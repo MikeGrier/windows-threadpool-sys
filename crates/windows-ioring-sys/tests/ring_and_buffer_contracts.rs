@@ -44,9 +44,12 @@ use windows_ioring_sys::{IoBufMut, IoRing};
 /// non-power-of-two rows is what makes this test vacuous again.
 #[test]
 fn a_ring_satisfies_the_queue_depths_it_was_asked_for() {
-    // Deliberately a mix: already-normalised shapes, which must pass through
-    // unchanged, and shapes that cannot pass through unchanged. A table of only
-    // the first kind is the defect this test was rewritten to remove.
+    // Deliberately a mix: already-normalised shapes, which a host MAY return
+    // unchanged, and shapes it cannot return unchanged. Both kinds are held to
+    // the same bounds below and nothing here asserts equality: a host is free to
+    // round either up further. A table of only the first kind is the defect this
+    // test was rewritten to remove, because there the bounds and an equality
+    // check cannot be told apart.
     for (submission, completion) in [
         (8_u32, 16_u32),
         (32, 64),

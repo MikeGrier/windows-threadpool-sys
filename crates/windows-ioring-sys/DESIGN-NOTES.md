@@ -319,8 +319,9 @@ this crate sits against them.
   Windows may reissue a closed ring's handle value, so the handle is not durable either.
 - **`Completion::synthetic` being `#[cfg(test)]`-only is category 10 ("valid by construction" overclaimed)
   handled correctly.** Its own comment states the rule: production code has no legitimate reason to fabricate
-  a completion, because `Token::claim_if`'s safety argument depends on every `Completion` in existence
-  tracing back to a real `IORING_CQE`. That is precisely the restriction `windows-file-watcher`'s D-83 had to
+  a completion, because the safety argument for returning a payload depends on every `Completion` in
+  existence tracing back to a real `IORING_CQE`. (The argument was `Token::claim_if`'s when this was
+  written; since [D-71](#d-71) it is the pop's, and it holds unchanged.) That is precisely the restriction `windows-file-watcher`'s D-83 had to
   learn and `windows-overlapped-io-sys`'s `post`/`post_raw` still lacks -- a test seam confined to test
   builds, rather than a public one documented as "do not misuse".
 
@@ -500,12 +501,18 @@ Relatedly, completions can arrive for work the caller never explicitly submitted
 
 ### Category 8: values deliberately never correlated
 
-**This crate joins nothing, deliberately.** Matching a completion to what it completes is the consumer's
-loop, and every place a pairing could have been offered is left to them on purpose:
+**Partly superseded by [D-71](#d-71) and [D-73](#d-73): the ring now joins a completion to the payload its push handed over.** The other pairings below are still left to the consumer.
 
-- a `Completion` is never joined to its `Token` -- `claim_if` is offered so the consumer can, and [D-4](#d-4)
-  is why the crate does not do it for them (it would require the ring to retain a map keyed by `UserData`,
-  which is exactly the per-operation allocation this design exists to avoid);
+**This crate joins one thing, and nothing else.** Matching a completion to what it completes was the
+consumer's loop throughout, and every place a pairing could have been offered was left to them on
+purpose. One of those has since changed:
+
+- a `Completion` **is** joined to what its push handed over -- by the ring, which keeps an inventory keyed
+  by operation identity and returns the payload from the pop that observed the completion ([D-71](#d-71),
+  [D-73](#d-73)). When this was written the join was the consumer's, through `Token::claim_if`, and
+  [D-4](#d-4) gave the reason the crate declined to do it: a ring-held map keyed by `UserData` is a
+  per-operation allocation. [D-55](#d-55) chose to spend that allocation so that no caller holds a token it
+  can lose; the `Token` and `claim_if` are retired;
 - a cancel's completion is never paired with its target's, though the consumer holds both identities;
 - a registration's completion is never paired with the reads and writes that later address that registration;
 - `Completion::information` is returned uninterpreted, since its meaning is per-op.
@@ -514,8 +521,8 @@ Stated plainly so the absence reads as a decision rather than an omission.
 
 ### Category 9: boundary-type fidelity lost at the consumer
 
-Most boundaries here are lossless or narrow loudly. `UserData` is `usize` from `IORING_CQE` through `Token`
-with no conversion. Buffer lengths narrow `usize` to `u32` through `checked_len`, which *reports*
+Most boundaries here are lossless or narrow loudly. `UserData` is `usize` from `IORING_CQE` through
+`OperationId` (through `Token` until `M28.4.1d.3` retired it) with no conversion. Buffer lengths narrow `usize` to `u32` through `checked_len`, which *reports*
 `InvalidInput` rather than truncating. `RegisteredBuffers::len`'s saturating `unwrap_or(u32::MAX)` is
 unreachable by construction, because `register_buffers` runs the same `checked_len` over the same `Vec`
 before the registration is ever built. `RingVersion` wraps a raw `i32` precisely so a version this crate
