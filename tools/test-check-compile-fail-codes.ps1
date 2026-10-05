@@ -100,6 +100,16 @@ $unpinnedForms = [ordered]@{
     'a #[doc] attribute'          = "#[doc = ""``````compile_fail""]"
     'a one-line cfg_attr'         = "#[cfg_attr(x, doc = ""``````compile_fail"", doc = ""``````"")]"
     'a rust-tagged info string'   = "/// ``````rust,compile_fail`n/// let x: u32 = ""no"";`n/// ``````"
+    # CommonMark containers: rustdoc still runs a fence nested in a blockquote
+    # or a list item, so the guard must still see it. Raised in PR #113's
+    # review; the tilde fence below was found while fixing it.
+    'a blockquote in a doc comment' = "/// > ``````compile_fail`n/// > let x: u32 = ""no"";`n/// > ``````"
+    'a list item in a doc comment'  = "/// - ``````compile_fail`n///   let x: u32 = ""no"";`n///   ``````"
+    'a numbered list item'          = "/// 1. ``````compile_fail`n///    ``````"
+    'a blockquoted list item'       = "//! > * ``````compile_fail`n//! >   ``````"
+    'a blockquote in a doc attribute' = "#[doc = ""> ``````compile_fail""]"
+    'a tilde fence'                 = "/// ~~~compile_fail`n/// let x: u32 = ""no"";`n/// ~~~"
+    'a blockquoted tilde fence'     = "/// > ~~~~rust,compile_fail`n/// > ~~~~"
 }
 foreach ($form in $unpinnedForms.Keys) {
     $text = $unpinnedForms[$form]
@@ -125,6 +135,24 @@ Test-Case 'an unpinned fence in markdown is refused' {
     finally { Remove-Fixture $root }
 }
 
+$markdownForms = [ordered]@{
+    'a markdown blockquote'   = "# A`n`n> ``````compile_fail`n> let x: u32 = ""no"";`n> ```````n"
+    'a markdown list item'    = "# A`n`n+ ``````compile_fail`n  let x: u32 = ""no"";`n  ```````n"
+    'a markdown tilde fence'  = "# A`n`n~~~compile_fail`nlet x: u32 = ""no"";`n~~~`n"
+}
+foreach ($form in $markdownForms.Keys) {
+    $text = $markdownForms[$form]
+    Test-Case "an unpinned fence in $form is refused" {
+        $root = New-Fixture @{ 'a\README.md' = $text }
+        try {
+            $result = Invoke-Guard $root
+            Assert-Equal 1 $result.ExitCode "exit code ($form)"
+            Assert-Match 'README\.md:3' $result.Output 'the fence line is named'
+        }
+        finally { Remove-Fixture $root }
+    }
+}
+
 # --- Accepted when pinned ----------------------------------------------------
 
 Test-Case 'every pinned spelling is accepted' {
@@ -133,11 +161,15 @@ Test-Case 'every pinned spelling is accepted' {
         "#[cfg_attr(x, doc = ""``````compile_fail,E0599"", doc = ""``````"")]`n" +
         "#[doc = ""``````compile_fail,E0382""]`n/// ``````rust,compile_fail,E0502`n/// ```````n"
         'a\README.md'  = "``````compile_fail,E0133`nlet x = 1;`n```````n"
+        'b\src\lib.rs' = "/// > ``````compile_fail,E0308`n/// - ``````compile_fail,E0308`n/// 1. ``````compile_fail,E0308`n" +
+        "//! > * ``````compile_fail,E0308`n#[doc = ""> ``````compile_fail,E0308""]`n/// ~~~compile_fail,E0308`n" +
+        "/// > ~~~~rust,compile_fail,E0308`n"
+        'b\README.md'  = "> ``````compile_fail,E0308`n+ ``````compile_fail,E0308`n~~~compile_fail,E0308`n"
     }
     try {
         $result = Invoke-Guard $root
         Assert-Equal 0 $result.ExitCode $result.Output
-        Assert-Match '\(6 found\)' $result.Output 'every pinned fence is counted'
+        Assert-Match '\(16 found\)' $result.Output 'every pinned fence is counted'
     }
     finally { Remove-Fixture $root }
 }
@@ -148,7 +180,9 @@ Test-Case 'prose, other fences and string literals are not fences' {
     $root = New-Fixture @{
         'a\src\lib.rs' = "/// A ``compile_fail`` example passes on any error.`n" +
         "/// ``````ignore`n/// ```````n/// ``````rust`n/// ```````n" +
-        "const S: &str = ""compile_fail"";`n// compile_fail in a plain comment`n"
+        "const S: &str = ""compile_fail"";`n// compile_fail in a plain comment`n" +
+        "/// - a ``compile_fail`` bullet, in single backticks`n/// > quoting ``compile_fail`` prose`n" +
+        "/// text ~~~compile_fail mid-line is not a fence`n// > ``````compile_fail behind a plain comment`n"
     }
     try {
         $result = Invoke-Guard $root

@@ -17,8 +17,15 @@
 # What counts as a fence: a line whose code-fence info string lists
 # `compile_fail`, in a `///` or `//!` doc comment, in a `doc = "..."` attribute
 # (the `cfg_attr` form windows-threadpool-sys uses), or in a markdown file --
-# markdown is scanned because a crate may `include_str!` it as doctests. It is
-# pinned when the same info string also carries an `E` followed by four digits.
+# markdown is scanned because a crate may `include_str!` it as doctests. The
+# fence may be backticks or tildes, and may sit inside any nesting of
+# blockquotes and list items, because rustdoc follows CommonMark and runs all of
+# those. It is pinned when the same info string also carries an `E` followed by
+# four digits.
+#
+# Not parsed: a fence opened mid-string after an escaped `\n` inside one
+# `doc = "..."` literal. Nothing in the workspace writes one, and the fixture
+# suite says what is and is not recognised.
 #
 #   ./tools/check-compile-fail-codes.ps1            # scan crates/ (CI)
 #   ./tools/check-compile-fail-codes.ps1 -Root DIR  # scan a fixture tree
@@ -42,9 +49,19 @@ $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
 # A fence opens a line (optionally behind `///` or `//!`), or follows
 # `doc = "` anywhere on a line -- a `cfg_attr` may put several `doc` strings on
 # one line, and a pattern anchored to the line start missed exactly that until
-# this script's own test found it. Then the info string, up to the end of the
-# line or the closing quote of an attribute.
-$fence = [regex]'(?:^\s*(?://[/!]\s?)?|\bdoc\s*=\s*")`{3,}(?<info>[^`"\r\n]*)'
+# this script's own test found it.
+#
+# Then any run of CommonMark container markers -- `>` for a blockquote, `-`,
+# `+`, `*` or `1.` / `1)` for a list item -- because a fence nested in those is
+# still a doctest. Missing them let `/// > ```compile_fail` through (PR #113
+# review), and the fix found tilde fences missing too.
+#
+# Then the fence and its info string, up to the end of the line or the closing
+# quote of an attribute. A backtick fence's info string cannot contain a
+# backtick; a tilde fence's can.
+$container = '(?:\s*(?:>|(?:[-+*]|\d{1,9}[.)])(?=\s)))*\s*'
+$fence = [regex]('(?:^\s*(?://[/!])?|\bdoc\s*=\s*")' + $container +
+    '(?:`{3,}(?<info>[^`"\r\n]*)|~{3,}(?<info>[^"\r\n]*))')
 $skip = @('target', '.scratch', '.git', 'node_modules')
 
 $unpinned = New-Object System.Collections.Generic.List[string]
