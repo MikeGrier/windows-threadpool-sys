@@ -221,6 +221,17 @@ refused one of this repository's test binaries as "potentially unwanted
 software" mid-sweep, and a declared blind spot reported as caught. Re-run the
 entry; the result says nothing about the tests.
 
+**`INFRASTRUCTURE: cargo could not be started`** -- Windows refused to start
+cargo itself, so it exited with a loader status such as `0xC0000142`
+(`STATUS_DLL_INIT_FAILED`) having run nothing. Before this outcome existed that
+non-zero exit scored `caught`. The exit code is named in the result, and the
+codes that count are listed once, in `Get-ProcessStartFailure` in
+[common.ps1](common.ps1). Seen on a CI runner under parallel load (PR #113),
+where it passed on re-run; in CI the harness's suite now runs through
+[invoke-retrying-on-start-failure.ps1](invoke-retrying-on-start-failure.ps1),
+which retries this signature and nothing else. If a baseline hits it, the
+sweep stops with the host's memory, commit, process and handle counts.
+
 **`MANIFEST STALE`** -- the pattern no longer matches exactly one site.
 Refactoring moved the code out from under the manifest. Fix the manifest; the
 sabotage was not run and proves nothing.

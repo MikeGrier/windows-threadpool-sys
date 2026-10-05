@@ -123,7 +123,16 @@ function Test-Case {
 function Assert-Equal {
     param($Expected, $Actual, [string] $Because = '')
     if ($Expected -ne $Actual) {
-        throw "expected [$Expected], got [$Actual]$(if ($Because) { " -- $Because" })"
+        # Format-ExitCode names a code that means a child process never
+        # started, and then the host's state is worth more than the case's own
+        # output: one CI run failed four cases this way with nothing but
+        # `got [-1073741502]` to go on (common.ps1, Get-ProcessStartFailure).
+        $got = Format-ExitCode $Actual
+        $hostState = if (Get-ProcessStartFailure $Actual) {
+            "`n" + ((@('Host state at the failure:') + (Get-HostPressureReport)) -join "`n")
+        }
+        else { '' }
+        throw "expected [$Expected], got [$got]$(if ($Because) { " -- $Because" })$hostState"
     }
 }
 
@@ -204,7 +213,7 @@ function New-Spec {
 function New-Stub {
     param(
         [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
-            'build-echo', 'not-executed')] [string] $Behaviour,
+            'build-echo', 'not-executed', 'not-started')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -256,6 +265,12 @@ function New-Stub {
             "echo 3  ^|     let x: u32 = `"GUARD FIRED`"; 1>&2`r`n" +
             "echo    ^|            ---   ^^^^^^^^^^^^^ expected ``u32``, found ``^&str`` 1>&2`r`n" +
             "exit /b 101`r`n"
+        }
+        # The RUN phase exits as a process Windows could not start:
+        # STATUS_DLL_INIT_FAILED, the code one CI run saw. The baseline stays
+        # green because the marker is still there for it.
+        'not-started' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`nexit /b -1073741502`r`n"
         }
         # cargo's own wording when it cannot start a test binary, as an
         # antivirus refusal produced it.
@@ -693,6 +708,21 @@ Test-Case 'does not count a test binary that never executed as caught' {
             -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
         Assert-Equal 1 $result.ExitCode $result.Output
         Assert-Match 'INFRASTRUCTURE: a test binary was never executed' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not count a cargo that could not start as caught' {
+    # A non-zero exit used to be scored `failed`, which this tool credits as a
+    # catch -- for a suite that never ran a line.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'not-started' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'INFRASTRUCTURE: cargo could not be started' $result.Output
+        Assert-Match 'PROCESS-START FAILURE 0xC0000142 STATUS_DLL_INIT_FAILED' $result.Output 'the code is named'
     }
     finally { Remove-Fixture $root }
 }

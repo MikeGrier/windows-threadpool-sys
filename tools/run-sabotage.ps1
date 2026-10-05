@@ -306,6 +306,16 @@ function Get-RepoRoot {
     # PARSED -- it becomes the repository root. Git can warn on stderr while
     # succeeding, and merging would splice that warning into the path.
     $root = Invoke-NativeStdout { git rev-parse --show-toplevel }
+    # A git that never started answered nothing, so "not a repository" would
+    # be a wrong diagnosis -- exactly what one CI run printed when the runner
+    # refused to start it (see Get-ProcessStartFailure in common.ps1).
+    $notStarted = Get-ProcessStartFailure $LASTEXITCODE
+    if ($notStarted) {
+        Exit-WithMessage (@(
+                "git could not be started: $(Format-ExitCode $LASTEXITCODE)."
+                "This says nothing about the working tree. Host state at the failure:"
+            ) + (Get-HostPressureReport) -join "`n") 2
+    }
     if ($LASTEXITCODE -ne 0) {
         # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
         # here is a terminating error that prints a stack trace and propagates
@@ -400,6 +410,10 @@ function Invoke-Bounded {
         # three sibling scripts in this directory are 5.1-clean; this one stays
         # that way too. Raised in the PR #64 review.
         $outcome = if ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
+        # A cargo that Windows could not start ran nothing, and must not be
+        # scored as a suite that failed -- which this tool would credit as a
+        # catch. See Get-ProcessStartFailure in common.ps1.
+        if (Get-ProcessStartFailure $process.ExitCode) { $outcome = 'not-started' }
         return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode; Seconds = $elapsed }
     }
 
@@ -451,6 +465,9 @@ function Invoke-Sabotaged {
         -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
 
+    if ($build.Outcome -eq 'not-started') {
+        return [pscustomobject]@{ Outcome = 'not-started'; Code = $build.Code; Seconds = 0 }
+    }
     if ($build.Outcome -eq 'failed') {
         return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code; Seconds = 0 }
     }
@@ -1165,6 +1182,12 @@ $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
 $baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
     -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $BuildTimeoutSeconds
 
+if ($baseline.Outcome -eq 'not-started') {
+    Exit-WithMessage (@(
+            "The baseline could not run: cargo could not be started, exit $(Format-ExitCode $baseline.Code)."
+            "That is the host, not the suite. Host state at the failure:"
+        ) + (Get-HostPressureReport) -join "`n") 2
+}
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
             "The baseline suite did not pass ($($baseline.Outcome))."
@@ -1354,6 +1377,7 @@ foreach ($sabotage in $selected) {
         # the one that "failed" failed to compile, so it detected nothing.
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
         'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
+        'not-started' { "INFRASTRUCTURE: cargo could not be started, exit $(Format-ExitCode $run.Code) (tests never ran)" }
     }
     # A refused-by-build entry whose patch BUILT has a guard that did not fire,
     # whatever the tests then did; say so first, so the run's own outcome is not

@@ -219,3 +219,101 @@ function Read-SharedText {
     }
     finally { $stream.Dispose() }
 }
+
+# --- A process that never started --------------------------------------------
+#
+# Exit codes that mean Windows could not START a child process at all, so it
+# never ran its own code and reported nothing. Recorded once here; everything
+# that reports an exit code, and the CI retry wrapper that keys on these, asks
+# this table.
+#
+# Why it exists: one PR #113 CI run of test-run-sabotage.ps1 had four cases get
+# 0xC0000142 (STATUS_DLL_INIT_FAILED) from their child processes, one of them
+# `git`, which the harness then reported as "Not inside a git repository" --
+# the wrong diagnosis, since nothing had asked git anything. The job passed on
+# re-run. Without a name for the code, the log said nothing about the cause.
+#
+# The marker is what a log reader, and the retry wrapper, search for. Keep it
+# stable: invoke-retrying-on-start-failure.ps1 decides whether to retry on it.
+$script:ProcessStartFailureMarker = 'PROCESS-START FAILURE'
+$script:ProcessStartFailures = [ordered]@{
+    0xC0000142L = 'STATUS_DLL_INIT_FAILED'
+    0xC0000135L = 'STATUS_DLL_NOT_FOUND'
+    0xC0000139L = 'STATUS_ENTRYPOINT_NOT_FOUND'
+    0xC000007BL = 'STATUS_INVALID_IMAGE_FORMAT'
+    0xC0000017L = 'STATUS_NO_MEMORY'
+    0xC000012DL = 'STATUS_COMMITMENT_LIMIT'
+}
+
+# The NTSTATUS name of an exit code that means the process never started, or
+# $null for any other code -- including success, an ordinary failure, and no
+# code at all. Accepts the signed form PowerShell reports in $LASTEXITCODE.
+function Get-ProcessStartFailure {
+    param([AllowNull()] $ExitCode)
+    # Anything that is not a whole number is not an exit code, and callers
+    # such as an assertion's failure message pass whatever they compared.
+    $value = 0L
+    if ($null -eq $ExitCode -or -not [int64]::TryParse("$ExitCode", [ref]$value)) { return $null }
+    $unsigned = $value -band 0xFFFFFFFFL
+    foreach ($code in $script:ProcessStartFailures.Keys) {
+        if ($unsigned -eq $code) {
+            return ('0x{0:X8} {1}' -f $code, $script:ProcessStartFailures[$code])
+        }
+    }
+    return $null
+}
+
+# An exit code as text, naming it -- and marking it -- when it is a
+# process-start failure, so a log line says what happened instead of printing
+# a bare negative number.
+function Format-ExitCode {
+    param([AllowNull()] $ExitCode)
+    $start = Get-ProcessStartFailure $ExitCode
+    if ($start) {
+        return "$ExitCode [$($script:ProcessStartFailureMarker) $($start): Windows could not start the process, so it reported nothing]"
+    }
+    return "$ExitCode"
+}
+
+# Whether captured output shows a process-start failure: the marker above, or
+# one of the table's codes written raw, in decimal or hex, by something that
+# did not go through Format-ExitCode.
+function Test-ProcessStartFailureText {
+    param([AllowNull()][string] $Text)
+    if (-not $Text) { return $false }
+    if ($Text.Contains($script:ProcessStartFailureMarker)) { return $true }
+    foreach ($code in $script:ProcessStartFailures.Keys) {
+        $signed = [int32]([int64]$code - 0x100000000L)
+        if ($Text -match "(?<![\d-])$signed(?!\d)" -or $Text -match ('(?i)\b0x{0:X8}\b' -f $code)) { return $true }
+    }
+    return $false
+}
+
+# What the host looked like at the moment of a failure, as plain lines. Best
+# effort: every figure that cannot be read is reported as unknown rather than
+# failing the report, because this runs on a path that is already failing.
+function Get-HostPressureReport {
+    $lines = New-Object System.Collections.Generic.List[string]
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $lines.Add(('  physical memory free: {0:N0} MiB of {1:N0} MiB' -f
+                ($os.FreePhysicalMemory / 1KB), ($os.TotalVisibleMemorySize / 1KB))) | Out-Null
+        $lines.Add(('  commit (virtual) free: {0:N0} MiB of {1:N0} MiB' -f
+                ($os.FreeVirtualMemory / 1KB), ($os.TotalVirtualMemorySize / 1KB))) | Out-Null
+        $lines.Add("  processes (OS count): $($os.NumberOfProcesses)") | Out-Null
+    }
+    catch { $lines.Add("  memory and OS process count: unknown ($($_.Exception.Message))") | Out-Null }
+    try {
+        $processes = @(Get-Process -ErrorAction Stop)
+        $handles = ($processes | Measure-Object -Property HandleCount -Sum).Sum
+        $lines.Add("  handles across visible processes: $handles") | Out-Null
+        $top = $processes | Group-Object ProcessName | Sort-Object Count -Descending | Select-Object -First 5 |
+            ForEach-Object { "$($_.Name) x$($_.Count)" }
+        $lines.Add("  most numerous processes: $($top -join ', ')") | Out-Null
+    }
+    catch { $lines.Add("  process and handle counts: unknown ($($_.Exception.Message))") | Out-Null }
+    # Unrolled: there are always at least two lines, so callers get an array
+    # whether they write `@(Get-HostPressureReport)` or `foreach`. A
+    # comma-wrapped return made `@(...)` a one-element array of arrays.
+    return $lines.ToArray()
+}
