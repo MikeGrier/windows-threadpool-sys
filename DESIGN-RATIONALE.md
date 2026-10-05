@@ -782,3 +782,77 @@ skipped when the pool demonstrably worked after the cancel. The interrupt-time
 counter is used rather than `QueryPerformanceCounter` because only ordering is
 needed, and it is a memory read rather than a syscall on a path that runs for
 every callback.
+
+## <a id="how-compile-fail-pinning-was-reached"></a>How the `compile_fail` pinning rule was reached
+
+Tier 2 for [DESIGN-NOTES.md](DESIGN-NOTES.md#compile-fail-pins-its-code). That section is the current
+rule; this one is how it was reached and what was rejected on the way.
+
+### The finding that started it
+
+A `compile_fail` doctest in windows-ioring-sys guarded "a borrow held across a push is refused". It
+called a method `M28` had since removed, so it kept failing to compile -- for "no such method" --
+and kept passing, while testing nothing. A PR #113 review found it by reading. Nothing in the
+toolchain would have.
+
+### Pinning was necessary and, on stable, not sufficient
+
+Pinning the code (`compile_fail,E0502`) is rustdoc's own answer, so it was the first move. It was
+then measured that the pin does nothing on the pinned stable toolchain: re-injecting the stale call
+passed with the pin in place, and failed only under `RUSTC_BOOTSTRAP=1`. That is why the rule has two
+halves -- every fence pins a code, and CI runs the doctests where the pin is enforced -- and why the
+second half is a dedicated job rather than a flag on the ordinary test run.
+
+The codes themselves were found rather than guessed: pin a placeholder, run under
+`RUSTC_BOOTSTRAP=1`, read what the compiler raised, and read its message before pinning. The message
+matters more than the code; a code alone cannot say whether the example fails for the reason it was
+written for.
+
+### Why a line scanner, and why it was not enough
+
+The first guard was a line-pattern scanner, chosen because it needs no build and so runs anywhere,
+including on a developer's machine before a push. Its own fixture suite found the first gap (several
+`doc` strings on one `cfg_attr` line). Review then found four more, one round at a time: fences inside
+blockquotes and list items, tilde fences, block doc comments, and raw-string doc attributes. Each was
+a real bypass -- an unpinned doctest CI would have passed -- and each fix was one more alternative in
+the pattern.
+
+That sequence is the reason the design changed, not any single gap. A pattern is a proxy for rustdoc's
+parser, and fixing a proxy one spelling at a time cannot close the class; the next spelling arrives as
+a review finding, after the push, which is the rung the detection ladder asks rules to leave.
+
+### Options considered
+
+- **Keep adding spellings as they are found.** Rejected for the reason above: it bounds nothing, and
+  every miss is discovered late, by a reader.
+- **Replace the scanner with rustdoc.** Rejected as a replacement: it needs a build in every feature
+  configuration that holds a fence, and would remove the check a developer can run in a second without
+  one.
+- **Check the scanner against rustdoc (chosen).** rustdoc supplies the set; the scanner stays fast and
+  local, and any spelling it misses fails CI instead of waiting for a review. This is the
+  duplicate-then-decide shape: whether the scanner is still worth keeping once the rustdoc check has a
+  record is left open, deliberately.
+
+### What the spike measured before anything was built
+
+- `cargo test --doc -- --list` names every doctest with file and line, but does **not** mark which are
+  `compile_fail`. They do come out as a separate group, but that group is every doctest rustdoc cannot
+  merge, so it is a proxy and was not used.
+- A doctest **run** does mark them: `... (line N) - compile fail ... ok`, whatever spelling produced
+  the doctest, including Markdown reached through `include_str!`.
+- Line N is the fence line for `///` and Markdown, but the first line of the attribute for a
+  `doc = "..."` attribute -- measured on windows-threadpool-sys, where the attribute and its fence are
+  two lines apart. So the check reads each fence from source at or after line N, claiming each fence
+  once, and fails closed when none can be read.
+
+The check was then verified end to end on the real tree: rewriting a real fence as
+`doc = concat!("```compile_fail,E0599")` still ran as a `compile_fail` doctest, the scanner reported
+every fence pinned, and the new check named the blind spot.
+
+### Declared, not fixed
+
+- A doc assembled by `concat!` or a macro has no fence to read in source. The check fails on it rather
+  than passing it, which is the safe direction but means such a doctest cannot currently be written.
+- The sabotage harness runs without `RUSTC_BOOTSTRAP`, so a sabotage that makes a `compile_fail`
+  example fail for the wrong reason survives a sweep. windows-ioring-sys records that as a declared
+  blind spot; the CI job is where the defect is caught instead.

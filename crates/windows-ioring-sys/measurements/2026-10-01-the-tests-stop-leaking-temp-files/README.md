@@ -12,7 +12,9 @@ guard with the hazard written down.
 
 The real defect is narrower and explains the observed leak better: **a trailing
 `remove_file` does not run when the test panics**, and the `M26.13`
-investigation was thirty thousand runs of a reproducer whose failing arm panics.
+investigation ran, many times over, a reproducer whose failing arm panics --
+see [its record](../../../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md#a-defect-the-check-produced)
+for how many runs, and how much they left behind.
 Three files -- `completion_event.rs`, `event_delivery.rs` and
 `submission_lifecycle.rs` -- also had no removal at all, on any path.
 
@@ -87,5 +89,6 @@ defect it was written to fix.
 
 It does not establish a rate for the leak under failure, only that the three
 unguarded files leaked unconditionally and that the guarded path now survives a
-panic. The 307,383-file figure comes from the investigation's own record and is
-not re-derived here.
+panic. The size of the leak the investigation saw is in
+[its own record](../../../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md#a-defect-the-check-produced),
+which owns that figure; it is not re-derived, or repeated, here.

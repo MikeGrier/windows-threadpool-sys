@@ -2813,6 +2813,10 @@ the blind spot.
 The scanner stays, as the check a developer can run without building anything. Whether it should
 remain once the rustdoc check has a record is a later decision, not one this records.
 
+How the rule was reached -- the finding behind it, the measurements, the options weighed and what is
+declared rather than fixed -- is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-compile-fail-pinning-was-reached).
+
 **To find a code**, pin a placeholder such as `E9999` and run the doctests with `RUSTC_BOOTSTRAP=1`:
 rustdoc reports the code the compiler actually raised, and the message says whether the example fails
 for the reason it was written for. Read the message before pinning the code; the code alone cannot tell
