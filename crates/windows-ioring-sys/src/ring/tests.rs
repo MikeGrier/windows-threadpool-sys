@@ -142,6 +142,11 @@ fn dropping_a_ring_actually_runs_its_drop_body() {
 /// ring handle, and `ring::tests` is a child of `ring`, so it can build an
 /// `IoRing` around one. See [`IoRing::refused_by_the_kernel`] for why null
 /// specifically, and why a non-null stand-in would crash instead.
+// Debug-only, as is the rundown test below: both expect a `debug_assert!` in
+// `IoRing::drop`, which a release build compiles out. Gated together with
+// `batch::tests::dropping_a_registration_with_work_outstanding_is_refused`,
+// the third test of that shape.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "CloseIoRing failed")]
 fn a_ring_whose_close_the_kernel_refuses_reports_the_close_failure() {
@@ -173,6 +178,7 @@ fn a_ring_whose_close_the_kernel_refuses_reports_the_close_failure() {
 /// asserted here.
 ///
 /// [sabotage.json]: ../../sabotage.json
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "IoRing rundown failed before close")]
 fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {

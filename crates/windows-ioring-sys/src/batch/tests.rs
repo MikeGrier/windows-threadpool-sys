@@ -315,6 +315,11 @@ fn submit_reports_how_many_operations_it_queued() {
     let _ = std::fs::remove_file(&path);
 }
 
+// Debug-only: the guard it expects is a `debug_assert!`, which a release build
+// compiles out, so under `cargo test --release` nothing would panic. Gated
+// together with `ring::tests`' two `IoRing::drop` assert tests, the other two
+// of that shape.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "RegisteredBuffers dropped while an operation still references it")]
 fn dropping_a_registration_with_work_outstanding_is_refused() {
