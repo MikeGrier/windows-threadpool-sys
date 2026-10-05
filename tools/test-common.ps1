@@ -311,13 +311,17 @@ Test-Case 'Format-ExitCode marks a start failure and leaves other codes bare' {
 }
 
 Test-Case 'the text detector finds the marker and raw codes, and nothing else' {
-    foreach ($text in @((Format-ExitCode -1073741502), 'got [-1073741502]', 'exit 0xc0000142', 'code 0xC0000135')) {
+    # Every form Get-ProcessStartFailure accepts: signed decimal (as
+    # $LASTEXITCODE holds it), unsigned decimal, and hex. PR #113 review found
+    # the unsigned decimal form missing.
+    foreach ($text in @((Format-ExitCode -1073741502), 'got [-1073741502]', 'got [3221225794]',
+            'exit 0xc0000142', 'code 0xC0000135')) {
         if (-not (Test-ProcessStartFailureText $text)) { throw "missed: $text" }
     }
     # The last two are what the digit boundaries exist for: a longer negative
     # number that STARTS with the code, and the code glued to a preceding digit.
     foreach ($text in @('got [101]', 'took 10737415029 ns', 'id 11073741502', '', $null,
-            'offset -10737415029', 'range 9-1073741502')) {
+            'offset -10737415029', 'range 9-1073741502', 'size 32212257945', 'id 13221225794')) {
         if (Test-ProcessStartFailureText $text) { throw "false alarm: $text" }
     }
 }

@@ -282,9 +282,16 @@ function Test-ProcessStartFailureText {
     param([AllowNull()][string] $Text)
     if (-not $Text) { return $false }
     if ($Text.Contains($script:ProcessStartFailureMarker)) { return $true }
+    # Every form Get-ProcessStartFailure accepts: signed decimal (what
+    # $LASTEXITCODE holds), unsigned decimal, and hex. The unsigned decimal
+    # form was missing until the PR #113 review. Digit boundaries on both
+    # decimal forms, so a longer number that merely contains one is not it.
     foreach ($code in $script:ProcessStartFailures.Keys) {
         $signed = [int32]([int64]$code - 0x100000000L)
-        if ($Text -match "(?<![\d-])$signed(?!\d)" -or $Text -match ('(?i)\b0x{0:X8}\b' -f $code)) { return $true }
+        $unsigned = [uint32]$code
+        if ($Text -match "(?<![\d-])$signed(?!\d)" -or
+            $Text -match "(?<![\d-])$unsigned(?!\d)" -or
+            $Text -match ('(?i)\b0x{0:X8}\b' -f $code)) { return $true }
     }
     return $false
 }
