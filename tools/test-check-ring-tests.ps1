@@ -168,6 +168,7 @@ fn by_alias() {
 // (PR #113 review). The aliases are declared here and resolved by the script.
 type LaneRing = IoRing<Vec<u8>>;
 type WideLane = LaneRing;
+type BareRing = IoRing;
 use crate::ring::IoRing as Renamed;
 
 #[test]
@@ -183,6 +184,11 @@ fn by_nested_turbofish_new() {
 #[test]
 fn by_alias_new() {
     let ring = LaneRing::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_bare_alias_new() {
+    let ring = BareRing::new(8, 8).expect("ring");
 }
 
 #[test]
@@ -204,11 +210,11 @@ fn by_path_qualified_new() {
         $recorded = Get-Recorded $root
         foreach ($name in 'by_new', 'by_with_version', 'by_with_inventory',
             'by_with_version_and_inventory', 'by_turbofish', 'by_alias', 'by_turbofish_new',
-            'by_nested_turbofish_new', 'by_alias_new', 'by_alias_of_alias_new',
+            'by_nested_turbofish_new', 'by_alias_new', 'by_bare_alias_new', 'by_alias_of_alias_new',
             'by_renamed_import_new', 'by_path_qualified_new') {
             Assert-Contains $recorded "alpha::$name" 'constructor spelling'
         }
-        Assert-Equal 12 $recorded.Count 'entries'
+        Assert-Equal 13 $recorded.Count 'entries'
     }
     finally { Remove-Fixture $root }
 }
