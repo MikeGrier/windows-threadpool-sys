@@ -116,6 +116,12 @@ $unpinnedForms = [ordered]@{
     'an inner block doc comment'    = "/*! ``````compile_fail`n``````*/"
     'a starred block doc line'      = "/**`n * ``````compile_fail`n * let x: u32 = ""no"";`n * ```````n */"
     'a bare block doc line'         = "/*!`n``````compile_fail`n```````n*/"
+    # Raw-string doc attributes, with and without hashes. PR #113 review.
+    'a raw-string doc attribute'    = "#[doc = r""``````compile_fail""]"
+    'a hashed raw-string doc'       = "#[doc = r#""``````compile_fail""#]"
+    'a double-hashed raw cfg_attr'  = "#[cfg_attr(x, doc = r##""``````compile_fail""##, doc = ""``````"")]"
+    'a blockquote in a raw doc'     = "#[doc = r#""> ``````compile_fail""#]"
+    'a fence inside a multi-line raw doc' = "#[doc = r#""`nIntro.`n``````compile_fail`nlet x: u32 = ""no"";`n```````n""#]"
 }
 foreach ($form in $unpinnedForms.Keys) {
     $text = $unpinnedForms[$form]
@@ -173,11 +179,14 @@ Test-Case 'every pinned spelling is accepted' {
         'b\README.md'  = "> ``````compile_fail,E0308`n+ ``````compile_fail,E0308`n~~~compile_fail,E0308`n"
         'c\src\lib.rs' = "/** ``````compile_fail,E0308`n``````*/`n/*! ``````compile_fail,E0308`n``````*/`n" +
         "/**`n * ``````compile_fail,E0308`n * ```````n */`n/*!`n``````compile_fail,E0308`n```````n*/`n"
+        'd\src\lib.rs' = "#[doc = r""``````compile_fail,E0308""]`n#[doc = r#""``````compile_fail,E0308""#]`n" +
+        "#[cfg_attr(x, doc = r##""``````compile_fail,E0308""##, doc = ""``````"")]`n" +
+        "#[doc = r#""> ``````compile_fail,E0308""#]`n#[doc = r#""`n``````compile_fail,E0308`n```````n""#]`n"
     }
     try {
         $result = Invoke-Guard $root
         Assert-Equal 0 $result.ExitCode $result.Output
-        Assert-Match '\(20 found\)' $result.Output 'every pinned fence is counted'
+        Assert-Match '\(25 found\)' $result.Output 'every pinned fence is counted'
     }
     finally { Remove-Fixture $root }
 }

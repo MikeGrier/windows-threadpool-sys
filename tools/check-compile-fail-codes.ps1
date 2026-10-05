@@ -48,10 +48,12 @@ if (-not (Test-Path -LiteralPath $Root)) {
 $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
 
 # A fence opens a line (optionally behind `///`, `//!`, or the `/**` / `/*!`
-# that opens a block doc comment), or follows
-# `doc = "` anywhere on a line -- a `cfg_attr` may put several `doc` strings on
-# one line, and a pattern anchored to the line start missed exactly that until
-# this script's own test found it.
+# that opens a block doc comment), or follows `doc = "` anywhere on a line -- a
+# `cfg_attr` may put several `doc` strings on one line, and a pattern anchored
+# to the line start missed exactly that until this script's own test found it.
+# The raw forms `doc = r"` and `doc = r#"` (any number of hashes) count too;
+# they were missed until the PR #113 review. A fence on a later line of a
+# multi-line raw string needed nothing, being an ordinary line.
 #
 # Then any run of CommonMark container markers -- `>` for a blockquote, `-`,
 # `+`, `*` or `1.` / `1)` for a list item -- because a fence nested in those is
@@ -66,7 +68,7 @@ $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
 # quote of an attribute. A backtick fence's info string cannot contain a
 # backtick; a tilde fence's can.
 $container = '(?:\s*(?:>|(?:[-+*]|\d{1,9}[.)])(?=\s)))*\s*'
-$fence = [regex]('(?:^\s*(?://[/!]|/\*[*!])?|\bdoc\s*=\s*")' + $container +
+$fence = [regex]('(?:^\s*(?://[/!]|/\*[*!])?|\bdoc\s*=\s*(?:r#*)?")' + $container +
     '(?:`{3,}(?<info>[^`"\r\n]*)|~{3,}(?<info>[^"\r\n]*))')
 $skip = @('target', '.scratch', '.git', 'node_modules')
 
