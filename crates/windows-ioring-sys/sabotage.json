@@ -1197,7 +1197,7 @@
       "name": "PR #113: a failed file-registration build keeps its array",
       "file": "src/batch/push.rs",
       "expect": "caught",
-      "why": "The array is held before the Build* call, so a Build* that fails -- a full queue, the case every push documents a retry for -- must release it: nothing was queued, and the retry holds its own. Without the release the retry trips the ring's set-once assertion in a debug build. Caught by the integration test that fills a real queue, not by the unit test of the helper, which cannot see whether register_files calls it.",
+      "why": "The array is held before the Build* call, so a Build* that fails -- a full queue, the case every push documents a retry for -- must release it: nothing was queued, and the retry holds its own. Without the release the retry trips the ring's set-once assertion in a debug build. Caught by the integration test that fills a real queue: only a test driving register_files itself can see whether it calls the release, so there is deliberately no unit test of the helper.",
       "find": [
         "            self.ring.release_unqueued_file_handles();\n"
       ],

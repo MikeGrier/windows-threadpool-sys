@@ -231,30 +231,36 @@ fn hold_both(ring: &mut IoRing) {
 /// failed-rundown path -- and in a debug build it did so during the unwind out
 /// of `Drop`'s assert, where no line of the body can intervene. Only the
 /// field's type prevents that, so the type is what this pins: it does not
-/// compile if the field stops being `ManuallyDrop`.
+/// compile if the field stops being `ManuallyDrop`. Entirely compile-time, so
+/// it opens no ring (D-49).
 #[test]
 fn the_registration_arrays_are_never_dropped_by_the_compiler() {
     fn pinned(ring: &IoRing) -> &std::mem::ManuallyDrop<super::LateReadArrays> {
         &ring.late_read
     }
-    let ring = IoRing::new(8, 8).expect("create ring");
-    let arrays = pinned(&ring);
-    assert!(
-        arrays.buffer_infos.is_empty() && arrays.file_handles.is_empty(),
-        "a fresh ring holds no array"
-    );
+    let _ = pinned;
 }
 
 /// The accepting direction: a ring whose rundown succeeds releases both
 /// arrays. Without this, a `Drop` that leaked them on every path would pass
 /// the test below and leak an allocation per registration on every ring.
+///
+/// No kernel ring is needed (D-49): the release turns on rundown alone, and
+/// with nothing outstanding rundown returns without submitting. The null
+/// handle's close is then refused, which is why the ring is dropped during an
+/// unwind -- the close assert stands down there, as in the refusing test below.
 #[test]
 fn a_quiesced_ring_releases_its_registration_arrays() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    hold_both(&mut ring);
-
     let before = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
-    drop(ring);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        hold_both(&mut ring);
+        assert_eq!(ring.accounting.outstanding(), 0, "nothing is outstanding");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
     let after = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
     assert_eq!(
         after,
@@ -289,23 +295,6 @@ fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
         after, before,
         "a ring that could not prove quiescence must not release an array the kernel may still read"
     );
-}
-
-/// A `Build*` that fails queues nothing, so the array held for it is released
-/// at once -- otherwise the documented retry after a full queue would hold a
-/// second array and trip the set-once assertion, in a debug build.
-#[test]
-fn an_array_held_for_a_failed_build_is_released_for_the_retry() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    hold_both(&mut ring);
-    ring.release_unqueued_buffer_infos();
-    ring.release_unqueued_file_handles();
-    assert!(ring.late_read.buffer_infos.is_empty());
-    assert!(ring.late_read.file_handles.is_empty());
-    // The retry: holding again must not trip the set-once assertion.
-    hold_both(&mut ring);
-    assert_eq!(ring.late_read.buffer_infos.len(), 1);
-    assert_eq!(ring.late_read.file_handles.len(), 1);
 }
 
 // --- The fault-injection seam (M16.3) ---
