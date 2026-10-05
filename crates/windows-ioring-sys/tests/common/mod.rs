@@ -34,10 +34,12 @@ use std::path::{Path, PathBuf};
 ///   `completion_event::fixture` and `handover::fixture` rely on exactly that:
 ///   their guard drops before they return the still-open `File`. Drop order is
 ///   not what makes their cleanup work.
-/// - **Direct `CreateFileW` calls** -- the unbuffered, overlapped handles in
-///   `bounded_pop`, `flush_barrier`, `flush_barrier_stress` and `handover` --
-///   pass `FILE_SHARE_READ | FILE_SHARE_WRITE` and no `FILE_SHARE_DELETE`, so
-///   a removal attempted while one is open fails. For these, ordering matters:
+/// - **Direct `CreateFileW` calls** on a temp file -- the unbuffered,
+///   overlapped handles in `flush_barrier`, `flush_barrier_stress` and
+///   `handover` -- pass `FILE_SHARE_READ | FILE_SHARE_WRITE` and no
+///   `FILE_SHARE_DELETE`, so a removal attempted while one is open fails.
+///   (`bounded_pop` calls `CreateFileW` too, but on a named pipe, with no temp
+///   file to remove.) For these, ordering matters:
 ///   struct fields and locals drop *after* the enclosing `Drop` body, and locals
 ///   drop in reverse declaration order, so a guard declared **before** the
 ///   handle it shadows is removed after that handle closes.

@@ -44,17 +44,23 @@ and its count, for the reason given above.
 That site previously had no removal on any path, so the same panic leaked before
 the change.
 
-## Deleting a file whose handle is open fails, and ordering is what saves it
+## Deleting a file whose handle is open: it depends on how the file was opened
 
-These files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE` and no
-`FILE_SHARE_DELETE`, so a removal attempted while a handle is open cannot
-succeed -- the lesson `flush_barrier_stress.rs` records, where holding the
-handle in the same struct meant every trial silently leaked a 32 MiB extent.
+An earlier version of this section said every converted site depended on
+declaration order. That was true of only some of them (PR #113 review). The
+authoritative description of the two kinds of open is on `TempPath` in
+[tests/common/mod.rs](../../tests/common/mod.rs); in brief:
 
-Locals drop in reverse declaration order, so a guard declared **before** the
-handle is removed after that handle closes. Every converted site already had
-`let path = ...` ahead of `let file = ...`, so the ordering holds; the guard
-documents the requirement so a new site does not get it wrong by accident.
+- A fixture opened with `std::fs::OpenOptions` shares delete, so its guard can
+  remove the file while the handle is still open, and drop order plays no part.
+- A fixture opened directly with `CreateFileW` and no `FILE_SHARE_DELETE`
+  cannot be removed while the handle is open -- the lesson
+  `flush_barrier_stress.rs` records, where holding the handle in the same
+  struct meant every trial silently leaked a 32 MiB extent. For those, the
+  guard must outlive the handle, and since locals drop in reverse declaration
+  order, it is declared **before** the handle. The converted sites of this kind
+  already declared `let path = ...` ahead of `let file = ...`; the guard
+  documents the requirement so a new site does not get it wrong by accident.
 
 ## What was deliberately not changed
 
