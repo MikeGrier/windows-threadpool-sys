@@ -190,6 +190,87 @@ fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {
     drop(ring);
 }
 
+// --- The registered-buffer descriptor array outlives an unproven rundown ---
+//
+// The kernel reads the `IORING_BUFFER_INFO` array when the registration op
+// runs (D-32), so `Drop` may free it only on the proof the inventory needs:
+// rundown showed nothing is outstanding. PR #113 review found it freed on every
+// path, because it was an ordinary field. These pin both halves of the fix.
+
+/// One descriptor, pointing at nothing the kernel is ever shown: no SQE is
+/// built from it, so it is only a non-empty array for `Drop` to decide about.
+fn one_buffer_info() -> Vec<windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO> {
+    vec![
+        windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO {
+            Address: std::ptr::null_mut(),
+            Length: 0,
+        },
+    ]
+}
+
+/// The compiler's own drop of the field is what freed the array on the
+/// failed-rundown path -- and in a debug build it did so during the unwind out
+/// of `Drop`'s assert, where no line of the body can intervene. Only the
+/// field's type prevents that, so the type is what this pins: it does not
+/// compile if the field goes back to a plain `Vec`.
+#[test]
+fn the_descriptor_array_is_never_dropped_by_the_compiler() {
+    fn pinned(
+        ring: &IoRing,
+    ) -> &std::mem::ManuallyDrop<Vec<windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO>>
+    {
+        &ring.registered_buffer_infos
+    }
+    let ring = IoRing::new(8, 8).expect("create ring");
+    assert!(pinned(&ring).is_empty(), "a fresh ring holds no array");
+}
+
+/// The accepting direction: a ring whose rundown succeeds releases the array.
+/// Without this, a `Drop` that leaked it on every path would pass the test
+/// below and leak one allocation per ring that ever registered buffers.
+#[test]
+fn a_quiesced_ring_releases_its_descriptor_array() {
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let _ = ring.hold_registered_buffer_infos(one_buffer_info());
+
+    let before = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+    drop(ring);
+    let after = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 1,
+        "a ring with nothing outstanding must release its descriptor array"
+    );
+}
+
+/// The refusing direction: a ring whose rundown fails keeps the array.
+///
+/// Dropped during an unwind, because that is the only way to reach the release
+/// decision in a debug build: outside one, the rundown assert panics first and
+/// the decision is never made, so a `Drop` that released unconditionally
+/// would pass. During an unwind both asserts stand down and the body runs to
+/// the end, in either profile.
+#[test]
+fn a_ring_whose_rundown_fails_keeps_its_descriptor_array() {
+    let before = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        let _ = ring.hold_registered_buffer_infos(one_buffer_info());
+        ring.accounting
+            .reserve_user_data()
+            .expect("a fresh ring's identity space is not exhausted");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after, before,
+        "a ring that could not prove quiescence must not release the array the kernel may still read"
+    );
+}
+
 // --- The fault-injection seam (M16.3) ---
 
 /// A real completion for a real, finished operation.

@@ -1156,6 +1156,30 @@
       "replace": [
         "        let _ = &ring;"
       ]
+    },
+    {
+      "name": "PR #113: a ring that could not prove quiescence frees its descriptor array",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The kernel reads the IORING_BUFFER_INFO array when the registration op runs (D-32), so Drop may free it only on the proof the inventory needs. Before PR #113's review it was an ordinary field and was freed on every path. This patch frees it unconditionally while leaving the inventory's rule alone, so only the descriptor-array test can notice. That test drops the ring during an unwind, because outside one the rundown assert panics before the release decision is reached in a debug build -- a test that did not would pass against this patch.",
+      "find": [
+        "            drop(infos);\n        }"
+      ],
+      "replace": [
+        "            drop(infos);\n        } else {\n            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };\n            #[cfg(test)]\n            if !infos.is_empty() {\n                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));\n            }\n            drop(infos);\n        }"
+      ]
+    },
+    {
+      "name": "PR #113: a quiesced ring leaks its descriptor array",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The accepting direction of the case above. Leaking on every path would satisfy the refusing test while leaking one allocation per ring that ever registered buffers. The count is taken from the value ManuallyDrop::take moves out, so removing the release removes the count with it rather than leaving a counter that moves beside a leak.",
+      "find": [
+        "            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };\n            #[cfg(test)]\n            if !infos.is_empty() {\n                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));\n            }\n            drop(infos);"
+      ],
+      "replace": [
+        "            // sabotage: the descriptor array is never released"
+      ]
     }
   ]
 }

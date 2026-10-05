@@ -386,7 +386,7 @@ impl<T, X> IoRing<T, X> {
             self.registered_buffer_infos.is_empty(),
             "a ring accepts at most one buffer registration, so this must only be set once"
         );
-        self.registered_buffer_infos = infos;
+        *self.registered_buffer_infos = infos;
         // `Vec::as_ptr` is stable for as long as the `Vec` is neither moved
         // out of nor reallocated; it lives in `self` and is never mutated
         // again, and moving the `IoRing` itself moves only the `Vec` header,

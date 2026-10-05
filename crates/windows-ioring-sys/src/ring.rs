@@ -623,9 +623,17 @@ pub struct IoRing<T = (), X = ()> {
     /// `SubmitIoRing` leaves the SQE queued as ring state (D-5), so a later,
     /// unrelated submit can be what finally runs it -- after that batch is
     /// long gone. A ring accepts at most one buffer registration, so this is
-    /// one small allocation per ring, and it is released only by
-    /// `CloseIoRing`.
-    registered_buffer_infos: Vec<IORING_BUFFER_INFO>,
+    /// one small allocation per ring.
+    ///
+    /// `ManuallyDrop` for the same reason as `inventory` below, and released
+    /// on the same proof: `Drop` frees it only once rundown has shown nothing
+    /// is outstanding, and leaks it otherwise. Before this was `ManuallyDrop`
+    /// it was an ordinary field, freed after the `Drop` body on every path --
+    /// including the one where rundown failed with the registration perhaps
+    /// still pending, and, in a debug build, by the unwind out of that path's
+    /// assert before any later line of the body could intervene. PR #113
+    /// review.
+    registered_buffer_infos: ManuallyDrop<Vec<IORING_BUFFER_INFO>>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -752,7 +760,7 @@ impl<T, X> IoRing<T, X> {
             version,
             supported_ops,
             accounting: Accounting::new(),
-            registered_buffer_infos: Vec::new(),
+            registered_buffer_infos: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         })
@@ -1158,7 +1166,7 @@ impl IoRing {
             version: RingVersion::V1,
             supported_ops: OpSupport::default(),
             accounting: Accounting::new(),
-            registered_buffer_infos: Vec::new(),
+            registered_buffer_infos: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         }
@@ -1234,12 +1242,29 @@ impl<T, X> Drop for IoRing<T, X> {
         // It is keyed by identity, so a CQE the ring never minted -- a
         // duplicate, or one carrying foreign user data -- cannot make it read
         // true while any operation, owned or raw, is still in flight.
+        //
+        // The registered-buffer descriptor array follows the same rule for
+        // the same reason. The kernel reads it when the registration op runs
+        // (D-32), and a failed rundown is precisely the case where this ring
+        // cannot say whether that has happened.
         if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
-            // aimed at anything this holds, and `self.inventory` is not used
-            // again -- this is `Drop`, and the field is `ManuallyDrop` so
-            // nothing drops it a second time.
+            // aimed at anything this holds and no registration op can still
+            // read the descriptor array; neither field is used again -- this
+            // is `Drop`, and both are `ManuallyDrop` so nothing drops them a
+            // second time.
             unsafe { ManuallyDrop::drop(&mut self.inventory) };
+            // Taken out rather than dropped in place so the test counter below
+            // counts the very value that is freed: deleting the release
+            // deletes the count with it.
+            //
+            // SAFETY: as for the inventory above; the field is not read again.
+            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };
+            #[cfg(test)]
+            if !infos.is_empty() {
+                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));
+            }
+            drop(infos);
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
@@ -1269,6 +1294,17 @@ impl<T, X> Drop for IoRing<T, X> {
 #[cfg(test)]
 thread_local! {
     pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// How many non-empty registered-buffer descriptor arrays `IoRing`'s `Drop` has
+// released on the calling thread. Thread-local for the reason `DROP_RUNS` is.
+//
+// What it observes is the explicit release, not the absence of the compiler's
+// own drop of the field; that half is the field's `ManuallyDrop` type, which
+// `ring::tests` pins at compile time.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUFFER_INFOS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Pop one completion, bounded, for tests that need a real one.
