@@ -615,25 +615,26 @@ pub struct IoRing<T = (), X = ()> {
     /// operation identities, and the counts (M24.2). Split out so those rules
     /// can be tested without opening a ring -- see [`crate::accounting`].
     accounting: Accounting,
-    /// The `IORING_BUFFER_INFO` array handed to `BuildIoRingRegisterBuffers`,
-    /// kept alive because the kernel reads it when the registration op
-    /// *runs*, not when the `Build*` call returns (D-32, measured).
+    /// The arrays handed to the two registration `Build*` calls, kept alive
+    /// because the kernel reads both when the registration op *runs*, not
+    /// when the `Build*` call returns (D-32, measured) -- see
+    /// [`LateReadArrays`].
     ///
-    /// Held by the ring rather than by the `Batch` that built it: a failed
+    /// Held by the ring rather than by the `Batch` that built them: a failed
     /// `SubmitIoRing` leaves the SQE queued as ring state (D-5), so a later,
     /// unrelated submit can be what finally runs it -- after that batch is
-    /// long gone. A ring accepts at most one buffer registration, so this is
-    /// one small allocation per ring.
+    /// long gone. A ring accepts at most one registration of each kind, so
+    /// this is at most two small allocations per ring.
     ///
     /// `ManuallyDrop` for the same reason as `inventory` below, and released
     /// on the same proof: `Drop` frees it only once rundown has shown nothing
     /// is outstanding, and leaks it otherwise. Before this was `ManuallyDrop`
-    /// it was an ordinary field, freed after the `Drop` body on every path --
-    /// including the one where rundown failed with the registration perhaps
-    /// still pending, and, in a debug build, by the unwind out of that path's
-    /// assert before any later line of the body could intervene. PR #113
-    /// review.
-    registered_buffer_infos: ManuallyDrop<Vec<IORING_BUFFER_INFO>>,
+    /// the buffer array was an ordinary field, freed after the `Drop` body on
+    /// every path -- including the one where rundown failed with the
+    /// registration perhaps still pending, and, in a debug build, by the
+    /// unwind out of that path's assert before any later line of the body
+    /// could intervene. PR #113 review.
+    late_read: ManuallyDrop<LateReadArrays>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -660,6 +661,27 @@ pub struct IoRing<T = (), X = ()> {
     inventory: ManuallyDrop<HashMap<usize, Entry<T, X>>>,
 }
 
+/// The arrays a registration op reads when it *runs*, during a later
+/// `SubmitIoRing`, rather than when its `Build*` call returns (D-32).
+///
+/// Both registrations behave this way. D-32 once recorded the file-handle
+/// array as read synchronously; that was measured in a debug build, where a
+/// caller's temporary `&[handle]` happened to survive in its stack slot until
+/// the submit. A release build reuses the slot, the kernel registered whatever
+/// it found there, and the first read through the index failed with
+/// `ERROR_INVALID_HANDLE`. Overwriting the caller's array before the submit
+/// reproduces it in every profile (PR #113).
+///
+/// One struct, so the two arrays have one owner, one release point and one
+/// rule for when that release is safe.
+#[derive(Default)]
+pub(crate) struct LateReadArrays {
+    /// The array handed to `BuildIoRingRegisterBuffers`.
+    pub(crate) buffer_infos: Vec<IORING_BUFFER_INFO>,
+    /// The array handed to `BuildIoRingRegisterFileHandles`.
+    pub(crate) file_handles: Vec<*mut c_void>,
+}
+
 impl<T, X> std::fmt::Debug for IoRing<T, X> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoRing")
@@ -671,10 +693,8 @@ impl<T, X> std::fmt::Debug for IoRing<T, X> {
             // second copy of the field list, drifting the moment either side
             // gains a field.
             .field("accounting", &self.accounting)
-            .field(
-                "registered_buffer_infos",
-                &self.registered_buffer_infos.len(),
-            )
+            .field("late_read_buffer_infos", &self.late_read.buffer_infos.len())
+            .field("late_read_file_handles", &self.late_read.file_handles.len())
             .field("completion_event", &self.completion_event)
             .finish()
     }
@@ -760,7 +780,7 @@ impl<T, X> IoRing<T, X> {
             version,
             supported_ops,
             accounting: Accounting::new(),
-            registered_buffer_infos: ManuallyDrop::new(Vec::new()),
+            late_read: ManuallyDrop::new(LateReadArrays::default()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         })
@@ -1166,7 +1186,7 @@ impl IoRing {
             version: RingVersion::V1,
             supported_ops: OpSupport::default(),
             accounting: Accounting::new(),
-            registered_buffer_infos: ManuallyDrop::new(Vec::new()),
+            late_read: ManuallyDrop::new(LateReadArrays::default()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         }
@@ -1243,14 +1263,14 @@ impl<T, X> Drop for IoRing<T, X> {
         // duplicate, or one carrying foreign user data -- cannot make it read
         // true while any operation, owned or raw, is still in flight.
         //
-        // The registered-buffer descriptor array follows the same rule for
-        // the same reason. The kernel reads it when the registration op runs
-        // (D-32), and a failed rundown is precisely the case where this ring
-        // cannot say whether that has happened.
+        // The registration arrays follow the same rule for the same reason.
+        // The kernel reads them when the registration op runs (D-32), and a
+        // failed rundown is precisely the case where this ring cannot say
+        // whether that has happened.
         if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds and no registration op can still
-            // read the descriptor array; neither field is used again -- this
+            // read either array; neither field is used again -- this
             // is `Drop`, and both are `ManuallyDrop` so nothing drops them a
             // second time.
             unsafe { ManuallyDrop::drop(&mut self.inventory) };
@@ -1259,12 +1279,14 @@ impl<T, X> Drop for IoRing<T, X> {
             // deletes the count with it.
             //
             // SAFETY: as for the inventory above; the field is not read again.
-            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };
+            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };
             #[cfg(test)]
-            if !infos.is_empty() {
-                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));
+            {
+                let non_empty = usize::from(!arrays.buffer_infos.is_empty())
+                    + usize::from(!arrays.file_handles.is_empty());
+                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));
             }
-            drop(infos);
+            drop(arrays);
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
@@ -1296,15 +1318,16 @@ thread_local! {
     pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-// How many non-empty registered-buffer descriptor arrays `IoRing`'s `Drop` has
-// released on the calling thread. Thread-local for the reason `DROP_RUNS` is.
+// How many non-empty registration arrays (`LateReadArrays`) `IoRing`'s `Drop`
+// has released on the calling thread. Thread-local for the reason `DROP_RUNS`
+// is.
 //
 // What it observes is the explicit release, not the absence of the compiler's
 // own drop of the field; that half is the field's `ManuallyDrop` type, which
 // `ring::tests` pins at compile time.
 #[cfg(test)]
 thread_local! {
-    pub(crate) static BUFFER_INFOS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static LATE_READ_ARRAYS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Pop one completion, bounded, for tests that need a real one.

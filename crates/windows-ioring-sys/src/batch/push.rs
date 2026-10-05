@@ -543,17 +543,20 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// reports failure has still spent it. There is no retry -- a consumer
     /// whose registration fails must build the registration on a new ring.
     ///
-    /// `handles` only needs to stay valid for this call, unlike a data
-    /// buffer referenced through an `IORING_HANDLE_REF`/`IORING_BUFFER_REF`:
-    /// `BuildIoRingRegisterFileHandles` has no such ref, it takes the array
-    /// directly and reads it synchronously -- confirmed by measurement, not
-    /// assumed (D-32). The handles themselves must still stay open for as
-    /// long as the registration is used -- this crate does not take
-    /// ownership of them, only of their assigned indices' bookkeeping.
+    /// The `handles` *slice* only needs to stay valid for this call. The
+    /// kernel reads the array when the registration op *runs*, during a later
+    /// `SubmitIoRing`, not when `BuildIoRingRegisterFileHandles` returns
+    /// (D-32, measured) -- so this copies it into the ring, which holds the
+    /// copy until it can prove the op has run, and builds the SQE from that.
+    /// The handles themselves must still stay open for as long as the
+    /// registration is used -- this crate does not take ownership of them,
+    /// only of their assigned indices' bookkeeping.
     ///
-    /// Do **not** generalize this to [`Batch::register_buffers`]:
-    /// `BuildIoRingRegisterBuffers` reads its array when the op *runs*, and
-    /// assuming otherwise was a live use-after-free in 0.1.2.
+    /// Before PR #113 this said the opposite, that the kernel reads the array
+    /// synchronously, and built the SQE from the caller's slice. A temporary
+    /// `&[handle]` then registered whatever its reused stack slot held by the
+    /// time of the submit: correct in a debug build by accident, and
+    /// `ERROR_INVALID_HANDLE` on the first read in a release one.
     ///
     /// # Safety
     ///
@@ -591,20 +594,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         let count = checked_len(handles.len())?;
         let base_index = self.ring.registered_file_count();
         let user_data = self.ring.reserve_user_data()?;
-        // SAFETY: `self.ring`'s handle is live; `handles` is read
-        // synchronously for the duration of this call only -- confirmed by
-        // measurement (D-32), not inherited from the sibling registration,
-        // which behaves the opposite way.
+        // The kernel reads the array when the op runs, during a later submit
+        // (D-32, measured), so the SQE is built from the ring's copy, never
+        // from the caller's slice.
+        let handles_ptr = self.ring.hold_registered_file_handles(handles.to_vec());
+        // SAFETY: `self.ring`'s handle is live; `handles_ptr` addresses the
+        // copy the ring now holds, which outlives every submit that could run
+        // this SQE.
         let hr = unsafe {
-            crate::sys::build_register_files(
-                self.ring.raw_handle(),
-                count,
-                handles.as_ptr(),
-                user_data,
-            )
+            crate::sys::build_register_files(self.ring.raw_handle(), count, handles_ptr, user_data)
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
+            self.ring.release_unqueued_file_handles();
             return Err(error);
         }
         self.ring.reserve_registered_files(count);
@@ -626,22 +628,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// lifetime, with the same zero-length and failed-registration
     /// consequences [`Batch::register_files`] spells out (M10.1).
     ///
-    /// Unlike [`Batch::register_files`], **two** things must outlive this
-    /// call, and the asymmetry is measured rather than assumed (D-32):
+    /// Two things must outlive this call (D-32):
     ///
     /// - the *bytes each entry points at* -- the registration case `IoBuf`'s
     ///   contract was extended to cover (D-11), so `buffers` is taken by
     ///   value and kept inside the returned [`RegisteredBuffers`] once
     ///   claimed;
-    /// - the `IORING_BUFFER_INFO` array itself. `BuildIoRingRegisterBuffers`
-    ///   does **not** read it synchronously the way
-    ///   `BuildIoRingRegisterFileHandles` reads its `handles` array; the
-    ///   kernel reads it when the registration op runs, during a later
-    ///   `SubmitIoRing`. This crate builds that array and hands it to the
-    ///   ring, which holds it for its remaining life, so a caller has
-    ///   nothing to do -- but the distinction is why
-    ///   [`crate::IoRing::push_raw`] callers building this op themselves must
-    ///   not pass a temporary.
+    /// - the `IORING_BUFFER_INFO` array itself, which the kernel reads when
+    ///   the registration op runs, during a later `SubmitIoRing` -- as it
+    ///   does [`Batch::register_files`]' handle array. This crate builds that
+    ///   array and hands it to the ring, which holds it until it can prove the
+    ///   op has run, so a caller has nothing to do -- but it is why
+    ///   [`crate::IoRing::push_raw`] callers building either registration op
+    ///   themselves must not pass a temporary.
     ///
     /// # Errors
     ///
@@ -675,9 +674,9 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         let user_data = self.ring.reserve_user_data()?;
         // The array must outlive this call: the kernel reads it when the
         // registration op runs, during a later `SubmitIoRing`, not here
-        // (D-32, measured). Hand it to the ring, which holds it for its
-        // remaining life, and build the SQE from *that* pointer rather than
-        // from the local `Vec` about to go out of scope.
+        // (D-32, measured). Hand it to the ring, which holds it until it can
+        // prove the op has run, and build the SQE from *that* pointer rather
+        // than from the local `Vec` about to go out of scope.
         let infos_ptr = self.ring.hold_registered_buffer_infos(infos);
         // SAFETY: `self.ring`'s handle is live; `infos_ptr` addresses the
         // array the ring now owns, which outlives every submit that could run
@@ -689,6 +688,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
+            self.ring.release_unqueued_buffer_infos();
             return Err(error);
         }
         self.ring.reserve_registered_buffers(count);

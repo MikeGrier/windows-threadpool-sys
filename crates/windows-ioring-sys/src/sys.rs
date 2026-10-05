@@ -208,7 +208,10 @@ pub(crate) unsafe fn build_cancel(
 ///
 /// # Safety
 ///
-/// `handles` must point to `count` valid handles that outlive the operation.
+/// `handles` must point to `count` valid handles that outlive the operation,
+/// and the *array* must stay valid until the registration operation *runs* --
+/// not merely until this call returns, exactly as for
+/// `BuildIoRingRegisterBuffers` below; see [D-32](../DESIGN-NOTES.md#d-32).
 #[inline(always)]
 pub(crate) unsafe fn build_register_files(
     ring: *mut c_void,

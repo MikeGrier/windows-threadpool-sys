@@ -368,30 +368,69 @@ impl<T, X> IoRing<T, X> {
     }
 
     /// Take ownership of the `IORING_BUFFER_INFO` array a
-    /// `BuildIoRingRegisterBuffers` call was handed, keeping it alive for
-    /// this ring's remaining life, and hand back a stable pointer to it
-    /// (D-32).
+    /// `BuildIoRingRegisterBuffers` call is about to be handed, keeping it
+    /// alive until the ring can prove the op has run, and hand back a stable
+    /// pointer to it (D-32).
     ///
     /// The kernel reads this array when the registration op *runs*, not when
     /// the `Build*` call returns, so the caller must not build the SQE from a
     /// temporary: store the array here first and pass the returned pointer.
-    /// Returns a null pointer for an empty array, which is what
-    /// `BuildIoRingRegisterBuffers` should be handed for a zero-length
-    /// registration anyway.
+    /// For an empty array the pointer is dangling, as `Vec::as_ptr` is for
+    /// any empty `Vec`, and is never dereferenced: the count passed beside it
+    /// is zero.
+    ///
+    /// If the `Build*` call then fails, call
+    /// [`IoRing::release_unqueued_buffer_infos`]: nothing was queued, and a
+    /// retry needs to hold its own array.
     pub(crate) fn hold_registered_buffer_infos(
         &mut self,
         infos: Vec<IORING_BUFFER_INFO>,
     ) -> *const IORING_BUFFER_INFO {
         debug_assert!(
-            self.registered_buffer_infos.is_empty(),
+            self.late_read.buffer_infos.is_empty(),
             "a ring accepts at most one buffer registration, so this must only be set once"
         );
-        *self.registered_buffer_infos = infos;
+        self.late_read.buffer_infos = infos;
         // `Vec::as_ptr` is stable for as long as the `Vec` is neither moved
         // out of nor reallocated; it lives in `self` and is never mutated
         // again, and moving the `IoRing` itself moves only the `Vec` header,
         // not its heap allocation.
-        self.registered_buffer_infos.as_ptr()
+        self.late_read.buffer_infos.as_ptr()
+    }
+
+    /// As [`IoRing::hold_registered_buffer_infos`], for the handle array a
+    /// `BuildIoRingRegisterFileHandles` call is about to be handed.
+    ///
+    /// The kernel reads this one late too (D-32). Copied in rather than
+    /// borrowed from the caller, so a caller's slice only has to live for
+    /// the `register_files` call.
+    pub(crate) fn hold_registered_file_handles(
+        &mut self,
+        handles: Vec<*mut c_void>,
+    ) -> *const *mut c_void {
+        debug_assert!(
+            self.late_read.file_handles.is_empty(),
+            "a ring accepts at most one file registration, so this must only be set once"
+        );
+        self.late_read.file_handles = handles;
+        // Stable for the reason given in `hold_registered_buffer_infos`.
+        self.late_read.file_handles.as_ptr()
+    }
+
+    /// Release the buffer array held for a `BuildIoRingRegisterBuffers` call
+    /// that then failed.
+    ///
+    /// A failed `Build*` queues no SQE, so the kernel will never read the
+    /// array, and the documented answer to a full queue is to submit and
+    /// retry -- which holds a fresh array and would otherwise trip the
+    /// set-once assertion above.
+    pub(crate) fn release_unqueued_buffer_infos(&mut self) {
+        self.late_read.buffer_infos = Vec::new();
+    }
+
+    /// As [`IoRing::release_unqueued_buffer_infos`], for the handle array.
+    pub(crate) fn release_unqueued_file_handles(&mut self) {
+        self.late_read.file_handles = Vec::new();
     }
 
     /// How many operations this ring believes are still outstanding: minted

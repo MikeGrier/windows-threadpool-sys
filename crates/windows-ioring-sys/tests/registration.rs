@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_ioring_sys::{
-    Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, SharedFile, WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, PushOptions,
+    RegisteredSpan, SharedFile, WriteCaching,
 };
 
 /// How long a completion this test caused is allowed to take to arrive.
@@ -596,6 +597,174 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
     // something else -- is what the successful read above demonstrates.
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// The caller's `handles` slice only has to live for the `register_files`
+/// call, whatever the kernel does with it afterwards.
+///
+/// `BuildIoRingRegisterFileHandles` reads its array when the registration op
+/// *runs*, during the later submit -- exactly as `BuildIoRingRegisterBuffers`
+/// does ([D-32](../DESIGN-NOTES.md#d-32)). D-32 originally said the opposite,
+/// and every caller here passed a temporary `&[handle]`. That passed in debug
+/// builds, where the temporary's stack slot happened to survive until the
+/// submit, and failed in release, where the slot is reused: the registration
+/// completed "successfully" with whatever it found, and the first read through
+/// the index failed with `ERROR_INVALID_HANDLE`.
+///
+/// This test does not leave that to the optimiser. It overwrites the caller's
+/// array before submitting and then frees it, so a crate that hands the kernel
+/// the caller's pointer registers a null handle in every build profile.
+#[test]
+fn the_callers_handle_array_may_die_before_the_submit() {
+    let path = temp_file("handles-die-before-submit");
+    let content = vec![21_u8; 64];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    let mut handles = vec![file.as_raw_handle()];
+    // SAFETY: the handle itself stays open for the whole test; only the slice
+    // naming it is about to die, which is the point.
+    let files_pending = unsafe { batch.register_files(&handles) }.expect("queue file registration");
+    handles[0] = std::ptr::null_mut();
+    drop(std::hint::black_box(handles));
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, _held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    let registered_file = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded")
+        .get(0)
+        .expect("index 0 exists");
+
+    let mut batch = Batch::new(&mut ring);
+    batch
+        .read_owned(&registered_file, vec![0_u8; 64], (), 0, PushOptions::new())
+        .expect("queue a read through the registered file");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    assert_eq!(
+        completion
+            .result()
+            .expect("a read through the registered index must reach the file that was registered"),
+        64
+    );
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
+}
+
+/// A registration the queue refuses can be retried once the queue drains,
+/// which is what every push's documentation tells a caller to do with
+/// `IORING_E_SUBMISSION_QUEUE_FULL`.
+///
+/// Both registrations hand their array to the ring *before* the `Build*`
+/// call, because the kernel reads it late (D-32). A `Build*` that then fails
+/// queues nothing, so the ring releases that array at once; if it did not, the
+/// retry would hold a second array and trip the ring's set-once assertion in a
+/// debug build.
+#[test]
+fn a_registration_refused_by_a_full_queue_can_be_retried() {
+    let path = temp_file("registration-retry-after-full");
+    let content = vec![5_u8; 64];
+    std::fs::write(&path, &content).expect("write fixture file");
+    // Write access because the filler below is a flush.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open for read and write");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(4, 8).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    let mut queued = 0_u32;
+    loop {
+        // SAFETY: `handle` stays open for the whole test.
+        match unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) } {
+            Ok(_) => queued += 1,
+            Err(error) => {
+                assert!(
+                    error.is_submission_queue_full(),
+                    "the filler must stop at a full queue, got {error:?}"
+                );
+                break;
+            }
+        }
+        assert!(queued <= 1024, "the queue never filled");
+    }
+    // SAFETY: as above.
+    let file_error = unsafe { batch.register_files(&[handle]) }
+        .expect_err("a full queue must refuse the file registration");
+    assert!(file_error.is_submission_queue_full(), "{file_error:?}");
+    let buffer_error = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect_err("a full queue must refuse the buffer registration");
+    assert!(buffer_error.is_submission_queue_full(), "{buffer_error:?}");
+    batch
+        .submit_and_wait(queued, 5_000)
+        .expect("submit the filler");
+    for _ in 0..queued {
+        ring.pop_within(POP_BOUND)
+            .expect("pop a filler completion")
+            .expect("a filler completion arrives within the bound");
+    }
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: as above.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("retry the file registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, _held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    let registered_file = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("the retried file registration succeeded")
+        .get(0)
+        .expect("index 0 exists");
+
+    let mut batch = Batch::new(&mut ring);
+    let buffers_pending = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect("retry the buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, _held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    let registered_buffers = buffers_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("the retried buffer registration succeeded");
+
+    let mut batch = Batch::new(&mut ring);
+    batch
+        .read_owned(&registered_file, vec![0_u8; 64], (), 0, PushOptions::new())
+        .expect("queue a read through the retried file registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    assert_eq!(completion.result().expect("read succeeded"), 64);
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
+
+    drop(registered_buffers);
 }
 
 #[test]

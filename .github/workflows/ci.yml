@@ -635,6 +635,33 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo run -p windows-ioring-sys --example epoch_log --release --locked
 
+  ioring-release:
+    name: windows-ioring-sys (release profile)
+    runs-on: windows-latest
+    # Every other test job builds debug, and a debug build hid a defect here
+    # for as long as the crate shipped it (D-32, corrected in PR #113):
+    # `BuildIoRingRegisterFileHandles` reads its handle array when the op runs,
+    # not when the call returns, and a temporary `&[handle]` survived in its
+    # stack slot until the submit only because debug code does not reuse the
+    # slot. In release the kernel registered whatever was left there and the
+    # first read through the index failed with `ERROR_INVALID_HANDLE`. A
+    # lifetime bug of that shape lives exactly in the gap between profiles, so
+    # the crate's suite runs in both.
+    #
+    # The three `#[should_panic]` tests over `debug_assert!` compile out here,
+    # by `#[cfg(debug_assertions)]`; the debug jobs cover them.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --release (all features)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-ioring-sys --all-features --release --locked --no-fail-fast
+
   threadpool-no-self-heal:
     name: windows-threadpool-sys (no self-heal feature)
     runs-on: windows-latest

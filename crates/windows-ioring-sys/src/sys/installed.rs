@@ -154,7 +154,8 @@ pub trait Responses {
     ///
     /// # Safety
     ///
-    /// As `BuildIoRingRegisterFileHandles`.
+    /// As `BuildIoRingRegisterFileHandles`, including that `handles` stays
+    /// valid until the registration operation *runs* (`D-32`).
     unsafe fn build_register_files(
         &mut self,
         ring: *mut c_void,

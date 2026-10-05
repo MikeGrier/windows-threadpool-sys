@@ -196,12 +196,14 @@ fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {
     drop(ring);
 }
 
-// --- The registered-buffer descriptor array outlives an unproven rundown ---
+// --- The registration arrays outlive an unproven rundown ---
 //
-// The kernel reads the `IORING_BUFFER_INFO` array when the registration op
-// runs (D-32), so `Drop` may free it only on the proof the inventory needs:
-// rundown showed nothing is outstanding. PR #113 review found it freed on every
-// path, because it was an ordinary field. These pin both halves of the fix.
+// The kernel reads both registration arrays -- `IORING_BUFFER_INFO` and the
+// file-handle array -- when the registration op runs (D-32), so `Drop` may free
+// them only on the proof the inventory needs: rundown showed nothing is
+// outstanding. PR #113 review found the buffer array freed on every path,
+// because it was an ordinary field; the handle array was not held at all.
+// These pin both halves of the fix, for both arrays.
 
 /// One descriptor, pointing at nothing the kernel is ever shown: no SQE is
 /// built from it, so it is only a non-empty array for `Drop` to decide about.
@@ -214,42 +216,54 @@ fn one_buffer_info() -> Vec<windows_sys::Win32::Storage::FileSystem::IORING_BUFF
     ]
 }
 
-/// The compiler's own drop of the field is what freed the array on the
+/// One null handle, for the same reason: nothing is ever built from it.
+fn one_file_handle() -> Vec<*mut std::ffi::c_void> {
+    vec![std::ptr::null_mut()]
+}
+
+/// Holds a non-empty array of each kind, as a ring that registered both would.
+fn hold_both(ring: &mut IoRing) {
+    let _ = ring.hold_registered_buffer_infos(one_buffer_info());
+    let _ = ring.hold_registered_file_handles(one_file_handle());
+}
+
+/// The compiler's own drop of the field is what freed the buffer array on the
 /// failed-rundown path -- and in a debug build it did so during the unwind out
 /// of `Drop`'s assert, where no line of the body can intervene. Only the
 /// field's type prevents that, so the type is what this pins: it does not
-/// compile if the field goes back to a plain `Vec`.
+/// compile if the field stops being `ManuallyDrop`.
 #[test]
-fn the_descriptor_array_is_never_dropped_by_the_compiler() {
-    fn pinned(
-        ring: &IoRing,
-    ) -> &std::mem::ManuallyDrop<Vec<windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO>>
-    {
-        &ring.registered_buffer_infos
+fn the_registration_arrays_are_never_dropped_by_the_compiler() {
+    fn pinned(ring: &IoRing) -> &std::mem::ManuallyDrop<super::LateReadArrays> {
+        &ring.late_read
     }
     let ring = IoRing::new(8, 8).expect("create ring");
-    assert!(pinned(&ring).is_empty(), "a fresh ring holds no array");
-}
-
-/// The accepting direction: a ring whose rundown succeeds releases the array.
-/// Without this, a `Drop` that leaked it on every path would pass the test
-/// below and leak one allocation per ring that ever registered buffers.
-#[test]
-fn a_quiesced_ring_releases_its_descriptor_array() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    let _ = ring.hold_registered_buffer_infos(one_buffer_info());
-
-    let before = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
-    drop(ring);
-    let after = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
-    assert_eq!(
-        after,
-        before + 1,
-        "a ring with nothing outstanding must release its descriptor array"
+    let arrays = pinned(&ring);
+    assert!(
+        arrays.buffer_infos.is_empty() && arrays.file_handles.is_empty(),
+        "a fresh ring holds no array"
     );
 }
 
-/// The refusing direction: a ring whose rundown fails keeps the array.
+/// The accepting direction: a ring whose rundown succeeds releases both
+/// arrays. Without this, a `Drop` that leaked them on every path would pass
+/// the test below and leak an allocation per registration on every ring.
+#[test]
+fn a_quiesced_ring_releases_its_registration_arrays() {
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    hold_both(&mut ring);
+
+    let before = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+    drop(ring);
+    let after = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 2,
+        "a ring with nothing outstanding must release both registration arrays"
+    );
+}
+
+/// The refusing direction: a ring whose rundown fails keeps both arrays.
 ///
 /// Dropped during an unwind, because that is the only way to reach the release
 /// decision in a debug build: outside one, the rundown assert panics first and
@@ -257,12 +271,12 @@ fn a_quiesced_ring_releases_its_descriptor_array() {
 /// would pass. During an unwind both asserts stand down and the body runs to
 /// the end, in either profile.
 #[test]
-fn a_ring_whose_rundown_fails_keeps_its_descriptor_array() {
-    let before = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
+    let before = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
 
     let unwound = std::panic::catch_unwind(|| {
         let mut ring = IoRing::refused_by_the_kernel();
-        let _ = ring.hold_registered_buffer_infos(one_buffer_info());
+        hold_both(&mut ring);
         ring.accounting
             .reserve_user_data()
             .expect("a fresh ring's identity space is not exhausted");
@@ -270,11 +284,28 @@ fn a_ring_whose_rundown_fails_keeps_its_descriptor_array() {
     });
     assert!(unwound.is_err(), "the closure must have unwound");
 
-    let after = super::BUFFER_INFOS_RELEASED.with(std::cell::Cell::get);
+    let after = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
     assert_eq!(
         after, before,
-        "a ring that could not prove quiescence must not release the array the kernel may still read"
+        "a ring that could not prove quiescence must not release an array the kernel may still read"
     );
+}
+
+/// A `Build*` that fails queues nothing, so the array held for it is released
+/// at once -- otherwise the documented retry after a full queue would hold a
+/// second array and trip the set-once assertion, in a debug build.
+#[test]
+fn an_array_held_for_a_failed_build_is_released_for_the_retry() {
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    hold_both(&mut ring);
+    ring.release_unqueued_buffer_infos();
+    ring.release_unqueued_file_handles();
+    assert!(ring.late_read.buffer_infos.is_empty());
+    assert!(ring.late_read.file_handles.is_empty());
+    // The retry: holding again must not trip the set-once assertion.
+    hold_both(&mut ring);
+    assert_eq!(ring.late_read.buffer_infos.len(), 1);
+    assert_eq!(ring.late_read.file_handles.len(), 1);
 }
 
 // --- The fault-injection seam (M16.3) ---

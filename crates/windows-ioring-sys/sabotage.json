@@ -1158,27 +1158,63 @@
       ]
     },
     {
-      "name": "PR #113: a ring that could not prove quiescence frees its descriptor array",
+      "name": "PR #113: a ring that could not prove quiescence frees its registration arrays",
       "file": "src/ring.rs",
       "expect": "caught",
-      "why": "The kernel reads the IORING_BUFFER_INFO array when the registration op runs (D-32), so Drop may free it only on the proof the inventory needs. Before PR #113's review it was an ordinary field and was freed on every path. This patch frees it unconditionally while leaving the inventory's rule alone, so only the descriptor-array test can notice. That test drops the ring during an unwind, because outside one the rundown assert panics before the release decision is reached in a debug build -- a test that did not would pass against this patch.",
+      "why": "The kernel reads both registration arrays when the registration op runs (D-32), so Drop may free them only on the proof the inventory needs. Before PR #113's review the buffer array was an ordinary field and was freed on every path. This patch frees them unconditionally while leaving the inventory's rule alone, so only the registration-array test can notice. That test drops the ring during an unwind, because outside one the rundown assert panics before the release decision is reached in a debug build -- a test that did not would pass against this patch.",
       "find": [
-        "            drop(infos);\n        }"
+        "            drop(arrays);\n        }"
       ],
       "replace": [
-        "            drop(infos);\n        } else {\n            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };\n            #[cfg(test)]\n            if !infos.is_empty() {\n                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));\n            }\n            drop(infos);\n        }"
+        "            drop(arrays);\n        } else {\n            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };\n            #[cfg(test)]\n            {\n                let non_empty = usize::from(!arrays.buffer_infos.is_empty())\n                    + usize::from(!arrays.file_handles.is_empty());\n                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));\n            }\n            drop(arrays);\n        }"
       ]
     },
     {
-      "name": "PR #113: a quiesced ring leaks its descriptor array",
+      "name": "PR #113: a quiesced ring leaks its registration arrays",
       "file": "src/ring.rs",
       "expect": "caught",
-      "why": "The accepting direction of the case above. Leaking on every path would satisfy the refusing test while leaking one allocation per ring that ever registered buffers. The count is taken from the value ManuallyDrop::take moves out, so removing the release removes the count with it rather than leaving a counter that moves beside a leak.",
+      "why": "The accepting direction of the case above. Leaking on every path would satisfy the refusing test while leaking an allocation per registration on every ring. The count is taken from the value ManuallyDrop::take moves out, so removing the release removes the count with it rather than leaving a counter that moves beside a leak.",
       "find": [
-        "            let infos = unsafe { ManuallyDrop::take(&mut self.registered_buffer_infos) };\n            #[cfg(test)]\n            if !infos.is_empty() {\n                BUFFER_INFOS_RELEASED.with(|released| released.set(released.get() + 1));\n            }\n            drop(infos);"
+        "            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };\n            #[cfg(test)]\n            {\n                let non_empty = usize::from(!arrays.buffer_infos.is_empty())\n                    + usize::from(!arrays.file_handles.is_empty());\n                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));\n            }\n            drop(arrays);"
       ],
       "replace": [
-        "            // sabotage: the descriptor array is never released"
+        "            // sabotage: the registration arrays are never released"
+      ]
+    },
+    {
+      "name": "PR #113: register_files builds its SQE from the caller's slice again",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The release-only defect itself. D-32 once said BuildIoRingRegisterFileHandles reads its array synchronously, so the SQE was built from the caller's slice; the kernel reads it at submit, and a temporary &[handle] then registered whatever its reused stack slot held -- correct in debug by accident, ERROR_INVALID_HANDLE on the first read in release. The test that catches it overwrites and frees the caller's array before the submit, so it fails in every profile rather than only where the optimiser happens to reuse the slot. Measured before the fix: in debug the registration op itself failed with ERROR_NOACCESS under the guard allocator.",
+      "find": [
+        "self.ring.hold_registered_file_handles(handles.to_vec())"
+      ],
+      "replace": [
+        "handles.as_ptr()"
+      ]
+    },
+    {
+      "name": "PR #113: a failed file-registration build keeps its array",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The array is held before the Build* call, so a Build* that fails -- a full queue, the case every push documents a retry for -- must release it: nothing was queued, and the retry holds its own. Without the release the retry trips the ring's set-once assertion in a debug build. Caught by the integration test that fills a real queue, not by the unit test of the helper, which cannot see whether register_files calls it.",
+      "find": [
+        "            self.ring.release_unqueued_file_handles();\n"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "PR #113: a failed buffer-registration build keeps its array",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The buffer-side twin of the case above. register_buffers already held its array before the Build* call before PR #113 and released nothing on failure, so this patch restores the crate's prior state on that side; the retry test catching it is the evidence that the prior state was a defect. Listed separately because the two releases are separate lines and a change can reach one without the other.",
+      "find": [
+        "            self.ring.release_unqueued_buffer_infos();\n"
+      ],
+      "replace": [
+        ""
       ]
     }
   ]

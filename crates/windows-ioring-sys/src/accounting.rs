@@ -5,7 +5,7 @@
 //!
 //! [`crate::IoRing`] had ten fields and they divide evenly. Five name kernel
 //! state -- the handle, the negotiated version, the probed op support, the
-//! registration array the kernel reads late (`D-32`), and the completion event.
+//! registration arrays the kernel reads late (`D-32`), and the completion event.
 //! The other five are a ledger this crate keeps for itself: the ring's
 //! identity, the next `UserData` to hand out, which operations are
 //! outstanding, and the two registration base indices.
