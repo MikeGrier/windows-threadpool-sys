@@ -162,14 +162,53 @@ fn by_turbofish() {
 fn by_alias() {
     let ring = LaneRing::with_inventory(8, 8).expect("ring");
 }
+
+// `new` is matched only on names that denote IoRing, so these are the forms
+// that slipped through while `new` was anchored to the literal `IoRing`
+// (PR #113 review). The aliases are declared here and resolved by the script.
+type LaneRing = IoRing<Vec<u8>>;
+type WideLane = LaneRing;
+use crate::ring::IoRing as Renamed;
+
+#[test]
+fn by_turbofish_new() {
+    let ring = IoRing::<()>::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_nested_turbofish_new() {
+    let ring = IoRing::<Vec<u8>, ()>::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_alias_new() {
+    let ring = LaneRing::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_alias_of_alias_new() {
+    let ring = WideLane::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_renamed_import_new() {
+    let ring = Renamed::new(8, 8).expect("ring");
+}
+
+#[test]
+fn by_path_qualified_new() {
+    let ring = crate::IoRing::new(8, 8).expect("ring");
+}
 '@ }
     try {
         $recorded = Get-Recorded $root
         foreach ($name in 'by_new', 'by_with_version', 'by_with_inventory',
-            'by_with_version_and_inventory', 'by_turbofish', 'by_alias') {
+            'by_with_version_and_inventory', 'by_turbofish', 'by_alias', 'by_turbofish_new',
+            'by_nested_turbofish_new', 'by_alias_new', 'by_alias_of_alias_new',
+            'by_renamed_import_new', 'by_path_qualified_new') {
             Assert-Contains $recorded "alpha::$name" 'constructor spelling'
         }
-        Assert-Equal 6 $recorded.Count 'entries'
+        Assert-Equal 12 $recorded.Count 'entries'
     }
     finally { Remove-Fixture $root }
 }
@@ -194,6 +233,26 @@ fn make_versioned_inventory() -> IoRing<Vec<u8>> {
     IoRing::with_version_and_inventory(version, 8, 8).expect("ring")
 }
 
+type LaneRing = IoRing<Vec<u8>>;
+
+fn make_alias_new() -> LaneRing {
+    LaneRing::new(8, 8).expect("ring")
+}
+
+fn make_turbofish_new() -> IoRing {
+    IoRing::<()>::new(8, 8).expect("ring")
+}
+
+#[test]
+fn via_alias_new() {
+    let ring = make_alias_new();
+}
+
+#[test]
+fn via_turbofish_new() {
+    let ring = make_turbofish_new();
+}
+
 #[test]
 fn via_new() {
     let ring = make_new();
@@ -216,10 +275,11 @@ fn via_versioned_inventory() {
 '@ }
     try {
         $recorded = Get-Recorded $root
-        foreach ($name in 'via_new', 'via_versioned', 'via_inventory', 'via_versioned_inventory') {
+        foreach ($name in 'via_new', 'via_versioned', 'via_inventory', 'via_versioned_inventory',
+            'via_alias_new', 'via_turbofish_new') {
             Assert-Contains $recorded "alpha::$name" 'helper indirection'
         }
-        Assert-Equal 4 $recorded.Count 'entries (helpers themselves are not tests)'
+        Assert-Equal 6 $recorded.Count 'entries (helpers themselves are not tests)'
     }
     finally { Remove-Fixture $root }
 }
@@ -264,6 +324,27 @@ fn null_handle_ring() {
 fn longer_method_name() {
     let p = Policy::with_versioned(3);
     let q = Policy::with_inventory_size(3);
+}
+
+// Names that are NOT the ring type: a type that merely contains it, prose that
+// says "IoRing as" without being a `use` rename, a longer name ending in
+// IoRing, and a `new` method that only shares the alias's prefix.
+type Rings = Vec<IoRing>;
+// IoRing as a whole is not a rename.
+
+#[test]
+fn container_of_rings_new() {
+    let rings = Rings::new();
+}
+
+#[test]
+fn longer_type_name_new() {
+    let r = MockIoRing::new(8, 8);
+}
+
+#[test]
+fn word_after_prose_new() {
+    let w = a::new();
 }
 '@ }
     try {

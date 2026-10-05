@@ -91,8 +91,46 @@ if (-not (Test-Path $sourceRoot)) {
 # the safe direction: an unrelated `Other::with_version(` produces an ADDED
 # entry, which fails loudly and is answered by a human, where a missed ring
 # would pass. tools/test-check-ring-tests.ps1 pins both behaviours.
+#
+# `new` cannot be matched on any type -- every `Vec::new()` would count -- so it
+# is matched on every NAME that denotes `IoRing` in this source tree, with or
+# without a turbofish (`IoRing::<()>::new(`). Those names are derived, not
+# listed: `IoRing` itself, every `type X = ...IoRing...` alias (followed through
+# chains of aliases), and every `IoRing as X` rename in a `use`. Anchoring `new`
+# to the literal `IoRing` let `LaneRing::new(` and `IoRing::<()>::new(` through,
+# while the `with_*` forms beside them were caught (PR #113 review). What is
+# still not resolved: a name brought in by a glob re-export of a renamed
+# import, or a ring built inside a macro. Both fail open, so they are declared
+# here rather than hidden.
+function Get-RingTypeNames {
+    param([string]$Root)
+
+    $names = New-Object System.Collections.Generic.HashSet[string]
+    $null = $names.Add('IoRing')
+    $texts = @(Get-ChildItem -Path $Root -Recurse -Filter '*.rs' |
+            ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) })
+    do {
+        $before = $names.Count
+        $alternatives = (@($names) | ForEach-Object { [regex]::Escape($_) }) -join '|'
+        foreach ($text in $texts) {
+            # The right-hand side must BE the ring type, possibly path-qualified
+            # and generic -- not merely mention it, as `Vec<IoRing>` does.
+            $aliases = "\btype\s+(\w+)\s*(?:<[^=;]*>)?\s*=\s*(?:\w+\s*::\s*)*(?:$alternatives)\b"
+            foreach ($match in [regex]::Matches($text, $aliases)) { $null = $names.Add($match.Groups[1].Value) }
+            # Followed by `;`, `,` or `}` so only a `use` rename qualifies, not
+            # prose such as "IoRing as a whole".
+            $renames = "\b(?:$alternatives)\s+as\s+(\w+)\s*[;,}]"
+            foreach ($match in [regex]::Matches($text, $renames)) { $null = $names.Add($match.Groups[1].Value) }
+        }
+    } while ($names.Count -gt $before)
+    # Unrolled on purpose: the set always holds `IoRing`, so the caller's
+    # pipeline sees one name per item rather than a single array.
+    return $names | Sort-Object
+}
+
+$ringNames = (Get-RingTypeNames -Root $sourceRoot | ForEach-Object { [regex]::Escape($_) }) -join '|'
 $script:RingConstructorPattern =
-    '(IoRing::new|::with_version_and_inventory|::with_inventory|::with_version)\s*\('
+    "(?:\b(?:$ringNames)(?:\s*::\s*<[^\n]*?>)?\s*::\s*new|::with_version_and_inventory|::with_inventory|::with_version)\s*\("
 
 # One entry per `#[test]` in `src/**/tests.rs` whose body reaches a ring, either
 # directly or through a helper in the same file that does.
