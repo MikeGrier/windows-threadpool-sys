@@ -36,13 +36,20 @@ were cleared rather than counted.
 A clean run on the passing path does not establish the property the fix exists
 for.
 `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting`
-was given a deliberate `panic!` placed **after its file handle is open**, which
-is the state in which a removal can fail outright. The run panicked at that
-line, exited 101, and left nothing behind. [arms.csv](arms.csv) carries that arm
-and its count, for the reason given above.
+was given a deliberate `panic!` placed **after its file handle is open**. The
+run panicked at that line, exited 101, and left nothing behind.
+[arms.csv](arms.csv) carries that arm and its count, for the reason given above.
 
 That site previously had no removal on any path, so the same panic leaked before
 the change.
+
+What this arm shows is that the guard runs on the panicking path. It does
+**not** show that a removal survives an open handle that refuses deletion: this
+test opens its file with `std::fs::OpenOptions`, which shares delete, so the
+removal could succeed with the handle still open (see the next section). An
+earlier version of this paragraph called that state the one "in which a removal
+can fail outright", which is true only of the direct `CreateFileW` fixtures; no
+panic arm was run against one of those (PR #113 review).
 
 ## Deleting a file whose handle is open: it depends on how the file was opened
 
