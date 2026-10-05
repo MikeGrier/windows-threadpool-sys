@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use win_numa_sys::NumaNode;
 use windows_ioring_sys::{
-    Batch, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan, Token, WriteCaching,
+    Batch, IoRing, NumaBuffer, OperationId, PushOptions, RegisteredBuffers, RegisteredSpan,
+    WriteCaching,
 };
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
@@ -18,9 +19,9 @@ use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffi
 
 use crate::plan::DomainPlan;
 
-/// How long a single push-and-wait may block before this sample gives up on
-/// it, rather than hanging forever on a stuck device.
-const OP_TIMEOUT_MS: u32 = 30_000;
+/// How long waiting for a single operation's completion may block before this
+/// sample gives up on it, rather than hanging forever on a stuck device.
+const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What one domain's copy pass accomplished.
 pub struct DomainReport {
@@ -69,10 +70,11 @@ pub fn copy_domain(
         let transferred = submit_one(&mut ring, |batch| {
             // SAFETY: `source` stays open for this domain's whole copy pass.
             unsafe {
-                batch.read_registered_raw(
+                batch.read_registered_raw_owned(
                     source,
                     &registration,
                     read_span,
+                    (),
                     offset,
                     PushOptions::new(),
                 )
@@ -90,10 +92,11 @@ pub fn copy_domain(
         submit_one(&mut ring, |batch| {
             // SAFETY: `destination` stays open for this domain's whole copy pass.
             unsafe {
-                batch.write_registered_raw(
+                batch.write_registered_raw_owned(
                     destination,
                     &registration,
                     write_span,
+                    (),
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
@@ -141,10 +144,13 @@ fn register_buffer(
     let pending = {
         let mut batch = Batch::new(ring);
         let pending = batch.register_buffers(vec![buffer])?;
-        batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
+        batch.submit()?;
         pending
     };
-    let completion = ring.try_pop()?.ok_or_else(|| {
+    // One bounded wait, owned by the pop. A submit that waited would promise
+    // nothing about poppability once its own timeout expired (RS-P-5), so
+    // an immediate `try_pop` after it could call a slow registration missing.
+    let (completion, _held) = ring.pop_within(OP_TIMEOUT)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
             "no completion for buffer registration",
@@ -158,28 +164,33 @@ fn register_buffer(
     }
 }
 
-/// Push one op via `push`, submit and wait for it, then claim its completion,
-/// returning the transferred byte count.
+/// Push one op via `push`, submit it, then wait a bounded time for its
+/// completion and claim it, returning the transferred byte count.
 fn submit_one<F>(ring: &mut IoRing, push: F) -> io::Result<u32>
 where
-    F: FnOnce(&mut Batch<'_>) -> io::Result<Token<windows_ioring_sys::RegisteredUse>>,
+    F: FnOnce(&mut Batch<'_>) -> io::Result<OperationId>,
 {
-    let token = {
+    {
         let mut batch = Batch::new(ring);
-        let token = push(&mut batch)?;
-        batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
-        token
-    };
-    let completion = ring.try_pop()?.ok_or_else(|| {
+        push(&mut batch)?;
+        batch.submit()?;
+    }
+    // The pop is not optional bookkeeping: this operation holds a registration
+    // lease, and popping its completion is what releases that lease back to the
+    // registered buffer's outstanding count. Skipping it would leave the
+    // registration pinned for the rest of the run.
+    let (completion, held) = ring.pop_within(OP_TIMEOUT)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
-            "no completion after submit_and_wait",
+            "no completion within the operation timeout",
         )
     })?;
+    if held.is_none() {
+        return Err(io::Error::other(
+            "completion did not match anything this ring was holding",
+        ));
+    }
     let transferred = completion.result()?;
-    token
-        .claim_if(&completion)
-        .map_err(|_| io::Error::other("completion did not match the token this call submitted"))?;
     u32::try_from(transferred)
         .map_err(|_| io::Error::other("transferred byte count does not fit in u32"))
 }

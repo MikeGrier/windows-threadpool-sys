@@ -108,9 +108,23 @@ jobs:
       - name: Run test-common.ps1
         shell: pwsh
         run: ./tools/test-common.ps1
+      # The retry wrapper the two steps below run through, tested before it is
+      # trusted. Both hosts, because it runs its target under its own host.
+      - name: Run test-invoke-retrying-on-start-failure.ps1
+        shell: pwsh
+        run: ./tools/test-invoke-retrying-on-start-failure.ps1
+      - name: Run test-invoke-retrying-on-start-failure.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-invoke-retrying-on-start-failure.ps1
+      # Through the retry wrapper because this suite starts hundreds of short
+      # processes across parallel shards, and one PR #113 run had four of them
+      # refused at start-up by the runner (0xC0000142, STATUS_DLL_INIT_FAILED)
+      # -- a pass on re-run. The wrapper retries ONLY that signature, logs the
+      # host's state when it sees it, and annotates the run, so a real failure
+      # still fails first time and a flake stays visible.
       - name: Run test-run-sabotage.ps1
         shell: pwsh
-        run: ./tools/test-run-sabotage.ps1
+        run: ./tools/invoke-retrying-on-start-failure.ps1 -Script ./tools/test-run-sabotage.ps1
       # And again under Windows PowerShell 5.1, which is not a duplicate of the
       # step above. The harness and its suite both capture native output, and the
       # rule that makes that capture terminate under `Stop` exists ONLY on 5.1 --
@@ -119,7 +133,18 @@ jobs:
       # Windows PowerShell 5.1 that ships on every windows runner.
       - name: Run test-run-sabotage.ps1 (Windows PowerShell 5.1)
         shell: powershell
-        run: ./tools/test-run-sabotage.ps1
+        run: ./tools/invoke-retrying-on-start-failure.ps1 -Script ./tools/test-run-sabotage.ps1
+      # The sweep workflow's job matrix comes from this planner, so a defect in
+      # it makes `sabotage sweeps` run fewer jobs than it claims -- or none,
+      # while still reporting success. Both hosts for the same reason as the
+      # pair above: it is an ordinary script a developer may run locally under
+      # either, and its suite is a second away.
+      - name: Run test-plan-sabotage-matrix.ps1
+        shell: pwsh
+        run: ./tools/test-plan-sabotage-matrix.ps1
+      - name: Run test-plan-sabotage-matrix.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-plan-sabotage-matrix.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run
@@ -173,6 +198,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # The census's own suite first: a census that has stopped recognising a
+      # constructor reports green over the very tests it exists to count, so
+      # its verdict below is only worth reading once this has passed. Both
+      # hosts, as for the planner's suite -- it is an ordinary script a
+      # developer may run under either, and its fixtures found a StrictMode
+      # defect that only zero- or one-entry trees reach.
+      - name: Run test-check-ring-tests.ps1
+        shell: pwsh
+        run: ./tools/test-check-ring-tests.ps1
+      - name: Run test-check-ring-tests.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-ring-tests.ps1
       - name: Run check-ring-tests.ps1
         shell: pwsh
         run: ./tools/check-ring-tests.ps1
@@ -234,6 +271,72 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-file-watcher --locked --no-fail-fast
+
+  # A `compile_fail` doctest passes on ANY compile error, so one that breaks for
+  # the wrong reason -- a typo, a method since renamed -- reports green while
+  # testing nothing. That happened: windows-ioring-sys guarded a borrow hazard
+  # with an example calling a method M28 had removed, and it went on passing for
+  # "no such method". Every fence therefore pins its expected error code
+  # (```compile_fail,E0502), and the first step refuses one that does not.
+  #
+  # rustdoc enforces a pinned code only on a nightly toolchain, which is what
+  # RUSTC_BOOTSTRAP=1 tells it this is. It changes nothing else these doctests
+  # rely on: no crate uses `#![feature]`, and if one started to, every other
+  # job here -- which runs without it -- would refuse to build it.
+  #
+  # Three configurations, because a fence can sit behind a feature: all
+  # features, default features, and windows-threadpool-sys without its default
+  # `self-heal`, whose heal.rs example exists only in that build.
+  doctest-error-codes:
+    name: compile_fail doctests fail for the stated reason
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run test-check-compile-fail-codes.ps1
+        shell: pwsh
+        run: ./tools/test-check-compile-fail-codes.ps1
+      - name: Run test-check-compile-fail-codes.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-compile-fail-codes.ps1
+      - name: Every compile_fail doctest pins its error code
+        shell: pwsh
+        run: ./tools/check-compile-fail-codes.ps1
+      - name: Run test-check-compile-fail-doctests.ps1
+        shell: pwsh
+        run: ./tools/test-check-compile-fail-doctests.ps1
+      - name: Run test-check-compile-fail-doctests.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-compile-fail-doctests.ps1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Each run's output is kept, because rustdoc names every compile_fail
+      # doctest it runs -- `... (line N) - compile fail ... ok` -- whatever
+      # spelling produced it, and the step after these checks that set against
+      # the regex guard above. The guard is a proxy for rustdoc's parser that four
+      # review rounds found blind spots in; this makes the next one fail here.
+      # Tee-Object leaves $LASTEXITCODE as cargo's, so a failing doctest still
+      # fails its step.
+      - name: cargo test --doc (all features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test --workspace --doc --all-features --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-all-features.txt"
+      - name: cargo test --doc (default features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test --workspace --doc --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-default.txt"
+      - name: cargo test --doc (windows-threadpool-sys, no default features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test -p windows-threadpool-sys --doc --no-default-features --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-threadpool-no-default.txt"
+      - name: Every compile_fail doctest rustdoc ran is pinned and seen by the guard
+        shell: pwsh
+        run: >-
+          ./tools/check-compile-fail-doctests.ps1 -Transcript
+          "$env:RUNNER_TEMP/doctests-all-features.txt",
+          "$env:RUNNER_TEMP/doctests-default.txt",
+          "$env:RUNNER_TEMP/doctests-threadpool-no-default.txt"
 
   platform-probes:
     # The asserted probe tier already runs on x64 here, because
@@ -565,6 +668,33 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: cargo run -p windows-ioring-sys --example epoch_log --release --locked
+
+  ioring-release:
+    name: windows-ioring-sys (release profile)
+    runs-on: windows-latest
+    # Every other test job builds debug, and a debug build hid a defect here
+    # for as long as the crate shipped it (D-32, corrected in PR #113):
+    # `BuildIoRingRegisterFileHandles` reads its handle array when the op runs,
+    # not when the call returns, and a temporary `&[handle]` survived in its
+    # stack slot until the submit only because debug code does not reuse the
+    # slot. In release the kernel registered whatever was left there and the
+    # first read through the index failed with `ERROR_INVALID_HANDLE`. A
+    # lifetime bug of that shape lives exactly in the gap between profiles, so
+    # the crate's suite runs in both.
+    #
+    # The three `#[should_panic]` tests over `debug_assert!` compile out here,
+    # by `#[cfg(debug_assertions)]`; the debug jobs cover them.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --release (all features)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-ioring-sys --all-features --release --locked --no-fail-fast
 
   threadpool-no-self-heal:
     name: windows-threadpool-sys (no self-heal feature)

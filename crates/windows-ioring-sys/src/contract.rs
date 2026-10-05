@@ -7,18 +7,18 @@
 //! Some of what this crate promises is a property of a *sequence*, not of any
 //! single value or call, and a per-value type cannot carry it. "Every SQE that
 //! successfully queues produces exactly one completion" is only observable by
-//! counting pushes against completions across a whole run; so is "no token was
-//! dropped unclaimed", and so is "no registered buffer is still in use once
-//! everything has finished".
+//! counting pushes against completions across a whole run, and so is "no
+//! registered buffer is still in use once everything has finished".
 //!
-//! Those three are stated in `DESIGN-NOTES.md` and, before this module,
-//! checked nowhere. That is not a hypothetical gap: two real defects in this
+//! Those rules are stated in `DESIGN-NOTES.md` and, before this module, were
+//! checked nowhere. That was not a hypothetical gap: two real defects in this
 //! repository were conservation failures. `Appender::claim` returned early on
 //! a failed write and permanently leaked the arena slot its token held, and a
 //! strategy harness shared one deferred-commit slot between two lanes so half
 //! its commits were never awaited. Both were found by review and by
 //! measurement respectively, and both would have fallen out of a quiescence
-//! check automatically.
+//! check automatically. (The first was a token leak, and the rule that caught
+//! that kind of leak retired with the token API -- see below.)
 //!
 //! # Why it lives here
 //!
@@ -36,14 +36,31 @@
 //! | Every queued SQE produces exactly one completion | [`DESIGN-NOTES.md`'s category-2 audit](../DESIGN-NOTES.md#one-sqe-one-completion) |
 //! | A push that failed synchronously produces none | the same section: it is un-counted, not merely uncompleted |
 //! | No completion arrives for an operation never pushed | corollary of the above |
-//! | Every token is claimed, or deliberately leaked | `Token`'s leak-on-drop contract ([D-13](../DESIGN-NOTES.md#d-13)) |
-//!
-//! Not every push carries a token: the `_raw` flush and cancel entry points
-//! return a bare `user_data`, because they own nothing a claim could hand
-//! back. Report those with
-//! [`RingContract::observe_tokenless_push`](crate::contract::RingContract::observe_tokenless_push),
-//! or the oracle will demand a claim that cannot be made.
 //! | Nothing is outstanding at quiescence | what `IoRing::run_down`'s termination depends on |
+//!
+//! Every rule here is about the **kernel**, not about a caller's bookkeeping.
+//! A fifth row used to sit above -- "every token is claimed, or deliberately
+//! leaked" -- and it retired with the token API: a push now hands back only an
+//! `OperationId`, which owns nothing, so there is nothing a caller could fail
+//! to claim. [D-74](../DESIGN-NOTES.md#d-74) records why that is a retirement
+//! rather than a narrowing.
+//!
+//! What replaced it is **not** `held() == outstanding()`. Those two are not
+//! equal in general and the ring does not compare them: a `_raw` flush or
+//! cancel is outstanding while deliberately stowing no inventory
+//! entry, so a perfectly valid push makes them differ. Reading equality as an
+//! invariant would report that valid push as a conservation failure, which is
+//! the over-constraining this oracle's next section exists to avoid.
+//!
+//! The owned-push invariant is narrower: **every push that stows an entry
+//! retires exactly that entry at the pop which observes its completion**, so
+//! what remains in the inventory is precisely the set of owned pushes whose
+//! completions have not yet been seen. [`IoRing::held`] counts that set, which
+//! is a subset of what [`IoRing::outstanding`] counts: `held() <= outstanding()`,
+//! and the gap is the raw operations in flight.
+//! Teardown checks the matching property rather than the equality: that rundown
+//! succeeded **and** no identity the ring minted is still in flight, which
+//! covers the inventory as well ([D-78](../DESIGN-NOTES.md#d-78)).
 //!
 //! # What it deliberately does **not** check
 //!
@@ -80,7 +97,7 @@
 //! - **That a caller pushed anything sensible.** This checks conservation of
 //!   what was pushed, not that pushing it was a good idea.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 /// A conservation rule this crate promises, broken.
@@ -92,6 +109,12 @@ pub enum Violation {
     /// Either the ring completed something twice, or the caller's own
     /// bookkeeping lost a push -- and distinguishing those is why the message
     /// says which is possible rather than asserting one.
+    ///
+    /// When the completions reported here come from an [`crate::IoRing`]'s own
+    /// pops, the ring has already checked the identity against what it minted
+    /// and panics on one that is not in flight
+    /// ([D-79](../DESIGN-NOTES.md#d-79)), so from such a ring this points at
+    /// the caller's reporting rather than at the kernel.
     UnexpectedCompletion {
         /// The identity the unrecognised completion carried.
         user_data: usize,
@@ -101,7 +124,9 @@ pub enum Violation {
     /// The "exactly" half of "exactly one completion". Counted separately from
     /// [`Violation::UnexpectedCompletion`] because a duplicate is a much
     /// stronger signal than an unrecognised identity: it cannot be explained
-    /// by a caller forgetting to report a push.
+    /// by a caller forgetting to report a push. A ring's own pop panics on a
+    /// duplicate first ([D-79](../DESIGN-NOTES.md#d-79)), so from a real ring
+    /// this means the caller reported one completion twice.
     DuplicateCompletion {
         /// The identity that completed more than once.
         user_data: usize,
@@ -109,17 +134,6 @@ pub enum Violation {
     /// An operation was pushed and never completed.
     Outstanding {
         /// The identity that was pushed and never completed.
-        user_data: usize,
-    },
-    /// A token was dropped without being claimed, and not deliberately.
-    ///
-    /// `Token` leaks on an unclaimed drop, which keeps the kernel's pointer
-    /// valid and is correct. It also means whatever that token held --
-    /// a buffer, a registered-buffer use count, a file guard -- is gone for
-    /// the process's life. A caller that means to do this says so with
-    /// [`RingContract::observe_deliberate_leak`].
-    LeakedToken {
-        /// The identity whose token was dropped unclaimed.
         user_data: usize,
     },
     /// A registered buffer still had operations outstanding at quiescence.
@@ -147,11 +161,6 @@ impl fmt::Display for Violation {
             Self::Outstanding { user_data } => {
                 write!(f, "user_data {user_data:#x} was pushed and never completed")
             }
-            Self::LeakedToken { user_data } => write!(
-                f,
-                "the token for user_data {user_data:#x} was dropped unclaimed, leaking whatever \
-                 it held for the life of the process"
-            ),
             Self::BufferStillInUse { index, outstanding } => write!(
                 f,
                 "registered buffer {index} still has {outstanding} operation(s) outstanding at \
@@ -161,26 +170,41 @@ impl fmt::Display for Violation {
     }
 }
 
-/// What one observed operation is known to have done so far.
+/// What one operation *still being tracked* is known to have done so far.
+///
+/// Terminal outcomes are deliberately absent. An operation that finishes --
+/// which since [D-74](../DESIGN-NOTES.md#d-74) means simply that its
+/// completion was popped -- leaves this map entirely and its identity moves
+/// to the bounded history described
+/// on [`RingContract`], because retaining a terminal entry per operation is
+/// what made the oracle grow without limit (M28.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
-    /// Queued with a token to claim, no completion seen.
-    Pushed,
-    /// Queued with nothing to claim, no completion seen.
+    /// Queued, no completion seen.
     ///
-    /// The `_raw` flush and cancel entry points return a bare `user_data`
-    /// rather than a [`crate::Token`], because they own nothing a claim could
-    /// hand back. Conflating them with [`State::Pushed`] would report a
-    /// `LeakedToken` for every one -- a violation that is not merely wrong but
-    /// unfixable by the caller, since there is no token to claim.
-    PushedTokenless,
-    /// Completed exactly once, and its token claimed (or none was owed).
-    Completed,
-    /// Completed, but its token was dropped unclaimed.
-    Leaked,
-    /// Deliberately abandoned by a caller who said so.
-    DeliberatelyLeaked,
+    /// **One push state, as of `D-74`.** There were two, because a `_raw`
+    /// push returned a bare `user_data` while the others returned a
+    /// `Token`, and conflating them reported a leak for every
+    /// tokenless push -- a violation the caller could not satisfy, since
+    /// there was no token to claim. With the ring holding what an operation
+    /// carries, no push hands the caller anything to lose, so the distinction
+    /// has nothing left to distinguish.
+    Pushed,
 }
+
+/// How many finished identities the oracle remembers for duplicate diagnosis.
+///
+/// A **diagnostic window, not a correctness parameter.** Nothing is missed
+/// when a duplicate falls outside it: the completion is still reported, as
+/// [`Violation::UnexpectedCompletion`] rather than
+/// [`Violation::DuplicateCompletion`]. What the window buys is the *stronger*
+/// of the two claims, which the variants' own docs explain is worth keeping --
+/// a duplicate cannot be explained away by a caller forgetting to report a
+/// push, and an unrecognised identity can.
+///
+/// Changing it is not a breaking change. It trades a fixed amount of memory
+/// for how far back a duplicate is still named precisely.
+const FINISHED_HISTORY: usize = 1024;
 
 /// An executable form of this crate's conservation rules.
 ///
@@ -190,6 +214,27 @@ enum State {
 /// would silently cover less than it appears to. And a consumer validating its
 /// own harness needs to drive the same rules from outside.
 ///
+/// # What this costs to run, which is bounded (M28.2)
+///
+/// Memory here is a function of **operations in flight**, not of operations
+/// ever performed. An operation that finishes leaves the tracking map, so a
+/// consumer that pushes and claims forever holds a map whose size follows its
+/// own concurrency rather than its uptime.
+///
+/// That was not true before M28.2: a claimed operation was marked `Completed`
+/// and kept, so the oracle retained one entry per operation for the life of
+/// the process. The sample never showed it because it appends 24 records, and
+/// nothing documented it -- so a long-running consumer following this crate's
+/// own recommendation grew without limit. It is also why an always-on checked
+/// inventory was ruled out in `M23.3`, since a check that cannot be left
+/// running is not a check.
+///
+/// Retiring an entry would lose the ability to call a later completion for it
+/// a *duplicate* rather than merely unrecognised, so the last
+/// `FINISHED_HISTORY` finished identities are remembered for that purpose
+/// alone. Beyond that window a duplicate is still reported, under the weaker
+/// name.
+///
 /// # Example
 ///
 /// ```
@@ -198,12 +243,19 @@ enum State {
 /// let mut contract = RingContract::new();
 /// contract.observe_push(0x1234);
 /// contract.observe_completion(0x1234);
-/// contract.observe_claim(0x1234);
 /// assert!(contract.check_quiescent().is_empty());
 /// ```
 #[derive(Debug, Default)]
 pub struct RingContract {
+    /// Operations still being tracked. Terminal outcomes are not kept here;
+    /// see the type's own documentation for why.
     operations: HashMap<usize, State>,
+    /// Identities that finished, most recent last, capped at
+    /// [`FINISHED_HISTORY`]. Paired with `finished_set` so the membership test
+    /// stays O(1) -- the queue exists only to know which one to evict.
+    finished: VecDeque<usize>,
+    /// Membership index over `finished`, held in step with it.
+    finished_set: HashSet<usize>,
     /// Per registered-buffer outstanding counts, as the caller reports them.
     buffers: HashMap<u32, usize>,
     violations: Vec<Violation>,
@@ -222,61 +274,83 @@ impl RingContract {
     /// synchronously releases its reservation and produces no completion, so
     /// reporting it would manufacture an [`Violation::Outstanding`] at
     /// teardown.
+    ///
+    /// There is one push observer, as of `M28.5`. There were two:
+    /// `observe_push` recorded a push that returned a token, and
+    /// `observe_tokenless_push` recorded an SQE that carried no token to
+    /// claim -- the `_raw` flush and cancel entry points -- because reporting
+    /// one through `observe_push` produced a leak violation its caller had no
+    /// way to satisfy, there being no token to claim. [D-74](../DESIGN-NOTES.md#d-74)
+    /// removed the leak rule, which made the two identical in body as well as
+    /// in purpose, and two names for one behaviour is a restatement waiting
+    /// for the next change to reach only one of them.
     pub fn observe_push(&mut self, user_data: usize) {
         self.operations.insert(user_data, State::Pushed);
-    }
-
-    /// Record that an SQE was queued that carries **no token** to claim.
-    ///
-    /// The `_raw` flush and cancel entry points return a bare `user_data`
-    /// rather than a [`crate::Token`], because they own nothing a claim could
-    /// hand back. Reporting one through [`RingContract::observe_push`] would
-    /// produce a [`Violation::LeakedToken`] the caller has no way to satisfy.
-    pub fn observe_tokenless_push(&mut self, user_data: usize) {
-        self.operations.insert(user_data, State::PushedTokenless);
     }
 
     /// Record a completion popped from the ring.
     pub fn observe_completion(&mut self, user_data: usize) {
         match self.operations.get(&user_data) {
-            None => self
-                .violations
-                .push(Violation::UnexpectedCompletion { user_data }),
+            None => {
+                // Not tracked. Either it finished already -- which the
+                // history can still prove, and which is the stronger claim --
+                // or no observed push ever produced it.
+                if self.finished_set.contains(&user_data) {
+                    self.violations
+                        .push(Violation::DuplicateCompletion { user_data });
+                } else {
+                    self.violations
+                        .push(Violation::UnexpectedCompletion { user_data });
+                }
+            }
             Some(State::Pushed) => {
-                // Provisionally leaked: a completion whose token is never
-                // claimed *is* a leak, so this is corrected by
-                // `observe_claim` rather than assumed benign.
-                self.operations.insert(user_data, State::Leaked);
+                // Terminal. A completion used to be *provisional* here,
+                // parked in a leaked state until `observe_claim` corrected
+                // it, because a completion whose token was never claimed was
+                // a real leak. The pop is the claim now (`D-74`), so there is
+                // no second step for the caller to omit and nothing for this
+                // to wait on.
+                self.retire(user_data);
             }
-            Some(State::PushedTokenless) => {
-                // Nothing was owed, so completing is the end of the story.
-                self.operations.insert(user_data, State::Completed);
-            }
-            Some(_) => self
-                .violations
-                .push(Violation::DuplicateCompletion { user_data }),
         }
     }
 
-    /// Record that the operation's token was claimed against its completion,
-    /// returning whatever it held.
-    pub fn observe_claim(&mut self, user_data: usize) {
-        if let Some(state) = self.operations.get_mut(&user_data) {
-            *state = State::Completed;
-        }
-    }
-
-    /// Record that a token was abandoned on purpose.
+    /// Retire a finished identity: out of the tracking map, into the bounded
+    /// history.
     ///
-    /// Leaking is a legitimate choice -- it is what keeps a buffer alive when
-    /// a caller cannot prove the kernel is finished with it -- so it is
-    /// excused when it is *stated*. An unstated leak is still reported,
-    /// because the difference between the two is exactly the bug worth
-    /// finding.
-    pub fn observe_deliberate_leak(&mut self, user_data: usize) {
-        self.operations.insert(user_data, State::DeliberatelyLeaked);
+    /// This is the one place an operation stops costing memory proportional to
+    /// how many have run, which is what `M28.2` was about.
+    fn retire(&mut self, user_data: usize) {
+        self.operations.remove(&user_data);
+        if self.finished_set.insert(user_data) {
+            self.finished.push_back(user_data);
+            if self.finished.len() > FINISHED_HISTORY
+                && let Some(evicted) = self.finished.pop_front()
+            {
+                self.finished_set.remove(&evicted);
+            }
+        }
     }
 
+    /// How many operations have been pushed and not yet completed.
+    ///
+    /// The same number [`RingContract::check_quiescent`] turns into one
+    /// [`Violation::Outstanding`] each, offered directly because a consumer
+    /// usually wants the count rather than the diagnosis -- a drain loop asks
+    /// "is anything left?", not "what is wrong?".
+    ///
+    /// **This exists because two callers had already written it by hand**, and
+    /// both were a restatement of what this type already knew.
+    /// `epoch_log`'s appender kept a `usize` beside its contract and drove it
+    /// at every push and every completion, which is precisely the
+    /// record-the-same-event-twice shape that
+    /// [D-55](../DESIGN-NOTES.md#d-55) exists to remove. The other counted
+    /// `Outstanding` violations out of `check_quiescent`, allocating a `Vec`
+    /// to answer a question about a map's length.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.operations.len()
+    }
     /// Record a registered buffer's outstanding count, as
     /// [`crate::RegisteredBuffers::outstanding`] reports it.
     pub fn observe_buffer(&mut self, index: u32, outstanding: usize) {
@@ -304,20 +378,16 @@ impl RingContract {
         let mut pending: Vec<_> = self
             .operations
             .iter()
-            .filter_map(|(user_data, state)| match state {
-                State::Pushed | State::PushedTokenless => Some(Violation::Outstanding {
+            // Not a `filter_map`: since `M28.2` retired the terminal states,
+            // every entry still tracked is a violation at quiescence.
+            .map(|(user_data, state)| match state {
+                State::Pushed => Violation::Outstanding {
                     user_data: *user_data,
-                }),
-                State::Leaked => Some(Violation::LeakedToken {
-                    user_data: *user_data,
-                }),
-                State::Completed | State::DeliberatelyLeaked => None,
+                },
             })
             .collect();
         pending.sort_by_key(|violation| match violation {
-            Violation::Outstanding { user_data } | Violation::LeakedToken { user_data } => {
-                *user_data
-            }
+            Violation::Outstanding { user_data } => *user_data,
             _ => 0,
         });
         all.extend(pending);

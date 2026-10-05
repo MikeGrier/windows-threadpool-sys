@@ -403,9 +403,12 @@ it now lists five, and the count is dropped rather than maintained.)
 
 - [ ] **M32.2** -- **Correlation.** Who mints the tag that joins a submission to its completion, and how
   it survives the two-layer translation into the ring's own `user_data`. Constraints already established:
-  `IoRing` mints `user_data` starting at **0** on a fresh ring, and `Token::claim_if` requires both
-  `user_data` **and** `RingId` to match. The client-facing tag is therefore not the ring's tag, and the
-  mapping between them is state the domain owns.
+  `IoRing` mints `user_data` starting at **0** on a fresh ring, so the same integer names a different
+  operation on each ring; a push's identity is an `OperationId` -- that `user_data` **and** the minting
+  ring's `RingId` -- and the ring hands a payload back only from the pop that observed its completion
+  ([DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md#d-71) -> `D-71`, which retired
+  `Token::claim_if`). The client-facing tag is therefore not the ring's tag, and the mapping between them
+  is state the domain owns.
 
 - [ ] **M32.3** -- **Backpressure behaviour.** R2 says a full queue fails, and that failure is the
   backpressure. But a client with nowhere to go either spins or drops, so decide whether a blocking submit

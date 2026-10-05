@@ -14,6 +14,7 @@ mod policy;
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use policy::Policy;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -23,6 +24,20 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_topology_sys::MachineMemoryTopology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
+
+/// Rounds `--compare` runs when `--rounds` is not given.
+///
+/// One complete rotation over the policies: the smallest count that gives every
+/// policy each position in the running order exactly once. A partial cycle
+/// leaves the order unbalanced -- at three rounds over five policies, two of
+/// them never run first -- and position is not free even after the warm-up
+/// pass, because a machine that drifts during the run drifts against whoever
+/// holds the later slots.
+///
+/// It is also comfortably more than one, so a policy has a fastest, a slowest
+/// and a middle: one run cannot show a spread, and a spread is the only handle
+/// this sample offers on whether two arrangements were distinguished at all.
+const DEFAULT_ROUNDS: usize = Policy::ALL.len();
 
 /// The single sink every line of this sample's output goes through
 /// (repository "Architectural pre-steps" rule: never call `println!`/
@@ -72,6 +87,10 @@ struct Args {
     remote_placement: bool,
     topology_path: Option<PathBuf>,
     chunk_len: usize,
+    /// Price every policy, not just the chosen one (`M27.3`).
+    compare: bool,
+    /// How many times each policy is run in `--compare`.
+    rounds: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -80,6 +99,8 @@ fn parse_args() -> Result<Args, String> {
     let mut remote_placement = false;
     let mut topology_path = None;
     let mut chunk_len = DEFAULT_CHUNK_LEN;
+    let mut compare = false;
+    let mut rounds = DEFAULT_ROUNDS;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -119,6 +140,16 @@ fn parse_args() -> Result<Args, String> {
                 }
                 chunk_len = parsed;
             }
+            "--compare" => compare = true,
+            "--rounds" => {
+                let value = args.next().ok_or("--rounds needs a value")?;
+                rounds = value
+                    .parse()
+                    .map_err(|_| format!("invalid --rounds {value:?}"))?;
+                if rounds == 0 {
+                    return Err("--rounds must be at least 1".to_string());
+                }
+            }
             other => positional.push(other.to_string()),
         }
     }
@@ -126,7 +157,7 @@ fn parse_args() -> Result<Args, String> {
     let mut positional = positional.into_iter();
     let source = positional.next().ok_or(
         "usage: ring_copy <source> <destination> [--policy NAME] [--placement local|remote] \
-         [--topology PATH] [--chunk-size BYTES]",
+         [--topology PATH] [--chunk-size BYTES] [--compare] [--rounds N]",
     )?;
     let destination = positional.next().ok_or("missing <destination>")?;
 
@@ -137,6 +168,8 @@ fn parse_args() -> Result<Args, String> {
         remote_placement,
         topology_path,
         chunk_len,
+        compare,
+        rounds,
     })
 }
 
@@ -172,6 +205,291 @@ fn same_file(a: &std::fs::File, b: &std::fs::File) -> io::Result<bool> {
         Ok((info.dwVolumeSerialNumber, index))
     }
     Ok(identity(a)? == identity(b)?)
+}
+
+/// What one arrangement cost on this machine.
+struct ArrangementRun {
+    policy: Policy,
+    domains: usize,
+    degraded: bool,
+    /// Wall time for the whole arrangement, not the sum of its domains.
+    ///
+    /// The domains run concurrently, so summing them would count the same
+    /// seconds once per domain and make a wider arrangement look slower the
+    /// more parallelism it was given.
+    wall: Duration,
+    bytes: u64,
+}
+
+/// Run one arrangement end to end and time it.
+///
+/// Extracted from `main` so `--compare` can price the alternatives through the
+/// identical path the chosen policy takes. A comparison whose arms do not share
+/// a code path measures the difference between the arms' code as much as
+/// between the arrangements.
+#[allow(clippy::too_many_arguments)]
+fn run_arrangement(
+    policy: Policy,
+    topology: &MachineMemoryTopology,
+    remote_placement: bool,
+    source: SendHandle,
+    destination: SendHandle,
+    source_len: u64,
+    chunk_len: usize,
+) -> io::Result<ArrangementRun> {
+    let (domains, degraded) = policy.select(topology);
+    let plans = plan::build_plan(topology, &domains)?;
+    let domain_count = plans.len() as u64;
+    let per_domain = source_len.div_ceil(domain_count.max(1));
+
+    // Remote placement is resolved and validated HERE, over this arrangement's
+    // own plans, before anything is timed.
+    //
+    // `main` validates remoteness only for the single policy `--policy` named,
+    // and `--compare` runs every policy. A plan that could not name a remote
+    // node used to fall back to local placement inside the spawn below, while
+    // its row was still reported as a remote arm -- a measurement labelled as
+    // something it was not, which is worse than no measurement. Refusing is the
+    // honest answer, and refusing here covers both callers rather than only the
+    // one that happened to check.
+    //
+    // Which outcomes refuse is `plan::remote_placement`'s to say, for both
+    // callers. A single-node machine (`SameAsLocal`) places locally: there is
+    // no other node, and the preflight has already said so. Refusing it here
+    // made `--compare --placement remote` fail on every single-node machine,
+    // straight after being told it would run (PR #113 review).
+    let placement: Vec<_> = if remote_placement {
+        let mut resolved = Vec::with_capacity(plans.len());
+        for domain_plan in &plans {
+            let outcome = plan::remote_numa_node(topology, domain_plan.local_numa_node);
+            match plan::remote_placement(outcome, domain_plan.local_numa_node) {
+                Ok(node) => resolved.push(node),
+                Err(refused) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!(
+                            "{policy:?}: remote placement was requested, but domain {} cannot \
+                             name a node to be remote from ({refused:?}). Refusing rather than \
+                             running it locally and reporting the row as remote.",
+                            domain_plan.label
+                        ),
+                    ));
+                }
+            }
+        }
+        resolved
+    } else {
+        plans.iter().map(|plan| plan.local_numa_node).collect()
+    };
+
+    let started = Instant::now();
+    let reports: Vec<io::Result<engine::DomainReport>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = plans
+            .iter()
+            .enumerate()
+            .map(|(index, domain_plan)| {
+                let start = per_domain * index as u64;
+                let end = (start + per_domain).min(source_len);
+                let numa_node = placement[index];
+                scope.spawn(move || {
+                    let source = source;
+                    let destination = destination;
+                    engine::copy_domain(
+                        domain_plan,
+                        source.0,
+                        destination.0,
+                        start..end,
+                        chunk_len,
+                        numa_node,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("domain thread panicked"))
+            .collect()
+    });
+    let wall = started.elapsed();
+
+    let mut bytes = 0;
+    for report in reports {
+        bytes += report?.bytes_copied;
+    }
+
+    Ok(ArrangementRun {
+        policy,
+        domains: plans.len(),
+        degraded,
+        wall,
+        bytes,
+    })
+}
+
+fn throughput_mib_s(bytes: u64, wall: Duration) -> f64 {
+    (bytes as f64 / (1024.0 * 1024.0)) / wall.as_secs_f64().max(f64::EPSILON)
+}
+
+/// Price every policy on this machine and report what each cost.
+///
+/// # This reports; it does not conclude
+///
+/// No arm is marked as best and no recommendation is printed, per OPTION
+/// INTEGRITY. Which arrangement a consumer wants depends on what they value --
+/// throughput, isolation, predictability under load -- and this sample cannot
+/// know that. It says what happened on the machine in hand and stops.
+fn compare_arrangements(
+    report: &mut Report<io::Stdout, io::Stderr>,
+    args: &Args,
+    topology: &MachineMemoryTopology,
+    source: SendHandle,
+    destination: SendHandle,
+    source_len: u64,
+) -> io::Result<()> {
+    let policies = Policy::ALL;
+    let mut runs: Vec<Vec<ArrangementRun>> = (0..policies.len()).map(|_| Vec::new()).collect();
+
+    report.line(format_args!(
+        "comparing {} arrangements over {} round(s):",
+        policies.len(),
+        args.rounds
+    ));
+
+    if !args.rounds.is_multiple_of(policies.len()) {
+        report.line(format_args!(
+            "  note: {} rounds is not a whole number of rotations over {} policies, so each \
+             policy does not get every position in the running order; pass --rounds as a \
+             multiple of {} for a complete rotation",
+            args.rounds,
+            policies.len(),
+            policies.len()
+        ));
+    }
+
+    // An untimed pass over every policy, before anything is recorded.
+    //
+    // Rotating the order does NOT distribute the cold-cache effect, which is
+    // what this comment used to claim. Nothing resets the cache between runs,
+    // so across the whole comparison there is exactly ONE cold run -- the very
+    // first -- and it lands on whichever policy happens to go first. Rotation
+    // changes which policy that is from round to round, but round 0 still has a
+    // uniquely cold sample, and it surfaces in exactly one policy's `slowest`
+    // figure and nowhere else.
+    //
+    // Discarding a full pass fixes that at the source rather than redistributing
+    // it: every recorded sample is then taken against a warm cache. The cost is
+    // one extra pass per policy.
+    for policy in policies {
+        let _ = run_arrangement(
+            policy,
+            topology,
+            args.remote_placement,
+            source,
+            destination,
+            source_len,
+            args.chunk_len,
+        )?;
+    }
+
+    for round in 0..args.rounds {
+        // The order still rotates, for an effect the warm-up does not cover: a
+        // machine that drifts during the run -- thermal, or another tenant
+        // arriving -- would otherwise hand that drift to whichever policy holds
+        // a fixed slot. Rotating does not remove drift; it stops it being
+        // *attributed* to one arm.
+        for offset in 0..policies.len() {
+            let index = (offset + round) % policies.len();
+            let run = run_arrangement(
+                policies[index],
+                topology,
+                args.remote_placement,
+                source,
+                destination,
+                source_len,
+                args.chunk_len,
+            )?;
+            runs[index].push(run);
+        }
+    }
+
+    report.line(format_args!(""));
+    report.line(format_args!(
+        "  {:<10} {:>8}  {:>15}  {:>15}  {:>15}",
+        "policy", "domains", "fastest", "slowest", "median"
+    ));
+
+    for per_policy in &runs {
+        let mut rates: Vec<f64> = per_policy
+            .iter()
+            .map(|run| throughput_mib_s(run.bytes, run.wall))
+            .collect();
+        rates.sort_by(f64::total_cmp);
+        // `rates.len() / 2` alone is the median only for an odd count, and
+        // `--rounds` takes any positive value -- a balanced ten-round run is
+        // even. The upper middle sample is not the median of an even set.
+        let median = if rates.len().is_multiple_of(2) {
+            let upper = rates.len() / 2;
+            (rates[upper - 1] + rates[upper]) / 2.0
+        } else {
+            rates[rates.len() / 2]
+        };
+        let first = &per_policy[0];
+
+        // Named from the run rather than from a parallel array, so a row cannot
+        // come to label itself with a policy it did not use.
+        report.line(format_args!(
+            "  {:<10} {:>8}  {:>9.1} MiB/s  {:>9.1} MiB/s  {:>9.1} MiB/s{}",
+            format!("{:?}", first.policy),
+            first.domains,
+            rates[rates.len() - 1],
+            rates[0],
+            median,
+            if first.degraded { "  (degraded)" } else { "" }
+        ));
+    }
+
+    report.line(format_args!(""));
+    report.line(format_args!(
+        "what these figures include: the filesystem cache, whatever else this machine was doing, \
+         and this sample's own chunking. They are what the arrangements cost here, today, on this \
+         file -- not a property of the policies."
+    ));
+    report.line(format_args!(
+        "what they cannot separate: an arrangement that is genuinely better from one that ran \
+         while the machine was quieter. The spread between fastest and slowest within a policy is \
+         the handle on that -- where it overlaps another policy's spread, this run did not \
+         distinguish them."
+    ));
+    report.line(format_args!(
+        "no arm is marked best, deliberately. Which of these a consumer wants depends on what \
+         they value, and that is theirs to decide against their own workload."
+    ));
+
+    // `Policy::Single` is excluded deliberately. One domain is what that policy
+    // IS, by definition, so counting it here made the note below report that the
+    // host could not express the one arrangement it had expressed exactly --
+    // every run, on every machine. What remains is worth saying, but it is
+    // "collapsed to the same shape as `single`", not "could not be expressed":
+    // a one-node, one-package or one-core host resolves another policy to a
+    // single domain legitimately, and that is the machine's topology showing
+    // through rather than a failure.
+    let collapsed: Vec<&ArrangementRun> = runs
+        .iter()
+        .filter_map(|per_policy| per_policy.first())
+        .filter(|run| run.policy != Policy::Single && (run.degraded || run.domains == 1))
+        .collect();
+    if !collapsed.is_empty() {
+        report.line(format_args!(""));
+        report.line(format_args!(
+            "note: {} of these policies fell back to, or resolved to, a single domain on this \
+             host -- the same shape `single` has by definition. That is this machine's topology \
+             showing through rather than a property of the policy, and it means those rows are \
+             not independent measurements of different arrangements.",
+            collapsed.len()
+        ));
+    }
+
+    Ok(())
 }
 
 fn main() -> io::Result<()> {
@@ -309,6 +627,18 @@ fn main() -> io::Result<()> {
         }
     }
 
+    if args.compare {
+        compare_arrangements(
+            &mut report,
+            &args,
+            &topology,
+            source_handle,
+            destination_handle,
+            source_len,
+        )?;
+        return Ok(());
+    }
+
     let domain_count = plans.len() as u64;
     let per_domain = source_len.div_ceil(domain_count.max(1));
 
@@ -320,15 +650,13 @@ fn main() -> io::Result<()> {
                 let start = per_domain * index as u64;
                 let end = (start + per_domain).min(source_len);
                 let numa_node = if args.remote_placement {
-                    match plan::remote_numa_node(&topology, domain_plan.local_numa_node) {
-                        plan::RemoteNode::Other(node) => Some(node),
-                        // Both already reported above -- `Unnamed` exited, and
-                        // `SameAsLocal` said that local is the only node there
-                        // is. Neither may reach here as a silent substitution.
-                        plan::RemoteNode::SameAsLocal
-                        | plan::RemoteNode::Unnamed
-                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
-                    }
+                    let outcome = plan::remote_numa_node(&topology, domain_plan.local_numa_node);
+                    // The refusing outcomes cannot reach here: the preflight
+                    // above exited on `Unnamed` and `LocalUnknown`, and said
+                    // that `SameAsLocal` places locally, which is what
+                    // `remote_placement` returns for it.
+                    plan::remote_placement(outcome, domain_plan.local_numa_node)
+                        .unwrap_or(domain_plan.local_numa_node)
                 } else {
                     domain_plan.local_numa_node
                 };

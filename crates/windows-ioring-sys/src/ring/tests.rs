@@ -92,13 +92,13 @@ fn nop_read_and_write_are_supported_on_any_real_ring() {
 #[test]
 fn run_down_returns_once_a_recorded_completion_zeroes_the_count() {
     let mut ring = IoRing::new(64, 128).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     assert_eq!(ring.outstanding(), 1);
     // Recording the completion up front proves run_down rechecks the count
     // rather than always performing at least one wait: it must return
     // without ever calling SubmitIoRing, or this test would hang for
     // RUN_DOWN_POLL_MS waiting on a completion that was never real.
-    ring.record_completion();
+    ring.record_completion(op);
     ring.run_down()
         .expect("run_down with the count already settled");
     assert_eq!(ring.outstanding(), 0);
@@ -142,6 +142,11 @@ fn dropping_a_ring_actually_runs_its_drop_body() {
 /// ring handle, and `ring::tests` is a child of `ring`, so it can build an
 /// `IoRing` around one. See [`IoRing::refused_by_the_kernel`] for why null
 /// specifically, and why a non-null stand-in would crash instead.
+// Debug-only, as is the rundown test below: both expect a `debug_assert!` in
+// `IoRing::drop`, which a release build compiles out. Gated together with
+// `batch::tests::dropping_a_registration_with_work_outstanding_is_refused`,
+// the third test of that shape.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "CloseIoRing failed")]
 fn a_ring_whose_close_the_kernel_refuses_reports_the_close_failure() {
@@ -173,6 +178,7 @@ fn a_ring_whose_close_the_kernel_refuses_reports_the_close_failure() {
 /// asserted here.
 ///
 /// [sabotage.json]: ../../sabotage.json
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "IoRing rundown failed before close")]
 fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {
@@ -188,6 +194,107 @@ fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {
     );
 
     drop(ring);
+}
+
+// --- The registration arrays outlive an unproven rundown ---
+//
+// The kernel reads both registration arrays -- `IORING_BUFFER_INFO` and the
+// file-handle array -- when the registration op runs (D-32), so `Drop` may free
+// them only on the proof the inventory needs: rundown showed nothing is
+// outstanding. PR #113 review found the buffer array freed on every path,
+// because it was an ordinary field; the handle array was not held at all.
+// These pin both halves of the fix, for both arrays.
+
+/// One descriptor, pointing at nothing the kernel is ever shown: no SQE is
+/// built from it, so it is only a non-empty array for `Drop` to decide about.
+fn one_buffer_info() -> Vec<windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO> {
+    vec![
+        windows_sys::Win32::Storage::FileSystem::IORING_BUFFER_INFO {
+            Address: std::ptr::null_mut(),
+            Length: 0,
+        },
+    ]
+}
+
+/// One null handle, for the same reason: nothing is ever built from it.
+fn one_file_handle() -> Vec<*mut std::ffi::c_void> {
+    vec![std::ptr::null_mut()]
+}
+
+/// Holds a non-empty array of each kind, as a ring that registered both would.
+fn hold_both(ring: &mut IoRing) {
+    let _ = ring.hold_registered_buffer_infos(one_buffer_info());
+    let _ = ring.hold_registered_file_handles(one_file_handle());
+}
+
+/// The compiler's own drop of the field is what freed the buffer array on the
+/// failed-rundown path -- and in a debug build it did so during the unwind out
+/// of `Drop`'s assert, where no line of the body can intervene. Only the
+/// field's type prevents that, so the type is what this pins: it does not
+/// compile if the field stops being `ManuallyDrop`. Entirely compile-time, so
+/// it opens no ring (D-49).
+#[test]
+fn the_registration_arrays_are_never_dropped_by_the_compiler() {
+    fn pinned(ring: &IoRing) -> &std::mem::ManuallyDrop<super::LateReadArrays> {
+        &ring.late_read
+    }
+    let _ = pinned;
+}
+
+/// The accepting direction: a ring whose rundown succeeds releases both
+/// arrays. Without this, a `Drop` that leaked them on every path would pass
+/// the test below and leak an allocation per registration on every ring.
+///
+/// No kernel ring is needed (D-49): the release turns on rundown alone, and
+/// with nothing outstanding rundown returns without submitting. The null
+/// handle's close is then refused, which is why the ring is dropped during an
+/// unwind -- the close assert stands down there, as in the refusing test below.
+#[test]
+fn a_quiesced_ring_releases_its_registration_arrays() {
+    let before = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        hold_both(&mut ring);
+        assert_eq!(ring.accounting.outstanding(), 0, "nothing is outstanding");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 2,
+        "a ring with nothing outstanding must release both registration arrays"
+    );
+}
+
+/// The refusing direction: a ring whose rundown fails keeps both arrays.
+///
+/// Dropped during an unwind, because that is the only way to reach the release
+/// decision in a debug build: outside one, the rundown assert panics first and
+/// the decision is never made, so a `Drop` that released unconditionally
+/// would pass. During an unwind both asserts stand down and the body runs to
+/// the end, in either profile.
+#[test]
+fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
+    let before = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        hold_both(&mut ring);
+        ring.accounting
+            .reserve_user_data()
+            .expect("a fresh ring's identity space is not exhausted");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::LATE_READ_ARRAYS_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after, before,
+        "a ring that could not prove quiescence must not release an array the kernel may still read"
+    );
 }
 
 // --- The fault-injection seam (M16.3) ---
@@ -266,7 +373,7 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
     // claiming against the original -- and must still work, or the seam could
     // not test the claim paths that failure handling lives on.
     //
-    // A real, token-carrying read throughout: nothing here is fabricated.
+    // A real, payload-carrying read throughout: nothing here is fabricated.
     use crate::{Batch, PushOptions};
     use std::os::windows::io::AsRawHandle;
 
@@ -280,14 +387,25 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
         .open(&path)
         .expect("open fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `file` outlives the operation; the token is claimed below.
-    let token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
+    // SAFETY: `file` outlives the operation; the ring holds the buffer until
+    // the pop below hands it back.
+    unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
-    let completion = super::pop_within(&mut ring, "the read's completion");
+    let (completion, held) = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read's completion");
     completion
         .result()
         .expect("the read really did succeed, or this test proves nothing");
@@ -296,9 +414,9 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
         .with_injected_failure(crate::InjectedFailure::Ring(crate::RingCondition::Corrupt));
     assert!(injected.result().is_err(), "the injected failure applies");
 
-    let buffer = token
-        .claim_if(&injected)
-        .expect("a failed completion still claims its own token");
+    let buffer = held
+        .map(|(payload, ())| payload.expect("a read carries a buffer"))
+        .expect("a failed completion still hands back its own payload");
     assert_eq!(
         buffer, b"hello",
         "claiming a failed operation must still hand the buffer back -- that is \
@@ -333,13 +451,20 @@ fn an_injected_failure_zeroes_the_transferred_byte_count() {
         .open(&path)
         .expect("open fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `file` outlives the operation, and the completion is popped
     // below before it is dropped.
-    let _token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
+    unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
     let completion = super::pop_within(&mut ring, "the fixture read's completion");
     assert_eq!(
@@ -647,7 +772,7 @@ fn pop_within_returns_the_completion_of_a_real_operation() {
     let (path, file) = pop_scratch("real");
     let ids = push_flushes(&mut ring, &file, 1);
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(std::time::Duration::from_secs(30))
         .expect("pop_within")
         .expect("the flush completes well inside the bound");
@@ -668,7 +793,7 @@ fn submit_wait_is_what_the_convenience_uses() {
     let (path, file) = pop_scratch("submit-wait");
     let ids = push_flushes(&mut ring, &file, 1);
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within_with(&mut SubmitWait, std::time::Duration::from_secs(30))
         .expect("pop_within_with")
         .expect("the flush completes");
@@ -684,7 +809,7 @@ fn pop_within_returns_successive_completions_one_at_a_time() {
 
     let mut seen = Vec::new();
     for _ in 0..ids.len() {
-        let completion = ring
+        let (completion, _held) = ring
             .pop_within(std::time::Duration::from_secs(30))
             .expect("pop_within")
             .expect("each flush completes");
@@ -729,13 +854,13 @@ fn a_supplied_wait_is_consulted_when_the_queue_is_not_ready() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
     // A reservation with no real SQE behind it: outstanding, and no
     // completion will ever arrive for it.
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
     // Settled before any assertion: a panic here would otherwise unwind into
     // `Drop`, whose rundown cannot settle a reservation the kernel never saw,
     // and the second panic would abort the whole harness.
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert!(
@@ -751,11 +876,11 @@ fn the_deadline_is_honoured_when_an_operation_never_completes() {
     // *stopped* is proved by this test returning at all. A busy machine
     // changes how long that takes and changes neither assertion.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
 
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(
         popped.expect("pop_within_with").is_none(),
@@ -770,10 +895,10 @@ fn the_deadline_is_honoured_when_an_operation_never_completes() {
 #[test]
 fn a_zero_bound_does_not_block() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::ZERO);
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     // The causal statement of "did not block": the wait is what blocks, and it
@@ -790,10 +915,10 @@ fn the_wait_is_never_handed_a_zero_timeout() {
     // `SubmitIoRing` reads as "poll and return" -- turning the tail of every
     // bound into a spin. The loop clamps it up to one.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_micros(600));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert!(wait.calls >= 1, "the wait must have been reached at all");
@@ -806,12 +931,12 @@ fn the_wait_is_never_handed_a_zero_timeout() {
 #[test]
 fn ring_wait_reports_the_rings_outstanding_count() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve a");
-    ring.reserve_user_data().expect("reserve b");
+    let a = ring.reserve_user_data().expect("reserve a");
+    let b = ring.reserve_user_data().expect("reserve b");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(20));
-    ring.record_completion();
-    ring.record_completion();
+    ring.record_completion(a);
+    ring.record_completion(b);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert_eq!(
@@ -823,9 +948,9 @@ fn ring_wait_reports_the_rings_outstanding_count() {
 #[test]
 fn a_wait_that_fails_ends_the_pop_with_its_error() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::from_secs(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("the wait's failure must reach the caller");
     assert_eq!(error.to_string(), "the wait refused");
@@ -845,9 +970,9 @@ fn a_wait_that_never_blocks_is_permitted_and_still_terminates() {
     // terminate hangs the harness, which is what a hang looks like in every
     // other test here too.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let popped = ring.pop_within_with(&mut ImmediateWait, std::time::Duration::from_millis(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(
         popped.expect("pop_within_with").is_none(),
@@ -862,9 +987,9 @@ fn a_bound_the_clock_cannot_represent_reaches_the_wait_rather_than_panicking() {
     // be represented. A failing wait is how the test escapes a bound that by
     // construction never arrives.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::MAX);
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("the wait refuses, which is how this returns at all");
     assert_eq!(error.to_string(), "the wait refused");
@@ -875,11 +1000,249 @@ fn the_wait_can_be_supplied_as_a_trait_object() {
     // `?Sized` on the bound is what makes this compile, and a consumer
     // choosing a wait at run time is the reason to keep it.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let wait: &mut dyn CompletionWait = &mut FailingWait;
     let outcome = ring.pop_within_with(wait, std::time::Duration::from_secs(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("a trait-object wait still refuses");
     assert_eq!(error.to_string(), "the wait refused");
+}
+
+/// A completion that retires no identity this ring is still owed is not
+/// quiescence, and `run_down_within` must not report it as such -- for a raw
+/// push exactly as for an owned one.
+///
+/// The first version of this guard lived inline in `Drop` and nowhere else, so
+/// a saturating counter reaching zero still made `run_down_within` answer
+/// `Ok(true)` -- "safe to drop". The second consulted the inventory as the
+/// witness, which only owned pushes populate: with two RAW operations in
+/// flight, a foreign CQE and the first real one drove the counter to zero over
+/// an inventory that was empty by design, and rundown closed a ring the kernel
+/// could still write through (PR #113 review). The ledger is now keyed by
+/// identity, so neither case can reach `true`.
+///
+/// Reported as `Ok(false)` -- "not finished, call again" -- and NOT as an
+/// error, because the operation still owed will complete (M10.2). Both
+/// directions are pinned: once the real completions arrive, rundown does
+/// report `true`, so a predicate that never quiesces would fail here too.
+#[test]
+fn a_completion_that_retires_nothing_is_not_quiescence() {
+    use super::{Entry, Held};
+    use crate::OperationId;
+    use std::time::Duration;
+
+    for owned in [false, true] {
+        let mut ring = IoRing::refused_by_the_kernel();
+
+        let first = ring.reserve_user_data().expect("mint the first");
+        let second = ring.reserve_user_data().expect("mint the second");
+        if owned {
+            for user_data in [first, second] {
+                ring.stow(
+                    OperationId::new(user_data, ring.ring_id()),
+                    Entry {
+                        payload: None,
+                        extra: (),
+                        held: Held::default(),
+                    },
+                );
+            }
+        }
+
+        // A completion for an identity this ring never minted, then the first
+        // operation's real one, then a duplicate of it.
+        assert!(
+            !ring.record_completion(usize::MAX),
+            "foreign (owned={owned})"
+        );
+        assert!(ring.record_completion(first), "real (owned={owned})");
+        if owned {
+            assert!(ring.reclaim(first).is_some(), "the first entry is retired");
+        }
+        assert!(!ring.record_completion(first), "duplicate (owned={owned})");
+
+        assert_eq!(
+            ring.outstanding(),
+            1,
+            "the second operation is still owed (owned={owned})"
+        );
+        let quiesced = ring
+            .run_down_within(Duration::from_millis(0))
+            .expect("a bound that expires is not an error");
+        assert!(
+            !quiesced,
+            "rundown must not report quiescence while an operation is in flight (owned={owned})"
+        );
+
+        assert!(
+            ring.record_completion(second),
+            "the second's real completion"
+        );
+        if owned {
+            assert!(
+                ring.reclaim(second).is_some(),
+                "the second entry is retired"
+            );
+        }
+        let quiesced = ring
+            .run_down_within(Duration::from_millis(0))
+            .expect("nothing is outstanding, so nothing is submitted");
+        assert!(
+            quiesced,
+            "with every identity retired, rundown must report quiescence (owned={owned})"
+        );
+
+        // Dropping this ring would assert on the null handle's close, which is
+        // a sibling test's subject rather than this one's.
+        std::mem::forget(ring);
+    }
+}
+
+/// A kernel that answers one pop with a completion for `user_data`, then
+/// reports the queue empty. Forwards nothing, so it is sound over the null
+/// handle `IoRing::refused_by_the_kernel` builds.
+#[cfg(feature = "kernel-seam")]
+struct ForgedCompletion {
+    user_data: Option<usize>,
+}
+
+#[cfg(feature = "kernel-seam")]
+impl crate::sys::Responses for ForgedCompletion {
+    unsafe fn pop(
+        &mut self,
+        _ring: *mut std::ffi::c_void,
+        cqe: *mut windows_sys::Win32::Storage::FileSystem::IORING_CQE,
+    ) -> windows_sys::core::HRESULT {
+        let Some(user_data) = self.user_data.take() else {
+            return windows_sys::Win32::Foundation::S_FALSE;
+        };
+        // SAFETY: the ring passes a valid out-pointer, as the Win32 call
+        // requires.
+        unsafe {
+            cqe.write(windows_sys::Win32::Storage::FileSystem::IORING_CQE {
+                UserData: user_data,
+                ResultCode: 0,
+                Information: 0,
+            });
+        }
+        windows_sys::Win32::Foundation::S_OK
+    }
+}
+
+/// A completion for an identity this ring never minted is a defect, and the
+/// pop panics on it (D-79).
+///
+/// Driven through the real `pop_raw` by forging the kernel's answer, so what
+/// is under test is the pop path every public pop shares, not the helper in
+/// isolation. Covers the two causes the ring can see: an identity never minted
+/// here, and a duplicate of one already retired.
+#[cfg(feature = "kernel-seam")]
+#[test]
+#[should_panic(expected = "which is not in flight on this ring")]
+fn a_completion_this_ring_never_minted_panics() {
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(0xDEAD),
+    }));
+    let mut ring = IoRing::refused_by_the_kernel();
+    let _ = ring.try_pop();
+}
+
+#[cfg(feature = "kernel-seam")]
+#[test]
+#[should_panic(expected = "which is not in flight on this ring")]
+fn a_duplicate_of_a_retired_completion_panics() {
+    let mut ring = IoRing::refused_by_the_kernel();
+    let op = ring.reserve_user_data().expect("mint one identity");
+    assert!(ring.record_completion(op), "its one real completion");
+
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(op),
+    }));
+    let _ = ring.try_pop();
+}
+
+/// The other direction: a completion this ring *did* mint pops normally, so
+/// the panic is about identity rather than about forged completions as such.
+#[cfg(feature = "kernel-seam")]
+#[test]
+fn a_completion_this_ring_minted_does_not_panic() {
+    let mut ring = IoRing::refused_by_the_kernel();
+    let op = ring.reserve_user_data().expect("mint one identity");
+    let kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(op),
+    }));
+
+    // `pop_within` rather than `try_pop`: the forged kernel answers on the
+    // first pop, but the crate's contract for "wait for this completion" is
+    // the bounded pop, and the already-poppable census holds tests to it.
+    let (completion, held) = ring
+        .pop_within(std::time::Duration::from_secs(5))
+        .expect("the forged pop succeeds")
+        .expect("one completion was queued");
+    assert_eq!(completion.user_data(), op);
+    assert!(held.is_none(), "nothing was stowed for it");
+    assert_eq!(ring.outstanding(), 0, "it retired the identity it carried");
+
+    drop(kernel);
+    std::mem::forget(ring);
+}
+
+/// During an unwind the defect is traced but not raised: a second panic there
+/// would abort the process, so the panic already in flight carries the
+/// failure.
+///
+/// Rundown inside `Drop` is how this is reached for real. If the guard were
+/// missing, this test would not fail -- the process would abort, which is the
+/// behaviour the guard exists to exclude.
+///
+/// The `Drop` below records what it saw rather than asserting: any panic it
+/// raised would itself be a second panic during the unwind, so a broken
+/// precondition -- the seam not answering, say -- would abort the process and
+/// hide which test failed. The assertions run after the unwind instead.
+#[cfg(feature = "kernel-seam")]
+#[test]
+fn an_unminted_completion_during_an_unwind_does_not_panic_again() {
+    type Seen = std::cell::RefCell<Option<(bool, Result<Option<usize>, String>)>>;
+
+    struct PopsWhileUnwinding<'a> {
+        ring: IoRing,
+        seen: &'a Seen,
+    }
+    impl Drop for PopsWhileUnwinding<'_> {
+        fn drop(&mut self) {
+            let popped = self
+                .ring
+                .try_pop()
+                .map(|popped| popped.map(|(completion, _)| completion.user_data()))
+                .map_err(|error| error.to_string());
+            *self.seen.borrow_mut() = Some((std::thread::panicking(), popped));
+        }
+    }
+
+    let seen = Seen::default();
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(0xBEEF),
+    }));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pops = PopsWhileUnwinding {
+            ring: IoRing::refused_by_the_kernel(),
+            seen: &seen,
+        };
+        panic!("the original failure");
+    }));
+
+    let payload = outcome.expect_err("the original panic propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("the original failure"),
+        "the panic that surfaces is the original one, not the defect report"
+    );
+    let (unwinding, popped) = seen.take().expect("the drop ran");
+    assert!(unwinding, "the pop happened during the unwind");
+    assert_eq!(
+        popped,
+        Ok(Some(0xBEEF)),
+        "the forged completion is still handed back"
+    );
 }

@@ -4,30 +4,34 @@
 //! # Why these exist, and what they are the counterpart to
 //!
 //! `M22.2` found a real defect here: [`super::Appender::claim`] returned early
-//! on a failed write without claiming the token, which `Token` deliberately
-//! treats as still outstanding. The arena slot's outstanding count then never
+//! on a failed write without claiming its token, which `Token` deliberately
+//! treated as still outstanding. The arena slot's outstanding count then never
 //! returned to zero, `free_slots` never offered it again, and after `SLOTS`
 //! such failures every append returned `WouldBlock` forever -- somewhere else
 //! entirely, with no trace of the cause.
 //!
-//! The library has a test named for exactly that hazard,
+//! **That hazard is gone, and these tests are not.** `M28.4.1d.3` retired the
+//! token API, so the pop releases the slot before `claim` runs and no ordering
+//! can leak one. The library's own test for the hazard -- once
 //! `claiming_before_checking_the_result_is_what_stops_a_failure_from_leaking`
-//! in `tests/failure_paths.rs`. This consumer had no counterpart, and the gap
-//! was measured rather than suspected: reinstating the defect here -- moving
-//! `completion.result()?` above the claim -- compiled and passed every test,
-//! because nothing produced a failed write.
+//! in `tests/failure_paths.rs` -- was deleted with it, because its whole
+//! subject was an ordering that can no longer be written.
 //!
-//! A failed write is not rare enough to be unreachable, only rare enough to go
-//! untested. [`Completion::with_injected_failure`] is the seam that reaches it
-//! on demand, which is why `epoch_log` is a test target at all.
+//! What these tests still carry is the reason the gap existed at all, and it
+//! outlived the defect: it was measured rather than suspected. Reinstating the
+//! bug here compiled and passed every test, because nothing produced a failed
+//! write. A failed write is not rare enough to be unreachable, only rare enough
+//! to go untested, and [`Completion::with_injected_failure`] is the seam that
+//! reaches it on demand -- which is why `epoch_log` is a test target at all,
+//! and why the cases below still drive failures through it.
 
 use std::os::windows::io::AsRawHandle;
 use std::time::Duration;
 
-use windows_ioring_sys::IoRing;
 #[cfg(feature = "fault-injection")]
 use windows_ioring_sys::IoRingErrorExt;
 
+use super::AppendRing;
 use super::Appender;
 // Used only by the fault-injection tests below, so the import is gated the
 // same way they are -- an unconditional one warns on a default-feature build
@@ -88,7 +92,7 @@ fn a_short_write_violates_the_contracts_transfer_requirement() {
     let complete = record::RECORD_STRIDE;
 
     for (transferred, expect_accepted) in [(complete, true), (complete - 1, false)] {
-        let mut ring = IoRing::new(16, 16).expect("create ring");
+        let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
         let (path, file) = scratch(&format!("short-write-{transferred}"));
         let mut appender =
             Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -103,20 +107,20 @@ fn a_short_write_violates_the_contracts_transfer_requirement() {
             .expect("push one append");
         assert_eq!(pushed, 1, "a fresh arena always has a slot");
 
-        let completion = ring
+        let (completion, held) = ring
             .pop_within(WAIT)
             .expect("pop_within")
             .expect("the append's completion arrives well inside the bound");
+        let (_payload, slot) = held.expect("an append carries its arena slot");
         let reported = completion.with_injected_transfer(transferred);
 
-        match appender.claim(&reported) {
-            Ok(accepted) => {
+        match appender.claim(&reported, slot) {
+            Ok(()) => {
                 assert!(
                     expect_accepted,
                     "a write reporting {transferred} of {complete} bytes was accepted; the \
                      contract requires complete transfers and this one is short"
                 );
-                assert!(accepted, "the completion is the append's own");
             }
             Err(error) => {
                 assert!(
@@ -150,7 +154,7 @@ fn a_short_write_violates_the_contracts_transfer_requirement() {
 #[cfg(feature = "fault-injection")]
 #[test]
 fn a_failed_write_still_releases_its_arena_slot() {
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
     let (path, file) = scratch("failed-write");
     let mut appender =
         Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -166,14 +170,15 @@ fn a_failed_write_still_releases_its_arena_slot() {
     assert_eq!(pushed, 1, "the arena starts empty, so one record fits");
     assert_eq!(appender.in_flight(), 1);
 
-    let completion = ring
+    let (completion, held) = ring
         .pop_within(WAIT)
         .expect("pop_within")
         .expect("the append's completion arrives well inside the bound");
+    let (_payload, slot) = held.expect("an append carries its arena slot");
 
     let failed = completion.with_injected_failure(INJECTED);
     let error = appender
-        .claim(&failed)
+        .claim(&failed, slot)
         .expect_err("a failed write must be reported, not swallowed");
     assert_eq!(
         (error.as_ioring_error().expect("an IoRingError").code() as u32) & 0xFFFF,
@@ -181,16 +186,18 @@ fn a_failed_write_still_releases_its_arena_slot() {
         "the error reaching the caller must be the one that was injected"
     );
 
-    // The point of the test. Claiming is what returns the slot; a claim skipped
-    // on the failure path would leave this at one and the leak would be
-    // invisible until the arena ran dry. That the *arena* recovers too is what
-    // `repeated_failures_never_exhaust_the_arena` below establishes, by driving
-    // past `SLOTS` failures -- which only completes if slots are genuinely
-    // being handed back rather than merely appearing to be.
+    // The point of the test, and it has moved one layer down. The slot is
+    // returned by the *pop*, not by anything `claim` does, so a failure path
+    // that returned early could no longer leak it. What is still worth
+    // asserting is that the appender accounts for the completion either way --
+    // a failed write is still a completed operation. That the *arena* recovers
+    // too is what `repeated_failures_never_exhaust_the_arena` below
+    // establishes, by driving past `SLOTS` failures, which only completes if
+    // slots are genuinely being handed back rather than merely appearing to be.
     assert_eq!(
         appender.in_flight(),
         0,
-        "the token must have been claimed even though the write failed"
+        "the completion must be accounted for even though the write failed"
     );
 
     drop(file);
@@ -206,7 +213,7 @@ fn a_failed_write_still_releases_its_arena_slot() {
 #[cfg(feature = "fault-injection")]
 #[test]
 fn repeated_failures_never_exhaust_the_arena() {
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
     let (path, file) = scratch("repeated-failures");
     let mut appender =
         Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -225,12 +232,13 @@ fn repeated_failures_never_exhaust_the_arena() {
             "round {round}: a slot must be available, or an earlier failure leaked one"
         );
 
-        let completion = ring
+        let (completion, held) = ring
             .pop_within(WAIT)
             .expect("pop_within")
             .expect("the append's completion arrives well inside the bound");
+        let (_payload, slot) = held.expect("an append carries its arena slot");
         appender
-            .claim(&completion.with_injected_failure(INJECTED))
+            .claim(&completion.with_injected_failure(INJECTED), slot)
             .expect_err("round {round}: the injected failure must be reported");
     }
 
@@ -246,7 +254,7 @@ fn repeated_failures_never_exhaust_the_arena() {
 /// claim happened.
 #[test]
 fn a_successful_write_releases_its_arena_slot() {
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
     let (path, file) = scratch("successful-write");
     let mut appender =
         Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -260,11 +268,14 @@ fn a_successful_write_releases_its_arena_slot() {
         )
         .expect("push one append");
 
-    let completion = ring
+    let (completion, held) = ring
         .pop_within(WAIT)
         .expect("pop_within")
         .expect("the append's completion arrives well inside the bound");
-    assert!(appender.claim(&completion).expect("a successful claim"));
+    let (_payload, slot) = held.expect("an append carries its arena slot");
+    appender
+        .claim(&completion, slot)
+        .expect("a successful claim");
     assert_eq!(appender.in_flight(), 0);
 
     drop(file);
@@ -289,7 +300,7 @@ fn a_successful_write_releases_its_arena_slot() {
 /// not documenting it.
 #[test]
 fn a_reused_slot_does_not_write_the_previous_records_tail() {
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
     let (path, file) = scratch("reused-slot-tail");
     let mut appender =
         Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -305,11 +316,14 @@ fn a_reused_slot_does_not_write_the_previous_records_tail() {
             .append_batch(&mut ring, file.as_raw_handle(), Epoch(0), &[payload])
             .expect("push one append");
         assert_eq!(pushed, 1, "a drained arena always has a slot");
-        let completion = ring
+        let (completion, held) = ring
             .pop_within(WAIT)
             .expect("pop_within")
             .expect("the append's completion arrives well inside the bound");
-        assert!(appender.claim(&completion).expect("a successful claim"));
+        let (_payload, slot) = held.expect("an append carries its arena slot");
+        appender
+            .claim(&completion, slot)
+            .expect("a successful claim");
     }
 
     let bytes = std::fs::read(&path).expect("read the log back");
@@ -352,7 +366,7 @@ fn records_land_one_per_stride_and_replay_walks_them_back() {
     let payload_for = |index: usize| format!("record {index}: the quick brown fox").into_bytes();
     const COUNT: usize = 3;
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = AppendRing::with_inventory(16, 16).expect("create ring");
     let (path, file) = scratch("stride-replay");
     let mut appender =
         Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
@@ -367,11 +381,14 @@ fn records_land_one_per_stride_and_replay_walks_them_back() {
             )
             .expect("push one append");
         assert_eq!(pushed, 1, "a drained arena always has a slot");
-        let completion = ring
+        let (completion, held) = ring
             .pop_within(WAIT)
             .expect("pop_within")
             .expect("the append's completion arrives well inside the bound");
-        assert!(appender.claim(&completion).expect("a successful claim"));
+        let (_payload, slot) = held.expect("an append carries its arena slot");
+        appender
+            .claim(&completion, slot)
+            .expect("a successful claim");
     }
 
     let bytes = std::fs::read(&path).expect("read the log back");

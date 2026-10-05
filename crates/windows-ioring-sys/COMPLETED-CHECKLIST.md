@@ -3821,3 +3821,2402 @@ the sixth, added by this milestone.
 anything observed**, and must not be derived from observation -- deriving it from what we have seen
 closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
 reviewable artifact rather than a recording.
+
+## Moved 2026-09-25 20:47:00 -04:00 -- M28.1, what a caller receives
+
+### <a id="m281"></a>M28.1 -- Decided: a push returns a `Copy` identity that owns nothing, and the ring returns the payload at its own pop -- `Token` is split, not moved. *(completed 2026-09-25 20:47:00 -04:00)*
+
+The decision is [D-71](DESIGN-NOTES.md#d-71). The item asked between two shapes and the census
+answer was both, because `Token` is an ownership guard and an identity welded together and only
+the first is what `M28` moves. The item as it read when it closed:
+
+- [x] **M28.1** -- **Decide what a caller receives, before writing any of it.** If the ring owns
+  the token then `Batch::write` can no longer hand one back, and the shape of what replaces it is
+  the whole design: an identity the caller matches later, or a claim that returns `(T, X)`
+  directly from the ring. The second makes drift impossible and is the point of the break; the
+  first is a smaller change that may not be worth breaking for. Settle it with the
+  `Token::claim_if` safety argument in hand, since that is what currently makes a mismatched
+  completion unclaimable.
+
+## Moved 2026-09-25 21:12:00 -04:00 -- M28.2, bounding the contract oracle
+
+### <a id="m282"></a>M28.2 -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. *(completed 2026-09-25 21:12:00 -04:00)*
+
+The decision, including why naive pruning was rejected as worse than the leak, is
+[D-72](DESIGN-NOTES.md#d-72). The item as it read when it closed:
+
+- [x] **M28.2** -- **Bound `RingContract` before anything depends on it more heavily.**
+  `operations: HashMap<usize, State>` is never pruned -- `observe_claim` marks an entry
+  `Completed` and keeps it -- so the oracle retains one entry per operation for the process's
+  life. Undocumented, and not visible in the sample because it appends 24 records. A long-running
+  consumer following the crate's own recommendation leaks. This blocks any design that checks by
+  default, which is why it is here rather than filed separately: `M23.3` reached for always-on
+  checking and this is what ruled it out. Decide whether completed entries are dropped, whether
+  `check_quiescent` needs them, and document the answer either way.
+
+## Moved 2026-09-26 00:26:05 -04:00 -- M28.4.1d.2, the ring-owned inventory migration
+
+### <a id="m2841d2"></a>M28.4.1d.2 -- Convert every consumer that can be converted before the token API is retired. *(completed 2026-09-26 00:26:05 -04:00)*
+
+    **Converted** (each its own commit, full gate green at every one):
+    `bounded_pop.rs`, `flush_barrier.rs`, `flush_barrier_stress.rs`, `calibration.rs`,
+    `completion_event.rs`, `event_delivery.rs`, `fault_injection.rs`, `handover.rs`,
+    `resolver_over_a_real_ring.rs`, `submission_lifecycle.rs`, `kernel_span.rs`,
+    `registration.rs`, `model_a_delivery.rs`, `model_b_multiplexed.rs`,
+    `epoch_log/logfile/tests.rs`, `ring_copy/engine.rs`, and the convertible half of
+    `failure_paths.rs`.
+
+    `registration.rs` was far smaller than its 27 `claim_if` sites suggested: most are
+    `PendingBufferRegistration` / `PendingFileRegistration` handles, which are a different
+    mechanism from `Token` and not in M28.4.1's push set. Eight were real token sites.
+
+    **Re-planned after execution: the rest of d.2 cannot precede d.3.** Four files remain,
+    and every one of them is blocked on `M28.4.1d.3` rather than on conversion effort --
+    converting them first would mean writing assertions against an API in the same commit
+    that another item deletes it. This is a genuine sequencing discovery, not a deferral
+    for convenience. Three are blocked specifically by [D-74](DESIGN-NOTES.md#d-74),
+    because their subject matter *is* what it removes; the fourth is blocked by the
+    retirement of `Pending<T, X>`, which is the same item but not the same reason:
+
+    - `generated_sequences.rs` and `properties_under_every_resolution.rs` both sample a
+      **claim-or-drop axis** as a generated dimension, with their own coverage assertions
+      (`coverage.deliberate_drops > 0`, `coverage.deliberate_leaks`). Converting them
+      *removes a dimension from the generated space*, which is a change to what the oracle
+      covers and belongs in the commit that retires `observe_deliberate_leak`.
+    - `failure_paths.rs`'s leak-ordering test asserts `Violation::LeakedToken` directly. It
+      is not convertible at all -- it is d.3's to delete, alongside the variant.
+    - `epoch_log/append.rs` uses the crate's `Pending<T, X>`, which d.3 retires, and raises
+      a question d.3 must answer first: it takes `&mut IoRing` rather than owning the ring,
+      so an appender cannot reach the inventory without the ring's payload type reaching
+      its own signature. **That is the first consumer to feel `D-73`'s type parameters at
+      an API boundary**, and it should be decided rather than discovered.
+
+    **Correction, same day**: an earlier version of this list also called
+    `epoch_log/checkpoint.rs` and `epoch_log/strategy.rs` blocked -- and omitted
+    `strategy.rs` from d.3's list while doing so, which would have lost it entirely.
+    Neither was blocked: both own their rings and use the plain sidecar pattern, and
+    neither samples the claim-or-drop axis that couples the others to `D-74`. The
+    over-broad claim came from reading `checkpoint.rs`'s own `Pending` struct as the
+    crate's `Pending<T, X>`; they are unrelated types with the same name. Both are now
+    converted. The lesson is narrow and worth keeping: *"blocked" is a claim about a
+    specific dependency, and naming that dependency is what makes it checkable* -- the
+    three files that really are blocked each name the item that unblocks them.
+
+    **Two API gaps the conversion found, both now closed**: `flush_raw_owned` did not exist
+    (eleven token pushes had ten owned counterparts), and `pop_within` had no reclaiming
+    form. A third is a real defect, fixed: `HeldCompletion` collapsed `Option<(T, X)>` via
+    `entry.payload.map(..)`, which discarded the sidecar of every *bufferless* operation --
+    so a flush could never say which group of writes it belonged to. It is
+    `Option<(Option<T>, X)>` now: the outer option is whether the ring stowed anything, the
+    inner one whether what it stowed included a buffer.
+## Moved 2026-09-26 00:31:44 -04:00 -- M28.4.1d.2b, the cost of a single payload type
+
+### <a id="m2841d2b"></a>M28.4.1d.2b -- Record what a single payload type costs a consumer holding heterogeneous buffers, and decide whether anything is owed. *(completed 2026-09-26 00:31:44 -04:00)*
+
+Record what a single payload type costs a consumer holding
+    heterogeneous buffers, and decide whether anything is owed.
+
+    Found converting [epoch_log/logfile/tests.rs](examples/epoch_log/logfile/tests.rs): one
+    test wrote a `NumaBuffer` and a `Vec<u8>` through the same ring. A ring holds one payload
+    type ([D-73](DESIGN-NOTES.md#d-73)) and [D-4](DESIGN-NOTES.md#d-4) forbids erasing it, so
+    that consumer's choices are an enum payload implementing `IoBuf`, or a ring per buffer
+    type. The test took a ring each, which was free there because its two writes were already
+    sequential -- but that will not generally be true, and a consumer multiplexing buffer
+    types over one ring has no cheap answer today.
+
+    This is not a request to relax `D-73`; the seal is load-bearing and the single type is
+    what makes the payload come back without a cast. It is a request to **state the
+    consequence where a consumer will meet it** rather than leaving them to discover it from
+    a type error, and to decide whether the crate should offer an `IoBuf` enum helper or
+    simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
+    the problem is visible first.
+
+**Decided: document, build nothing.** The two ways round a mixed payload -- a ring per
+buffer type, or an enum payload carrying its own `unsafe impl IoBuf` -- are now stated on
+`IoRing::with_inventory`, where a consumer meets the parameter rather than a type error,
+and the decision with its evidence is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md#d-73).
+
+The premise this item was written on did not survive the rest of the conversion. It asserted
+that a consumer multiplexing buffer types over one ring "will not generally" find a ring
+each free. Of the seventeen ring types the conversion introduced, one carried two buffer
+types through what had been a single ring, and its writes were already sequential. The
+prediction was made from a single observation and tested against sixteen more.
+## Moved 2026-09-26 10:26:56 -04:00 -- M28.4.1d.3, the commit that ended the break
+
+### <a id="m2841d3"></a>M28.4.1d.3 -- Retire the token API and apply D-74. *(completed 2026-09-26 10:26:56 -04:00)*
+
+**Also carries the three consumers d.2 could not convert** (see
+    `M28.4.1d.2`): `generated_sequences.rs` and `properties_under_every_resolution.rs`
+    (each samples claim-or-drop as a generated dimension, with a coverage assertion that
+    the axis was exercised), and `failure_paths.rs`'s leak-ordering test (asserts
+    `Violation::LeakedToken` -- deleted here, not converted). Each is blocked on this item
+    rather than on effort, because what they assert is what this item deletes.
+
+    **Decide `epoch_log/append.rs`'s boundary question before converting it**: it takes
+    `&mut IoRing` rather than owning the ring, so reaching the inventory would put the
+    ring's payload type into the appender's own signature. It is also the last user of the
+    crate's `Pending<T, X>`, so retiring that type and answering this question are the same
+    piece of work.
+
+    Retire every `Token`-returning push -- there is now exactly one per `*_owned` form,
+    since `flush_raw_owned` closed the last gap -- along with `Token` itself and
+    `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
+    `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
+    `observe_deliberate_leak`, and collapse the two push states.
+
+    **Dropping `observe_claim` reaches past the three unconverted files.** `M28.4.1d.2`
+    left its calls in place in [handover.rs](tests/handover.rs),
+    [kernel_span.rs](tests/kernel_span.rs),
+    [submission_lifecycle.rs](tests/submission_lifecycle.rs) and the converted half of
+    [failure_paths.rs](tests/failure_paths.rs) -- deliberately, because the oracle still
+    modelled a claim while both token models were live, and a converted test that stopped
+    reporting one would have looked like a leak. Those calls have nothing left to report
+    once the pop is the claim, so they go with the API rather than being rewritten.
+    [contract.rs](src/contract.rs) also carries a doctest that calls it, and
+    [pending.rs](src/pending.rs) calls both -- the latter disappears with `Pending<T, X>`. Leaving them would describe
+    a hazard the API no longer has, which is worse than a gap: a reader would go looking for
+    the way to leak a token and not find one. **This is the commit that ends the break.** **Convert all of them or
+    none**: converting a few relocates the duplication rather than removing it, which is the
+    lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
+    left the other. This is the step that ends with one token model.
+
+**Done.** The token API is gone: `pending.rs` deleted, `Token` stripped from
+`token.rs` (`OperationId` survives, with its own tests -- deleting the file would have
+left the surviving type untested), ten `Token`-returning pushes and the private
+`finish_push` removed from `batch.rs`, and `try_pop`/`pop_within` now name the one
+reclaiming pop each. D-74 applied in full.
+
+**The count in this item was wrong, and it was my own correction that broke it.** An
+earlier revision said "ten"; `M28.4.1d.2` "corrected" it to eleven from a command that
+counted `io::Result<Token<...>>` occurrences. Eleven was the occurrence count; **ten** was
+the push count, because the eleventh was the private `finish_push` helper. The original
+was right. The rule that a census must come from a command holds -- but a command is only
+as good as what it is pointed at, and a return type is not a push.
+
+**Two guards were disturbed by the rename, and one of them had gone blind.**
+[check-ring-tests.ps1](../../tools/check-ring-tests.ps1) detected ring-opening tests by
+grepping `IoRing::new`, so every ring moved onto `with_inventory` vanished from its
+inventory -- reported as five REMOVED entries, which the script's own text calls
+"progress". It was a guard silently stopping guarding. Fixed to match the constructor
+*name* (which also catches a type alias like `PipeRing::with_inventory`), and the fix
+immediately surfaced two ring-opening tests the old pattern had never matched at all.
+[check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) reported the one genuine
+change, a removal, answered in [DESIGN-NOTES.md](DESIGN-NOTES.md#borrow-surface-audit-m2841d3).
+
+**The documentation sweep was larger than the code change.** Retiring `Token` broke 73
+intra-doc links and left 35 prose references describing a model that no longer exists --
+including the README's headline example, which is the first thing a consumer reads. All
+rewritten. The census in [response_space_census.rs](tests/response_space_census.rs) also
+caught two unbounded `try_pop` spins that the rename made visible to it; both are now
+bounded pops.
+## Moved 2026-09-26 11:54:28 -04:00 -- M28.4.2, sabotaging the inventory
+
+### <a id="m2842"></a>M28.4.2 -- Sabotage the inventory: a push that does not record, and a pop that does not retire, must both turn the suite red. *(completed 2026-09-26 11:54:28 -04:00)*
+
+Sabotage the inventory: a push that does not record, and a pop that does
+    not retire, must both turn the suite red.
+
+    The pop half now has a worked precedent to follow rather than invent: `M28.4.1d.2`
+    made both public pops retire their entry, and verified it by re-injecting the
+    stranding -- five `registration.rs` tests went red, and all eighteen passed once it
+    was restored. Record that as a case in `sabotage.json` rather than leaving it as a
+    command that was run once and discarded.
+
+**Five cases added, two repaired, three removed.** The manifest is the artifact; what
+follows is what running it taught.
+
+**The sweep found that `M28.4.1d.3` had broken the manifest, and nobody noticed because
+nobody ran it.** Two cases patched `src/pending.rs`, which that commit deleted, so the
+harness aborted before testing anything. A third re-injected the `M22.2` ordering defect
+-- checking a write's result before claiming -- which is no longer expressible. Two more
+were silently stale: `M23.5`'s rundown guard had been re-indented, and `M26.7`'s
+restated-pop site now destructures a tuple, so both matched zero times. That is exactly
+the decay the harness exists to catch, arriving in the harness itself.
+
+**One case had to be rewritten because it was caught for the wrong reason.** The
+push-does-not-record sabotage originally dropped the entry, which frees the buffer while
+the kernel writes into it: the suite failed with `STATUS_HEAP_CORRUPTION` (0xC0000374).
+That scores as `caught` because the process died, not because a test noticed, and
+whether it dies at all depends on allocator behaviour -- the repository's own cargo-mutants
+guidance says to treat a crash-caught result as uncovered. The patch now *leaks* the entry
+instead. The ring still records nothing, `ring.held()` and every `held.expect(..)` go
+red by assertion, and the two defects are separated: this case asserts the ring failed to
+**record**, which is a claim a test can make, rather than that a freed buffer is unsound,
+which no sabotage can establish reliably.
+
+**The two pops are asserted separately on purpose.** They have separate bodies, and a fix
+to one has already failed to reach the other: the pair existed as `try_pop`/`try_pop_held`
+and `pop_within`/`pop_within_held` precisely because the reclaiming behaviour was added
+one at a time, and `pop_within` went a full milestone without it.
+
+**Two cases moved rather than died.** `Pending<T, X>`'s "push stops telling the oracle"
+guarantee survived its type -- `Appender` keeps a `RingContract` and must observe both
+ends -- so it is relocated to the appender, alongside a new completion-side case that
+replaces the retired `M22.2` ordering one.
+## Moved 2026-09-26 13:05:21 -04:00 -- M28.5, the tokenless push
+
+### <a id="m285"></a>M28.5 -- Answer the tokenless push. *(completed 2026-09-26 13:05:21 -04:00)*
+
+**Answer the tokenless push.** `flush_raw` returns a bare `usize` and
+`epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
+`RawHandle` gives its token nothing to guard. An inventory the ring owns has to say what it
+does with operations that have no token -- `RingContract` already models them separately with
+`observe_tokenless_push`. Note this may dissolve rather than need solving: if the sample owned
+a `SharedFile` instead of passing a `RawHandle` it could use the safe `flush` and get a token,
+which `M25.3` reopens anyway by changing how the log is opened.
+
+**Most of the question had already dissolved, but not the way this item guessed.** It
+expected the sample to stop passing a `RawHandle`. What actually happened is that
+`D-74` collapsed the two push states, which left `RingContract::observe_tokenless_push`
+**byte-identical** to `observe_push`, with a doc describing a leak violation that no
+longer exists. Two names for one behaviour is what `FAIL FAST` rule 1 is about, so the
+tokenless one retired and its eight call sites moved.
+
+**What genuinely remained was the meaning of the outer `None` from a pop**, and the
+public doc was wrong about it: it said `None` meant a contract violation, when a
+`_raw` flush legitimately produces one. Recorded as [D-75](DESIGN-NOTES.md#d-75). The
+answer is that the ring cannot separate the two causes and does not try -- the caller
+can, because it chose the push. Closing the gap was considered and rejected: an entry for
+every raw push needs an `X` the caller never supplied, which is the residue `D-73`
+named, and the `_owned` forms already serve a caller who wants one.
+
+**The contract is now asserted rather than only documented**, bidirectionally on one ring,
+because a test showing only one side would pass against a ring that answered the same way
+every time. Two things came out of verifying it by sabotage. Patching `try_pop` left the
+test green -- it pops with `pop_within` -- which is the same separation `M28.4.2`
+asserts with two cases rather than one. And the first manifest case was crash-caught
+(STATUS_STACK_BUFFER_OVERRUN): manufacturing a payload needs an `X` from nowhere, and
+`std::mem::zeroed()` on a ring whose sidecar is `&'static str` is a null reference.
+The case is arithmetic now, and fails by assertion on every ring.
+## Moved 2026-09-26 13:30:33 -04:00 -- M28.6, sweeping what the break made false
+
+### <a id="m286"></a>M28.6 -- Sweep what the break makes false. *(completed 2026-09-26 13:30:33 -04:00)*
+
+**Sweep what the break makes false**, including the README's ring examples, the
+`D-4` detail section, and every rustdoc that tells a caller to match a completion against a
+held token -- `Completion::user_data` and `IoRing::push_raw` both do, and they are the evidence
+D-55 rests on, so they are the first things the change invalidates.
+
+**The named targets were mostly already done, and the sweep's value was the rest.**
+`M28.4.1d.3` had fixed the README example and reworded `Completion::user_data`; what
+remained of the list was `D-4`, `D-55`, and a nuance the item got slightly wrong.
+
+**`D-4`**: its load-bearing half -- no slab entry, no box, **no type erasure** -- is
+unchanged and is what `D-55` and `D-73` both rest on. What moved is who holds the
+buffer, and the forget-on-failure mechanism did not disappear so much as become the
+crate's: `Drop for IoRing` forgets the inventory for exactly the reason a dropped token
+used to forget its value. Amended in place rather than superseded.
+
+**`D-55`**: landed, with two of its own assertions corrected. Its evidence was that "its
+own rustdoc twice instructs a caller to match it against a held `Token`" -- but one of
+those two sites was `IoRing::push_raw`, which *still* says to match by hand, and is
+right to: a raw push creates no entry, which is `D-75`'s subject. The defect was in the
+tokened path; the raw seam only looked the same. And `generated_sequences.rs` no longer
+carries the eight-token-type enum that was the strongest evidence the erasure objection
+was false -- the argument stands, the artifact is gone, and a reader sent to look for it
+should know before going.
+
+**Six live false claims in the examples**, none of them on the item's list: `append.rs`
+and `strategy.rs` still told a reader that claiming a token returns its arena slot,
+`model_b_multiplexed.rs` twice said the kernel writes through buffers "those tokens
+own", `checkpoint.rs` documented a map field that no longer holds a token, `main.rs`
+asserted "every token was claimed", and `append/tests.rs` pointed at a library test
+`M28.4.1d.3` had deleted.
+
+**Three defects this sweep found in `M28.4.1d.3`'s own prose sweep**, which is the part
+worth remembering. That sweep replaced 35 `Token` references by table-driven
+substitution, and three of the replacements were wrong in ways no gate could catch:
+`buf.rs` was left with a sentence broken mid-clause (`-- a` followed by `The ring
+has no Drop...`), and two `ring.rs` sites lost their backticks or kept a stale
+"every claim path", because a PowerShell double-quoted replacement string eats backticks.
+**Prose does not compile, and rustdoc only checks links.** A substitution sweep over
+documentation needs its output read, not just its exit code.
+
+`MUTATION-SURVIVORS.md` and the `M18.1` borrow-surface table are dated captures and
+were **annotated, not edited** -- the record of what was measured then is the thing worth
+keeping, but a reader should not learn from a compile error that an item is gone.
+## Moved 2026-09-26 16:39:03 -04:00 -- M28.7, decided against
+
+### <a id="m287"></a>M28.7 -- Decide whether the ring should check conservation itself. *(completed 2026-09-26 16:39:03 -04:00)*
+
+**Decide whether the ring should check conservation itself, rather than a
+caller driving `RingContract`.** Raised by [D-74](DESIGN-NOTES.md#d-74) and deliberately not
+taken there. Once the inventory is the only push path, a pop already knows whether the identity
+was stowed, and `held()`/`outstanding()` are both the ring's own numbers -- so
+`UnexpectedCompletion`, `DuplicateCompletion` and `Outstanding` are all answerable without a
+caller reporting anything.
+
+**Why it is a decision and not a cleanup.** [DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md) recorded the structural
+complaint that an oracle's "value depends on being driven correctly by the very code it checks",
+and this would answer it. But `RingContract` is deliberately *not* wired into `Batch` ([its own
+rustdoc](src/contract.rs) says why): a ring driven through `push_raw` bypasses this crate's
+bookkeeping entirely, so an internal hook would cover less than it appears to, and a consumer
+validating its own harness needs to drive the same rules from outside. Moving the checking
+inward trades that away. Gated on `M28.4.1d`.
+
+**Decided: no, and it schedules no work.** Recorded as [D-76](DESIGN-NOTES.md#d-76).
+`RingContract` is unchanged.
+
+**Of the four violations, the ring can answer one.** `Outstanding` it already does --
+`run_down` waits on that number and `Drop` debug-asserts it.
+`UnexpectedCompletion` it **cannot**, because [D-75](DESIGN-NOTES.md#d-75) -- decided in
+this same milestone -- established that a `_raw` push creates no entry, so "the ring
+holds nothing for this identity" is legitimate rather than a violation.
+`DuplicateCompletion` needs a finished-identity history the ring does not keep.
+`BufferStillInUse` reads a count living in `RegisteredBuffers`, which the *caller*
+owns.
+
+**The decisive argument was the failure mode, not the coverage.** An internal check
+reporting `UnexpectedCompletion` for an entry-less completion would fire on every
+`_raw` push -- 13 call sites across 8 files, including the sample's commit path. Not a
+check that covers less than it appears to; a check that is wrong about correct code.
+
+**Two corrections to the reasoning as this item stated it.** Its `push_raw` argument
+rested on a seam with **zero** call sites; the real bypass is `flush_raw`/`cancel_raw`.
+And the structural complaint it would have answered is in this tree almost entirely a
+*test* concern: of 37 `RingContract` instances, 36 are tests and one is a consumer.
+
+**What reopens it:** `M23.3` had ruled an always-on checked inventory out because the
+oracle grew without bound, and `M28.2` removed that obstacle -- so memory is no longer
+the reason. If `_raw` pushes ever gain inventory entries, `UnexpectedCompletion`
+becomes answerable and the question is live again.
+
+**Also fixed while here:** three links to `src/pending.rs`, which `M28.4.1d.3`
+deleted -- this item's own, and one each in `D-71` and `D-74`. All now point at the
+design session that holds the material.
+## Moved 2026-09-26 17:24:22 -04:00 -- M28.8, the duplication closed properly
+
+### <a id="m288"></a>M28.8 -- Give `RingContract` an in-flight count, and delete the counter that duplicates it. *(completed 2026-09-26 17:24:22 -04:00)*
+
+**Give `RingContract` an in-flight count, and delete the counter that
+duplicates it.** [`Appender`](examples/epoch_log/append.rs) keeps `outstanding: usize`
+next to its `RingContract`, incremented at every push and decremented at every
+completion -- two hand-driven lines at each of two sites. The oracle already knows that
+number: it is what [`RingContract::check_quiescent`](src/contract.rs) computes
+`Violation::Outstanding` from. The counter exists only because the oracle has no
+accessor for it, and [main.rs](examples/epoch_log/main.rs) needs `in_flight() > 0` for
+its two drain loops.
+
+Add `RingContract::in_flight()`, have `Appender::in_flight` read it, delete
+`Appender::outstanding`. One source of truth. Sabotage the accessor to confirm the
+drain loops genuinely depend on it rather than terminating for another reason.
+
+**Why this is worth an item.** It is the residue of the complaint that started
+[D-55](DESIGN-NOTES.md#d-55): an oracle driven *beside* a consumer's own record of the
+same event, "a restatement in the repository's own terms, and one that can drift in both
+directions" -- see
+[DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
+`M23.3`'s `Pending<T, X>` had closed it, by making one call drive both the map and the
+oracle. **`M28.4.1d.3` retired `Pending<T, X>` and re-opened it in a smaller form**, and
+that went unnoticed because a `usize` counter looks nothing like the map it replaced.
+This is not [M28.7](COMPLETED-CHECKLIST.md#m287) in another guise: nothing moves into
+the ring, so [D-75](DESIGN-NOTES.md#d-75)'s objection does not apply.
+
+**Two hand-written copies, not one.** The appender''s counter was the known one. Looking
+for it found a second in
+[properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs):
+`contract_outstanding` counted `Violation::Outstanding` out of `check_quiescent()`,
+allocating a `Vec` to ask a map its length. Its own doc said "derived from the contract
+rather than counted here" -- the right instinct, implemented by hand because the type
+offered no accessor. Both now call `RingContract::in_flight`.
+
+**The verification this item specified was aimed at the wrong place, and measuring it
+said so.** The item asked to confirm `epoch_log`''s drain loops depend on the accessor.
+They do not. `main.rs` loops on `appender.in_flight() > 0 || committer.in_flight() > 0`
+and the committer keeps its own map, so the second operand holds the loop open while each
+pass drains both producers -- the sample runs clean with the accessor hard-coded to zero.
+That is exactly the "terminating for another reason" the item warned about, found by
+doing the check rather than assuming it.
+
+What does catch it is `P-4`, which compares `IoRing::outstanding()` against the
+contract''s own count -- the agreement this accessor asserts. Recorded as a case in
+[sabotage.json](sabotage.json) so it is re-run rather than discarded, with the
+wrong-place finding written into its `why`.
+
+**The appender''s half of that loop condition is not dead**, only unexercised by the
+sample''s path: it would matter with appends outstanding and no commit pending. Left
+alone rather than "simplified".
+
+## Moved 2026-09-26 19:11:20 -04:00 -- M26.12, which turned out not to be a race at all
+
+### <a id="m2612"></a>M26.12 -- Find why a signal raised just after `wait.arm` can be lost, and fix it. *(completed 2026-09-26 19:11:20 -04:00)*
+
+**The item's premise was false, and measuring it said so.** It asked for the mechanism of a
+wakeup lost in a window after arming. There is no window. Isolating `SetThreadpoolWait` from
+the ring entirely lost no wakeups in arm-then-signal order, none with the 50 ms pause, and
+none in the signal-then-arm order the API documents against; a real ring holding a backlog
+lost none with no pool, and none under a wait armed exactly as `EventDelivery::new` arms one.
+Full figures in [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
+
+**The cause was the narrow finding review reported on PR #108**, which the investigation had
+set aside as too small. `attach_completion_event_unsignalled` reported the setup signal "still
+owed" only when that call had performed the attachment, so a caller that attached earlier and
+consumed that signal handed over a non-empty queue with no wakeup pending -- and D-19's edge
+cannot re-arm without the queue first returning to empty. Deterministic, not rare. The
+reproducer's own report had said so all along: `callbacks run: 0` is a signal never raised.
+
+**Two claims in the record were wrong in the same direction**, and both had been treated as
+measurement: that signalling unconditionally did not fix it, and that a 50 ms sleep did.
+Signalling unconditionally passes 30 of 30. The likely cause of the bad measurement was
+reproduced by accident during this work -- a stale test binary, after a file restore that
+preserved mtime let cargo skip the rebuild. Recorded as reconstruction, not finding.
+
+**Fixed** by deleting the flag: attach and signal stay separate so a caller can arm in
+between, but both `IoRing::completion_event` and `EventDelivery::new` raise the signal
+unconditionally. Recorded as [D-77](DESIGN-NOTES.md#d-77), which also corrects the one clause
+of [D-68](DESIGN-NOTES.md#d-68) the measurements contradict -- D-68's ordering stands, since
+it binds to what `SetThreadpoolWait` documents rather than to what this host tolerates.
+
+**Guarded** by two sabotage cases in [sabotage.json](sabotage.json) and by a new test,
+`a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed`, which is the only
+test that consumes both earlier signals and so the only one that can observe the ring-level
+half -- confirmed by sabotage to be the single test that fails when the old behaviour returns.
+
+**Left open:** `M26.9`'s intermittent stall was real and its fix is kept, but the mechanism
+D-68 offered for it does not survive these measurements. Queued as `M26.13`.
+
+## Moved 2026-09-26 21:55:20 -04:00 -- M26.13.1, the trace coverage the stall capture lacked
+
+### <a id="m26131"></a>M26.13.1 -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. *(completed 2026-09-26 21:55:20 -04:00)*
+
+**What the item asked for, and what was added.** `M26.13`'s capture had no records at all
+between 0.0023s and 5.0087s, so the stall itself was unobserved. The item named four gaps in
+[windows-threadpool-sys](../windows-threadpool-sys/src/wait.rs) and one in this crate's test,
+and all five are closed:
+
+1. the wait trampoline's **exit** (`trampoline-left`), paired with the entry that existed;
+2. `rearm_reporting`'s two ends -- `rearm-entered` recorded *before* the suppression lock it
+   can block on, then `rearm-left` or `rearm-suppressed`, so a re-arm parked on that mutex is
+   distinguishable from one that never started;
+3. work-item callbacks in [work.rs](../windows-threadpool-sys/src/work.rs), both ends, plus
+   `created` and `submitted` -- without the submit, a `trampoline-entered` has nothing to be
+   late relative to;
+4. `ThreadpoolWait::drop`'s stages, confirmed rather than changed: the interval from
+   `drop-drained` to the handle's own close holds exactly `CloseThreadpoolWait`, the context
+   free, and the `target` field drop that runs the instant the body returns. `drop-begin` and
+   `drop-closed` now carry the target handle, because nothing after `drop-closed` can;
+5. the post-mortem in [event_delivery.rs](tests/event_delivery.rs), under a `postmortem`
+   target: the `recv_timeout` expiry, the `outstanding()` call **bracketed** (it takes the ring
+   mutex the delivery callback drains under, so an `outstanding-begin` with no
+   `outstanding-read` is itself a finding), the liveness probe's phases, and the second wait.
+
+**Extended past the four the item listed**, because the item's own title says *every*
+pool-invoked functor and there are five: the `io`, `timer`, and `timer-periodic` trampolines
+now record both ends too. A reader of a capture can then take silence to mean no functor ran,
+rather than no *traced* functor ran.
+
+**Verified by sabotage, not by reading.** Each of the thirteen new library call sites was
+deleted in turn and the guard re-run: all thirteen `caught`, and a control case (deleting the
+unasserted `suppress-and-disarm` record) `survives`, so the guard is sensitive to these call
+sites rather than merely sensitive. The post-mortem records were verified by making the
+expiry happen for real -- `DELIVERY_BOUND` cut to one nanosecond -- which exercises the whole
+failure path rather than a proxy for it, and every `postmortem` record appeared in the
+captured report.
+
+**The guard is `every_pool_trampoline_records_both_of_its_ends`** in
+[trace/tests.rs](../windows-threadpool-sys/src/trace/tests.rs), with the `io` half asserted
+inside the existing `pending_read_completes_through_the_callback`, which already owns the only
+overlapped-read exercise in that crate. It asserts **only** when `WINDOWS_THREADPOOL_TRACE` has
+narrowed the trace, because the filter is read once per process and cached, so a test cannot
+set it without racing every other test in the binary; the test says so rather than leaving a
+reader to infer it from a green run. Run it as `$env:WINDOWS_THREADPOOL_TRACE = '*'` with
+`cargo test -p windows-threadpool-sys --features trace`.
+
+**Not recorded in a sabotage manifest.** [tools/run-sabotage.ps1](../../tools/run-sabotage.ps1)
+has no way to set an environment variable for a case's test command, and this guard is
+env-gated by construction, so a manifest entry would run in a build where the test returns
+having asserted nothing. The sweep above was therefore run by hand and is not persisted; closing
+that gap means either env support in the harness or a CI job that builds with `--features trace`,
+and both are decisions to raise rather than take in passing.
+
+**Left to M26.13.** The report's "it arrived, N past the bound" wording is still measured from
+the start of the post-mortem; `second-wait-begin` / `second-wait-ended` now make that interval
+readable in the trace, but the wording fix is M26.13's own, not this item's.
+
+## Moved 2026-09-26 22:13:01 -04:00 -- M26.13.2, in which the buffer question turned out to be two questions
+
+### <a id="m26132"></a>M26.13.2 -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. *(completed 2026-09-26 22:13:01 -04:00)*
+
+**The item's premise was wrong in a way that mattered.** It asked for one or two full-suite
+runs, looking for the `... earlier record(s) dropped` line. That line appears only in a
+`dump()`, and `dump()` is called from exactly one place in this workspace --
+[event_delivery.rs](tests/event_delivery.rs)'s `trace_section`, on a failing delivery. A
+passing full-suite run produces no dump, so the prescribed check could not have answered the
+question it was asked to answer, whatever the answer turned out to be.
+
+**The buffer is also per-process, and every test binary is its own process.** So "the full
+suite" is not one population, it is one per binary, and only the binary that takes a capture
+can carry a truncated one. Measured with the trace narrowed to everything, the two that record
+at all are four orders of magnitude apart:
+
+| Binary | Records offered | Against a capacity of 8192 |
+|---|---|---|
+| `windows-ioring-sys`' `event_delivery` (7 tests, the only one that captures) | 89 | never fills |
+| `windows-threadpool-sys`' lib tests (224 tests) | 14061 | 5869 evicted -- the first 42% of the run |
+
+**So the answer to the question as asked is that no capture was ever at risk**, and the answer
+to the question underneath it is that the buffer was nonetheless losing most of a traced run
+of the crate that owns it -- the half nobody could see, because nothing there dumps.
+
+**Three changes, in the order they matter.**
+
+1. **An overflow now announces itself to stderr, once, as it happens.** This is what makes the
+   check re-runnable by anyone rather than a measurement that rots: a run that never dumps is
+   now still told that its capture no longer reaches back to the start. It is the one place
+   this module formats on the traced path, and it is reached only after `CAPACITY` records have
+   already been taken. Both suites were re-run under it afterwards with zero announcements.
+2. **`CAPACITY` raised from 8192 to 65536**, which is 4.6x the larger measured population
+   rather than a round number. The buffer is allocated only when something is actually
+   recorded, so a build carrying the feature with the environment unset still pays nothing;
+   a run that asks for a trace pays about 4.7 MB.
+3. **The eviction policy was lifted out of the `trace` feature gate** into a `Buffer` type
+   tested at a capacity of four. It now runs in every developer's `cargo test` and in CI, with
+   no feature flag and no environment variable -- where the rest of this facility's guards
+   need both. Filling the *real* buffer in a test was never an option: it would evict every
+   record the rest of the suite had just taken.
+
+**Verified by sabotage.** Eight behavioural mutations of the policy -- evict newest instead of
+oldest, stop counting losses, announce every eviction, announce none, let a clear leave the
+announcement spent or the count standing, drop the zero-capacity guard, let a full buffer stop
+recording -- were each injected in turn and all eight caught. A control that loosens `>=` to
+`==` survives, which is correct: the buffer is never allowed past its capacity, so the two
+forms cannot differ.
+
+**A side effect worth naming.** `M26.13.1`'s guard reads the global dump inside the very
+binary that was overflowing. It asserts immediately after its own exercise, so the newest
+records were always its own -- but the hazard was real and is now removed outright rather than
+left improbable, because that binary no longer wraps.
+
+**Not covered.** The glue in `record` -- that it passes `CAPACITY` and forwards the push's
+answer to the announcement -- has no test. Reaching it needs 65536 real records through the
+global buffer, which is the exact thing the `Buffer` split exists to avoid. The decision it
+carries is tested; the five lines that carry it are not.
+
+## Moved 2026-09-26 22:34:12 -04:00 -- M26.13.3, which found what ends the stall and moved the search
+
+### <a id="m26133"></a>M26.13.3 -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. *(completed 2026-09-26 22:34:12 -04:00)*
+
+**The question the item set** was what record immediately precedes `trampoline-entered` at the
+five-second mark. In all nine captures taken for this item it is **`work submitted`**, from the
+pool-liveness probe the delivery test runs after giving up, a few hundred microseconds earlier.
+
+**That alone would have been a correlation**, and `M26.13` had already rejected the probe as an
+explanation once, on the grounds that the probe's own `wait created` is stamped *after* the first
+`trampoline-entered`. It is: in all nine. The resolution is that it is the **work** half of the
+probe that precedes dispatch, not the wait half -- which is why looking at the wait half ruled the
+probe out.
+
+**Two further configurations turned the correlation into a cause**, each a temporary edit to the
+test that delays only what happens *after* the test has already given up:
+
+- **A two-second quiet period** inserted before anything touches the ring or the pool. Zero records
+  of any kind appear inside it, in all six captures that have one, and the stall ends two seconds
+  later than before -- tracking the probe, not the clock. So the stall does not end on a timer, and
+  the test thread waking from `recv_timeout` is not what ends it either.
+- **A one-second gap between `ThreadpoolWork::new` and `submit`.** The work object exists for a full
+  second in the same silence; dispatch follows the `submit`. So it is the queuing, not the creation.
+
+Captures, the generated figures, and the exact edits:
+[measurements/2026-09-26-what-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-26-what-releases-the-stall/README.md).
+The figures there are generated from the captures rather than transcribed -- five of nine were wrong
+when the table was first typed by hand, which is recorded in the README because it is the same
+transcription failure this repository's instructions already warn about.
+
+**What it cost to find:** 3 failures in 1200 runs, 3 in 1312, and 3 in 1070, at about 0.05s a run.
+The rate is in the same range as the one in three hundred recorded before this trace existed.
+
+**It moved the search, so `M26.13` was re-planned in the same commit.** That item was framed as a
+ring question and its four queued experiments all added ring ingredients to a pool-only isolation.
+The remaining question is a pool question -- why a queued wait callback waits for an unrelated
+`SubmitThreadpoolWork` -- so those four are withdrawn as the *next* step (recorded, not deleted, and
+still available if the new line dead-ends) and four pool-side experiments replace them, starting
+with the pool's worker-thread supply and with whether a private pool carrying a non-zero minimum
+stalls at all.
+
+**Deliberately not concluded.** The captures do not observe the pool's own thread accounting: the
+gap between `SetThreadpoolWait` returning and the trampoline being entered is inside the pool, where
+this workspace's trace cannot see. The supply reading is the obvious hypothesis and it is queued as
+an experiment rather than written up as a finding.
+
+**One instruction in the item was not needed and is recorded so it is not re-derived.** It warned
+against polling the completion event to see whether it was still signalled, because the event is
+auto-reset and a successful poll would consume the signal and manufacture the bug. Nothing here
+polled it -- the question was answered from record ordering alone -- so the `NtQueryEvent`
+dependency decision it flagged stays unraised.
+
+## Moved 2026-09-27 11:39:37 -04:00 -- M26.13.4, which moved the fault out of this crate
+
+### <a id="m26134"></a>M26.13.4 -- Experiment 3: nothing else releases it, and nothing else dispatches either -- a wait, a timer and an I/O object armed during the stall all sit undispatched, so the fault is pool-wide and not this crate's. *(completed 2026-09-27 11:39:37 -04:00)*
+
+**The question asked** was whether any pool poke releases the stall or only a work submit. Five
+configurations, three captures each, with a work-submit control in every one so that a poke which
+did nothing could not be confused with a stall that had already ended:
+[measurements/2026-09-27-which-poke-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+
+**The answer to the question as asked:** only a work submit. A fresh wait armed and signalled, a
+fresh timer due in a millisecond, and a real overlapped read that completed each leave the delivery
+stalled for the full two-second observe window; the work submit releases it within microseconds.
+Fifteen captures, no exceptions.
+
+**The answer underneath it is larger, and it is why this item matters more than its own question.**
+The poke's *own* callback does not run either. A wait, a timer and an I/O object created and armed
+**during** the stall, with no connection to any ring, all sit undispatched for two seconds and then
+run only once a work item is submitted. So the stall is not a property of the ring's wait, and not
+of waits: the process thread pool is dispatching **nothing**, of any kind, and a work submit
+restarts everything at once.
+
+**`M-T1.1` is what made this readable, one day after it was queued.** The claim "the poke was
+established at 7.01s and dispatched at 9.01s" rests entirely on the `created` and `armed` records
+that item added to the timer and the I/O object -- `timer created` / `timer armed` at 7.016s against
+`timer trampoline-entered` at 9.017s, and the same shape for `io`. Without them the capture would
+have shown only a late trampoline, which is equally consistent with a poke that never armed at all.
+That was the exact distinction the item was written for.
+
+**One further observation, recorded because it bears on what is left:** when dispatch resumes, a
+*single* pool thread runs everything queued, in order -- the delivery waits first, which had been
+queued since about two milliseconds into the run, then the work items.
+
+**What it does not establish.** Why the pool stops, and why a work submit is the one thing that
+restarts it. That interval is inside the pool, where this workspace's trace cannot reach, and it is
+`M26.13`'s remaining experiment 1. The worker-supply reading is the obvious hypothesis and is
+recorded as a hypothesis, not a finding.
+
+**`M26.13` was re-planned in the same commit**, for the second time in two days and for the same
+reason both times: the measurement moved the question. Its experiment list is now three pool-side
+items rather than four, and it carries a handoff noting that a remedy most likely lands in
+[windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) or in what this crate passes it as
+an environment -- not in the ring.
+
+**Rates**, all three-failure runs: none 3 in 525, wait 3 in 1307, timer 3 in 612, io 3 in 2105,
+work 3 in 859.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs)'s post-mortem, reverted after the runs and described
+in the measurement README.
+
+## Moved 2026-09-27 12:01:28 -04:00 -- M26.13.5, a null result that the queued wording would have hidden
+
+### <a id="m26135"></a>M26.13.5 -- Experiment 2: a private pool does not stall in 12000 runs, but the thread minimum is not why -- the no-minimum arm is already clean, so the supply reading it was written to test is unsupported. *(completed 2026-09-27 12:01:28 -04:00)*
+
+**The experiment as queued would have produced a confident wrong answer.** Its wording was: "if a
+private pool with `SetThreadpoolThreadMinimum` does not stall, the supply reading is supported."
+That conflates two variables -- being off the default process pool, and having a non-zero thread
+minimum -- so the clean result it anticipated would have been read as confirming worker supply.
+
+Split into four arms, it is a **null result on that hypothesis**:
+
+| Arm | Failures | Runs |
+|---|---|---|
+| `default` (control) | 13 | 4000 |
+| `private-min0`, no minimum set | 0 | 4000 |
+| `private-min1` | 0 | 4000 |
+| `private-min4` | 0 | 4000 |
+
+`private-min0` is the arm the original wording did not call for, and it is the one that carries the
+finding: a private pool with **no minimum at all** is already clean, so the minimum adds nothing and
+supply cannot be tested from this direction. Figures, method and the positive control in
+[measurements/2026-09-27-private-pool-does-not-stall/](../windows-threadpool-sys/measurements/2026-09-27-private-pool-does-not-stall/README.md).
+
+**What it does establish:** the stall has only ever been seen on the default process pool. All three
+`EventDelivery` objects shared one pool in every arm, including the trigger's, so the variable is
+*which* pool and never shared-against-isolated -- the private arms are exactly as shared as the
+default arm.
+
+**A positive control, because this experiment's failure mode is a false negative.** A private arm
+whose environment silently named no pool would have run on the default pool and reported "does not
+stall" for the wrong reason. Every construction therefore asserted a non-null pool in its
+environment and recorded the pointer, and the assertion was checked by sabotage: removing the
+`set_pool` call makes the arm fail with the message the assertion carries.
+
+**Sizing, so that zero means something.** Every arm is the same size, so each private arm would have
+been expected to produce about as many failures as the control did, and the three together about
+three times that.
+
+**What it does not establish.** Why. "A private pool" is still compound -- a different pool object,
+its own threads, and no sharing with whatever else in the process uses the default one -- and
+nothing here observes pool-internal state. It is not evidence that the default pool is defective,
+only that the failure has never been seen off it.
+
+**It also does not make a remedy, and `M26.13` was re-planned to say so.** Putting deliveries on a
+private pool is reachable today, since `EventDelivery::new` already takes an environment. But it
+would be a workaround ahead of a diagnosis, and it raises questions this item must not answer alone:
+who owns the pool, one per delivery or one shared, what it means for a caller passing their own
+environment, and whether a crate should quietly move a caller's callbacks off the pool they
+expected. That is now recorded as a **decision to raise, not to take**.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs), reverted after the runs and described in the
+measurement README.
+
+## Moved 2026-09-27 12:47:35 -04:00 -- M26.13.6, a reading from review, half confirmed and half refuted
+
+### <a id="m26136"></a>M26.13.6 -- The pool has 6 threads while stalled and 8 or 9 right after the work submit, so it has no worker and makes one; runs-long does not change that, and no callback of ours is holding a thread. *(completed 2026-09-27 12:47:35 -04:00)*
+
+**Prompted by a reading offered during review**, not by the queued plan: that the pool is not
+dispatching because it has no thread, and will not grow promptly because nothing told it these
+callbacks may run long. Worth testing rather than arguing about, because this workspace had already
+measured what that flag does -- four threads immediately, then growth throttled to roughly one
+thread per 166 ms without it, against a millisecond with it, in the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) under "`SetThreadpoolCallbackRunsLong` is the growth
+mechanism, not a hint".
+
+**The supply half is confirmed, and it is the sharpest evidence yet.** Counting the process's
+threads in the post-mortem: **6 while stalled, 8 or 9 immediately after the work submit**, in all
+six captures across both arms -- and, in a follow-up that examined **every** failure rather than a
+capped sample, in 14 of 14. `at_stall` was 6 every single time. The capped figure is left above
+because it is what this item measured; the uncapped one is the stronger claim and lives with the
+data. The pool has no worker and makes two or three the moment work is
+queued to it. `M26.13` had recorded this as needing an external instrument; it does not -- a
+Toolhelp snapshot in the post-mortem is enough.
+
+**The runs-long half is refuted, twice and independently.**
+
+- *Nothing of ours is running.* Across the 27 captures from `M26.13.3`, `M26.13.4` and `M26.13.5`,
+  **zero** trampolines are entered during the stall. No callback of this workspace's is inside a
+  closure, blocked or otherwise, so none can be occupying a worker. This is exactly the distinction
+  the entry/exit pairing from `M26.13.1` was built for, answered from data already committed.
+- *Setting the flag changes nothing measurable.* 12 failures in 4000 with
+  `SetThreadpoolCallbackRunsLong` on the delivery environment, against a control that has measured
+  13 and 21 in two separate 4000-run measurements. 12 is inside the control's own spread and no
+  effect is claimed in either direction.
+
+The two are consistent rather than contradictory: the measured effect of runs-long is on growth
+*under blocking callbacks*, and there are no blocking callbacks here.
+
+**Both arms assert their own environment before use** -- the runs-long arm that the flag bit is set
+and that it is still on the default pool -- and record it in the trace, because an arm that silently
+carried no flag would behave exactly like the control and report its result for the wrong reason.
+The assertion was checked by sabotage: removing the `set_runs_long` call makes the arm fail with the
+message it carries.
+
+**A methodological result worth as much as the finding.** The first version took its thread count on
+the *setup* path, once per `EventDelivery` construction. A Toolhelp snapshot enumerates every thread
+on the system, and three per run -- taken exactly where the race happens -- cut the failure rate to
+roughly one in several thousand and slowed each run by an order of magnitude. The run was abandoned,
+the count moved into the post-mortem, and the control returned to its usual rate. This is the hazard
+the trace facility's own module documentation is built around, arriving through a different door:
+an instrument cheap enough to leave in a callback is not automatically cheap enough for a setup
+path.
+
+**What is left is one sentence**, and `M26.13` was re-planned around it: why the pool will create a
+worker for a submitted work item but not for a wait, timer, or I/O callback that is already queued.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs) plus one dev-dependency feature, both reverted after
+the runs and described in
+[measurements/2026-09-27-the-pool-has-no-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-has-no-worker/README.md).
+
+## Moved 2026-09-27 15:07:48 -04:00 -- M26.13.7, a run with every instrument on
+
+### <a id="m26137"></a>M26.13.7 -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. *(completed 2026-09-27 15:07:48 -04:00)*
+
+**The buffer was checked first, not after.** The trace had roughly tripled -- this workspace's
+threadpool suite went from 14061 records to 47997 with the new targets on -- leaving a third of a
+buffer spare at the old capacity. Raised to 262144 before the run rather than discovering a
+truncated capture afterwards. The binary that actually captures holds **153** records, identically
+in all 24 captures, so it is nowhere near either figure.
+
+**The run:** 24 failures in 4000, in the range this configuration has produced all day.
+
+**What it rules out, measured rather than assumed:**
+
+- **No Win32 call blocked.** Every `syscall-enter` had its `syscall-leave`, in all 24 captures.
+  707 calls measured; the slowest single one anywhere is 220us.
+- **No pool lock contended at arming time.** `CreateThreadpoolWait` returns in 2us and
+  `SetThreadpoolWait` in 1us, immediately before the silence begins.
+- **No exception was raised**, confirming M26.13.6's result on a second population.
+
+Figures and captures in
+[measurements/2026-09-27-no-win32-call-blocks/](../windows-threadpool-sys/measurements/2026-09-27-no-win32-call-blocks/README.md).
+
+**One observation, offered as one.** `SubmitThreadpoolWork` is the slowest call in the table by an
+order of magnitude -- median 85us against 1 to 3us for everything else -- and every one of those 48
+measurements is the probe's submit, the call already known to end the stall and to gain the process
+two or three threads. The cost is consistent with work happening inside it that the other calls do
+not do. It is not evidence of what that work is.
+
+**A flaky guard was found and fixed on the way.** The exception observer's test asserted that a
+single raised exception was recorded. Run filtered it passed; run under the full suite with every
+target on it failed, because the handler records with `try_lock` and drops rather than blocks --
+which is the property that makes it safe to run on a thread already inside the trace. The test now
+raises repeatedly and asserts that at least one landed, which keeps the guarantee that matters
+without pretending a designed-in loss does not happen. Worth recording as a method error: the guard
+had only ever been exercised in isolation, and the suite is where it had to hold.
+
+## Moved 2026-09-27 15:27:23 -04:00 -- M26.13.8, a coincidence eliminated by changing it
+
+### <a id="m26138"></a>M26.13.8 -- The reproducer's own 5000ms submit timeout is not the five seconds: changed to 4000ms, dispatch still resumed at five in 14 of 14. *(completed 2026-09-27 15:27:23 -04:00)*
+
+**Raised in review and worth running.** The reproducer contains a literal `5_000`, the stall lasts
+five seconds, and coincidences of that shape usually are not. `submit_and_wait`'s second argument
+really is `timeout_ms`, so the units matched too.
+
+**The experiment's design is what made it decisive**, and it came from the reviewer rather than from
+here: change the constant to **4000**, not to something tiny. If it governed the stall, dispatch
+would resume at about four seconds -- before the test's own `DELIVERY_BOUND` of five -- so the
+delivery would arrive in time and the tests would simply stop failing.
+
+**Result:** 14 failures in 4000 runs, squarely in the range this configuration has produced all day,
+and dispatch resumed at about five seconds in **14 of 14**, never at four. Figures and captures in
+[measurements/2026-09-27-the-submit-timeout-is-not-it/](../windows-threadpool-sys/measurements/2026-09-27-the-submit-timeout-is-not-it/README.md).
+
+**Three existing observations already pointed this way**, but each was an inference where the
+experiment is direct: the call returns in about two milliseconds and never consumes its timeout; the
+*other* victim submits with `submit_and_wait(0, 0)` and has no such constant yet fails in lockstep;
+and the stall had already been moved to seven and eight seconds by delaying the probe, which no
+timer armed near t=0 could do.
+
+**What the five seconds actually is.** Two five-second constants exist in the reproducer and only
+one matters: `DELIVERY_BOUND` decides when the test gives up and runs the pool-liveness probe, and
+the probe's work submit is what ends the stall. The stall lasts five seconds *because* that is when
+the probe runs. No five-second constant exists in either crate's library code.
+
+## Moved 2026-09-27 15:39:37 -04:00 -- M26.13.9, in which the instrument turned out to be repairing the fault
+
+### <a id="m26139"></a>M26.13.9 -- It never self-releases. With the probe removed the delivery never arrives in 65s, so this is a permanent hang and the "delayed dispatch" claim was an artifact of the instrument. *(completed 2026-09-27 15:39:37 -04:00)*
+
+**Found by a question, not by a plan.** Review asked why anything waits five seconds before
+submitting the work that ends the stall. Nothing does: the probe is diagnostic code in the test's
+*failure* path, and the five seconds is `DELIVERY_BOUND`, the test's own assertion deadline. The
+probe runs at step 5 of a sequence whose step 4 is "the test has already failed".
+
+**Which exposed an untested assumption.** If the probe is the only thing in the process that submits
+work after the stall begins, every observation of the delivery "arriving late" was taken *after* the
+repair. That had never been separated.
+
+**Measured:** probe removed, post-mortem extended to sixty seconds. 3 failures in 1896 runs, and in
+all three the delivery **never arrives** -- `callbacks run: 0`, no trampoline entered, nothing in
+the trace between 2ms and 65.02s.
+[measurements/2026-09-27-it-never-self-releases/](../windows-threadpool-sys/measurements/2026-09-27-it-never-self-releases/README.md).
+
+**The correction.** This record said in four places that the failure was "not a lost wakeup" but "a
+delayed dispatch that eventually delivers everything", and that `D-68` had converted a permanent
+loss into a late one. All four were wrong, for the most avoidable reason there is: the instrument
+was repairing the fault before the measurement was taken. `M26.9`'s original signature -- a
+permanent lost wakeup -- was right all along. Corrected in
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md),
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) and this checklist in the same commit.
+
+**What survives unchanged.** Every result about *what releases it* kept the probe and varied
+something else, so all of them stand: the stall ends on a work submit and at no other time, nothing
+else dispatches during it, no Win32 call blocks, no exception is raised, and it is never seen off
+the default pool. What changes is the severity and the wording -- this is a hang, not a delay.
+
+## Moved 2026-09-27 16:11:58 -04:00 -- M26.13.10, the best hypothesis this failure has had, refuted
+
+### <a id="m261310"></a>M26.13.10 -- Not a missed wake: re-signalling the event the wait is armed on releases nothing in 5 of 5, with every SetEvent's success recorded. *(completed 2026-09-27 16:11:58 -04:00)*
+
+**The strongest hypothesis so far, and it came from review.** Everything about the signature fits a
+lost wakeup: `callbacks run: 0`, an auto-reset event ([D-21](DESIGN-NOTES.md#d-21)) whose signal is
+consumed rather than left pending, an edge that cannot re-arm without the queue returning to empty
+([D-19](DESIGN-NOTES.md#d-19)), and a stall now known to be permanent. This crate has had exactly
+that bug twice, in [D-68](DESIGN-NOTES.md#d-68) and [D-77](DESIGN-NOTES.md#d-77).
+
+**The test:** if the wait is armed and healthy and merely never woken, setting that same event again
+must release it -- with no work submitted. `SetEvent` is safe where a zero-timeout poll is not,
+because setting an auto-reset event can only add a signal, never consume one; the poll would have
+manufactured the bug it was looking for, which is why
+[M26.13.3](COMPLETED-CHECKLIST.md#m26133) forbade it.
+
+**Result: 5 of 5 releases nothing.** Three seconds pass between the signal and the delivery, and the
+delivery lands at the control work submit, never at the signal.
+[measurements/2026-09-27-not-a-missed-wake/](../windows-threadpool-sys/measurements/2026-09-27-not-a-missed-wake/README.md).
+
+**The positive control is what makes that a refutation rather than a null.** A `SetEvent` that
+quietly failed would look identical to a signal that did nothing, so every call's return value is
+recorded. Two captures show `0` for the first handle of each pass -- the trigger's delivery, already
+dropped, so its duplicate is closed. Expected, and worth seeing. **Both victims' handles returned 1
+in every capture.**
+
+**So the fault is not in the signal and not in the arming.** It is that the pool does not dispatch,
+which [M26.13.4](COMPLETED-CHECKLIST.md#m26134) showed from the other direction when a fresh wait, a
+fresh timer and a fresh I/O completion all failed to dispatch in the same window. None of D-19, D-68
+or D-77 is implicated.
+
+## Moved 2026-09-27 16:22:50 -04:00 -- M26.13.11, a dump, and a thesis refuted
+
+### <a id="m261311"></a>M26.13.11 -- A dump taken while stalled shows three pool workers parked idle, so the pool is not starved of threads and M26.13.6's reading was wrong. *(completed 2026-09-27 16:22:50 -04:00)*
+
+**Suggested in review**, along with the observation that the same hook used to inject a `SetEvent`
+could inject a process dump. It could, and out of process: the post-mortem spawns
+`cdb -pvr -p <pid> -c ".dump /ma <path>; qd"` at the moment of failure, before the liveness probe,
+so what is captured is the faulted state rather than the repaired one. Non-invasive attach injects
+no thread; `qd` leaves the process running, and it went on to produce its usual report.
+
+**The dump shows six threads, three of them the pool's**, all parked in
+`ntdll!ZwWaitForWorkViaWorkerFactory` under `ntdll!TppWorkerThread` -- the kernel's "give me
+work" wait. They are idle and available.
+
+**That corrects `M26.13.6`.** It measured 6 threads while stalled and 8 or 9 after the work submit
+and read it as "the pool has no worker and makes one". The counts were right; the inference was
+wrong, and it was the kind of inference a thread *count* can never support -- it cannot say what the
+threads are. Recorded in
+[measurements/2026-09-27-the-workers-are-there/](../windows-threadpool-sys/measurements/2026-09-27-the-workers-are-there/README.md).
+
+**So the question is now sharper and stranger.** The pool has idle workers. The wait is armed. Its
+event can be signalled successfully ([M26.13.10](COMPLETED-CHECKLIST.md#m261310)). No Win32 call
+blocks ([M26.13.7](COMPLETED-CHECKLIST.md#m26137)). And no callback is handed to any of those idle
+workers until a work item is submitted.
+
+**One observation, offered as one.** Of the four ways into this pool, the three that fail during the
+stall -- a wait's event signalling, a timer expiring, an I/O completing -- are all delivered **by the
+kernel** into the worker factory, while the one that works, `SubmitThreadpoolWork`, is a user-mode
+queue push. Whether that distinction is the mechanism is not established, and a dump cannot settle
+it: it captures state, not a delivery path.
+
+> **Corrected by [M26.13.15](COMPLETED-CHECKLIST.md#m261315).** "User-mode queue push" is wrong in
+> the half that matters: `TppWorkPost` pushes in user mode and then calls
+> `NtReleaseWorkerFactoryWorker`, one of only four functions in `ntdll`'s thread pool that does, and
+> the three failing paths call none of them. The distinction is not user mode against kernel mode;
+> it is that the work path alone **explicitly asks the factory to release a worker**.
+
+**On querying the pool's thread count:** there is no supported Win32 API, which the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) already recorded. What works is counting threads whose
+stack or Win32 start address is `ntdll!TppWorkerThread`, either from a dump as here or at run time
+through `NtQueryInformationThread`. The kernel does track live and available counts in the worker
+factory object, reachable through `NtQueryInformationWorkerFactory`, but the pool exposes no handle
+to it -- so that route needs the handle recovered from a dump or by enumeration.
+
+## Moved 2026-09-27 16:35:48 -04:00 -- M26.13.12, the strongest statement yet
+
+### <a id="m261312"></a>M26.13.12 -- A self-rearming timer armed while the pool was healthy, due inside the stall window, fires only at the release in 10 of 10 -- so the fault is dispatch, not registration. *(completed 2026-09-27 16:35:48 -04:00)*
+
+**Designed in review:** a one-shot timer armed for four seconds whose callback does nothing but
+re-arm itself for another four, to see what it does to the failure rate.
+
+**It differs from [M26.13.4](COMPLETED-CHECKLIST.md#m26134)'s timer poke in the way that matters.**
+That one created a timer *during* the stall, which leaves open the objection that a pool in this
+state cannot accept new registrations. This one is armed at process start while the pool is
+demonstrably healthy and holds a standing commitment, so there is no registration to fail. A passing
+run exits in about fifty milliseconds, long before the four-second expiry, so the heartbeat only ever
+gets a chance to fire on a run that stalls -- a clean probe rather than added load.
+
+**Result: 10 of 10 fired about a second late, at the release, never when due.** Armed at 0.000s, due
+at 4.000s, fired between 5.004s and 5.019s -- the moment the work submit woke the pool.
+[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](../windows-threadpool-sys/measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
+
+**It is its own positive control.** The timer does fire, so the machinery works and the arming took
+effect; it simply cannot fire while the pool is in this state. A bare "never fires" would have been
+ambiguous between a wedged pool and a broken probe. This is not.
+
+**What it closes.** The fault is in dispatch, not in registration, and it is not about events,
+handles, waits or the ring: this is a pure kernel timer expiry, registered before anything went
+wrong, and it is suppressed exactly like everything else. Together with
+[M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s three idle workers, the picture is a pool with threads
+available, commitments registered while healthy, and nothing being dispatched to them.
+
+**On the rate:** 10 in 4000, against 13, 21, 14, 18, 24 and 14 for the same configuration earlier
+the same day. Just below that spread, and one measurement cannot separate a real reduction from
+ordinary variation, so no effect is claimed either way.
+
+## Moved 2026-09-27 16:45:53 -04:00 -- M26.13.13, the clock says it never starts
+
+### <a id="m261313"></a>M26.13.13 -- At a 100ms period the heartbeat becomes a clock: its first expiry is already missed and no pool callback of any kind is dispatched before the release, in 18 of 18. The pool never starts. *(completed 2026-09-27 16:45:53 -04:00)*
+
+**Same probe as [M26.13.12](COMPLETED-CHECKLIST.md#m261312), period changed from four seconds to a
+hundred milliseconds**, on review's suggestion. At four seconds it could only say the timer was
+late; at a hundred milliseconds it is fine-grained enough to say *when* dispatch stopped.
+
+**Rate unaffected:** 18 in 4000, squarely in the day's range. A constantly-expiring timer does not
+prevent the fault.
+
+**The timer is armed at 0.000031s**, so due at 0.100031s and every 100ms after. In all 18 captures
+it fires **zero** times before the release and **once** in total, at the release -- about fifty
+consecutive expiries missed.
+
+**The stronger statement that licenses.** Across all 18, **not one** pool callback of any kind is
+dispatched before the release. So this is not a pool that runs for a while and then wedges: in a run
+that stalls, the pool dispatches nothing at all from process start until a work item is submitted.
+The five seconds is not a period during which it stopped working; it is a period during which it
+never started.
+[measurements/2026-09-27-the-pool-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-never-starts/README.md).
+
+**Still its own positive control:** the one firing at the release proves the arming took effect, so
+a wedged pool and a broken probe are not confusable.
+
+**What it cannot separate**, and what is now queued as the next experiment: whether the pool would
+never have dispatched in this process, or whether it was put into this state during setup. Nothing
+in these runs needs a callback before the deliveries are armed at about 2.5ms, so there is no
+earlier successful dispatch to compare against. A period of one or two milliseconds would give one.
+### <a id="m261314"></a>M26.13.14 -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. *(completed 2026-09-27 16:59:53 -04:00)*
+
+**Same probe as [M26.13.13](COMPLETED-CHECKLIST.md#m261313), period changed from a hundred
+milliseconds to 15.625ms** -- the default Windows timer interval, 64 ticks a second, and the finest
+period a process can ask for without raising the machine's global timer resolution with
+`timeBeginPeriod`. A shorter request lands on the same tick.
+
+**Rate unaffected:** 13 in 4000, inside the day's range (13, 21, 14, 18, 24, 14, 10, 18). A timer
+expiring 64 times a second does not prevent the fault.
+
+**320 consecutive expiries missed, in every capture.** The minimum and the maximum across the 13 are
+both 320. The heartbeat fires exactly once, at the release, about a tenth of a millisecond behind
+the post-mortem probe's work item -- which remains the first pool callback of any kind in the
+process.
+
+**The new thing this shows: the trace window is empty.** At 100ms the claim was "no pool callback is
+dispatched before the release". At the tick the instrument is fine enough for a plainer statement --
+the last record before the stall (`delivery setup-signalled`, about 2.5ms) and the first record
+after it (`postmortem delivery-wait-expired`, about 5.01s) are **adjacent lines in the capture**.
+`records_in_between` is 0 in all 13. Since the trace brackets every Win32 call and carries a
+vectored exception handler as well as every callback, the window contains no callback, no syscall
+and no exception. Nothing happens in the process at all.
+
+**A tighter bracket on the onset.** In all 13 the heartbeat's `armed` record (about 0.00004s)
+precedes the trigger's first `delivery event-attached` (about 0.00015s), so the timer was registered
+while the pool was not merely healthy but untouched by the trigger -- and it still never fired.
+With its 15.7ms due time that brackets the onset to the interval between process start and 15.7ms;
+the trigger's whole create-and-drop completes inside the first 0.2ms of it.
+
+**It ruled out its own successor's method.** Item 0 asked for a heartbeat whose first expiry
+precedes the deliveries. 15.625ms is the floor for a thread-pool timer without `timeBeginPeriod`,
+and 15.7ms is still after the deliveries are armed at about 2.5ms, so no timer period reaches it
+without changing the machine's timer behaviour under the measurement. Item 0 is re-planned to arm a
+wait on an **already-signalled** event at process start instead: due immediately, no timer
+resolution needed, and in the kernel-delivered class that fails.
+[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+### <a id="m261315"></a>M26.13.15 -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". *(completed 2026-09-27 19:43:47 -04:00)*
+
+**Three results, from one experiment and one census.**
+
+**1. The submit, and nothing else in the probe, is what releases it.** Prior runs showed that a work
+submit releases the pool and no other poke does, but the probe that submits also creates a work
+object, reads the ring's count and writes to stderr first. A sleep was inserted **between
+`CreateThreadpoolWork` and `SubmitThreadpoolWork`** so the submit moves and nothing else does. Five
+arms of 4000 runs, delay in {0, 250, 500, 1000, 2000}ms, 99 captures (17, 19, 23, 16, 24 -- the rate
+is unmoved by the delay). Delivery-minus-**submit** stays at 0.25 to 0.54ms in every arm;
+delivery-minus-**create** tracks the delay across a 2000ms span. The negative half was already on
+record and was not repeated: a created-but-unsubmitted work object releases nothing
+([M26.13.3](COMPLETED-CHECKLIST.md#m26133)'s 1s create/submit gap arm), and with no submit the delivery never
+arrives inside 60s ([M26.13.9](COMPLETED-CHECKLIST.md#m26139)).
+
+**2. The backlog was already queued.** In 99 of 99 the first callback dispatched anywhere in the
+process is the stalled delivery's **wait**, served 29 to 67us (mean 39) *ahead of* the work item
+whose submit woke the worker; one released worker then drains everything, on two threads in 91
+captures and one in 8. A worker that had to be told to wake and then finds a five-second-old wait
+callback ahead of the item that woke it is taking the front of an existing queue. This is the
+discriminator experiment 1 asked for: **queued and unserved, not unnoticed.** The limit, stated: the
+trace cannot see the completion port, so this shows the wait is *ordered ahead of* the work, not the
+instant the kernel enqueued it.
+
+**3. Correction: `SubmitThreadpoolWork` makes a syscall, and it is the interesting one.** This
+record has carried "`SubmitThreadpoolWork` is a user-mode queue push" since 2026-09-26 as an
+unverified label. Every one of the 189 `ntdll!Tp*`/`Tpp*` functions was disassembled and grepped.
+`TppWorkPost` pushes in user mode under the pool's SRW lock and then calls
+`TppAdjustRunningThreadGoalWithLock`, `NtAlertThreadByThreadId` and **`NtReleaseWorkerFactoryWorker`**
+-- and exactly four functions in the whole thread pool call that last one (`TppWorkPost`,
+`TpPostTask`, `TppPrepareDirectParams`, `TppWorkCallbackPrologRelease`). None of the four is on the
+wait, timer or I/O path; those register for kernel delivery (`NtCreateWaitCompletionPacket`,
+`NtAssociateWaitCompletionPacket`, `NtSetTimer2`) and rely on the factory releasing a worker itself.
+So the distinction is not user mode against kernel mode -- the submit makes a syscall too -- it is
+that **the work path is the only one that explicitly asks the factory to release a worker.** The
+same call also explains the thread growth that had no explanation: the running-thread goal is raised
+on that path, so the 6-to-8 rise is a side effect of the submit rather than evidence about supply.
+This is static evidence about a code path, not a measurement of the fault.
+[measurements/2026-09-27-the-submit-is-what-releases-it/](../windows-threadpool-sys/measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
+
+**Swept the corrected claim:** 2 sites carried the wrong wording ([M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s
+archive entry and its measurement README); both now carry an additive correction rather than a
+rewrite, since both are dated records. 4 further sites use "kernel-delivered", which the census
+confirms rather than contradicts, and were left alone.
+
+**Experiment 1 re-planned.** Its premise ("the pool has no worker and makes one, but only for work")
+is gone -- [M26.13.11](COMPLETED-CHECKLIST.md#m261311) found three parked workers and the thread
+growth is now accounted for. The question becomes: the factory holds parked workers and a queued
+packet and does not put them together. The next measurement is the factory's own counters via
+`NtQueryInformationWorkerFactory`, read from a dump taken while stalled.
+### <a id="m261316"></a>M26.13.16 -- No thread alive at the stall ever runs a callback, in 12 of 12, while a passing run serves the delivery on a pre-existing thread in 30 of 30: the parked workers are present and unused, so `M26.13.11`'s "not starved" survives but the inference drawn from it does not. *(completed 2026-09-27 20:20:01 -04:00)*
+
+**Prompted by a question about [M26.13.15](COMPLETED-CHECKLIST.md#m261315):** was the thread that
+releases the stall the one that had been waiting? No, and the two calls are different in kind --
+`NtWaitForWorkViaWorkerFactory` is the park that `TppWorkerThread` blocks in, while
+`NtReleaseWorkerFactoryWorker` is a post that never blocks, called by whichever thread runs
+`SubmitThreadpoolWork` (here the test's own post-mortem thread, running rather than waiting). But the
+question pointed at one that had not been asked: are the three parked workers the ones that
+eventually serve the backlog?
+
+**Method.** A Toolhelp thread snapshot emitting one `thread-present` record per live thread with its
+`GetCurrentThreadId` value. The trace stamps every record with the same id, so the thread that later
+serves the stalled wait can be tested for membership. Taken in the post-mortem for the stalled arm --
+[M26.13.6](COMPLETED-CHECKLIST.md#m26136) had already measured that the same snapshot on the setup
+path destroys the race -- and, for the healthy control, after the delivery is armed and before any
+completion can arrive.
+
+**Result.** Both populations hold six threads at the snapshot: main, the two test threads, and three
+others.
+
+| | threads alive at the snapshot | first delivery served by a thread that already existed |
+|---|---|---|
+| stalled, 12 captures | 6 | **0 of 12** |
+| healthy, 30 runs | 6 | **30 of 30** |
+
+In a passing run one of the three others serves the delivery, every time. In a stalled run none of
+them ever runs anything, and the backlog is served by one or two threads that did not exist when the
+stall was observed.
+
+**What it changes.** [M26.13.11](COMPLETED-CHECKLIST.md#m261311) read its dump as "the pool is not
+starved of threads". The literal claim survives -- the threads are there, parked, in both
+populations. The inference does not: their presence was taken to mean supply is not the subject, and
+these runs show the parked workers are **present and unused**. A free worker sat available for the
+whole five seconds, in the same state as the one that serves the delivery in a passing run, and the
+pool dispatched only once a *new* thread existed. So the stall is not "a queued packet waiting for a
+free worker".
+
+**What it does not establish.** Whether the new thread was created *because* the parked ones were
+unusable, or merely as a side effect of the submit: `TppWorkPost` calls
+`TppAdjustRunningThreadGoalWithLock` on its way to the release, so a submit raises the thread goal
+whether or not a worker is idle, and this cannot separate the two. What needs no such separation is
+the **wait** callback -- no submit involved, queued for five seconds -- served by a thread that did
+not exist at the stall in 12 of 12 while a passing run serves it on one that did in 30 of 30. It
+also does not identify the three parked threads as this pool's by direct evidence; the identical
+composition across both populations, one of which serves the delivery, is the argument.
+[measurements/2026-09-27-the-parked-workers-are-never-used/](../windows-threadpool-sys/measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
+
+**Swept the qualified inference:** 8 pre-existing sites mention idle workers or starvation (one
+further hit, on an appender, is unrelated). Two assert the inference and carry a qualifier now -- the
+timeline's ruled-out row and [M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s measurement README. Two
+more are this archive's own dated heading and its checklist stub, left as written because the archive
+is history. The remaining four say "has idle workers and does not dispatch to them", which this
+sharpens rather than contradicts.
+
+**Experiment 1 sharpened.** The factory-counter measurement now has a second reading to separate:
+whether the factory believes it has an available worker while three sit parked in
+`NtWaitForWorkViaWorkerFactory`. If the counters say zero available while the stacks say three
+parked, that disagreement is the fault.
+### <a id="m261317"></a>M26.13.17 -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. *(completed 2026-09-27 21:46:03 -04:00)*
+
+**Built the instrument the question needed.** `windows-threadpool-sys` gained inline hooks on
+`ntdll`'s worker-factory syscall stubs. No disassembler is required, because every `ntdll` `Nt*`
+entry point is the same stub: the displaced bytes are not decoded and relocated, they are
+**recognised**, and the trampoline is rebuilt from the one variable in them -- the system call
+number. The recognition is the safety property and is enforced, patching happens with every other
+thread suspended, and the whole facility needs the `trace` feature *and*
+`WINDOWS_THREADPOOL_TRACE_HOOKS` before it will touch anything.
+
+**The hooks turned out not to be how the answer arrived**, and that is itself a finding. Installing
+them took 0.15s to 0.58s, which is **after** the onset (`M26.13.14` brackets it to the first
+15.7ms), so in a stalled run no hooked call had ever fired and the factory handle a hook would have
+learned was exactly the handle that was missing. The handle is instead found by asking each
+candidate handle whether it is a worker factory -- read-only, sub-millisecond, and it cannot disturb
+what it is looking at, which matters in an investigation whose instruments have repaired the fault
+before.
+
+**The result, 12 stalled captures against 20 healthy runs, every capture in each arm identical:**
+
+| | factory with `ThreadMaximum` 768 | factory with `ThreadMaximum` 3 |
+|---|---|---|
+| stalled | total **0**, waiting **0** | total 3, waiting 3 |
+| healthy | total **1**, waiting 1 | total 3, waiting 3 |
+
+**This overturns [M26.13.11](COMPLETED-CHECKLIST.md#m261311).** Its dump was accurate and its
+inference was not: `TppWorkerThread` is the worker routine for *every* pool in a process, so a stack
+can never say which factory a parked worker serves. The three it found answer to the second factory
+-- whose maximum is three, which is why there are exactly three -- and that factory is byte-for-byte
+identical in passing runs. The pool under test has **no worker**, which is what
+[M26.13.6](COMPLETED-CHECKLIST.md#m26136) said from thread counts and the dump was taken to
+disprove. It also explains [M26.13.16](COMPLETED-CHECKLIST.md#m261316) rather than leaving it
+strange: no thread alive at the stall runs a callback because the parked ones were never candidates.
+
+**What the factory says about itself while stalled**, beyond the zero: `Paused` false, `Shutdown`
+false, `MayCreate` **true**, `ThreadMinimum` 0, `PendingWorkerCount` 0, `ReleaseCount` 0,
+`LastThreadCreationStatus` 0. Nothing has told it to stop, nothing has failed, and nothing has asked
+it for a worker.
+
+**Not established:** the packet's presence in the port. These counters describe workers, not queued
+completions, so "the factory holds the packet and will not act on it" and "the packet never arrived"
+are both still consistent with them. `M26.13.15`'s ordering evidence argues for the first and
+remains an argument. The second factory's identity is also unresolved -- a loose end rather than a
+gap, since it is identical in both arms.
+[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](../windows-threadpool-sys/measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+
+**Two defects in the instrument, both caught by building the guard rather than by the guard:** the
+self-test stub's first argument is an out-pointer and the first draft would have installed it as the
+worker factory handle; and the information struct was truncated, which makes the query fail with
+`STATUS_INFO_LENGTH_MISMATCH` and look exactly like a process with no factory in it. Both are now
+sabotages in the crate's new `sabotage.json` -- 9 sabotages, 8 caught and the control survived.
+
+**Swept the overturned claim.** Named rather than counted, because a grep for "parked" or "starved"
+across this crate's documents matches mostly incidental prose and a tally of it would say nothing.
+The documents that *assert* the overturned reading are four, and each now carries a correction at
+the point of the assertion: [the-workers-are-there](../windows-threadpool-sys/measurements/2026-09-27-the-workers-are-there/README.md)
+and [the-parked-workers-are-never-used](../windows-threadpool-sys/measurements/2026-09-27-the-parked-workers-are-never-used/README.md)
+open with an overturning note, [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)'s entry is
+marked at its heading, and [STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md)'s ruled-out row now reads "not
+ruled out after all". The dated archive entries above are left as written, with the correction
+carried here.
+
+**A standing lesson, recorded in [STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md):** count a pool's workers by
+asking each factory, never by reading stacks. A parked `TppWorkerThread` says *a* pool has a worker;
+in a process with more than one factory it does not say which, and here that distinction was the
+whole answer.
+### <a id="m261318"></a>M26.13.18 -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. *(completed 2026-09-27 22:37:50 -04:00)*
+
+**From a suggestion in review**: the hooks were arriving after the tests started, so put something
+in front of the tests. The better form of that is to move the *install* earlier rather than delay
+the tests -- a function pointer in `.CRT$XCU`, the C runtime's static-initialiser table, runs before
+`main` and therefore before the harness has created a thread. It is also cheaper than the lazy
+install it replaces: patching live code requires every other thread to be stopped, and at that point
+there are none, so the suspend-and-resume pass finds nothing and perturbs nothing.
+
+**The result, with the hooks in place from process start:**
+
+| | first worker announces `NtWorkerFactoryWorkerReady`, relative to the delivery being armed |
+|---|---|
+| healthy, 10 runs | **0.243 -- 0.309 ms** |
+| stalled, 8 captures | **5003 -- 5017 ms**, which is the release |
+
+A healthy run does the whole thing in a quarter of a millisecond: the event signals, the kernel
+makes a worker, it announces itself, parks, is handed the queued packet at once, and runs the
+callback. **A stalled run has no `ready` and no `park` on that factory at any point before the
+release, in 8 of 8.** So the stall is not a worker that fails to wake, nor a packet handed to the
+wrong thread, nor a callback that runs and goes missing. The thread to run it is never made.
+
+**Refuted: the `AlreadySignaled` race**, which was the reason the wait registration was hooked.
+`NtAssociateWaitCompletionPacket` sets an out-parameter when the object is already signalled at
+association time; on that path the kernel queues no completion and leaves the caller to act, which
+is a second delivery path taken only on a race and exactly the shape of a lost callback. It is not
+what happens: the flag is **false** for every association made before the first callback, in both
+arms. The only `true` anywhere is a re-arm after the release, which is the ordinary case.
+
+**Two instrument defects fixed on the way, neither found by a test.** The suspended window
+allocated -- `held.push` grew a vector while other threads were stopped, and a thread suspended
+holding the allocator lock can never give it back. Both vectors are now reserved before anything is
+suspended. And the install pass was paying for `CreateToolhelp32Snapshot` *per hook*; it snapshots
+every thread on the machine and is then filtered to this process, about 0.12s each, which put the
+last of six installs 0.73s into the process. One snapshot for the batch puts all of them at 0.132s.
+
+**Cost:** 8 failures in 4000 with four hooks installed, inside the range this configuration produces
+without them.
+[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
+
+**Still not established:** the packet's presence in the port. "The kernel queued the completion and
+the factory did not act on it" and "the kernel never queued it" produce identical records here,
+because every observation is of a call *ntdll* makes and neither case involves one.
+
+**What is left is outside this workspace's reach.** A worker factory with no workers, permitted to
+create one, not paused and not shut down, owes a callback and does not make the thread to run it
+until `NtReleaseWorkerFactoryWorker` asks. Why is inside the kernel.
+### <a id="m261319"></a>M26.13.19 -- An ETW kernel trace confirms the missing worker independently of the ntdll hooks: across 900 traced runs exactly one process has a gap over a second, the failing one, at 5008.7ms against a healthy 0.232-17.928ms. *(completed 2026-09-28 00:08:32 -04:00)*
+
+**Why a second instrument.** Everything known about the missing worker came from hooks this
+workspace plants in `ntdll` -- a good instrument, and a self-interested one, since it reports on the
+very mechanism it modifies. A reader is entitled to ask whether the hooks are why the worker is
+missing. This answers that with the kernel's own thread-creation record, collected through the NT
+Kernel Logger's `PROC_THREAD` flag, which needs no cooperation from `ntdll` or from this crate.
+
+**The result**, over 900 runs in one trace:
+
+| | first pool worker created, relative to the last test thread |
+|---|---|
+| healthy, 899 processes | **0.232 -- 17.928 ms**, mean 1.298 |
+| failing, 1 process | **5008.736 ms** |
+
+Exactly one process in the trace has a gap of more than a second anywhere in its thread activity,
+and it is the run that failed. The slowest healthy process is 17.9 ms, so the separation is complete
+with nothing in between. The failing process then creates **three** workers inside 373 us, which is
+consistent with the release path raising the running-thread goal on its way to
+`NtReleaseWorkerFactoryWorker`, and is why it is one of only three processes in the trace to reach
+ten threads.
+
+**So the hooks were not the cause.** The kernel logged the same absence, in the same runs, through a
+path the hooks do not touch -- and logged normal behaviour for 899 other processes that had those
+same hooks installed.
+[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](../windows-threadpool-sys/measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
+
+**Method note worth keeping.** Thread ids are recycled aggressively across 900 short-lived
+processes, so matching the failing run to its process by any single id is wrong -- several processes
+in this trace contain any given id. The match is the process holding **all seven** ids that appear
+in the failing run's own user-mode trace, and only one process does.
+
+**Elevation.** The NT Kernel Logger refuses a non-elevated session; `sudo` in Inline mode supplied
+it, for `xperf` only. The reproducer itself ran unprivileged, exactly as every earlier arm, so the
+conditions are unchanged. One failure in 900 is the usual rate, and the session was stopped and
+merged before analysis.
+
+**Still not settled, and no ETW will settle it**: whether the wait-completion packet reached the
+port. `PROC_THREAD` records threads, not queues, and a census done the same day found no public
+event anywhere for a packet arriving at a completion port or for a worker factory being activated --
+1198 registered providers, `xperf -providers KF`, and all 40 `Microsoft-Windows-Kernel-*` manifests.
+
+**Queued rather than taken:** `DISPATCHER`, which adds `ReadyThread` and would name what causes the
+worker to appear in a healthy run. Left out here to keep a machine-wide trace small; it is now the
+whole of M26.13 experiment 1.
+### <a id="m261320"></a>M26.13.20 -- Re-verified the reproducer's premises from a clean build: the 3-test reduction matches the full binary (16 vs 18 in 4000), the trigger is necessary (0 in 4000 without it), one victim suffices at about half the rate, and "fail together, never singly" was wrong. *(completed 2026-09-28 08:27:01 -04:00)*
+
+**Why re-check the setup at all.** Nineteen findings had accumulated on top of a reproducer that was
+itself a reduction, and several of them had already corrected earlier ones. The premises were worth
+re-establishing from a clean build of the committed tree rather than from the record.
+
+**What the reproducer is, stated precisely.** Each run is one **fresh process** -- measured, not
+assumed: the ETW capture in `M26.13.19` recorded 900 distinct process ids for 900 runs. Inside it
+the tests run **concurrently**; the machine has 16 logical processors, `libtest` defaults to that
+many threads, and the kernel trace shows the three test threads created within 105us. Outside it
+there is **no deliberate load** -- the loop is serial, one process at a time. "Concurrent" in this
+investigation has always meant between the tests inside one process, and saying so removes an
+ambiguity that had never been written down.
+
+**Five arms, 4000 runs each:**
+
+| arm | what runs | failures |
+|---|---|---|
+| A | 3-test reproducer: 2 victims + trigger | 16 |
+| B | the whole binary, all 7 tests | 18 |
+| C | 2 victims, no trigger | **0** |
+| D | one victim + trigger | 8 |
+| A again | as A, against a cleared temp directory | 13 |
+
+B says the **reduction is representative** -- narrowing 7 tests to 3 changed nothing. C re-confirms
+from scratch that the **trigger is necessary**. D is the interesting one: a single victim still
+fails, at about half the rate, which fits a race between the trigger's teardown and *a victim's*
+setup (two victims, two chances to enter the state) better than a per-process failure that any
+victim would report. Offered as the reading the numbers fit.
+
+**A claim corrected.** The record said the victims "fail together, never singly". Across the 80
+committed captures, 79 report both and **one reports a single victim**. It is the same phenomenon:
+that capture's trace shows the pool dead for the full five seconds, and what differs is the finish
+-- the victims' deadlines are a fraction of a millisecond apart, the first to expire runs the probe,
+the probe releases the pool ~0.3ms later, and the second victim's deliveries land inside its own
+deadline. Both are always *stalled*; they usually both *report*. One more instance of the probe
+repairing the fault it measures.
+
+**A defect found and queued as M26.14.** The tests leak their temp files -- two per run, nothing
+ever deletes them, and roughly thirty thousand runs had left **307,383 files, 1.2 GB** on the
+machine, since removed. Fifteen of this crate's test files share the pattern. Measured **not** to be
+a confound (13 in 4000 against a cleared directory, 16 against a full one) before being queued, and
+deliberately not fixed during M26.13 because adding teardown changes the reproducer while it is the
+instrument of an active investigation.
+[measurements/2026-09-28-re-verifying-the-premises/](../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md).
+
+**Extended on review, with the question stated plainly: several different test cases per process,
+never a repeat.** `libtest` runs each `#[test] fn` exactly once and this file has no
+parameterisation, so the 3-test reproducer is three distinct functions -- a 6-line trigger and two
+victims of 83 and 99 lines -- on three concurrent threads. No run in this investigation has ever had
+fewer than two test cases in a process, because the fault needs the trigger co-running; all the
+repetition is *across* roughly thirty thousand fresh processes and none within one.
+
+**They overlap less than "concurrent" suggests, and the ordering turned out to be a constant.** The
+trigger creates its delivery, arms, drops and closes it within about 0.05 ms, and the victims arm
+about 2.4 ms later -- so the trigger has finished before the victims arrive. That holds in **80 of
+80** failing captures, which on its own looks like a signature. It also holds in **183 of 183**
+passing ones, with an indistinguishable gap distribution, so it is simply how `libtest` schedules
+these three tests. Reading the failures alone would have promoted a constant to a discriminator;
+the passing control is the only reason that did not happen.
+### <a id="m26141"></a>M26.14.1 -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. *(completed 2026-09-28 12:57:52 -04:00)*
+
+**From a review reading**: that `dropping_with_nothing_outstanding_does_not_hang` poisons the
+process rather than competing with the victims for anything. Tested rather than accepted, by making
+the trigger selectable so one build served five arms of 4000 runs.
+
+| arm | what the trigger does | failures |
+|---|---|---|
+| `default` | ring + `EventDelivery`, **dropped** | **11** |
+| `none` | nothing | 0 |
+| `ring-only` | ring created and dropped, **no delivery** | 0 |
+| `leak` | ring + `EventDelivery`, **never dropped** | **0** |
+| `x4` | four create-and-drop cycles | **26** |
+
+`default` was re-run in the same session, so the three zeroes are measured against a live
+reproducer rather than against an earlier figure.
+
+**`leak` is the result.** The trigger builds exactly what it always builds -- a ring, an event
+attached to it, a `ThreadpoolWait` armed on that event -- and does not drop it. Zero in 4000. So the
+setup does not poison; taking it back down does. `ring-only` closes the other half: a ring created
+and dropped with no delivery over it is also zero, so the ring alone is innocent too. It takes the
+delivery **and** its teardown.
+
+**What that teardown is**, on the trigger's own thread and spanning 54us: a `TP_WAIT` created, armed
+on the ring's completion event, then `SetThreadpoolWait(NULL)`, `WaitForThreadpoolWaitCallbacks` and
+`CloseThreadpoolWait` -- all before the pool has dispatched anything, and about 2.4ms before either
+victim arms its own delivery.
+
+**`x4` gives 26 against 11**, which is 3.5 Poisson sigma below four independent chances and 2.9
+above no increase. Repeating it raises the rate without quadrupling it. Offered as a direction
+rather than a dose-response, and the reason is stated: four cycles take longer than one, which also
+moves when the trigger finishes relative to the victims arming, so the arm changes two things at
+once.
+
+**Not established:** which part of the teardown does it -- disarm, drain and close are 12us apart
+and this cannot separate them. Nor why a ring is needed when the wait is on an ordinary event.
+Both are queued as M26.14.2.
+[measurements/2026-09-28-the-teardown-is-what-poisons/](../windows-threadpool-sys/measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
+### <a id="m26142"></a>M26.14.2 -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. *(completed 2026-09-28 20:39:34 -04:00)*
+
+**The decisive run**: three arms interleaved, 20000 each, pipes drained asynchronously, 60s bound
+per run, timing balanced to 1.3% (157.7 / 155.6 / 156.3 ms per run) and no timeouts.
+
+| arm | teardown | failures in 20000 |
+|---|---|---|
+| `hand-full` | disarm -> `WaitForThreadpoolWaitCallbacks(TRUE)` -> close | **10** |
+| `hand-disarm-sleep-close` | disarm -> **sleep 1ms** -> close | **0** |
+| `hand-disarm-drainwait-close` | disarm -> `WaitForThreadpoolWaitCallbacks(FALSE)` -> close | **0** |
+
+Each zero has probability `exp(-10)` = 4.5e-5 under the control's rate.
+
+**The whole decomposition reads down one column.** Nothing before the disarm matters -- never
+armed then closed, armed then abandoned, and armed then closed while still armed are all 0 in
+4000. The disarm alone is innocent: 0 in **15000** cumulative. The poison appears exactly when a
+close follows a disarm closely (disarm -> close, 11 in 8000; disarm -> cancel-drain -> close, 10 in
+20000), and putting any real gap between those two calls stops it.
+
+**The control that makes the sleep mean something** is `hand-sleep-after`: the identical 1ms sleep
+placed *after* the whole teardown, which still fails. So the sleep does not help by delaying the
+trigger or by moving when it finishes relative to the victims arming -- the gap must sit between
+the disarm and the close.
+
+**Cancelling is not draining.** `WaitForThreadpoolWaitCallbacks`' `fCancelPendingCallbacks` is TRUE
+in `EventDelivery`'s path and does not prevent the stall; FALSE does. One argument, 10 failures
+against 0 over 20000 runs each. The arm was written expecting it might hang -- the trigger signals
+the event while the wait is armed, so a callback is usually pending -- and it never did, in 20000
+runs against a 60s bound.
+
+**This is a workaround with a mechanism-shaped hint, not a diagnosis.** A sleep that makes a race
+disappear is evidence of a race, not an explanation of one. Nothing here says what the close races,
+nor why the worker factory is left unable to make its first worker. No threshold is established
+either; 1ms was chosen as about 80x the natural 12us gap.
+
+**Two false turns on the way, both caught by controls rather than by reasoning.** A five-arm
+interleaved run came back all zeroes and was reported as void on the grounds that the harness had
+broken the reproducer; re-testing the control on the historical launcher gave 4 in 4000 against the
+harness's 3 in 8000 (p = 0.18), so the harness was innocent and the run was merely underpowered --
+its four events had in fact landed 3 and 1 on the two unmodified-teardown arms and 0 on the three
+modified ones. Separately, an apparent 5x instability in the failure rate was mostly Poisson noise
+on counts of 5 to 16: a chi-square over six measurements of the unmodified teardown gives p = 0.048,
+and five of the six sit inside the 95% band around a pooled 2.6 per 1000. The practical lesson
+governed this run's design -- at 4000 runs a zero is strong but a rate comparison is not, which is
+why the decisive arms used 20000.
+[measurements/2026-09-28-closing-too-soon-after-the-disarm/](../windows-threadpool-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
+
+**Raised, not taken:** M26.14.3 asks whether `windows-threadpool-sys` should adopt the draining
+teardown, which is a one-argument change with real semantic weight -- a drop that blocks until a
+pending callback runs can deadlock a caller. M26.14.4 asks for the threshold sweep if it does not.
+## <a id="moved-2026-10-01-m20-through-m24"></a>Moved 2026-10-01 21:19:21 -04:00 -- M20 through M24, and the M21+/M22+/M28+ buckets they filled
+
+Eight milestones, every item in them complete. Each item was archived individually as it
+finished, so the entries below are the stubs that pointed at those archive entries plus the
+milestone prose that framed them -- which is the part that lived only here.
+
+### M20 -- Repairs from the 2026-08-30 NUMA-sharding measurement
+
+Queued from
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+which measured a shipping ARM laptop and found the L3 heuristic's justification does not hold there. These
+were queued as documentation and policy repairs only, on the basis that **no defect was found in
+`ring_copy`** -- `Policy::select` already degrades to a whole-machine domain and reports it, which an
+initial reading of the session got wrong and the code corrected.
+
+**Corrected 2026-09-19: that basis no longer holds, and it changes the order.** `SH-4.12` in
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md) later found two
+defects in that same function: it selects on `DomainKind::Cache { level: 3, .. }` rather than asking
+`outermost_partitioning_cache()` -- the one definition of which cache level partitions a machine, shipped
+in `windows-topology-sys` 0.2.0 -- so it can produce **overlapping** ring domains where two cache kinds
+report at level 3, and degrades silently on a host whose outermost partition sits at another level.
+`M20.1` and `M20.3` both land on that function and that rule, so both are **coupled to `SH-4.12`** and
+must follow it. `M20.2` and `M20.4` are done. `M20.6` is gated the other way, on `M22.1`. That leaves
+`SH-4.12` as the only thing standing between M20 and completion.
+
+The design questions the session opened are deliberately **not** queued here. It is still open, and its
+conclusions belong to it until it converges.
+
+- [x] **M20.1** -- Restate the cache heuristic as "the outermost cache level that actually partitions
+  the machine", sweep every restatement, and replace the consumer that bound to the level number.
+  Done together with `SH-4.12`, which is the code half of the same change.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m201)
+
+- [x] **M20.2** -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node
+  observation it is the sibling of.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m202)
+
+- [x] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test, asserting both
+  that an absent relation degrades and that a present one does not. Done without waiting on
+  `SH-4.12`: the fallback tail is shared by every policy, so exercising it through `ByNode` and
+  `ByPackage` pins nothing that item rewrites.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m203)
+
+- [x] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the
+  file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests
+  on volume granularity, absence, and spanned volumes instead.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m204)
+
+- [x] **M20.5** -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the
+  `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
+  flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
+
+- [x] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the benchmark's conclusion
+  against [D-47](DESIGN-NOTES.md#d-47-detail). **The harness cannot exhibit a blast-radius
+  difference, which is a fact about the harness and not a finding against the strategy** -- each
+  lane's own arena is the limiter there. The strategy stays, with the conditions under which it
+  would pay written down; `M25.5` re-runs the comparison where operations genuinely pend. The
+  sample's output and prose are corrected so they stop claiming to measure a commit.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m206)
+
+
+### M21 -- Epoch-log review: correctness repairs
+
+Queued from
+[DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
+(findings `C-1` through `C-5`). Independent of each other; listed in ascending cost. Nothing in this
+milestone was observed failing at the sample's current constants -- these are a withdrawn justification,
+two hang shapes, a mis-keyed trigger, and a specification gap. (`M21.3` predicted that its trigger was
+merely unreachable *today*; measuring it while implementing showed it is unreachable at any constants, so
+what it corrected was the coupling rather than a latent bug. The archived entry has the numbers.)
+
+- [x] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn
+  half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back
+  claim [D-47](DESIGN-NOTES.md#d-47) removed.
+  -> [completed 2026-09-20](COMPLETED-CHECKLIST.md#m211)
+
+- [x] **M21.2** -- Publish a bounded pop and the wait it is generic over, then remove the two unbounded
+  spins. `IoRing::pop_within` / `pop_within_with`, over a `CompletionWait` the caller supplies, because
+  [D-21](DESIGN-NOTES.md#d-21) means the crate cannot choose the wait for them.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m212)
+
+- [x] **M21.3** -- Key the epoch commit off a completed append rather than off the counter, so the
+  trigger cannot fire on a pass that appended nothing. The predicted latent bug turned out to be
+  unreachable at any constants -- measured, not re-reasoned -- so this is a coupling change rather than
+  a fix.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m213)
+
+- [x] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with tests in both
+  directions. Required making the sample a test target at all (`test = true`), and gating the
+  failure-path tests on `fault-injection`, since a healthy flush cannot be made to fail.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m214)
+
+- [x] **M21.5** -- Give the harness's wait loops a bound, and collapse the hand-written waits onto the
+  bounded pop. The item named two loops; a census found four, plus two flaky single-`try_pop` sites.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m215)
+
+- [x] **M21.6** -- Fix the four defects an independent review of the `M21.2` surface found: the timeout
+  mapping, its victim in `run_down`, the `INFINITE` collision, and the test hole that hid all of them.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m216)
+
+### M21+ -- Queued by the 2026-09-21 API review
+
+Queued from the review of the `M21.2` surface, recorded in
+[DESIGN-SESSION-2026-09-21-m21-remediation-findings.md](design-sessions/DESIGN-SESSION-2026-09-21-m21-remediation-findings.md).
+Its other four findings were fixed in `M21.6`.
+
+- [x] **M21+.1** -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes
+  it was blind to: methods of a `pub trait`, and borrows in parameter position. Four entries appeared, one
+  of them predating the widening; the probes also found a latent bug in the checker itself.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m21plus1)
+
+### M22 -- Epoch-log review: submission and arena
+
+Queued from the same session (findings `E-1` through `E-3`). `M22.1` is sequenced first because `M20.6`
+re-reads numbers that its change moves.
+
+- [x] **M22.1** -- Batch an epoch's appends into one submission in both append paths, and measure
+  whether the per-record submission cost was flattening the strategy comparison. It was not:
+  throughput did not move out of the noise, though commit p50 did.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m221)
+
+- [x] **M22.2** -- Collapse the two free-slot implementations to one, derived from the arena's own
+  outstanding counts rather than tracked beside them. The item called both correct; one was not --
+  the tracked free list leaked a slot on every refused append.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m222)
+
+- [x] **M22.3** -- Give the registered arena a stated placement: the epoch-log arena is placed on the
+  NUMA node its own log file's volume reports, and the allocator moved into the library as
+  `NumaBuffer` rather than being copied a second time. The sample says plainly that the placement
+  cannot pay at this workload.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m223)
+
+
+### M22+ -- Queued by what the M21 work left behind
+
+- [x] **M22+.1** -- Make [bounded_pop.rs](tests/bounded_pop.rs) independent of how fast a device is, by
+  reading from an overlapped pipe nobody has written to. Filed and completed the same hour; the deferral
+  was a scheduling preference rather than a blocker.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m22plus1)
+
+
+
+### M24 -- Make the unit suite hermetic
+
+The defect and its classification are [D-49](DESIGN-NOTES.md#d-49); the remedies and their costs are
+[DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md](design-sessions/DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md).
+It began at **63 of 131 lib tests opening a real kernel ring**, so `cargo test --lib` did not mean
+what its name implies, and the repository's own Quality rule already classifies an operating-system
+API as an external boundary.
+
+**Where it ended: 41 of 151 open a ring, 110 do not.** The remainder is not movable without
+`M26.2`'s FFI seam, and [D-53](DESIGN-NOTES.md#d-53) records the rung that keeps it from climbing
+back -- an inventory of *which* tests open a ring, since a zero-check would fail on day one and
+could only be satisfied by deleting coverage.
+
+**Sequencing is the open question, not whether. Corrected 2026-09-22: the cost of waiting is close
+to zero, which is the opposite of what this paragraph first said.** It claimed that waiting
+compounds, "because every milestone that adds tests adds to the pile to be migrated, and `M22` is a
+testing-heavy milestone". The mechanism is real but the instance was not checked, and it is false:
+**all three `M22` items touch only `examples/epoch_log/`**, and none adds a lib test.
+
+**Unconditional as of 2026-09-22.** `M24.1` concluded and `M24.4` is withdrawn, so nothing in this
+milestone waits on an evaluation any more. The hermetic goal is reached by relocation and by the
+accounting extraction alone; the technique `M24.1` went looking for turned out to be a different
+and larger thing, and is `M26`.
+
+Checked across the whole queue rather than for `M22` alone, since the first claim was wrong for
+want of exactly that: **no pending item outside this milestone modifies `src/**/tests.rs`.** `M22`
+is example-only; `M23.1` is the *sample's* `contract.rs`, not the crate's; `M20.1` and `M20.6` are
+documentation and the `ring_copy` sample; `M23.2` is a decision that may imply API later. The 63
+therefore do not grow while this waits.
+
+So sequencing turns on other things, and they point the other way:
+
+- **`M24.2` is an internals refactor of a published crate**, and the branch carrying this work is
+  already 19 commits with one `feat` and three `fix` commits on it. Stacking a field-layout change
+  on top makes one review cover both a new public API and that refactor.
+- **`M24.1` is an evaluation whose answer could invalidate `M24.4`**, so beginning the build before
+  it concludes risks building something the evaluation rejects.
+- **`M22.1` unblocks `M20.6`**, an open question since 2026-09-07 about whether a strategy still
+  earns its place in a published sample -- which is a decision waiting on a measurement `M22.1`
+  produces.
+
+**`M24.1` concluded (2026-09-22) and nothing here waits on it.** `M24.4` is withdrawn; `M24.2`,
+`M24.3` and `M24.7` are the path to a hermetic suite and are independent of each other.
+
+- [x] **M24.1** -- Settle whether a co-tested fake escapes the mock objection. **Answered: the fake
+  was the wrong instrument.** A shared suite is strong over what we specify and blind to the
+  platform's incidental behaviour, and an assertion about the latter is a frozen observation rather
+  than a contract. Superseded by the resolver in `M26`.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m241)
+
+- [x] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`. The
+  item's field split was verified exactly: five fields carry no kernel state, five do.
+  `Accounting` now owns them with 19 hermetic tests, and `IoRing` delegates nine methods.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m242)
+
+- [x] **M24.7** -- Convert the lib tests that construct a ring only to exercise bookkeeping.
+  **61 -> 52**, by narrowing `Token::new` to take the ring's ledger rather than the ring. The
+  remaining 52 are not convertible and the reason is structural, not effort -- see the archive.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m247)
+
+- [x] **M24.4** -- **Withdrawn by `M24.1` (2026-09-22).** A shared conformance suite over a
+  hand-written fake is superseded by the response-space resolver in `M26`, which serves the same
+  purpose without encoding a belief about the platform at all. Nothing is deferred by this: `M24`'s
+  goal is a hermetic lib suite, and `M24.2` plus `M24.3` achieve that without it.
+
+- [x] **M24.3** -- Relocate the lib tests that open a ring but use only public API into `tests/`.
+  **52 -> 41.** Eleven moved; the "25" the item predicted was never achievable, and the reason is
+  the same structural one `M24.7` found.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m243)
+
+- [x] **M24.5** -- Put the rule on a rung. An **inventory** of which lib tests open a ring
+  ([D-53](DESIGN-NOTES.md#d-53)), not the zero-check the item assumed -- that rule is false and
+  could only be satisfied by deleting coverage. The guard's own bidirectional check found a defect
+  in the guard.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m245)
+
+- [x] **M24.6** -- Sweep what this milestone makes false. Two of the three sites the item named
+  were false alarms; the third was false for a different and larger reason than the item gave, and
+  the sweep found two more it did not name.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m246)
+
+### M23 -- The ring as a durability domain, and storage affinity
+
+Queued from the 2026-09-19 epoch-log review (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6`
+rather than an item here. `M23.1` and `M23.2` are done; `M23.3` is the remaining question, and it is
+about this crate's own surface rather than about storage at all.
+
+- [x] **M23.1** -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m231)
+
+- [x] **M23.2** -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m232)
+
+- [x] **M23.3** -- Decide what this crate offers for holding a token between push and completion: the ring owns the inventory, `IoRing` becomes generic, and the break is accepted. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m233)
+
+- [x] **M23.4** -- Drop guards that panicked during unwind aborted the process instead of reporting; they now stay silent while `std::thread::panicking()`. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m234)
+
+- [x] **M23.5** -- Both asserts in `IoRing::drop` are now reached by tests; the raw-HRESULT seam the item priced turned out not to be needed, because the kernel refuses a null ring handle cleanly. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m235)
+
+
+
+### M28+ -- Opened by the inventory
+
+- [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
+
+- [x] **M28.8** -- `RingContract::in_flight` added; two hand-written copies deleted. The drain loops it named turned out not to depend on it -- `P-4` does. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m288)
+
+
+## <a id="moved-2026-10-01-m26143"></a>Moved 2026-10-01 21:26:40 -04:00 -- M26.14.3, the draining-teardown decision
+
+### <a id="m26143"></a>M26.14.3 -- Taken, and taken the way this item proposed: `windows-threadpool-sys` adopted the draining teardown. *(completed 2026-10-01 21:26:40 -04:00)*
+
+The item as it stood when the decision was taken:
+
+> - [ ] **M26.14.3** -- **DECISION TO RAISE, not to take: adopt the draining teardown in
+>   `windows-threadpool-sys`?** `M26.14.2` found that `ThreadpoolWait`'s drop -- disarm, then
+>   `WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` **TRUE**, then close -- is what
+>   poisons, and that passing **FALSE** instead prevents it entirely (0 in 20000 against 10).
+>
+>   **It is a one-argument change and a real semantic one, which is why it is a decision rather than
+>   a fix.** Cancelling returns promptly and abandons a pending callback; draining blocks until that
+>   callback has actually run. A drop that waits for a callback can deadlock a caller whose callback
+>   needs something the dropping thread holds -- and this crate's `Drop` is not a place a caller can
+>   see a deadlock coming. Questions that belong to the engineer, not to this item: whether drop may
+>   block at all, whether the draining form should be opt-in on a builder rather than the default,
+>   what it means for `stop_and_drain` and `cancel_pending` which already expose both shapes, and
+>   whether the suppression machinery that exists to make drop safe is still needed if drop drains.
+>
+>   **Do not ship the sleep.** The 1ms gap works equally well in the measurement and is the worse of
+>   the two: it is a timing constant with no principle behind it, no established threshold, and it
+>   would sit in a teardown path forever.
+>
+
+#### The decision, taken 2026-10-01
+
+**Adopted.** `windows-threadpool-sys` drains rather than cancels, recorded as [Teardown drains
+rather than cancels](../../DESIGN-NOTES.md#teardown-drains) and implemented as `M-T4`. Verified in
+the shipped source rather than inferred from the decision: `ThreadpoolWait::drop` disarms and then
+calls `WaitForThreadpoolWaitCallbacks` with **FALSE**, and the only remaining **TRUE** is the
+explicitly named `try_cancel_pending_no_heal_tracking`.
+
+Each of the four questions this item reserved for the engineer was answered, rather than left
+implicit:
+
+- **May drop block at all?** Yes, unconditionally -- rule 1 of that decision makes leaving an
+  object unsynchronised unacceptable, so the blocking is the point rather than a side effect.
+- **Opt-in on a builder, or the default?** Draining is the default. Cancelling survives as an
+  explicit, differently named call (`try_cancel_pending`, renamed by `M-T6.3` to say in its name
+  that it is best-effort), so a caller who wants the prompt-return shape asks for it.
+- **What does it mean for `stop_and_drain` and `cancel_pending`?** `M-T6.7` made `stop_and_drain`
+  the uniform name of the synchronous close across every type that drains; `M-T6.3` renamed the
+  cancelling form and backed it with a self-heal repair, because a cancellation is what can sever
+  the pool.
+- **Is the suppression machinery still needed if drop drains?** Yes. `Drop` still raises the
+  re-arm suppression before draining -- without it a callback could re-arm during the drain and the
+  drain could return with the object armed. `M-T4.10` extracted it into a shared `RearmSuppression`
+  rather than retiring it.
+
+**The sleep was not shipped**, as this item required.
+
+**What this item did not do, and what still owes a measurement.** The decision was taken partly on
+this crate's evidence -- `M26.14.2` measured a drain in place of a cancel at 0 failures in 20000
+against a control's 10 -- but that was the *reproducer* with a patched teardown, not the shipped
+crate. Nothing has yet re-run this crate's stall at scale against the shipped drain. Queued as
+`M26.15`, and until it reports, the entry in
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) stands.
+
+## <a id="moved-2026-10-01-m2615"></a>Moved 2026-10-01 21:47:17 -04:00 -- M26.15, re-measuring the stall against the shipped drain
+
+### <a id="m2615"></a>M26.15 -- Re-measured: control 12 in 4000, current 0 in 12000, and the stall's entry moved to RESOLVED-TEST-FAILURES.md. *(completed 2026-10-01 21:47:17 -04:00)*
+
+The item as it stood, including the premise that turned out to be false:
+> - [ ] **M26.15** -- **Re-run the stall at scale against the shipped draining teardown, and settle
+>   the unresolved entry either way.** Queued 2026-10-01, when `M26.14.3`'s decision landed.
+>
+>   **What is and is not established.** `M26.14.2` measured a drain in place of a cancel at 0 failures
+>   in 20000 against a control's 10 -- but that was *this reproducer with a patched teardown*, not the
+>   shipped crate. `windows-threadpool-sys` has since shipped the drain for real, and nothing has run
+>   this crate's stall against it. The remedy is believed to work on evidence that predates the thing
+>   it is now a remedy *in*.
+>
+>   **A green suite run is not that evidence, and must not be mistaken for it.** The stall's measured
+>   rate is on the order of 13 in 4000, so an ordinary `cargo test` passing says almost nothing: the
+>   arm has to be sized against the rate. Re-run the same reproducer, at the same scale and with the
+>   same positive control the earlier measurements used, so the result is comparable to the figures
+>   already on record rather than a fresh and unrelatable number.
+>
+>   **It needs a control that can still fail.** If the shipped drain really closes it, every arm goes
+>   to zero -- and a measurement in which nothing can fail cannot distinguish "fixed" from "the
+>   reproducer stopped reproducing". Keep an arm that forces the old cancelling teardown (reachable
+>   through `try_cancel_pending`), and require it to still fail, or the zero proves nothing.
+>
+>   **On success:** move the entry out of [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)
+>   into [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) under a dated heading, per the
+>   repository's rule that a resolved failure is moved rather than deleted -- and note there that this
+>   is the *second* time that file has carried a fix for this stall, the first being `D-68`, which
+>   `M26.13` overturned.
+>
+>   **On failure:** the drain is not sufficient, which is a finding against the current explanation
+>   rather than against the decision, and `M26.13`'s diagnostics become live again.
+>
+
+#### Correction: this item's central premise was false
+
+**"Nothing has re-run this crate's stall against the shipped drain" was wrong when it was
+written**, on 2026-10-01, and nothing in the tree had changed to make it so -- the evidence was
+already committed and was not looked for.
+[2026-09-29-the-fix-on-the-real-path](../windows-threadpool-sys/measurements/2026-09-29-the-fix-on-the-real-path/README.md)
+had measured exactly that: the committed drain, on the real `EventDelivery` path, at 33 failures
+in 10000 reverted runs against 0 in 70000 drained. The item was written from `M26.14.2`'s
+hand-rolled model and from the absence of a *later* measurement that in fact existed one directory
+away.
+
+The mistake is worth recording rather than quietly fixing, because it is the cheap kind to repeat:
+the claim was about **what the repository already knows**, which is checkable by reading it, and it
+was asserted from the shape of the argument instead. `measurements/` is the artifact that answers
+such a question, and was not consulted before the gap was declared.
+
+#### What the run did establish
+
+The narrower question the item should have asked. The 2026-09-29 measurement was taken against the
+`M-T4` build, and three things have changed the teardown path since: `M-T6` added the default-on
+self-heal, whose repair timer **submits a work item** -- the one action `M26.13.3` found ends the
+stall, so a mechanism that could mask the failure rather than leave it absent; `M-T6.3` renamed the
+cancelling form; and `EventDelivery` gained its own draining `Drop` on 2026-10-01.
+
+Measured in
+[2026-10-01-the-fix-still-holds-after-the-self-heal](../windows-threadpool-sys/measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md):
+the control reproduces at 12 in 4000, inside the range every earlier capture of that arm reported,
+and the current build reports 0 in 12000. Under an unchanged rate, 12000 runs would be expected to
+produce about 36 failures.
+
+The control was run **first** and from the same tree, because a zero on its own cannot distinguish
+a fix from a reproducer that has stopped reproducing. Both control patches were made with a tool
+that fails on a missing anchor and read back out of the source before building, per the procedure
+adopted after a silent `.Replace()` voided a 60000-run measurement.
+
+**Left open deliberately:** the run did not instrument whether any self-heal repair fired, so "the
+self-heal did not mask anything" rests on the mechanism -- a repair is only owed after a
+cancellation, and the drain records none -- rather than on a measurement. A `--no-default-features`
+arm would settle it, and is not queued, because nothing currently depends on the answer.
+
+## <a id="moved-2026-10-01-m2614"></a>Moved 2026-10-01 22:03:17 -04:00 -- M26.14, the leaking temp files
+
+### <a id="m2614"></a>M26.14 -- A self-removing `TempPath` guard, shared by 14 test files: an all-passing suite run went from 25 leaked files to 0, and a test panicking with its handle open now leaves none. *(completed 2026-10-01 22:03:17 -04:00)*
+
+The item as it stood, including the premise that turned out to be wrong:
+> - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
+>   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
+>   and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty
+>   thousand runs during that investigation accumulated **307,383 files, 1.2 GB** on the development
+>   machine before they were deleted by hand. It is not confined to that file: **15** of this crate's
+>   test files build paths under the temp directory and none clean up.
+>
+>   **Measured not to be a confound** before being queued -- the reproducer gives 13 failures in 4000
+>   against a cleared directory and 16 against a full one, both inside its usual range
+>   ([measurements/2026-09-28-re-verifying-the-premises/](../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md)).
+>
+>   **Deliberately not fixed during M26.13**, and the reason is the blocker rather than a preference:
+>   adding teardown changes the reproducer's shape while it is the instrument of an active
+>   investigation, and every failure rate on record would have to be re-established against the new
+>   one. Take it once M26.13 closes, or take it sooner as an explicit decision to re-baseline. The
+>   fix itself is small -- an RAII guard returned by `temp_file` that removes the path on drop, so
+>   that a panicking test still cleans up.
+
+#### Correction: "none clean up" was wrong, and the correction sharpened the fix
+
+**Twelve of the fifteen files already removed their temp files**, across 45 call sites, and
+`flush_barrier_stress.rs` already carried a correct RAII guard with the hazard documented. Only
+three -- `completion_event.rs`, `event_delivery.rs` and `submission_lifecycle.rs` -- had no removal
+on any path.
+
+The real defect is narrower and explains the leak better than the item's version did: **a trailing
+`remove_file` does not run when the test panics**, and `M26.13` was thirty thousand runs of a
+reproducer whose failing arm panics. Had the item's framing been taken at face value, the fix would
+have been fifteen new cleanup calls on the path that already worked, and the panicking path -- the
+one that produced the 307,383 files -- would have been left exactly as it was.
+
+#### What was built and what it was measured against
+
+A `TempPath` guard in `tests/common/mod.rs`, one definition, included by the 14 converted files.
+Measured in
+[2026-10-01-the-tests-stop-leaking-temp-files](measurements/2026-10-01-the-tests-stop-leaking-temp-files/README.md):
+an all-passing suite run leaked **25** files before and **0** after.
+
+**The panicking path was verified rather than assumed**, because a zero on a passing run does not
+establish the property the guard exists for. A deliberate `panic!` was placed in a test *after its
+file handle is open* -- the state in which a removal can fail outright -- and the run panicked
+there, exited 101, and left no file. That site had no removal at all beforehand, so the same panic
+leaked before the change.
+
+#### Two things deliberately left alone, each for a reason
+
+**The 45 existing `remove_file` calls stay.** They look redundant and are not: each runs at a point
+the test controls, after the test has closed its own handle, which is strictly more reliable than a
+drop order that depends on declaration order. The guard is the net underneath them, and a removal
+that finds nothing is not an error, so the two compose.
+
+**`flush_barrier_stress.rs` keeps its own `Fixture` guard**, which closes the handle before
+deleting. Converting it for uniformity would have risked the precise defect it was written to fix --
+every trial silently leaking a 32 MiB extent because the handle was held in the same struct.
+
+#### The gate this item carried
+
+It said to take this once `M26.13` closes, or sooner as an explicit decision to re-baseline, because
+changing the reproducer while it was an active instrument would invalidate every failure rate on
+record. `M26.13` is still open, so this was the second case. The re-baselining cost is now small:
+`M26.15` re-established the rates earlier the same day, and the arm that still carries a rate is the
+*control*, which is a patched build anyone re-running it would rebuild regardless.
+
+## <a id="moved-2026-10-01-m2841d"></a>Moved 2026-10-01 22:25 -04:00 -- M28.4.1d, closing the inventory migration
+
+### <a id="m2841d"></a>M28.4.1d -- Done by its sub-items; closing it was a documentation sweep, not a migration. *(completed 2026-10-01 22:25 -04:00)*
+
+The item as it stood:
+>   - [ ] **M28.4.1d** -- Migrate every consumer onto the inventory, then retire the token API.
+>
+>         **Measured before planning, and it is larger than "36 files" suggested**: 172 push call
+>         sites and **116 `claim_if` sites** across 35 files. `claim_if` is not a substitution --
+>         it is how each test *drives* its ring, so converting restructures control flow rather
+>         than replacing a call.
+>
+>         **What a conversion actually does, which is why it is worth it.** The caller's
+>         `HashMap<usize, (sidecar, Token<..>)>` *disappears* at each site: the push carries the
+>         sidecar as `X`, and the pop returns `(payload, sidecar)` together. That is `D-55` paying
+>         off rather than a cost being paid.
+>
+>         **Batched, and the reason that is legitimate.** Both APIs coexist today, so a
+>         partly-converted tree still compiles and every batch is a green commit. `M28.4.2`'s
+>         "convert all of them or none" governs the **shipped** state -- never two token models in
+>         a release -- not the path to it. The final batch is what makes that true, and nothing is
+>         released in between.
+>
+
+#### What was actually left, which was not migration
+
+Every sub-item (`d.1`, `d.1b`, `d.2`, `d.2b`, `d.3`) was already complete, and the code bears that
+out: `src/token.rs` defines `OperationId` and nothing else, `try_pop_held` is gone, and the 47
+surviving `claim_if` sites are `PendingBufferRegistration` / `PendingFileRegistration` -- the
+registration mechanism, which `d.2` already recorded as a different thing from the push set.
+
+So the parent was an unchecked box over finished work. What closing it found instead was a sweep
+`M28.6` did not complete: **documentation that still describes the retired token API in the present
+tense**, which a reader would take as current.
+
+- **`contract.rs`'s "What it checks" table still advertised the leak rule `D-74` retired** --
+  "every token is claimed, or deliberately leaked", sourced to `D-13`. The `Violation` enum has
+  exactly the four kernel-level variants `M28.4.1c` said it would keep, so the table was promising a
+  fifth check the oracle does not make. The paragraph beneath it told a reader to report `_raw`
+  pushes "or the oracle will demand a claim that cannot be made", which it no longer can. That
+  paragraph also sat *between* two table rows, so the table did not render as a table at all.
+- **`ring.rs` carried a worked example of `token.claim_if(...)`** in an ```` ```ignore ```` block --
+  precisely the rot that `ignore` permits, since nothing compiles it. This repository's own rule
+  prefers `no_run` for that reason.
+- **`ring.rs` attributed a safety argument to `Token::claim_if`**, a type that no longer exists.
+- **`batch.rs` told callers four times to "claim its token"** to get a buffer back, which is now
+  done by popping the completion.
+- **`token.rs`'s own module doc still announced `Token<T>`** as what the file defines.
+
+**What was deliberately left alone.** Most `Token` mentions in this crate are *history* and read
+correctly as such -- "the identity that survived `Token`'s retirement", "it used to say", the `D-74`
+citations. Rewriting those would erase the record of a decision rather than correct a stale claim.
+The test is whether a reader would act on the sentence, not whether the word appears.
+
+**Verified by execution, not by reading**: full suite under `--all-features`, and `cargo doc` with
+`-D rustdoc::broken_intra_doc_links`, which also cleared a pre-existing private-link warning in the
+file being edited.
+
+## <a id="moved-2026-10-01-m26-and-m28"></a>Moved 2026-10-01 22:34:22 -04:00 -- M26+ and M28, both fully complete
+
+Two milestones with every item done. `M26+` is what remains of the wakeup-window review after its
+stall half transferred to `windows-threadpool-sys`; `M28` is the pending-inventory break, closed
+when `M28.4.1d` did. `M27` stays open in [CHECKLIST.md](CHECKLIST.md).
+
+### M26+ -- The wakeup window review opened
+
+- [x] **M26.12** -- Not a race: the setup signal was owed only to the call that attached the event, so a caller that attached earlier got no wakeup at all. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2612)
+
+- [x] **M26.13** -- Transferred to `windows-threadpool-sys`: the fault is pool-wide, not this
+  crate's. The question, the timeline and the 33 measurement captures now live there as `M-T7.1`.
+  -> [windows-threadpool-sys/CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md)
+
+- [x] **M26.14** -- A self-removing `TempPath` guard, shared by 14 test files: an all-passing suite
+  run went from 25 leaked files to 0, and a test panicking with its handle open now leaves none.
+  The item's "none clean up" was wrong; 12 of 15 did, just not on the panicking path. ->
+  [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2614)
+
+
+### M28 -- The ring owns the pending inventory
+
+Queued by [D-55](DESIGN-NOTES.md#d-55), taken 2026-09-23 after the `M23.3` exploration. The break
+is accepted deliberately: `IoRing` becomes generic so the inventory cannot drift from the ring,
+because a consumer never holds a token to lose. The exploration and everything it falsified is in
+[DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md);
+`src/pending.rs` is the working spike and is the shape the internal map starts from.
+
+**Sequenced so each step compiles.** The published crate is at 0.3.1, so this is a major bump and
+every consumer names the type -- which means the migration order matters more than usual.
+
+- [x] **M28.1** -- Decided: a push returns a `Copy` identity that owns nothing, and the ring returns the payload at its own pop -- `Token` is split, not moved. Recorded as [D-71](DESIGN-NOTES.md#d-71). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m281)
+
+- [x] **M28.2** -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. Recorded as [D-72](DESIGN-NOTES.md#d-72). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m282)
+
+- [x] **M28.3+M28.4** -- **Make `IoRing` generic, move the inventory inside, and migrate every
+  consumer, as one commit.** Complete 2026-10-01, when `M28.4.1d` closed. Gated on [D-71](DESIGN-NOTES.md#d-71), which settled what a caller
+  receives.
+
+  **Merged deliberately, and the coupling is acknowledged rather than disguised.** The milestone
+  header requires each step to compile, `M28.4` requires converting all consumers or none, and
+  `M28.3` changes `IoRing`'s shape -- so the three cannot all hold with the items separate. The
+  alternative considered and rejected was landing `M28.3` additively, with an `OperationId` path
+  beside the existing `Token` one: it compiles at every step, but it leaves two token models live
+  at once and the old one still lets a consumer lose a token, which is the defect `D-55` exists to
+  remove. Never having both is worth one large commit.
+
+  **Carry the sidecar.** The census found two thirds of consumers keep per-operation data beside
+  the token, so an inventory holding only tokens serves a minority. Mixed-shape consumers use a
+  closed `enum`; [generated_sequences.rs](tests/generated_sequences.rs) is the worked example.
+
+  **Soundness already settled:** [`IoBuf`](src/buf.rs) is an unsafe trait whose contract requires
+  the address to survive a move, so the ring may hold buffers in a map.
+
+  Sequenced so the work is resumable, since it does not compile in the middle:
+
+  - [x] **M28.3.1** -- `OperationId`: `Copy`, no `Drop`, a name and not a capability (`D-71`).
+  - [x] **M28.3.2** -- `IoRing<T = ()>` carrying `inventory: HashMap<usize, T>`, and
+        `Batch<'ring, T>` with it. A default keeps a payload-free consumer from naming `()`.
+  - [x] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the
+        payload with the completion. Shape settled by [D-73](DESIGN-NOTES.md#d-73):
+        `IoRing<T, X = ()>`, with the file guard held in a concrete internal `Held` rather than
+        made generic, which is sound because `FileTarget` is sealed.
+
+        **Do the `Drop` half in this step, not later.** Moving buffers into the ring removes the
+        protection `Token`'s leak-on-unclaimed-drop provides on the path where `run_down` fails --
+        which `Drop for IoRing` takes best-effort, closing anyway. The inventory must be
+        *forgotten* rather than dropped there, or the close frees memory the kernel may still be
+        writing into. Landing the inventory without this is a use-after-free, so it is one step.
+
+        The tokenless shape is `M28.5`'s and is only accommodated here, not answered.
+  - [x] **M28.3.4** -- Carry the parameter through `EventDelivery`, `RingScope` and the contract
+        wiring.
+
+        **The tree stops compiling here, as this plan said it would.** The delivery callback is
+        now `Fn(Completion, Option<(T, X)>)`, so ten call sites across
+        [event_delivery.rs](tests/event_delivery.rs), [handover.rs](tests/handover.rs),
+        [checkpoint.rs](examples/epoch_log/checkpoint.rs) and
+        [model_a_delivery.rs](examples/model_a_delivery.rs) take a one-argument closure and no
+        longer build. The library and its own unit tests are green; the integration and example
+        targets are `M28.4.1`'s to migrate. Contract wiring is untouched deliberately -- what
+        becomes of the oracle's leak rules is a decision `M28.4.1` carries, per
+        [D-73](DESIGN-NOTES.md#d-73).
+  - [x] **M28.4.1a** -- Restore the tree: every delivery callback takes the payload, so the
+        build is green again on every feature set.
+
+        **Two call sites were invisible to an ordinary sweep**, and both are worth remembering
+        rather than rediscovering. One lives in a **doctest**, found only because this repository
+        compiles its prose. The other is in [failure_paths.rs](tests/failure_paths.rs), which
+        compiles only under `--all-features`, so a default-feature check could not see it. A
+        migration sweep here has to run `--all-features` **and** `--doc` before it means anything.
+
+  - [x] **M28.4.1b** -- All ten push shapes have an inventory form: `read_raw_owned`,
+        `write_raw_owned`, `read_owned`, `write_owned`, `flush_owned`, `cancel_owned`, and the
+        four registered variants. `Held` is populated by the guarded pushes and
+        `Held.registration` by the registered ones, so both halves are exercised and neither
+        needs a dead-code marker any longer. `read_owned` is the only
+        entry point that stows, so "migrate the consumers" has no destination for the other ten
+        shapes yet -- writes, flushes, cancels, and the registered variants. Give each an
+        inventory form first, populating `Held` for the guarded ones, which is what retires the
+        `#[expect(dead_code)]` on `Held` and `FileGuard`.
+
+  - [x] **M28.4.1c** -- Decided in [D-74](DESIGN-NOTES.md#d-74): the leak rules **retire** rather
+        than narrow, because a push that hands back only an `OperationId` leaves nothing to drop
+        unclaimed. `State::Pushed` and `State::PushedTokenless` collapse with them. The
+        conservation they approximated becomes `held() == outstanding()`, which the ring can check
+        about itself. `RingContract` keeps the four claims that are about the kernel rather than
+        about a caller's bookkeeping.
+
+  - [x] **M28.4.1d** -- Done by its sub-items; closing it was a documentation sweep, not a
+        migration. Four present-tense references to the retired token API survived `M28.6`,
+        including a rule the `RingContract` module still advertised that `D-74` had removed. ->
+        [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2841d)
+  - [x] **M28.4.1d.1** -- [bounded_pop.rs](tests/bounded_pop.rs) converted as the worked
+        pattern. The `Token<Vec<u8>>` threaded through `push_pending_read`, `settle` and six call
+        sites is gone; `PipeRing = IoRing<Vec<u8>>` holds the buffer instead. The conversion
+        found a real defect in rundown, which is recorded as `M28.4.1d.1b`.
+
+  - [x] **M28.4.1d.1b** -- Decided: there should be one pop, not two. **Decide what `try_pop`
+        and `pop_within` mean on a ring that holds payloads.** Found by converting the first file: `drain_for_rundown` popped with `try_pop`
+        and never reclaimed, so rundown stranded every entry it reaped. Fixed there -- rundown is
+        teardown, so dropping is right, and the completion is the proof that makes freeing safe.
+
+        **The same gap is open on the public paths, and the answer is that the split should not
+        exist.** An earlier note here offered three ways to manage a permanent distinction
+        between `try_pop` and `try_pop_held`. That was wrong, and the symmetry is the argument:
+        `try_pop_held` sits beside `try_pop` for exactly the reason `read_raw_owned` sits beside
+        `read_raw` -- the inventory was added *beside* the token API rather than replacing it.
+        Both are the same transitional duplication, and the push side is already settled as
+        ending with one family.
+
+        **Nothing needs a non-reclaiming pop.** Measured: the only internal callers are
+        `drain_for_rundown` (now reclaims), `pop_within_with`, and one other -- and once the
+        token pushes are gone, *every* operation has an inventory entry, including the tokenless
+        ones, which stow `payload: None`. There is no operation a pop could legitimately find
+        nothing for.
+
+        So `try_pop` becomes the reclaiming pop, `try_pop_held` disappears as a name, and
+        `pop_within` returns the same shape. Preserving the distinction would be a rule against
+        an impossible act, which [D-74](DESIGN-NOTES.md#d-74) already names as worse than no rule
+        at all.
+
+        **This does not gate the conversion.** Consumers migrate onto the reclaiming pop either
+        way; the rename lands in `M28.4.1d.3` beside the push retirement.
+
+  - [x] **M28.4.1d.2** -- Every consumer that can be converted before the token API is retired now is; three plus `append.rs` are blocked on `M28.4.1d.3`. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d2)
+
+  - [x] **M28.4.1d.2b** -- Documented the two ways round a mixed payload on `IoRing::with_inventory` and in `D-73`; no `IoBuf` enum helper built. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d2b)
+
+  - [x] **M28.4.1d.3** -- Token API retired, `D-74` applied, one reclaiming pop per shape; the break is closed. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d3)
+
+  - [x] **M28.4.2** -- Five inventory sabotages added (push, both pops, both appender halves); the sweep also found `d.3` had broken the manifest. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2842)
+
+- [x] **M28.5** -- `observe_tokenless_push` retired; the outer `None` has two causes the caller distinguishes, recorded as `D-75` and asserted both ways. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m285)
+
+- [x] **M28.6** -- Swept what the break made false: `D-4` and `D-55` amended, six live example claims corrected, and three defects found in `d.3`'s own prose sweep. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m286)
+
+## <a id="moved-2026-10-01-m271"></a>Moved 2026-10-01 22:42 -04:00 -- M27.1, the realizer census
+
+### <a id="m271"></a>M27.1 -- Census done: one gap, and it is not in this crate. *(completed 2026-10-01 22:42 -04:00)*
+
+The item as it stood:
+> - [ ] **M27.1** -- **Census what a realizer would need from this crate, against the plan vocabulary,
+>   and name what is missing.** A plan states which processor a domain pins to, which memory node its
+>   pool allocates from, how many queues of which types, and where each channel's buffer lives. Walk
+>   each of those to the public API that would realize it and record the gaps. `NumaBuffer`
+>   ([D-51](DESIGN-NOTES.md#d-51)) is one half of the pool answer and arrived this month; the ring's
+>   own construction takes no placement input at all. **The output is a gap list, not an API** --
+>   proposing surface before the plan vocabulary is settled would be binding to a draft.
+>
+
+#### The gate was examined rather than obeyed or ignored
+
+The item carried a `CROSS-COMPONENT PREREQUISITE` on the planner's `EP-1+.5` and `EP-1+.6`, and
+both are still open. They were read before proceeding, and they do not bind a census:
+
+- **`EP-1+.5`** decides the *type* of stage 1's connectivity graph and which crate holds it.
+- **`EP-1+.6`** decides that the answer is plural and what a candidate carries beyond the
+  arrangement.
+
+Neither changes what a realizer needs **from this crate**: a realizer consuming one candidate or
+five still supplies the same construction inputs, and the four physical facts the census walks are
+enumerated in `M27.1`'s own text rather than drawn from a type that does not exist yet. The gate
+binds `M27.2`, which proposes surface -- binding an API to a draft vocabulary is precisely the
+failure it names -- and a gap list binds nothing.
+
+Recorded rather than quietly decided, because the prerequisite is the engineer's and this is a
+reading of it: if the intent was that *nothing* under `M27` proceeds until the vocabulary lands,
+this census was taken early and the finding stands independently of when it was taken.
+
+#### The finding, and what it was not
+
+**One gap, and it is not in this crate** -- which is not what the item expected. `M27.1` was
+written anticipating this crate would be found short, and the two things it is short of turn out to
+be someone else's:
+
+- **Thread placement** has no expression anywhere in the workspace. Measured surfaces:
+  `ThreadpoolPool` offers `new` / `set_min_threads` / `set_max_threads`; `CallbackEnviron` offers
+  `set_pool` / `clear_pool` / `set_priority` / `set_runs_long`. A domain can get its own pool with a
+  bounded thread count; it cannot say which processor runs it. Queued as `M-T8.1` in
+  [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md).
+- **The ring's own queue memory** takes no placement input because `CreateIoRing` has no parameter
+  for one -- a version, two sizes, and required/advisory flag words. That is a platform limit to
+  state, not a gap to close.
+
+**Two expectations in the item were corrected by looking.** It said `NumaBuffer` is "one half of the
+pool answer": it is the *whole* of the caller-buffer answer, because
+[numa_buffer_io.rs](src/numa_buffer_io.rs) implements `IoBuf` and `IoBufMut` for it, so a node-bound
+allocation is pushed and registered like any other buffer with no new surface at all. And it said
+"the ring's own construction takes no placement input at all", which is exactly right -- but the
+reason is the platform, not an omission here.
+
+## <a id="moved-2026-10-01-m27-retired"></a>Moved 2026-10-01 23:08 -04:00 -- M27.1 and M27.2, retired rather than completed
+
+**Retired, not finished.** `M27.1` was done and `M27.2` was open; both are withdrawn because the
+question they served does not belong to this crate.
+
+### Why
+
+The design records a **planner** and a **realizer** as distinct things: the planner experiments
+against a description of the application's structure and the machine's reported characteristics,
+and the realizer assembles the I/O, queue and thread topology from the planner's analysis.
+[EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5) places the realizer **outside** this crate --
+its own component, depending on `topology-model` and the runtime crates -- and it does not exist.
+
+`windows-ioring-sys` fundamentally delivers a safe API over `IoRing`. If a realizer turns out to
+need API it does not have, that is the ordinary lifecycle of a consumer asking its layer for
+something, worked out when it happens by the component that discovered the need. A standing
+milestone item here saying *the realizer might one day need something from us* is not work; it is
+an obligation to a consumer nobody has written, and it cannot be discharged because nothing can
+tell us whether it is satisfied.
+
+**This is a blocked-on-a-missing-dependency retirement, not a "no visible client" deferral.** The
+distinction matters because the second would be the anti-pattern. The dependency is named and
+specific: the realizer component of `EP-D-5`. What is retired is the *speculation*, not the
+capability -- nothing about this crate's API changed, and nothing stops a realizer asking later.
+
+### What the retired work did produce, and where it went
+
+- **The one real gap was not in this crate.** The census found that thread placement has no
+  expression anywhere in the workspace: `ThreadpoolPool` offers `new` / `set_min_threads` /
+  `set_max_threads`, and `CallbackEnviron` offers `set_pool` / `clear_pool` / `set_priority` /
+  `set_runs_long`. That is queued as `M-T8.1` in
+  [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md), which states the measured
+  surfaces itself and does not depend on the census document.
+- **The census document and the synthetic-plan test are deleted.** Both existed to answer the
+  retired question. The test was a hand-rolled stand-in realizer living in this crate's `tests/`,
+  which in hindsight was the clearest signal that the question had the wrong owner.
+- **Two assertions survived, because they are this crate's own contract.** Nothing asserted that a
+  ring reports back the exact depths it was created with -- the nearest was
+  `submission_queue_size > 0` -- and nothing exercised the `IoBuf` / `IoBufMut` impls for
+  `NumaBuffer`. Both are now in
+  [ring_and_buffer_contracts.rs](tests/ring_and_buffer_contracts.rs), with no plan vocabulary
+  anywhere in them.
+- **`CreateIoRing` takes no placement parameter** -- a version, two sizes, and required/advisory
+  flag words. A fact about Win32 rather than a gap in this crate, recorded here because it is the
+  only durable thing the census learned about the ring itself.
+
+### The items as they stood
+> ## M27 -- What this crate owes the topology planner
+>
+> **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
+> without the architectural commitment", and asked whether *this crate* should derive a partition for a
+> consumer who expresses no preference. That was the wrong owner, and the checklist rules require
+> saying so rather than quietly rewriting it. The adaptivity the
+> [adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) asks for is delivered by
+> [topology-planner](../topology-planner/COMPONENT.md), which takes a dataflow description of the
+> application and returns one or more suggested realizations
+> ([EP-D-6](../topology-planner/DESIGN-NOTES.md#ep-d-6)). Had the original M27.1 been answered here it
+> would have grown a second, weaker policy surface beside the one that component exists to provide --
+> the `outermost_partitioning_cache` defect again, where a policy answer lands in a crate whose job is
+> something else.
+>
+> > **-> CROSS-COMPONENT PREREQUISITE:** `M27.1` and `M27.2` are gated on component
+> > `crates/topology-planner` -> `M1+` -> `EP-1+.5` and `EP-1+.6`, which decide the plan vocabulary
+> > this crate would be realized from. See [CHECKLIST.md](../topology-planner/CHECKLIST.md).
+>
+> **What survives here is the realization end, not the policy end.** The planner emits a plan; the
+> outward adapter realizes it as buffers, rings and threads
+> ([EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5)). That adapter is a separate crate, but it can
+> only build what this crate exposes, and nothing has ever checked that what it exposes is sufficient.
+> [D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate, and being
+> *constructible from* a policy decision made elsewhere is the opposite of taking one.
+>
+> - [x] **M27.1** -- Census done: one gap, and it is not in this crate. Caller-buffer placement is
+>   already covered by `NumaBuffer`; the ring's own queue memory is a Win32 limit; what is missing is
+>   thread placement, which belongs a layer down. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m271)
+>
+>   Full census: `REALIZATION-CENSUS.md`. *(de-linked: deleted with the retirement above)*
+>
+>   > **-> CROSS-COMPONENT HANDOFF:** the gap is queued as component `crates/windows-threadpool-sys`
+>   > -> `M-T8` -> `M-T8.1` (`Decide whether this crate expresses thread placement, and if so where`).
+>   > See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
+>
+> - [ ] **M27.2** -- **Still gated on the planner's `EP-1+.6`; its verification half is done.**
+>
+>   **The verification half, done 2026-10-01.**
+>   `tests/realization_from_a_plan.rs` *(de-linked: deleted with the retirement above)* realizes a plan-shaped description
+>   against a synthetic machine using only the public API, which is what `M27.1`'s "covered" verdicts
+>   rested on -- they were reached by reading signatures, and now a test builds the arrangement
+>   instead. The stand-in plan type is local to that file, so nothing public binds to a vocabulary
+>   that is not settled. Sabotage-checked: swapping the two queue depths inside the realizer fails the
+>   depth assertion by name.
+>
+>   **The gap-closing half has nothing to close, and that is why it stays open rather than closing.**
+>   The census named one gap and it is `windows-threadpool-sys`' (`M-T8.1`); the ring-memory one is a
+>   Win32 limit. But the census walked the four facts *as `M27.1` described them*, not a settled
+>   vocabulary -- so whether `EP-1+.6` names a fact nobody has walked is exactly what this item is
+>   waiting to find out. Closing it now would assert the vocabulary adds nothing.
+>
+>   Unchanged when it resumes: each gap is an input a caller supplies, never a choice this crate
+>   makes.
+>
+
+## <a id="moved-2026-10-01-m273"></a>Moved 2026-10-01 23:14 -04:00 -- M27.3, pricing the alternatives
+
+### <a id="m273"></a>M27.3 -- `ring_copy --compare` prices every policy on the machine in hand and reports what each cost, with no verdict. *(completed 2026-10-01 23:14 -04:00)*
+
+The item as it stood:
+> - [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
+>   **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
+>   developer disagree with any plan they are handed. `cache_domains.rs` now prints every cache level
+>   beside the heuristic's pick; the equivalent for placement is a sample that reports what a chosen
+>   arrangement costs and what the alternatives would have cost, on the machine in hand.
+>   [ring_copy](examples/ring_copy) is the natural host, being already policy-selectable. **Do not ship
+>   a verdict** -- report the observation and let the consumer conclude, per OPTION INTEGRITY.
+
+#### What was built
+
+`--compare` runs the copy under every policy and reports what each cost, with `--rounds` (default
+3) controlling repetitions. Three choices are worth recording, because each was the difference
+between a number and a defensible number:
+
+- **The arms share one code path.** `run_arrangement` was extracted from `main` so the alternatives
+  are priced through the identical path the chosen policy takes. A comparison whose arms do not
+  share a path measures the difference between the arms' *code* as much as between the
+  arrangements.
+- **The order rotates each round.** Back-to-back runs over the same file are not independent -- the
+  first pass warms the filesystem cache and every later one benefits. A fixed order would hand that
+  advantage to the same policy every time and bake it into the result. Rotating does not remove the
+  effect; it stops it being *attributed* to one arm.
+- **Wall time per arrangement, not the sum of its domains.** The domains run concurrently, so
+  summing them counts the same seconds once per domain and makes a wider arrangement look slower
+  the more parallelism it was given.
+
+#### No verdict, and the output says why
+
+Per OPTION INTEGRITY, no arm is marked best. The report states what the figures include (the
+filesystem cache, whatever else the machine was doing, this sample's own chunking), what they
+cannot separate (a genuinely better arrangement from one that ran while the machine was quieter),
+and that the choice belongs to the consumer and their workload.
+
+The fastest/slowest/median columns exist for that last point: **where one policy's spread overlaps
+another's, this run did not distinguish them**, and the reader can see that rather than being told
+a winner.
+
+A single-domain arrangement is reported as the machine saying it cannot express that arrangement --
+information about the host, not a finding against the policy.
+
+#### Observed on the development machine
+
+Run against a 16 MiB file, 3 rounds. Reported here as a demonstration that the sample produces
+intelligible output, not as a measurement of anything: one file, one machine, one moment.
+
+`ByCache` and `ByCore` both selected 8 domains; `ByNode`, `ByPackage` and `Single` each collapsed to
+one on this host. `ByCache`'s slowest round came in far below its median while `ByCore`'s rounds sat
+close together -- which is the cold first pass showing up exactly where the rotation is designed to
+expose it rather than hide it. A reader who took the medians alone would have missed it, which is
+why the spread is printed beside them.
+
+## <a id="moved-2026-10-01-m27"></a>Moved 2026-10-01 23:29:13 -04:00 -- M27, the last open milestone
+
+Completes this crate's checklist. `M27.1` and `M27.2` were retired rather than finished -- the
+reasoning is in the [earlier group](#moved-2026-10-01-m27-retired) -- and `M27.3` shipped
+`ring_copy --compare`.
+
+### M27 -- Placement questions a consumer can answer on their own hardware
+
+**Re-planned 2026-10-01, and most of this milestone retired.** M27 previously asked what this crate
+owes a topology realizer, and carried a census (`M27.1`) and a gap-closing item (`M27.2`) against
+the plan vocabulary. Both are retired: see
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired).
+
+**The reason is structural, not a judgement that the work is unimportant.** The realizer is a
+distinct component -- [EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5) places it outside this
+crate, depending on `topology-model` and the runtime crates -- and it does not exist. This crate
+fundamentally delivers a safe API over `IoRing`. If a realizer turns out to need API it does not
+have, that is the ordinary lifecycle of a dependency asking its layer for something, worked out
+when it happens by the component that discovered the need. It is not a standing obligation this
+crate carries on behalf of a consumer nobody has written.
+
+[D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate.
+
+- [x] **M27.1** -- Retired with `M27.2`; the census it produced found no gap in this crate, and its
+  one finding is queued where it belongs. ->
+  [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
+
+- [x] **M27.2** -- Retired: a gap-closing item for gaps a non-existent consumer has not asked for.
+  -> [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
+
+- [x] **M27.3** -- `ring_copy --compare` prices every policy on the machine in hand and reports
+  what each cost, with no verdict. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m273)
+
+## Moved 2026-10-04 15:27:15 -04:00 -- M-R2, the identity-keyed ledger and the unminted-completion panic
+
+### M-R2 -- The outstanding-operation ledger, after the PR #113 review
+
+Opened 2026-10-04. The review found that a raw push could still reach a false quiesce; the fix is
+[D-78](DESIGN-NOTES.md#d-78).
+
+- [x] **M-R2.1** -- **Track outstanding operations by identity rather than by count.** Done
+      2026-10-04. `Accounting` keeps the set of minted, unretired `user_data`; `record_completion`
+      and `cancel_reservation` take the identity; quiescence is that set being empty, for owned
+      and raw pushes alike. Pinned by `a_completion_that_retires_nothing_is_not_quiescence`
+      (both push kinds, both directions) and by the `PR #113` case in
+      [sabotage.json](sabotage.json), which restores count semantics and is caught.
+
+- [x] **M-R2.2** -- **Decide whether the ring should now answer `UnexpectedCompletion`.** Done
+      2026-10-04, decided by the engineer and recorded as [D-79](DESIGN-NOTES.md#d-79): a
+      completion for an identity not in flight is a defect, traced always and raised as a panic
+      from `pop_raw` except during an unwind. `RingContract` stays external. Pinned by four
+      `kernel-seam` tests in `ring::tests` that forge the kernel's answer -- never minted,
+      duplicate, the minted control, and the unwind case -- and by the two `D-79` cases in
+      [sabotage.json](sabotage.json).

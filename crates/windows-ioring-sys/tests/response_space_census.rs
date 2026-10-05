@@ -119,6 +119,38 @@ fn test_files() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Every `.rs` file under `dir`, recursively, keyed by its path relative to
+/// the crate root.
+///
+/// Recursive where [`test_files`] is not, because the code the already-poppable
+/// census watches lives in nested modules -- `examples/ring_copy/engine.rs`,
+/// `src/ring/tests.rs` -- and a shallow walk is exactly how a census goes on
+/// reporting green over a directory it never opened.
+fn rust_files_under(dir: &str) -> BTreeMap<String, String> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut BTreeMap<String, String>) {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", dir.display()));
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let name = path
+                    .strip_prefix(root)
+                    .expect("under the crate root")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+                out.insert(name, text);
+            }
+        }
+    }
+    let root = crate_root();
+    let mut out = BTreeMap::new();
+    walk(&root, &root.join(dir), &mut out);
+    out
+}
+
 /// The resolver's own unit tests, which live in `src/` and carry the
 /// `EXERCISES:` markers.
 fn resolver_unit_tests() -> String {
@@ -245,8 +277,14 @@ fn a_marker_is_a_claim_and_a_mention_is_not() {
 }
 
 #[test]
-fn no_kernel_test_asserts_a_completion_is_already_poppable() {
+fn no_kernel_code_asserts_a_completion_is_already_poppable() {
     // The defect class M26.7 audited, guarded so it cannot return.
+    //
+    // Over `tests/`, `examples/` and `src/` alike. It began as a census of
+    // `tests/` only, and the PR #113 review then found the same assertion
+    // three times in the samples, spelled `try_pop()?.ok_or_else(..)` after a
+    // `submit_and_wait` whose own timeout promises nothing about poppability.
+    // A sample is code a consumer copies, so it is held to the same rule.
     //
     // `try_pop()` immediately after a submit, with the `Option` unwrapped,
     // asserts that the kernel has *already* queued the completion. RS-P-5
@@ -268,8 +306,11 @@ fn no_kernel_test_asserts_a_completion_is_already_poppable() {
     // do by writing it.
     let shape = regex_lite_matches;
     let mut offenders = Vec::new();
-    for (name, text) in test_files() {
-        if name.as_str() == SELF || text.contains("Resolver") {
+    let sources = ["tests", "examples", "src"]
+        .into_iter()
+        .flat_map(rust_files_under);
+    for (name, text) in sources {
+        if name.ends_with(SELF) || text.contains("Resolver") {
             continue;
         }
         let hits = shape(&text);
@@ -280,7 +321,7 @@ fn no_kernel_test_asserts_a_completion_is_already_poppable() {
 
     assert!(
         offenders.is_empty(),
-        "these kernel tests assert a completion is poppable the instant a submit returns: \
+        "this code asserts a completion is poppable the instant a submit returns: \
          {offenders:?}\n\
          That is RS-P-5's freedom being treated as a guarantee. State it as this crate's own \
          contract instead -- `pop_within(bound)` -- which holds on every handle rather than on \
@@ -291,6 +332,22 @@ fn no_kernel_test_asserts_a_completion_is_already_poppable() {
 /// Count `try_pop()` occurrences whose `Option` is unwrapped, which is the
 /// "already poppable" assertion.
 ///
+/// Three spellings, all of which refuse the `None` that means "empty at this
+/// instant":
+///
+/// - `try_pop()` followed by two unwraps (`expect`/`unwrap`);
+/// - `try_pop()?` whose `Option` is immediately turned into a value or an
+///   error (`ok_or`, `ok_or_else`, `expect`, `unwrap`);
+/// - a `let`-`else` binding the pop directly -- `let Some(..) =
+///   ring.try_pop()? else { .. }`, or `let Ok(Some(..)) = ring.try_pop()
+///   else { .. }` -- whose `else` can only diverge.
+///
+/// **Not recognised, deliberately:** an `if let .. else` or a `match` that
+/// handles `None` in a branch. Whether that branch refuses `None` or handles it
+/// is a question about what the branch *does*, which a text scan cannot
+/// answer; a drain loop is the common honest case. The scanner's own test pins
+/// that it stays silent on them, so the boundary cannot move unnoticed.
+///
 /// Hand-rolled rather than pulled in as a dependency: the shape is two method
 /// calls in sequence, and a scanner for it is shorter than the argument for
 /// adding a regex crate to a test.
@@ -299,6 +356,30 @@ fn regex_lite_matches(text: &str) -> usize {
     let mut rest = text;
     while let Some(at) = rest.find("try_pop()") {
         rest = &rest[at + "try_pop()".len()..];
+        // `try_pop()?` hands back the `Option` itself, so the very next call
+        // is the one that decides whether `None` is accepted. Only a call
+        // chained directly onto the `?` counts: a later, unrelated `.expect(`
+        // inside a `while let` body is not this shape.
+        if let Some(after) = rest.trim_start().strip_prefix('?') {
+            if refused_by_let_else(after) {
+                count += 1;
+                continue;
+            }
+            if let Some(call) = after.trim_start().strip_prefix('.') {
+                let call = call.trim_start();
+                if ["ok_or(", "ok_or_else(", "expect(", "unwrap()"]
+                    .iter()
+                    .any(|refusal| call.starts_with(refusal))
+                {
+                    count += 1;
+                }
+            }
+            continue;
+        }
+        if refused_by_let_else(rest) {
+            count += 1;
+            continue;
+        }
         // Look at the next two chained calls, skipping whitespace and dots.
         let tail: String = rest.chars().take(200).collect();
         let mut calls = tail
@@ -314,6 +395,20 @@ fn regex_lite_matches(text: &str) -> usize {
         }
     }
     count
+}
+
+/// Whether `after` -- the text straight after `try_pop()` or `try_pop()?` --
+/// begins the `else` of a `let`-`else`. That `else` must diverge, so the pattern
+/// on the left refuses whatever it does not match, `None` included.
+///
+/// The keyword must stand alone: `elsewhere` is an identifier, not `else`.
+fn refused_by_let_else(after: &str) -> bool {
+    after.trim_start().strip_prefix("else").is_some_and(|rest| {
+        !rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
 }
 
 #[test]
@@ -343,6 +438,73 @@ fn the_already_poppable_scanner_recognises_the_shape_and_nothing_else() {
         regex_lite_matches("let maybe = ring.try_pop()?;"),
         0,
         "propagating the Result is not the refused shape either"
+    );
+
+    // The `?` spelling, as the PR #113 review found it in the samples.
+    assert_eq!(
+        regex_lite_matches("let c = ring.try_pop()?.ok_or_else(|| err())?;"),
+        1,
+        "turning the Option into an error is the same refusal"
+    );
+    assert_eq!(
+        regex_lite_matches("let c = ring\n    .try_pop()?\n    .ok_or(e)?;"),
+        1,
+        "the refusal split across lines is still the refusal"
+    );
+    assert_eq!(
+        regex_lite_matches("let c = ring.try_pop()?.expect(\"ready\");"),
+        1,
+        "expect after the ? is the refusal too"
+    );
+    assert_eq!(
+        regex_lite_matches("let c = ring.try_pop()?.unwrap();"),
+        1,
+        "and so is unwrap"
+    );
+    assert_eq!(
+        regex_lite_matches("while let Some(c) = ring.try_pop()? { c.result().expect(\"ok\"); }"),
+        0,
+        "a drain loop handles the Option; a later expect in its body is unrelated"
+    );
+    assert_eq!(
+        regex_lite_matches("let c = ring.pop_within(WAIT)?.ok_or_else(|| err())?;"),
+        0,
+        "a bounded pop may refuse None, because None there means the bound expired"
+    );
+
+    // The let-else spelling (PR #113 review), in each form it can take.
+    assert_eq!(
+        regex_lite_matches("let Some(c) = ring.try_pop()? else { return Err(e); };"),
+        1,
+        "a let-else binding the pop refuses None as surely as ok_or does"
+    );
+    assert_eq!(
+        regex_lite_matches(
+            "let Some(c) = ring\n    .try_pop()?\n    else {\n        panic!()\n    };"
+        ),
+        1,
+        "split across lines it is still the refusal"
+    );
+    assert_eq!(
+        regex_lite_matches("let Ok(Some(c)) = ring.try_pop() else { panic!() };"),
+        1,
+        "without the ? the pattern refuses Err and None together"
+    );
+    // And what it must stay silent on: a branch that handles None is a
+    // question about the branch, which this scanner does not answer.
+    assert_eq!(
+        regex_lite_matches("if let Some(c) = ring.try_pop()? { use_it(c) } else { idle() }"),
+        0,
+        "an if-let's else belongs to the block, not to the pop"
+    );
+    assert_eq!(
+        regex_lite_matches("match ring.try_pop()? { Some(c) => c, None => return Ok(()) }"),
+        0,
+        "a match that handles None is not the refused shape"
+    );
+    assert!(
+        !refused_by_let_else(" elsewhere()"),
+        "an identifier beginning with else is not the keyword"
     );
 }
 #[test]

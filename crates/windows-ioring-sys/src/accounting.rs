@@ -5,16 +5,16 @@
 //!
 //! [`crate::IoRing`] had ten fields and they divide evenly. Five name kernel
 //! state -- the handle, the negotiated version, the probed op support, the
-//! registration array the kernel reads late (`D-32`), and the completion event.
+//! registration arrays the kernel reads late (`D-32`), and the completion event.
 //! The other five are a ledger this crate keeps for itself: the ring's
-//! identity, the next `UserData` to hand out, how many operations are
+//! identity, the next `UserData` to hand out, which operations are
 //! outstanding, and the two registration base indices.
 //!
 //! Nothing in that second half needs a ring to exist. It is arithmetic and
 //! identity, and the rules it enforces -- that an identity is never reused,
-//! that a reservation is released exactly once, that the counters saturate
-//! rather than wrap -- are **this crate's own specification**, not anything
-//! Windows has an opinion about.
+//! that only an identity it minted can retire an outstanding operation, that
+//! the registration counters saturate rather than wrap -- are **this crate's
+//! own specification**, not anything Windows has an opinion about.
 //!
 //! Splitting it out is what lets those rules be tested without opening a
 //! kernel ring, which is [D-49](../DESIGN-NOTES.md#d-49)'s defect: `cargo test
@@ -29,12 +29,13 @@
 //! the point -- a ledger that tried to second-guess the kernel would be the
 //! mock this crate rejects ([D-52](../DESIGN-NOTES.md#d-52)).
 
+use std::collections::HashSet;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A ring's identity, unique for the process's lifetime (PR #20 review
 /// response): every value a ring hands out that later gets checked back
-/// against it -- a [`crate::Token`], a [`crate::RegisteredFile`], a
+/// against it -- an inventory entry, a [`crate::RegisteredFile`], a
 /// [`crate::RegisteredBuffers`] -- carries the id of the ring that minted
 /// it, and every [`crate::Completion`] carries the id of the ring that
 /// popped it.
@@ -68,8 +69,16 @@ pub(crate) struct Accounting {
     /// The next `UserData` value [`Accounting::reserve_user_data`] will hand
     /// out.
     next_user_data: usize,
-    /// Operations minted but not yet observed to have completed (M2.4).
-    outstanding: usize,
+    /// The identities minted but not yet observed to have completed (M2.4),
+    /// keyed by `user_data` rather than counted.
+    ///
+    /// A count cannot tell a real completion from a foreign or duplicate one:
+    /// both lower it. With two operations in flight, one bogus CQE plus the
+    /// first real one drove a counter to zero while the second was still owed,
+    /// and rundown then closed a ring the kernel could still write through.
+    /// A set retires only what it holds, so an identity this ring never
+    /// minted -- or already retired -- changes nothing.
+    in_flight: HashSet<usize>,
     /// How many file handles are registered so far, across every confirmed
     /// `BuildIoRingRegisterFileHandles` (M5.1). The base index of the next
     /// registration.
@@ -84,13 +93,13 @@ impl Accounting {
         Self {
             ring_id: RingId::next(),
             next_user_data: 0,
-            outstanding: 0,
+            in_flight: HashSet::new(),
             registered_files: 0,
             registered_buffers: 0,
         }
     }
 
-    /// This ring's own identity, for stamping onto every [`crate::Token`] and
+    /// This ring's own identity, for stamping onto every [`crate::OperationId`] and
     /// registration it mints and checking against on use.
     pub(crate) fn ring_id(&self) -> RingId {
         self.ring_id
@@ -98,33 +107,64 @@ impl Accounting {
 
     /// How many operations this ring believes are still outstanding: minted
     /// (via [`Accounting::reserve_user_data`]) but not yet observed to have
-    /// completed (via [`Accounting::record_completion`]).
+    /// completed (via [`Accounting::record_completion`]) or released (via
+    /// [`Accounting::cancel_reservation`]).
     pub(crate) fn outstanding(&self) -> usize {
-        self.outstanding
+        self.in_flight.len()
+    }
+
+    /// Whether nothing minted by this ledger is still owed a completion.
+    ///
+    /// This is the ring's quiescence predicate, and it is sound for every
+    /// push alike -- owned and raw -- because it asks about identities rather
+    /// than about what the ring happens to be holding.
+    pub(crate) fn is_quiescent(&self) -> bool {
+        self.in_flight.is_empty()
     }
 
     /// Mint a fresh `UserData` identity for a new operation, and account for
-    /// it as outstanding until `record_completion` is called for it.
+    /// it as outstanding until `record_completion` or `cancel_reservation` is
+    /// called with it.
     ///
     /// # Errors
     ///
     /// Returns an error rather than reusing an identity if the `usize` space
     /// is ever exhausted, mirroring `windows-threadpool-sys`'s own
     /// "exhausting the generation sequence fails rather than wraps."
+    ///
+    /// Also returns an error if the identity it would mint is still in
+    /// flight. The counter never repeats, so only a ledger whose counter was
+    /// moved by hand can reach this; the error exists because the alternative
+    /// is two operations aliased under one identity, which quiescence cannot
+    /// survive.
     pub(crate) fn reserve_user_data(&mut self) -> io::Result<usize> {
         let id = self.next_user_data;
         self.next_user_data = id
             .checked_add(1)
             .ok_or_else(|| io::Error::other("IoRing operation identity space exhausted"))?;
-        self.outstanding += 1;
+        // Uniqueness is what makes the set sound: two in-flight operations
+        // sharing an identity would collapse to one entry, the first
+        // completion would retire both, and rundown would close the ring with
+        // the second still running. Refused rather than aliased.
+        if !self.in_flight.insert(id) {
+            return Err(io::Error::other(
+                "IoRing operation identity is already in flight",
+            ));
+        }
         Ok(id)
     }
 
-    /// Record that one outstanding operation's completion has been observed
-    /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// [`crate::Token`] was still around to claim it.
-    pub(crate) fn record_completion(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+    /// Record that a completion carrying `user_data` has been observed (a real
+    /// `IORING_CQE` was popped), whether or not the ring was still holding
+    /// something for it.
+    ///
+    /// Retires `user_data` only if this ledger minted it and has not already
+    /// retired it, and reports whether it did. A foreign or duplicate
+    /// completion therefore returns `false` and leaves every outstanding
+    /// operation outstanding -- which is what keeps [`Accounting::is_quiescent`]
+    /// from answering `true` while a real operation is still in flight.
+    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {
+        self.in_flight.remove(&user_data)
     }
 
     /// Release a reservation for an operation that was never actually
@@ -137,11 +177,12 @@ impl Accounting {
     /// `IoRing::run_down` either.
     ///
     /// The two are separate methods rather than one, even though their bodies
-    /// are identical, because they record different *facts* and a future
+    /// are nearly identical, because they record different *facts* and a future
     /// change to either -- a conservation counter, a debug assertion -- is
     /// overwhelmingly likely to apply to only one of them.
-    pub(crate) fn cancel_reservation(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+    pub(crate) fn cancel_reservation(&mut self, user_data: usize) {
+        let held = self.in_flight.remove(&user_data);
+        debug_assert!(held, "only a reservation still in flight can be released");
     }
 
     /// The registered-file base index: how many file handles are registered
@@ -175,7 +216,8 @@ impl Accounting {
     /// operations -- and the repository's rule is that an error edge no test
     /// can traverse is written rather than implemented. The alternative to
     /// erroring there is silently handing out a duplicate identity, which is
-    /// exactly what a `Token` cannot survive.
+    /// exactly what identity-keyed tracking cannot survive
+    /// ([D-78](../DESIGN-NOTES.md#d-78)).
     #[cfg(test)]
     pub(crate) fn set_next_user_data_for_test(&mut self, next: usize) {
         self.next_user_data = next;

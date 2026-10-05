@@ -36,8 +36,9 @@ A bad manifest is always the reported exit 2 with a message naming the file and
 the field, never a raw PowerShell error: the tool is a diagnostic instrument, so
 its own failures must not need diagnosing, and must not take a calling script
 down with them. Missing file, invalid JSON, absent `package` or `sabotages`, an
-empty `sabotages`, an unresolvable `root`, a missing per-sabotage field, and an
-`expect` that is neither `caught` nor `survives` are each reported this way, as
+empty `sabotages`, an unresolvable `root`, a missing per-sabotage field, an `expect` that is not
+one of `caught`, `survives` and `refused-by-build`, and a `buildError` that is
+missing where it is required or present where it is ignored are each reported this way, as
 are running from outside a git repository, an `-OutputDirectory` git does not
 ignore, and a `testArgs` carrying `--target-dir`.
 
@@ -212,11 +213,40 @@ changing the behaviour, and the suite then passes for the honest reason that
 nothing was broken. That has happened in this repository, and it read as a hole
 in the tests for a while before anyone looked at the patch.
 
+**`INFRASTRUCTURE: a test binary was never executed`** -- cargo could not start
+a test binary and said so (`could not execute process ... (never executed)`).
+The suite exits 101 exactly as it does for a real catch, so without this the
+entry would score `caught` for tests that never ran. Measured: Windows Defender
+refused one of this repository's test binaries as "potentially unwanted
+software" mid-sweep, and a declared blind spot reported as caught. Re-run the
+entry; the result says nothing about the tests.
+
+**`INFRASTRUCTURE: cargo could not be started`** -- Windows refused to start
+cargo itself, so it exited with a loader status such as `0xC0000142`
+(`STATUS_DLL_INIT_FAILED`) having run nothing. Before this outcome existed that
+non-zero exit scored `caught`. The exit code is named in the result, and the
+codes that count are listed once, in `Get-ProcessStartFailure` in
+[common.ps1](common.ps1). Seen on a CI runner under parallel load (PR #113),
+where it passed on re-run; in CI the harness's suite now runs through
+[invoke-retrying-on-start-failure.ps1](invoke-retrying-on-start-failure.ps1),
+which retries this signature and nothing else. If a baseline hits it, the
+sweep stops with the host's memory, commit, process and handle counts.
+
 **`MANIFEST STALE`** -- the pattern no longer matches exactly one site.
 Refactoring moved the code out from under the manifest. Fix the manifest; the
 sabotage was not run and proves nothing.
 
 **`MANIFEST INERT`** -- the patch does not change the file at all.
+
+**`refused by the build ('...')`** -- the entry declared `refused-by-build`, the
+build failed, and its error output contained the entry's `buildError`. This is
+the one build failure that counts, because it is the strongest rung there is: a
+guard that fires at compile time cannot be skipped by a run nobody made. The
+named message is what separates it from a typo in the patch -- without it, any
+build failure would score, which is the defect the next entry exists to stop.
+If such an entry's build fails with some *other* error, it is reported as
+`MANIFEST DOES NOT COMPILE (the build failed, but not with '...')`; if it builds
+cleanly, the guard did not fire, and the result says `BUILT CLEANLY` first.
 
 **`MANIFEST DOES NOT COMPILE`** -- the patch is not valid Rust, so the tests
 never got a chance to notice it. Reported for a build-phase failure and,
@@ -316,7 +346,8 @@ Inside each entry of `sabotages`:
 |---|---|---|
 | `name` | yes | Unique; also the `-Name` filter key and the transcript filename. Two names that differ only in punctuation are rejected, as is `baseline`. |
 | `file` | yes | Source to patch, relative to `root`. |
-| `expect` | yes | `caught` for a defect, `survives` for a control. |
+| `expect` | yes | `caught` for a defect the tests must notice, `survives` for a control, `refused-by-build` for a defect a compile-time guard must reject. |
+| `buildError` | with `refused-by-build` only | Literal text the build's error output must contain -- the guard's own message, e.g. `a policy is missing from Policy::ALL`. Required for `refused-by-build` and rejected for anything else. |
 | `why` | yes | What breaks, and why the suite should or should not notice. This is the part a future reader needs; the patch only says what changed. |
 | `find` | yes | Lines to replace. Must match **exactly once**. |
 | `replace` | yes | Replacement lines. Either `[]` or `[""]` deletes -- the lines are joined with newlines, so both spell the empty string, and the shipped manifests use both. |

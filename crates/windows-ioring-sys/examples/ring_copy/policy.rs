@@ -39,6 +39,44 @@ pub enum Policy {
 }
 
 impl Policy {
+    /// Every policy, for `--compare` to price each in turn.
+    ///
+    /// Listed here rather than derived, because a sample that silently gained
+    /// an arm when a variant was added would change what a recorded comparison
+    /// means without anyone choosing that. [`Policy::listed_exactly_once`]
+    /// makes the list impossible to get wrong in either direction.
+    pub const ALL: [Policy; 5] = [
+        Policy::ByCache,
+        Policy::ByNode,
+        Policy::ByPackage,
+        Policy::ByCore,
+        Policy::Single,
+    ];
+
+    /// Where this policy sits in [`Policy::ALL`] -- and the build-time proof
+    /// that it sits there exactly once.
+    ///
+    /// The `match` is exhaustive, so adding a variant fails to compile until it
+    /// is given an arm here, which is the intentional update. Each arm is an
+    /// inline `const` block, and those are evaluated at compile time whether
+    /// or not anything calls this, so each fails the build unless its variant
+    /// is in `ALL` exactly once. Between them, `ALL` can neither omit a
+    /// variant, repeat one, nor silently gain one. (Stable Rust cannot count an
+    /// enum's variants, so this is the route that reaches the build rung.)
+    #[allow(
+        dead_code,
+        reason = "its value is the compile-time evaluation of its arms, not any call"
+    )]
+    const fn listed_exactly_once(self) -> usize {
+        match self {
+            Self::ByCache => const { position_in_all(Policy::ByCache) },
+            Self::ByNode => const { position_in_all(Policy::ByNode) },
+            Self::ByPackage => const { position_in_all(Policy::ByPackage) },
+            Self::ByCore => const { position_in_all(Policy::ByCore) },
+            Self::Single => const { position_in_all(Policy::Single) },
+        }
+    }
+
     /// Parse a policy name (case-insensitive), for the sample's `--policy` switch.
     ///
     /// `byl3` and `l3` are deliberately **not** accepted. They named a rule
@@ -129,6 +167,24 @@ impl Policy {
             }],
             degraded,
         )
+    }
+}
+
+/// The index of `policy` in [`Policy::ALL`]; a compile error, when evaluated in
+/// a `const` context, if it is absent or listed more than once.
+const fn position_in_all(policy: Policy) -> usize {
+    let mut found = None;
+    let mut i = 0;
+    while i < Policy::ALL.len() {
+        if Policy::ALL[i] as u8 == policy as u8 {
+            assert!(found.is_none(), "a policy is listed in Policy::ALL twice");
+            found = Some(i);
+        }
+        i += 1;
+    }
+    match found {
+        Some(index) => index,
+        None => panic!("a policy is missing from Policy::ALL, so --compare would not price it"),
     }
 }
 

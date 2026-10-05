@@ -6,26 +6,24 @@
 // this whole file compiles out with `--no-default-features`.
 #![cfg(all(windows, feature = "threadpool"))]
 
-use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
+use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-event-delivery-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("event-delivery", tag)
 }
 
 fn filled_content() -> Vec<u8> {
@@ -143,6 +141,7 @@ fn pool_liveness() -> String {
     use windows_threadpool_sys::work::ThreadpoolWork;
 
     let probe_bound = Duration::from_secs(2);
+    windows_threadpool_sys::trace_record!("postmortem", "probe-begin");
 
     // 1. A plain work item. If this does not run, the pool is not dispatching
     //    anything and the wait mechanism is not the subject.
@@ -157,10 +156,19 @@ fn pool_liveness() -> String {
         None,
     ) {
         Ok(work) => {
+            // The submit and the callback's own two ends are recorded by
+            // `windows-threadpool-sys` under `work`; what is added here is the
+            // answer this thread got, so a probe that timed out is separable
+            // from one whose callback ran after the probe gave up.
             work.submit();
-            work_rx.recv_timeout(probe_bound).is_ok()
+            let ran = work_rx.recv_timeout(probe_bound).is_ok();
+            windows_threadpool_sys::trace_record!("postmortem", "work-probe-answered", ran);
+            ran
         }
-        Err(error) => return format!("could not create a work probe: {error}"),
+        Err(error) => {
+            windows_threadpool_sys::trace_record!("postmortem", "probe-left-work-uncreatable");
+            return format!("could not create a work probe: {error}");
+        }
     };
 
     // 2. A brand-new wait on a brand-new event, armed and then signalled. If
@@ -180,6 +188,13 @@ fn pool_liveness() -> String {
                 None,
             ) {
                 Ok(wait) => {
+                    // Creation and arming are recorded by
+                    // `windows-threadpool-sys` under `wait`, as `created` and
+                    // `armed`. The signal is not, so it is recorded here: the
+                    // question this probe was built for is whether a wait armed
+                    // *during* the stall dispatches, and that is an interval
+                    // from this record to the `trampoline-entered` that follows
+                    // it.
                     wait.arm(None);
                     // SAFETY: the wait owns the event, so the handle is open.
                     unsafe {
@@ -187,14 +202,34 @@ fn pool_liveness() -> String {
                             std::os::windows::io::AsRawHandle::as_raw_handle(&wait.handle()),
                         )
                     };
-                    rx.recv_timeout(probe_bound).is_ok()
+                    windows_threadpool_sys::trace_record!(
+                        "postmortem",
+                        "wait-probe-signalled",
+                        std::os::windows::io::AsRawHandle::as_raw_handle(&wait.handle()) as usize
+                    );
+                    let ran = rx.recv_timeout(probe_bound).is_ok();
+                    windows_threadpool_sys::trace_record!("postmortem", "wait-probe-answered", ran);
+                    ran
                 }
-                Err(error) => return format!("could not create a wait probe: {error}"),
+                Err(error) => {
+                    windows_threadpool_sys::trace_record!(
+                        "postmortem",
+                        "probe-left-wait-uncreatable"
+                    );
+                    return format!("could not create a wait probe: {error}");
+                }
             }
         }
-        Err(error) => return format!("could not create a probe event: {error}"),
+        Err(error) => {
+            windows_threadpool_sys::trace_record!("postmortem", "probe-left-event-uncreatable");
+            return format!("could not create a probe event: {error}");
+        }
     };
 
+    // Recorded before the probe's own objects are dropped, so the drop records
+    // that follow it in the trace are attributable to this probe rather than
+    // mistaken for the delivery path tearing down.
+    windows_threadpool_sys::trace_record!("postmortem", "probe-left", work_ran, wait_ran);
     format!("work item ran: {work_ran}; a fresh wait ran: {wait_ran} (both within {probe_bound:?})")
 }
 
@@ -218,24 +253,65 @@ fn trace_section() -> String {
     format!("  trace (oldest first):\n{dump}")
 }
 
+/// The ring these tests drive.
+///
+/// Each read hands over its buffer and carries its chunk index as the
+/// sidecar, so a delivered completion arrives already matched to both. That
+/// matching used to happen on the receiving thread, against a map the test
+/// maintained; the ring does it now, which is why the map is gone.
+type DeliveryRing = IoRing<Vec<u8>, usize>;
+
+/// What the callback forwards: the completion and whatever the ring was
+/// holding for it.
+///
+/// The payload has to travel through the channel now, because the ring lives
+/// inside the `EventDelivery` and the callback is the only place it surfaces.
+type Delivered = (
+    windows_ioring_sys::Completion,
+    Option<(Option<Vec<u8>>, usize)>,
+);
+
 /// Wait for one delivery, turning a timeout into the report above.
 fn recv_one(
-    rx: &mpsc::Receiver<windows_ioring_sys::Completion>,
+    rx: &mpsc::Receiver<Delivered>,
     watch: &mut DeliveryWatch,
     what: &str,
     expected: usize,
     outstanding: impl Fn() -> usize,
-) -> windows_ioring_sys::Completion {
+) -> Delivered {
     match rx.recv_timeout(DELIVERY_BOUND) {
-        Ok(completion) => {
+        Ok(delivered) => {
             watch.record_arrival();
-            completion
+            delivered
         }
         Err(_) => {
+            // The first record of the post-mortem, and the one every later
+            // timestamp is read against: it is the moment this thread gave up,
+            // which is also the moment the captured stalls resume dispatching.
+            windows_threadpool_sys::trace_record!("postmortem", "delivery-wait-expired");
             // Read the ring's own count *before* the second wait, so it
             // describes the moment of failure rather than the moment of
             // giving up on it.
+            //
+            // Bracketed, because this takes the ring's mutex and the delivery
+            // callback drains under that same mutex. An `outstanding-begin`
+            // with no `outstanding-read` after it is therefore a finding in
+            // itself: this thread is parked behind a callback that is inside
+            // the drain, which is a different stall from one where no callback
+            // ever ran.
+            windows_threadpool_sys::trace_record!("postmortem", "outstanding-begin");
             let at_failure = outstanding();
+            windows_threadpool_sys::trace_record!("postmortem", "outstanding-read", at_failure);
+            // **The worker-factory counters and the completion-port depths used
+            // to be read here, and are gone.** They were the quantity the
+            // factory's create test actually consults, and reading them needed
+            // an undocumented entry point and an unpublished structure layout,
+            // which `windows-threadpool-sys` no longer ships -- see
+            // [This crate ships no undocumented APIs](../../../DESIGN-NOTES.md#no-undocumented-apis).
+            //
+            // What that costs this post-mortem is recorded with the removal, not
+            // left to be inferred from an absence: see `M-R1.1` in CHECKLIST.md.
+            //
             // The pool-liveness probe runs first, while the process is still
             // in the failed state -- asking afterwards would describe a
             // different moment.
@@ -258,10 +334,21 @@ fn recv_one(
                 )
             );
             let started = std::time::Instant::now();
+            // The interval this brackets is *not* the delivery latency: it
+            // begins here, after the liveness probe has already run and
+            // created and armed a fresh wait of its own. The two records make
+            // that visible, so a reader can subtract the probe rather than
+            // taking the printed figure for the lateness of the delivery.
+            windows_threadpool_sys::trace_record!("postmortem", "second-wait-begin");
             let postmortem = match rx.recv_timeout(POST_MORTEM_BOUND) {
                 Ok(_) => format!("it arrived, {:?} past the bound", started.elapsed()),
                 Err(_) => format!("still nothing after a further {POST_MORTEM_BOUND:?}"),
             };
+            windows_threadpool_sys::trace_record!(
+                "postmortem",
+                "second-wait-ended",
+                started.elapsed().as_micros() as u64
+            );
             panic!(
                 "{}\n  pool liveness  : {liveness}",
                 watch.report(what, expected, at_failure, &postmortem)
@@ -290,21 +377,21 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let callbacks = Arc::new(AtomicUsize::new(0));
     let callbacks_for_callback = Arc::clone(&callbacks);
 
-    let ring = IoRing::new(64, 64).expect("create ring");
+    let ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             if std::thread::current().id() != submitting_thread {
                 saw_foreign_thread_for_callback.store(true, Ordering::SeqCst);
             }
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
     .expect("wire event delivery");
 
-    // Buffers are held by the token map in `windows-ioring-sys`'s own
+    // Buffers are held by the ring's inventory in `windows-ioring-sys`'s own
     // submission API; here it is enough to know each op's byte count and
     // offset without keeping the buffer, since Model A hands the buffer back
     // through the completion path this test does not need to exercise
@@ -315,8 +402,10 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let _token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         // `wait_operations = 0`: this thread submits and returns immediately,
         // never waiting for a single completion itself (M4.4).
@@ -326,14 +415,22 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
     let mut received = 0;
     while received < CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting",
             CHUNKS,
             || delivery.scope().outstanding(),
         );
+        let (completion, held) = delivered;
         completion.result().expect("read succeeded");
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        assert_eq!(
+            buffer.len(),
+            CHUNK_LEN,
+            "chunk {chunk_index} came back the size it went in"
+        );
         received += 1;
     }
 
@@ -359,10 +456,10 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     let delivered = Arc::new(AtomicUsize::new(0));
     let delivered_for_callback = Arc::clone(&delivered);
 
-    let ring = IoRing::new(64, 64).expect("create ring");
+    let ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = completion.result();
             delivered_for_callback.fetch_add(1, Ordering::SeqCst);
         },
@@ -375,7 +472,7 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
         let mut batch = scope.batch();
         for _ in 0..8 {
             let buffer = vec![0_u8; content.len()];
-            let _token = unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }
+            unsafe { batch.read_raw_owned(handle, buffer, 0, 0, PushOptions::new()) }
                 .expect("queue read");
         }
         batch.submit_and_wait(0, 0).expect("submit without waiting");
@@ -420,16 +517,16 @@ fn completions_queued_before_handover_are_still_delivered() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(64, 64).expect("create ring");
-    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
+    let mut ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     {
         let mut batch = Batch::new(&mut ring);
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
-            pending.insert(token.id(), (chunk_index, token));
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         // Wait for all of them here, on this thread, so the ring is handed
         // over with a full completion queue. This is the whole point: no
@@ -445,16 +542,16 @@ fn completions_queued_before_handover_are_still_delivered() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
     .expect("wire event delivery to a ring that already has completions queued");
 
     // Claim on this thread rather than in the callback, so a delivered
-    // completion is checked against the token that minted it -- a delivery
+    // completion is checked against the operation that minted it -- a delivery
     // that reported the wrong `UserData` would fail here rather than pass.
     //
     // Note what a stall means *here* specifically, and why the report says
@@ -462,8 +559,9 @@ fn completions_queued_before_handover_are_still_delivered() {
     // the queue before the handover, so the kernel has nothing left to do.
     // A timeout in this test therefore cannot be the device being slow.
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
+    let mut seen = Vec::with_capacity(CHUNKS);
     for _ in 0..CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "completions_queued_before_handover_are_still_delivered (every completion was \
@@ -472,13 +570,11 @@ fn completions_queued_before_handover_are_still_delivered() {
             CHUNKS,
             || delivery.scope().outstanding(),
         );
+        let (completion, held) = delivered;
         let transferred = completion.result().expect("read succeeded");
-        let (chunk_index, token) = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        seen.push(chunk_index);
         // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
         // this test chose (an ordinary file on a local volume, where a
         // successful completion carries the whole length and a full volume is
@@ -489,9 +585,11 @@ fn completions_queued_before_handover_are_still_delivered() {
             content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
         );
     }
-    assert!(
-        pending.is_empty(),
-        "every completion queued before the handover must have been delivered"
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        (0..CHUNKS).collect::<Vec<_>>(),
+        "every completion queued before the handover must have been delivered, each exactly once"
     );
 
     drop(delivery);
@@ -511,20 +609,17 @@ fn completions_queued_before_handover_are_still_delivered() {
 /// would signal either. The backlog would be stranded permanently, which is
 /// exactly what the guarantee promises against.
 ///
-/// **Ignored: this reproduces a defect that is not yet fixed (`M26.12`).**
+/// Raised by review on PR #108, which diagnosed it correctly: the setup signal
+/// was owed only to the call that performed the attachment, so a caller that
+/// attached earlier and consumed that signal got no wakeup at all. The fix is
+/// to raise it unconditionally.
 ///
-/// Raised by review on PR #108, and investigating it found something larger
-/// than the report. Signalling unconditionally -- the obvious repair, and the
-/// one the report suggests -- does **not** make this pass. What does is a
-/// 50 ms sleep between `wait.arm` and the signal, measured 3 of 3 against 0 of
-/// 6 without it, so the wakeup is lost in a window after arming rather than
-/// never being raised.
-///
-/// That matters beyond this test: `M26.9` fixed the delivery stall by ordering
-/// the arm before the signal, and this says that ordering alone is not
-/// sufficient. It is left failing-and-ignored rather than deleted, patched
-/// with a sleep, or "fixed" by a change that does not fix it.
-#[ignore = "M26.12: reproduces an unfixed wakeup race; see UNRESOLVED-TEST-FAILURES.md"]
+/// It was briefly recorded as a *wakeup race* with an unexplained timing
+/// window, on the strength of two claims that later measurement contradicted:
+/// that signalling unconditionally did not help, and that a 50 ms sleep after
+/// arming was what made it pass. Neither holds. The failure is deterministic
+/// and the callback ran zero times, which is a signal never raised rather than
+/// one raised and lost.
 #[test]
 fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
     let path = temp_file("attached-before-handover");
@@ -536,7 +631,7 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
 
     // Attach before any work exists, so the handover finds the event already
     // in place -- and then **consume the signal that attaching raised**.
@@ -557,15 +652,15 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
         "attaching raises one signal and this consumes it"
     );
 
-    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
     {
         let mut batch = Batch::new(&mut ring);
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
-            pending.insert(token.id(), (chunk_index, token));
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         batch
             .submit_and_wait(CHUNKS as u32, 5_000)
@@ -588,17 +683,18 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
     .expect("wire delivery to a ring whose event the caller already attached");
 
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
+    let mut seen = Vec::with_capacity(CHUNKS);
     for _ in 0..CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "a_backlog_is_delivered_even_when_the_caller_attached_the_event_first (the event \
@@ -607,21 +703,21 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
             CHUNKS,
             || delivery.scope().outstanding(),
         );
-        let (chunk_index, token) = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let (_completion, held) = delivered;
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        seen.push(chunk_index);
         assert_eq!(
             buffer,
             content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
         );
     }
-    assert!(
-        pending.is_empty(),
-        "every completion queued before the handover must have been delivered, even though \
-         the caller attached the event rather than the handover"
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        (0..CHUNKS).collect::<Vec<_>>(),
+        "every completion queued before the handover must have been delivered, each exactly \
+         once, even though the caller attached the event rather than the handover"
     );
 
     drop(delivery);
@@ -679,14 +775,100 @@ fn the_stall_report_carries_what_a_diagnosis_needs() {
 #[test]
 fn new_succeeds_and_the_ring_stays_reachable_for_pushes() {
     let ring = IoRing::new(8, 8).expect("create ring");
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
     let info = delivery.scope().info().expect("query info");
     assert!(info.submission_queue_size > 0);
 }
 
+/// EXPERIMENT (M-T5.1): the trigger, hand-rolled from raw Win32.
+///
+/// `EventDelivery` no longer reproduces the stall -- M-T4.2 made its teardown
+/// drain, and a drain never asks the kernel to remove a delivered packet. This
+/// rebuilds the pre-fix teardown so the fault can still be provoked on demand.
+///
+/// `hand-spin-3us` is the arm to run: at about 4.15 failures per thousand it is
+/// roughly five times the no-gap rate, so a few thousand processes yield enough
+/// stalls to read. `hand-control` is the pre-M-T4.2 teardown, kept as the live
+/// control.
+fn hand_rolled_trigger(variant: &str) {
+    use std::os::windows::io::AsRawHandle;
+    use std::time::Instant;
+    use windows_sys::Win32::System::Threading::{
+        CloseThreadpoolWait, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT, SetEvent,
+        SetThreadpoolWait, WaitForThreadpoolWaitCallbacks,
+    };
+
+    unsafe extern "system" fn noop(
+        _instance: PTP_CALLBACK_INSTANCE,
+        _context: *mut std::ffi::c_void,
+        _wait: PTP_WAIT,
+        _result: u32,
+    ) {
+    }
+
+    // (make the cancel call, microseconds to spin before the close)
+    let (cancel, spin_us): (bool, u64) = match variant {
+        "hand-nocancel" => (false, 0),
+        v if v.starts_with("hand-spin-") && v.ends_with("us") => (
+            false,
+            v["hand-spin-".len()..v.len() - 2]
+                .parse()
+                .expect("hand-spin-<N>us: N must parse"),
+        ),
+        _ => (true, 0),
+    };
+
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let event = ring
+        .completion_event()
+        .expect("attach the completion event");
+    let handle = event.as_raw_handle();
+
+    // SAFETY: a no-op callback of the documented shape, default environment.
+    let wait = unsafe { CreateThreadpoolWait(Some(noop), std::ptr::null_mut(), std::ptr::null()) };
+    assert!(wait != 0, "create the wait");
+    // SAFETY: `wait` is live and `handle` is an event this thread owns.
+    unsafe { SetThreadpoolWait(wait, handle, std::ptr::null()) };
+    // SAFETY: a live event handle. Satisfies the wait, so a callback is owed
+    // and its packet is queued to the pool's completion port.
+    unsafe { SetEvent(handle) };
+
+    // SAFETY: `wait` is live and armed; a null target disarms it. This asks the
+    // kernel to cancel *without* removing an already-delivered packet, so it
+    // leaves the packet queued.
+    unsafe { SetThreadpoolWait(wait, std::ptr::null_mut(), std::ptr::null()) };
+
+    let t0 = Instant::now();
+    if cancel {
+        // SAFETY: `wait` is live and disarmed. TRUE removes the queued packet.
+        unsafe { WaitForThreadpoolWaitCallbacks(wait, 1) };
+    }
+    while t0.elapsed() < Duration::from_micros(spin_us) {
+        std::hint::spin_loop();
+    }
+    let gap_us = t0.elapsed().as_micros();
+
+    // SAFETY: `wait` is live and no longer armed. The close removes the queued
+    // packet, which is the action under investigation.
+    unsafe { CloseThreadpoolWait(wait) };
+    // Proof on every run that the arm dispatched and cost what it should. An
+    // experiment was once voided entirely by an edit that silently failed to
+    // apply, leaving every arm running the same code.
+    eprintln!("hand_rolled_trigger: variant={variant} cancel={cancel} gap_us={gap_us}");
+    drop(event);
+    drop(ring);
+}
+
 #[test]
 fn dropping_with_nothing_outstanding_does_not_hang() {
+    let variant = std::env::var("IORING_TRIGGER").unwrap_or_default();
+    if variant.starts_with("hand-") {
+        hand_rolled_trigger(&variant);
+        return;
+    }
     let ring = IoRing::new(8, 8).expect("create ring");
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
     drop(delivery);
 }

@@ -1,0 +1,222 @@
+# Copyright (c) Mike Grier.
+#
+# Sabotage sweeps, which CI deliberately does not gate on.
+#
+# A sweep rebuilds a crate and runs its whole suite once per manifest entry, so
+# its cost scales with the crate's build and suite rather than with the change
+# under review. Measured on this repository, per-entry cost spans more than an
+# order of magnitude between crates: `windows-placement-probe` sweeps its whole
+# manifest in about a minute, while `windows-threadpool-sys` measured about
+# eighty seconds for a single entry -- nearly all of it rebuild rather than
+# test, which is why the split below is built to keep the build cache warm. The
+# large manifests are therefore tens of minutes. That is the wrong shape for a
+# per-push gate and the right shape for something that runs once per
+# integration.
+#
+# **This is not the `sabotage harness tests` job in ci.yml.** That job runs the
+# harness's own unit tests with cargo stubbed out, finishes in well under two
+# minutes, and stays on every push. This workflow is the thing it is often
+# mistaken for: the real sweeps, against the real manifests.
+#
+# WHY POST-MERGE RATHER THAN NIGHTLY. A sweep that fails needs to name the change
+# that broke it. On `push: main` the run is attributable to one merge; on a
+# schedule it is attributable to a day's worth, and the person who has to read it
+# is whoever happens to look. The repository already pays for this shape in
+# `release-please.yml`.
+#
+# WHY IT DOES NOT GATE ANYTHING. By the time this runs the merge has happened, so
+# a failure is a report rather than a block. That is the deliberate trade: the
+# alternative is adding tens of minutes to every pull request to re-check
+# guarantees that change far more slowly than the code does.
+name: sabotage sweeps
+
+on:
+  push:
+    branches: [main]
+    # Only when something a sweep could actually be affected by moves.
+    #
+    # Note that a crate's DOCUMENTATION is such a thing, and an earlier version
+    # of this comment claimed the opposite. Every crate here splices its README
+    # into the library under `cfg(doctest)`, and a sweep runs the crate's whole
+    # `cargo test` -- doctests included -- once per entry. So a README-only
+    # change really can move whether a sabotage is caught. `crates/**` below
+    # already covers it; what was wrong was the explanation, not the filter.
+    paths:
+      - 'crates/**'
+      # A glob rather than a list of script names. The list form is exactly what
+      # let the matrix planner be added without this filter learning about it,
+      # so a planner-only fix would have skipped the sweep it changes the shape
+      # of. Anything in `tools/` named for sabotage can move which jobs run or
+      # whether a defect is caught.
+      - 'tools/*sabotage*.ps1'
+      # And the shared helper those scripts dot-source. The glob above cannot
+      # reach it, because `common.ps1` is named for what it IS rather than for
+      # what uses it -- `run-sabotage.ps1` sources it for the native-command
+      # wrappers every sweep runs through, so a change that breaks the helper
+      # breaks the sweep. That is a DEPENDENCY, and no glob over names can
+      # express one; the glob fixed "somebody added a script", not this.
+      - 'tools/common.ps1'
+      # The toolchain the sweep compiles with. Changing the pin changes what
+      # every sweep builds, so it belongs here for the same reason the lockfile
+      # does.
+      - 'rust-toolchain.toml'
+      # A sweep builds the crates, so the workspace manifest and lockfile change
+      # what it compiles even when no crate source moves.
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sabotage-sweep.yml'
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: 'One manifest path, or blank for every manifest'
+        required: false
+        default: ''
+      name:
+        description: 'Wildcard over sabotage names, for re-running one entry'
+        required: false
+        default: '*'
+
+permissions:
+  contents: read
+
+# One sweep of `main` at a time. Later merges supersede earlier ones rather than
+# queueing behind them, because what matters is that the tip is swept.
+concurrency:
+  # Push runs group by ref, so a later merge supersedes an earlier one: what
+  # matters is that the tip is swept.
+  #
+  # A DISPATCH must not join that group. It carries the same `github.ref` as the
+  # push runs on `main`, so manually dispatching even a one-manifest diagnostic
+  # would cancel the post-merge sweep for the latest merge -- and the next merge
+  # would cancel the diagnostic right back. `github.run_id` is unique per run,
+  # so each dispatch becomes its own group and neither can cancel the other.
+  group: sabotage-sweep-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The matrix is DERIVED from the manifests, not listed here. A list stores two
+  # facts the repository already owns -- which crates have a manifest, and how
+  # many entries each has -- and both drift silently. Both already did: within
+  # the branch that added this workflow, one manifest grew and left four stale
+  # numbers behind, including a worked shard table describing no real split.
+  #
+  # This job also resolves the `manifest` dispatch input. Selecting jobs for a
+  # named manifest used to be an `endsWith` test on each matrix entry, so a typo
+  # matched NOTHING: every sweep step skipped, every job green, nothing swept --
+  # a result indistinguishable from a clean run. The planner fails loudly on an
+  # unknown name instead, once, before any sweep starts.
+  plan:
+    name: plan the shard matrix
+    runs-on: windows-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
+      # `${{ }}` interpolation into the script body. An expression substituted
+      # into `run:` is spliced in as source before PowerShell parses it, so a
+      # value carrying a quote and a statement separator runs as a command on
+      # the runner. Read back as `${env:...}` it can only ever be data.
+      - id: plan
+        shell: pwsh
+        env:
+          SWEEP_MANIFEST: ${{ inputs.manifest }}
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -GitHubOutput "${env:GITHUB_OUTPUT}"
+
+  sweep:
+    name: sweep ${{ matrix.crate }} ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: plan
+    runs-on: windows-latest
+    # Sharded by crate AND within each crate, so the wall clock is the longest
+    # *shard* rather than the longest manifest. Sharding by crate alone leaves
+    # one worker sweeping a whole large manifest while the rest sit idle.
+    #
+    # Shard counts come from each manifest's entry count (see the planner), which
+    # is possible because the harness's split is even at any shard count: it
+    # orders entries by file and cuts that order into equal contiguous blocks, so
+    # shard sizes differ by at most one AND each shard still runs long same-file
+    # runs. `tools/test-run-sabotage.ps1` asserts both properties.
+    #
+    # The same-file runs are INTENDED to keep the build cache warm, and that is
+    # an argument from how cargo rebuilds rather than a measured result -- the
+    # one comparison taken so far ran against it and was confounded. See the
+    # -ShardCount help in `tools/run-sabotage.ps1`. The evenness half is not in
+    # doubt; the cache half is why this split is no worse than the alternatives,
+    # not a claim that it is faster.
+    #
+    # There is no manifest-shaped floor to respect -- an earlier revision of the
+    # harness refused to split a file, so a manifest whose entries cluster in
+    # one source file could not go below that cluster's size on a single worker
+    # whatever the shard count. An over-provisioned shard is not an error: the
+    # harness treats an empty shard as a success and exits before the baseline,
+    # so it costs nothing but a checkout.
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # Generous against the measured cost, because the failure this bound is for
+    # is a sweep that hangs rather than one that is merely large. The harness
+    # applies its own per-entry bound inside this one.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # The repository's pinned toolchain, not the floating stable the lint jobs
+      # force: a sweep is asking whether *this* crate's suite notices a defect,
+      # so it must build the crate the way the crate is specified to build.
+      # `@stable` installs a toolchain; `rust-toolchain.toml` then decides which
+      # one cargo actually runs, because rustup resolves that directory override
+      # ahead of the installed default. The version is therefore DERIVED here
+      # rather than copied -- an earlier revision pinned `@1.98.0` inline, which
+      # is a second home for a fact the workspace already owns, and the comment
+      # beside it claimed to use "the repository's pinned toolchain" while in
+      # fact restating it. This is the pattern every other workflow here uses.
+      #
+      # Deliberately NOT setting `RUSTUP_TOOLCHAIN`: the lint jobs set it to
+      # `stable` and that is exactly what overrides the directory pin. A sweep
+      # asks whether *this* crate's suite notices a defect, so it must build the
+      # crate the way the crate is specified to build.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `run-sabotage.ps1` forces every cargo invocation into
+          # `.scratch/sabotage/target` with an absolute `--target-dir`, so the
+          # action has to be TOLD that. Its default of `. -> target` caches a
+          # directory the sweep never writes: every shard would start from a
+          # cold build while the per-shard key below made it look cached, which
+          # is the failure that hides rather than fails.
+          workspaces: '. -> .scratch/sabotage/target'
+          # Every shard is a separate job building a different slice, so they
+          # must not share a key.
+          key: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+      # Unconditional. A dispatch that named one manifest has already been
+      # resolved by `plan`, which emitted jobs for that manifest alone, so there
+      # is nothing left for a step-level `if` to decide. The pair of conditional
+      # steps this replaces could BOTH evaluate false -- on any manifest name
+      # the `endsWith` test did not match -- and a job whose every step is
+      # skipped is a job that succeeds, so the run went green having swept
+      # nothing.
+      - name: Sweep ${{ matrix.crate }}
+        shell: pwsh
+        env:
+          # Same rule as the planner step above. `inputs.name` is the value an
+          # attacker chooses, and the matrix values travel the same way rather
+          # than asking a reader to work out which of them is safe to splice.
+          SWEEP_CRATE: ${{ matrix.crate }}
+          SWEEP_SHARD: ${{ matrix.shard }}
+          SWEEP_SHARDS: ${{ matrix.shards }}
+          SWEEP_NAME: ${{ inputs.name || '*' }}
+        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}"
+      # The transcripts are the whole diagnostic value of a failed sweep: they
+      # name which entry survived and carry the suite output that let it.
+      - name: Upload transcripts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+          # The working copy and its target directory live here too and are far
+          # too large to upload; only the transcripts are wanted. They are
+          # `<name>.txt` plus `.build`, `.err` and `.build.err` siblings, so the
+          # glob has to be `*.txt*` -- `*.log` matches none of them, which is how
+          # an artifact step silently uploads nothing.
+          path: .scratch/sabotage/*.txt*
+          if-no-files-found: ignore
+          retention-days: 14

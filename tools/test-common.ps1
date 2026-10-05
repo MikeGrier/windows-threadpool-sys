@@ -247,6 +247,90 @@ Test-Case 'the flip does not escape when the command throws' {
     Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after a throw'
 }
 
+# --- Read-SharedText: a file another handle still has open for writing --------
+#
+# Deterministic stand-in for the race CI hit: a redirect file is briefly still
+# open for writing after its process exits. Holding a write handle open here
+# makes that window permanent, so both directions are asserted on every run --
+# the control proves the condition is real (ReadAllText refuses it), and the
+# helper must read through it anyway.
+
+Test-Case 'ReadAllText refuses a file still open for writing (the control)' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "rst-control-$PID.txt"
+    $writer = New-Object IO.FileStream($path, 'Create', 'Write', 'ReadWrite')
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes('held')
+        $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+        $threw = $false
+        try { $null = [IO.File]::ReadAllText($path) } catch { $threw = $true }
+        if (-not $threw) { throw 'ReadAllText read a write-held file, so this case no longer reproduces the race' }
+    }
+    finally { $writer.Dispose(); Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'Read-SharedText reads a file still open for writing' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "rst-shared-$PID.txt"
+    $writer = New-Object IO.FileStream($path, 'Create', 'Write', 'ReadWrite')
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes("error: GUARD FIRED`n")
+        $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+        Assert-Equal "error: GUARD FIRED`n" (Read-SharedText -Path $path) 'text read through a held write handle'
+    }
+    finally { $writer.Dispose(); Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'Read-SharedText still throws for a file that does not exist' {
+    $threw = $false
+    try { $null = Read-SharedText -Path (Join-Path ([IO.Path]::GetTempPath()) "rst-absent-$PID-none.txt") } catch { $threw = $true }
+    if (-not $threw) { throw 'a missing file must not read as empty text' }
+}
+
+# --- Process-start failures --------------------------------------------------
+#
+# The decoder, the formatter and the text detector are what the CI retry
+# wrapper and every exit-code report rely on, so each is tested both ways: a
+# start failure is named, and nothing else is.
+
+Test-Case 'a process-start code is named in either signed or unsigned form' {
+    Assert-Equal '0xC0000142 STATUS_DLL_INIT_FAILED' (Get-ProcessStartFailure -1073741502) 'signed, as $LASTEXITCODE holds it'
+    Assert-Equal '0xC0000142 STATUS_DLL_INIT_FAILED' (Get-ProcessStartFailure 3221225794) 'unsigned'
+    Assert-Equal '0xC0000135 STATUS_DLL_NOT_FOUND' (Get-ProcessStartFailure -1073741515) 'another table entry'
+}
+
+Test-Case 'ordinary exit codes, non-numbers and null are not process-start failures' {
+    foreach ($code in @(0, 1, 2, 101, -1, 'abc', '')) {
+        if (Get-ProcessStartFailure $code) { throw "'$code' was named a process-start failure" }
+    }
+    if (Get-ProcessStartFailure $null) { throw 'null was named a process-start failure' }
+}
+
+Test-Case 'Format-ExitCode marks a start failure and leaves other codes bare' {
+    $named = Format-ExitCode -1073741502
+    if ($named -notmatch 'PROCESS-START FAILURE 0xC0000142 STATUS_DLL_INIT_FAILED') { throw "not marked: $named" }
+    Assert-Equal '101' (Format-ExitCode 101) 'an ordinary code'
+}
+
+Test-Case 'the text detector finds the marker and raw codes, and nothing else' {
+    # Every form Get-ProcessStartFailure accepts: signed decimal (as
+    # $LASTEXITCODE holds it), unsigned decimal, and hex. PR #113 review found
+    # the unsigned decimal form missing.
+    foreach ($text in @((Format-ExitCode -1073741502), 'got [-1073741502]', 'got [3221225794]',
+            'exit 0xc0000142', 'code 0xC0000135')) {
+        if (-not (Test-ProcessStartFailureText $text)) { throw "missed: $text" }
+    }
+    # The last two are what the digit boundaries exist for: a longer negative
+    # number that STARTS with the code, and the code glued to a preceding digit.
+    foreach ($text in @('got [101]', 'took 10737415029 ns', 'id 11073741502', '', $null,
+            'offset -10737415029', 'range 9-1073741502', 'size 32212257945', 'id 13221225794')) {
+        if (Test-ProcessStartFailureText $text) { throw "false alarm: $text" }
+    }
+}
+
+Test-Case 'the host pressure report produces lines rather than throwing' {
+    $lines = @(Get-HostPressureReport)
+    if ($lines.Count -lt 2) { throw "expected several lines, got $($lines.Count)" }
+}
+
 if (-not $SingleHost) {
     # The other host, which is the claim this file exists to make.
     $isSeven = $PSVersionTable.PSVersion.Major -ge 6

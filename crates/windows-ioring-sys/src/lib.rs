@@ -3,9 +3,13 @@
 //!
 //! Windows 11 and Server 2022 added `IoRing`, a submission/completion ring for
 //! file I/O closer in shape to `io_uring` than to anything else Windows offers.
-//! This crate raises those primitives into safe Rust with the minimum additional
-//! CPU and memory cost: a completion hands the caller's buffer back without the
-//! crate having allocated anything to track it.
+//! This crate raises those primitives into safe Rust. The ring holds each
+//! in-flight operation's buffer on the caller's behalf and hands it back at the
+//! pop that observes its completion, so no buffer the kernel may still be using
+//! is reachable from safe code. The tracking that makes this possible has a
+//! cost, which may allocate: an entry in a hash set for every operation in
+//! flight, and for an owned push an entry in a hash map holding its payload
+//! ([D-78](../DESIGN-NOTES.md#d-78)).
 //!
 //! # Scope: a file data plane, not a general completion backend
 //!
@@ -83,7 +87,7 @@
 //!
 //! Three facts, all measured rather than documented by Win32, and all of them
 //! things a consumer gets wrong by default. They are stated in full on
-//! [`Batch::flush`], [`FlushCoverage`], [`WriteCaching`] and [`FlushMode`];
+//! [`Batch::flush_owned`], [`FlushCoverage`], [`WriteCaching`] and [`FlushMode`];
 //! this is the summary that stops a reader from never looking.
 //!
 //! 1. **There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is
@@ -98,7 +102,7 @@
 //! 3. **A flush without the barrier covers nothing.** An unflagged flush is an
 //!    ordinary operation competing with the writes before it, and it
 //!    frequently wins, so its completion proves nothing about them. This is
-//!    why [`Batch::flush`] requires a [`FlushCoverage`] instead of defaulting:
+//!    why [`Batch::flush_owned`] requires a [`FlushCoverage`] instead of defaulting:
 //!    the obvious spelling was a silent data-loss bug, invisible until power
 //!    is lost.
 //!
@@ -183,8 +187,6 @@ mod numa_buffer_io;
 // only way to validate whether one type fits the twelve hand-rolled shapes.
 // Whether it stays public is the decision M23.3 has not yet taken.
 #[cfg(windows)]
-mod pending;
-#[cfg(windows)]
 mod ring;
 /// The seam the kernel-response resolver sits under (M26.2).
 ///
@@ -212,12 +214,6 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
-// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
-// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
-// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
-// `numa_buffer_io`, which explains there why they are separated from the type.
-#[cfg(windows)]
-pub use pending::Pending;
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real
@@ -225,8 +221,15 @@ pub use pending::Pending;
 #[cfg(all(windows, any(test, feature = "fault-injection")))]
 pub use ring::InjectedFailure;
 #[cfg(windows)]
-pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
-pub use token::Token;
+pub use ring::{
+    Completion, CompletionWait, HeldCompletion, IoRing, Op, RingInfo, RingWait, SubmitWait,
+};
+#[cfg(windows)]
+pub use token::OperationId;
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
+// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
+// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
+// `numa_buffer_io`, which explains there why they are separated from the type.
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
 

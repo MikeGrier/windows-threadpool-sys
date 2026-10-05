@@ -32,14 +32,20 @@ use std::os::windows::io::AsRawHandle;
 use windows_ioring_sys::sys::{Resolver, ResolverConfig};
 use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, SharedFile};
 
+/// The ring these tests drive.
+///
+/// Every operation here is a flush, which carries no buffer -- so the entry
+/// exists only to hold the file guard the token used to carry (`D-73`), and
+/// `held.is_some()` is the identity check `claim_if` used to make.
+type ResolverRing = IoRing;
+
 /// A file to aim flushes at. Its contents never matter: under a resolver the
 /// operation never reaches the kernel, and the point of the handle is that the
 /// crate's own `Build*` path is exercised exactly as it would be otherwise.
-fn scratch(tag: &str) -> (SharedFile, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-m26-3-{}-{tag}.tmp",
-        std::process::id()
-    ));
+mod common;
+
+fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
+    let path = common::TempPath::new("m26-3", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -47,7 +53,7 @@ fn scratch(tag: &str) -> (SharedFile, std::path::PathBuf) {
         .open(&path)
         .expect("a scratch file");
     assert!(!file.as_raw_handle().is_null());
-    (SharedFile::new(file.into()), path)
+    (path, SharedFile::new(file.into()))
 }
 
 #[test]
@@ -63,17 +69,16 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
         // Created *inside* the scope, so the ring's rundown is answered by the
         // resolver that owns its operations. Outside it, rundown would ask a
         // real ring to wait for completions the kernel has no record of.
-        let mut ring = IoRing::new(64, 128).expect("a ring");
-        let (file, path) = scratch("reachable");
+        let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        let (path, file) = scratch("reachable");
 
-        let token = {
+        {
             let mut batch = Batch::new(&mut ring);
-            let token = batch
-                .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+            batch
+                .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                 .expect("a flush builds");
             batch.submit().expect("the submit is answered");
-            token
-        };
+        }
 
         assert_eq!(
             ring.outstanding(),
@@ -81,12 +86,12 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
             "the crate's accounting counts the operation whether the kernel saw it or not"
         );
 
-        let completion = ring
+        let (_completion, held) = ring
             .pop_within(std::time::Duration::from_secs(5))
             .expect("the pop is answered")
             .expect("a completion arrives within the bound");
         assert!(
-            token.claim_if(&completion).is_ok(),
+            held.is_some(),
             "RS-C-2: the completion must identify the operation that produced it"
         );
         assert_eq!(
@@ -153,17 +158,14 @@ fn a_ring_runs_down_under_the_widest_resolution() {
         );
         let replay = resolver.replay_hint();
         let path = resolver.scoped(|watch| {
-            let mut ring = IoRing::new(64, 128).expect("a ring");
-            let (file, path) = scratch("rundown");
+            let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+            let (path, file) = scratch("rundown");
 
-            let mut tokens = Vec::new();
             let mut batch = Batch::new(&mut ring);
             for _ in 0..6 {
-                tokens.push(
-                    batch
-                        .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
-                        .expect("a flush builds"),
-                );
+                batch
+                    .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
+                    .expect("a flush builds");
             }
             batch.submit().expect("the submit is answered");
 
@@ -209,13 +211,13 @@ fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
     let resolver = Resolver::new(0x1A);
     let replay = resolver.replay_hint();
     let (path, refusals, finished) = resolver.scoped(|_| {
-        let mut ring = IoRing::new(64, 128).expect("a ring");
-        let (file, path) = scratch("declined");
+        let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        let (path, file) = scratch("declined");
 
         let mut batch = Batch::new(&mut ring);
         for _ in 0..6 {
             let _token = batch
-                .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                 .expect("a flush builds");
         }
         let _ = batch.submit();
@@ -278,14 +280,14 @@ fn an_expired_wait_is_a_successful_submit() {
         );
         let replay = resolver.replay_hint();
         let path = resolver.scoped(|watch| {
-            let mut ring = IoRing::new(64, 128).expect("a ring");
-            let (file, path) = scratch("expired-submit");
+            let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+            let (path, file) = scratch("expired-submit");
 
             let outcome = {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..4 {
                     let _token = batch
-                        .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                        .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                         .expect("a flush builds");
                 }
                 // Ask to wait, which is what lets RS-P-4 apply.
@@ -333,13 +335,13 @@ fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
     );
     let replay = resolver.replay_hint();
     let path = resolver.scoped(|_| {
-        let mut ring = IoRing::new(64, 128).expect("a ring");
-        let (file, path) = scratch("bounded-rundown");
+        let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        let (path, file) = scratch("bounded-rundown");
         {
             let mut batch = Batch::new(&mut ring);
             for _ in 0..4 {
                 let _token = batch
-                    .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                    .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                     .expect("a flush builds");
             }
             batch.submit().expect("the submit is answered");
@@ -407,17 +409,16 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
     let replay = resolver.replay_hint();
 
     let path = resolver.scoped(|_| {
-        let mut ring = IoRing::new(64, 128).expect("a ring");
-        let (file, path) = scratch("pending");
+        let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        let (path, file) = scratch("pending");
 
-        let token = {
+        {
             let mut batch = Batch::new(&mut ring);
-            let token = batch
-                .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+            batch
+                .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                 .expect("a flush builds");
             batch.submit().expect("the submit is answered");
-            token
-        };
+        }
 
         // The frozen-observation spelling. Under a resolution that pends, the
         // completion is not there yet -- so a test written this way would have
@@ -435,12 +436,12 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
 
         // The restated spelling: this crate's own contract, which holds under
         // every resolution rather than on one kind of handle.
-        let completion = ring
+        let (_completion, held) = ring
             .pop_within(std::time::Duration::from_secs(5))
             .expect("pop_within")
             .expect("a completion arrives within the bound");
         assert!(
-            token.claim_if(&completion).is_ok(),
+            held.is_some(),
             "{replay}: the completion identifies its operation"
         );
 
@@ -458,8 +459,8 @@ fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
     // that leaked past its guard would divert every ring in the process, and
     // the failure would look like a flaky kernel rather than like a harness
     // defect.
-    let (file, path) = scratch("uninstalled");
-    let mut ring = IoRing::new(64, 128).expect("a ring");
+    let (path, file) = scratch("uninstalled");
+    let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
 
     {
         let resolver = Resolver::with_config(1, ResolverConfig::narrowest());
@@ -468,15 +469,15 @@ fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
         assert_eq!(watch.stats().built, 0, "the scope did nothing of its own");
 
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+        batch
+            .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
             .expect("a flush builds");
         batch.submit().expect("the kernel accepts the submit");
-        let completion = ring
+        let (_completion, held) = ring
             .pop_within(std::time::Duration::from_secs(5))
             .expect("the kernel answers")
             .expect("a real completion arrives");
-        assert!(token.claim_if(&completion).is_ok());
+        assert!(held.is_some());
         assert_eq!(
             watch.stats().built,
             0,

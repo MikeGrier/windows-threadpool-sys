@@ -2772,6 +2772,61 @@ sweep can tell you the tests are sensitive but not that they are sensitive to th
 control reported as caught means a test has begun asserting the implementation rather than the
 contract, and that test is the thing to fix.
 
+## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
+
+**Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI
+enforces both the pin and the code.** An unpinned `compile_fail` example passes on *any* compile error,
+so one that breaks for the wrong reason reports green while testing nothing. That is not hypothetical:
+windows-ioring-sys guarded "a borrow held across a push is refused" with an example calling a method
+its `M28` had removed, and it went on passing -- for "no such method" -- until a PR #113 review pass
+found the stale name.
+
+**The pin alone is not enough, and the reason is a property of rustdoc, not of this workspace:** rustdoc
+checks a pinned code only when it believes it is running on a nightly toolchain. On stable the pin is
+ignored. Measured on the pinned 1.98.0 toolchain: re-injecting the stale call passes, and fails under
+`RUSTC_BOOTSTRAP=1`. So:
+
+- [check-compile-fail-codes.ps1](tools/check-compile-fail-codes.ps1) refuses a fence that pins no code,
+  in a doc comment, a `doc = "..."` attribute, or markdown. Its own suite,
+  [test-check-compile-fail-codes.ps1](tools/test-check-compile-fail-codes.ps1), checks every spelling
+  in both directions; it found that a one-line `cfg_attr` bypassed the first version of the pattern.
+- The `doctest-error-codes` job in [ci.yml](.github/workflows/ci.yml) runs the doctests with
+  `RUSTC_BOOTSTRAP=1`, in each configuration that contains a fence -- all features, default features,
+  and windows-threadpool-sys without `self-heal`.
+- [check-compile-fail-doctests.ps1](tools/check-compile-fail-doctests.ps1) checks the first script
+  against rustdoc, in that same job.
+
+**The scanner is a proxy for rustdoc's parser, and is checked against it.** Four PR #113 review rounds
+each found a spelling the scanner missed (container-nested fences, tilde fences, block doc comments,
+raw-string doc attributes), each an unpinned doctest CI would have passed. Fixing them one at a time
+cannot close the class. A doctest run already names every `compile_fail` doctest it runs, as
+`... (line N) - compile fail`, whatever spelling produced it. So the second check takes that set from
+the job's three runs, reads each doctest's fence from source at or after line N, and fails when the
+fence is unpinned, when the scanner does not recognise it, or when no fence can be read at all -- a doc
+assembled by `concat!` or a macro. "Recognised" and "pinned" are the scanner's own answers, asked
+through its `-ListFences` mode, so they are defined once. Line N is the fence line for `///` and
+markdown, but the attribute's first line for a `doc = "..."` attribute; both measured. Verified on the
+real tree: rewriting windows-threadpool-sys's attribute fence as `doc = concat!("```compile_fail,E0599")`
+still runs as a `compile_fail` doctest, the scanner reports every fence pinned, and this check names
+the blind spot.
+
+The scanner stays, as the check a developer can run without building anything. Whether it should
+remain once the rustdoc check has a record is a later decision, not one this records.
+
+How the rule was reached -- the finding behind it, the measurements, the options weighed and what is
+declared rather than fixed -- is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-compile-fail-pinning-was-reached).
+
+**To find a code**, pin a placeholder such as `E9999` and run the doctests with `RUSTC_BOOTSTRAP=1`:
+rustdoc reports the code the compiler actually raised, and the message says whether the example fails
+for the reason it was written for. Read the message before pinning the code; the code alone cannot tell
+you.
+
+**One gap remains, and is declared rather than hidden.** The sabotage harness runs the suite without
+`RUSTC_BOOTSTRAP`, so a sabotage that makes a `compile_fail` example fail for the wrong reason survives
+a sweep. windows-ioring-sys records that as a `DECLARED BLIND SPOT` entry; this job is where the defect
+is caught instead.
+
 ## <a id="remoting-synchronous-namespace-operations"></a>Remoting synchronous namespace operations: the measured platform
 
 A planned facility makes synchronous-only Win32 operations available

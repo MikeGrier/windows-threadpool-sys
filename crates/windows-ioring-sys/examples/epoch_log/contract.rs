@@ -10,7 +10,7 @@
 //! file does not change to match it.
 //!
 //! The mechanisms chosen, recorded so the dependency is traceable but never
-//! authoritative: a covering flush (`Batch::flush` with
+//! authoritative: a covering flush (`Batch::flush_owned` with
 //! `FlushCoverage::CoversPrecedingOperations` and a syncing `FlushMode`) is
 //! what makes an epoch commit real, and the ring's completion event is how
 //! this program learns the commit finished. They were picked because they meet
@@ -170,7 +170,7 @@
 //! `FlushCoverage::CoversPrecedingOperations` is a flag on the **ring**: a
 //! drained flush does not execute until every operation outstanding when it was
 //! reached has *completed* (D-47, measured over roughly 4,500 trials).
-//! `Batch::flush` names a **file**: what a syncing mode pushes to stable media
+//! `Batch::flush_owned` names a **file**: what a syncing mode pushes to stable media
 //! is that file's data and the device cache behind it. Completion is not
 //! durability -- this contract says so above, about a record's own write -- so
 //! the barrier bounds what a commit **waits for**, and the flush bounds what it

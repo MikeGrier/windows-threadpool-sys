@@ -510,7 +510,7 @@ impl<T> Producer<T> {
     /// be moved to another thread, because it borrows a producer that is not
     /// [`Sync`], so `&Producer` is not [`Send`]:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0277
     /// # use windows_waitable_queues::spsc;
     /// let (tx, _rx) = spsc::bounded::<u32>(4).unwrap();
     /// let slot = tx.reserve().expect("room");

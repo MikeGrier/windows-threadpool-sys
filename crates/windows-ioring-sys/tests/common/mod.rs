@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Mike Grier
+//! Shared test helpers.
+//!
+//! Not a test target: `cargo` compiles only the top-level `.rs` files in
+//! `tests/` as integration tests, so a module in a subdirectory is included by
+//! the files that declare `mod common;` rather than run on its own.
+
+#![allow(dead_code, reason = "each test target includes only the parts it uses")]
+
+use std::path::{Path, PathBuf};
+
+/// A path under the system temp directory that removes itself when dropped.
+///
+/// Exists because the explicit `remove_file` at the end of a test body does
+/// **not** run when the test panics, and a panicking test is exactly the case
+/// that was leaking: the `M26.13` stall investigation ran a reproducer whose
+/// failing arm panics, and filled the temp directory doing it. Even an
+/// all-passing run of this crate's suite left files behind, because several
+/// paths had no removal at all.
+///
+/// The counts live in the committed capture rather than here -- see
+/// [the measurement record](../../measurements/2026-10-01-the-tests-stop-leaking-temp-files/README.md)
+/// and the `arms.csv` beside it. A measured figure transcribed into a doc
+/// comment is a second copy that drifts from the capture with nothing to
+/// notice, which is the whole reason the capture is committed.
+///
+/// # Deleting a file whose handle is still open depends on how it was opened
+///
+/// Two kinds of open are in use here, and they behave oppositely.
+///
+/// - **`std::fs::OpenOptions`** shares delete by default on Windows -- its
+///   default share mode includes `FILE_SHARE_DELETE` -- so removing the file
+///   while such a handle is open succeeds. Fixtures such as
+///   `completion_event::fixture` and `handover::fixture` rely on exactly that:
+///   their guard drops before they return the still-open `File`. Drop order is
+///   not what makes their cleanup work.
+/// - **Direct `CreateFileW` calls** on a temp file -- the unbuffered,
+///   overlapped handles in `flush_barrier`, `flush_barrier_stress` and
+///   `handover` -- pass `FILE_SHARE_READ | FILE_SHARE_WRITE` and no
+///   `FILE_SHARE_DELETE`, so a removal attempted while one is open fails.
+///   (`bounded_pop` calls `CreateFileW` too, but on a named pipe, with no temp
+///   file to remove.) For these, ordering matters:
+///   struct fields and locals drop *after* the enclosing `Drop` body, and locals
+///   drop in reverse declaration order, so a guard declared **before** the
+///   handle it shadows is removed after that handle closes.
+///
+/// A change to how a fixture opens its file can therefore move it from one
+/// group to the other, and with it the mechanism its cleanup depends on.
+///
+/// That ordering is why an explicit `remove_file` placed after the test closes
+/// its own handle is kept where it already exists rather than deleted as
+/// redundant: it runs at a point the test controls, and this guard is the net
+/// underneath it for the panicking path. A removal that finds nothing is not an
+/// error here, so the two compose.
+///
+/// The hazard is not hypothetical -- see the `Fixture` in
+/// [flush_barrier_stress.rs](../flush_barrier_stress.rs), where holding the
+/// handle directly meant every trial silently leaked a 32 MiB extent.
+pub struct TempPath {
+    path: PathBuf,
+}
+
+impl TempPath {
+    /// A path named for `tag`, unique to this process.
+    ///
+    /// The process id is part of the name because the reproducer runs the same
+    /// test in thousands of fresh processes, and a shared name would have them
+    /// racing for one file.
+    pub fn new(prefix: &str, tag: &str) -> Self {
+        Self {
+            path: std::env::temp_dir().join(format!(
+                "windows-ioring-sys-{prefix}-{tag}-{}.tmp",
+                std::process::id()
+            )),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl std::ops::Deref for TempPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempPath {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl std::fmt::Debug for TempPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.path.fmt(f)
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            // The test removed it already, or never created it. Both are
+            // ordinary, and neither is worth a line of output.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // Reported rather than discarded. A silent `let _ =` is what let
+            // the 32 MiB-per-trial leak in flush_barrier_stress.rs run for a
+            // whole session unnoticed; a warning during teardown costs nothing.
+            Err(error) => eprintln!(
+                "warning: could not remove the temp file {}: {error}",
+                self.path.display()
+            ),
+        }
+    }
+}

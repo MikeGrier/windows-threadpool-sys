@@ -29,6 +29,15 @@
     greps for that string will report a hole in the tests where there is none,
     and the hours then spent looking for it are pure loss.
 
+    Three exceptions read output, each because an exit code cannot carry the
+    distinction. Two only ever WITHHOLD credit: a doctest that would not
+    compile, and a test binary cargo never executed (an antivirus refusal, say)
+    both exit 101 exactly like a real catch. The third GRANTS it, narrowly: an
+    entry declared `refused-by-build` names the compile error its guard raises
+    in `buildError`, and only a build failure carrying that literal text counts.
+    Any other build failure is still a malformed patch -- the exit code alone
+    cannot tell a guard firing from a typo, and the named message can.
+
     A TIMEOUT COUNTS AS CAUGHT. A missing wakeup does not fail a test, it hangs
     it -- so a harness with no timeout hangs too, and a lost-wakeup defect that
     hangs the suite has been detected exactly as intended.
@@ -131,6 +140,66 @@
     transcripts are cleared at startup; the `tree/` and `target/` subdirectories
     persist between runs so builds stay warm.
 
+.PARAMETER Shard
+    Which shard this invocation runs, from 0. Requires -ShardCount.
+
+.PARAMETER ShardCount
+    How many shards the manifest is divided into, defaulting to 1 (no
+    sharding). A sweep's cost is one rebuild and one full suite run PER ENTRY,
+    so it scales with the manifest rather than with the change under review, and
+    the large manifests are tens of minutes. No amount of care inside one
+    process makes that shorter. Sharding is the only lever: each shard is an
+    independent process, so N workers take roughly 1/N of the wall clock.
+
+    No entry count appears here. An earlier draft of this very paragraph quoted
+    one while the text below told the reader not to duplicate counts, and it was
+    stale within the same branch. The manifests say how many entries they have.
+
+    Entries are ordered BY FILE and that order is then cut into equal
+    contiguous blocks, one per shard. The two things being asked for look
+    opposed and are not.
+
+    Adjacency is MEANT to buy the build cache, by this argument: each entry
+    patches a file, runs the suite, and restores it, so two consecutive entries
+    in the SAME file dirty one compilation unit per iteration -- the restore and
+    the next patch land on the same file -- while two in DIFFERENT files dirty
+    two. It should matter most where a manifest clusters, and they do cluster;
+    over half of `windows-threadpool-sys`' entries sit in a single file. Ask the
+    manifests for the current shape rather than trusting a count written here.
+
+    That argument is structural and is NOT confirmed by measurement. The one
+    comparison taken so far -- `windows-threadpool-sys` cut in two, shard 0
+    entirely one file and shard 1 spread over the rest -- came out 79.4s per
+    entry on the clumped shard against 69.6s on the mixed one, which is the
+    wrong direction for the hypothesis. That does not refute it: the two shards
+    patch DIFFERENT files, so the comparison is confounded by how expensive each
+    file is to rebuild, and the clumped shard's file is a core module. Isolating
+    the effect needs ONE entry set run in two ORDERS, which has not been done.
+    Until it is, treat adjacency as a reason this split is no worse than the
+    alternatives, not as a measured win.
+
+    Equal blocks are what stop a hot file pinning one shard, and that half is
+    not in doubt. The two goals coexist because splitting a file across a block
+    boundary leaves each PIECE contiguous: a shard holding seven consecutive
+    entries from one file gets seven same-file rebuilds in a row whoever holds
+    the rest.
+
+    An earlier revision dealt whole files to the lightest shard and refused to
+    split any of them. That is where the floor came from -- a manifest's biggest
+    file took an entire shard to itself however many shards were asked for, so
+    the extra workers bought nothing -- and it was the reason to think a static
+    plan could not be fair. It can.
+
+    Sizes differ by at most one, so a shard count can be chosen for the machines
+    available rather than for the shape of the manifest. `test-run-sabotage.ps1`
+    asserts that evenness and the file-contiguity across a range of shard
+    counts. No worked split is reproduced here: the table that used to be went
+    stale the first time a manifest grew.
+
+    An empty shard is a SUCCESS, not an error: a manifest with one entry and
+    four shards leaves three with nothing to do, and that is the normal state
+    of a fixed matrix over manifests of different sizes.
+
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
@@ -165,7 +234,11 @@ param(
 
     [switch] $List,
 
-    [string] $CargoCommand = 'cargo'
+    [string] $CargoCommand = 'cargo',
+
+    [int] $Shard = 0,
+
+    [int] $ShardCount = 1
 )
 
 Set-StrictMode -Version Latest
@@ -233,6 +306,16 @@ function Get-RepoRoot {
     # PARSED -- it becomes the repository root. Git can warn on stderr while
     # succeeding, and merging would splice that warning into the path.
     $root = Invoke-NativeStdout { git rev-parse --show-toplevel }
+    # A git that never started answered nothing, so "not a repository" would
+    # be a wrong diagnosis -- exactly what one CI run printed when the runner
+    # refused to start it (see Get-ProcessStartFailure in common.ps1).
+    $notStarted = Get-ProcessStartFailure $LASTEXITCODE
+    if ($notStarted) {
+        Exit-WithMessage (@(
+                "git could not be started: $(Format-ExitCode $LASTEXITCODE)."
+                "This says nothing about the working tree. Host state at the failure:"
+            ) + (Get-HostPressureReport) -join "`n") 2
+    }
     if ($LASTEXITCODE -ne 0) {
         # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
         # here is a terminating error that prints a stack trace and propagates
@@ -327,6 +410,10 @@ function Invoke-Bounded {
         # three sibling scripts in this directory are 5.1-clean; this one stays
         # that way too. Raised in the PR #64 review.
         $outcome = if ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
+        # A cargo that Windows could not start ran nothing, and must not be
+        # scored as a suite that failed -- which this tool would credit as a
+        # catch. See Get-ProcessStartFailure in common.ps1.
+        if (Get-ProcessStartFailure $process.ExitCode) { $outcome = 'not-started' }
         return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode; Seconds = $elapsed }
     }
 
@@ -378,6 +465,9 @@ function Invoke-Sabotaged {
         -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
 
+    if ($build.Outcome -eq 'not-started') {
+        return [pscustomobject]@{ Outcome = 'not-started'; Code = $build.Code; Seconds = 0 }
+    }
     if ($build.Outcome -eq 'failed') {
         return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code; Seconds = 0 }
     }
@@ -403,8 +493,26 @@ function Invoke-Sabotaged {
     # the exit code is 101 either way and carries no way to tell them apart.
     # The marker is libtest's own fixed string, verified on this toolchain to
     # land on stdout (the transcript, not `.err`).
+    # A test binary cargo could not start -- Defender refusing it as "potentially
+    # unwanted software" is the case that was measured -- also exits 101, and
+    # would otherwise score as `caught` for a suite that never ran. cargo's
+    # wording is fixed: "could not execute process `...` (never executed)", on
+    # stderr. Withholds credit only; never grants it.
+    #
+    # Both transcripts here are redirect files, read just after cargo exited, so
+    # they are read through Read-SharedText like the build log (common.ps1).
+    # Select-String happens to survive that race -- measured: 0 of 120 reads
+    # threw where ReadAllText threw 29 -- but only because of a sharing mode
+    # PowerShell does not document, and the harness binds to the helper that
+    # states its sharing rather than to that. PR #113 review.
+    if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath "$TranscriptPath.err")) {
+        if ((Read-SharedText -Path "$TranscriptPath.err").Contains('(never executed)')) {
+            return [pscustomobject]@{ Outcome = 'not-executed'; Code = $run.Code; Seconds = $run.Seconds }
+        }
+    }
+
     if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
-        if (Select-String -LiteralPath $TranscriptPath -Pattern "Couldn't compile the test." -SimpleMatch -Quiet) {
+        if ((Read-SharedText -Path $TranscriptPath).Contains("Couldn't compile the test.")) {
             return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code; Seconds = $run.Seconds }
         }
     }
@@ -521,8 +629,31 @@ function Get-EvidencePath {
     switch ($Outcome) {
         'build-failed' { return "$TranscriptPath.build.err" }
         'build-hung' { return "$TranscriptPath.build.err" }
+        'not-executed' { return "$TranscriptPath.err" }
         default { return $TranscriptPath }
     }
+}
+
+# The part of a build log that is rustc speaking, not rustc quoting.
+#
+# rustc renders a diagnostic with the source line it points at, behind a line
+# number and a gutter:
+#
+#     3 |     let x: u32 = "GUARD FIRED";
+#
+# so searching the whole log credits ANY failed build whose offending line
+# merely contains the declared message -- an unrelated type error on the
+# guard's own line, say, which is exactly a patch that broke the guard rather
+# than tripped it. Those numbered excerpt lines are dropped. Headers
+# (`error[E0080]: evaluation panicked: ...`), labels and notes are kept, and
+# they are where a guard's message appears when the guard actually fires.
+# PR #113 review.
+#
+# Line filtering rather than `--message-format=json`, so that the build
+# transcript a reader opens stays the compiler's ordinary rendering.
+function Remove-EchoedSource {
+    param([string] $Text)
+    return (($Text -split "\r?\n") | Where-Object { $_ -notmatch '^\s*\d+\s*\|' }) -join "`n"
 }
 
 # A bound at or below zero gets the answer wrong in the dangerous direction.
@@ -698,14 +829,35 @@ foreach ($entry in @($spec.sabotages)) {
                 ) -join "`n") 2
         }
     }
-    if (@('caught', 'survives') -notcontains $entry.expect) {
+    if (@('caught', 'survives', 'refused-by-build') -notcontains $entry.expect) {
         # Checked because an unrecognised value is not inert: `expect` is
         # compared for equality when scoring, so anything else can never match
         # and the entry would be reported as misbehaving on every run, whatever
         # the suite actually did.
         Exit-WithMessage (@(
                 "The sabotage '$($entry.name)' declares expect = '$($entry.expect)'."
-                "It must be 'caught' or 'survives'."
+                "It must be 'caught', 'survives' or 'refused-by-build'."
+            ) -join "`n") 2
+    }
+    # `buildError` is what makes a build failure count, so it is required
+    # exactly where it is read and refused everywhere else: an entry carrying
+    # one under `caught` would have it silently ignored, which reads as a guard
+    # being checked when it is not.
+    $hasBuildError = ($entry.PSObject.Properties.Name -contains 'buildError')
+    if ($entry.expect -eq 'refused-by-build') {
+        if (-not $hasBuildError -or -not ($entry.buildError -is [string]) -or
+            [string]::IsNullOrWhiteSpace($entry.buildError)) {
+            Exit-WithMessage (@(
+                    "The sabotage '$($entry.name)' expects refused-by-build but names no buildError."
+                    "Give the literal text of the compile error its guard raises; without it"
+                    "any build failure -- a typo in the patch included -- would count."
+                ) -join "`n") 2
+        }
+    }
+    elseif ($hasBuildError) {
+        Exit-WithMessage (@(
+                "The sabotage '$($entry.name)' sets buildError but expects '$($entry.expect)'."
+                "buildError is read only for refused-by-build; anywhere else it would be ignored."
             ) -join "`n") 2
     }
 }
@@ -753,21 +905,102 @@ if ($spec.PSObject.Properties.Name -contains 'testArgs' -and $spec.testArgs) {
     $testArgs = @('test') + $supplied
 }
 
-$selected = @($spec.sabotages | Where-Object { $_.name -like $Name })
+# Validated before anything is built, like every other argument here: a sweep
+# that discovers a bad shard index after the baseline has run has wasted the
+# most expensive part of the job.
+if ($ShardCount -lt 1) {
+    Exit-WithMessage "-ShardCount must be at least 1; got $ShardCount." 2
+}
+if ($Shard -lt 0 -or $Shard -ge $ShardCount) {
+    Exit-WithMessage "-Shard must be in 0..$($ShardCount - 1) for -ShardCount $ShardCount; got $Shard." 2
+}
+
+# Two sets from here on, and the distinction is load-bearing.
+#
+# `$manifestSelected` is everything the name filter matched. The checks below --
+# stem collisions, output-directory writability -- are properties of the
+# MANIFEST, so they must see all of it: a collision between two entries that
+# land on different shards is still a defect in the manifest, and a shard that
+# validated only its own slice would pass it through.
+#
+# `$selected` is this shard's share, and is what actually gets swept.
+$manifestSelected = @($spec.sabotages | Where-Object { $_.name -like $Name })
+
+if ($manifestSelected.Count -eq 0) {
+    Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
+}
+
+# Ordered by FILE, then cut into equal contiguous blocks. NOT whole groups
+# dealt to the lightest shard -- that is the earlier revision described further
+# down, and this comment went on describing it after the code had stopped. See
+# the -ShardCount documentation for why the two goals are not opposed.
+#
+# The `@(...)` wraps the WHOLE `if`, not just the work inside it. PowerShell
+# unrolls a collection returned from a statement, so an empty shard assigned
+# through the inner form arrives as `$null` rather than an empty array, and the
+# `.Count` read below then fails with "property 'Count' cannot be found". That
+# is the empty-shard case this script documents as a success, so the defect
+# would have appeared exactly where the handling for it is.
+$selected = @(
+    if ($ShardCount -gt 1) {
+        # Order by file, then cut that order into equal contiguous blocks.
+        #
+        # The two goals look opposed and are not. Keeping a file's entries
+        # ADJACENT is what gets the build-cache reuse; keeping the blocks EQUAL
+        # is what stops a hot file pinning one shard while the others idle. A
+        # contiguous cut of a file-ordered list does both, because splitting a
+        # file across a block boundary leaves each piece still contiguous -- a
+        # shard that receives seven consecutive `heal.rs` entries gets seven
+        # same-file rebuilds in a row regardless of who has the other six.
+        #
+        # An earlier revision dealt whole files to the lightest shard and
+        # refused to split any of them. That is where the floor came from: over
+        # half of `windows-threadpool-sys`' entries sit in one file, so that
+        # file took an entire shard to itself however many shards were asked
+        # for, and the extra workers bought nothing. A contiguous cut splits it
+        # evenly instead, giving up one cache transition at each boundary.
+        #
+        # Deterministic: group size descending, file name breaking ties. An
+        # entry lands on the same shard every run, so a failing shard can be
+        # re-run by number.
+        $ordered = @($manifestSelected |
+                Group-Object -Property file |
+                Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'Name'; Descending = $false } |
+                ForEach-Object { $_.Group })
+
+        # The first `$remainder` shards take one extra, so the sizes differ by
+        # at most one and every entry is placed exactly once.
+        $block = [Math]::Floor($ordered.Count / $ShardCount)
+        $remainder = $ordered.Count % $ShardCount
+        $start = ($Shard * $block) + [Math]::Min($Shard, $remainder)
+        $take = $block + $(if ($Shard -lt $remainder) { 1 } else { 0 })
+        if ($take -gt 0) { $ordered[$start..($start + $take - 1)] }
+    }
+    else { $manifestSelected }
+)
 
 if ($List) {
     Write-Report "Manifest : $manifestPath"
     Write-Report "Package  : $package"
     Write-Report "Command  : cargo $($testArgs -join ' ')"
+    if ($ShardCount -gt 1) {
+        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($manifestSelected.Count) entries)"
+    }
     Write-Report ''
     $selected | ForEach-Object {
-        Write-Report ("{0,-10} {1}" -f $_.expect, $_.name)
+        Write-Report ("{0,-16} {1}" -f $_.expect, $_.name)
     }
     exit 0
 }
 
 if ($selected.Count -eq 0) {
-    Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
+    # Success, not failure, and taken BEFORE the baseline. A fixed CI matrix
+    # over manifests of different sizes leaves small ones with shards that have
+    # nothing to do; a red job there would be noise that trains people to
+    # ignore the workflow. Exiting here rather than after the baseline also
+    # saves each empty shard a full cold build of a crate it will not touch.
+    Write-Report "Shard $Shard of ${ShardCount} has no entries in $manifestPath; nothing to sweep." -Level good
+    exit 0
 }
 
 # Transcript and backup file names are derived from the sabotage's name, and
@@ -793,7 +1026,7 @@ $stemOwners = @{}
 # `baseline` are one file here.
 $reservedStems = @('baseline')
 
-foreach ($sabotage in $selected) {
+foreach ($sabotage in $manifestSelected) {
     $stem = $sabotage.name -replace '[^A-Za-z0-9]+', '-'
     if ($reservedStems -contains $stem.ToLowerInvariant()) {
         Exit-WithMessage (@(
@@ -949,6 +1182,12 @@ $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
 $baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
     -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $BuildTimeoutSeconds
 
+if ($baseline.Outcome -eq 'not-started') {
+    Exit-WithMessage (@(
+            "The baseline could not run: cargo could not be started, exit $(Format-ExitCode $baseline.Code)."
+            "That is the host, not the suite. Host state at the failure:"
+        ) + (Get-HostPressureReport) -join "`n") 2
+}
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
             "The baseline suite did not pass ($($baseline.Outcome))."
@@ -990,12 +1229,27 @@ else {
     $timeoutSource = "${TimeoutMultiplier}x the ${baselineSeconds}s baseline, floor ${TimeoutFloorSeconds}s"
 }
 Write-Report "Baseline is green in ${baselineSeconds}s. Hang bound: ${defaultTimeout}s ($timeoutSource)." -Level note
-Write-Report 'Sweeping.' -Level note
+
+if ($ShardCount -gt 1) {
+    Write-Report "Shard $Shard of ${ShardCount}: $($selected.Count) of $($manifestSelected.Count) entries." -Level note
+}
+
+$sweepTotal = $selected.Count
+Write-Report "Sweeping $sweepTotal entr$(if ($sweepTotal -eq 1) { 'y' } else { 'ies' })." -Level note
 Write-Report ''
 
 $results = @()
+$sweepClock = [System.Diagnostics.Stopwatch]::StartNew()
+$entryIndex = 0
 
 foreach ($sabotage in $selected) {
+    $entryIndex++
+    # Announced BEFORE the work, not only after it. A sweep is tens of minutes
+    # of near-silence otherwise, and the entry that matters most is the one
+    # running when a job is killed at its timeout -- which a completion-only
+    # log never names, because it never completed.
+    Write-Report ("[{0,3}/{1}] {2}" -f $entryIndex, $sweepTotal, $sabotage.name) -Level note
+    $entryClock = [System.Diagnostics.Stopwatch]::StartNew()
     # The file to patch is the COPY's, reached by the real target's path
     # relative to the repository root. The manifest keeps meaning what it always
     # meant -- `root` and `file` still resolve against the real tree -- and only
@@ -1088,24 +1342,54 @@ foreach ($sabotage in $selected) {
         [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($realTarget))
     }
 
+    # A refused-by-build entry is judged on the build alone. Read here, once,
+    # rather than inside the switch, so the verdict and the message below agree.
+    # Read-SharedText, not ReadAllText: cargo has exited, but its redirected
+    # stderr can still be held open for a moment, and ReadAllText throws on that
+    # (see common.ps1). Measured as a red CI run under 5.1. Searched only in what
+    # rustc said, never in the source it quoted -- see Remove-EchoedSource.
+    $refusedAsNamed = $false
+    if ($sabotage.expect -eq 'refused-by-build' -and $run.Outcome -eq 'build-failed') {
+        $buildLog = "$transcript.build.err"
+        if (Test-Path -LiteralPath $buildLog) {
+            $refusedAsNamed = (Remove-EchoedSource (Read-SharedText -Path $buildLog)).Contains($sabotage.buildError)
+        }
+    }
+
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
         'failed' { "caught (suite failed, exit $($run.Code))" }
         'hung' { "caught (tests HUNG past ${entryTimeout}s)" }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
-        # not a result to record.
-        'build-failed' { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
+        # not a result to record -- unless the entry declared exactly this, and
+        # the build said what the entry said it would.
+        'build-failed' {
+            if ($refusedAsNamed) { "refused by the build ('$($sabotage.buildError)')" }
+            elseif ($sabotage.expect -eq 'refused-by-build') {
+                "MANIFEST DOES NOT COMPILE (the build failed, but not with '$($sabotage.buildError)')"
+            }
+            else { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
+        }
         'build-hung' { "BUILD HUNG past ${BuildTimeoutSeconds}s (tests never ran)" }
         # Same category as build-failed, reached one phase later because
         # doctests cannot be built by the build phase. The tests did run, but
         # the one that "failed" failed to compile, so it detected nothing.
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
+        'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
+        'not-started' { "INFRASTRUCTURE: cargo could not be started, exit $(Format-ExitCode $run.Code) (tests never ran)" }
+    }
+    # A refused-by-build entry whose patch BUILT has a guard that did not fire,
+    # whatever the tests then did; say so first, so the run's own outcome is not
+    # mistaken for the verdict.
+    if ($sabotage.expect -eq 'refused-by-build' -and @('passed', 'failed', 'hung') -contains $run.Outcome) {
+        $actual = "BUILT CLEANLY: the guard did not fire; then $actual"
     }
     $ok = switch ($run.Outcome) {
         'passed' { $sabotage.expect -eq 'survives' }
         'failed' { $sabotage.expect -eq 'caught' }
         'hung' { $sabotage.expect -eq 'caught' }
+        'build-failed' { $refusedAsNamed }
         default { $false }
     }
 
@@ -1115,7 +1399,19 @@ foreach ($sabotage in $selected) {
     }
 
     $level = if ($ok) { 'good' } else { 'bad' }
-    Write-Report ("{0,-58} {1}" -f $sabotage.name, $actual) -Level $level
+    # The completion line carries what the start line could not: how long this
+    # entry took, and -- from the mean so far -- roughly how much sweep is left.
+    # Both are for a reader watching a live CI log decide whether a job is
+    # progressing or stuck, which a bare name and verdict cannot answer.
+    $entrySeconds = [int]$entryClock.Elapsed.TotalSeconds
+    $remaining = $sweepTotal - $entryIndex
+    $left = if ($remaining -gt 0) {
+        $meanSeconds = $sweepClock.Elapsed.TotalSeconds / $entryIndex
+        ', ~{0}m left' -f [Math]::Max(1, [int][Math]::Round(($meanSeconds * $remaining) / 60))
+    }
+    else { '' }
+    Write-Report ("[{0,3}/{1}] {2,-52} {3} ({4}s{5})" -f `
+            $entryIndex, $sweepTotal, $sabotage.name, $actual, $entrySeconds, $left) -Level $level
 }
 
 Write-Report ''

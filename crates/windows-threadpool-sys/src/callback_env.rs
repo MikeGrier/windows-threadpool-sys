@@ -86,7 +86,7 @@ const ENVIRON_VERSION: u32 = 3;
 /// -- which would otherwise create an object from a dangling pool value -- does
 /// not compile:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0597
 /// use windows_threadpool_sys::callback_env::CallbackEnviron;
 /// use windows_threadpool_sys::pool::ThreadpoolPool;
 ///

@@ -12,13 +12,26 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 use crate::batch::Batch;
 use crate::capability::RingVersion;
 use crate::ring::{Completion, IoRing, Op, RingInfo};
+/// What a delivery hands a caller for each completion: the completion, and
+/// whatever the ring was holding for it, exactly as [`IoRing::try_pop`]
+/// returns them.
+///
+/// The two `Option`s answer different questions, and a callback must not
+/// collapse them. The **outer** `None` means the push created no entry at all
+/// -- a `_raw` flush or cancel, or [`IoRing::push_raw`]. `Some((None, extra))`
+/// is an `_owned` push that never had a buffer, a flush or a cancellation, and
+/// its sidecar still arrives: discarding it on the inner `None` would lose
+/// which group of writes the flush belonged to. `try_pop`'s "What each `None`
+/// means" is the authoritative statement.
+type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sync;
+
 /// Pop every completion currently available and hand each to `on_completion`.
 ///
 /// Each pop is its own short lock: `on_completion` always runs with the
 /// mutex released, so a slow callback does not block a submitter, and a
 /// callback that calls [`EventDelivery::ring`] and locks it itself cannot
 /// deadlock against this loop.
-fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync)) {
+fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
         let popped = {
             let mut ring = ring
@@ -27,7 +40,7 @@ fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync
             ring.try_pop()
         };
         match popped {
-            Ok(Some(completion)) => on_completion(completion),
+            Ok(Some((completion, held))) => on_completion(completion, held),
             Ok(None) => break,
             Err(error) => {
                 debug_assert!(
@@ -55,7 +68,7 @@ fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync
 /// member it did not create itself. `EventDelivery` stays individually
 /// owned, where its own field-drop order (below) gives the same
 /// quiesce-then-close guarantee a group would otherwise provide.
-pub struct EventDelivery {
+pub struct EventDelivery<T = (), X = ()> {
     // Drop order matters and is why these fields are declared in this order:
     // Rust drops struct fields top-to-bottom. `wait` must go first -- its own
     // `Drop` disarms, suppresses re-arming, and drains any in-flight callback
@@ -63,15 +76,11 @@ pub struct EventDelivery {
     // the time `ring`'s last reference drops below and runs
     // `IoRing::run_down` then `CloseIoRing`, no callback can still be
     // touching it (M4.3).
-    #[allow(
-        dead_code,
-        reason = "held only for its Drop side effect and ordering relative to `ring`"
-    )]
     wait: ThreadpoolWait,
-    ring: Arc<Mutex<IoRing>>,
+    ring: Arc<Mutex<IoRing<T, X>>>,
 }
 
-impl Drop for EventDelivery {
+impl<T, X> Drop for EventDelivery<T, X> {
     fn drop(&mut self) {
         // The wait is armed, so it owes a drain. Field drop would make that
         // drain anyway -- this adds no blocking -- but leaving it to `Drop`
@@ -86,7 +95,7 @@ impl Drop for EventDelivery {
     }
 }
 
-impl EventDelivery {
+impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// Wire `ring`'s completion event to a thread-pool wait, delivering every
     /// popped [`Completion`] to `on_completion` on a pool thread (M4.2).
     ///
@@ -110,22 +119,22 @@ impl EventDelivery {
     /// That signal is raised *after* the wait has been armed, which is the
     /// order `SetThreadpoolWait` documents -- "you must re-register the event
     /// with the wait object before signaling it each time to trigger the wait
-    /// callback". Signalling first and arming afterwards is not guaranteed to
-    /// run the callback, and since the event is auto-reset the signal is
-    /// consumed rather than left pending for the arming to find. For a ring
-    /// whose queue never returns to empty there is no second wakeup coming,
-    /// so that loss strands the backlog permanently instead of merely
-    /// delaying it. This method therefore attaches the event unsignalled and
-    /// raises the signal itself, rather than going through
-    /// [`IoRing::completion_event`], which signals as it attaches and so
-    /// leaves a caller no way to arm in between.
+    /// callback". The ordering binds to that documented rule, not to any
+    /// observed tolerance for the other order. This method therefore attaches
+    /// the event unsignalled and raises the signal itself, rather than going
+    /// through [`IoRing::completion_event`], which raises the signal before it
+    /// returns and so leaves a caller no way to arm in between.
     ///
     /// This was false in the implementation, and asserted anyway in this
     /// rustdoc, before M11.3 -- every test until then handed over a fresh
     /// ring, so nothing contradicted it. A caller on an earlier version
     /// cannot rely on the guarantee; `tests/event_delivery.rs` keeps the
     /// repro that now holds it. The ordering above was wrong until M26.9, in
-    /// a way that stranded the backlog in roughly one run in a hundred.
+    /// a way that stranded the backlog in roughly one run in a hundred. It
+    /// was wrong again until `M26.12`, which raised the signal only when this
+    /// method had itself attached the event: a caller that attached earlier
+    /// and consumed that signal lost its whole backlog, every time rather
+    /// than rarely.
     ///
     /// # Errors
     ///
@@ -138,12 +147,12 @@ impl EventDelivery {
     /// ring's completion event, from `ThreadpoolWait::new`, or from raising
     /// the setup signal.
     pub fn new<F>(
-        mut ring: IoRing,
+        mut ring: IoRing<T, X>,
         on_completion: F,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>
     where
-        F: Fn(Completion) + Send + Sync + 'static,
+        F: Fn(Completion, Option<(Option<T>, X)>) + Send + Sync + 'static,
     {
         // The ring creates, owns, and attaches its own event and hands back a
         // duplicate (D-20), which leaves exactly one
@@ -156,7 +165,7 @@ impl EventDelivery {
         // that "you must re-register the event with the wait object before
         // signaling it each time to trigger the wait callback". Signalling
         // first and arming afterwards is the order that rule forbids.
-        let (event, owes_setup_signal) = ring.attach_completion_event_unsignalled()?;
+        let event = ring.attach_completion_event_unsignalled()?;
         windows_threadpool_sys::trace_record!(
             "delivery",
             "event-attached",
@@ -171,7 +180,7 @@ impl EventDelivery {
 
         let ring = Arc::new(Mutex::new(ring));
         let ring_for_wait = Arc::clone(&ring);
-        let on_completion: Arc<dyn Fn(Completion) + Send + Sync> = Arc::new(on_completion);
+        let on_completion: Arc<OnCompletion<T, X>> = Arc::new(on_completion);
         let wait = ThreadpoolWait::new(
             event,
             move |activation| {
@@ -196,18 +205,13 @@ impl EventDelivery {
         // backlog guarantee above true, so a failure to raise it is a failure
         // to construct.
         //
-        // Signalled only when this call attached the event. A caller that
-        // attached it earlier and consumed the signal reaches this with a
-        // non-empty queue and no wakeup owing, which review raised and
-        // `M26.12` is investigating -- the obvious repair, signalling
-        // unconditionally, was tried and does **not** fix it, so it is not
-        // applied here. See the ignored reproducer in
-        // `tests/event_delivery.rs` and UNRESOLVED-TEST-FAILURES.md.
-        if owes_setup_signal {
-            ring.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .raise_setup_signal()?;
-        }
+        // Raised unconditionally. It was once raised only when this call had
+        // itself attached the event, which stranded the backlog of a caller
+        // who attached earlier and consumed that signal -- the state the
+        // guarantee is precisely about. See `M26.12`.
+        ring.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .raise_setup_signal()?;
 
         Ok(Self { wait, ring })
     }
@@ -240,12 +244,16 @@ impl EventDelivery {
     /// `*scope = ...` works through `DerefMut` just as well; nor would handing
     /// a `&mut IoRing` to a closure.
     ///
-    /// Replacing the ring is therefore refused at compile time:
+    /// Replacing the ring is therefore refused at compile time. The expected
+    /// error is pinned, though rustdoc enforces a pinned code only on a
+    /// nightly toolchain or under `RUSTC_BOOTSTRAP=1`, which CI's
+    /// `doctest-error-codes` job sets; on plain stable, the compiling twin
+    /// below is what keeps this example honest:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0614
     /// # use windows_ioring_sys::{EventDelivery, IoRing};
     /// let delivery =
-    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_, _| {}, None).unwrap();
     /// let mut scope = delivery.scope();
     /// // No `DerefMut`, so there is no `&mut IoRing` to assign through.
     /// *scope = IoRing::new(8, 8).unwrap();
@@ -258,12 +266,12 @@ impl EventDelivery {
     /// ```
     /// # use windows_ioring_sys::{EventDelivery, IoRing};
     /// let delivery =
-    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_, _| {}, None).unwrap();
     /// let scope = delivery.scope();
     /// assert_eq!(scope.outstanding(), 0);
     /// ```
     #[must_use]
-    pub fn scope(&self) -> RingScope<'_> {
+    pub fn scope(&self) -> RingScope<'_, T, X> {
         RingScope {
             ring: self
                 .ring
@@ -283,16 +291,16 @@ impl EventDelivery {
 /// See [`EventDelivery::scope`] for what this deliberately does not expose,
 /// and why handing out anything that yields a `&mut IoRing` would reopen
 /// [D-43](../DESIGN-NOTES.md#d-43).
-pub struct RingScope<'delivery> {
-    ring: MutexGuard<'delivery, IoRing>,
+pub struct RingScope<'delivery, T = (), X = ()> {
+    ring: MutexGuard<'delivery, IoRing<T, X>>,
 }
 
-impl RingScope<'_> {
+impl<T, X> RingScope<'_, T, X> {
     /// Open a [`Batch`] against the ring.
     ///
     /// The borrow is confined to the returned batch, so no `&mut IoRing`
     /// escapes to the caller.
-    pub fn batch(&mut self) -> Batch<'_> {
+    pub fn batch(&mut self) -> Batch<'_, T, X> {
         Batch::new(&mut self.ring)
     }
 

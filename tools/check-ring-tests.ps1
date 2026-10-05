@@ -45,23 +45,92 @@
 #
 #   ./tools/check-ring-tests.ps1            # verify (CI)
 #   ./tools/check-ring-tests.ps1 -Update    # regenerate after answering
+#
+# -SourceRoot and -InventoryPath exist for tools/test-check-ring-tests.ps1,
+# which drives this script against fixture trees; both default to the crate's
+# own paths.
 
 [CmdletBinding()]
 param(
-    [switch]$Update
+    [switch]$Update,
+    [string]$SourceRoot,
+    [string]$InventoryPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$sourceRoot = Join-Path $repoRoot 'crates\windows-ioring-sys\src'
-$inventoryPath = Join-Path $repoRoot 'crates\windows-ioring-sys\RING-OPENING-LIB-TESTS.txt'
+$sourceRoot = if ($SourceRoot) { $SourceRoot } else { Join-Path $repoRoot 'crates\windows-ioring-sys\src' }
+$inventoryPath = if ($InventoryPath) { $InventoryPath } else {
+    Join-Path $repoRoot 'crates\windows-ioring-sys\RING-OPENING-LIB-TESTS.txt'
+}
 
 if (-not (Test-Path $sourceRoot)) {
     Write-Host "CONFIG ERROR: source root not found: $sourceRoot" -ForegroundColor Red
     exit 2
 }
+
+# Every constructor that opens a ring, spelled ONCE.
+#
+# This used to be two identical copies of the expression -- one for the helper
+# census, one for the test bodies -- and that is exactly how
+# `with_version_and_inventory` came to be missing from a list already naming its
+# three siblings: the constructor was added, and only the site someone happened
+# to be looking at got updated. A helper opening a ring through it was then
+# classified as not opening one, so every test calling that helper bypassed this
+# guard silently.
+#
+# The longest alternative is first so a match never depends on the engine
+# backtracking out of `::with_version` when the text is
+# `::with_version_and_inventory`.
+#
+# The `::with_*` forms are matched on ANY type, deliberately. A ring can be
+# built through a type alias or a turbofish, and this script cannot resolve
+# types, so anchoring to `IoRing` would miss those silently. Over-inclusion is
+# the safe direction: an unrelated `Other::with_version(` produces an ADDED
+# entry, which fails loudly and is answered by a human, where a missed ring
+# would pass. tools/test-check-ring-tests.ps1 pins both behaviours.
+#
+# `new` cannot be matched on any type -- every `Vec::new()` would count -- so it
+# is matched on every NAME that denotes `IoRing` in this source tree, with or
+# without a turbofish (`IoRing::<()>::new(`). Those names are derived, not
+# listed: `IoRing` itself, every `type X = ...IoRing...` alias (followed through
+# chains of aliases), and every `IoRing as X` rename in a `use`. Anchoring `new`
+# to the literal `IoRing` let `LaneRing::new(` and `IoRing::<()>::new(` through,
+# while the `with_*` forms beside them were caught (PR #113 review). What is
+# still not resolved: a name brought in by a glob re-export of a renamed
+# import, or a ring built inside a macro. Both fail open, so they are declared
+# here rather than hidden.
+function Get-RingTypeNames {
+    param([string]$Root)
+
+    $names = New-Object System.Collections.Generic.HashSet[string]
+    $null = $names.Add('IoRing')
+    $texts = @(Get-ChildItem -Path $Root -Recurse -Filter '*.rs' |
+            ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) })
+    do {
+        $before = $names.Count
+        $alternatives = (@($names) | ForEach-Object { [regex]::Escape($_) }) -join '|'
+        foreach ($text in $texts) {
+            # The right-hand side must BE the ring type, possibly path-qualified
+            # and generic -- not merely mention it, as `Vec<IoRing>` does.
+            $aliases = "\btype\s+(\w+)\s*(?:<[^=;]*>)?\s*=\s*(?:\w+\s*::\s*)*(?:$alternatives)\b"
+            foreach ($match in [regex]::Matches($text, $aliases)) { $null = $names.Add($match.Groups[1].Value) }
+            # Followed by `;`, `,` or `}` so only a `use` rename qualifies, not
+            # prose such as "IoRing as a whole".
+            $renames = "\b(?:$alternatives)\s+as\s+(\w+)\s*[;,}]"
+            foreach ($match in [regex]::Matches($text, $renames)) { $null = $names.Add($match.Groups[1].Value) }
+        }
+    } while ($names.Count -gt $before)
+    # Unrolled on purpose: the set always holds `IoRing`, so the caller's
+    # pipeline sees one name per item rather than a single array.
+    return $names | Sort-Object
+}
+
+$ringNames = (Get-RingTypeNames -Root $sourceRoot | ForEach-Object { [regex]::Escape($_) }) -join '|'
+$script:RingConstructorPattern =
+    "(?:\b(?:$ringNames)(?:\s*::\s*<[^\n]*?>)?\s*::\s*new|::with_version_and_inventory|::with_inventory|::with_version)\s*\("
 
 # One entry per `#[test]` in `src/**/tests.rs` whose body reaches a ring, either
 # directly or through a helper in the same file that does.
@@ -83,7 +152,7 @@ function Get-RingOpeningTests {
             $stop = $text.IndexOf("`n}", $start)
             if ($stop -lt 0) { $stop = $text.Length }
             $body = $text.Substring($start, [Math]::Min(4000, $stop - $start))
-            if ($body -match 'IoRing::new') { $helpers.Add($match.Groups[1].Value) | Out-Null }
+            if ($body -match $script:RingConstructorPattern) { $helpers.Add($match.Groups[1].Value) | Out-Null }
         }
 
         $blocks = $text -split '#\[test\]'
@@ -103,7 +172,7 @@ function Get-RingOpeningTests {
             $end = $block.IndexOf("`n}")
             $body = if ($end -gt 0) { $block.Substring(0, $end) } else { $block }
 
-            $opensRing = $body -match 'IoRing::new'
+            $opensRing = $body -match $script:RingConstructorPattern
             if (-not $opensRing) {
                 foreach ($helper in $helpers) {
                     if ($helper -eq $name) { continue }
@@ -118,7 +187,11 @@ function Get-RingOpeningTests {
     return @($entries | Sort-Object)
 }
 
-$current = Get-RingOpeningTests -Root $sourceRoot
+# `@(...)`: a function's returned array is unrolled, so zero or one entry would
+# arrive as `$null` or a bare string, neither of which has `.Count` under
+# StrictMode. The live tree never has so few, which is why only
+# test-check-ring-tests.ps1's fixtures found it.
+$current = @(Get-RingOpeningTests -Root $sourceRoot)
 
 if ($Update) {
     $header = @(
@@ -175,7 +248,7 @@ if ($added.Count -gt 0) {
     Write-Host ''
     Write-Host '    Does this test need the KERNEL, or only a ring-shaped thing?' -ForegroundColor White
     Write-Host ''
-    Write-Host '    If only the latter, narrow what it reaches for -- Token::new takes' -ForegroundColor White
+    Write-Host '    If only the latter, narrow what it reaches for -- Accounting takes' -ForegroundColor White
     Write-Host '    the ledger rather than the ring for exactly this reason (M24.7) --' -ForegroundColor White
     Write-Host '    or move it to tests/ if it uses only public API (M24.3).' -ForegroundColor White
     Write-Host ''

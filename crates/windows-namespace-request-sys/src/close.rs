@@ -109,7 +109,7 @@ pub type CloseFn = unsafe extern "system" fn(HANDLE) -> BOOL;
 /// This is what makes closing twice through this type impossible -- the second
 /// call does not compile:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0382
 /// use std::fs;
 ///
 /// use windows_namespace_request_sys::close::CloseRequest;

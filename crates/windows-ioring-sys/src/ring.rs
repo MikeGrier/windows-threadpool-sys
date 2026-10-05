@@ -1,6 +1,10 @@
 // Copyright (c) 2026 Mike Grier
 //! The owned `IoRing` handle (M1.2), and the op capability set (M1.4).
 
+use std::collections::HashMap;
+use std::mem::ManuallyDrop;
+
+use crate::token::OperationId;
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -184,6 +188,82 @@ impl InjectedFailure {
     }
 }
 
+/// What the crate itself is holding for an in-flight operation.
+///
+/// Concrete rather than generic, and [D-73](../DESIGN-NOTES.md#d-73) explains
+/// why that is sound: `FileTarget` is sealed to `SharedFile` and
+/// `RegisteredFile`, so this set is closed and crate-owned. A caller never
+/// names it. Unsealing that trait would break the arrangement -- the
+/// alternatives are type erasure, which [D-4](../DESIGN-NOTES.md#d-4) forbids,
+/// or a third generic parameter on every consumer.
+#[derive(Default)]
+pub(crate) struct Held {
+    /// Keeps the file valid for the operation's life.
+    ///
+    /// Never read, and `allow` rather than `expect` says so deliberately:
+    /// this field exists **for its `Drop`**, not for its value. Holding it
+    /// until the pop that completes the operation is the whole job, and
+    /// reading it would serve nothing. An `expect` here would be a promise
+    /// that some later change makes it read, which is not the intent.
+    #[allow(
+        dead_code,
+        reason = "held so the file outlives the operation; dropped at reclaim"
+    )]
+    pub(crate) guard: Option<FileGuard>,
+    /// Keeps a registered buffer's use counted while the kernel has it.
+    ///
+    /// Held for its `Drop`, as `guard` above.
+    #[allow(dead_code, reason = "held so the registration outlives the operation")]
+    pub(crate) registration: Option<crate::batch::RegisteredUse>,
+}
+
+/// The closed set of file guards, per `D-73`.
+///
+/// Public only because [`crate::FileTarget`]'s `Guard` bound names it, and a
+/// bound may not be more private than the trait carrying it. It is opaque on
+/// purpose: a caller cannot construct one, and the sealed trait means nobody
+/// outside this crate implements the thing that produces one.
+pub enum FileGuard {
+    Shared(crate::batch::SharedFile),
+    Registered(crate::batch::RegisteredFile),
+}
+
+impl From<crate::batch::SharedFile> for FileGuard {
+    fn from(guard: crate::batch::SharedFile) -> Self {
+        Self::Shared(guard)
+    }
+}
+
+impl From<crate::batch::RegisteredFile> for FileGuard {
+    fn from(guard: crate::batch::RegisteredFile) -> Self {
+        Self::Registered(guard)
+    }
+}
+
+/// A popped completion and whatever the ring was holding for it.
+///
+/// Named rather than left as a nested tuple in the signature: the outer
+/// `Option` is "was there a completion", and the inner one is "was this ring
+/// holding anything for it", and those are different questions that read
+/// badly stacked.
+pub type HeldCompletion<T, X> = (Completion, Option<(Option<T>, X)>);
+
+/// One in-flight operation's entry in the ring's inventory.
+pub(crate) struct Entry<T, X> {
+    /// What the caller handed over. `None` for a push that carries nothing to
+    /// give back -- the `_raw` flush and cancel entry points, whose shape is
+    /// `M28.5`'s to settle.
+    pub(crate) payload: Option<T>,
+    /// The caller's per-operation sidecar. Two thirds of the census sites keep
+    /// one, which is why it is a parameter rather than a convenience.
+    pub(crate) extra: X,
+    /// The crate's own half, which the caller never sees.
+    #[expect(
+        dead_code,
+        reason = "read when the guarded pushes migrate in M28.4.1; see M28.3+M28.4 in CHECKLIST.md"
+    )]
+    pub(crate) held: Held,
+}
 /// One popped completion (M3.7): the operation's identity, from
 /// `IORING_CQE::UserData`, and its result.
 #[derive(Clone, Copy, Debug)]
@@ -195,15 +275,24 @@ pub struct Completion {
 }
 
 impl Completion {
-    /// The `UserData` identity this completion reports -- match it against
-    /// a held [`crate::Token`] via [`crate::Token::claim_if`].
+    /// The `UserData` identity this completion reports.
+    ///
+    /// **Not a way to reach what the operation was holding.** The pop that
+    /// produced this completion already returned that, and it is the only
+    /// call that can -- see [`IoRing::try_pop`]. This is the integer for
+    /// correlation and for naming a cancel target, which is the same thing
+    /// [`crate::OperationId`] is and for the same reason.
+    ///
+    /// It used to say "match it against a held `Token`", and that instruction
+    /// was [D-55](../DESIGN-NOTES.md#d-55)'s evidence that the crate handed a
+    /// caller two halves and connected them with nothing.
     #[must_use]
     pub fn user_data(&self) -> usize {
         self.user_data
     }
 
     /// The identity of the ring that popped this completion (PR #20 review
-    /// response): a [`crate::Token`]/registration only ever matches a
+    /// response): an entry or registration only ever matches a
     /// `Completion` whose `ring_id` is also its own, so a `UserData` value
     /// that happens to coincide across two different rings (every ring's
     /// own counter starts at the same value) can never be confused for a
@@ -266,9 +355,9 @@ impl Completion {
     ///
     /// # Why this is sound, where fabricating a completion would not be
     ///
-    /// [`crate::Token::claim_if`]'s safety argument is that a `Completion` for
-    /// some `UserData` **existing at all** proves the kernel has finished with
-    /// that operation, and therefore that handing its buffer back is sound.
+    /// The pop's safety argument is that a [`Completion`] for some `UserData`
+    /// **existing at all** proves the kernel has finished with that operation,
+    /// and therefore that handing its buffer back is sound.
     ///
     /// This method consumes a completion the ring genuinely popped and returns
     /// one carrying the same `UserData` and the same ring identity. The
@@ -279,8 +368,8 @@ impl Completion {
     ///
     /// `Completion::synthetic` is the opposite, and is why it is not
     /// reachable from here. A fabricated completion can name an operation that
-    /// is **still in flight**, and claiming a token against one hands a buffer
-    /// back to the caller while the kernel is still writing through it -- the
+    /// is **still in flight**, and reclaiming a payload against one hands a
+    /// buffer back to the caller while the kernel is still writing through it -- the
     /// precise use-after-free this crate exists to prevent. That is a
     /// test-only, crate-only tool and stays one.
     ///
@@ -306,9 +395,9 @@ impl Completion {
     ///
     /// # The one place injection is *not* inert: registration completions
     ///
-    /// The soundness argument above is about [`crate::Token::claim_if`], where
-    /// a failed completion changes nothing the caller does with memory: the
-    /// buffer comes back either way. **A registration claim is different.**
+    /// The soundness argument above is about the pop, where a failed
+    /// completion changes nothing the caller does with memory: the buffer
+    /// comes back either way. **A registration claim is different.**
     /// [`crate::PendingBufferRegistration::claim_if`] treats a failed
     /// completion as proof the kernel did *not* retain the addresses, and so
     /// **drops the buffers**. Inject a failure there and it frees memory the
@@ -327,12 +416,21 @@ impl Completion {
     /// # Example
     ///
     /// ```ignore
+    /// // ONE pop. The completion being injected into has already been popped,
+    /// // and that same pop is what retired the inventory entry and handed the
+    /// // payload back -- there is no second pop that could return it again.
+    /// let (completion, payload) = ring
+    ///     .pop_within(WAIT)
+    ///     .expect("pop_within")
+    ///     .expect("a completion arrives within the wait");
+    ///
+    /// // The payload comes back whatever the result says: the operation did
+    /// // complete, and a failed completion is still the proof that frees the
+    /// // buffer.
     /// let completion = completion.with_injected_failure(
     ///     InjectedFailure::Win32(ERROR_ACCESS_DENIED),
     /// );
     /// assert!(completion.result().is_err());
-    /// // The token still claims it: the operation did complete.
-    /// let buffer = token.claim_if(&completion).expect("claims its own");
     /// ```
     #[cfg(any(test, feature = "fault-injection"))]
     #[must_use]
@@ -369,9 +467,9 @@ impl Completion {
     /// # Why this one is inert
     ///
     /// The result code is left successful and only the byte count moves, so
-    /// every claim path behaves exactly as it would for the real completion:
-    /// [`crate::Token::claim_if`] returns the buffer, and no path keys memory
-    /// ownership off the transferred count. That makes this seam free of the
+    /// the pop behaves exactly as it would for the real completion: the buffer
+    /// comes back, and no path keys memory ownership off the transferred
+    /// count. That makes this seam free of the
     /// registration hazard documented on
     /// [`Completion::with_injected_failure`], which arises only because a
     /// *failed* registration is taken as proof the kernel retained nothing.
@@ -397,12 +495,13 @@ impl Completion {
     }
 
     /// Build a `Completion` without popping a real one, for tests that
-    /// exercise [`crate::Token::claim_if`] without real I/O.
+    /// exercise the pop without real I/O.
     ///
     /// Not available outside `#[cfg(test)]`: production code has no
-    /// legitimate reason to fabricate a completion, since `Token::claim_if`'s
-    /// whole safety argument depends on every `Completion` in existence
-    /// tracing back to a real `IORING_CQE` `IoRing::try_pop` observed.
+    /// legitimate reason to fabricate a completion, since the whole safety
+    /// argument for returning a payload depends on every `Completion` in
+    /// existence tracing back to a real `IORING_CQE` `IoRing::try_pop`
+    /// observed.
     #[cfg(test)]
     pub(crate) fn synthetic(
         user_data: usize,
@@ -508,7 +607,7 @@ fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
 // `Debug` is hand-written rather than derived: `IORING_BUFFER_INFO` does not
 // implement it, and the array's contents (raw addresses and lengths) are not
 // useful to print anyway -- its length is.
-pub struct IoRing {
+pub struct IoRing<T = (), X = ()> {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
@@ -516,17 +615,26 @@ pub struct IoRing {
     /// operation identities, and the counts (M24.2). Split out so those rules
     /// can be tested without opening a ring -- see [`crate::accounting`].
     accounting: Accounting,
-    /// The `IORING_BUFFER_INFO` array handed to `BuildIoRingRegisterBuffers`,
-    /// kept alive because the kernel reads it when the registration op
-    /// *runs*, not when the `Build*` call returns (D-32, measured).
+    /// The arrays handed to the two registration `Build*` calls, kept alive
+    /// because the kernel reads both when the registration op *runs*, not
+    /// when the `Build*` call returns (D-32, measured) -- see
+    /// [`LateReadArrays`].
     ///
-    /// Held by the ring rather than by the `Batch` that built it: a failed
+    /// Held by the ring rather than by the `Batch` that built them: a failed
     /// `SubmitIoRing` leaves the SQE queued as ring state (D-5), so a later,
     /// unrelated submit can be what finally runs it -- after that batch is
-    /// long gone. A ring accepts at most one buffer registration, so this is
-    /// one small allocation per ring, and it is released only by
-    /// `CloseIoRing`.
-    registered_buffer_infos: Vec<IORING_BUFFER_INFO>,
+    /// long gone. A ring accepts at most one registration of each kind, so
+    /// this is at most two small allocations per ring.
+    ///
+    /// `ManuallyDrop` for the same reason as `inventory` below, and released
+    /// on the same proof: `Drop` frees it only once rundown has shown nothing
+    /// is outstanding, and leaks it otherwise. Before this was `ManuallyDrop`
+    /// the buffer array was an ordinary field, freed after the `Drop` body on
+    /// every path -- including the one where rundown failed with the
+    /// registration perhaps still pending, and, in a debug build, by the
+    /// unwind out of that path's assert before any later line of the body
+    /// could intervene. PR #113 review.
+    late_read: ManuallyDrop<LateReadArrays>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -539,9 +647,42 @@ pub struct IoRing {
     /// body runs before its fields are dropped -- so the ring is closed, and
     /// can no longer signal, before the event it referenced goes away.
     completion_event: Option<OwnedHandle>,
+    /// What each in-flight operation is holding on the caller's behalf
+    /// (`D-71`, `M28.3`).
+    ///
+    /// The ring owns this rather than handing a caller a `Token` to keep
+    /// beside its own map, because a consumer that never holds one cannot
+    /// lose one ([D-55](../DESIGN-NOTES.md#d-55)). An entry goes in when a
+    /// push queues and comes out at the pop that observes its completion --
+    /// which is why there is no call turning an identity back into memory the
+    /// kernel may still be using.
+    ///
+    /// `T` defaults to `()` so a consumer holding nothing never names it.
+    inventory: ManuallyDrop<HashMap<usize, Entry<T, X>>>,
 }
 
-impl std::fmt::Debug for IoRing {
+/// The arrays a registration op reads when it *runs*, during a later
+/// `SubmitIoRing`, rather than when its `Build*` call returns (D-32).
+///
+/// Both registrations behave this way. D-32 once recorded the file-handle
+/// array as read synchronously; that was measured in a debug build, where a
+/// caller's temporary `&[handle]` happened to survive in its stack slot until
+/// the submit. A release build reuses the slot, the kernel registered whatever
+/// it found there, and the first read through the index failed with
+/// `ERROR_INVALID_HANDLE`. Overwriting the caller's array before the submit
+/// reproduces it in every profile (PR #113).
+///
+/// One struct, so the two arrays have one owner, one release point and one
+/// rule for when that release is safe.
+#[derive(Default)]
+pub(crate) struct LateReadArrays {
+    /// The array handed to `BuildIoRingRegisterBuffers`.
+    pub(crate) buffer_infos: Vec<IORING_BUFFER_INFO>,
+    /// The array handed to `BuildIoRingRegisterFileHandles`.
+    pub(crate) file_handles: Vec<*mut c_void>,
+}
+
+impl<T, X> std::fmt::Debug for IoRing<T, X> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoRing")
             .field("handle", &self.handle)
@@ -552,10 +693,8 @@ impl std::fmt::Debug for IoRing {
             // second copy of the field list, drifting the moment either side
             // gains a field.
             .field("accounting", &self.accounting)
-            .field(
-                "registered_buffer_infos",
-                &self.registered_buffer_infos.len(),
-            )
+            .field("late_read_buffer_infos", &self.late_read.buffer_infos.len())
+            .field("late_read_file_handles", &self.late_read.file_handles.len())
             .field("completion_event", &self.completion_event)
             .finish()
     }
@@ -566,9 +705,17 @@ impl std::fmt::Debug for IoRing {
 // moving ownership of one to another thread is sound. This does not imply
 // `Sync`: submitting to the ring is not thread-safe (D-5), so only `Send` is
 // implemented.
-unsafe impl Send for IoRing {}
+unsafe impl<T: Send, X: Send> Send for IoRing<T, X> {}
 
-impl IoRing {
+/// Constructors for a ring that holds nothing on a caller's behalf.
+///
+/// These sit on `IoRing<()>` rather than on the generic impl for a reason that
+/// is about inference, not about capability: a defaulted type parameter
+/// applies in *type* position, so `IoRing::new(..)` on a generic impl would be
+/// ambiguous and every existing call site would have to write `IoRing::<()>`.
+/// A ring that holds payloads is built with
+/// [`IoRing::with_inventory`](IoRing::with_inventory) instead.
+impl IoRing<()> {
     /// Create a ring, negotiating the version as `min(RingVersion::HIGHEST_KNOWN,
     /// capabilities()?.max_version)` (D-6).
     ///
@@ -589,6 +736,21 @@ impl IoRing {
     /// `IORING_E_VERSION_NOT_SUPPORTED` if `version` exceeds what the system
     /// supports, or any other error from `CreateIoRing`.
     pub fn with_version(
+        version: RingVersion,
+        submission_queue_size: u32,
+        completion_queue_size: u32,
+    ) -> io::Result<Self> {
+        Self::with_version_and_inventory(version, submission_queue_size, completion_queue_size)
+    }
+}
+
+impl<T, X> IoRing<T, X> {
+    /// Create a ring at exactly `version`, whose inventory holds `T`.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::with_version`].
+    pub fn with_version_and_inventory(
         version: RingVersion,
         submission_queue_size: u32,
         completion_queue_size: u32,
@@ -618,652 +780,107 @@ impl IoRing {
             version,
             supported_ops,
             accounting: Accounting::new(),
-            registered_buffer_infos: Vec::new(),
+            late_read: ManuallyDrop::new(LateReadArrays::default()),
             completion_event: None,
+            inventory: ManuallyDrop::new(HashMap::new()),
         })
     }
+}
 
-    /// The version this ring was created at.
-    #[must_use]
-    pub fn version(&self) -> RingVersion {
-        self.version
-    }
-
-    /// Query this ring's current info via `GetIoRingInfo`.
+/// A ring that holds `T` on the caller's behalf for each in-flight operation.
+impl<T, X> IoRing<T, X> {
+    /// Whether this ring can be believed when it says nothing is outstanding.
     ///
-    /// # Errors
+    /// Asks the ledger, which tracks outstanding operations by **identity**:
+    /// [`Accounting::record_completion`] retires only a `user_data` it minted
+    /// and has not yet retired, so a CQE this ring never minted -- a duplicate,
+    /// or one carrying foreign user data -- retires nothing. That holds for
+    /// every push alike. An earlier revision kept a saturating counter and
+    /// consulted the inventory beside it as the witness the counter had been
+    /// corrupted, but only owned pushes stow, so for `push_raw` and the raw
+    /// flush and cancel forms the inventory was empty whether or not anything
+    /// was outstanding, and the false quiesce survived on exactly the seam
+    /// whose caller-managed memory it endangers.
     ///
-    /// Returns any error from `GetIoRingInfo`.
-    pub fn info(&self) -> io::Result<RingInfo> {
-        let mut raw = IORING_INFO::default();
-        // SAFETY: `self.handle` is a live ring; `raw` is a valid out-pointer.
-        let hr = unsafe { GetIoRingInfo(self.handle, &raw mut raw) };
-        check(hr)?;
-        Ok(RingInfo {
-            version: RingVersion::from_raw(raw.IoRingVersion),
-            submission_queue_size: raw.SubmissionQueueSize,
-            completion_queue_size: raw.CompletionQueueSize,
-        })
-    }
-
-    /// Whether this ring supports `op`, from the capability set cached at
-    /// construction.
+    /// Every owned entry's identity is still in flight until the pop that
+    /// retires it also reclaims it, so the inventory is a subset of what this
+    /// checks; the `debug_assert` records that rather than relying on it.
     ///
-    /// Answers what the *kernel's* op table contains, not what this crate's
-    /// safe push surface reaches (M10.1, [`Op`]'s own docs list the mapping).
-    /// The two coincide for every op except [`Op::Nop`], which has no
-    /// [`crate::Batch`] method at all: a nop owns no buffer, so there is
-    /// nothing for a [`crate::Token`] to hand back, and it is reachable only
-    /// through [`IoRing::push_raw`]. A `true` here therefore means "the
-    /// kernel would accept this op", not "a `Batch` method exists to push
-    /// it".
-    #[must_use]
-    pub fn supports(&self, op: Op) -> bool {
-        self.supported_ops.contains(op)
-    }
-
-    /// Overrides the cached capability set to exactly `ops`, for tests that
-    /// need a ring known to lack support for something.
-    ///
-    /// Every real host this crate has been tested against supports all seven
-    /// named ops, which is exactly why [`IoRing::supports`] and
-    /// [`Batch::require`](crate::Batch)'s use of it could not be told apart
-    /// from a constant `true` by any test that only ever asked a real ring:
-    /// the honest answer and the constant agree on every host available to
-    /// run the test. This seam constructs the disagreement instead of hoping
-    /// to find a host that has it.
-    ///
-    /// Not available outside `#[cfg(test)]`, for the same reason
-    /// [`Completion::synthetic`] is not: production code has no legitimate
-    /// reason to claim a capability the kernel did not actually report.
-    #[cfg(test)]
-    pub(crate) fn set_supported_ops_for_test(&mut self, ops: &[Op]) {
-        self.supported_ops = OpSupport(ops.iter().fold(0_u8, |mask, &op| {
-            let index = Op::ALL
-                .iter()
-                .position(|&candidate| candidate == op)
-                .expect("Op::ALL is exhaustive");
-            mask | (1 << index)
-        }));
-    }
-
-    /// An owned duplicate of this ring's completion event, so a caller can
-    /// wait on the ring alongside other handles without surrendering it
-    /// (M11.1, D-20).
-    ///
-    /// The ring creates the event, attaches it with
-    /// `SetIoRingCompletionEvent`, keeps ownership, and hands back a
-    /// duplicate. Closing the returned handle is therefore always safe: the
-    /// ring keeps signalling its own copy, and a `DuplicateHandle`'d event is
-    /// still signalled after the original is closed.
-    ///
-    /// **Idempotent.** Repeat calls return another duplicate of the *same*
-    /// event rather than attaching a new one, so two subsystems can each ask
-    /// without silently detaching the other's.
-    ///
-    /// This is not a third delivery architecture -- it is Model B with a
-    /// multiplexed wakeup source, changing only what the domain thread blocks
-    /// on, never who owns, submits, or drains ([`Batch::submit_and_wait`] is
-    /// still the single-source shape). Use it when ring I/O has to be waited
-    /// on alongside non-ring I/O, which
-    /// `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot order across.
-    ///
-    /// [`Batch::submit_and_wait`]: crate::Batch::submit_and_wait
-    ///
-    /// # The event is an edge, not a level
-    ///
-    /// **Measured, not inferred, and getting it wrong hangs rather than just
-    /// slowing down** (D-19). The event is signalled when the completion
-    /// queue transitions from **empty to non-empty**. It is *not* signalled
-    /// once per completion, and it is *not* level-triggered: eight
-    /// completions arriving at once into an empty queue produce exactly one
-    /// wakeup, and a completion arriving into an already-non-empty queue
-    /// produces none.
-    ///
-    /// Two rules follow, and they are contract rather than advice:
-    ///
-    /// 1. **Drain to empty before waiting again** -- [`IoRing::try_pop`]
-    ///    until it yields `None`, on *every* pass through a multiplexed wait
-    ///    loop, not only the pass where this handle signalled. A wait entered
-    ///    with entries still in the queue blocks until some later completion
-    ///    arrives *after* the queue has been emptied, which may be never.
-    ///    That is a lost-wakeup deadlock, not a latency wobble.
-    /// 2. **A wake with nothing to pop is normal.** It must not be treated as
-    ///    an error or as a spurious wakeup. This method deliberately produces
-    ///    one: the event is signalled once before it returns, so a caller who
-    ///    had already submitted work never misses a backlog that arrived
-    ///    before the event was attached.
-    ///
-    /// The event is auto-reset, and **exactly one waiter per ring** is
-    /// supported (D-21): the drain that restores the empty state, and so
-    /// re-arms the edge, must run to empty exactly once. Two threads waiting
-    /// on one ring's event cannot be made correct.
-    ///
-    /// # If you are arming a thread-pool wait on this handle
-    ///
-    /// `SetThreadpoolWait` documents that "you must re-register the event
-    /// with the wait object before signaling it each time to trigger the wait
-    /// callback". This method signals the event *before* it returns (rule 2
-    /// above), so by the time you have a handle to build a wait object
-    /// around, that setup signal has already happened -- in the order the
-    /// rule forbids. It is not guaranteed to run your callback, and because
-    /// the event is auto-reset the signal is *consumed* rather than left
-    /// pending, so a later arming has nothing to observe. Combined with the
-    /// edge rule above, a ring whose queue never returns to empty has no
-    /// second wakeup coming: the loss is permanent, not late.
-    ///
-    /// The remedy needs nothing this method does not already give you --
-    /// after arming the wait, signal your own duplicate yourself:    ///
-    /// ```no_run
-    /// # use windows_ioring_sys::IoRing;
-    /// # use std::os::windows::io::AsRawHandle;
-    /// # fn f(ring: &mut IoRing) -> std::io::Result<()> {
-    /// let event = ring.completion_event()?;
-    /// // ... build the wait object around `event`, then arm it ...
-    /// // Only now raise the wakeup, in the documented order. A wake with
-    /// // nothing to pop is normal (rule 2), so this is always safe.
-    /// unsafe { windows_sys::Win32::System::Threading::SetEvent(event.as_raw_handle()) };
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    #[cfg_attr(
-        feature = "threadpool",
-        doc = "[`EventDelivery`](crate::EventDelivery) already does this for you and"
-    )]
-    #[cfg_attr(
-        not(feature = "threadpool"),
-        doc = "`EventDelivery` (the default `threadpool` feature) already does this for you and"
-    )]
-    /// is the better answer if you do not need the handle itself.
-    ///
-    /// `examples/model_b_multiplexed.rs` is this whole shape worked end to
-    /// end -- a caller-owned ring waited on alongside a shutdown latch, with
-    /// the quiesce that shutdown-while-outstanding requires (M11.6).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`io::ErrorKind::Unsupported`] if the running system does not
-    /// report `IORING_FEATURE_SET_COMPLETION_EVENT`; this crate refuses to
-    /// silently substitute a polling thread, since a caller who asked for an
-    /// event and got a spun-up thread has been told something false. Also
-    /// returns any error from `CreateEventW`,
-    /// `SetIoRingCompletionEvent`, `SetEvent`, or duplicating the handle.
-    pub fn completion_event(&mut self) -> io::Result<OwnedHandle> {
-        let (event, owes_setup_signal) = self.attach_completion_event_unsignalled()?;
-        if owes_setup_signal {
-            self.raise_setup_signal()?;
-        }
-        Ok(event)
-    }
-
-    /// Attach the ring's completion event *without* raising the setup signal,
-    /// reporting whether that signal is still owed.
-    ///
-    /// `SetThreadpoolWait` documents that "you must re-register the event with
-    /// the wait object before signaling it each time to trigger the wait
-    /// callback". A caller that is about to arm a threadpool wait on this
-    /// event therefore needs the attachment and the signal as two steps, so
-    /// that arming can be sequenced between them; handing back an
-    /// already-signalled event leaves that caller no way to obey the rule.
-    /// [`IoRing::completion_event`] is these two composed, for a caller who
-    /// does its own waiting and is not bound by that rule.
-    ///
-    /// The flag is false when the ring already had an event attached, which
-    /// matches [`IoRing::completion_event`]: the setup signal belongs to the
-    /// call that performs the attachment.
-    pub(crate) fn attach_completion_event_unsignalled(
-        &mut self,
-    ) -> io::Result<(OwnedHandle, bool)> {
-        // Already attached: hand back another duplicate rather than
-        // attaching a second event, which would silently detach the first
-        // (`SetIoRingCompletionEvent` replaces rather than adds). The
-        // capability was necessarily verified on the call that attached it.
-        if let Some(event) = &self.completion_event {
-            return Ok((event.try_clone()?, false));
-        }
-
-        if !capabilities()?.supports_completion_event {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this system's IoRing does not report IORING_FEATURE_SET_COMPLETION_EVENT",
-            ));
-        }
-
-        // Auto-reset (manual_reset = FALSE) per D-21, initially unsignalled
-        // -- the deliberate setup signal is raised by `raise_setup_signal`,
-        // after the event is attached and owned, so it cannot be lost, and
-        // after any threadpool wait has been armed, so the arm-before-signal
-        // rule `SetThreadpoolWait` documents is obeyed.
-        // SAFETY: null attributes and name are documented defaults.
-        let raw = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-        if raw.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `CreateEventW` just returned this handle and it is not
-        // owned anywhere else, so `OwnedHandle` is its sole owner from here.
-        let event = unsafe { OwnedHandle::from_raw_handle(raw) };
-
-        // SAFETY: `self.handle` is a live ring; `event` is a live event that
-        // this ring will own for the rest of its life once stored below.
-        let hr = unsafe { crate::sys::set_completion_event(self.handle, event.as_raw_handle()) };
-        // On failure `event` drops here, closing a handle the ring never
-        // successfully referenced.
-        check(hr)?;
-
-        // Stored *before* the setup signal can be raised: from this point the
-        // ring owns the event, so no later failure can drop it and leave the
-        // ring signalling a closed (possibly recycled) handle.
-        self.completion_event
-            .insert(event)
-            .try_clone()
-            .map(|dup| (dup, true))
-    }
-
-    /// Raise the one deliberate setup signal on the attached completion event.
-    ///
-    /// This is the single spurious wakeup the event's contract allows for: a
-    /// caller who submitted before attaching would otherwise never be woken
-    /// for that backlog, since the queue never returns to empty and so never
-    /// re-arms the edge (D-19).
-    ///
-    /// Separated from the attachment so that a caller arming a threadpool wait
-    /// can obey `SetThreadpoolWait`'s documented ordering -- register first,
-    /// signal second. Does nothing if no event is attached, which cannot
-    /// happen on the paths that call it.
-    pub(crate) fn raise_setup_signal(&self) -> io::Result<()> {
-        let Some(event) = &self.completion_event else {
-            return Ok(());
-        };
-        // SAFETY: `event` is a live event handle this ring owns.
-        if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // The setup signal is what a waiter attaching to a backlog depends on
-        // entirely, so M26.9's investigation needs to know it happened -- and
-        // that it happened on the ring's own handle rather than a duplicate
-        // handed to a caller, since only the former is what the kernel will go
-        // on signalling.
-        //
-        // Gated because `windows-threadpool-sys` is optional (D-22): this
-        // method is on the always-present path, unlike the delivery module,
-        // so an ungated reference breaks `--no-default-features`.
-        #[cfg(feature = "threadpool")]
-        windows_threadpool_sys::trace_record!(
-            "delivery",
-            "setup-signalled",
-            event.as_raw_handle() as usize,
-            self.accounting.outstanding()
-        );
-        Ok(())
-    }
-
-    /// Whether this ring supports a raw op code, including one this crate
-    /// does not yet name (D-7).
-    ///
-    /// Its reason to exist is an op outside [`Op`], which by definition this
-    /// ring's cached capability set was never probed for -- but passing a
-    /// named op's [`Op::code`] is equally in contract, and answers
-    /// identically to [`IoRing::supports`] (M10.1). The difference between
-    /// them is cost, not truth: `supports` is a bit test against the set
-    /// probed once at construction, this is an `IsIoRingOpSupported` call
-    /// every time.
-    ///
-    /// What a `true` here does *not* mean is that the op became pushable: an
-    /// op outside [`Op`] has no builder method whatever this answers, so
-    /// [`IoRing::push_raw`] remains the only route to one.
-    #[must_use]
-    pub fn supports_raw(&self, op_code: IORING_OP_CODE) -> bool {
-        // SAFETY: `self.handle` is a live ring.
-        unsafe { IsIoRingOpSupported(self.handle, op_code) != 0 }
-    }
-
-    /// How many file handles this ring has **reserved** for registration --
-    /// not how many are confirmed registered (M5.1, M10.3, D-31).
-    ///
-    /// The count advances the instant a `BuildIoRingRegisterFileHandles`
-    /// call queues, never when its completion is observed. Two consequences
-    /// a caller must not be surprised by:
-    ///
-    /// - it is already advanced before any completion has been popped, so it
-    ///   cannot be used to decide whether a registration has taken effect --
-    ///   claim the completion with
-    ///   [`crate::PendingFileRegistration::claim_if`] for that;
-    /// - it stays advanced after a registration whose completion reported
-    ///   *failure*, which is why such a registration cannot be retried on
-    ///   this ring ([`crate::Batch::register_files`]).
-    ///
-    /// Because a ring accepts at most one registration that assigns an
-    /// index, this is `0` until that registration is queued and its count
-    /// thereafter; there is no second registration for it to serve as a base
-    /// index for.
-    #[must_use]
-    pub fn registered_file_count(&self) -> u32 {
-        self.accounting.registered_file_count()
-    }
-
-    /// As [`IoRing::registered_file_count`], for registered buffers (M5.2) --
-    /// a **reserved** count, not a confirmed one, with the same two
-    /// consequences (M10.3, D-31).
-    #[must_use]
-    pub fn registered_buffer_count(&self) -> u32 {
-        self.accounting.registered_buffer_count()
-    }
-
-    /// Advance the registered-file base index by `count`, the instant a
-    /// `BuildIoRingRegisterFileHandles` call successfully queues (not once
-    /// its completion is observed).
-    ///
-    /// D-14 recorded this as an explicitly unverified assumption, since this
-    /// crate cannot know whether the kernel claims these `count` indices
-    /// synchronously at build time or only once the registration op runs.
-    /// D-31 (M10.3) dissolved that: the collision it guarded against needs a
-    /// *second* registration, and `Batch::register_files`/`register_buffers`
-    /// forbid one, so no later base index is ever derived from this count and
-    /// the kernel's actual timing has no observable consequence. What the
-    /// eager advance does still determine is the *meaning* of the public
-    /// accessors, which is why they document a reserved rather than a
-    /// confirmed count.
-    ///
-    /// D-32 did not answer this question, despite being adjacent to it: it
-    /// established when the kernel reads the `IORING_BUFFER_INFO` *array*,
-    /// which is a different thing from when it claims the *indices*. The
-    /// latter remains unmeasured, and dissolved rather than resolved.
-    pub(crate) fn reserve_registered_files(&mut self, count: u32) {
-        self.accounting.reserve_registered_files(count);
-    }
-
-    /// As [`IoRing::reserve_registered_files`], for registered buffers.
-    pub(crate) fn reserve_registered_buffers(&mut self, count: u32) {
-        self.accounting.reserve_registered_buffers(count);
-    }
-
-    /// Take ownership of the `IORING_BUFFER_INFO` array a
-    /// `BuildIoRingRegisterBuffers` call was handed, keeping it alive for
-    /// this ring's remaining life, and hand back a stable pointer to it
-    /// (D-32).
-    ///
-    /// The kernel reads this array when the registration op *runs*, not when
-    /// the `Build*` call returns, so the caller must not build the SQE from a
-    /// temporary: store the array here first and pass the returned pointer.
-    /// Returns a null pointer for an empty array, which is what
-    /// `BuildIoRingRegisterBuffers` should be handed for a zero-length
-    /// registration anyway.
-    pub(crate) fn hold_registered_buffer_infos(
-        &mut self,
-        infos: Vec<IORING_BUFFER_INFO>,
-    ) -> *const IORING_BUFFER_INFO {
+    /// Every quiescence decision asks here rather than re-deriving it. The
+    /// first version of this check was written inline in `Drop` and nowhere
+    /// else, so [`IoRing::run_down_within`] went on reporting the false quiesce
+    /// as `Ok(true)` and `pop_within_raw_with` as "nothing can arrive": one
+    /// rule at three sites, corrected at one.
+    fn is_quiescent(&self) -> bool {
+        let quiescent = self.accounting.is_quiescent();
+        // Not asserted during an unwind: this runs inside `Drop`'s rundown,
+        // and a second panic there aborts the process instead of failing the
+        // test that is already unwinding.
         debug_assert!(
-            self.registered_buffer_infos.is_empty(),
-            "a ring accepts at most one buffer registration, so this must only be set once"
+            !quiescent || self.inventory.is_empty() || std::thread::panicking(),
+            "an owned entry outlived its identity's retirement"
         );
-        self.registered_buffer_infos = infos;
-        // `Vec::as_ptr` is stable for as long as the `Vec` is neither moved
-        // out of nor reallocated; it lives in `self` and is never mutated
-        // again, and moving the `IoRing` itself moves only the `Vec` header,
-        // not its heap allocation.
-        self.registered_buffer_infos.as_ptr()
-    }
-
-    /// How many operations this ring believes are still outstanding: minted
-    /// (via `reserve_user_data`) but not yet observed to have completed (via
-    /// `record_completion`).
-    #[must_use]
-    pub fn outstanding(&self) -> usize {
-        self.accounting.outstanding()
-    }
-
-    /// Mint a fresh `UserData` identity for a new operation, and account for
-    /// it as outstanding until `record_completion` is called for it.
-    ///
-    /// The identity is the whole of what a [`crate::Token`] needs to validate
-    /// a completion (D-4): unlike `windows-overlapped-io-sys`'s
-    /// `OperationId`, there is no separate storage address to pair it with,
-    /// because `UserData` is a value this crate chooses rather than one Win32
-    /// hands back.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error rather than reusing an identity if the `usize` space
-    /// is ever exhausted, mirroring `windows-threadpool-sys`'s own
-    /// "exhausting the generation sequence fails rather than wraps."
-    pub(crate) fn reserve_user_data(&mut self) -> io::Result<usize> {
-        self.accounting.reserve_user_data()
-    }
-
-    /// Record that one outstanding operation's completion has been observed
-    /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// [`crate::Token`] was still around to claim it.
-    pub(crate) fn record_completion(&mut self) {
-        self.accounting.record_completion();
-    }
-
-    /// Release a reservation for an operation that was never actually
-    /// queued -- a `Build*` call failed synchronously, after
-    /// [`IoRing::reserve_user_data`] had already minted its identity.
-    ///
-    /// Distinct from [`IoRing::record_completion`]: that marks a real
-    /// `IORING_CQE` observed; this marks one that will never arrive because
-    /// the op never entered the queue, so it must not count against
-    /// [`IoRing::run_down`] either.
-    pub(crate) fn cancel_reservation(&mut self) {
-        self.accounting.cancel_reservation();
-    }
-
-    /// This ring's ledger, for the crate's own minting paths (M24.2).
-    ///
-    /// Handed out rather than proxied so that a `Token` can be minted from
-    /// the bookkeeping alone -- which is what lets `token.rs`'s tests run
-    /// without a kernel ring, since minting is all they ever needed one for.
-    pub(crate) fn accounting_mut(&mut self) -> &mut Accounting {
-        &mut self.accounting
-    }
-
-    /// This ring's native handle, for `batch.rs`'s `Build*`/`Submit` calls.
-    pub(crate) fn raw_handle(&self) -> *mut c_void {
-        self.handle
-    }
-
-    /// This ring's own identity, for stamping onto every [`crate::Token`]/
-    /// registration it mints and checking against on use (PR #20 review
-    /// response); see [`RingId`].
-    pub(crate) fn ring_id(&self) -> RingId {
-        self.accounting.ring_id()
-    }
-
-    /// Queue a raw, not-yet-wrapped SQE via a caller-supplied `Build*` call
-    /// (M3.5, D-7).
-    ///
-    /// `build` receives this ring's native handle and a freshly reserved
-    /// `UserData` value, and must call exactly one `BuildIoRing*` function
-    /// with them, returning its `HRESULT`. On success the `UserData` is
-    /// returned so the caller can match it against a later [`Completion`]
-    /// popped by [`IoRing::try_pop`]; on failure the reservation is
-    /// released, since the op was never actually queued.
-    ///
-    /// # Errors
-    ///
-    /// Returns any error `build`'s `HRESULT` reports.
-    ///
-    /// # Safety
-    ///
-    /// `build` must queue an SQE for a *self-contained* op: everything the
-    /// kernel reads or writes for it must stay valid until the
-    /// corresponding completion is observed, and this crate cannot verify
-    /// what `build` does with the handle it is given. This is the same
-    /// framing as `windows-overlapped-io-sys`'s raw `ioctl` seam
-    /// (`device.rs`): the mechanics of building an SQE need nothing unsafe,
-    /// but this crate cannot audit an arbitrary `Build*` call, so the seam
-    /// itself is unsafe.
-    pub unsafe fn push_raw(
-        &mut self,
-        build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
-    ) -> io::Result<usize> {
-        let user_data = self.reserve_user_data()?;
-        let hr = build(self.handle, user_data);
-        if let Err(error) = check(hr) {
-            self.cancel_reservation();
-            return Err(error);
-        }
-        Ok(user_data)
-    }
-
-    /// Block until every outstanding operation has completed, so
-    /// `CloseIoRing` never runs while the kernel might still be touching a
-    /// token's buffer.
-    ///
-    /// Waits in short, rechecked steps via `SubmitIoRing`'s own wait -- with
-    /// zero new entries queued, its only effect is to block for up to
-    /// `RUN_DOWN_POLL_MS` and reap whatever is already outstanding -- rather
-    /// than one unbounded call. This does not interpret what it pops; M3/M4
-    /// add the typed completion path `Token` consumes. Idempotent: calling it
-    /// again once `outstanding() == 0` is a no-op.
-    ///
-    /// # A poll that expires is not a failure
-    ///
-    /// Each poll blocks for `RUN_DOWN_POLL_MS` and then reports
-    /// `ERROR_TIMEOUT` if nothing finished in that window, which is the
-    /// ordinary outcome for any operation slower than 50ms. Treating that as
-    /// an error -- which this did until M21.6 -- made `run_down` return `Err`
-    /// with the operation still outstanding, so `Drop` asserted and then
-    /// called `CloseIoRing` anyway: exactly the "the kernel may still be
-    /// writing through a token's buffer" hazard this function exists to
-    /// prevent.
-    ///
-    /// This loop therefore has no overall bound, and that is deliberate.
-    /// **Every SQE that successfully queues produces exactly one completion**
-    /// (M10.2), so it terminates. Blocking until that holds is the safe
-    /// failure mode; closing the ring early is not.
-    ///
-    /// # Choosing an unbounded wait is the caller's to make
-    ///
-    /// This spelling waits until rundown finishes, however long that takes,
-    /// and calling it is how a caller elects that. A caller who wants to
-    /// decide for themselves -- a deadline, a backoff, a number of attempts
-    /// before giving up -- calls [`IoRing::run_down_within`] instead and owns
-    /// the policy entirely. **This crate does not implement retry policy**
-    /// (M26.8): it supplies a bounded primitive and reports what happened.
-    ///
-    /// Note the difference from [`IoRing::pop_within`], which also waits in
-    /// segments: there the segments sit *inside a period the caller supplied*,
-    /// which is a bounded wait implemented properly rather than a policy. This
-    /// method had segments and no such period, which is what made it the one
-    /// waiting API in this crate shaped wrongly.
-    ///
-    /// # Errors
-    ///
-    /// Returns any error from `SubmitIoRing` other than an expired wait, or
-    /// from `PopIoRingCompletion`. **An error leaves the ring resumable**: see
-    /// [`IoRing::run_down_within`] for what is guaranteed about the operations
-    /// still queued.
-    pub fn run_down(&mut self) -> io::Result<()> {
-        while !self.run_down_within(Duration::MAX)? {}
-        Ok(())
-    }
-
-    /// Run down for at most `bound`, reporting whether it finished.
-    ///
-    /// `Ok(true)` means nothing is outstanding and the ring is safe to drop.
-    /// `Ok(false)` means the bound elapsed with work still in flight -- call
-    /// again when your own policy says to. [`IoRing::outstanding`] says how
-    /// much is left.
-    ///
-    /// # Why this exists, and why it returns rather than retries
-    ///
-    /// Rundown can fail for a reason that a later attempt would survive, and
-    /// **deciding whether to make that attempt is not this crate's business**.
-    /// A caller running under a deadline, a supervisor with a backoff, and a
-    /// test that wants to fail fast all want different answers, and a policy
-    /// baked in here would be wrong for two of the three. So this waits for
-    /// exactly as long as it is told and then reports.
-    ///
-    /// # What an error guarantees, which is what makes retrying safe
-    ///
-    /// `SubmitIoRing` documents that *"If this function returns an error other
-    /// than IORING_E_WAIT_TIMEOUT, then all entries remain in the submission
-    /// queue."* So a failure here has **not** lost the operations and has not
-    /// rewound them ([D-5](../DESIGN-NOTES.md#d-5)); they are still ring state,
-    /// a later submit is what runs them, and their buffers must stay alive
-    /// until they complete.
-    ///
-    /// The consequence worth stating plainly: after an `Err`, **do not drop
-    /// this ring**. Dropping it closes a ring the kernel may still write
-    /// through, which is the hazard rundown exists to prevent. Call again.
-    ///
-    /// # Errors
-    ///
-    /// Returns any error from `SubmitIoRing` other than an expired wait, or
-    /// from `PopIoRingCompletion`.
-    pub fn run_down_within(&mut self, bound: Duration) -> io::Result<bool> {
-        let deadline = Instant::now().checked_add(bound);
-        loop {
-            if self.accounting.outstanding() == 0 {
-                return Ok(true);
-            }
-            // `checked_add` rather than `+`, for the reason `pop_within_with`
-            // records: `Instant + Duration` panics on overflow, so
-            // `Duration::MAX` -- the honest spelling of "no deadline" -- would
-            // take down the process. A deadline the clock cannot represent is
-            // one that never arrives, which is what was asked for.
-            let remaining = match deadline {
-                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
-                None => Duration::MAX,
-            };
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            // Segments sit inside the caller's period, never outside it: the
-            // poll is the shorter of the rundown step and what is left.
-            let poll_ms = u32::try_from(remaining.as_millis())
-                .unwrap_or(u32::MAX)
-                .clamp(1, RUN_DOWN_POLL_MS);
-            let mut submitted = 0_u32;
-            // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
-            // new SQEs are queued -- this call's only purpose is to wait for
-            // and reap already-outstanding completions.
-            let hr = unsafe { crate::sys::submit(self.handle, 1, poll_ms, &raw mut submitted) };
-            wait_outcome(hr)?;
-            self.drain_for_rundown()?;
-        }
+        quiescent
     }
 
     /// Pop every currently available completion, recording each -- without
     /// interpreting it, since rundown only needs to know a completion
     /// happened, not what it was.
+    ///
+    /// Whatever each entry held is dropped here rather than handed back,
+    /// because there is nobody to hand it to: rundown is the one path that
+    /// pops without a caller waiting for the result. Dropping is correct
+    /// rather than merely convenient -- the completion is the proof the kernel
+    /// has finished, which is exactly what makes freeing safe.
     fn drain_for_rundown(&mut self) -> io::Result<()> {
-        while self.try_pop()?.is_some() {}
+        while let Some((_completion, _held)) = self.try_pop()? {}
         Ok(())
     }
 
-    /// Pop one completion if the queue has one ready, without blocking
-    /// (M3.7).
+    /// A completion was popped for an identity that is not in flight on this
+    /// ring ([D-79](../DESIGN-NOTES.md#d-79)).
     ///
-    /// Every popped completion is recorded via `record_completion`
-    /// regardless of whether the caller still holds a [`crate::Token`] for
-    /// it (D-4): accounting is driven by observing a real `IORING_CQE`,
-    /// never by a token being dropped.
+    /// It was never minted here, has already completed, or belongs to a
+    /// reservation released because its `Build*` call failed. Every queued SQE
+    /// produces exactly one completion carrying the identity it was built
+    /// with (M10.2), so each of those is a defect -- in a [`IoRing::push_raw`]
+    /// closure that built with some other `user_data`, in a `kernel-seam`
+    /// responder that broke `RS-C-2`, or in the kernel.
     ///
-    /// `None` says the completion queue is empty *at this instant*, never
-    /// that an operation will not complete. **Every SQE that successfully
-    /// queues produces exactly one completion** (M10.2) -- unconditionally,
-    /// which is what lets [`IoRing::run_down`] terminate. The only push that
-    /// yields no completion is one whose `Build*` call failed synchronously,
-    /// and that push's reservation is released rather than left outstanding.
+    /// Traced always, so the event survives in a trace dump whatever happens
+    /// next, and then a panic -- **except during an unwind**. Rundown runs in
+    /// `Drop`, so this can be reached while the thread is already panicking,
+    /// and a second panic there would abort the process; the panic already in
+    /// flight is left to carry the failure. The completion has retired
+    /// nothing either way, so quiescence is unaffected ([D-78](../DESIGN-NOTES.md#d-78)).
+    #[cold]
+    fn unminted_completion(&self, user_data: usize) {
+        #[cfg(feature = "threadpool")]
+        windows_threadpool_sys::trace_record!(
+            "ring",
+            "unminted-completion",
+            user_data,
+            self.accounting.outstanding()
+        );
+        if !std::thread::panicking() {
+            panic!(
+                "IoRing popped a completion for user_data {user_data:#x}, which is not in flight \
+                 on this ring: it was never minted here, has already completed, or its build \
+                 failed. Every queued SQE completes exactly once with the identity it was built \
+                 with, so this is a defect in a push_raw closure, a kernel-seam responder, or \
+                 the kernel (D-79)"
+            );
+        }
+    }
+
+    /// Pop a completion without touching the inventory.
     ///
-    /// A popped completion matching no live [`crate::Token`] is **normal**,
-    /// not a bug, and a drain loop must not treat it as one. It happens for
-    /// a registration (claimed by [`crate::PendingFileRegistration`] or
-    /// [`crate::PendingBufferRegistration`] instead), for a
-    /// [`crate::Batch::flush_raw`]/[`crate::Batch::cancel_raw`] push (which
-    /// return a bare identity because they own no buffer), for a cancel's own
-    /// completion as distinct from its target's, and for a token the caller
-    /// dropped unclaimed.
-    ///
-    /// # Errors
-    ///
-    /// Returns any error from `PopIoRingCompletion` other than its
-    /// documented empty-queue result.
-    pub fn try_pop(&mut self) -> io::Result<Option<Completion>> {
+    /// The shared body of every pop. It is deliberately private: a pop that
+    /// leaves the entry behind strands whatever the ring was holding, which is
+    /// a defect rather than a mode -- `drain_for_rundown` had exactly that bug
+    /// before `M28.4.1d.1`. Both public forms retire the entry; they differ
+    /// only in whether the caller is handed what it contained.
+    fn pop_raw(&mut self) -> io::Result<Option<Completion>> {
         let mut cqe = IORING_CQE {
             UserData: 0,
             ResultCode: 0,
@@ -1275,7 +892,9 @@ impl IoRing {
             return Ok(None);
         }
         check(hr)?;
-        self.record_completion();
+        if !self.record_completion(cqe.UserData) {
+            self.unminted_completion(cqe.UserData);
+        }
         Ok(Some(Completion {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
@@ -1313,7 +932,11 @@ impl IoRing {
     /// # Errors
     ///
     /// Any error from `SubmitIoRing` or `PopIoRingCompletion`.
-    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<Completion>> {
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
+    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<HeldCompletion<T, X>>> {
         self.pop_within_with(&mut SubmitWait, timeout)
     }
 
@@ -1329,20 +952,46 @@ impl IoRing {
     /// # Errors
     ///
     /// Any error from the wait or from `PopIoRingCompletion`.
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
     pub fn pop_within_with<W: CompletionWait + ?Sized>(
+        &mut self,
+        wait: &mut W,
+        timeout: Duration,
+    ) -> io::Result<Option<HeldCompletion<T, X>>> {
+        let Some(completion) = self.pop_within_raw_with(wait, timeout)? else {
+            return Ok(None);
+        };
+        let held = self
+            .reclaim(completion.user_data())
+            .map(|entry| (entry.payload, entry.extra));
+        Ok(Some((completion, held)))
+    }
+
+    /// [`IoRing::pop_within_with`] without touching the inventory.
+    ///
+    /// The counterpart to [`IoRing::pop_raw`], and private for the same
+    /// reason: it is the shared body, not a mode any caller should choose.
+    fn pop_within_raw_with<W: CompletionWait + ?Sized>(
         &mut self,
         wait: &mut W,
         timeout: Duration,
     ) -> io::Result<Option<Completion>> {
         let deadline = Instant::now().checked_add(timeout);
         loop {
-            if let Some(completion) = self.try_pop()? {
+            if let Some(completion) = self.pop_raw()? {
                 return Ok(Some(completion));
             }
             // Checked *after* the pop, never before: `record_completion` runs
             // during `try_pop`, so reading it first would race the very
             // completion being drained.
-            if self.outstanding() == 0 {
+            //
+            // `is_quiescent`, which is keyed by identity, so a foreign or
+            // duplicate completion cannot cut the wait short by claiming
+            // nothing can arrive.
+            if self.is_quiescent() {
                 return Ok(None);
             }
             // `checked_add` rather than `+`: `Instant + Duration` panics on
@@ -1367,7 +1016,13 @@ impl IoRing {
             let ms = u32::try_from(remaining.as_millis())
                 .unwrap_or(MAX_WAIT_MS)
                 .clamp(1, MAX_WAIT_MS);
-            wait.wait(&mut RingWait { ring: self }, ms)?;
+            wait.wait(
+                &mut RingWait {
+                    handle: self.handle,
+                    accounting: &self.accounting,
+                },
+                ms,
+            )?;
         }
     }
 }
@@ -1432,7 +1087,14 @@ pub trait CompletionWait {
     doc = "`RingScope` (the default `threadpool` feature) under [D-43](../DESIGN-NOTES.md#d-43)."
 )]
 pub struct RingWait<'ring> {
-    ring: &'ring mut IoRing,
+    /// Narrowed to what a wait actually uses -- the handle to submit on, and
+    /// the ledger to ask how much is outstanding -- rather than the whole
+    /// ring. That is the same narrowing `M24.7` made for `Token::new`, and
+    /// here it also keeps [`CompletionWait`] free of `IoRing`'s payload
+    /// parameter: a waiter blocks on a ring, and what the ring is holding for
+    /// its caller is none of its business.
+    handle: *mut c_void,
+    accounting: &'ring Accounting,
 }
 
 impl RingWait<'_> {
@@ -1469,7 +1131,7 @@ impl RingWait<'_> {
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
-        let hr = unsafe { crate::sys::submit(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
+        let hr = unsafe { crate::sys::submit(self.handle, 1, timeout_ms, &raw mut submitted) };
         wait_outcome(hr)
     }
 
@@ -1480,7 +1142,7 @@ impl RingWait<'_> {
     /// whether blocking on this ring is worth a slot at all.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.ring.outstanding()
+        self.accounting.outstanding()
     }
 }
 
@@ -1524,13 +1186,14 @@ impl IoRing {
             version: RingVersion::V1,
             supported_ops: OpSupport::default(),
             accounting: Accounting::new(),
-            registered_buffer_infos: Vec::new(),
+            late_read: ManuallyDrop::new(LateReadArrays::default()),
             completion_event: None,
+            inventory: ManuallyDrop::new(HashMap::new()),
         }
     }
 }
 
-impl Drop for IoRing {
+impl<T, X> Drop for IoRing<T, X> {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
         // the rundown-and-close actually executes rather than trusting the
@@ -1542,8 +1205,9 @@ impl Drop for IoRing {
         DROP_RUNS.with(|runs| runs.set(runs.get() + 1));
 
         // Best-effort rundown: a ring with an operation still outstanding at
-        // drop time is a use bug (M3's Batch/Token are the sanctioned way to
-        // avoid it), but Drop cannot propagate the error, so this asserts in
+        // drop time is a use bug (popping every completion, or calling
+        // `run_down`, before the drop is the sanctioned way to avoid it), but
+        // Drop cannot propagate the error, so this asserts in
         // debug builds rather than silently closing a ring the kernel may
         // still be writing through.
         //
@@ -1567,11 +1231,62 @@ impl Drop for IoRing {
         // substituted: `CloseIoRing(0xDEAD_0000)` raises
         // `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
         // kernel dereferences rather than an index into a handle table.
-        if let Err(error) = self.run_down() {
-            debug_assert!(
-                std::thread::panicking(),
-                "IoRing rundown failed before close: {error}"
-            );
+        let quiesced = match self.run_down() {
+            Ok(()) => true,
+            Err(error) => {
+                debug_assert!(
+                    std::thread::panicking(),
+                    "IoRing rundown failed before close: {error}"
+                );
+                false
+            }
+        };
+
+        // The inventory is dropped only when rundown actually quiesced the
+        // ring, and **forgotten otherwise** (D-73). This is `Token`'s
+        // leak-on-unclaimed-drop, relocated: it used to be the caller's,
+        // because the caller held the buffers and could not prove the kernel
+        // was finished with them. The ring can prove it -- rundown returning
+        // `Ok` is that proof -- but only on the path where rundown succeeds,
+        // and the rundown above is deliberately best-effort. On the other path
+        // the close below runs with operations possibly still outstanding, so
+        // freeing what they point at would hand the kernel a dangling write.
+        //
+        // Leaking is the correct answer there, exactly as it was for a `Token`
+        // dropped unclaimed before the token API retired: memory is lost, which
+        // is finite and visible,
+        // rather than reused, which is neither.
+        //
+        // `is_quiescent` is rechecked rather than trusting `quiesced` alone so
+        // that the free below and rundown's answer rest on the one predicate.
+        // It is keyed by identity, so a CQE the ring never minted -- a
+        // duplicate, or one carrying foreign user data -- cannot make it read
+        // true while any operation, owned or raw, is still in flight.
+        //
+        // The registration arrays follow the same rule for the same reason.
+        // The kernel reads them when the registration op runs (D-32), and a
+        // failed rundown is precisely the case where this ring cannot say
+        // whether that has happened.
+        if quiesced && self.is_quiescent() {
+            // SAFETY: nothing is outstanding, so no kernel write can still be
+            // aimed at anything this holds and no registration op can still
+            // read either array; neither field is used again -- this
+            // is `Drop`, and both are `ManuallyDrop` so nothing drops them a
+            // second time.
+            unsafe { ManuallyDrop::drop(&mut self.inventory) };
+            // Taken out rather than dropped in place so the test counter below
+            // counts the very value that is freed: deleting the release
+            // deletes the count with it.
+            //
+            // SAFETY: as for the inventory above; the field is not read again.
+            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };
+            #[cfg(test)]
+            {
+                let non_empty = usize::from(!arrays.buffer_infos.is_empty())
+                    + usize::from(!arrays.file_handles.is_empty());
+                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));
+            }
+            drop(arrays);
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
@@ -1603,6 +1318,18 @@ thread_local! {
     pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// How many non-empty registration arrays (`LateReadArrays`) `IoRing`'s `Drop`
+// has released on the calling thread. Thread-local for the reason `DROP_RUNS`
+// is.
+//
+// What it observes is the explicit release, not the absence of the compiler's
+// own drop of the field; that half is the field's `ManuallyDrop` type, which
+// `ring::tests` pins at compile time.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LATE_READ_ARRAYS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Pop one completion, bounded, for tests that need a real one.
 ///
 /// `Batch::submit_and_wait` returning does **not** mean a completion is
@@ -1627,14 +1354,22 @@ thread_local! {
 /// waited for in the failure message, where a consumer wants an `Option` it
 /// can act on.
 #[cfg(test)]
-pub(crate) fn pop_within(ring: &mut IoRing, what: &str) -> Completion {
+pub(crate) fn pop_within<T, X>(ring: &mut IoRing<T, X>, what: &str) -> Completion {
     // Named once so the bound and the message it reports cannot drift apart.
     const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
     ring.pop_within(BOUND)
         .expect("pop")
         .unwrap_or_else(|| panic!("timed out after {BOUND:?} waiting for {what}"))
+        .0
 }
+
+// Both are children rather than siblings so they can reach this module's
+// private items -- `pop_raw`, `is_quiescent`, `drain_for_rundown` -- which stay
+// here because `Drop` needs them too and a parent cannot see into its children.
+// No public path changes: an inherent `impl` is found by its type.
+mod bookkeeping;
+mod inventory;
 
 #[cfg(test)]
 mod tests;

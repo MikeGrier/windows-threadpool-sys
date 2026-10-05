@@ -35,7 +35,7 @@ fn run_down_is_a_no_op_when_nothing_is_outstanding() {
 
 #[test]
 fn dropping_a_ring_with_nothing_outstanding_does_not_hang() {
-    // The ordinary path: no tokens were ever minted, so Drop's run_down must
+    // The ordinary path: no operation was ever pushed, so Drop's run_down must
     // return immediately rather than waiting on SubmitIoRing at all.
     let ring = IoRing::new(64, 128).expect("create ring");
     drop(ring);

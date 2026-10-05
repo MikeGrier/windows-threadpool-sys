@@ -123,7 +123,16 @@ function Test-Case {
 function Assert-Equal {
     param($Expected, $Actual, [string] $Because = '')
     if ($Expected -ne $Actual) {
-        throw "expected [$Expected], got [$Actual]$(if ($Because) { " -- $Because" })"
+        # Format-ExitCode names a code that means a child process never
+        # started, and then the host's state is worth more than the case's own
+        # output: one CI run failed four cases this way with nothing but
+        # `got [-1073741502]` to go on (common.ps1, Get-ProcessStartFailure).
+        $got = Format-ExitCode $Actual
+        $hostState = if (Get-ProcessStartFailure $Actual) {
+            "`n" + ((@('Host state at the failure:') + (Get-HostPressureReport)) -join "`n")
+        }
+        else { '' }
+        throw "expected [$Expected], got [$got]$(if ($Because) { " -- $Because" })$hostState"
     }
 }
 
@@ -203,7 +212,8 @@ function New-Spec {
 # sabotage has, and the one the phase split exists to tell apart.
 function New-Stub {
     param(
-        [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail')] [string] $Behaviour,
+        [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
+            'build-echo', 'not-executed', 'not-started')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -220,6 +230,8 @@ function New-Stub {
     # unconditionally would only ever prove that a red baseline aborts.
     $skipBuild = "echo %* | findstr /C:`"--no-run`" >nul && exit /b 0"
     $intact = "findstr /C:`"// marker line`" src\lib.rs >nul && exit /b 0"
+    # The inverse of $skipBuild: the RUN phase passes, so only the build decides.
+    $runPhasePasses = "echo %* | findstr /C:`"--no-run`" >nul || exit /b 0"
     $body = switch ($Behaviour) {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
@@ -229,6 +241,43 @@ function New-Stub {
             "echo Couldn't compile the test.`r`nexit /b 101`r`n"
         }
         'hang' { "@echo off`r`n$skipBuild`r`n$intact`r`nping -n 900 127.0.0.1 >nul`r`n" }
+        # The BUILD fails, and only once the marker is gone -- the shape of a
+        # compile-time guard firing on a sabotage. The run phase always passes,
+        # so a result can only come from how the build failure is judged.
+        # `build-other` fails the same way with a different message: a typo in
+        # a patch, as far as the harness can tell.
+        'build-guard' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0080]: evaluation panicked: GUARD FIRED 1>&2`r`nexit /b 101`r`n"
+        }
+        'build-other' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0425]: cannot find value in this scope 1>&2`r`nexit /b 101`r`n"
+        }
+        # An unrelated error whose ECHOED SOURCE LINE carries the guard text,
+        # laid out as rustc renders it: the guard did not fire, but its message
+        # is on the line the diagnostic points at. PR #113 review.
+        'build-echo' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0308]: mismatched types 1>&2`r`n" +
+            "echo   --^> src\lib.rs:3:18 1>&2`r`n" +
+            "echo    ^| 1>&2`r`n" +
+            "echo 3  ^|     let x: u32 = `"GUARD FIRED`"; 1>&2`r`n" +
+            "echo    ^|            ---   ^^^^^^^^^^^^^ expected ``u32``, found ``^&str`` 1>&2`r`n" +
+            "exit /b 101`r`n"
+        }
+        # The RUN phase exits as a process Windows could not start:
+        # STATUS_DLL_INIT_FAILED, the code one CI run saw. The baseline stays
+        # green because the marker is still there for it.
+        'not-started' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`nexit /b -1073741502`r`n"
+        }
+        # cargo's own wording when it cannot start a test binary, as an
+        # antivirus refusal produced it.
+        'not-executed' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`n" +
+            "echo could not execute process ``x.exe`` (never executed) 1>&2`r`nexit /b 101`r`n"
+        }
     }
     $path = Join-Path $Root "stubs\$Behaviour.cmd"
     [System.IO.File]::WriteAllText($path, $body)
@@ -577,6 +626,144 @@ Test-Case 'does not count a patch that only breaks a doctest as caught' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'credits a compile-time guard that fails the build with its named message' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match "refused by the build \('GUARD FIRED'\)" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not credit a build that fails with some other message' {
+    # The named message is the whole difference between a guard firing and a
+    # typo in the patch; a build failure without it must stay a manifest
+    # problem even under refused-by-build.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-other' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "the build failed, but not with 'GUARD FIRED'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not credit a guard message that appears only in an echoed source line' {
+    # rustc prints the source line a diagnostic points at, so an unrelated
+    # error on a line that merely CONTAINS the guard text would otherwise read
+    # as the guard firing. PR #113 review.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-echo' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "the build failed, but not with 'GUARD FIRED'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'reports a refused-by-build patch that builds as a guard that did not fire' {
+    # The tests then fail, which would read as a catch; the verdict is the
+    # build's, and the build let the defect through.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'BUILT CLEANLY: the guard did not fire' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'still reports a build failure under caught as a manifest problem' {
+    # The other direction: the new expectation must not make build failures
+    # count for entries that did not declare one.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not count a test binary that never executed as caught' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'not-executed' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'INFRASTRUCTURE: a test binary was never executed' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not count a cargo that could not start as caught' {
+    # A non-zero exit used to be scored `failed`, which this tool credits as a
+    # catch -- for a suite that never ran a line.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'not-started' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'INFRASTRUCTURE: cargo could not be started' $result.Output
+        Assert-Match 'PROCESS-START FAILURE 0xC0000142 STATUS_DLL_INIT_FAILED' $result.Output 'the code is named'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects refused-by-build without a buildError' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ expect = 'refused-by-build' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'names no buildError' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a blank buildError' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = '  ' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'names no buildError' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a buildError on an entry that would ignore it' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'buildError is read only for refused-by-build' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'refuses to sweep when the baseline is already red' {
     $root = New-Fixture -Manifest (New-Spec)
     try {
@@ -910,6 +1097,226 @@ Test-Case 'ignores a per-sabotage bound that would lower the sweep-wide one' {
         $result = Invoke-Harness -Root $root -Arguments @(
             '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '8')
         Assert-Match 'HUNG past 8s' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+# --- sharding ---
+
+<#
+.SYNOPSIS
+    A manifest of `Count` entries, each patching its own line of the fixture.
+#>
+function New-ShardedFixture {
+    param(
+        [int] $Count,
+        # Where the `$Count` entries live. Defaults to the fixture's only file.
+        [string] $File = 'src/lib.rs',
+        # Extra entries, one per additional file, so a fixture can be given a
+        # dominant file and a tail of small ones -- the shape every manifest in
+        # this repository actually has.
+        [int] $Extra = 0
+    )
+
+    $lines = @(0..($Count - 1) | ForEach-Object { "// line $_" })
+    $entries = @(0..($Count - 1) | ForEach-Object {
+            [ordered]@{
+                name    = "entry $_"
+                file    = $File
+                expect  = 'caught'
+                why     = 'Each entry patches a line of its own.'
+                find    = @("// line $_")
+                replace = @('')
+            }
+        })
+    $source = ($lines -join "`n") + "`nfn main() {}`n"
+    $root = New-Fixture -Manifest ([ordered]@{ package = 'fixture'; sabotages = $entries }) -Source $source
+
+    if ($File -ne 'src/lib.rs') {
+        [System.IO.File]::WriteAllText((Join-Path $root ($File -replace '/', '\')), $source)
+    }
+    if ($Extra -gt 0) {
+        foreach ($i in 0..($Extra - 1)) {
+            $extraFile = "src/extra$i.rs"
+            [System.IO.File]::WriteAllText((Join-Path $root ($extraFile -replace '/', '\')),
+                "// only line`nfn main() {}`n")
+            $entries += [ordered]@{
+                name    = "extra $i"
+                file    = $extraFile
+                expect  = 'caught'
+                why     = 'One entry in a file of its own.'
+                find    = @('// only line')
+                replace = @('')
+            }
+        }
+        Set-Manifest -Root $root -Spec ([ordered]@{ package = 'fixture'; sabotages = $entries })
+    }
+    Invoke-Native { git -C $root add -A } | Out-Null
+    return $root
+}
+
+<#
+.SYNOPSIS
+    The entry names a `-List` run reported, in order.
+#>
+function Get-ListedNames {
+    param([string] $Root, [string[]] $Arguments)
+    $result = Invoke-Harness -Root $Root -Arguments $Arguments
+    Assert-Equal 0 $result.ExitCode $result.Output
+    return @($result.Output -split "`r?`n" |
+            Where-Object { $_ -match '^(caught|survives)\s+\S' } |
+            ForEach-Object { ($_ -split '\s+', 2)[1].Trim() })
+}
+
+Test-Case 'shards partition the manifest exactly, at every shard count' {
+    # The property that makes sharding safe to run in parallel, and it has two
+    # halves that fail differently: a missed entry means a sweep silently stops
+    # checking something, and a duplicated one means two workers patch and
+    # rebuild the same source. Asserted together, because a split that drops an
+    # entry and a split that repeats one are both "the counts look plausible".
+    $root = New-ShardedFixture -Count 11
+    try {
+        $all = Get-ListedNames -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List')
+        Assert-Equal 11 $all.Count 'the fixture should list every entry'
+
+        foreach ($count in 1, 2, 3, 4, 11, 16) {
+            $union = @()
+            for ($shard = 0; $shard -lt $count; $shard++) {
+                $union += Get-ListedNames -Root $root -Arguments @(
+                    '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', $count)
+            }
+            Assert-Equal $all.Count $union.Count "shard count ${count}: every entry exactly once"
+            $duplicated = @($union | Group-Object | Where-Object { $_.Count -gt 1 })
+            Assert-Equal 0 $duplicated.Count "shard count ${count}: no entry on two shards"
+            $missing = @($all | Where-Object { $union -notcontains $_ })
+            Assert-Equal 0 $missing.Count "shard count ${count}: no entry missed"
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'shards are evenly sized even when one file dominates the manifest' {
+    # The regression this exists for had both halves looking reasonable. An
+    # earlier split dealt WHOLE files to the lightest shard, which kept a
+    # shard's rebuilds in one compilation unit but refused to split anything --
+    # so a manifest whose entries cluster in one file (and all of this
+    # repository's do) pinned that file to one worker and the rest idled. The
+    # real `windows-threadpool-sys` manifest split 13,4,4,4 over four shards.
+    #
+    # Asserted as a property rather than against fixed numbers: no two shards
+    # may differ by more than one entry, whatever the shard count.
+    $root = New-ShardedFixture -Count 12 -File 'src/hot.rs' -Extra 6
+    try {
+        foreach ($count in 2, 3, 4, 6) {
+            $sizes = @()
+            for ($shard = 0; $shard -lt $count; $shard++) {
+                $sizes += (Get-ListedNames -Root $root -Arguments @(
+                        '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', $count)).Count
+            }
+            $spread = ($sizes | Measure-Object -Maximum).Maximum - ($sizes | Measure-Object -Minimum).Minimum
+            Assert-True ($spread -le 1) `
+            ("shard count ${count}: sizes [$($sizes -join ',')] differ by $spread, but a dominant " +
+                'file must not pin one shard')
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a shard keeps a dominant file contiguous rather than interleaving it' {
+    # The other half of the same design, and the one a fairness fix would
+    # silently undo: evening the sizes must not be done by dealing entries
+    # round-robin, which would alternate files on purpose and dirty two
+    # compilation units per iteration instead of one.
+    #
+    # Asserted as "a file's entries are never split into two runs", NOT as a
+    # count of file changes. The first version of this counted changes and
+    # failed the implementation wrongly: a shard made entirely of single-entry
+    # files changes file on every step and cannot do otherwise, so a count
+    # punishes a split for the manifest's shape rather than for its own
+    # behaviour. What is actually required is that a file, once started within a
+    # shard, is finished before another begins.
+    $root = New-ShardedFixture -Count 12 -File 'src/hot.rs' -Extra 6
+    try {
+        $spec = Get-Content (Join-Path $root 'sabotage.json') -Raw | ConvertFrom-Json
+        for ($shard = 0; $shard -lt 3; $shard++) {
+            $names = Get-ListedNames -Root $root -Arguments @(
+                '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', 3)
+            $files = @($names | ForEach-Object {
+                    $n = $_; ($spec.sabotages | Where-Object { $_.name -eq $n }).file
+                })
+            # One run per file at most: collapse consecutive duplicates, then a
+            # file appearing twice in what is left is a file that was resumed.
+            $runs = @()
+            for ($i = 0; $i -lt $files.Count; $i++) {
+                if ($i -eq 0 -or $files[$i] -ne $files[$i - 1]) { $runs += $files[$i] }
+            }
+            $resumed = @($runs | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+            Assert-Equal 0 $resumed.Count `
+            ("shard ${shard}: [$($files -join ',')] returns to $($resumed -join ',') after leaving it; " +
+                'a file must be finished before another begins')
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'an empty shard is a success, not a failure' {
+    # A fixed CI matrix over manifests of different sizes leaves small ones with
+    # shards that have nothing to do. A red job there would be noise that trains
+    # people to ignore the workflow, so this is the accepting direction of the
+    # shard split and is asserted on a real sweep, not a listing.
+    $root = New-ShardedFixture -Count 1
+    try {
+        # No cargo stub needed: the empty-shard exit happens before the
+        # baseline, which is the point -- an empty shard must not pay for a
+        # cold build of a crate it will not touch.
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-Shard', 3, '-ShardCount', 4)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'no entries' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a shard index outside its shard count' {
+    $root = New-ShardedFixture -Count 4
+    try {
+        foreach ($args in @(
+                @('-Shard', 4, '-ShardCount', 4),
+                @('-Shard', -1, '-ShardCount', 4),
+                @('-ShardCount', 0))) {
+            $result = Invoke-Harness -Root $root `
+                -Arguments (@('-Manifest', 'sabotage.json', '-List') + $args)
+            Assert-Equal 2 $result.ExitCode $result.Output
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a stem collision is rejected even when the two entries are on different shards' {
+    # The reason the collision check reads the WHOLE manifest rather than the
+    # shard. Two names that sanitise to one stem share a transcript and a backup
+    # path; that is a defect in the manifest whether or not one process happens
+    # to run both. A shard that validated only its own slice would report green
+    # on a manifest the unsharded sweep rejects, which is the worst shape a
+    # parallel mode can have: it disagrees with the serial one.
+    #
+    # The two entries are adjacent, so `index % 2` puts them on different
+    # shards, and shard 0 alone would otherwise see only the first.
+    $spec = [ordered]@{
+        package   = 'fixture'
+        sabotages = @(
+            [ordered]@{ name = 'a: b'; file = 'src/lib.rs'; expect = 'caught'; why = 'w'
+                find = @('// marker line'); replace = @('') },
+            [ordered]@{ name = 'a - b'; file = 'src/lib.rs'; expect = 'caught'; why = 'w'
+                find = @('fn main() {}'); replace = @('') })
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Shard', 0, '-ShardCount', 2)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'same file name stem' $result.Output
     }
     finally { Remove-Fixture $root }
 }

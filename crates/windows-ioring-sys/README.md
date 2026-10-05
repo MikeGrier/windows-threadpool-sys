@@ -7,9 +7,13 @@ empty shell on other platforms.
 
 Windows 11 and Server 2022 added `IoRing`, a submission/completion ring for file
 I/O closer in shape to `io_uring` than to anything else Windows offers. This
-crate raises those primitives into safe Rust with the minimum additional CPU and
-memory cost: a completion hands the caller's buffer back without the crate having
-allocated anything to track it.
+crate raises those primitives into safe Rust. The ring holds each in-flight
+operation's buffer on the caller's behalf and hands it back at the pop that
+observes its completion, so no buffer the kernel may still be using is reachable
+from safe code. The tracking that makes this possible has a cost, which may
+allocate: an entry in a hash set for every operation in flight, and for an owned
+push an entry in a hash map holding its payload
+([D-78](DESIGN-NOTES.md#d-78)).
 
 ## Example
 
@@ -21,19 +25,28 @@ use std::os::windows::io::OwnedHandle;
 
 let file = std::fs::File::open(r"C:\some\file.bin")?;
 let shared = SharedFile::new(OwnedHandle::from(file));
-let mut ring = IoRing::new(8, 8)?;
+// The ring holds each operation's buffer, so `T` says what it holds.
+let mut ring = IoRing::<Vec<u8>>::with_inventory(8, 8)?;
 
-let token = {
+{
     let mut batch = Batch::new(&mut ring);
-    let token = batch.read(&shared, vec![0_u8; 4096], 0, Default::default())?;
+    batch.read_owned(&shared, vec![0_u8; 4096], (), 0, Default::default())?;
     batch.submit_and_wait(1, 5_000)?;
-    token
-};
+}
 
-let completion = ring.try_pop()?.expect("a completion is ready");
+// The pop hands the buffer back. There is nothing to hold onto in between,
+// and nothing to match against: the ring already knows which operation this
+// completion belongs to.
+// `pop_within` rather than `try_pop`: `submit_and_wait` returning does not
+// promise a completion is already poppable. RS-P-5 leaves the kernel free to
+// post it later, so unwrapping `try_pop` here would assert a guarantee this
+// crate does not make -- the same shape its own tests refuse at the source.
+let (completion, held) = ring
+    .pop_within(std::time::Duration::from_secs(5))?
+    .expect("a completion arrives within the bound");
 completion.result()?;
-let (buffer, _file) = token.claim_if(&completion).expect("token claims its own completion");
-println!("read {} bytes", buffer.len());
+let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+println!("read {} bytes", buffer.expect("a read carries a buffer").len());
 # Ok::<(), std::io::Error>(())
 ```
 
@@ -138,7 +151,7 @@ first-class; neither is a degraded form of the other.
 ## Durability
 
 Three facts, all measured rather than documented by Win32, and all of them
-things a consumer gets wrong by default. `Batch::flush`, `FlushCoverage`,
+things a consumer gets wrong by default. `Batch::flush_owned`, `FlushCoverage`,
 `WriteCaching` and `FlushMode` state them in full; this is the summary that
 stops a reader from never looking.
 
@@ -154,7 +167,7 @@ stops a reader from never looking.
 3. **A flush without the barrier covers nothing.** An unflagged flush is an
    ordinary operation competing with the writes before it, and it frequently
    wins, so its completion proves nothing about them. This is why
-   `Batch::flush` requires a `FlushCoverage` rather than defaulting: the
+   `Batch::flush_owned` requires a `FlushCoverage` rather than defaulting: the
    obvious spelling was a silent data-loss bug, invisible until power is lost.
    Note that seeing your flush land last on your hardware is not evidence you
    can omit the barrier -- which direction the reordering shows in is
