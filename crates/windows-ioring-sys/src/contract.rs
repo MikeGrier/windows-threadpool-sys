@@ -274,10 +274,12 @@ impl RingContract {
     /// synchronously releases its reservation and produces no completion, so
     /// reporting it would manufacture an [`Violation::Outstanding`] at
     /// teardown.
+    ///
     /// There is one push observer, as of `M28.5`. There were two:
-    /// `observe_push` recorded an SQE that carried no token to
+    /// `observe_push` recorded a push that returned a token, and
+    /// `observe_tokenless_push` recorded an SQE that carried no token to
     /// claim -- the `_raw` flush and cancel entry points -- because reporting
-    /// one as an ordinary push produced a leak violation its caller had no
+    /// one through `observe_push` produced a leak violation its caller had no
     /// way to satisfy, there being no token to claim. [D-74](../DESIGN-NOTES.md#d-74)
     /// removed the leak rule, which made the two identical in body as well as
     /// in purpose, and two names for one behaviour is a restatement waiting
