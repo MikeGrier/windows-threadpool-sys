@@ -85,6 +85,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'common.ps1')
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 # The single output sink. Every message this tool emits goes through here, so
@@ -123,9 +124,14 @@ function Invoke-Suite {
             # test ran at all. Reporting that as `caught` credits the suite with
             # a detection it never made -- the same unviable-vs-caught
             # distinction `run-sabotage.ps1` draws. Raised in PR #56 review.
+            # Read-SharedText rather than Get-Content: these are redirect files,
+            # and a read that failed here used to be silenced, leaving the text
+            # empty and scoring a mutant that never compiled as `failed` -- that
+            # is, as caught. Get-Content was measured to survive the race, but by
+            # an undocumented sharing mode; see common.ps1. PR #113 review.
             $text = @(
-                (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue),
-                (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
+                @($out, "$out.err") | Where-Object { Test-Path -LiteralPath $_ } |
+                    ForEach-Object { Read-SharedText -Path $_ }
             ) -join "`n"
             $outcome = if ($text -match 'could not compile|(?m)^error\[E\d+\]') {
                 'unviable'

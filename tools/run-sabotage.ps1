@@ -481,14 +481,21 @@ function Invoke-Sabotaged {
     # would otherwise score as `caught` for a suite that never ran. cargo's
     # wording is fixed: "could not execute process `...` (never executed)", on
     # stderr. Withholds credit only; never grants it.
+    #
+    # Both transcripts here are redirect files, read just after cargo exited, so
+    # they are read through Read-SharedText like the build log (common.ps1).
+    # Select-String happens to survive that race -- measured: 0 of 120 reads
+    # threw where ReadAllText threw 29 -- but only because of a sharing mode
+    # PowerShell does not document, and the harness binds to the helper that
+    # states its sharing rather than to that. PR #113 review.
     if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath "$TranscriptPath.err")) {
-        if (Select-String -LiteralPath "$TranscriptPath.err" -Pattern '(never executed)' -SimpleMatch -Quiet) {
+        if ((Read-SharedText -Path "$TranscriptPath.err").Contains('(never executed)')) {
             return [pscustomobject]@{ Outcome = 'not-executed'; Code = $run.Code; Seconds = $run.Seconds }
         }
     }
 
     if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
-        if (Select-String -LiteralPath $TranscriptPath -Pattern "Couldn't compile the test." -SimpleMatch -Quiet) {
+        if ((Read-SharedText -Path $TranscriptPath).Contains("Couldn't compile the test.")) {
             return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code; Seconds = $run.Seconds }
         }
     }
