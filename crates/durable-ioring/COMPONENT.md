@@ -1,10 +1,5 @@
 # durable-ioring
 
-**Planned, not built.** This directory holds a plan and no code. It becomes a crate when
-[CHECKLIST.md](CHECKLIST.md) reaches its scaffolding item; until then it exists so the work has an
-owner and a place. It is deliberately absent from the workspace manifest,
-`release-please-config.json` and the publish workflow until there is code to publish.
-
 "dioring" is the engineer's short form of the name, and is used throughout these documents.
 
 ## What it is

@@ -5,6 +5,7 @@
   "crates/windows-file-watcher-example-test-harness": "0.1.5",
   "crates/windows-impersonation-token-sys": "0.1.1",
   "crates/windows-ioring-sys": "0.7.0",
+  "crates/durable-ioring": "0.0.0",
   "crates/win-numa-sys": "0.1.0",
   "crates/win-shared-os-owned-handle": "0.1.0",
   "crates/windows-overlapped-io-sys": "0.1.3",

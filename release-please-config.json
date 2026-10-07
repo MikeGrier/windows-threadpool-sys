@@ -21,7 +21,11 @@
             "component": "windows-platform-probes",
             "versioning": "probe-calver"
         },
-        "crates/win-numa-sys": {
+        "crates/durable-ioring": {
+      "package-name": "durable-ioring",
+      "component": "durable-ioring"
+    },
+    "crates/win-numa-sys": {
       "package-name": "win-numa-sys",
       "component": "win-numa-sys"
     },

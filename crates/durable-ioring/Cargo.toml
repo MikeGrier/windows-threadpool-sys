@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "durable-ioring"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A ring for Windows file I/O with durability scheduled into its work: writes are tagged with epochs, and durability through an epoch is requested and reported in the ring's own completion stream. Built on windows-ioring-sys. No unsafe code."
+readme = "COMPONENT.md"
+
+[dependencies]
+# **Path only, with no `version`, deliberately** (DI-D-16 in DESIGN-NOTES.md). dioring is built
+# against the ring crate's unreleased tree, and a version written now would guess the number
+# release-please will choose. A path-only dependency also makes `cargo publish` refuse, so the pin
+# cannot be skipped at release: DI-3.5 adds the version, keeping the path.
+windows-ioring-sys = { path = "../windows-ioring-sys" }
+# The contract's file type (DI-D-29): a consumer's file is a `SharedHandle`, and dioring hands that
+# same handle to the ring, which takes the type directly.
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it would render an
+# almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

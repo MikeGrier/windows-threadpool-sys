@@ -4,9 +4,8 @@ What this component is: [COMPONENT.md](COMPONENT.md). Decisions: [DESIGN-NOTES.m
 The session behind both: [DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).
 
 DI-M1, the contract, and DI-M2, the API shape, are complete -- see [CONTRACT.md](CONTRACT.md),
-[API.md](API.md) and the archive in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Nothing is
-implemented; code begins at DI-M3. The flush-failure spike (DI-M4) runs alongside and gates
-nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
+[API.md](API.md) and the archive in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Code begins
+at DI-M3. The flush-failure spike (DI-M4) runs alongside and gates nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
 convention.
 
 ## DI-M3 -- First implementations
@@ -14,12 +13,7 @@ convention.
 Graduated from the parked DI-M3+ on 2026-10-07, once DI-M2 was complete; its items were renumbered
 from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
-- [ ] **DI-3.1** -- **Scaffold the crate**: `Cargo.toml` inheriting the workspace's edition and
-  MSRV, workspace membership, `#![forbid(unsafe_code)]`, and the release-please and publish-workflow
-  entries. The `windows-ioring-sys` dependency is **path only**, with no `version`
-  ([DI-D-16](DESIGN-NOTES.md#di-d-16)); `DI-3.5` pins it before release.
-  `win-shared-os-owned-handle`, for the file type ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is already
-  published, so it is a normal `version` and `path` dependency.
+- [x] **DI-3.1** -- The crate is scaffolded: a workspace member with `#![forbid(unsafe_code)]`, registered for release and publication. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-31)
 
 - [ ] **DI-3.2** -- **dioring over `windows-ioring-sys`**, implementing the contract in
   [CONTRACT.md](CONTRACT.md). The crate's documentation includes CONTRACT.md

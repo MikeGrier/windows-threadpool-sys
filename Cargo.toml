@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/durable-ioring",
 	"crates/win-numa-sys",
 	"crates/win-shared-os-owned-handle",
 	"crates/windows-file-enumeration-sys",

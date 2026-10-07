@@ -1189,3 +1189,19 @@ Every item below was already archived above under its own anchor; these are the 
 - [x] **DI-2.13** -- A lineage its holder will not finish is ended: its unfinished epochs abandoned, its handle refused, retired once drained, nothing waited for or cancelled. -> [completed 2026-10-06](COMPLETED-CHECKLIST.md#di-213)
 
 - [x] **DI-2.8** -- An epoch number's scope is one instance, with one author per epoch space. -> [completed 2026-10-05](COMPLETED-CHECKLIST.md#di-28)
+
+## Moved 2026-10-07 16:24:03 -04:00 -- DI-3.1: the crate is scaffolded
+
+### <a id="di-31"></a>DI-3.1 -- The crate is scaffolded: a workspace member with `#![forbid(unsafe_code)]`, registered for release and publication. *(completed 2026-10-07 16:24:03 -04:00)*
+
+[Cargo.toml](Cargo.toml) inherits the workspace's edition and MSRV, depends on
+`windows-ioring-sys` by path only ([DI-D-16](DESIGN-NOTES.md#di-d-16)) and on
+`win-shared-os-owned-handle` by version and path ([DI-D-29](DESIGN-NOTES.md#di-d-29)), and uses
+[COMPONENT.md](COMPONENT.md) as its readme. [src/lib.rs](src/lib.rs) forbids unsafe code
+([DI-D-4](DESIGN-NOTES.md#di-d-4)) and holds nothing else yet. Registered in the workspace
+members, `release-please-config.json`, the manifest at `0.0.0`, and the publish workflow.
+
+DI-D-16's claim that a path-only dependency stops a publish was checked, not assumed:
+`cargo publish --dry-run` refuses with "all dependencies must have a version requirement
+specified when publishing", naming `windows-ioring-sys`. So dioring's first release cannot
+publish until `DI-3.5` pins that version.
