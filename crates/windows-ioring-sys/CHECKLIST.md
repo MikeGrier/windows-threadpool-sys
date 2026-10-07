@@ -101,31 +101,16 @@ Opened 2026-10-05 from the durable-ioring design session
 ([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
 "DI-2.3: completion routing"). durable-ioring's design ([DI-D-18](../durable-ioring/DESIGN-NOTES.md#di-d-18))
 needs two properties of the
-`on_completion` callback. Today they hold only as implementation: the comments on the private
-`drain` and on the callback body say so, but `EventDelivery::new`'s rustdoc does not. Relying on
-them as they stand would bind a consumer to incidental behaviour. The engineer's framing: using
+`on_completion` callback. When this milestone opened they held only as implementation: the
+comments on the private `drain` and on the callback body said so, but `EventDelivery::new`'s
+rustdoc did not, so relying on them would have bound a consumer to incidental behaviour. The engineer's framing: using
 it "without permission" is not better than getting it properly supported.
 
 This does **not** make the ring a synchronization provider. That is out of this crate's scope, and
 no consumer may share the ring's lock. It states two properties of this crate's own callback that
 any callback API owes its users.
 
-- [ ] **M31.1** -- **State and pin `on_completion`'s re-entrancy and concurrency on the public
-  surface.**
-  - **Re-entrancy:** `on_completion` is called with the ring's lock released, so it may call
-    `EventDelivery::scope` and submit without deadlocking.
-  - **Concurrency:** two invocations may run at once on different pool threads, and completions
-    handed to concurrent invocations carry no order relative to each other. A consumer that needs
-    an order must impose it. The drain-rearm-drain shape is what produces the overlap.
-  - Both go in `EventDelivery::new`'s rustdoc, and in [DESIGN-NOTES.md](DESIGN-NOTES.md) as a
-    decision, so a later change to the delivery loop has a stated contract to answer to.
-  - **Tests, in both directions:** a callback that calls `scope()` and pushes completes, which a
-    lock held across the callback would turn into a deadlock -- run it with a bounded wait so a
-    regression fails rather than hangs. The concurrency statement is a permission, not a
-    promise, so it is asserted by documentation; do not write a test that requires overlap to be
-    observed.
-  - **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
-    re-entrancy test fails.
+- [x] **M31.1** -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m311)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 

@@ -1336,6 +1336,18 @@
       "replace": [
         "        std::mem::forget(self.clone());\n        self.clone()\n"
       ]
+    },
+    {
+      "name": "M31.1: the delivery loop holds the ring's lock across on_completion",
+      "file": "src/event_delivery.rs",
+      "expect": "caught",
+      "why": "D-83: the callback runs with the ring unlocked, so it may open a scope and submit. Holding the guard through the match makes the callback's own scope() wait on a lock its thread already holds. Caught by a_callback_may_open_a_scope_and_submit in event_delivery.rs, whose second read is never submitted; it leaks the delivery on failure, so the deadlocked callback fails the test rather than hanging its teardown.",
+      "find": [
+        "        let popped = {\n            let mut ring = ring\n                .lock()\n                .unwrap_or_else(std::sync::PoisonError::into_inner);\n            ring.try_pop()\n        };\n"
+      ],
+      "replace": [
+        "        let mut held = ring\n            .lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner);\n        let popped = held.try_pop();\n"
+      ]
     }
   ]
 }

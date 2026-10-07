@@ -29,8 +29,10 @@ type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sy
 ///
 /// Each pop is its own short lock: `on_completion` always runs with the
 /// mutex released, so a slow callback does not block a submitter, and a
-/// callback that calls [`EventDelivery::ring`] and locks it itself cannot
-/// deadlock against this loop.
+/// callback that calls [`EventDelivery::scope`] and submits cannot deadlock
+/// against this loop. That is contract, not just how this happens to work:
+/// [`EventDelivery::new`] states it, and [D-83](../DESIGN-NOTES.md#d-83)
+/// records it.
 fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
         let popped = {
@@ -135,6 +137,27 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// method had itself attached the event: a caller that attached earlier
     /// and consumed that signal lost its whole backlog, every time rather
     /// than rarely.
+    ///
+    /// # What `on_completion` may rely on
+    ///
+    /// Two properties of the callback are part of this method's contract
+    /// ([D-83](../DESIGN-NOTES.md#d-83)), so a consumer may build on them:
+    ///
+    /// - **It runs with the ring unlocked.** Each completion is popped under
+    ///   the ring's lock and handed to `on_completion` after the lock is
+    ///   released, so the callback may call [`EventDelivery::scope`] and
+    ///   submit without deadlocking. This method hands the callback nothing
+    ///   to reach its `EventDelivery` by; the caller arranges that, with a
+    ///   `Weak` set after construction, for instance.
+    /// - **Invocations may overlap.** Two calls may run at once on different
+    ///   pool threads, and completions handed to concurrent calls carry no
+    ///   order relative to each other. A consumer that needs an order imposes
+    ///   it. The overlap comes from the delivery loop's shape -- drain, re-arm
+    ///   the wait, drain again -- since a completion arriving after the
+    ///   re-arm can start a second call while the first is still draining.
+    ///
+    /// Neither makes the ring a synchronization provider: its lock is its
+    /// own, and a callback holds it only for as long as a scope it opens.
     ///
     /// # Errors
     ///

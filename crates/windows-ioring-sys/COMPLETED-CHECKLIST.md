@@ -6287,3 +6287,36 @@ both-directions lifetime test is
 [ring_owned_inventory.rs](tests/ring_owned_inventory.rs), beside the existing
 test for the other direction; a leaked guard is recorded in
 [sabotage.json](sabotage.json) and was verified caught by it.
+
+## Moved 2026-10-07 17:12:55 -04:00 -- M31.1: the delivery callback's contract is stated
+
+### <a id="m311"></a>M31.1 -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. *(completed 2026-10-07 17:12:55 -04:00)*
+
+The decision is [D-83](DESIGN-NOTES.md#d-83); the statement a consumer binds to is
+`EventDelivery::new`'s "What `on_completion` may rely on". The re-entrancy test is
+`a_callback_may_open_a_scope_and_submit` in
+[event_delivery.rs](tests/event_delivery.rs): the first read's callback reaches the
+delivery through a `Weak` and submits a second read. It deliberately does not use the
+file's `recv_one`, whose post-mortem reads the ring's count under the very lock a
+regression would leave held, and it leaks the delivery on panic so the deadlocked
+callback fails the test instead of hanging its teardown. The sabotage that holds the
+lock across the callback is in [sabotage.json](sabotage.json), and a harness run
+recorded it caught by that test alone, at the bound rather than by a hang. Overlap is
+stated, not tested, as the item required.
+
+The item as it stood at completion:
+
+- **Re-entrancy:** `on_completion` is called with the ring's lock released, so it may call
+  `EventDelivery::scope` and submit without deadlocking.
+- **Concurrency:** two invocations may run at once on different pool threads, and completions
+  handed to concurrent invocations carry no order relative to each other. A consumer that needs
+  an order must impose it. The drain-rearm-drain shape is what produces the overlap.
+- Both go in `EventDelivery::new`'s rustdoc, and in [DESIGN-NOTES.md](DESIGN-NOTES.md) as a
+  decision, so a later change to the delivery loop has a stated contract to answer to.
+- **Tests, in both directions:** a callback that calls `scope()` and pushes completes, which a
+  lock held across the callback would turn into a deadlock -- run it with a bounded wait so a
+  regression fails rather than hangs. The concurrency statement is a permission, not a
+  promise, so it is asserted by documentation; do not write a test that requires overlap to be
+  observed.
+- **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
+  re-entrancy test fails.

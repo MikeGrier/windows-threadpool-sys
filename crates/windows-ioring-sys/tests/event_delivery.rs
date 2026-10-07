@@ -772,6 +772,144 @@ fn the_stall_report_carries_what_a_diagnosis_needs() {
 // ------------------------------------------------------------------------
 // Relocated from `src/event_delivery/tests.rs` at 9bc0350e (M24.3).
 
+/// Keeps the delivery alive past a panic, so a failing assertion fails rather
+/// than hangs.
+///
+/// Dropping an `EventDelivery` waits for any callback still running. The
+/// regression [`a_callback_may_open_a_scope_and_submit`] guards against leaves
+/// a callback parked on the ring's lock forever, so unwinding through a normal
+/// drop would trade the failure for a hang. Leaking it costs nothing: the
+/// process is about to report a failed test.
+struct LeakOnPanic<D>(Option<D>);
+
+impl<D> Drop for LeakOnPanic<D> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(self.0.take());
+        }
+    }
+}
+
+/// `M31.1`, [D-83](../DESIGN-NOTES.md#d-83): the callback runs with the ring
+/// unlocked, so it may open a scope and submit.
+///
+/// The first read's callback reaches the delivery through a `Weak` set after
+/// construction and submits a second read from inside the callback. Were the
+/// ring's lock held across the callback, its own `scope()` would block on that
+/// lock and the second read would never be submitted, so the test fails at the
+/// bound. Only the re-entrancy is tested: whether two callbacks overlap is
+/// permitted, not promised, and asserting it would assert a scheduling accident.
+///
+/// Uses a plain bounded receive rather than `recv_one`, whose post-mortem reads
+/// the ring's count under that same lock and would park behind the very
+/// callback this test is about.
+#[test]
+fn a_callback_may_open_a_scope_and_submit() {
+    const FIRST: usize = 0;
+    const SUBMITTED_FROM_THE_CALLBACK: usize = 1;
+
+    let path = temp_file("reentrant");
+    let content = filled_content();
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    // As an integer, because a raw handle is not `Send` and the callback must
+    // be. The file outlives every use: it is dropped after the delivery, or
+    // leaked with it.
+    let handle = file.as_raw_handle() as usize;
+
+    type Delivery = EventDelivery<Vec<u8>, usize>;
+    let reach: Arc<std::sync::OnceLock<std::sync::Weak<Delivery>>> =
+        Arc::new(std::sync::OnceLock::new());
+    let reach_for_callback = Arc::clone(&reach);
+    let (tx, rx) = mpsc::channel::<Delivered>();
+
+    let ring = DeliveryRing::with_inventory(8, 8).expect("create ring");
+    let delivery = Arc::new(
+        EventDelivery::new(
+            ring,
+            move |completion, held| {
+                let resubmit = matches!(held, Some((_, FIRST)));
+                if resubmit {
+                    // The strong reference is dropped before anything is sent,
+                    // so the test thread's is always the last: an
+                    // `EventDelivery` dropped from inside its own callback
+                    // would wait for itself.
+                    if let Some(delivery) = reach_for_callback.get().and_then(|weak| weak.upgrade())
+                    {
+                        let mut scope = delivery.scope();
+                        let mut batch = scope.batch();
+                        unsafe {
+                            batch.read_raw_owned(
+                                handle as HANDLE,
+                                vec![0_u8; CHUNK_LEN],
+                                SUBMITTED_FROM_THE_CALLBACK,
+                                CHUNK_LEN as u64,
+                                PushOptions::new(),
+                            )
+                        }
+                        .expect("queue a read from inside the callback");
+                        batch
+                            .submit_and_wait(0, 0)
+                            .expect("submit from inside the callback");
+                    }
+                }
+                let _ = tx.send((completion, held));
+            },
+            None,
+        )
+        .expect("wire event delivery"),
+    );
+    reach
+        .set(Arc::downgrade(&delivery))
+        .expect("set the callback's reach once");
+    let delivery = LeakOnPanic(Some(delivery));
+
+    {
+        let live = delivery.0.as_ref().expect("held until the end");
+        let mut scope = live.scope();
+        let mut batch = scope.batch();
+        unsafe {
+            batch.read_raw_owned(
+                handle as HANDLE,
+                vec![0_u8; CHUNK_LEN],
+                FIRST,
+                0,
+                PushOptions::new(),
+            )
+        }
+        .expect("queue the first read");
+        batch.submit_and_wait(0, 0).expect("submit the first read");
+    }
+
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let (completion, held) = rx.recv_timeout(DELIVERY_BOUND).unwrap_or_else(|_| {
+            panic!(
+                "D-83: only {seen:?} of [{FIRST}, {SUBMITTED_FROM_THE_CALLBACK}] arrived within \
+                 {DELIVERY_BOUND:?}; a callback that submits must not block on the ring's lock"
+            )
+        });
+        completion.result().expect("read succeeded");
+        let (buffer, which) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        let offset = if which == FIRST { 0 } else { CHUNK_LEN };
+        assert_eq!(
+            buffer,
+            content[offset..offset + CHUNK_LEN],
+            "read {which} returned its own chunk"
+        );
+        seen.push(which);
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, [FIRST, SUBMITTED_FROM_THE_CALLBACK]);
+
+    drop(delivery);
+    drop(file);
+}
+
 #[test]
 fn new_succeeds_and_the_ring_stays_reachable_for_pushes() {
     let ring = IoRing::new(8, 8).expect("create ring");
