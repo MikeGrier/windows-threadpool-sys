@@ -53,28 +53,44 @@
       "replace": ["        [System.IO.File]::Copy($realTarget, $target, $true)"]
     },
     {
-      "name": "a hung run is abandoned instead of killed",
+      "name": "the launcher's timeout is scored as a pass",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",
-      "why": "Removing the kill leaves the outcome correct -- the phase still reports as hung -- while the process tree survives the sweep. A tool that detects hangs by walking away from them accumulates one orphaned test binary per hang, each holding build locks and CPU.",
-      "find": ["    Stop-Tree -ProcessId $process.Id"],
+      "why": "The launcher kills a hung tree and says so; reading that as a pass turns every lost-wakeup sabotage into a survivor, and a red sweep into a list of false gaps.",
+      "find": ["        return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }"],
+      "replace": ["        return [pscustomobject]@{ Outcome = 'passed'; Code = $null; Seconds = $elapsed }"]
+    },
+    {
+      "name": "a launcher that wrote no result is scored as a failed suite",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A launcher that failed ran nothing the harness can see. Scoring it 'failed' would credit the suite with a catch, the one wrong answer this tool exists to make impossible.",
+      "find": ["        $outcome = 'launcher-failed'"],
+      "replace": ["        $outcome = 'failed'"]
+    },
+    {
+      "name": "arguments reach the launcher unquoted",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "Start-Process passes its argument list through as text, so without quoting a transcript path containing a space reaches the launcher as two arguments, and the launcher refuses the command line.",
+      "find": ["    $commandLine = @($launcherArgs | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '"],
+      "replace": ["    $commandLine = @($launcherArgs) -join ' '"]
+    },
+    {
+      "name": "-TraceLaunches is never forwarded, so a launch is never narrated",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The narration is the only evidence a stalled CI job leaves of where it stalled, and losing it changes no outcome -- so nothing but a test of the narration itself would notice.",
+      "find": ["    if ($script:TraceLaunches) { $launcherArgs += $flag.Trace }"],
       "replace": [""]
     },
     {
-      "name": "-TraceKills is ignored, so a kill is never narrated",
-      "file": "tools/run-sabotage.ps1",
-      "expect": "caught",
-      "why": "The narration exists for the one stall no bound covers: a kill that never returns, in CI, where the last line printed is the only evidence of which call it was in. Losing it changes no outcome, so nothing but a test of the narration itself would notice.",
-      "find": ["$script:TraceKills = $TraceKills.IsPresent"],
-      "replace": ["$script:TraceKills = $false"]
-    },
-    {
-      "name": "every kill is narrated, whether or not -TraceKills asked",
+      "name": "every launch is narrated, whether or not -TraceLaunches asked",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",
       "why": "The other direction. The narration is opt-in so a local sweep's report stays the table a reader scans; a guard that only checked the narration appears would pass a harness that printed it always.",
-      "find": ["$script:TraceKills = $TraceKills.IsPresent"],
-      "replace": ["$script:TraceKills = $true"]
+      "find": ["$script:TraceLaunches = $TraceLaunches.IsPresent"],
+      "replace": ["$script:TraceLaunches = $true"]
     },
     {
       "name": "CONTROL: a progress message nothing asserts on is reworded",

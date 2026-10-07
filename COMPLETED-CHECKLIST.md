@@ -3880,3 +3880,32 @@ and Clippy, default-workspace debug/release checks, publication routes, workflow
 references and text encoding. The debug build reported non-failing incremental
 cache access notes. Hosted upload permissions and attestation issuance await the
 tag-push workflow after merge; no release or tag was created locally.
+
+## Moved 2026-10-07 15:52:29 -04:00 -- JL: the sabotage harness kills a hung run through a job object
+
+A sabotage sweep of `windows-waitable-queues` sat for its job's full hour on one
+entry (run 37656687292), inside the harness's kill: a WMI walk of the process
+tree with no bound of its own, which also cannot find a descendant whose parent
+has exited. The kill now runs through a kill-on-close Windows job object, owned
+by a launcher written in Rust -- the engineer's choice over a C# helper, so the
+repository takes on no further language.
+
+### <a id="jl-11"></a>JL-1.1 -- Narrate each kill, and let a stalled sweep upload its transcripts. *(completed 2026-10-07 15:08:45 UTC-04:00)*
+
+Landed as e6cd07d3. The sweep step's own timeout stands. Its `-TraceKills`
+narration of the WMI walk went with the walk in JL-1.3, replaced by
+`-TraceLaunches`, the launcher's own narration.
+
+### <a id="jl-12"></a>JL-1.2 -- The launcher crate, `crates/win-job-launcher`. *(completed 2026-10-07 15:32:43 UTC-04:00)*
+
+Landed as 7ffb6276. What it guarantees is stated in its
+[lib.rs](crates/win-job-launcher/src/lib.rs); what its tests cannot observe is
+recorded in its [sabotage.json](crates/win-job-launcher/sabotage.json).
+
+### <a id="jl-13"></a>JL-1.3 -- The harness launches every phase through `win-job-launcher`. *(completed 2026-10-07 15:52:29 UTC-04:00)*
+
+`Stop-Tree` is deleted; the harness reads the launcher's result and keeps only a
+backstop over the launcher itself. A harness test with a descendant whose parent
+has exited was run against the old harness first: the descendant survived the
+kill. How the kill works now is in
+[README-sabotage.md](tools/README-sabotage.md#how-a-hung-run-is-killed).

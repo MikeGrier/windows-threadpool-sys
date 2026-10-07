@@ -212,18 +212,22 @@
     lets a manifest sweep something whose tests are not `cargo test`, given a
     `testArgs` that spells the whole command.
 
-.PARAMETER TraceKills
-    Narrate each kill of a hung run, step by step, with an offset from the
-    moment the hang was declared. Off by default; the sweep workflow turns it on.
+.PARAMETER LauncherPath
+    A built win-job-launcher.exe to run every phase through. By default this
+    tool builds the launcher from this checkout's crates/win-job-launcher into
+    the sweep's target directory, so a sweep is always supervised by the
+    launcher the checkout specifies. Exists for callers that run this tool many
+    times -- its own tests run it hundreds of times -- and build it once.
 
-    The kill is the one step on a hung entry's path that nothing bounds: the
-    build and test phases are polled against deadlines, but finding a hung
-    cargo's descendants is a WMI query, and stopping each is a call that returns
-    when Windows says so. A sweep has stalled past every bound inside that
-    window with no evidence of which call it was in, so each call is announced
-    before it is made and reported after it returns -- the last line printed
-    names where a stall sits. Each process is described as it is stopped (CPU
-    time, threads, working set), which tells a spinning hang from a parked one.
+.PARAMETER TraceLaunches
+    Have win-job-launcher narrate every phase it runs, step by step, on this
+    tool's console: the job created, the command resumed, and -- for a hang --
+    the job's accounting at the bound, the termination, and the confirmation
+    that the tree is gone. Off by default; the sweep workflow turns it on.
+
+    Each step is announced as it happens, so the last line printed names where
+    a stall sits. The accounting at the bound gives the tree's CPU time, which
+    tells a spinning hang from a parked one.
 
 .OUTPUTS
     Exits 0 only if every sabotage matched its declared expectation.
@@ -253,7 +257,9 @@ param(
 
     [int] $ShardCount = 1,
 
-    [switch] $TraceKills
+    [string] $LauncherPath,
+
+    [switch] $TraceLaunches
 )
 
 Set-StrictMode -Version Latest
@@ -271,10 +277,10 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 # Script scope so Invoke-Bounded reads it without threading it through three
 # call layers that have no other reason to know about it.
 $script:CargoExecutable = $CargoCommand
-# Script scope for the same reason: Stop-Tree recurses, and only the kill path
-# reads these.
-$script:TraceKills = $TraceKills.IsPresent
-$script:KillClock = $null
+# Script scope for the same reason. The executable is resolved -- built, or
+# taken from -LauncherPath -- just before the baseline.
+$script:TraceLaunches = $TraceLaunches.IsPresent
+$script:LauncherExecutable = $null
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
@@ -351,59 +357,68 @@ function Get-RepoRoot {
     return $root.Replace('/', '\')
 }
 
-# PSScriptAnalyzer asks for `SupportsShouldProcess` on a `Stop-` verb. Declined
-# deliberately: that machinery exists to raise a confirmation prompt, and this
-# function's whole job is to kill a build that has already hung. A tool built to
-# detect hangs must not acquire a way to hang on a prompt. PSScriptAnalyzer is
-# not a gate in this repository -- CI executes these scripts rather than linting
-# them, and all four siblings in this directory carry the same class of warning.
-function Stop-Tree {
-    param([int] $ProcessId)
-    Write-KillTrace "querying children of PID $ProcessId"
-    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)
-    if ($script:TraceKills) {
-        $names = @($children | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', '
-        Write-KillTrace "PID $ProcessId has $($children.Count) child(ren): [$names]"
+# win-job-launcher's command line and result, as crates/win-job-launcher spells
+# them (its `cli::flags`, `outcome::outcomes`). Restated here because the two
+# sides are different languages. Nothing has to remember to keep them in step:
+# this tool's own tests run every phase through the real launcher, so a spelling
+# that drifts fails them.
+$script:LauncherFlag = @{
+    TimeoutMs = '--timeout-ms'; Stdout = '--stdout'; Stderr = '--stderr'
+    Result = '--result'; Trace = '--trace'; Separator = '--'
+}
+$script:LauncherOutcome = @{ Exited = 'exited'; TimedOut = 'timed-out'; NotStarted = 'not-started' }
+
+# How far past its own bound the launcher may run before this tool gives up on
+# it. After a kill the launcher waits up to its `launch::CONFIRM_BOUND` for the
+# tree to empty before it reports; this allows for that and for start-up.
+$script:LauncherGraceSeconds = 30
+
+# One argument, quoted for a command line the way the MSVC runtime -- and
+# Rust's std, which the launcher parses with -- splits it back apart.
+# Start-Process passes -ArgumentList through as text, so without this a path
+# containing a space arrives as two arguments.
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string] $Value)
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $text = New-Object System.Text.StringBuilder
+    [void]$text.Append('"')
+    $backslashes = 0
+    foreach ($c in $Value.ToCharArray()) {
+        if ($c -eq [char]'\') { $backslashes++; continue }
+        # Backslashes are literal except before a quote, where each must be
+        # doubled and the quote itself escaped.
+        if ($c -eq [char]'"') { [void]$text.Append([char]'\', 2 * $backslashes + 1) }
+        elseif ($backslashes -gt 0) { [void]$text.Append([char]'\', $backslashes) }
+        [void]$text.Append($c)
+        $backslashes = 0
     }
-    $children | ForEach-Object { Stop-Tree -ProcessId $_.ProcessId }
-    if ($script:TraceKills) { Write-KillTrace "stopping $(Format-ProcessFacts -ProcessId $ProcessId)" }
-    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
-    Write-KillTrace "Stop-Process returned for PID $ProcessId"
+    # Trailing backslashes precede the closing quote, so they double too.
+    if ($backslashes -gt 0) { [void]$text.Append([char]'\', 2 * $backslashes) }
+    [void]$text.Append('"')
+    return $text.ToString()
 }
 
-# One line of the kill narration -TraceKills asks for, through the report sink.
-# The offset is from the moment Invoke-Bounded declared the hang, so a reader
-# sees how long each step took without subtracting timestamps.
-function Write-KillTrace {
-    param([string] $Message)
-    if (-not $script:TraceKills) { return }
-    $offset = $script:KillClock.Elapsed.TotalSeconds.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
-    Write-Report "    kill +${offset}s: $Message" -Level note
+# The launcher's result, or $null when there is none to read: it failed before
+# writing one, or wrote something that is not a JSON object. Through
+# Read-SharedText like every other file a just-exited process wrote.
+function Read-LauncherResult {
+    param([string] $Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try { return (Read-SharedText -Path $Path) | ConvertFrom-Json }
+    catch { return $null }
 }
 
-# What a process is doing as it is stopped. Through Get-Process rather than
-# WMI, so describing a process does not add a second call of the kind under
-# suspicion. CPU time near (threads x seconds hung) is a spin; near zero is a
-# parked wait.
-function Format-ProcessFacts {
-    param([int] $ProcessId)
-    $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if ($null -eq $p) { return "PID $ProcessId (already gone)" }
-    # A process can exit between the lookup and these reads -- a stub's cmd.exe
-    # does, the moment its child is stopped -- and an exited process's
-    # properties throw or read as null, which StrictMode makes an error. The
-    # description must never be able to break the kill it describes, so any
-    # failure here only costs detail.
-    try {
-        $cpu = $p.TotalProcessorTime.TotalSeconds.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)
-        return "PID $ProcessId $($p.ProcessName), ${cpu}s CPU, $(@($p.Threads).Count) threads, $([int]($p.WorkingSet64 / 1MB)) MB"
-    }
-    catch { return "PID $ProcessId (exited while being described)" }
-}
-
-# Runs cargo under a wall-clock bound, and reports which of the three outcomes
-# occurred. A hang is a distinct outcome from a failure because it is what a
-# lost-wakeup defect looks like, and collapsing the two would hide that.
+# Runs cargo under a wall-clock bound, through win-job-launcher, and reports
+# which outcome occurred: passed, failed, hung, not-started, or launcher-failed.
+# A hang is a distinct outcome from a failure because it is what a lost-wakeup
+# defect looks like, and collapsing the two would hide that.
+#
+# The launcher enforces the bound and does the kill. It runs cargo inside a
+# kill-on-close job object, so at the bound every descendant is killed in one
+# call -- including one whose parent has already exited, which no walk of
+# parent PIDs can find. It replaced exactly such a walk: a WMI query per level
+# with no bound of its own, inside which a CI sweep once stalled for an hour.
+# See crates/win-job-launcher for what the launcher guarantees.
 function Invoke-Bounded {
     param(
         [string[]] $CargoArgs,
@@ -412,72 +427,93 @@ function Invoke-Bounded {
         [int] $Seconds
     )
 
-    $process = Start-Process -FilePath $script:CargoExecutable -ArgumentList $CargoArgs `
-        -WorkingDirectory $WorkingDirectory -PassThru -NoNewWindow `
-        -RedirectStandardOutput $TranscriptPath `
-        -RedirectStandardError "$TranscriptPath.err"
+    $resultPath = "$TranscriptPath.result"
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+    $flag = $script:LauncherFlag
+    $launcherArgs = @(
+        $flag.TimeoutMs, [string]([int64]$Seconds * 1000),
+        $flag.Stdout, $TranscriptPath,
+        $flag.Stderr, "$TranscriptPath.err",
+        $flag.Result, $resultPath)
+    if ($script:TraceLaunches) { $launcherArgs += $flag.Trace }
+    $launcherArgs += @($flag.Separator, $script:CargoExecutable) + @($CargoArgs)
+    $commandLine = @($launcherArgs | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '
+
+    # Not redirected: the launcher writes cargo's streams to the transcript
+    # files itself, and its own narration belongs on this tool's console, live,
+    # where a stalled CI job still shows it.
+    $process = Start-Process -FilePath $script:LauncherExecutable -ArgumentList $commandLine `
+        -WorkingDirectory $WorkingDirectory -PassThru -NoNewWindow
 
     # Reading .Handle before waiting, and discarding it, is load bearing on
     # Windows PowerShell 5.1. A Process object from `Start-Process -PassThru`
     # there does not cache the native handle; once the process exits the handle
     # is released and .ExitCode comes back $null -- for a process that exited 0
-    # exactly as for one that failed. Every phase would then classify as
-    # 'failed', so the baseline could never pass, and if it somehow did, every
-    # sabotage would read as 'caught': a clean bill of health that proves
-    # nothing, which is the one result this harness exists to make impossible.
-    # Touching .Handle keeps it alive so the exit code survives the wait.
-    #
-    # Measured, not assumed: under 5.1 a `cmd /c exit 0` reports ExitCode $null
-    # without this line and 0 with it. A no-op on PowerShell 7, which caches the
-    # handle itself. Found by running the suite under 5.1 after the PR #64
-    # review flagged the ternary on the line below -- fixing only that would
-    # have turned a loud parse error into a silent wrong answer.
+    # exactly as for one that failed. Touching .Handle keeps it alive so the
+    # exit code survives the wait. Measured, not assumed: under 5.1 a
+    # `cmd /c exit 0` reports ExitCode $null without this line and 0 with it. A
+    # no-op on PowerShell 7, which caches the handle itself.
     $null = $process.Handle
 
-    # Polled against a deadline rather than `WaitForExit($Seconds * 1000)`,
-    # because that overload does NOT reliably return at the timeout here.
-    #
-    # cargo's stdout and stderr are redirected to files, and the test binary
-    # cargo spawns INHERITS those handles. .NET's timed WaitForExit waits for
-    # the redirected streams to reach end-of-file as well as for the process, so
-    # the wait outlives the bound for exactly as long as the grandchild holds
-    # the handles open -- which, for a hung test, is forever. Measured: a sweep
-    # sat on a single hung sabotage for 31 MINUTES against a 60-second bound,
-    # with the kill never reached, and resumed the moment that test binary was
-    # killed by hand. A tool whose whole job is to detect hangs must not be
-    # hangable by one.
-    #
-    # HasExited only asks the kernel whether the process object is signalled and
-    # never touches the streams, so this loop cannot overrun its deadline.
+    # A backstop against the launcher itself, polled rather than a timed
+    # WaitForExit: that overload also waits for redirected streams, and once sat
+    # 31 minutes on a 60-second bound while a hung grandchild held them open.
+    # HasExited only asks the kernel whether the process is signalled.
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    $deadline = (Get-Date).AddSeconds($Seconds)
+    $deadline = (Get-Date).AddSeconds($Seconds + $script:LauncherGraceSeconds)
     while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 100
     }
     $clock.Stop()
     $elapsed = [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
 
-    if ($process.HasExited) {
-        # Spelled as an if/else rather than a ternary on purpose: `? :` is
-        # PowerShell 7 syntax, and this is a PARSE error under Windows
-        # PowerShell 5.1 -- so a single ternary anywhere makes the whole script
-        # unrunnable on the shell that `powershell.exe` still starts by default,
-        # failing before the first line executes rather than at this line. The
-        # three sibling scripts in this directory are 5.1-clean; this one stays
-        # that way too. Raised in the PR #64 review.
-        $outcome = if ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
-        # A cargo that Windows could not start ran nothing, and must not be
-        # scored as a suite that failed -- which this tool would credit as a
-        # catch. See Get-ProcessStartFailure in common.ps1.
+    if (-not $process.HasExited) {
+        # Stopping the launcher closes its job handle, and the job is
+        # kill-on-close, so cargo's tree goes with it.
+        Write-Report ("    win-job-launcher (PID $($process.Id)) overran its ${Seconds}s bound by " +
+            "$($script:LauncherGraceSeconds)s; stopping it.") -Level bad
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $null; Seconds = $elapsed }
+    }
+
+    $result = Read-LauncherResult -Path $resultPath
+    if ($null -eq $result) {
+        # No result: the launcher refused its command line or could not write
+        # it -- or Windows could not start the launcher at all, which is the
+        # host, not the launcher. See Get-ProcessStartFailure in common.ps1.
+        $outcome = 'launcher-failed'
         if (Get-ProcessStartFailure $process.ExitCode) { $outcome = 'not-started' }
         return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode; Seconds = $elapsed }
     }
 
-    $script:KillClock = [Diagnostics.Stopwatch]::StartNew()
-    Write-KillTrace "cargo PID $($process.Id) still running after ${elapsed}s; $([Environment]::ProcessorCount) logical processors"
-    Stop-Tree -ProcessId $process.Id
-    Write-KillTrace "tree stopped; cargo exited: $($process.HasExited)"
-    return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }
+    $outcomes = $script:LauncherOutcome
+    if ($result.outcome -eq $outcomes.Exited) {
+        $code = [int]$result.code
+        # Spelled as an if/else rather than a ternary on purpose: `? :` is
+        # PowerShell 7 syntax, and a PARSE error under Windows PowerShell 5.1,
+        # so one ternary anywhere makes the whole script unrunnable there.
+        $outcome = if ($code -eq 0) { 'passed' } else { 'failed' }
+        # A cargo that Windows could not start ran nothing, and must not be
+        # scored as a suite that failed -- which this tool would credit as a
+        # catch. See Get-ProcessStartFailure in common.ps1.
+        if (Get-ProcessStartFailure $code) { $outcome = 'not-started' }
+        if ([int]$result.strays -gt 0) {
+            Write-Report ("    $($result.strays) process(es) were still running when the command exited; " +
+                'win-job-launcher killed them.') -Level note
+        }
+        return [pscustomobject]@{ Outcome = $outcome; Code = $code; Seconds = $elapsed }
+    }
+    if ($result.outcome -eq $outcomes.TimedOut) {
+        if (-not $result.confirmed) {
+            Write-Report '    win-job-launcher could not confirm the hung tree was gone.' -Level bad
+        }
+        return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }
+    }
+    if ($result.outcome -eq $outcomes.NotStarted) {
+        Write-Report "    win-job-launcher could not start the command: $($result.error)" -Level bad
+        return [pscustomobject]@{ Outcome = 'not-started'; Code = $result.osError; Seconds = $elapsed }
+    }
+    return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $process.ExitCode; Seconds = $elapsed }
 }
 
 # Inserts a cargo flag BEFORE any `--` separator, rather than at the end.
@@ -526,6 +562,9 @@ function Invoke-Sabotaged {
 
     if ($build.Outcome -eq 'not-started') {
         return [pscustomobject]@{ Outcome = 'not-started'; Code = $build.Code; Seconds = 0 }
+    }
+    if ($build.Outcome -eq 'launcher-failed') {
+        return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $build.Code; Seconds = 0 }
     }
     if ($build.Outcome -eq 'failed') {
         return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code; Seconds = 0 }
@@ -1223,12 +1262,34 @@ $testArgs = Add-CargoFlag -CargoArgs $testArgs -Flag @('--target-dir', $sweepTar
 # manifest nor being rejected by it deletes anything.
 $writableStems = @('baseline') + @($selected | ForEach-Object { $stems[$_.name] })
 foreach ($writableStem in $writableStems) {
-    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err')) {
+    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err', '.txt.result', '.txt.build.result')) {
         $stale = Join-Path $OutputDirectory ($writableStem + $suffix)
         if (Test-Path -LiteralPath $stale) {
             Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+# The launcher every phase runs through. Built from this checkout rather than
+# found on PATH, so a sweep is supervised by the launcher the checkout
+# specifies -- and from the REAL tree, never the copy, so sweeping the
+# launcher's own manifest cannot sabotage its supervisor. See Build-JobLauncher
+# in common.ps1.
+if ($LauncherPath) {
+    if (-not (Test-Path -LiteralPath $LauncherPath -PathType Leaf)) {
+        Exit-WithMessage "-LauncherPath names no file: $LauncherPath" 2
+    }
+    $script:LauncherExecutable = [System.IO.Path]::GetFullPath($LauncherPath)
+}
+else {
+    # Its own target directory, not the sweep's: sweeping the launcher's own
+    # manifest builds the copy's win-job-launcher.exe, and in a shared directory
+    # that build would overwrite the supervisor while it runs. Nested inside
+    # the sweep's, so whatever keeps that warm keeps this warm too.
+    Write-Report 'Building win-job-launcher.' -Level note
+    $supervisorTargetDir = Join-Path $sweepTargetDir 'win-job-launcher-supervisor'
+    try { $script:LauncherExecutable = Build-JobLauncher -TargetDirectory $supervisorTargetDir }
+    catch { Exit-WithMessage $_.Exception.Message 2 }
 }
 
 Write-Report 'Baseline: running the unmodified suite.' -Level note
@@ -1246,6 +1307,12 @@ if ($baseline.Outcome -eq 'not-started') {
             "The baseline could not run: cargo could not be started, exit $(Format-ExitCode $baseline.Code)."
             "That is the host, not the suite. Host state at the failure:"
         ) + (Get-HostPressureReport) -join "`n") 2
+}
+if ($baseline.Outcome -eq 'launcher-failed') {
+    Exit-WithMessage (@(
+            "The baseline could not be supervised: win-job-launcher failed, exit $(Format-ExitCode $baseline.Code)."
+            "That is this tool's machinery, not the suite. Its errors are above."
+        ) -join "`n") 2
 }
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
@@ -1437,6 +1504,7 @@ foreach ($sabotage in $selected) {
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
         'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
         'not-started' { "INFRASTRUCTURE: cargo could not be started, exit $(Format-ExitCode $run.Code) (tests never ran)" }
+        'launcher-failed' { "INFRASTRUCTURE: win-job-launcher failed, exit $(Format-ExitCode $run.Code) (no verdict)" }
     }
     # A refused-by-build entry whose patch BUILT has a guard that did not fire,
     # whatever the tests then did; say so first, so the run's own outcome is not

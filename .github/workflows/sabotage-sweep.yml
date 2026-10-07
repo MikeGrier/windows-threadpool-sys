@@ -210,7 +210,7 @@ jobs:
           SWEEP_SHARD: ${{ matrix.shard }}
           SWEEP_SHARDS: ${{ matrix.shards }}
           SWEEP_NAME: ${{ inputs.name || '*' }}
-        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceKills
+        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceLaunches
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts

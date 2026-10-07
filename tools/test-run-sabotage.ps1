@@ -68,7 +68,8 @@ param(
     [string] $Name = '*',
     [int] $Jobs = 0,
     [int] $Shard = -1,
-    [int] $ShardCount = 0
+    [int] $ShardCount = 0,
+    [string] $LauncherPath
 )
 
 Set-StrictMode -Version Latest
@@ -212,7 +213,7 @@ function New-Spec {
 # sabotage has, and the one the phase split exists to tell apart.
 function New-Stub {
     param(
-        [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
+        [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started')] [string] $Behaviour,
         [string] $Root
     )
@@ -241,6 +242,20 @@ function New-Stub {
             "echo Couldn't compile the test.`r`nexit /b 101`r`n"
         }
         'hang' { "@echo off`r`n$skipBuild`r`n$intact`r`nping -n 900 127.0.0.1 >nul`r`n" }
+        # Hangs, having first left a descendant whose PARENT HAS EXITED: a
+        # middle script starts the holder and exits at once. A parent-PID walk
+        # from the stub cannot reach the holder. The holder loops on short
+        # pings so that stopping it leaves nothing running for long, and its
+        # command line names the fixture, so Get-StrayProcesses can find it.
+        'orphan-hang' {
+            $stubs = Join-Path $Root 'stubs'
+            [System.IO.File]::WriteAllText((Join-Path $stubs 'orphan-holder.cmd'),
+                "@echo off`r`n:loop`r`nping -n 2 127.0.0.1 >nul`r`ngoto loop`r`n")
+            [System.IO.File]::WriteAllText((Join-Path $stubs 'orphan-middle.cmd'),
+                "@echo off`r`nstart `"`" /b cmd /d /c `"$stubs\orphan-holder.cmd`"`r`nexit /b 0`r`n")
+            "@echo off`r`n$skipBuild`r`n$intact`r`n" +
+            "start `"`" /b cmd /d /c `"$stubs\orphan-middle.cmd`"`r`nping -n 900 127.0.0.1 >nul`r`n"
+        }
         # The BUILD fails, and only once the marker is gone -- the shape of a
         # compile-time guard firing on a sabotage. The run phase always passes,
         # so a result can only come from how the build failure is judged.
@@ -303,7 +318,12 @@ function Invoke-Harness {
     try {
         $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
         $text = Invoke-Native {
-            & $shell -NoProfile -File $script:Harness @Arguments
+            if ($Arguments -contains '-LauncherPath') {
+                & $shell -NoProfile -File $script:Harness @Arguments
+            }
+            else {
+                & $shell -NoProfile -File $script:Harness @Arguments -LauncherPath $script:Launcher
+            }
         } | Out-String
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $text }
     }
@@ -330,6 +350,21 @@ function Get-StrayProcesses {
     Get-CimInstance Win32_Process -Filter "name='cmd.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like "*$FixtureRoot*" }
 }
+
+# The launcher the harness runs every phase through: built once here and handed
+# to every shard and every harness run, rather than built by each of the
+# hundreds of runs below. Into a directory under TEMP keyed by this checkout's
+# path, because the self-sabotage sweep runs this suite from a COPY whose
+# untracked files are deleted between entries -- a target directory inside it
+# would be cold every time -- and two checkouts sharing one directory would
+# overwrite each other's executable.
+if (-not $LauncherPath) {
+    $checkout = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).ToLowerInvariant()
+    $digest = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($checkout))
+    $key = -join @($digest[0..5] | ForEach-Object { $_.ToString('x2') })
+    $LauncherPath = Build-JobLauncher -TargetDirectory (Join-Path ([System.IO.Path]::GetTempPath()) "win-job-launcher-$key")
+}
+$script:Launcher = $LauncherPath
 
 # --- parallel dispatch ------------------------------------------------------
 #
@@ -359,7 +394,7 @@ if ($Shard -lt 0) {
                     -RedirectStandardOutput $out -RedirectStandardError "$out.err" `
                     -ArgumentList @(
                     '-NoProfile', '-File', $PSCommandPath,
-                    '-Name', $Name, '-Shard', $i, '-ShardCount', $Jobs)
+                    '-Name', $Name, '-Shard', $i, '-ShardCount', $Jobs, '-LauncherPath', $script:Launcher)
             }
         }
 
@@ -846,8 +881,8 @@ Test-Case 'kills a hung run at the bound and counts it as caught' {
 
         Assert-Equal 0 $result.ExitCode $result.Output
         Assert-Match 'caught \(tests HUNG past 5s\)' $result.Output
-        # The kill narration is opt-in; the case below asserts the other half.
-        Assert-False ($result.Output -match 'kill \+[0-9.]+s:') 'the kill is traced only under -TraceKills'
+        # The launcher's narration is opt-in; the case below asserts the other half.
+        Assert-False ($result.Output -match 'win-job-launcher \+[0-9.]+s:') 'a launch is traced only under -TraceLaunches'
 
         # The bound must actually bound. A timed WaitForExit did not: the
         # process cargo spawns inherits the redirected stream handles, and the
@@ -860,24 +895,45 @@ Test-Case 'kills a hung run at the bound and counts it as caught' {
     finally { Remove-Fixture $root }
 }
 
-Test-Case 'narrates every step of the kill under -TraceKills' {
+Test-Case 'narrates every launch under -TraceLaunches' {
     $root = New-Fixture -Manifest (New-Spec)
     try {
         $stub = New-Stub -Behaviour 'hang' -Root $root
         $result = Invoke-Harness -Root $root -Arguments @(
-            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5', '-TraceKills')
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5', '-TraceLaunches')
 
         Assert-Equal 0 $result.ExitCode $result.Output
         Assert-Match 'caught \(tests HUNG past 5s\)' $result.Output
-        # Each unbounded call is announced before it is made and reported after
-        # it returns, so the last line printed names where a stall sits.
-        Assert-Match 'kill \+[0-9.]+s: cargo PID \d+ still running after \d+s; \d+ logical processors' $result.Output
-        Assert-Match 'kill \+[0-9.]+s: querying children of PID \d+' $result.Output
-        # The recursion is traced too: the stub's own child is named.
-        Assert-Match 'kill \+[0-9.]+s: PID \d+ has [1-9]\d* child\(ren\): \[[^\]]*PING\.EXE' $result.Output
-        Assert-Match 'kill \+[0-9.]+s: stopping PID \d+ \S+, [0-9.]+s CPU, \d+ threads, \d+ MB' $result.Output
-        Assert-Match 'kill \+[0-9.]+s: Stop-Process returned for PID \d+' $result.Output
-        Assert-Match 'kill \+[0-9.]+s: tree stopped; cargo exited: (True|False)' $result.Output
+        # The launcher's own words, reaching this tool's console: each step is
+        # announced as it happens, so the last line printed names where a stall
+        # sits, and the accounting at the bound is what tells a spin from a park.
+        Assert-Match 'win-job-launcher \+[0-9.]+s: created a kill-on-close job' $result.Output
+        Assert-Match ('win-job-launcher \+[0-9.]+s: the bound of 5000ms was reached; job: \d+ active of \d+ ' +
+            'process\(es\), \d+ms user CPU, \d+ms kernel CPU') $result.Output
+        Assert-Match 'win-job-launcher \+[0-9.]+s: TerminateJobObject returned' $result.Output
+        Assert-Match 'win-job-launcher \+[0-9.]+s: the job is empty' $result.Output
+    }
+    finally {
+        Get-StrayProcesses -FixtureRoot $root |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Fixture $root
+    }
+}
+
+Test-Case 'kills a descendant whose parent exited before the hang was declared' {
+    # The case a parent-PID walk cannot reach, and the reason the kill is a job
+    # object: the holder's parent is gone by the time the bound is reached, so
+    # nothing links it to the stub any more except the job it was created in.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'orphan-hang' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5')
+
+        Assert-Match 'caught \(tests HUNG past 5s\)' $result.Output
+        $strays = @(Get-StrayProcesses -FixtureRoot $root)
+        Assert-Equal 0 $strays.Count `
+            "left running: $(@($strays | ForEach-Object { $_.CommandLine }) -join '; ')"
     }
     finally {
         Get-StrayProcesses -FixtureRoot $root |
@@ -908,6 +964,91 @@ Test-Case 'leaves no stray process behind after killing a hung run' {
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Remove-Fixture $root
     }
+}
+
+# --- the launcher ------------------------------------------------------------
+#
+# Every phase runs through win-job-launcher, so each way the launcher itself can
+# fail must end as "no verdict", never as a catch. A fake launcher -- a script
+# that never writes a result -- stands in for the real one's failures.
+
+Write-Line ''
+Write-Line 'the launcher'
+
+Test-Case 'refuses a -LauncherPath that names no file' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub,
+            '-LauncherPath', (Join-Path $root 'no-such-launcher.exe'))
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match '-LauncherPath names no file' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a launcher that writes no result is no verdict, and stops the sweep at the baseline' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $fake = Join-Path $root 'stubs\fake-launcher.cmd'
+        [System.IO.File]::WriteAllText($fake, "@echo off`r`nexit /b 1`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-LauncherPath', $fake)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'The baseline could not be supervised: win-job-launcher failed, exit 1' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a launcher that overruns its own bound is stopped by the backstop' {
+    # The baseline's bound is the BUILD bound, set to its minimum here, so the
+    # backstop fires at that plus the launcher's grace. The fake's ping outlives
+    # the backstop by a second and then ends by itself.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $fake = Join-Path $root 'stubs\stalling-launcher.cmd'
+        [System.IO.File]::WriteAllText($fake, "@echo off`r`nping -n 33 127.0.0.1 >nul`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-LauncherPath', $fake,
+            '-BuildTimeoutSeconds', '1')
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'win-job-launcher \(PID \d+\) overran its 1s bound by \d+s; stopping it' $result.Output
+        Assert-Match 'The baseline could not be supervised' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'paths with spaces reach the launcher whole' {
+    # Start-Process passes its argument list through as text, so a transcript
+    # path with a space survives only because each argument is quoted for the
+    # launcher. Every other fixture path here is free of spaces.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $out = Join-Path $root '.scratch\out dir'
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-OutputDirectory', $out)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'caught \(suite failed' $result.Output
+        Assert-True (Test-Path -LiteralPath (Join-Path $out 'baseline.txt')) `
+            'the baseline transcript is where it was asked for'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a command the launcher cannot start is reported as not started, with the reason' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', (Join-Path $root 'no-such-cargo.exe'))
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'win-job-launcher could not start the command: could not start the command' $result.Output
+        Assert-Match 'The baseline could not run: cargo could not be started' $result.Output
+    }
+    finally { Remove-Fixture $root }
 }
 
 # --- the working tree is never touched --------------------------------------

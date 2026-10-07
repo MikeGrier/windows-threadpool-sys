@@ -324,3 +324,25 @@ function Get-HostPressureReport {
     # comma-wrapped return made `@(...)` a one-element array of arrays.
     return $lines.ToArray()
 }
+
+# Builds win-job-launcher, the job-object launcher the sabotage harness runs
+# every phase through, and returns the path of its executable.
+#
+# Built from THIS checkout's crates/win-job-launcher -- found from this file,
+# never from the repository being swept -- because the launcher is the
+# harness's own machinery. A sweep of a fixture repository has no launcher crate
+# at all, and a sweep of the launcher's own manifest patches a COPY of it; in
+# both cases the supervisor must be the unsabotaged build. Throws on a failed
+# build, with cargo's output, so each caller decides how to report it.
+function Build-JobLauncher {
+    param([Parameter(Mandatory = $true)][string] $TargetDirectory)
+    $manifest = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\crates\win-job-launcher\Cargo.toml'))
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        throw "No launcher crate at $manifest."
+    }
+    $output = @(Invoke-Native { cargo build --quiet --manifest-path $manifest --target-dir $TargetDirectory })
+    if ($LASTEXITCODE -ne 0) {
+        throw ((@("Could not build win-job-launcher (cargo exit $(Format-ExitCode $LASTEXITCODE)):") + $output) -join "`n")
+    }
+    return Join-Path $TargetDirectory 'debug\win-job-launcher.exe'
+}

@@ -52,10 +52,15 @@ than the code.
 
 ## The harness has its own tests
 
-[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite: 44
-cases in about 30 seconds, run by CI on every push. It stubs cargo out entirely
-through `-CargoCommand`, so nothing is built, and works against a throwaway
-two-file git repository rather than this one.
+[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite, run
+by CI on every push. It stubs cargo out through `-CargoCommand`, so no crate
+under test is built, and works against a throwaway two-file git repository
+rather than this one. The one thing it does build is
+[win-job-launcher](../crates/win-job-launcher/src/lib.rs) (see
+[How a hung run is killed](#how-a-hung-run-is-killed)) -- once per run, into a
+directory under `TEMP` keyed by the checkout's path, then handed to every case
+with `-LauncherPath` -- so the stubs run under the same supervisor a real sweep
+does.
 
 ```powershell
 .\tools\test-run-sabotage.ps1
@@ -306,6 +311,29 @@ the tests, not a failure of the run.
 already-red suite every sabotage "fails" and the sweep means nothing while
 looking like a clean bill of health. The script refuses to start otherwise.
 
+## How a hung run is killed
+
+Every phase runs through
+[win-job-launcher](../crates/win-job-launcher/src/lib.rs), which starts cargo
+inside a kill-on-close Windows job object and enforces the bound itself. At the
+bound it terminates the whole job in one call and waits for it to empty before
+reporting, so every descendant dies -- including one whose parent has already
+exited, which a walk of parent PIDs cannot find. It writes the outcome to a
+result file the harness reads; the harness keeps only a backstop, and stopping
+the launcher takes its tree down with it.
+
+This replaced a walk of the process tree through WMI, which had no bound of its
+own: a CI sweep once sat for its job's whole hour inside it, with no evidence of
+which call it was in.
+
+The harness builds the launcher from this checkout at the start of a sweep --
+from the real tree, never the copy, so sweeping the launcher's own manifest
+cannot sabotage its supervisor. `-LauncherPath` supplies one already built.
+`-TraceLaunches` has the launcher narrate each step on the console, which is
+what a stalled CI job leaves behind; the sweep workflow turns it on. A launcher
+that fails -- no result, or overrunning its own bound -- is reported as
+`INFRASTRUCTURE`, never as a catch.
+
 ## Manifest format
 
 JSON. `find` and `replace` are arrays of lines, joined with newlines --
@@ -426,7 +454,8 @@ from the current run.
 
 Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
 them to stderr, and error messages name whichever of the two actually holds the
-evidence.
+evidence. Each phase also leaves the launcher's `.result` (`.build.result` for
+the build), the one-line JSON outcome the harness judged it by.
 
 A transcript is named after its sabotage with non-alphanumerics collapsed to
 dashes, so two entries differing only in punctuation would collide; the manifest
