@@ -80,9 +80,41 @@
       "name": "the faux stub reads a directive from any file, not only *.faux",
       "file": "tools/faux/faux-cargo.cmd",
       "expect": "caught",
-      "why": "Documentation or a manifest quoting a directive would then be read as a plan. The stub searches *.faux only.",
-      "find": ["for /f \"tokens=2,3,4,5\" %%a in ('findstr /S /B /C:\"// faux:\" *.faux 2^>nul') do ("],
-      "replace": ["for /f \"tokens=2,3,4,5\" %%a in ('findstr /S /B /C:\"// faux:\" * 2^>nul') do ("]
+      "why": "Documentation or a manifest quoting a directive would then be read as a plan. The stub reads *.faux only.",
+      "find": ["(for /r %%f in (*.faux) do @more \"%%f\") > \"%FAUX_LINES%\" 2>nul"],
+      "replace": ["(for /r %%f in (*) do @more \"%%f\") > \"%FAUX_LINES%\" 2>nul"]
+    },
+    {
+      "name": "the faux stub accepts a valid verb followed by more words",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "A typo after a real verb would then be scored as that verb's result -- a pass or a catch -- indistinguishable from a finding. The stub validates the whole line.",
+      "find": ["/C:\"// faux: pass *$\""],
+      "replace": ["/C:\"// faux: pass\""]
+    },
+    {
+      "name": "a launcher result that is a one-element array of objects is read as the object",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "ConvertFrom-Json unrolls an array, so [{...}] comes back as its element and looks like a result. Only the text check, that the file opens with a brace, tells the two apart.",
+      "find": ["        if ($text.TrimStart() -notmatch '^\\{') { return $null }"],
+      "replace": ["        if ($false) { return $null }"]
+    },
+    {
+      "name": "EQUIVALENT: the launcher result's type check is dropped beside the brace check",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "survives",
+      "why": "Text that opens with a brace and parses at all parses to an object, so the type check can never fire once the brace check has passed. Recorded as surviving because it is equivalent, not because a test is missing; if it ever comes back caught, the two checks have stopped overlapping and this entry should be revisited.",
+      "find": ["    if ($parsed -isnot [pscustomobject]) { return $null }"],
+      "replace": ["    if ($false) { return $null }"]
+    },
+    {
+      "name": "the faux driver counts only a positive exit code as a failure",
+      "file": "tools/faux/run-faux-plan.ps1",
+      "expect": "caught",
+      "why": "A crashed or killed shard has a negative exit code on Windows. Counted as a pass, the run is reported clean with a shard missing from it.",
+      "find": ["        if ($code -ne 0) { $failures += $code }"],
+      "replace": ["        if ($code -gt 0) { $failures += $code }"]
     },
     {
       "name": "a launcher that wrote no result is scored as a failed suite",

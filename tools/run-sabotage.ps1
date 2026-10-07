@@ -375,15 +375,33 @@ $script:LauncherGraceSeconds = 30
 # How long to wait, after stopping a launcher that overran, for it to be gone.
 $script:LauncherStopSeconds = 10
 
-
 # The launcher's result, or $null when there is none to read: it failed before
-# writing one, or wrote something that is not a JSON object. Through
-# Read-SharedText like every other file a just-exited process wrote.
+# writing one, or wrote something that is not a JSON OBJECT with an `outcome`.
+# Valid JSON of another shape -- a number, a string, an array -- would otherwise
+# be returned, and reading `.outcome` off it throws under Set-StrictMode, which
+# is a crash where a controlled launcher-failed is meant. The text is checked for
+# its opening brace as well as the parsed type, because ConvertFrom-Json unrolls
+# an array and hands back a one-element array's object as if it were the result.
+# Through Read-SharedText like every other file a just-exited process wrote.
 function Read-LauncherResult {
     param([string] $Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    try { return (Read-SharedText -Path $Path) | ConvertFrom-Json }
+    try {
+        $text = Read-SharedText -Path $Path
+        if ($text.TrimStart() -notmatch '^\{') { return $null }
+        $parsed = $text | ConvertFrom-Json
+    }
     catch { return $null }
+    # Not independently observable: text that opens with a brace and parses at
+    # all parses to an object, so with the check above this one never fires. On
+    # Windows PowerShell 5.1 it cannot reject anything at all -- `-is
+    # [pscustomobject]` is true of every value there -- and the brace check is what
+    # keeps a scalar or an array out. Swept as an equivalent mutant in
+    # sabotage2.json. It states the contract in the type the caller relies on, and
+    # holds if a host ever parses otherwise.
+    if ($parsed -isnot [pscustomobject]) { return $null }
+    if ($null -eq $parsed.PSObject.Properties['outcome']) { return $null }
+    return $parsed
 }
 
 # Runs cargo under a wall-clock bound, through win-job-launcher, and reports

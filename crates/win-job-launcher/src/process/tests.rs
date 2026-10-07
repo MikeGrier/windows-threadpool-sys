@@ -16,8 +16,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::{
-    Process, batch_plan, cmd_exe, exe_plan, is_batch, known_directory, push_arg, push_batch_part,
-    resolve, resolve_in, search_directories, spawn_in_job, system_directory, windows_directory,
+    Process, batch_plan, cmd_exe, exe_plan, is_batch, known_directory, path_directories, push_arg,
+    push_batch_part, resolve, resolve_in, search_directories, spawn_in_job, system_directory,
+    windows_directory,
 };
 use crate::job::Job;
 
@@ -209,8 +210,37 @@ fn the_search_order_is_the_launchers_directory_then_system_then_windows_then_pat
     assert_eq!(directories[1], system_directory().unwrap());
     assert_eq!(directories[2], windows_directory().unwrap());
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let on_path: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    let on_path: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .collect();
     assert_eq!(&directories[3..], &on_path[..]);
+}
+
+#[test]
+fn empty_path_entries_are_dropped_so_the_current_directory_cannot_be_reached_through_them() {
+    let paths = |text: &str| path_directories(OsStr::new(text));
+    let a = PathBuf::from(r"C:\a");
+    let b = PathBuf::from(r"C:\b");
+    assert_eq!(paths(r"C:\a;C:\b"), [a.clone(), b.clone()]);
+    assert_eq!(
+        paths(r"C:\a;;C:\b"),
+        [a.clone(), b.clone()],
+        "an empty entry between"
+    );
+    assert_eq!(
+        paths(r";C:\a;C:\b"),
+        [a.clone(), b.clone()],
+        "a leading one"
+    );
+    assert_eq!(
+        paths(r"C:\a;C:\b;"),
+        [a.clone(), b.clone()],
+        "a trailing one"
+    );
+    assert_eq!(paths(r";;C:\a;;;C:\b;;"), [a, b], "several of each");
+    assert!(paths("").is_empty());
+    assert!(paths(";").is_empty());
+    assert!(paths(";;;").is_empty());
 }
 
 #[test]

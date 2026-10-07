@@ -1079,7 +1079,12 @@ Test-Case 'the faux stub reads each directive as planned' {
         @("// faux: sleep 0 pass`n", 'test', 0),
         @("// faux: sleep 0 fail`n", 'test', 101),
         @("// faux: sleep 1 fail`n", 'test --no-run', 0),
-        @("// faux: pass`r`n", 'test', 0)
+        @("// faux: pass`r`n", 'test', 0),
+        # Trailing spaces are not a different directive.
+        @("// faux: pass   `n", 'test', 0),
+        @("// faux: fail  `n", 'test', 101),
+        @("// faux: build-fail `n", 'test --no-run', 101),
+        @("// faux: sleep 0 pass  `n", 'test', 0)
     )
     foreach ($row in $table) {
         $r = Invoke-FauxStub -Content $row[0] -Arguments $row[1]
@@ -1100,15 +1105,54 @@ Test-Case 'the faux stub refuses a plan it cannot read, rather than scoring it' 
     $bad = @(
         "// faux:`n", "// faux: bogus`n", "// faux: Pass`n", "// faux: sleep`n",
         "// faux: sleep x pass`n", "// faux: sleep -1 pass`n", "// faux: sleep 1`n",
-        "// faux: sleep 1 maybe`n", "// faux: pass`n// faux: fail`n"
+        "// faux: sleep 1 maybe`n", "// faux: pass`n// faux: fail`n",
+        # A valid verb with anything extra, or the wrong number of operands.
+        "// faux: pass typo`n", "// faux: fail now`n", "// faux: hang 5`n", "// faux: build-fail x`n",
+        "// faux: sleep 1 fail typo`n", "// faux: sleep 1 pass pass`n", "// faux: sleep 1 2 pass`n",
+        "// faux: sleep 123456 pass`n",
+        # Characters the command interpreter would otherwise take as syntax.
+        "// faux: pass & echo pwned`n", "// faux: pa`"ss & echo pwned`n", "// faux: pass | echo pwned`n",
+        "// faux: pass > pwned.txt`n"
     )
     foreach ($content in $bad) {
         foreach ($arguments in @('test', 'test --no-run')) {
             $r = Invoke-FauxStub -Content $content -Arguments $arguments
             Assert-Equal $script:FauxRefused $r.ExitCode "[$($content -replace "`r?`n", '|')] with [$arguments]"
             Assert-Match 'faux-cargo: expected exactly one valid' $r.Output 'it says why'
+            Assert-False ($r.Output -match '(?m)^pwned\s*$') "[$($content -replace "`r?`n", '|')] was run as a command"
         }
     }
+}
+
+Test-Case 'faux stubs run at the same moment never read one another''s plans' {
+    # Stubs run in parallel -- every shard, and the suite's own shards -- and an
+    # earlier version named its temporary file from %RANDOM%, which is seeded from
+    # the clock: stubs started together drew the same names, shared a file, and
+    # scored each other's plans. This starts several at once, many times, each
+    # with a plan only it holds.
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('faux-concurrent-' + [guid]::NewGuid().ToString('N'))
+    try {
+        for ($round = 0; $round -lt 4; $round++) {
+            $started = @()
+            for ($i = 0; $i -lt 12; $i++) {
+                $dir = Join-Path $root "r$round-$i"
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+                $directive = if ($i % 2 -eq 0) { 'pass' } else { 'fail' }
+                [System.IO.File]::WriteAllText((Join-Path $dir 'subject.faux'), "// faux: $directive`n")
+                $started += [pscustomobject]@{
+                    Expected = if ($i % 2 -eq 0) { 0 } else { 101 }; Dir = $dir
+                    Process = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', "`"`"$script:FauxCargo`" test`"") `
+                        -WorkingDirectory $dir -PassThru -WindowStyle Hidden
+                }
+            }
+            foreach ($s in $started) { $null = $s.Process.Handle }
+            foreach ($s in $started) {
+                $s.Process.WaitForExit()
+                Assert-Equal $s.Expected $s.Process.ExitCode "round $round, $($s.Dir)"
+            }
+        }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case 'a directive outside a .faux file is not a plan' {
@@ -1277,6 +1321,61 @@ Test-Case 'the shipped faux plan runs as declared, sharded across processes' {
     Assert-Equal 3 ([regex]::Matches($text, 'behaved as declared\.')).Count 'one all-clear per shard'
 }
 
+function Invoke-FauxDriverWithShards {
+    # The driver over a stand-in harness whose shard i exits with Codes[i], to
+    # see how the driver reads exit codes without running anything.
+    param([int[]] $Codes)
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('faux-driver-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    try {
+        $fake = Join-Path $dir 'fake-harness.ps1'
+        $body = @(
+            'param([string]$Manifest, [string]$CargoCommand, [string]$TimeoutSeconds, [string]$Name,',
+            '      [string]$OutputDirectory, [string]$LauncherPath, [int]$Shard = 0, [int]$ShardCount = 1)',
+            ('$codes = @(' + ($Codes -join ',') + ')'),
+            'Write-Host "fake shard $Shard"',
+            'exit $codes[$Shard]'
+        ) -join "`r`n"
+        [System.IO.File]::WriteAllText($fake, $body)
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $driver = Join-Path $PSScriptRoot 'faux\run-faux-plan.ps1'
+        $text = Invoke-Native {
+            & $shell -NoProfile -File $driver -Jobs $Codes.Count -LauncherPath $script:Launcher -HarnessScript $fake
+        } | Out-String
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $text }
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the faux driver succeeds only when every shard does' {
+    $r = Invoke-FauxDriverWithShards -Codes @(0, 0, 0)
+    Assert-Equal 0 $r.ExitCode $r.Output
+    Assert-Match 'Every planned run behaved as declared \(3 shard\(s\)' $r.Output
+}
+
+Test-Case 'the faux driver fails when a shard crashed with a negative exit code' {
+    # A crashed or killed shard has a NEGATIVE code on Windows. Compared against
+    # the highest code seen so far, it would never count as a failure and the run
+    # would be reported clean.
+    foreach ($codes in @(@(0, -1073741502, 0), @(-1, 0, 0), @(0, 0, -1073741819), @(-1, -2, -3))) {
+        $r = Invoke-FauxDriverWithShards -Codes $codes
+        Assert-Equal 1 $r.ExitCode "shard codes [$($codes -join ', ')]`n$($r.Output)"
+        Assert-False ($r.Output -match 'Every planned run behaved as declared') "[$($codes -join ', ')] reported clean"
+        Assert-Match 'shard\(s\) reported a problem' $r.Output
+    }
+}
+
+Test-Case 'the faux driver exits with the highest positive code any shard returned' {
+    $r = Invoke-FauxDriverWithShards -Codes @(1, 0, 2)
+    Assert-Equal 2 $r.ExitCode $r.Output
+    $r = Invoke-FauxDriverWithShards -Codes @(0, 1, 0)
+    Assert-Equal 1 $r.ExitCode $r.Output
+    # A crash beside a positive code does not outrank it, and is not hidden by it.
+    $r = Invoke-FauxDriverWithShards -Codes @(-1073741502, 2, 0)
+    Assert-Equal 2 $r.ExitCode $r.Output
+    Assert-Match '2 of 3 shard\(s\) reported a problem' $r.Output
+}
+
 # --- the launcher ------------------------------------------------------------
 #
 # Every phase runs through win-job-launcher, so each way the launcher itself can
@@ -1311,6 +1410,30 @@ Test-Case 'a launcher that writes no result is no verdict, and stops the sweep a
         Assert-Match 'The baseline could not be supervised: win-job-launcher failed, exit 1' $result.Output
     }
     finally { Remove-Fixture $root }
+}
+
+# Valid JSON that is not a launcher result must be no verdict, not a crash:
+# under Set-StrictMode, reading `.outcome` off a number or a string throws.
+foreach ($shape in @('1', '"text"', 'null', '[]', '{}', '{"code":0}',
+        '[{"outcome":"exited","code":0,"strays":0,"confirmed":true,"elapsedMs":1}]', '{"outcome":"exited"')) {
+    # Not named $body: Test-Case has a parameter of that name, which a case's own
+    # scope would see instead of this loop's variable.
+    Test-Case "a launcher result of $shape is no verdict" {
+        $root = New-Fixture -Manifest (New-Spec)
+        try {
+            $stub = New-Stub -Behaviour 'fail' -Root $root
+            $fake = Join-Path $root 'stubs\shaped-launcher.cmd'
+            $script = "@echo off`r`n:next`r`nif `"%~1`"==`"`" exit /b 1`r`nif `"%~1`"==`"--result`" goto found`r`n" +
+                "shift`r`ngoto next`r`n:found`r`n> `"%~2`" echo $shape`r`nexit /b 0`r`n"
+            [System.IO.File]::WriteAllText($fake, $script)
+            $result = Invoke-Harness -Root $root -Arguments @(
+                '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-LauncherPath', $fake)
+            Assert-Equal 2 $result.ExitCode $result.Output
+            Assert-Match 'The baseline could not be supervised: win-job-launcher failed, exit 0' $result.Output
+            Assert-False ($result.Output -match 'cannot be found on this object|Exception') 'a crash, not a controlled outcome'
+        }
+        finally { Remove-Fixture $root }
+    }
 }
 
 foreach ($case in @(

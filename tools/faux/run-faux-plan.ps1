@@ -42,6 +42,10 @@
     An already-built win-job-launcher.exe. Built from this checkout, into
     .scratch/faux, when not given.
 
+.PARAMETER HarnessScript
+    The harness to run in each shard, run-sabotage.ps1 by default. Only the
+    harness's own tests change it, to stand in a shard that crashes.
+
 .OUTPUTS
     Exits 0 if every shard did, otherwise the highest exit code any shard
     returned (1: a run did not do what its entry declared; 2: nothing was swept).
@@ -53,7 +57,8 @@ param(
     [int] $TimeoutSeconds = 3,
     [string] $Name = '*',
     [string[]] $HarnessArguments = @(),
-    [string] $LauncherPath
+    [string] $LauncherPath,
+    [string] $HarnessScript
 )
 
 Set-StrictMode -Version Latest
@@ -81,6 +86,7 @@ function Write-Report {
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $harness = Join-Path $PSScriptRoot '..\run-sabotage.ps1'
+if ($HarnessScript) { $harness = [System.IO.Path]::GetFullPath($HarnessScript) }
 $faux = Join-Path $PSScriptRoot 'faux-cargo.cmd'
 $planPath = [System.IO.Path]::GetFullPath($Plan)
 if (-not (Test-Path -LiteralPath $planPath)) {
@@ -146,11 +152,16 @@ try {
     # Touching the handle keeps the exit code readable on Windows PowerShell 5.1.
     foreach ($shard in $running) { $null = $shard.Process.Handle }
 
-    $worst = 0
+    # Every code but 0 is a failure. A shard that crashed or was killed has a
+    # NEGATIVE code on Windows, and one whose code could not be read has none;
+    # comparing codes against the highest seen so far would let either through.
+    $failures = @()
     foreach ($shard in $running) {
         $shard.Process.WaitForExit()
-        $code = [int]$shard.Process.ExitCode
-        if ($code -gt $worst) { $worst = $code }
+        $exit = $shard.Process.ExitCode
+        $code = -1
+        if ($null -ne $exit) { $code = [int]$exit }
+        if ($code -ne 0) { $failures += $code }
         Write-Report ''
         $level = 'heading'
         if ($code -ne 0) { $level = 'bad' }
@@ -166,12 +177,21 @@ finally {
     Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# The highest positive code any shard returned (2 -- nothing was swept -- over 1),
+# or 1 when every failure was a crash and has no meaningful size.
+$worst = 0
+if ($failures.Count -gt 0) {
+    $worst = 1
+    $positive = @($failures | Where-Object { $_ -gt 0 })
+    if ($positive.Count -gt 0) { $worst = ($positive | Measure-Object -Maximum).Maximum }
+}
+
 Write-Report ''
 $seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
-if ($worst -eq 0) {
+if ($failures.Count -eq 0) {
     Write-Report "Every planned run behaved as declared ($Jobs shard(s), ${seconds}s)." -Level good
 }
 else {
-    Write-Report "A shard reported a problem (worst exit $worst; ${seconds}s)." -Level bad
+    Write-Report "$($failures.Count) of $Jobs shard(s) reported a problem (exit codes $($failures -join ', '); ${seconds}s)." -Level bad
 }
 exit $worst

@@ -361,11 +361,14 @@ the baseline, which has no directive, passes without being told to.
 | `// faux: sleep <n> pass` / `fail` | takes `<n>` seconds, then passes or fails | placed under or over the bound by choosing `<n>` |
 | `// faux: build-fail` | the build phase fails | a manifest that does not compile, or `refused-by-build` if the entry names that |
 
-A directive the stub cannot read -- a typo, a missing word, two of them -- is
+A directive the stub cannot read -- a typo, a missing word, anything extra after
+an otherwise valid one, or two directives -- is
 neither a pass nor a failure, since either would be scored as a result and a
-typo would then look like a finding. The stub exits with the process-start code
-the harness reports as `INFRASTRUCTURE`, in every phase. Only `*.faux` files are
-searched, so a directive quoted in documentation is not a plan.
+typo would then look like a finding. The stub validates the whole line against
+every valid form before reading anything out of it, and exits with the
+process-start code the harness reports as `INFRASTRUCTURE`, in every phase. Only
+`*.faux` files are searched, so a directive quoted in documentation is not a
+plan.
 
 [plan.json](faux/plan.json) is a worked mix, and
 [run-faux-plan.ps1](faux/run-faux-plan.ps1) runs it:

@@ -27,43 +27,77 @@ rem                                 "does not compile")
 rem
 rem A directive this script does not understand, or two of them, is NOT read as a
 rem pass or a failure: either would be scored as a result, and a typo in a plan
-rem would then be indistinguishable from a real finding. It exits with the
-rem process-start code the harness reports as INFRASTRUCTURE instead, which is
-rem loud and never a catch.
+rem would then be indistinguishable from a real finding. That includes a valid
+rem verb with anything extra after it, or the wrong number of operands. It exits
+rem with the process-start code the harness reports as INFRASTRUCTURE instead,
+rem which is loud and never a catch.
+rem
+rem The directive is validated as a whole line, against every valid form, BEFORE
+rem anything is read out of it: a line is only ever split into words once it is
+rem known to hold nothing but one of those forms, so no character in a mistyped
+rem one -- a quote, an ampersand -- reaches the command interpreter as syntax.
 rem
 rem Only *.faux files are searched, so a directive quoted in documentation or in
 rem a manifest cannot be mistaken for a plan.
 
+rem Every *.faux file, read through `more`, into a temporary file. `more` ends
+rem every line with CR LF whatever the file used, and findstr's `$` and `/X` only
+rem match at a CR: against a file written with bare LFs -- which is what most of
+rem this repository's files are -- a valid directive would be read as invalid.
+rem
+rem The file goes in a directory this run made for itself. Stubs run in parallel,
+rem and %RANDOM% alone is not enough to tell them apart: it is seeded from the
+rem clock, so processes started together draw the same numbers, and two stubs
+rem sharing a file would read each other's plans. mkdir either creates the
+rem directory or fails because it exists, atomically, so a name is only ever
+rem used by the process that made it.
+set "FAUX_TRIES=0"
+:make_work
+set /a FAUX_TRIES+=1
+if %FAUX_TRIES% GTR 100 (
+  echo faux-cargo: could not make a working directory under %TEMP% 1>&2
+  goto :refuse
+)
+set "FAUX_WORK=%TEMP%\faux-cargo-%RANDOM%%RANDOM%"
+mkdir "%FAUX_WORK%" 2>nul || goto :make_work
+set "FAUX_LINES=%FAUX_WORK%\lines.txt"
+(for /r %%f in (*.faux) do @more "%%f") > "%FAUX_LINES%" 2>nul
+
+rem How many directive lines there are, and how many of them are one of the
+rem valid forms. findstr's regular expressions have no alternation, so each form
+rem is its own /C: pattern; ` *$` allows trailing spaces and nothing else.
 set "FAUX_COUNT=0"
+for /f %%n in ('findstr /B /C:"// faux:" "%FAUX_LINES%" ^| find /c /v ""') do set "FAUX_COUNT=%%n"
+
+rem No directive: the baseline, or a patch that is not a faux one. It passes.
+if %FAUX_COUNT%==0 (
+  rmdir /s /q "%FAUX_WORK%" 2>nul
+  exit /b 0
+)
+
+set "FAUX_VALID=0"
+for /f %%n in ('findstr /B /R /C:"// faux: pass *$" /C:"// faux: fail *$" /C:"// faux: hang *$" /C:"// faux: build-fail *$" /C:"// faux: sleep [0-9][0-9]* pass *$" /C:"// faux: sleep [0-9][0-9]* fail *$" "%FAUX_LINES%" ^| find /c /v ""') do set "FAUX_VALID=%%n"
+
+rem Exactly one directive, and it is valid. Anything else is refused in every
+rem phase, so a typo is loud and not only in the phase it would have governed.
+if not %FAUX_COUNT%==1 goto :bad
+if not %FAUX_VALID%==1 goto :bad
+
 set "FAUX_VERB="
 set "FAUX_A="
 set "FAUX_B="
-rem Tokens 1 and 2 are the file and "// faux:"; reading from token 2 on means a
-rem directive with no verb at all still counts as one, and is refused below
-rem rather than read as no directive.
-for /f "tokens=2,3,4,5" %%a in ('findstr /S /B /C:"// faux:" *.faux 2^>nul') do (
-  set /a FAUX_COUNT+=1
-  set "FAUX_VERB=%%b"
-  set "FAUX_A=%%c"
-  set "FAUX_B=%%d"
+for /f "tokens=3,4,5" %%a in ('findstr /B /C:"// faux:" "%FAUX_LINES%"') do (
+  set "FAUX_VERB=%%a"
+  set "FAUX_A=%%b"
+  set "FAUX_B=%%c"
 )
+rmdir /s /q "%FAUX_WORK%" 2>nul
 
-rem No directive: the baseline, or a patch that is not a faux one. It passes.
-if %FAUX_COUNT%==0 exit /b 0
-if %FAUX_COUNT% GTR 1 goto :bad
-
-rem Validate before acting, so a typo is loud in every phase and not only the one
-rem it would have governed.
-if "%FAUX_VERB%"=="pass" goto :valid
-if "%FAUX_VERB%"=="fail" goto :valid
-if "%FAUX_VERB%"=="hang" goto :valid
-if "%FAUX_VERB%"=="build-fail" goto :valid
+rem A sleep long enough to overflow set /a would ping for the wrong time; a bound
+rem of five digits is a day and more.
 if "%FAUX_VERB%"=="sleep" (
-  echo %FAUX_A%| findstr /R /X "[0-9][0-9]*" >nul || goto :bad
-  if "%FAUX_B%"=="pass" goto :valid
-  if "%FAUX_B%"=="fail" goto :valid
+  echo %FAUX_A%| findstr /R "^[0-9][0-9][0-9][0-9][0-9][0-9]" >nul && goto :bad_quiet
 )
-goto :bad
 
 :valid
 rem The build phase: the harness asks for --no-run first. Only build-fail touches
@@ -98,7 +132,15 @@ ping -n 900 127.0.0.1 >nul
 exit /b 0
 
 :bad
-echo faux-cargo: expected exactly one valid "// faux: ..." directive in *.faux, found %FAUX_COUNT%; last read [%FAUX_VERB% %FAUX_A% %FAUX_B%] 1>&2
+echo faux-cargo: expected exactly one valid "// faux: ..." directive in *.faux; found %FAUX_COUNT%, of which %FAUX_VALID% valid. The lines read: 1>&2
+findstr /B /C:"// faux:" "%FAUX_LINES%" 1>&2
+rmdir /s /q "%FAUX_WORK%" 2>nul
+goto :refuse
+
+:bad_quiet
+echo faux-cargo: expected exactly one valid "// faux: ..." directive; a sleep of six or more digits is not valid: %FAUX_A% 1>&2
+
+:refuse
 rem STATUS_DLL_INIT_FAILED, the code the harness reports as INFRASTRUCTURE (see
 rem Get-ProcessStartFailure in common.ps1) rather than as a result.
 exit /b -1073741502

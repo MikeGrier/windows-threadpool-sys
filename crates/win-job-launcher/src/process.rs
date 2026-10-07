@@ -396,9 +396,19 @@ fn search_directories() -> Vec<PathBuf> {
     directories.extend(system_directory());
     directories.extend(windows_directory());
     if let Some(path) = std::env::var_os("PATH") {
-        directories.extend(std::env::split_paths(&path));
+        directories.extend(path_directories(&path));
     }
     directories
+}
+
+/// The entries of a `PATH` value, without the empty ones. An empty entry (`;;`,
+/// or a leading or trailing `;`) joined onto a program name is a bare relative
+/// path, which is looked for in the current directory -- the one place the
+/// search must never reach.
+fn path_directories(path: &OsStr) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .collect()
 }
 
 fn system_directory() -> Option<PathBuf> {

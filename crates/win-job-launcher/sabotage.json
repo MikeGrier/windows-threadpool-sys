@@ -20,6 +20,14 @@
       "replace": ["    out.extend(std::iter::repeat_n(BACKSLASH, 0 * trailing));"]
     },
     {
+      "name": "an empty PATH entry is searched",
+      "file": "src/process.rs",
+      "expect": "caught",
+      "why": "Joined onto a program name, an empty entry is a bare relative path, looked for in the current directory -- for the harness a mutable working copy, where a same-named executable could stand in for the real one.",
+      "find": ["        .filter(|directory| !directory.as_os_str().is_empty())"],
+      "replace": ["        .filter(|_| true)"]
+    },
+    {
       "name": "the bound is never enforced",
       "file": "src/launch.rs",
       "expect": "caught",
