@@ -33,6 +33,10 @@
             "package-name": "win-shared-os-owned-handle",
             "component": "win-shared-os-owned-handle"
         },
+        "crates/win-sync-sys": {
+            "package-name": "win-sync-sys",
+            "component": "win-sync-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

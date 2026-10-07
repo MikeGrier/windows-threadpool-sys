@@ -124,6 +124,13 @@ name = "win-shared-os-owned-handle"
 version = "0.1.0"
 
 [[package]]
+name = "win-sync-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "windows-core"
 version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

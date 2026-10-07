@@ -5,6 +5,7 @@ members = [
 	"crates/durable-ioring",
 	"crates/win-numa-sys",
 	"crates/win-shared-os-owned-handle",
+	"crates/win-sync-sys",
 	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-file-watcher-example-test-harness",

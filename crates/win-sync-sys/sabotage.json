@@ -1,0 +1,79 @@
+{
+  "package": "win-sync-sys",
+  "description": "Sabotages for win-sync-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "Event::new's and Event::try_clone's error paths are absent: CreateEventW and DuplicateHandle fail only when the process cannot get another handle or the kernel cannot allocate the object, which no test can produce on demand. event.rs says so at each definition.",
+  "sabotages": [
+    {
+      "name": "WS-1.1: set resets instead",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The operation the crate exists for. Every set test sees the event unsignalled afterwards.",
+      "find": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == FALSE {\n"],
+      "replace": ["        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == FALSE {\n"]
+    },
+    {
+      "name": "WS-1.1: an auto-reset event is created manual-reset",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "An auto-reset event releases one waiter per set; created manual-reset it releases every waiter and stays signalled, which the one-wait tests see without a timing window.",
+      "find": ["            ResetMode::Auto => FALSE,\n"],
+      "replace": ["            ResetMode::Auto => TRUE,\n"]
+    },
+    {
+      "name": "WS-1.1: a manual-reset event is created auto-reset",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The other direction of the mode: a manual-reset event must stay signalled across waits until it is reset.",
+      "find": ["            ResetMode::Manual => TRUE,\n"],
+      "replace": ["            ResetMode::Manual => FALSE,\n"]
+    },
+    {
+      "name": "WS-1.1: the initial state is dropped",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "An event asked for signalled must start signalled.",
+      "find": ["        let initial_state = if initially_signalled { TRUE } else { FALSE };\n"],
+      "replace": ["        let initial_state = if initially_signalled { FALSE } else { FALSE };\n"]
+    },
+    {
+      "name": "WS-1.1: reset does nothing",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "A reset that reports success without resetting leaves a manual-reset event signalled.",
+      "find": ["        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == FALSE {\n            return Err(io::Error::last_os_error());\n        }\n"],
+      "replace": ["        if false {\n            return Err(io::Error::last_os_error());\n        }\n"]
+    },
+    {
+      "name": "WS-1.1: set swallows its error",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "A refused set reported as success is a signal the caller believes was sent. Caught by the reduced-access test, which is the only way to make SetEvent fail.",
+      "find": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == FALSE {\n            return Err(io::Error::last_os_error());\n"],
+      "replace": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == FALSE {\n            return Ok(());\n"]
+    },
+    {
+      "name": "WS-1.1: reset swallows its error",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "The same for reset: a refused reset reported as success leaves a signal the caller believes withdrawn.",
+      "find": ["        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == FALSE {\n            return Err(io::Error::last_os_error());\n"],
+      "replace": ["        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == FALSE {\n            return Ok(());\n"]
+    },
+    {
+      "name": "WS-1.1: try_clone creates a new event",
+      "file": "src/event.rs",
+      "expect": "caught",
+      "why": "A clone that is a different event looks like a working event in isolation; it fails only where the two are meant to be one, which is the whole use -- keeping one handle to signal while another is waited on.",
+      "find": ["            handle: self.handle.try_clone()?,\n"],
+      "replace": ["            handle: Event::new(ResetMode::Manual, false)?.handle,\n"]
+    },
+    {
+      "name": "CONTROL: set compares against 0 rather than FALSE",
+      "file": "src/event.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: FALSE is 0, so this is an equivalent change on code every set test executes. If it comes back caught, the harness or a test is reacting to something other than behaviour.",
+      "find": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == FALSE {\n"],
+      "replace": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == 0 {\n"]
+    }
+  ]
+}
