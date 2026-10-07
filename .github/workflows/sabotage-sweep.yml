@@ -209,7 +209,7 @@ jobs:
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
           # The working copy and its target directory live here too and are far
