@@ -4,6 +4,11 @@ Append-only record of finished [CHECKLIST.md](CHECKLIST.md) items.
 
 ## Moved 2026-10-07 18:05:45 -04:00 -- WS-1.1: the crate, with `Event`
 
+WS-M1 (`Event`, and the thread pool built on it) completed with this item and with
+`windows-threadpool-sys`' `M-T14.1`, archived in that crate's
+[COMPLETED-CHECKLIST.md](../windows-threadpool-sys/COMPLETED-CHECKLIST.md#m-t141); the
+milestone heading and this item's stub left [CHECKLIST.md](CHECKLIST.md) together.
+
 ### <a id="ws-11"></a>WS-1.1 -- The crate exists, with an `Event` that sets and resets without `unsafe`, its tests and its sabotages. *(completed 2026-10-07 18:05:45 -04:00)*
 
 The decisions it implements are [WS-D-3](DESIGN-NOTES.md#ws-d-3) and

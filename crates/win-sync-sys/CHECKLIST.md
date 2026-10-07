@@ -3,12 +3,6 @@
 Memory-safe Rust over the Win32 synchronization API. See [README.md](README.md) for what the crate is
 and [DESIGN-NOTES.md](DESIGN-NOTES.md) for its decisions.
 
-## WS-M1 -- `Event`, and the thread pool built on it
-
-- [x] **WS-1.1** -- The crate exists, with an `Event` that sets and resets without `unsafe`, its tests and its sabotages. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#ws-11)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-threadpool-sys` -> `M-T14` -> `M-T14.1` (`WaitableHandle` built on `Event`). See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
-
 ## WS-M1+ -- The rest of the kernel objects
 
 Sequenced after `Event` by the engineer ([WS-D-2](DESIGN-NOTES.md#ws-d-2)); graduates to numbered
@@ -43,7 +37,14 @@ milestones when the first of these is taken up.
   ([WS-D-1](DESIGN-NOTES.md#ws-d-1)); whether private namespaces belong here or with
   `windows-namespace-request-sys` is part of the question.
 
-- [ ] **WS-inf.3** -- **Whether the workspace's private events move onto `Event`**: the ring
-  crate's completion event (`windows-ioring-sys`' `ring/bookkeeping.rs`), `windows-waitable-queues`'
-  doorbell, and `windows-file-watcher`'s `queue.rs`. Each is the engineer's decision, taken per
-  crate.
+- [ ] **WS-inf.3** -- **Whether the workspace's private events move onto `Event`.** Each is the
+  engineer's decision, taken per crate. Found by sweeping non-test sources for raw `CreateEventW`,
+  `SetEvent` and `ResetEvent` on 2026-10-07:
+  - `windows-ioring-sys`: the ring's completion event (`ring/bookkeeping.rs`) and the resolver's
+    event (`sys/resolver.rs`);
+  - `windows-waitable-queues`: the doorbell (`doorbell.rs`);
+  - `windows-file-watcher`: `queue.rs`;
+  - `windows-file-enumeration-sys`: the completion ring's doorbell (`completion_ring.rs`), which
+    already creates through `WaitableHandle::event` and sets and resets the handle raw -- the shape
+    a kept `Event` clone replaces;
+  - `windows-platform-probes`: `doorbell_cost.rs` and `pool_growth.rs`.
