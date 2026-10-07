@@ -1,4 +1,4 @@
-# Keep GitHub Actions and Cargo deps current.
+# Keep GitHub Actions, Cargo and the release automation's npm deps current.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -23,3 +23,15 @@ updates:
     labels:
       - dependencies
       - rust
+
+  # The release automation (release-please and the probe packaging scripts) is
+  # the repository's only npm project. Without this entry Dependabot raised
+  # security alerts for its lockfile but could not open fixes for them.
+  - package-ecosystem: npm
+    directory: "/.github/release"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - javascript
