@@ -15,7 +15,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-use super::{Process, batch_plan, exe_plan, is_batch, push_arg, resolve, spawn_in_job};
+use super::{
+    Process, batch_plan, cmd_exe, exe_plan, is_batch, known_directory, push_arg, push_batch_part,
+    resolve, resolve_in, search_directories, spawn_in_job, system_directory, windows_directory,
+};
 use crate::job::Job;
 
 fn quoted(arg: &str) -> String {
@@ -143,6 +146,22 @@ fn a_batch_file_runs_through_cmd_with_every_argument_quoted_whole() {
 }
 
 #[test]
+fn trailing_backslashes_in_a_batch_files_arguments_are_doubled_before_the_closing_quote() {
+    let part = |arg: &str| {
+        let mut out = Vec::new();
+        push_batch_part(&mut out, OsStr::new(arg)).unwrap();
+        String::from_utf16(&out).unwrap()
+    };
+    assert_eq!(part(r"dir\"), r#""dir\\""#);
+    assert_eq!(part(r"dir\\"), r#""dir\\\\""#);
+    assert_eq!(part(r"C:\a b\"), r#""C:\a b\\""#);
+    // Backslashes anywhere else are left as they are.
+    assert_eq!(part(r"a\b"), r#""a\b""#);
+    assert_eq!(part(r"\a"), r#""\a""#);
+    assert_eq!(part(""), r#""""#);
+}
+
+#[test]
 fn what_cmd_would_reread_as_syntax_is_refused_in_a_batch_files_arguments() {
     let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
     for bad in ["a\"b", "100%", "%PATH%", "a\nb", "a\rb"] {
@@ -171,18 +190,92 @@ fn shell_metacharacters_are_accepted_in_a_batch_files_arguments_because_they_are
 }
 
 #[test]
-fn a_program_name_is_found_as_createprocess_would_find_it() {
+fn a_program_name_is_found_in_the_documented_order_with_the_system_directory_before_path() {
     let found = resolve(OsStr::new("cmd")).expect("find cmd");
-    assert!(
-        found
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with("cmd.exe"),
-        "{}",
-        found.display()
-    );
+    assert_eq!(found, system_directory().unwrap().join("cmd.exe"));
     assert_eq!(resolve(OsStr::new("cmd.exe")).unwrap(), found);
     assert!(found.is_absolute());
+}
+
+#[test]
+fn the_search_order_is_the_launchers_directory_then_system_then_windows_then_path() {
+    let directories = search_directories();
+    let exe_directory = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    assert_eq!(directories[0], exe_directory);
+    assert_eq!(directories[1], system_directory().unwrap());
+    assert_eq!(directories[2], windows_directory().unwrap());
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let on_path: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(&directories[3..], &on_path[..]);
+}
+
+#[test]
+fn the_current_directory_is_not_searched_for_a_program() {
+    // A program that exists only in the directory the search runs from is not
+    // found: the search is the listed directories and nothing else.
+    let s = Scratch::new("cwd");
+    fs::write(s.path("only-here.exe"), "").unwrap();
+    let e = resolve_in(OsStr::new("only-here"), &[s.path("elsewhere")]).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotFound);
+}
+
+#[test]
+fn the_first_directory_holding_the_program_wins() {
+    let s = Scratch::new("order");
+    for (dir, content) in [("a", "first"), ("b", "second")] {
+        fs::create_dir(s.path(dir)).unwrap();
+        fs::write(s.path(dir).join("tool.exe"), content).unwrap();
+    }
+    let found = resolve_in(OsStr::new("tool"), &[s.path("a"), s.path("b")]).unwrap();
+    assert_eq!(fs::read_to_string(found).unwrap(), "first");
+    let found = resolve_in(OsStr::new("tool"), &[s.path("b"), s.path("a")]).unwrap();
+    assert_eq!(fs::read_to_string(found).unwrap(), "second");
+}
+
+#[test]
+fn exe_is_appended_to_a_bare_name_and_nothing_else_is() {
+    let s = Scratch::new("extension");
+    fs::write(s.path("only.exe"), "").unwrap();
+    fs::write(s.path("script.cmd"), "").unwrap();
+    let dirs = [s.0.clone()];
+    assert_eq!(
+        resolve_in(OsStr::new("only"), &dirs).unwrap(),
+        s.path("only.exe")
+    );
+    assert_eq!(
+        resolve_in(OsStr::new("only.exe"), &dirs).unwrap(),
+        s.path("only.exe")
+    );
+    assert_eq!(
+        resolve_in(OsStr::new("script.cmd"), &dirs).unwrap(),
+        s.path("script.cmd")
+    );
+    // Not found as `script`, which would be looked for as `script.exe`.
+    let e = resolve_in(OsStr::new("script"), &dirs).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotFound);
+}
+
+#[test]
+fn a_name_with_a_directory_part_is_taken_as_given_and_not_searched_for() {
+    let s = Scratch::new("explicit");
+    fs::create_dir(s.path("elsewhere")).unwrap();
+    fs::write(s.path("elsewhere").join("tool.exe"), "").unwrap();
+    let explicit = s.path("elsewhere").join("tool.exe");
+    // Found whatever directories are given, including none.
+    assert_eq!(resolve_in(explicit.as_os_str(), &[]).unwrap(), explicit);
+    assert_eq!(
+        resolve_in(s.path("elsewhere").join("tool").as_os_str(), &[]).unwrap(),
+        explicit
+    );
+    // And a missing one is not rescued by a directory that holds the bare name.
+    fs::write(s.path("tool.exe"), "").unwrap();
+    let missing = s.path("nowhere").join("tool.exe");
+    let e = resolve_in(missing.as_os_str(), std::slice::from_ref(&s.0)).unwrap_err();
+    assert_eq!(e.raw_os_error(), Some(2));
 }
 
 #[test]
@@ -190,6 +283,39 @@ fn a_program_that_does_not_exist_is_a_file_not_found_error() {
     let e = resolve(OsStr::new("win-job-launcher-no-such-program-xyz")).unwrap_err();
     assert_eq!(e.kind(), io::ErrorKind::NotFound);
     assert_eq!(e.raw_os_error(), Some(2));
+}
+
+#[test]
+fn the_command_interpreter_comes_from_the_system_directory() {
+    let cmd = cmd_exe().unwrap();
+    assert_eq!(cmd, system_directory().unwrap().join("cmd.exe"));
+    assert!(cmd.is_file());
+}
+
+#[test]
+fn a_known_directory_longer_than_the_first_buffer_is_read_whole() {
+    // The call reports the length needed (with its NUL) while the buffer is too
+    // small, then writes the text once it is not.
+    let calls = std::cell::Cell::new(0);
+    let found = known_directory(|buffer, length| {
+        calls.set(calls.get() + 1);
+        if length < 400 {
+            return 400;
+        }
+        for i in 0..399 {
+            // SAFETY: `i` is below `length`, which the caller made writable.
+            unsafe { *buffer.add(i) = u16::from(b'a') };
+        }
+        399
+    })
+    .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(found, PathBuf::from("a".repeat(399)));
+}
+
+#[test]
+fn a_known_directory_that_cannot_be_read_is_none() {
+    assert_eq!(known_directory(|_, _| 0), None);
 }
 
 #[test]
@@ -352,6 +478,45 @@ fn a_batch_file_runs_with_arguments_that_are_syntax_to_cmd() {
     // `%1` keeps the quotes it was given, which is what shows each argument
     // reached the script whole and inert.
     assert_eq!(s.read("out.txt").trim(), r#"["a b"] ["c&d"] ["e|f"]"#);
+}
+
+#[test]
+fn a_batch_file_that_forwards_its_arguments_keeps_a_trailing_backslash_from_eating_the_next() {
+    // The C runtime reads `"dir\"` as a quote escaped by a backslash, so the
+    // forwarded argument would swallow its neighbour. The consumer here is
+    // PowerShell, which splits its command line the same way.
+    let s = Scratch::new("forward");
+    fs::write(
+        s.path("echo.ps1"),
+        "$args | ForEach-Object { \"[$_]\" }\r\n",
+    )
+    .unwrap();
+    let script = s.path("forward.cmd");
+    fs::write(
+        &script,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" \"%~1\" \"%~2\"\r\n",
+            s.path("echo.ps1").display()
+        ),
+    )
+    .unwrap();
+    let job = Job::new_kill_on_close().unwrap();
+    let process = start(
+        &s,
+        &job,
+        script.to_str().unwrap(),
+        &[r"C:\dir with space\", "next"],
+    )
+    .unwrap();
+    assert!(exits_within(&process, 60_000));
+    let out = s.read("out.txt");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [r"[C:\dir with space\]", "[next]"],
+        "out: {out:?} err: {:?}",
+        s.read("err.txt")
+    );
 }
 
 #[test]

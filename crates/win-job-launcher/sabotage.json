@@ -12,6 +12,14 @@
       "replace": ["            0,"]
     },
     {
+      "name": "a batch file's trailing backslash is not doubled",
+      "file": "src/process.rs",
+      "expect": "caught",
+      "why": "A script that forwards \"%~1\" hands its program a backslash-escaped closing quote, so the argument swallows the one after it. The C runtime's reading of the command line is the contract, and the forwarding test shows the merge.",
+      "find": ["    out.extend(std::iter::repeat_n(BACKSLASH, trailing));"],
+      "replace": ["    out.extend(std::iter::repeat_n(BACKSLASH, 0 * trailing));"]
+    },
+    {
       "name": "the bound is never enforced",
       "file": "src/launch.rs",
       "expect": "caught",

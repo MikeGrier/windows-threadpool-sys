@@ -12,16 +12,21 @@
 //! this module calls `CreateProcessW` itself, and owns the three things
 //! `Command` would otherwise have done:
 //!
-//! - **Finding the program.** `SearchPathW`, with `.exe` appended when the name
-//!   has no extension: the launcher's directory, the system directories, then
-//!   `PATH`, as `CreateProcess` itself searches.
+//! - **Finding the program.** In the order the pinned toolchain documents for
+//!   `std::process::Command` on Windows: the launcher's own directory, the
+//!   system directory, the Windows directory, then `PATH` -- and not the current
+//!   directory, which for the harness is a mutable working copy. `.exe` is
+//!   appended when the name has no extension. The command interpreter is taken
+//!   from the system directory, never searched for.
 //! - **Quoting the arguments.** The rules the Microsoft C runtime reads back
 //!   with, which every Rust and C program started this way parses.
 //! - **Running `.cmd` and `.bat` files**, which `CreateProcess` cannot run
 //!   directly: through `cmd.exe /c`. `cmd` re-parses its command line, so an
 //!   argument it would treat as syntax is refused rather than escaped. The
 //!   refused set is `"`, `%`, a carriage return and a line feed; every other
-//!   argument is quoted whole, which `cmd` leaves inert.
+//!   argument is quoted whole, which `cmd` leaves inert, with trailing
+//!   backslashes doubled so a script that forwards `"%~1"` does not have its
+//!   closing quote escaped.
 //!
 //! Only the command's own three standard handles are inherited, named by
 //! `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so nothing else the launcher holds open
@@ -32,13 +37,14 @@ use std::fs::File;
 use std::io;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, TRUE,
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_FILE_NOT_FOUND,
+    ERROR_INSUFFICIENT_BUFFER, HANDLE, TRUE,
 };
-use windows_sys::Win32::Storage::FileSystem::SearchPathW;
+use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
     GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -57,16 +63,18 @@ const SPACE: u16 = b' ' as u16;
 const TAB: u16 = b'\t' as u16;
 const QUOTE: u16 = b'"' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
+const SLASH: u16 = b'/' as u16;
+const COLON: u16 = b':' as u16;
 const PERCENT: u16 = b'%' as u16;
 const CR: u16 = b'\r' as u16;
 const LF: u16 = b'\n' as u16;
 
-/// The extension `SearchPathW` appends to a name that has none.
+/// The extension appended to a program name that has none.
 const DEFAULT_EXTENSION: &str = ".exe";
 
-/// The initial size, in UTF-16 units, of the `SearchPathW` result buffer; it is
+/// The initial size, in UTF-16 units, of a `Get...DirectoryW` buffer; it is
 /// grown to fit when the path is longer.
-const SEARCH_BUFFER: usize = 1024;
+const KNOWN_DIRECTORY_BUFFER: usize = 260;
 
 /// A process the launcher created. The handle is closed on drop.
 #[derive(Debug)]
@@ -205,8 +213,7 @@ struct Plan {
 fn plan(program: &OsStr, args: &[OsString]) -> io::Result<Plan> {
     let resolved = resolve(program)?;
     if is_batch(&resolved) {
-        let cmd = resolve(OsStr::new("cmd.exe"))?;
-        batch_plan(&cmd, &resolved, args)
+        batch_plan(&cmd_exe()?, &resolved, args)
     } else {
         exe_plan(&resolved, args)
     }
@@ -294,7 +301,11 @@ fn push_arg(out: &mut Vec<u16>, arg: &OsStr) -> io::Result<()> {
 }
 
 /// Appends a script path or one of its arguments, quoted whole, for `cmd` to
-/// hand on without re-reading it as syntax.
+/// hand on without re-reading it as syntax. Backslashes just before the closing
+/// quote are doubled, as `std` does for batch files: a script that forwards
+/// `"%~1"` to a program hands it `\\"`, which the C runtime reads back as a
+/// quote after one backslash, where a lone `\"` would escape the quote and
+/// merge the next argument into this one.
 fn push_batch_part(out: &mut Vec<u16>, part: &OsStr) -> io::Result<()> {
     let units = units_without_nul(part)?;
     if units
@@ -306,8 +317,10 @@ fn push_batch_part(out: &mut Vec<u16>, part: &OsStr) -> io::Result<()> {
              file's path or arguments as syntax, so it is refused",
         ));
     }
+    let trailing = units.iter().rev().take_while(|&&u| u == BACKSLASH).count();
     out.push(QUOTE);
     out.extend(units);
+    out.extend(std::iter::repeat_n(BACKSLASH, trailing));
     out.push(QUOTE);
     Ok(())
 }
@@ -330,35 +343,103 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
-/// The file `name` names, found as `CreateProcess` would find it.
-fn resolve(name: &OsStr) -> io::Result<std::path::PathBuf> {
-    let name = wide_nul(name)?;
-    let extension = wide_nul(OsStr::new(DEFAULT_EXTENSION))?;
-    let mut buffer = vec![0_u16; SEARCH_BUFFER];
+/// The file `name` names, found in the order the pinned toolchain documents for
+/// `std::process::Command` on Windows: the launcher's own directory, the system
+/// directory, the Windows directory, then each directory in `PATH`. The current
+/// directory is not searched, so a same-named file in the directory the launcher
+/// happens to run in -- for the harness, a mutable working copy -- is never
+/// picked over the real one.
+///
+/// A name with a directory part (`\`, `/` or `:`) is a path, not a name to
+/// search for, and is taken as given. A name with no extension has `.exe`
+/// appended; one with an extension is looked for as spelled.
+fn resolve(name: &OsStr) -> io::Result<PathBuf> {
+    resolve_in(name, &search_directories())
+}
+
+fn resolve_in(name: &OsStr, directories: &[PathBuf]) -> io::Result<PathBuf> {
+    let units = units_without_nul(name)?;
+    let mut file = name.to_os_string();
+    if Path::new(name).extension().is_none() {
+        file.push(DEFAULT_EXTENSION);
+    }
+    let file = PathBuf::from(file);
+    let has_directory_part = units
+        .iter()
+        .any(|&u| u == BACKSLASH || u == SLASH || u == COLON);
+    if has_directory_part {
+        return if file.is_file() {
+            Ok(file)
+        } else {
+            Err(not_found())
+        };
+    }
+    directories
+        .iter()
+        .map(|directory| directory.join(&file))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(not_found)
+}
+
+/// `ERROR_FILE_NOT_FOUND`, the error the program's absence has always carried
+/// in the result file.
+fn not_found() -> io::Error {
+    io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND.cast_signed())
+}
+
+/// The directories [`resolve`] searches, in order.
+fn search_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        directories.extend(exe.parent().map(Path::to_path_buf));
+    }
+    directories.extend(system_directory());
+    directories.extend(windows_directory());
+    if let Some(path) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&path));
+    }
+    directories
+}
+
+fn system_directory() -> Option<PathBuf> {
+    // SAFETY: the buffer is writable for the length passed.
+    known_directory(|buffer, length| unsafe { GetSystemDirectoryW(buffer, length) })
+}
+
+fn windows_directory() -> Option<PathBuf> {
+    // SAFETY: the buffer is writable for the length passed.
+    known_directory(|buffer, length| unsafe { GetWindowsDirectoryW(buffer, length) })
+}
+
+/// Runs one of the `Get...DirectoryW` calls, growing the buffer to fit. They
+/// return the length written, or when the buffer is too small the length needed
+/// including the NUL.
+fn known_directory(query: impl Fn(*mut u16, u32) -> u32) -> Option<PathBuf> {
+    let mut buffer = vec![0_u16; KNOWN_DIRECTORY_BUFFER];
     loop {
-        let capacity = u32::try_from(buffer.len()).expect("the buffer fits a u32");
-        // SAFETY: both strings are NUL-terminated and the buffer is writable
-        // for `capacity` units; a null search path means the default order and
-        // a null file-part pointer is allowed.
-        let written = unsafe {
-            SearchPathW(
-                ptr::null(),
-                name.as_ptr(),
-                extension.as_ptr(),
-                capacity,
-                buffer.as_mut_ptr(),
-                ptr::null_mut(),
-            )
-        } as usize;
+        let capacity = u32::try_from(buffer.len()).ok()?;
+        let written = query(buffer.as_mut_ptr(), capacity) as usize;
         if written == 0 {
-            return Err(io::Error::last_os_error());
+            return None;
         }
         if written < buffer.len() {
             buffer.truncate(written);
-            return Ok(OsString::from_wide(&buffer).into());
+            return Some(OsString::from_wide(&buffer).into());
         }
-        // Too small: `written` is the size needed, including the NUL.
         buffer.resize(written + 1, 0);
+    }
+}
+
+/// The command interpreter, from the system directory -- never searched for, so
+/// nothing in `PATH` or the current directory can stand in for it.
+fn cmd_exe() -> io::Result<PathBuf> {
+    let cmd = system_directory()
+        .ok_or_else(|| io::Error::other("the system directory could not be read"))?
+        .join("cmd.exe");
+    if cmd.is_file() {
+        Ok(cmd)
+    } else {
+        Err(not_found())
     }
 }
 
