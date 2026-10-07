@@ -2349,6 +2349,38 @@ The engineer chose "the earlier option" for both, read as the option that lands 
   signal's harness check beside it, and each later step adds its rules. DI-3.7 is kept as a
   checked record pointing there.
 
+## The readiness event needs a safe event, and gets a crate (2026-10-07)
+
+Starting DI-3.2.2 surfaced a gap: DI-D-28's readiness event must be created and set inside a crate
+that forbids `unsafe`, and nothing below dioring offered a safe event that could be set.
+`windows-threadpool-sys` creates one safely (`WaitableHandle::event`) but only as a wait target to
+hand to the pool, with no way to set it; the ring crate and `windows-waitable-queues` each make a
+private one.
+
+The engineer asked first why a new type was needed at all, given `windows-sys`, the `windows`
+crate and std's `OwnedHandle`. The answer: nothing about the event differs; what is missing is a
+type whose invariant lets `SetEvent` be called safely. Both binding crates expose it as an
+`unsafe` function over a raw handle, and `OwnedHandle` knows the handle is valid but not that it is
+an event, so it has no `set`. The `unsafe` has to live somewhere, and the question was only where.
+
+Asked to place it, and not to keep adding to the thread-pool crate, I proposed `win-sync-sys`
+covering Win32's synchronization area, sorted Learn's fourteen groups into kernel objects (the
+core), in-process primitives (a pinning problem of their own) and groups belonging elsewhere, and
+asked four questions. The engineer's answers:
+
+- the name `win-sync-sys`;
+- omit the in-process primitives to start with;
+- start with `Event` only;
+- make it work well with `windows-threadpool-sys`, changing that crate as part of this work;
+- omit `PulseEvent` and document why.
+
+Named objects were not answered and stay open. One thing surfaced while planning that the proposal
+had stated loosely: what makes `set` safe is ownership, which `OwnedHandle` already gives; that
+the object is an event is what makes it correct. Event-ness becomes a safety property only at the
+thread pool, which treats a wait on a mutex as undefined -- so adopting an existing handle as an
+`Event` must be `unsafe`. Recorded as [WS-D-4](../crates/win-sync-sys/DESIGN-NOTES.md#ws-d-4),
+with the rest in that crate's [DESIGN-NOTES.md](../crates/win-sync-sys/DESIGN-NOTES.md).
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

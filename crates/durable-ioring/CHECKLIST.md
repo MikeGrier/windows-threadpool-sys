@@ -53,6 +53,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface), done and recorded as the ring crate's [D-83](../windows-ioring-sys/DESIGN-NOTES.md#d-83). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). The readiness event [DI-D-28](DESIGN-NOTES.md#di-d-28) describes must be created and set under `#![forbid(unsafe_code)]`, and no lower crate offered a safe event that could be set; the engineer placed one in a new crate (2026-10-07). `windows-threadpool-sys`' `M-T14.1` moves onto it first, as part of the same work. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
 - [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
   provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
   default lineage. Coverage as CONTRACT.md defines it: a write is named to the default provider
