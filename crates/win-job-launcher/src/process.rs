@@ -36,11 +36,11 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, TRUE,
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, TRUE,
 };
 use windows_sys::Win32::Storage::FileSystem::SearchPathW;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
+    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
     GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
@@ -105,7 +105,8 @@ impl AsRawHandle for Process {
 }
 
 /// Starts `program` with `args` as a member of `job` from its first instruction,
-/// with a null stdin and `stdout`/`stderr` as its output streams.
+/// with a null stdin and `stdout`/`stderr` as its output streams. The caller's
+/// handles are not modified: the command is given inheritable duplicates.
 ///
 /// # Errors
 ///
@@ -121,15 +122,16 @@ pub fn spawn_in_job(
 ) -> io::Result<Process> {
     let mut plan = plan(program, args)?;
 
+    // The command gets inheritable DUPLICATES, closed when this call returns.
+    // Marking the caller's own handles inheritable would leave them so for good:
+    // a later or concurrent process creation, by anything, would inherit them.
     let stdin = File::open("NUL")?;
-    let stdio: [HANDLE; 3] = [
-        stdin.as_raw_handle(),
-        stdout.as_raw_handle(),
-        stderr.as_raw_handle(),
+    let owned = [
+        duplicate_inheritable(stdin.as_raw_handle())?,
+        duplicate_inheritable(stdout.as_raw_handle())?,
+        duplicate_inheritable(stderr.as_raw_handle())?,
     ];
-    for handle in stdio {
-        make_inheritable(handle)?;
-    }
+    let stdio: [HANDLE; 3] = owned.each_ref().map(AsRawHandle::as_raw_handle);
     let jobs: [HANDLE; 1] = [job.as_raw_handle()];
 
     let mut attributes = AttributeList::new(2)?;
@@ -360,12 +362,28 @@ fn resolve(name: &OsStr) -> io::Result<std::path::PathBuf> {
     }
 }
 
-fn make_inheritable(handle: HANDLE) -> io::Result<()> {
-    // SAFETY: the handle is live for the call.
-    if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
+/// A new handle to the same object as `handle`, inheritable, owned by the caller.
+fn duplicate_inheritable(handle: HANDLE) -> io::Result<OwnedHandle> {
+    let mut duplicate: HANDLE = ptr::null_mut();
+    // SAFETY: `handle` is live for the call; both process arguments are this
+    // process's own pseudo-handle, and `duplicate` is writable.
+    let ok = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            handle,
+            GetCurrentProcess(),
+            &raw mut duplicate,
+            0,
+            TRUE,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(())
+    // SAFETY: a successful DuplicateHandle returns a new handle this process
+    // owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(duplicate) })
 }
 
 /// A `PROC_THREAD_ATTRIBUTE_LIST`, deleted on drop.

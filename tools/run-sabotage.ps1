@@ -372,6 +372,8 @@ $script:LauncherOutcome = @{ Exited = 'exited'; TimedOut = 'timed-out'; NotStart
 # it. After a kill the launcher waits up to its `launch::CONFIRM_BOUND` for the
 # tree to empty before it reports; this allows for that and for start-up.
 $script:LauncherGraceSeconds = 30
+# How long to wait, after stopping a launcher that overran, for it to be gone.
+$script:LauncherStopSeconds = 10
 
 # One argument, quoted for a command line the way the MSVC runtime -- and
 # Rust's std, which the launcher parses with -- splits it back apart.
@@ -469,11 +471,26 @@ function Invoke-Bounded {
 
     if (-not $process.HasExited) {
         # Stopping the launcher closes its job handle, and the job is
-        # kill-on-close, so cargo's tree goes with it.
+        # kill-on-close, so cargo's tree goes with it. That is the one way left
+        # to take the tree down, and it is NOT one this tool can confirm: the
+        # launcher is what held the job, and it has stopped answering. So the
+        # sweep ends here rather than score this run, or start the next one,
+        # beside a tree it cannot show is gone.
         Write-Report ("    win-job-launcher (PID $($process.Id)) overran its ${Seconds}s bound by " +
             "$($script:LauncherGraceSeconds)s; stopping it.") -Level bad
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $null; Seconds = $elapsed }
+        $stopDeadline = (Get-Date).AddSeconds($script:LauncherStopSeconds)
+        while (-not $process.HasExited -and (Get-Date) -lt $stopDeadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        $stopped = 'It exited'
+        if (-not $process.HasExited) { $stopped = "It did not exit within $($script:LauncherStopSeconds)s" }
+        Exit-WithMessage (@(
+                "win-job-launcher overran its bound and was stopped by the backstop. $stopped, and its closing"
+                "its job handle is the only thing that ends cargo's process tree, which this tool cannot confirm."
+                "The sweep stops rather than patch and run beside a tree that may still be alive."
+                "That is this tool's machinery, not the suite."
+            ) -join "`n") 2
     }
 
     $result = Read-LauncherResult -Path $resultPath
@@ -491,9 +508,12 @@ function Invoke-Bounded {
     # either way. A kill that did not take is the exact case a catch must not be
     # credited for, and a "passed" or "failed" beside a tree that may still be
     # running is not one the next phase can trust -- so it is the launcher that
-    # failed, and the run is INFRASTRUCTURE, not a result.
+    # failed, and the run is INFRASTRUCTURE, not a result. The property is looked
+    # up rather than read: under Set-StrictMode a result without it throws, and
+    # an absent field has to land here as "unconfirmed", not as a crash.
+    $confirmed = $result.PSObject.Properties['confirmed']
     if (($result.outcome -eq $outcomes.Exited -or $result.outcome -eq $outcomes.TimedOut) -and
-        $result.confirmed -ne $true) {
+        ($null -eq $confirmed -or $confirmed.Value -ne $true)) {
         Write-Report ("    win-job-launcher could not confirm the command's process tree was gone " +
             "(outcome $($result.outcome)); the run is not scored.") -Level bad
         return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $process.ExitCode; Seconds = $elapsed }

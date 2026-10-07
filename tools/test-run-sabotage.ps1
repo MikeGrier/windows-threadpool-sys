@@ -1004,7 +1004,8 @@ Test-Case 'a launcher that writes no result is no verdict, and stops the sweep a
 
 foreach ($case in @(
         @{ Name = 'exits'; Json = '{"outcome":"exited","code":0,"strays":1,"confirmed":false,"elapsedMs":1}'; Outcome = 'exited' },
-        @{ Name = 'is killed at the bound'; Json = '{"outcome":"timed-out","confirmed":false,"elapsedMs":1}'; Outcome = 'timed-out' })) {
+        @{ Name = 'is killed at the bound'; Json = '{"outcome":"timed-out","confirmed":false,"elapsedMs":1}'; Outcome = 'timed-out' },
+        @{ Name = 'exits and its result has no confirmed field at all'; Json = '{"outcome":"exited","code":0,"strays":0,"elapsedMs":1}'; Outcome = 'exited' })) {
     Test-Case "a launcher that could not confirm the tree gone when the command $($case.Name) is no verdict" {
         # Scoring either as the command's own result would credit a catch (or
         # take a pass) beside a tree that may still be running. The fake writes
@@ -1026,10 +1027,11 @@ foreach ($case in @(
     }
 }
 
-Test-Case 'a launcher that overruns its own bound is stopped by the backstop' {
+Test-Case 'a launcher that overruns its own bound is stopped by the backstop, and the sweep ends' {
     # The baseline's bound is the BUILD bound, set to its minimum here, so the
     # backstop fires at that plus the launcher's grace. The fake's ping outlives
-    # the backstop by a second and then ends by itself.
+    # the backstop by a second and then ends by itself. The sweep ends rather
+    # than score or go on beside a tree it cannot show is gone.
     $root = New-Fixture -Manifest (New-Spec)
     try {
         $stub = New-Stub -Behaviour 'fail' -Root $root
@@ -1040,7 +1042,8 @@ Test-Case 'a launcher that overruns its own bound is stopped by the backstop' {
             '-BuildTimeoutSeconds', '1')
         Assert-Equal 2 $result.ExitCode $result.Output
         Assert-Match 'win-job-launcher \(PID \d+\) overran its 1s bound by \d+s; stopping it' $result.Output
-        Assert-Match 'The baseline could not be supervised' $result.Output
+        Assert-Match 'was stopped by the backstop\. It exited' $result.Output
+        Assert-Match 'The sweep stops rather than patch and run beside a tree that may still be alive' $result.Output
     }
     finally { Remove-Fixture $root }
 }

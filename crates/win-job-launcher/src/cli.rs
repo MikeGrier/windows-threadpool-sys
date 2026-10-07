@@ -41,7 +41,8 @@ pub const USAGE: &str = "usage: win-job-launcher --timeout-ms <ms> --stdout <pat
 /// One parsed command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invocation {
-    /// The wall-clock bound, from the moment the command is resumed.
+    /// The wall-clock bound, from the moment the command has been created: the
+    /// launcher starts waiting when creating it returns.
     pub timeout_ms: u32,
     /// Where the command's stdout goes; created or truncated.
     pub stdout: PathBuf,

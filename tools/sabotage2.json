@@ -65,7 +65,7 @@
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",
       "why": "An unconfirmed termination beside a 'caught' is the false positive the whole launcher exists to prevent: the kill did not take, and the harness credits the suite anyway. The same field on an exit gates a 'passed' or 'failed' next to a tree that may still be running.",
-      "find": ["        $result.confirmed -ne $true) {"],
+      "find": ["        ($null -eq $confirmed -or $confirmed.Value -ne $true)) {"],
       "replace": ["        $false) {"]
     },
     {

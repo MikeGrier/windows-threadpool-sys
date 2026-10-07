@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::{
+    GetHandleInformation, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::{Process, batch_plan, exe_plan, is_batch, push_arg, resolve, spawn_in_job};
@@ -370,6 +372,75 @@ fn a_program_that_cannot_be_found_starts_nothing() {
     let e = start(&s, &job, "win-job-launcher-no-such-program-xyz", &[]).unwrap_err();
     assert_eq!(e.kind(), io::ErrorKind::NotFound);
     assert_eq!(job.accounting().unwrap().total_processes, 0);
+}
+
+#[test]
+fn the_callers_handles_are_left_exactly_as_they_were() {
+    // Neither marked inheritable by the call, nor stripped of the flag they
+    // already had: a spawn must not change what a later process creation, on
+    // any thread, would inherit.
+    let s = Scratch::new("flags");
+    let job = Job::new_kill_on_close().unwrap();
+    let plain_out = File::create(s.path("plain-out.txt")).unwrap();
+    let plain_err = File::create(s.path("plain-err.txt")).unwrap();
+    let marked_out = File::create(s.path("marked-out.txt")).unwrap();
+    let marked_err = File::create(s.path("marked-err.txt")).unwrap();
+    set_inherit(&marked_out, true);
+    set_inherit(&marked_err, true);
+
+    for (out, err, expected) in [
+        (&plain_out, &plain_err, false),
+        (&marked_out, &marked_err, true),
+    ] {
+        let process = spawn_in_job(
+            &job,
+            OsStr::new("cmd"),
+            &args(&["/d", "/c", "exit", "0"]),
+            out,
+            err,
+        )
+        .unwrap();
+        assert!(exits_within(&process, 10_000));
+        assert_eq!(inherits(out), expected, "stdout");
+        assert_eq!(inherits(err), expected, "stderr");
+    }
+}
+
+#[test]
+fn the_handles_given_to_a_command_that_failed_to_start_are_left_alone_too() {
+    let s = Scratch::new("flags-failed");
+    let job = Job::new_kill_on_close().unwrap();
+    let out = File::create(s.path("out.txt")).unwrap();
+    let err = File::create(s.path("err.txt")).unwrap();
+    let e = spawn_in_job(
+        &job,
+        OsStr::new("win-job-launcher-no-such-program-xyz"),
+        &[],
+        &out,
+        &err,
+    )
+    .unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotFound);
+    assert!(!inherits(&out) && !inherits(&err));
+}
+
+fn inherits(file: &File) -> bool {
+    let mut flags = 0;
+    // SAFETY: the handle is live and `flags` is writable.
+    assert_ne!(
+        unsafe { GetHandleInformation(file.as_raw_handle(), &raw mut flags) },
+        0
+    );
+    flags & HANDLE_FLAG_INHERIT != 0
+}
+
+fn set_inherit(file: &File, on: bool) {
+    let value = if on { HANDLE_FLAG_INHERIT } else { 0 };
+    // SAFETY: the handle is live for the call.
+    assert_ne!(
+        unsafe { SetHandleInformation(file.as_raw_handle(), HANDLE_FLAG_INHERIT, value) },
+        0
+    );
 }
 
 #[test]
