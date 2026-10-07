@@ -122,6 +122,24 @@ any callback API owes its users.
 
 - [x] **M31.3** -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m313)
 
+## M32 -- Write-through needs an unbuffered handle
+
+Opened 2026-10-07 from durable-ioring's `DI-3.2.2.1`, whose test of its caching option found this.
+
+- [ ] **M32.1** -- **State, and pin, what `WriteCaching::WriteThrough` does on a cached handle.**
+  Measured through dioring's ring on 2026-10-07: a write-through write to a handle opened for cached
+  I/O -- including one opened with `FILE_FLAG_WRITE_THROUGH` -- completes with Win32 error 509 ("The
+  specified operation is not supported on a file opened for cached IO"), and to a handle opened with
+  `FILE_FLAG_NO_BUFFERING` as well, it completes as a transfer. This crate's documentation presents
+  the flag as a cache directive a caller may add alongside a covering flush, and none of it says the
+  handle must be unbuffered: `WriteCaching`'s rustdoc in `batch.rs`, the write push's in
+  `batch/push.rs`, `lib.rs`, the README's durability section, and
+  [D-25](DESIGN-NOTES.md#d-25). Sweep all of them. **Test in both directions:** the cached handle
+  fails with 509, and the unbuffered one transfers, with a buffer and offset that meet unbuffered
+  I/O's alignment rules (a page-aligned allocation, for instance), so the test does not pass by
+  accident of the allocator. No crate test exercises write-through today, which is why this was not
+  found here.
+
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.

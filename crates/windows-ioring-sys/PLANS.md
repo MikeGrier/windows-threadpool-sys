@@ -8,4 +8,4 @@ Add a row below, and a milestone in [CHECKLIST.md](CHECKLIST.md), when new work 
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | `M-R1` stall post-mortem after the hooking facility's removal; `M29` corrects the `epoch_log` sample's claim that a later successful commit repairs a failed one; `M31` specifies `EventDelivery`'s callback re-entrancy and concurrency | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | `M-R1` stall post-mortem after the hooking facility's removal; `M29` corrects the `epoch_log` sample's claim that a later successful commit repairs a failed one; `M31` specifies `EventDelivery`'s callback re-entrancy and concurrency; `M32` states and pins that write-through needs an unbuffered handle | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
