@@ -69,6 +69,22 @@
       "replace": ["        $false) {"]
     },
     {
+      "name": "the faux stub reads a plan it cannot understand as a failing run",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "A typo in a plan would then be scored as a catch, indistinguishable from a real finding. The stub exits with the process-start code instead, which the harness reports as INFRASTRUCTURE.",
+      "find": ["exit /b -1073741502"],
+      "replace": ["exit /b 101"]
+    },
+    {
+      "name": "the faux stub reads a directive from any file, not only *.faux",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "Documentation or a manifest quoting a directive would then be read as a plan. The stub searches *.faux only.",
+      "find": ["for /f \"tokens=2,3,4,5\" %%a in ('findstr /S /B /C:\"// faux:\" *.faux 2^>nul') do ("],
+      "replace": ["for /f \"tokens=2,3,4,5\" %%a in ('findstr /S /B /C:\"// faux:\" * 2^>nul') do ("]
+    },
+    {
       "name": "a launcher that wrote no result is scored as a failed suite",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",

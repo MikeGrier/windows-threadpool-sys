@@ -1,0 +1,56 @@
+{
+  "description": "A planned mix of outcomes for watching the sabotage harness without building anything: passes, failures, runs that overrun the bound, and one patch that does not build. Not part of any test; run it with tools/faux/run-faux-plan.ps1, which sweeps it in a throwaway repository -- see 'Faux runs' in tools/README-sabotage.md. Each entry's replace line is its plan.",
+  "package": "faux",
+  "sabotages": [
+    {
+      "name": "survives at once",
+      "file": "subject.faux",
+      "expect": "survives",
+      "why": "A planned pass.",
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: pass"]
+    },
+    {
+      "name": "fails at once",
+      "file": "subject.faux",
+      "expect": "caught",
+      "why": "A planned failure.",
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: fail"]
+    },
+    {
+      "name": "takes a second, then fails",
+      "file": "subject.faux",
+      "expect": "caught",
+      "why": "A slow failure, well under the default bound of 3 seconds.",
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: sleep 1 fail"]
+    },
+    {
+      "name": "never ends",
+      "file": "subject.faux",
+      "expect": "caught",
+      "why": "A hang: killed at the bound, and reported as caught.",
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: hang"]
+    },
+    {
+      "name": "sleeps past the bound, but is given more",
+      "file": "subject.faux",
+      "expect": "caught",
+      "why": "Over the sweep's bound and under this entry's own: a failure, not a hang.",
+      "timeoutSeconds": 6,
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: sleep 4 fail"]
+    },
+    {
+      "name": "is refused by the build",
+      "file": "subject.faux",
+      "expect": "refused-by-build",
+      "buildError": "faux build failure",
+      "why": "A patch that does not build, as a compile-time guard would refuse it.",
+      "find": ["// subject: nothing is wrong here"],
+      "replace": ["// faux: build-fail"]
+    }
+  ]
+}

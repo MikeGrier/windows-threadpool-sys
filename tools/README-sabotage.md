@@ -337,6 +337,61 @@ that fails -- no result, overrunning its own bound, or an outcome whose cleanup
 it could not confirm (`confirmed` false, on an exit or on a timeout alike) -- is
 reported as `INFRASTRUCTURE`, never as a catch.
 
+## Faux runs: a planned mix of passes, failures and overruns
+
+The stubs in [test-run-sabotage.ps1](test-run-sabotage.ps1) each behave one way,
+so a sweep through them can only show every entry behaving the same. To watch
+the harness handle a *mix* -- some runs that pass, some that fail, some that
+overrun their bound -- without building anything and without anything random,
+each entry carries its own planned outcome.
+
+**The plan lives in the patch.** An entry's `replace` text puts one directive
+line into a `*.faux` file, and
+[faux-cargo.cmd](faux/faux-cargo.cmd), passed as `-CargoCommand`, reads it back
+out of the harness's working copy -- the only place a sabotaged run differs from
+the baseline. So the plan is the manifest: it sits beside the entry it governs,
+needs no state shared between runs (it is correct sharded and in parallel), and
+the baseline, which has no directive, passes without being told to.
+
+| Directive | The run | Harness reports |
+|---|---|---|
+| `// faux: pass` | passes | survived |
+| `// faux: fail` | fails, exit 101 | caught |
+| `// faux: hang` | never ends | caught, HUNG, once the bound kills it |
+| `// faux: sleep <n> pass` / `fail` | takes `<n>` seconds, then passes or fails | placed under or over the bound by choosing `<n>` |
+| `// faux: build-fail` | the build phase fails | a manifest that does not compile, or `refused-by-build` if the entry names that |
+
+A directive the stub cannot read -- a typo, a missing word, two of them -- is
+neither a pass nor a failure, since either would be scored as a result and a
+typo would then look like a finding. The stub exits with the process-start code
+the harness reports as `INFRASTRUCTURE`, in every phase. Only `*.faux` files are
+searched, so a directive quoted in documentation is not a plan.
+
+[plan.json](faux/plan.json) is a worked mix, and
+[run-faux-plan.ps1](faux/run-faux-plan.ps1) runs it:
+
+```powershell
+.\tools\faux\run-faux-plan.ps1                  # the shipped plan, entries sharded across processes
+.\tools\faux\run-faux-plan.ps1 -Jobs 1          # serially, for a clean trace
+.\tools\faux\run-faux-plan.ps1 -Plan .\my.json  # a plan of your own
+```
+
+What makes it quick, since a faux run's cost is the time the plan asks for and
+not a build: the plan is swept in a throwaway repository holding only the plan
+and its subject, because the harness copies every tracked file of the repository
+it sweeps into a working copy per shard; the entries are spread across parallel
+shards, each with an output directory of its own, so a sweep takes about as long
+as its slowest planned run instead of the sum; and the bound defaults to a few
+seconds, since every overrun costs it. A plan's `file` is therefore the subject
+by name, `subject.faux`, and a plan is not run directly with `run-sabotage.ps1`.
+
+To write a plan, copy an entry from [plan.json](faux/plan.json) and change its
+`replace` directive and its `expect`. A run is placed against the bound by its
+`sleep`: well under it finishes, past it is killed, and an entry's own
+`timeoutSeconds` raises the bound for that entry only. The harness's own suite
+sweeps plans of this kind in its `faux runs` section, including a plan whose
+runs do *not* do what their entries declared, to show the sweep names each one.
+
 ## Manifest format
 
 JSON. `find` and `replace` are arrays of lines, joined with newlines --
