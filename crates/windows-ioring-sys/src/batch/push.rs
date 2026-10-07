@@ -33,8 +33,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// whose buffer the **ring** holds (`D-71`, `D-73`).
     ///
     /// The raw counterpart to [`Batch::write_owned`]: prefer that unless `file`
-    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
-    /// bookkeeping.
+    /// needs to address a raw `FileRef` directly, without a `SharedHandle`'s
+    /// shared-ownership bookkeeping.
     ///
     /// # Safety
     ///
@@ -197,8 +197,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// name (`D-71`, `D-73`).
     ///
     /// The raw counterpart to [`Batch::read_owned`]: prefer that unless `file`
-    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
-    /// bookkeeping. The caller hands over the buffer and its sidecar and
+    /// needs to address a raw `FileRef` directly, without a `SharedHandle`'s
+    /// shared-ownership bookkeeping. The caller hands over the buffer and its sidecar and
     /// receives an [`OperationId`], which names the operation and grants
     /// nothing; the buffer comes back from [`IoRing::try_pop`] and from nowhere
     /// else. A consumer that never holds a token cannot lose one, which is the
@@ -610,7 +610,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// review response). Prefer [`Batch::register_shared_files`], the safe
     /// counterpart, which discharges this by having the ring own the handles
     /// for its whole life ([D-81](../../DESIGN-NOTES.md#d-81)). This method
-    /// remains for a caller whose handles cannot be `SharedFile`s.
+    /// remains for a caller whose handles cannot be `SharedHandle`s.
     ///
     /// # Errors
     ///
@@ -693,10 +693,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// kernel never saw a handle.
     pub fn register_shared_files(
         &mut self,
-        files: Vec<SharedFile>,
-    ) -> Result<PendingFileRegistration, PushRefused<Vec<SharedFile>, ()>> {
-        let handles: Vec<HANDLE> = files.iter().map(SharedFile::raw_handle).collect();
-        // SAFETY: every handle belongs to a `SharedFile` in `files`, which the
+        files: Vec<SharedHandle>,
+    ) -> Result<PendingFileRegistration, PushRefused<Vec<SharedHandle>, ()>> {
+        let handles: Vec<HANDLE> = files.iter().map(SharedHandle::as_raw_handle).collect();
+        // SAFETY: every handle belongs to a `SharedHandle` in `files`, which the
         // ring takes below and holds until `Drop` has closed the ring -- or
         // forever, if rundown cannot prove the kernel is finished. The ring
         // therefore outlives every use of the registration, which is the

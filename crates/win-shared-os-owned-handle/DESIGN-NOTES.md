@@ -26,7 +26,7 @@ There are three ways to hold a handle, and std provides two:
 - **Shared ownership** -- not in std.
 
 Without a type for the third, crates in this workspace each wrapped `Arc<OwnedHandle>` under a name
-of their own, with different and incomplete surfaces: `windows-ioring-sys`' `SharedFile` cannot lend
+of their own, with different and incomplete surfaces: `windows-ioring-sys`' `SharedFile` could not lend
 its handle at all. This crate is the one shared form, so those crates can use it instead.
 
 **Not wanted: a unified owning wrapper for every handle.** std's `OwnedHandle` already owns a

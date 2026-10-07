@@ -424,7 +424,10 @@ impl<T, X> IoRing<T, X> {
     ///
     /// Called only once the registration has queued: a refused one hands its
     /// files back instead, since the kernel never saw their handles.
-    pub(crate) fn hold_registered_shared_files(&mut self, files: Vec<crate::batch::SharedFile>) {
+    pub(crate) fn hold_registered_shared_files(
+        &mut self,
+        files: Vec<win_shared_os_owned_handle::SharedHandle>,
+    ) {
         debug_assert!(
             self.registered_files.is_empty(),
             "a ring accepts at most one file registration, so this must only be set once"

@@ -308,12 +308,14 @@ fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
 
 /// Two real file handles, to stand for a registration's files. No SQE is ever
 /// built from them; they are only something for `Drop` to decide about.
-fn two_shared_files() -> Vec<crate::batch::SharedFile> {
+fn two_shared_files() -> Vec<win_shared_os_owned_handle::SharedHandle> {
     let exe = std::env::current_exe().expect("the test binary's path");
     (0..2)
         .map(|_| {
             let file = std::fs::File::open(&exe).expect("open the test binary for read");
-            crate::batch::SharedFile::new(std::os::windows::io::OwnedHandle::from(file))
+            win_shared_os_owned_handle::SharedHandle::new(std::os::windows::io::OwnedHandle::from(
+                file,
+            ))
         })
         .collect()
 }
@@ -323,7 +325,9 @@ fn two_shared_files() -> Vec<crate::batch::SharedFile> {
 /// path, so the type is what this pins.
 #[test]
 fn the_registered_files_are_never_dropped_by_the_compiler() {
-    fn pinned(ring: &IoRing) -> &std::mem::ManuallyDrop<Vec<crate::batch::SharedFile>> {
+    fn pinned(
+        ring: &IoRing,
+    ) -> &std::mem::ManuallyDrop<Vec<win_shared_os_owned_handle::SharedHandle>> {
         &ring.registered_files
     }
     let _ = pinned;

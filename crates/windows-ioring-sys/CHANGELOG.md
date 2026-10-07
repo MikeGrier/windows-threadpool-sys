@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.6.0...windows-ioring-sys-v0.7.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ioring:** SharedFile is removed. Use SharedHandle; SharedHandle::new and From<OwnedHandle> are spelled as before.
+
+### Features
+
+* **ioring:** take win-shared-os-owned-handle's SharedHandle in place of SharedFile ([f85e618](https://github.com/MikeGrier/windows-threadpool-sys/commit/f85e618d22ad68cfb729a77d07e87b7f5b85824c))
+
 ## [0.6.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.5.1...windows-ioring-sys-v0.6.0) (2026-10-05)
 
 

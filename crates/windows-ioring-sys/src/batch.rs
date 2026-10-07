@@ -4,7 +4,7 @@
 use std::ffi::c_void;
 use std::io;
 use std::mem::ManuallyDrop;
-use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,6 +21,7 @@ use crate::buf::{IoBuf, IoBufMut};
 use crate::error::{PushRefused, check};
 use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
 use crate::token::OperationId;
+use win_shared_os_owned_handle::SharedHandle;
 
 /// Per-push options shared across every op builder (M3.2).
 #[derive(Clone, Copy, Debug, Default)]
@@ -381,7 +382,7 @@ fn checked_len(len: usize) -> io::Result<u32> {
 /// [`Batch::register_files`] assigned it (M5.1).
 ///
 /// This enum is the `_raw` pushes' addressing parameter. A safe push takes a
-/// [`FileTarget`] instead -- a [`SharedFile`] or a [`RegisteredFile`] -- so
+/// [`FileTarget`] instead -- a [`SharedHandle`] or a [`RegisteredFile`] -- so
 /// reaching a registered file has not required `unsafe` since M10.4 (D-29,
 /// D-33). Constructing a `FileRef` directly is only necessary for the `_raw`
 /// pushes, whose reason to exist is a bare `HANDLE` this crate cannot keep
@@ -412,41 +413,6 @@ impl From<RegisteredFile> for FileRef {
     }
 }
 
-/// A file handle this crate can read/write through without the caller
-/// having to prove it outlives every operation pushed against it (M8, PR
-/// #20 review response).
-///
-/// Backed by `Arc<OwnedHandle>` rather than an exclusive-ownership
-/// shape: unlike a buffer, one handle is legitimately the target of many
-/// concurrent pushes, so what must survive until every one of them
-/// completes is a *reference*, not sole ownership. Every safe push method
-/// (e.g. [`Batch::read_owned`], as opposed to its `_raw` sibling) clones this
-/// `Arc` into the same inventory entry that already tracks the operation's own
-/// payload, so the underlying handle survives until the ring returns that
-/// entry at its pop (D-4 in `DESIGN-NOTES.md`), regardless of what the caller does
-/// with its own clone.
-#[derive(Clone, Debug)]
-pub struct SharedFile(Arc<OwnedHandle>);
-
-impl SharedFile {
-    /// Wrap an owned handle so it can be read/written through the ring
-    /// safely.
-    #[must_use]
-    pub fn new(handle: OwnedHandle) -> Self {
-        Self(Arc::new(handle))
-    }
-
-    fn raw_handle(&self) -> HANDLE {
-        self.0.as_raw_handle()
-    }
-}
-
-impl From<OwnedHandle> for SharedFile {
-    fn from(handle: OwnedHandle) -> Self {
-        Self::new(handle)
-    }
-}
-
 /// One index a [`Batch::register_files`] registration assigned (M5.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisteredFile {
@@ -464,15 +430,15 @@ impl RegisteredFile {
 
 mod sealed {
     pub trait Sealed {}
-    impl Sealed for super::SharedFile {}
+    impl Sealed for super::SharedHandle {}
     impl Sealed for super::RegisteredFile {}
 }
 
-/// A file a *safe* push can address: either a [`SharedFile`] or a
-/// [`RegisteredFile`] (M10.4; D-29 and D-33 in `DESIGN-NOTES.md`).
+/// A file a *safe* push can address: either a [`SharedHandle`] or a
+/// [`RegisteredFile`] (M10.4; D-29, D-33 and D-82 in `DESIGN-NOTES.md`).
 ///
 /// This exists because the two carry different lifetime obligations, and
-/// exactly one of them has none. A `SharedFile` is a raw `HANDLE` underneath,
+/// exactly one of them has none. A `SharedHandle` is a raw `HANDLE` underneath,
 /// so something must keep it open until the kernel is finished; a
 /// `RegisteredFile` is an index into a table the ring itself owns, minted by
 /// this crate and checked against the minting ring, so there is nothing for a
@@ -481,11 +447,11 @@ mod sealed {
 /// its `unsafe` contract, or by the ring itself after
 /// [`Batch::register_shared_files`].) Both are therefore safe to push, and neither needs
 /// `unsafe` -- which is why [`Batch::read_owned`] and its siblings are generic over
-/// this trait rather than hardcoding `SharedFile`.
+/// this trait rather than hardcoding `SharedHandle`.
 ///
 /// [`Guard`](FileTarget::Guard) is what the ring holds until the
-/// operation's completion is observed. For `SharedFile` that is a clone of its
-/// `Arc`, which is what makes the handle outlive the operation; for
+/// operation's completion is observed. For `SharedHandle` that is a clone,
+/// which shares the handle and so makes it outlive the operation; for
 /// `RegisteredFile` there is nothing to keep alive, so it is the (`Copy`)
 /// index itself, handed back for symmetry rather than out of necessity.
 ///
@@ -513,11 +479,19 @@ pub trait FileTarget: sealed::Sealed {
     fn guard(&self) -> Self::Guard;
 }
 
-impl FileTarget for SharedFile {
-    type Guard = SharedFile;
+/// A [`SharedHandle`] is how a caller gives this crate a file it does not have
+/// to prove outlives every operation pushed against it (M8; D-82). One handle is
+/// legitimately the target of many concurrent pushes, so what must survive until
+/// every one of them completes is a *reference*, not sole ownership. Every safe
+/// push (e.g. [`Batch::read_owned`], as opposed to its `_raw` sibling) clones it
+/// into the same inventory entry that tracks the operation's own payload, so the
+/// handle survives until the ring returns that entry at its pop (D-4), whatever
+/// the caller does with its own clone.
+impl FileTarget for SharedHandle {
+    type Guard = SharedHandle;
 
     fn as_file_ref(&self) -> FileRef {
-        FileRef::Raw(self.raw_handle())
+        FileRef::Raw(self.as_raw_handle())
     }
 
     fn guard(&self) -> Self::Guard {
@@ -817,11 +791,11 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// rename that reaches both:
     ///
     /// ```compile_fail,E0502
-    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
+    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedHandle};
     /// # fn hazard<B: windows_ioring_sys::IoBufMut>(
     /// #     ring: &mut IoRing,
     /// #     arena: &mut RegisteredBuffers<B>,
-    /// #     file: &SharedFile,
+    /// #     file: &SharedHandle,
     /// #     span: RegisteredSpan,
     /// # ) -> std::io::Result<u8> {
     /// let bytes: &[u8] = arena.get(0)?;      // quiet here, so the check passes
@@ -837,11 +811,11 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// is per-buffer -- that is the arena pattern, and it must keep working:
     ///
     /// ```no_run
-    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
+    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedHandle};
     /// # fn arena_still_works<B: windows_ioring_sys::IoBufMut>(
     /// #     ring: &mut IoRing,
     /// #     arena: &mut RegisteredBuffers<B>,
-    /// #     file: &SharedFile,
+    /// #     file: &SharedHandle,
     /// #     span: RegisteredSpan,
     /// # ) -> std::io::Result<()> {
     /// let mut batch = Batch::new(ring);

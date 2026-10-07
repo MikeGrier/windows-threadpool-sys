@@ -76,7 +76,7 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers, RegisteredFile,
-    RegisteredSpan, SharedFile, WriteCaching,
+    RegisteredSpan, SharedHandle, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -376,7 +376,7 @@ fn drain_to_empty(ring: &mut SequenceRing, run: &mut Run) -> usize {
 fn run_plan(
     plan: &Plan,
     file: &File,
-    shared: &SharedFile,
+    shared: &SharedHandle,
     coverage: &mut Coverage,
 ) -> Result<(), String> {
     let handle = file.as_raw_handle();
@@ -583,7 +583,7 @@ fn submit_one(
     run: &mut Run,
     op: &GenOp,
     handle: std::os::windows::io::RawHandle,
-    shared: &SharedFile,
+    shared: &SharedHandle,
     registered_file: RegisteredFile,
     registered_buffers: &RegisteredBuffers<Vec<u8>>,
     coverage: &mut Coverage,
@@ -794,7 +794,7 @@ fn generated_sequences_satisfy_the_ring_contract() {
     );
 
     let (path, file) = fixture("sweep");
-    let shared = SharedFile::new(duplicate_handle(&file));
+    let shared = SharedHandle::new(duplicate_handle(&file));
     let mut rng = Rng(seed);
     let mut coverage = Coverage::default();
 
@@ -938,7 +938,7 @@ fn issue_47_backlog_at_handover() -> Regression {
 
 fn replay(tag: &str, regression: &Regression) {
     let (path, file) = fixture(tag);
-    let shared = SharedFile::new(duplicate_handle(&file));
+    let shared = SharedHandle::new(duplicate_handle(&file));
     let mut coverage = Coverage::default();
     let plan = Plan {
         steps: regression.steps.clone(),

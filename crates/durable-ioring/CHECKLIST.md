@@ -37,7 +37,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   with the identity it was built with, a completion for anything not in flight being a defect that
   panics ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface) and `M31.3` (`SharedFile` adopts `SharedHandle`, so a consumer's file reaches the ring without a duplicate handle or a conversion, [DI-D-29](DESIGN-NOTES.md#di-d-29)). See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush

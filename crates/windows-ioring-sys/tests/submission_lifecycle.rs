@@ -9,7 +9,7 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, PushOptions,
-    RingCondition, SharedFile, WriteCaching,
+    RingCondition, SharedHandle, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, HANDLE};
 
@@ -302,7 +302,7 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         .expect("open for read");
 
     let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
-    let shared = SharedFile::new(OwnedHandle::from(file));
+    let shared = SharedHandle::new(OwnedHandle::from(file));
     let buffer = vec![0_u8; CHUNK_LEN];
     {
         let mut batch = Batch::new(&mut ring);
@@ -312,7 +312,7 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         batch.submit_and_wait(0, 0).expect("submit without waiting");
     }
 
-    // Drop the caller's own SharedFile clone -- its only external reference.
+    // Drop the caller's own SharedHandle clone -- its only external reference.
     // The guard that keeps the underlying handle open is now the *ring's*
     // (`D-73`) rather than a token's, so this is the same property with a
     // different holder: without it the read below would fail against a closed

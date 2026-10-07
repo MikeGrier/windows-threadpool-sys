@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PendingFileRegistration, PushOptions,
-    RegisteredFiles, SharedFile, WriteCaching,
+    RegisteredFiles, SharedHandle, WriteCaching,
 };
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
@@ -31,9 +31,9 @@ const LEN: usize = 64;
 
 type Ring = IoRing<Vec<u8>>;
 
-/// A temp file holding `LEN` copies of `fill`, and a `SharedFile` opened on it
+/// A temp file holding `LEN` copies of `fill`, and a `SharedHandle` opened on it
 /// for read and write. The `TempPath` is returned first so it drops last.
-fn fixture(tag: &str, fill: u8) -> (common::TempPath, SharedFile) {
+fn fixture(tag: &str, fill: u8) -> (common::TempPath, SharedHandle) {
     let path = common::TempPath::new("shared-file-registration", tag);
     std::fs::write(&path, [fill; LEN]).expect("write fixture file");
     let file = std::fs::OpenOptions::new()
@@ -41,7 +41,7 @@ fn fixture(tag: &str, fill: u8) -> (common::TempPath, SharedFile) {
         .write(true)
         .open(&path)
         .expect("open for read and write");
-    (path, SharedFile::new(OwnedHandle::from(file)))
+    (path, SharedHandle::new(OwnedHandle::from(file)))
 }
 
 /// Whether some handle to `path` is still open: an exclusive open is refused

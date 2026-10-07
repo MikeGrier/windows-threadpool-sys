@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PushOptions, RegisteredSpan,
-    SharedFile, WriteCaching,
+    SharedHandle, WriteCaching,
 };
 
 mod common;
@@ -37,7 +37,7 @@ const LEN: usize = 64;
 type Ring = IoRing<Vec<u8>, u32>;
 
 /// A temp file holding `LEN` zero bytes, opened for read and write.
-fn fixture(tag: &str) -> (common::TempPath, SharedFile) {
+fn fixture(tag: &str) -> (common::TempPath, SharedHandle) {
     let path = common::TempPath::new("push-refusal", tag);
     std::fs::write(&path, [0_u8; LEN]).expect("write fixture file");
     let file = std::fs::OpenOptions::new()
@@ -45,12 +45,12 @@ fn fixture(tag: &str) -> (common::TempPath, SharedFile) {
         .write(true)
         .open(&path)
         .expect("open for read and write");
-    (path, SharedFile::new(OwnedHandle::from(file)))
+    (path, SharedHandle::new(OwnedHandle::from(file)))
 }
 
 /// Queue unordered flushes until the submission queue refuses one, and return
 /// how many were queued.
-fn fill(batch: &mut Batch<'_, Vec<u8>, u32>, file: &SharedFile) -> u32 {
+fn fill(batch: &mut Batch<'_, Vec<u8>, u32>, file: &SharedHandle) -> u32 {
     let mut queued = 0_u32;
     loop {
         match batch.flush_owned(file, FILLER, FlushCoverage::Unordered, FlushMode::Default) {

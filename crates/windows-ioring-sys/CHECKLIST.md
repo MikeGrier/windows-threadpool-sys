@@ -127,31 +127,15 @@ any callback API owes its users.
   - **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
     re-entrancy test fails.
 
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2` (dioring over `windows-ioring-sys`), whose Model A front end relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 - [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
   `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)
   makes a completion for anything not in flight a panicking defect; the restatement added nothing
   a consumer could rely on, and its `compile_fail` doctest would have pinned an implementation
   detail.
 
-- [ ] **M31.3** -- **`SharedFile` adopts `win-shared-os-owned-handle`'s `SharedHandle`.** Opened
-  2026-10-06 from durable-ioring's DI-2.17 ([DI-D-29](../durable-ioring/DESIGN-NOTES.md#di-d-29)) as
-  `From<Arc<OwnedHandle>> for SharedFile`; reworded 2026-10-07, when the engineer moved the shared
-  handle into its own crate ([win-shared-os-owned-handle](../win-shared-os-owned-handle/README.md),
-  published at 0.1.0) so that crates wrapping `Arc<OwnedHandle>` share one type. durable-ioring
-  gives files as `SharedHandle`, and handing the ring the same handle should need no duplicate and
-  no conversion. That crate's `SH-1+.1` is this adoption.
-  - **Shape:** `pub type SharedFile = SharedHandle;` keeps every existing use compiling -- `new`,
-    `From<OwnedHandle>`, `Clone`, `Debug` -- and adds what `SharedFile` lacked, lending its handle
-    (`AsHandle`). The crate-private `raw_handle` becomes `as_raw_handle`, since an inherent method
-    cannot be added to a foreign type. Expected not to be breaking; confirm before choosing the
-    commit type, since a downstream trait implemented for both names would now conflict.
-  - Record it in [DESIGN-NOTES.md](DESIGN-NOTES.md), and say in `SharedFile`'s rustdoc that it is
-    `SharedHandle`.
-  - **Test, both directions:** the handle stays open while an operation is in flight after the
-    caller drops every clone it holds, and closes once the last clone and the operation are both
-    gone.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2` (dioring over `windows-ioring-sys`), whose Model A front end relies on `M31.1`'s contract and whose file type relies on `M31.3`. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+- [x] **M31.3** -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m313)
 
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 

@@ -6271,3 +6271,19 @@ The decision is [D-81](DESIGN-NOTES.md#d-81). Points recorded only here:
   so this item stayed additive as planned.
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M2` -> `DI-2.2` (composition with `IoRing<T, X>`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-07 16:18:25 -04:00 -- M31.3: `SharedFile` gives way to `SharedHandle`
+
+### <a id="m313"></a>M31.3 -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. *(completed 2026-10-07 16:18:25 -04:00)*
+
+Planned as an alias (`pub type SharedFile = SharedHandle`); the engineer chose
+removal instead, landed on `main` in #119 as a breaking change, and recorded as
+[D-82](DESIGN-NOTES.md#d-82). The M30 additions that existed only on the
+durable-ioring branch -- `register_shared_files`, its bookkeeping and tests, and
+the `PushRefused` example -- moved to `SharedHandle` when that branch merged
+`main`, and [D-81](DESIGN-NOTES.md#d-81) carries an amendment marker. The
+both-directions lifetime test is
+`the_rings_hold_on_a_shared_handle_ends_when_the_pop_retires_it` in
+[ring_owned_inventory.rs](tests/ring_owned_inventory.rs), beside the existing
+test for the other direction; a leaked guard is recorded in
+[sabotage.json](sabotage.json) and was verified caught by it.

@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile};
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedHandle};
 
 const LEN: usize = 4096;
 
@@ -132,11 +132,11 @@ fn a_second_pop_finds_nothing_held_for_the_same_identity() {
 /// the ring is holding a guard that outlives it.
 #[test]
 fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
-    use windows_ioring_sys::SharedFile;
+    use windows_ioring_sys::SharedHandle;
 
     let (path, file) = fixture("guarded");
     let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
-    let shared = SharedFile::new(file.into());
+    let shared = SharedHandle::new(file.into());
 
     {
         let mut batch = Batch::new(&mut ring);
@@ -159,6 +159,51 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
         buffer.iter().all(|&byte| byte == 0xC3),
         "the read completed against a file only the ring was still holding"
     );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The ring's hold on a `SharedHandle` ends when the pop retires the entry
+/// (`M31.3`, D-82).
+///
+/// Both directions, judged by an exclusive open, which Windows refuses while
+/// any handle to the file is open: refused while the ring still holds the
+/// operation after the caller has dropped its clone, and granted once the pop
+/// has retired it. The test above shows the first half working for the kernel;
+/// this one shows the second, which a guard that leaked would fail silently.
+#[test]
+fn the_rings_hold_on_a_shared_handle_ends_when_the_pop_retires_it() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_ioring_sys::SharedHandle;
+
+    let exclusive = |path: &std::path::Path| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+    };
+
+    let (path, file) = fixture("hold-ends");
+    let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
+    let shared = SharedHandle::new(file.into());
+    {
+        let mut batch = Batch::new(&mut ring);
+        batch
+            .read_owned(&shared, vec![0_u8; LEN], (), 0, PushOptions::new())
+            .expect("queue a guarded read");
+    }
+    drop(shared);
+    assert!(
+        exclusive(&path).is_err(),
+        "the ring still holds the file until the pop retires the operation"
+    );
+
+    let popped = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read completes within the bound");
+    drop(popped);
+    drop(exclusive(&path).expect("the last holder is gone, so the file opens exclusively"));
 
     let _ = std::fs::remove_file(&path);
 }
@@ -269,7 +314,7 @@ fn a_cancel_refuses_an_operation_id_minted_by_a_different_ring() {
     // this test passing for the wrong reason.
     let path = common::TempPath::new("inventory", "cross-ring-cancel");
     std::fs::write(&path, b"x").expect("create fixture");
-    let file = SharedFile::new(
+    let file = SharedHandle::new(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)

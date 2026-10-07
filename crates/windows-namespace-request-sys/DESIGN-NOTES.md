@@ -77,6 +77,8 @@ concurrency and thread-freedom rather than latency.
 
 ## <a id="d-4"></a>D-4: A request owns duplicates of any handle it names
 
+**Current, with a replacement parked: [NR-inf.1](CHECKLIST.md) would share a `SharedHandle` instead of duplicating (not decided).**
+
 Five of the round-one entries take a handle rather than a path. A request
 **duplicates** such a handle at capture and owns the duplicate for its life.
 

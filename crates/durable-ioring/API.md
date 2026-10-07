@@ -333,7 +333,8 @@ as it will on every implementation.
 - **A file is a `SharedHandle`** ([DI-D-29](DESIGN-NOTES.md#di-d-29)), from the workspace crate
   `win-shared-os-owned-handle`, so no ring-crate type appears in the core trait. It is an owning,
   cheaply shared handle that lends its handle to consumers and providers. dioring hands the ring
-  crate the same handle, never a duplicate, which needs `windows-ioring-sys` `M31.3`.
+  crate the same handle, never a duplicate: the ring crate takes `SharedHandle` itself
+  (`windows-ioring-sys` D-82).
 
 ### 18. Ending a lineage
 
@@ -373,7 +374,7 @@ use std::sync::{Arc, Weak};
 
 use win_shared_os_owned_handle::SharedHandle;
 use windows_ioring_sys::{
-    IoBuf, IoBufMut, IoRing, RegisteredBuffers, RegisteredFile, RegisteredSpan, SharedFile,
+    IoBuf, IoBufMut, IoRing, RegisteredBuffers, RegisteredFile, RegisteredSpan,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1306,16 +1307,11 @@ pub struct SetupError<E: EpochId + 'static, R> {
 /// How dioring addresses one of the consumer's files.
 enum FileSlot {
     /// Given at construction: the ring holds it for its life (`windows-ioring-sys` D-81).
-    Registered { index: RegisteredFile, file: SharedFile },
-    /// Added later: pushed through its handle, guarded per operation.
-    Shared(SharedFile),
-}
-
-/// The ring crate's view of a consumer's file: the same handle, never a duplicate. Needs
-/// `windows-ioring-sys` `M31.3` (`SharedFile` adopts `SharedHandle`); until then this is the one
-/// place the two types meet.
-fn ring_file(file: &SharedHandle) -> SharedFile {
-    todo!()
+    Registered { index: RegisteredFile, file: SharedHandle },
+    /// Added later: pushed through its handle, guarded per operation. The consumer's own
+    /// `SharedHandle` -- the ring takes that type directly (`windows-ioring-sys` D-82), so a file
+    /// reaches the ring with no duplicate and no conversion.
+    Shared(SharedHandle),
 }
 
 /// A flush domain interned by this instance: a word-sized stand-in for its bytes.

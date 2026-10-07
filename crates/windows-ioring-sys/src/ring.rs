@@ -191,7 +191,7 @@ impl InjectedFailure {
 /// What the crate itself is holding for an in-flight operation.
 ///
 /// Concrete rather than generic, and [D-73](../DESIGN-NOTES.md#d-73) explains
-/// why that is sound: `FileTarget` is sealed to `SharedFile` and
+/// why that is sound: `FileTarget` is sealed to `SharedHandle` and
 /// `RegisteredFile`, so this set is closed and crate-owned. A caller never
 /// names it. Unsealing that trait would break the arrangement -- the
 /// alternatives are type erasure, which [D-4](../DESIGN-NOTES.md#d-4) forbids,
@@ -224,12 +224,12 @@ pub(crate) struct Held {
 /// purpose: a caller cannot construct one, and the sealed trait means nobody
 /// outside this crate implements the thing that produces one.
 pub enum FileGuard {
-    Shared(crate::batch::SharedFile),
+    Shared(win_shared_os_owned_handle::SharedHandle),
     Registered(crate::batch::RegisteredFile),
 }
 
-impl From<crate::batch::SharedFile> for FileGuard {
-    fn from(guard: crate::batch::SharedFile) -> Self {
+impl From<win_shared_os_owned_handle::SharedHandle> for FileGuard {
+    fn from(guard: win_shared_os_owned_handle::SharedHandle) -> Self {
         Self::Shared(guard)
     }
 }
@@ -640,7 +640,7 @@ pub struct IoRing<T = (), X = ()> {
     /// [D-81](../DESIGN-NOTES.md#d-81)). Released by `Drop` after
     /// `CloseIoRing`, and only on the proof `late_read` waits for; leaked
     /// otherwise.
-    registered_files: ManuallyDrop<Vec<crate::batch::SharedFile>>,
+    registered_files: ManuallyDrop<Vec<win_shared_os_owned_handle::SharedHandle>>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -1353,7 +1353,7 @@ thread_local! {
     pub(crate) static LATE_READ_ARRAYS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-// How many registered `SharedFile`s `IoRing`'s `Drop` has released on the
+// How many registered `SharedHandle`s `IoRing`'s `Drop` has released on the
 // calling thread (D-81). Thread-local for the reason `DROP_RUNS` is.
 #[cfg(test)]
 thread_local! {

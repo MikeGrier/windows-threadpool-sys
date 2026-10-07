@@ -1324,6 +1324,18 @@
       "replace": [
         "            Err(error) => Err(PushRefused::new(error, None, ())),\n"
       ]
+    },
+    {
+      "name": "M31.3: a SharedHandle's guard leaks a clone, so the file never closes",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "D-82's other half: the ring holds the handle until the pop retires the operation, and no longer. A leaked guard keeps every pushed file open for the life of the process while every lifetime test that only checks the handle stays open still passes. Caught by ring_owned_inventory.rs, which requires an exclusive open to succeed once the pop has retired the operation.",
+      "find": [
+        "        self.clone()\n"
+      ],
+      "replace": [
+        "        std::mem::forget(self.clone());\n        self.clone()\n"
+      ]
     }
   ]
 }

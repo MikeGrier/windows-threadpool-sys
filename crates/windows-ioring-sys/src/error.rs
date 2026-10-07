@@ -205,9 +205,9 @@ impl IoRingError {
 /// of hand-rolled at each call site.
 ///
 /// ```no_run
-/// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedFile};
+/// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedHandle};
 ///
-/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedFile) -> std::io::Result<()> {
+/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedHandle) -> std::io::Result<()> {
 /// let mut batch = Batch::new(ring);
 /// match batch.read_owned(file, vec![0_u8; 4096], (), 0, PushOptions::new()) {
 ///     Ok(_id) => {}
@@ -305,9 +305,9 @@ impl std::error::Error for IoRingError {}
 /// is exactly the case where the caller wants the same buffer for a retry:
 ///
 /// ```no_run
-/// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedFile};
+/// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedHandle};
 ///
-/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedFile) -> std::io::Result<()> {
+/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedHandle) -> std::io::Result<()> {
 /// let mut batch = Batch::new(ring);
 /// if let Err(refused) = batch.read_owned(file, vec![0_u8; 4096], (), 0, PushOptions::new()) {
 ///     if !refused.error.is_submission_queue_full() {
