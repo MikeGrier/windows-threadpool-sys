@@ -846,6 +846,8 @@ Test-Case 'kills a hung run at the bound and counts it as caught' {
 
         Assert-Equal 0 $result.ExitCode $result.Output
         Assert-Match 'caught \(tests HUNG past 5s\)' $result.Output
+        # The kill narration is opt-in; the case below asserts the other half.
+        Assert-False ($result.Output -match 'kill \+[0-9.]+s:') 'the kill is traced only under -TraceKills'
 
         # The bound must actually bound. A timed WaitForExit did not: the
         # process cargo spawns inherits the redirected stream handles, and the
@@ -856,6 +858,32 @@ Test-Case 'kills a hung run at the bound and counts it as caught' {
             "the 5s bound took $([int]$clock.Elapsed.TotalSeconds)s to enforce"
     }
     finally { Remove-Fixture $root }
+}
+
+Test-Case 'narrates every step of the kill under -TraceKills' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'hang' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5', '-TraceKills')
+
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'caught \(tests HUNG past 5s\)' $result.Output
+        # Each unbounded call is announced before it is made and reported after
+        # it returns, so the last line printed names where a stall sits.
+        Assert-Match 'kill \+[0-9.]+s: cargo PID \d+ still running after \d+s; \d+ logical processors' $result.Output
+        Assert-Match 'kill \+[0-9.]+s: querying children of PID \d+' $result.Output
+        # The recursion is traced too: the stub's own child is named.
+        Assert-Match 'kill \+[0-9.]+s: PID \d+ has [1-9]\d* child\(ren\): \[[^\]]*PING\.EXE' $result.Output
+        Assert-Match 'kill \+[0-9.]+s: stopping PID \d+ \S+, [0-9.]+s CPU, \d+ threads, \d+ MB' $result.Output
+        Assert-Match 'kill \+[0-9.]+s: Stop-Process returned for PID \d+' $result.Output
+        Assert-Match 'kill \+[0-9.]+s: tree stopped; cargo exited: (True|False)' $result.Output
+    }
+    finally {
+        Get-StrayProcesses -FixtureRoot $root |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Fixture $root
+    }
 }
 
 Test-Case 'leaves no stray process behind after killing a hung run' {

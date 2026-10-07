@@ -196,6 +196,12 @@ jobs:
       # nothing.
       - name: Sweep ${{ matrix.crate }}
         shell: pwsh
+        # Below the job's own bound, so a sweep that stalls fails THIS step and
+        # the transcript upload below still runs. Hitting the job's bound instead
+        # cancels the job, `failure()` is false on a cancellation, and the run
+        # that most needed its evidence uploaded none -- which is how a sweep
+        # once sat for the full hour on one entry and left nothing to read.
+        timeout-minutes: 50
         env:
           # Same rule as the planner step above. `inputs.name` is the value an
           # attacker chooses, and the matrix values travel the same way rather
@@ -204,7 +210,7 @@ jobs:
           SWEEP_SHARD: ${{ matrix.shard }}
           SWEEP_SHARDS: ${{ matrix.shards }}
           SWEEP_NAME: ${{ inputs.name || '*' }}
-        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}"
+        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceKills
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts

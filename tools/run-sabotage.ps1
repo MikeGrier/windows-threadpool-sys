@@ -212,6 +212,19 @@
     lets a manifest sweep something whose tests are not `cargo test`, given a
     `testArgs` that spells the whole command.
 
+.PARAMETER TraceKills
+    Narrate each kill of a hung run, step by step, with an offset from the
+    moment the hang was declared. Off by default; the sweep workflow turns it on.
+
+    The kill is the one step on a hung entry's path that nothing bounds: the
+    build and test phases are polled against deadlines, but finding a hung
+    cargo's descendants is a WMI query, and stopping each is a call that returns
+    when Windows says so. A sweep has stalled past every bound inside that
+    window with no evidence of which call it was in, so each call is announced
+    before it is made and reported after it returns -- the last line printed
+    names where a stall sits. Each process is described as it is stopped (CPU
+    time, threads, working set), which tells a spinning hang from a parked one.
+
 .OUTPUTS
     Exits 0 only if every sabotage matched its declared expectation.
 #>
@@ -238,7 +251,9 @@ param(
 
     [int] $Shard = 0,
 
-    [int] $ShardCount = 1
+    [int] $ShardCount = 1,
+
+    [switch] $TraceKills
 )
 
 Set-StrictMode -Version Latest
@@ -256,6 +271,10 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 # Script scope so Invoke-Bounded reads it without threading it through three
 # call layers that have no other reason to know about it.
 $script:CargoExecutable = $CargoCommand
+# Script scope for the same reason: Stop-Tree recurses, and only the kill path
+# reads these.
+$script:TraceKills = $TraceKills.IsPresent
+$script:KillClock = $null
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
@@ -340,9 +359,46 @@ function Get-RepoRoot {
 # them, and all four siblings in this directory carry the same class of warning.
 function Stop-Tree {
     param([int] $ProcessId)
-    Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue |
-        ForEach-Object { Stop-Tree -ProcessId $_.ProcessId }
+    Write-KillTrace "querying children of PID $ProcessId"
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)
+    if ($script:TraceKills) {
+        $names = @($children | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', '
+        Write-KillTrace "PID $ProcessId has $($children.Count) child(ren): [$names]"
+    }
+    $children | ForEach-Object { Stop-Tree -ProcessId $_.ProcessId }
+    if ($script:TraceKills) { Write-KillTrace "stopping $(Format-ProcessFacts -ProcessId $ProcessId)" }
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    Write-KillTrace "Stop-Process returned for PID $ProcessId"
+}
+
+# One line of the kill narration -TraceKills asks for, through the report sink.
+# The offset is from the moment Invoke-Bounded declared the hang, so a reader
+# sees how long each step took without subtracting timestamps.
+function Write-KillTrace {
+    param([string] $Message)
+    if (-not $script:TraceKills) { return }
+    $offset = $script:KillClock.Elapsed.TotalSeconds.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
+    Write-Report "    kill +${offset}s: $Message" -Level note
+}
+
+# What a process is doing as it is stopped. Through Get-Process rather than
+# WMI, so describing a process does not add a second call of the kind under
+# suspicion. CPU time near (threads x seconds hung) is a spin; near zero is a
+# parked wait.
+function Format-ProcessFacts {
+    param([int] $ProcessId)
+    $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $p) { return "PID $ProcessId (already gone)" }
+    # A process can exit between the lookup and these reads -- a stub's cmd.exe
+    # does, the moment its child is stopped -- and an exited process's
+    # properties throw or read as null, which StrictMode makes an error. The
+    # description must never be able to break the kill it describes, so any
+    # failure here only costs detail.
+    try {
+        $cpu = $p.TotalProcessorTime.TotalSeconds.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)
+        return "PID $ProcessId $($p.ProcessName), ${cpu}s CPU, $(@($p.Threads).Count) threads, $([int]($p.WorkingSet64 / 1MB)) MB"
+    }
+    catch { return "PID $ProcessId (exited while being described)" }
 }
 
 # Runs cargo under a wall-clock bound, and reports which of the three outcomes
@@ -417,7 +473,10 @@ function Invoke-Bounded {
         return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode; Seconds = $elapsed }
     }
 
+    $script:KillClock = [Diagnostics.Stopwatch]::StartNew()
+    Write-KillTrace "cargo PID $($process.Id) still running after ${elapsed}s; $([Environment]::ProcessorCount) logical processors"
     Stop-Tree -ProcessId $process.Id
+    Write-KillTrace "tree stopped; cargo exited: $($process.HasExited)"
     return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }
 }
 

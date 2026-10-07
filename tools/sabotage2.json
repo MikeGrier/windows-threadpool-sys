@@ -61,6 +61,22 @@
       "replace": [""]
     },
     {
+      "name": "-TraceKills is ignored, so a kill is never narrated",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The narration exists for the one stall no bound covers: a kill that never returns, in CI, where the last line printed is the only evidence of which call it was in. Losing it changes no outcome, so nothing but a test of the narration itself would notice.",
+      "find": ["$script:TraceKills = $TraceKills.IsPresent"],
+      "replace": ["$script:TraceKills = $false"]
+    },
+    {
+      "name": "every kill is narrated, whether or not -TraceKills asked",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The other direction. The narration is opt-in so a local sweep's report stays the table a reader scans; a guard that only checked the narration appears would pass a harness that printed it always.",
+      "find": ["$script:TraceKills = $TraceKills.IsPresent"],
+      "replace": ["$script:TraceKills = $true"]
+    },
+    {
       "name": "CONTROL: a progress message nothing asserts on is reworded",
       "file": "tools/run-sabotage.ps1",
       "expect": "survives",
