@@ -20,13 +20,17 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   them is. Re-planned 2026-10-07: as one item it covered the whole contract, and two of its
   requirements sat on items numbered after it. Each step lands what it implements, with its tests,
   and adds to the trait only the methods it implements -- the crate is unreleased, so the trait
-  grows rather than shipping `todo!()` bodies. Two questions are **open, and the engineer's**:
-  - **The worked-example doctests.** The healing trace and the many-to-many failures were to become
-    compiled doctests driven by the fault-injecting implementation, `DI-3.3`, which comes after
-    this item. Either they move to `DI-3.3`, or a fault seam lands early enough for `DI-3.2.4`.
-  - **The conformance oracle.** `DI-3.7` is to be built "alongside" this item, so dioring's own tests
-    bind to it from the start. Either it folds into these steps, or it stays its own item and the
-    steps adopt it from `DI-3.2.3` on.
+  grows rather than shipping `todo!()` bodies. Two dependencies on later items were settled by the
+  engineer on 2026-10-07, each by bringing the work forward:
+  - **The worked-example doctests** land in `DI-3.2.4`, on a fault seam built there, rather than
+    waiting for the fault-injecting implementation, `DI-3.3`.
+  - **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)), formerly `DI-3.7`, is folded
+    into these steps: `DI-3.2.2` builds it, and each later step adds the rules it implements, so
+    dioring's own tests bind to it from the start. It is a reusable checker over the event stream,
+    owned by dioring, that every implementation of the trait runs in its tests -- dioring's own,
+    the fault-injecting one (`DI-3.3`), and layers above. Modelled on `windows-file-watcher`'s
+    `ContractChecker`: it accepts the legal-but-surprising sequences as carefully as it rejects the
+    illegal ones, and says which rules the stream cannot show.
 
 - [ ] **DI-3.2.1** -- **Types, trait and construction.** The shared types, identities and
   `DurableRing` trait from [API.md](API.md)'s sketch move into the crate as code, `Dioring::new`
@@ -43,7 +47,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `NoRegisteredBuffers`, `Ring`). The front end: `EventDelivery`'s callback moves ring completions
   into dioring's queue, `pop` serves it, and the readiness signal is set as
   [DI-D-28](DESIGN-NOTES.md#di-d-28) states. Writes are tagged and recorded, but nothing is sealed
-  yet. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the front end binds only to
+  yet. **The conformance oracle starts here**, with this step's rules -- one completion per
+  operation, its context handed back -- and beside it the readiness signal's harness check, which
+  the oracle cannot make because it sees entries, not wakes: push into an empty queue and assert
+  the signal is set; drain; assert the next push sets it again. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the front end binds only to
   `EventDelivery`'s specified callback contract -- called with the ring lock released, and possibly
   concurrently -- never to how its delivery loop happens to work. **What it relies on from the
   ring's completions, already specified:** `try_pop` hands an operation's payload back by that call
@@ -69,9 +76,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   and the inventory, `failures()`. **Constraint from DI-1.2 Q4:** "a failure is observed" is one
   transition, reachable at any drain point, with its cause (flush, import) as a field -- no
   import-specific state or edge. Prefer enforcing it in the types (the cause is data on one variant,
-  not a variant of its own) over a test that could be skipped. Its tests need flush failures on
-  demand; check whether `windows-ioring-sys`' `fault-injection` feature can fail a flush, before
-  building anything for it.
+  not a variant of its own) over a test that could be skipped. **A fault seam lands here**, because
+  this step's tests need flush failures on demand and so do CONTRACT.md's worked examples: the
+  healing trace and the many-to-many failures become compiled doctests driven by it, so a
+  behaviour change that invalidates them breaks the build. The seam must therefore be reachable
+  from doctests, not only from `cfg(test)`. Check first whether `windows-ioring-sys`'
+  `fault-injection` feature can fail a flush; `DI-3.3` may build on the seam rather than beside it.
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
@@ -122,14 +132,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   - **Installing the manifest**: how an application shipping dioring registers it, or documents
     that it must.
 
-- [ ] **DI-3.7** -- **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)): a reusable
-  checker over the event stream, owned by dioring, that every implementation of the trait runs in
-  its tests -- dioring's own, the fault-injecting one (DI-3.3), and layers above. Modelled on
-  `windows-file-watcher`'s `ContractChecker`: it accepts the legal-but-surprising sequences as
-  carefully as it rejects the illegal ones, and says which rules the stream cannot show. Built
-  alongside DI-3.2, so dioring's own tests bind to it from the start. Beside it, the readiness
-  signal's harness check ([DI-D-28](DESIGN-NOTES.md#di-d-28)): push into an empty queue and assert
-  the signal is set; drain; assert the next push sets it again.
+- [x] **DI-3.7** -- **Folded into `DI-3.2` by the engineer, 2026-10-07: the conformance oracle
+  is built from `DI-3.2.2`, and each later step adds its rules.** What the oracle is, and the
+  readiness signal's harness check beside it, are stated under `DI-3.2` and `DI-3.2.2`.
 
 - [ ] **DI-3.8** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
   dispatches each seal's work by flush domain to providers registered with it when it is built,

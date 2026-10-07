@@ -2326,6 +2326,29 @@ The engineer: "do the renaming to start with". DI-M3+ graduated to DI-M3 and its
 `DI-3+.n` to `DI-3.n` in every live document; the archives and this record keep the old IDs, and a
 note under the new heading maps one to the other.
 
+## DI-3.2 is split, and two dependencies are brought forward (2026-10-07)
+
+With the merge of `main` (the ring taking `SharedHandle`, M31.3 done) and DI-3.1's scaffold in
+place, the engineer asked whether DI-3.2 could be implemented. The answer given: yes, once ring
+M31.1 lands -- DI-D-18 binds the front end to a callback contract that today holds only as
+implementation -- and once DI-3.2 is split, because as one item it covered the whole contract and
+two of its requirements sat on items numbered after it: its worked-example doctests on DI-3.3's
+fault injection, and DI-3.7's conformance oracle, to be built "alongside" it.
+
+The engineer: "do the rewrite of the milestone item first, now". DI-3.2 became DI-3.2.1 to
+DI-3.2.7 -- types, trait and construction; plain I/O and the Model A front end; seals in one
+lineage; failures and resolution; lineages, gates and flush domains; the consumer provider; ending
+-- each growing the trait by what it implements, with the M31.1 prerequisite on DI-3.2.2 alone.
+The two dependencies were left open for the engineer, each with two options.
+
+The engineer chose "the earlier option" for both, read as the option that lands sooner:
+
+- **The worked-example doctests** land in DI-3.2.4, on a fault seam built there and reachable from
+  doctests, rather than waiting for DI-3.3.
+- **The conformance oracle** is folded into DI-3.2: DI-3.2.2 builds it, with the readiness
+  signal's harness check beside it, and each later step adds its rules. DI-3.7 is kept as a
+  checked record pointing there.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
