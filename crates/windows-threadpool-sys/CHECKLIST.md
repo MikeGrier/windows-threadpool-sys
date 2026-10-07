@@ -1306,30 +1306,6 @@ finding is of a different and worse kind: a rule nothing tests.
   justification needs replacing with the real reason rather than deleting, since the flag is still
   required.
 
-## M-T14 -- Events come from `win-sync-sys`
-
-Opened 2026-10-07. The engineer moved event creation out of this crate, which exists to wrap the
-thread pool, into the new `win-sync-sys`
-([WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5)), and asked that this crate be made to work well
-with it as part of the same work.
-
-- [ ] **M-T14.1** -- **`WaitableHandle` built on `win-sync-sys`' `Event`.**
-  - `From<Event> for WaitableHandle`, safe because an `Event` is never a mutex
-    ([WS-D-4](../win-sync-sys/DESIGN-NOTES.md#ws-d-4)).
-  - `WaitableHandle::event` keeps its signature and creates through `Event`, so this crate makes no
-    event of its own; drop the `windows-sys` feature that existed only for its `CreateEventW`, if
-    nothing else needs it.
-  - The two `ThreadpoolWait` examples in `wait.rs` signal through a kept `Event` clone rather than
-    `unsafe { SetEvent(wait.handle()...) }`, so the documented way to signal a pool-owned event
-    needs no `unsafe`.
-  - **Tests:** a wait built from an `Event` fires when a kept clone is set; and both `From` and
-    `WaitableHandle::event` preserve the reset mode, an auto-reset event firing once per `set`.
-  - **Sabotage:** the conversion creating a fresh event instead of taking the one it was given.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end, whose readiness event is an `Event`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

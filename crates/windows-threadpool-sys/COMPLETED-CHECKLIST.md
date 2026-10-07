@@ -1380,3 +1380,49 @@ field and re-running the guard: it still passes, where the arrangement it replac
 exactly the hazard its own comment warned about. The drain stays guarded by the test above, which
 still fails under sabotage at `exit 101`.
 
+
+## Moved 2026-10-07 18:14:51 -04:00 -- M-T14, events come from `win-sync-sys`
+
+Opened 2026-10-07. The engineer moved event creation out of this crate, which exists to wrap the
+thread pool, into the new `win-sync-sys`
+([WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5)), and asked that this crate be made to work well
+with it as part of the same work.
+
+### <a id="m-t141"></a>M-T14.1 -- `WaitableHandle` is built on `win-sync-sys`' `Event`, and the documented way to signal or reset a pool-owned event needs no `unsafe`. *(completed 2026-10-07 18:14:51 -04:00)*
+
+**What landed beyond the item's text.** A third example used `unsafe { ResetEvent(...) }`: the
+reset-before-re-arm example on `WaitActivation::rearm`, found by sweeping the workspace for raw
+`SetEvent`/`ResetEvent`/`CreateEventW` outside tests. It now resets through the callback's clone
+of the `Event`. The module documentation said to signal through `ThreadpoolWait::handle`, and now
+says to keep a clone; the README's "Safety highlights" names the conversion. `Win32_Security` left
+the `windows-sys` features, having existed only for `CreateEventW`.
+
+**Two tests the item did not name.** `the_conversion_keeps_the_event_it_was_given` asserts object
+identity with `CompareObjectHandles`, with a second event as the negative case, so the conversion
+is pinned without a timing window; and `the_event_constructor_makes_each_reset_mode_and_initial_state`
+walks all four combinations, so the constructor's booleans still mean what they meant when it
+called `CreateEventW` itself. A second sabotage covers that mapping.
+
+**How the sabotages were verified.** Both are caught under this crate's manifest, but that run is
+workspace-wide and `windows-file-enumeration-sys`' completion-ring tests fail first, ending the run
+before this crate's tests report. Each was therefore re-applied by hand and run against this
+crate's wait tests alone; each was caught by the test its `why` names.
+
+The item as it stood at completion:
+
+- [x] **M-T14.1** -- **`WaitableHandle` built on `win-sync-sys`' `Event`.**
+  - `From<Event> for WaitableHandle`, safe because an `Event` is never a mutex
+    ([WS-D-4](../win-sync-sys/DESIGN-NOTES.md#ws-d-4)).
+  - `WaitableHandle::event` keeps its signature and creates through `Event`, so this crate makes no
+    event of its own; drop the `windows-sys` feature that existed only for its `CreateEventW`, if
+    nothing else needs it.
+  - The two `ThreadpoolWait` examples in `wait.rs` signal through a kept `Event` clone rather than
+    `unsafe { SetEvent(wait.handle()...) }`, so the documented way to signal a pool-owned event
+    needs no `unsafe`.
+  - **Tests:** a wait built from an `Event` fires when a kept clone is set; and both `From` and
+    `WaitableHandle::event` preserve the reset mode, an auto-reset event firing once per `set`.
+  - **Sabotage:** the conversion creating a fresh event instead of taking the one it was given.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end, whose readiness event is an `Event`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
