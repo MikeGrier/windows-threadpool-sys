@@ -316,8 +316,9 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 ## The readiness signal
 
 An instance has a **readiness signal**: an auto-reset event it owns, of which the consumer can take
-a duplicate ([DI-D-28](DESIGN-NOTES.md#di-d-28)). These rules bind every implementation of this
-contract and whoever waits on the signal:
+a duplicate, as a `win-sync-sys` `Event` ([DI-D-28](DESIGN-NOTES.md#di-d-28)). These rules bind
+every implementation of this contract and whoever waits on the signal, and the conformance module's
+`check_readiness` checks the instance's half of them:
 
 - **The instance** sets the signal only after an entry has become poppable, and at least every time
   its queue goes from empty to non-empty. It sets it for every source of entries alike: kernel

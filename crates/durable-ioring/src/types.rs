@@ -333,8 +333,15 @@ pub struct PushError<V: Identities, B, C> {
 
 /// Whether a write may rest in the system cache (DI-2.6). The contract's own type, so an
 /// implementation needs nothing from the ring crate for it; dioring passes it through as the
-/// write's flag. It shapes latency only: a write-through write is still durable only when its
-/// epoch is sealed, because device-level write-through (FUA) is not relied on.
+/// write's flag. It does not change durability: a write-through write is still durable only when
+/// its epoch is sealed, because device-level write-through (FUA) is not relied on.
+///
+/// **What the platform does with it depends on how the file was opened**, and dioring passes the
+/// platform's answer through as the write's outcome. Measured on 2026-10-07 through dioring's
+/// ring: a write-through write to a handle opened for cached I/O -- including one opened with
+/// `FILE_FLAG_WRITE_THROUGH` -- completes as failed, with Win32 error 509 ("not supported on a
+/// file opened for cached IO"); to a handle opened with `FILE_FLAG_NO_BUFFERING` as well, it
+/// completes as a transfer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WriteCaching {
     /// The write may be satisfied into the system cache.
@@ -372,7 +379,14 @@ impl<V: Identities> WriteOptions<V> {
 
     /// Hold the write until `epoch` is durable; it fails as `NeverIssued` if `epoch` is
     /// abandoned (contract guarantee 9).
-    pub fn gate(mut self, epoch: Epoch<V>) -> Self {
+    ///
+    /// Crate-private until gates are honoured (DI-3.2.5): a public setter before then would let a
+    /// gated write be issued as an ungated one.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "public once gates are honoured: DI-3.2.5")
+    )]
+    pub(crate) fn gate(mut self, epoch: Epoch<V>) -> Self {
         self.gate = Some(epoch);
         self
     }
@@ -399,7 +413,13 @@ impl<V: Identities> ReadOptions<V> {
     }
 
     /// Hold the read until `epoch` is durable.
-    pub fn gate(mut self, epoch: Epoch<V>) -> Self {
+    ///
+    /// Crate-private until gates are honoured (DI-3.2.5), as for writes.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "public once gates are honoured: DI-3.2.5")
+    )]
+    pub(crate) fn gate(mut self, epoch: Epoch<V>) -> Self {
         self.gate = Some(epoch);
         self
     }

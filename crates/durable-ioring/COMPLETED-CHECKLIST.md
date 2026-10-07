@@ -1226,3 +1226,70 @@ Two findings. The kernel accepts queue sizes of zero, so ring creation is refuse
 and a zero-length buffer both registered -- so those error paths are unreached by tests;
 [dioring.rs](src/dioring.rs) says what would reach them, and [sabotage.json](sabotage.json) records
 it. Six sabotages, each caught, and a control that survives.
+## Moved 2026-10-07 19:18:33 -04:00 -- DI-3.2.2.1: plain I/O and the shared delivery
+
+### <a id="di-3221"></a>DI-3.2.2.1 -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. *(completed 2026-10-07 19:18:33 -04:00)*
+
+**What landed.** The trait grew by `readiness`, `add_file`/`add_file_with`, `write`/`write_with`,
+`read`/`read_with` and `pop`, and the extension trait `RegisteredBufferRing` by the registered-span
+forms and `registered_buffer`/`registered_buffer_mut`. In `Dioring`, the ring goes to
+`EventDelivery` after construction's registrations, and its callback records each completion into
+`Relay` -- dioring's queue under dioring's own lock -- setting the readiness event on every
+empty-to-non-empty transition. `pop` serves that queue. Pushes run through one path (`push.rs`):
+the file, then the epoch's lineage, then the registration a span operation needs are checked before
+anything is reserved, and every refusal, the ring's included, hands back the buffer and the
+context. Only an accepted push spends an `OpId`. A submission that fails after a push was accepted
+leaves the entry queued, so the push stands and the next push or pop submits again, `pop`
+reporting the error only when it has no entry to return.
+
+**The conformance oracle** is `durable_ioring::oracle`: `ConformanceOracle` checks one completion
+per operation, with the kind and context it was pushed with, and lists what it deliberately does not
+check; `check_readiness` is DI-D-28's harness check, waiting on the signal through a thread-pool
+wait. Each rule is tested in both directions, and the readiness check is shown to fail against a fake
+that never sets the signal and one that sets it once.
+
+**Decided while implementing, each recorded where it binds:**
+
+- `readiness()` returns a `win-sync-sys` `Event`, not an `OwnedHandle`: the readiness check cannot
+  wait on a bare handle without `unsafe`, and neither could a Model A front end. DI-D-28 carries the
+  amendment, and CONTRACT.md's readiness section names the type.
+- The gate setters on `WriteOptions` and `ReadOptions` are crate-private until gates are honoured,
+  so a gated operation cannot be issued ungated; `DI-3.2.5` makes them public again.
+- `B`, `C` and the epoch-id type must be `Send`, and the epoch-id type `Sync` too, because they cross
+  to pool threads and a failure's suspect set is shared.
+- `IoBuf`, `IoBufMut`, `RegisteredSpan`, `SharedHandle` and `Event` are re-exported, so a consumer
+  calls the contract with no direct dependency on the crates it is built on.
+- `win-sync-sys` and `windows-threadpool-sys` are path-only dependencies; `DI-3.5` pins them.
+- "Writes are tagged and recorded": the epoch is checked against the instance's lineages and travels
+  in the operation's sidecar, so its completion carries it. Coverage state is `DI-3.2.3`'s.
+
+**Found:** `IoRing`'s write-through flag fails with Win32 error 509 on a handle opened for cached
+I/O, including one opened with `FILE_FLAG_WRITE_THROUGH`, and succeeds only on an unbuffered handle.
+The ring crate's documentation does not say so; that is queued there. dioring's `WriteCaching`
+rustdoc records the measurement, and `the_caching_choice_reaches_the_kernel` uses it to show the
+flag is passed through.
+
+**Verification.** The crate's tests pass; a harness run recorded all 26 entries of
+[sabotage.json](sabotage.json) as declared, the two readiness sabotages caught by the readiness
+check alone.
+
+The item as it stood at completion:
+
+- [x] **DI-3.2.2.1** -- **Plain I/O, and the delivery every front end shares.** Re-planned
+  2026-10-07 from `DI-3.2.2`, which also held the Model A front end (now `DI-3.2.2.2`). `write`,
+  `read` and their `_with` and
+  registered-span forms, `add_file` and `add_file_with`, with the consumer's context passed through
+  to each `OpCompletion` and every refusal handing back what it took (`UnknownFile`,
+  `NoRegisteredBuffers`, `Ring`). The delivery: `EventDelivery`'s callback moves ring completions
+  into dioring's queue, `pop` serves it, and the readiness signal is set as
+  [DI-D-28](DESIGN-NOTES.md#di-d-28) states. Writes are tagged and recorded, but nothing is sealed
+  yet. **The conformance oracle starts here**, with this step's rules -- one completion per
+  operation, its context handed back -- and beside it the readiness signal's harness check, which
+  the oracle cannot make because it sees entries, not wakes: push into an empty queue and assert
+  the signal is set; drain; assert the next push sets it again. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the front end binds only to
+  `EventDelivery`'s specified callback contract -- called with the ring lock released, and possibly
+  concurrently -- never to how its delivery loop happens to work. **What it relies on from the
+  ring's completions, already specified:** `try_pop` hands an operation's payload back by that call
+  and no other, and every operation completes exactly once with the identity it was built with, a
+  completion for anything not in flight being a defect that panics
+  ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).

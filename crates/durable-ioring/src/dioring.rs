@@ -3,18 +3,28 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
+use win_sync_sys::Event;
 use windows_ioring_sys::{
-    Batch, Completion, IoBufMut, IoRing, PushRefused, RegisteredBuffers, RegisteredFile,
-    RegisteredFiles,
+    Batch, Completion, EventDelivery, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers,
+    RegisteredFile, RegisteredFiles, RegisteredSpan,
 };
 
-use crate::contract::{DurableRing, EpochId};
+use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::provider::DurabilityProvider;
-use crate::types::{Epoch, FileKey, FileOptions, FlushDomain, LineageInfo, OpKind};
+use crate::types::{
+    AddFileError, Epoch, FileKey, FileOptions, FlushDomain, LineageInfo, OpKind, ReadOptions,
+    WriteOptions,
+};
+
+mod push;
+mod relay;
+
+use relay::Relay;
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
 #[cfg(test)]
@@ -67,8 +77,13 @@ pub enum SetupRefusal {
 
 /// A failed construction hands back what it was given. `buffers` is `None` only once the buffers
 /// have been handed to the kernel and could not be shown to have come back: when the kernel's
-/// registration completion itself failed (`windows-ioring-sys` drops them then), or when no
-/// completion arrived (the ring crate leaks them rather than free memory the kernel may hold).
+/// registration completion itself failed (`windows-ioring-sys` drops them then), when no
+/// completion arrived (the ring crate leaks them rather than free memory the kernel may hold), or
+/// when the registration succeeded and wiring the ring's delivery then failed (the registration
+/// holds them, and has no way to give them back).
+///
+/// That last failure is not reached by this crate's tests: `EventDelivery::new` fails where the
+/// system does not support a ring completion event, or the thread pool cannot create a wait.
 pub struct SetupError<E: EpochId + 'static, R> {
     /// Why construction failed.
     pub reason: SetupRefusal,
@@ -94,14 +109,11 @@ impl<E: EpochId + 'static, R> std::fmt::Debug for SetupError<E, R> {
 }
 
 /// How dioring addresses one of the consumer's files.
-#[expect(
-    dead_code,
-    reason = "read, and `Shared` built, once pushes and add_file exist: DI-3.2.2"
-)]
 pub(crate) enum FileSlot {
     /// Given at construction: the ring holds it for its life (`windows-ioring-sys` D-81).
     Registered {
         index: RegisteredFile,
+        #[expect(dead_code, reason = "handed back by remove_file: DI-3.2.7")]
         file: SharedHandle,
     },
     /// Added later: pushed through its handle, guarded per operation. The consumer's own
@@ -116,12 +128,12 @@ pub(crate) struct DomainId(u32);
 
 /// One of the consumer's files, with its declared flush domains, sorted and without repeats. An
 /// empty set means unknown, which intersects every file.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read once pushes exist, from DI-3.2.2")
-)]
 pub(crate) struct FileRecord {
     pub(crate) target: FileSlot,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read when a seal names files to flush: DI-3.2.3")
+    )]
     pub(crate) domains: Box<[DomainId]>,
 }
 
@@ -137,15 +149,20 @@ pub(crate) struct ProviderSlot<E: EpochId + 'static> {
 
 /// dioring's record of each operation, carried as the ring crate's sidecar. The consumer's
 /// context rides inside it, so routing a completion needs no side table.
-#[expect(dead_code, reason = "constructed once pushes exist, from DI-3.2.2")]
 pub(crate) enum Sidecar<E: EpochId + 'static, C> {
     Consumer {
         id: OpId,
         kind: OpKind<DioringIds<E>>,
+        #[expect(
+            dead_code,
+            reason = "recorded so coverage can name a completed write's file: DI-3.2.3"
+        )]
         file: FileKey,
+        #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         offset: u64,
         context: C,
     },
+    #[expect(dead_code, reason = "a seal's covering flush, pushed from DI-3.2.3")]
     Commit {
         through: Epoch<DioringIds<E>>,
         file: FileKey,
@@ -154,32 +171,54 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
 
 /// dioring: `B` is the owned buffer type, `E` the epoch-id type, `C` the consumer's
 /// per-operation context, and `R` the registered-buffer type.
-#[expect(
-    dead_code,
-    reason = "the ring and its records are read once pushes exist: DI-3.2.2"
-)]
+///
+/// The ring is handed to `EventDelivery`, whose callbacks move each completion into dioring's own
+/// queue and set the readiness event, and the consumer pops that queue (DI-D-18, DI-D-28). So
+/// the buffer, epoch-id and context types cross to pool threads and must be `Send`; the epoch-id
+/// type must also be `Sync`, because a failure's suspect set is shared.
 pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>> {
     pub(crate) instance: InstanceId,
-    /// Declared before `registered`, so the ring closes before the buffers it registered are
-    /// released.
-    pub(crate) ring: IoRing<B, Sidecar<E, C>>,
+    /// The ring, inside its delivery. Declared before `registered`: dropping it quiesces the
+    /// delivery callbacks and then closes the ring, so both happen before the buffers the ring
+    /// registered are released (DI-2.7 point 5, the ring crate's D-13 order).
+    pub(crate) delivery: EventDelivery<B, Sidecar<E, C>>,
+    pub(crate) relay: Arc<Relay<E, B, C>>,
     pub(crate) files: HashMap<FileKey, FileRecord>,
     /// The interning table. An entry lives for the instance's life: the number of distinct
     /// domains is the number of devices and shares the consumer touches.
     pub(crate) domains: HashMap<FlushDomain, DomainId>,
     pub(crate) registered: Option<RegisteredBuffers<R>>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the provider is called once seals exist: DI-3.2.6"
+        )
+    )]
     pub(crate) provider: Option<ProviderSlot<E>>,
+    /// The next operation's sequence number.
+    pub(crate) next_op: u64,
+    /// A submission failed, so operations accepted by pushes may still sit in the submission
+    /// queue. The next push or pop submits again.
+    pub(crate) unsubmitted: bool,
 }
 
-impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
-    /// Build an instance and make the ring's registrations. Blocks until both have completed.
+impl<B, E, C, R> Dioring<B, E, C, R>
+where
+    B: Send + 'static,
+    E: EpochId + Send + Sync + 'static,
+    C: Send + 'static,
+    R: IoBufMut,
+{
+    /// Build an instance, make the ring's registrations, and wire its delivery. Blocks until both
+    /// registrations have completed.
     ///
     /// # Errors
     ///
     /// A [`SetupError`] handing back what it was given, for a duplicate file key, a provider
-    /// domain named twice, or a ring that could not be created or could not make a
-    /// registration. The checks that need no ring run first, so a refusal for either of the
-    /// first two creates nothing.
+    /// domain named twice, or a ring that could not be created, make a registration, or be wired
+    /// to deliver its completions. The checks that need no ring run first, so a refusal for
+    /// either of the first two creates nothing.
     pub fn new(setup: Setup<E, R>) -> Result<Self, SetupError<E, R>> {
         let Setup {
             submission_queue_size,
@@ -207,6 +246,17 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
             });
         }
 
+        let relay = match Relay::new() {
+            Ok(relay) => Arc::new(relay),
+            Err(error) => {
+                return Err(SetupError {
+                    reason: SetupRefusal::Ring(error),
+                    files,
+                    buffers: Some(buffers),
+                    provider,
+                });
+            }
+        };
         let mut ring = match IoRing::<B, Sidecar<E, C>>::with_inventory(
             submission_queue_size,
             completion_queue_size,
@@ -244,6 +294,25 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
             }
         };
 
+        // After the registrations, which claim their completions from the ring directly: once
+        // the ring is handed over, only the delivery callback pops it.
+        let recorder = Arc::clone(&relay);
+        let delivery = match EventDelivery::new(
+            ring,
+            move |completion, held| recorder.record(completion, held),
+            None,
+        ) {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                return Err(SetupError {
+                    reason: SetupRefusal::Ring(error),
+                    files,
+                    buffers: None,
+                    provider,
+                });
+            }
+        };
+
         let mut domains = HashMap::new();
         let mut records = HashMap::with_capacity(files.len());
         for (i, FileSetup { key, file, options }) in files.into_iter().enumerate() {
@@ -266,19 +335,98 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
 
         Ok(Self {
             instance: InstanceId::next(),
-            ring,
+            delivery,
+            relay,
             files: records,
             domains,
             registered,
             provider,
+            next_op: 0,
+            unsubmitted: false,
         })
     }
 }
 
-impl<B, E: EpochId + 'static, C, R: IoBufMut> DurableRing for Dioring<B, E, C, R> {
+impl<B, E, C, R> DurableRing for Dioring<B, E, C, R>
+where
+    B: Send + 'static,
+    E: EpochId + Send + Sync + 'static,
+    C: Send + 'static,
+    R: IoBufMut,
+{
     type Ids = DioringIds<E>;
     type Buffer = B;
     type Context = C;
+
+    fn readiness(&mut self) -> io::Result<Event> {
+        self.relay.readiness()
+    }
+
+    fn add_file_with(
+        &mut self,
+        key: FileKey,
+        file: SharedHandle,
+        options: FileOptions,
+    ) -> Result<(), AddFileError> {
+        if self.files.contains_key(&key) {
+            return Err(AddFileError { key, file, options });
+        }
+        let domains = intern_all(&mut self.domains, options.domains);
+        self.files.insert(
+            key,
+            FileRecord {
+                target: FileSlot::Shared(file),
+                domains,
+            },
+        );
+        Ok(())
+    }
+
+    fn write_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: B,
+        epoch: Epoch<Self::Ids>,
+        context: C,
+        options: WriteOptions<Self::Ids>,
+    ) -> PushResult<Self>
+    where
+        B: IoBuf,
+    {
+        self.push_write(file, offset, buffer, epoch, context, options)
+    }
+
+    fn read_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: B,
+        context: C,
+        options: ReadOptions<Self::Ids>,
+    ) -> PushResult<Self>
+    where
+        B: IoBufMut,
+    {
+        self.push_read(file, offset, buffer, context, options)
+    }
+
+    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+        // A failed submission is retried here as well as at the next push, so a consumer that
+        // stops pushing still gets its accepted operations issued. Its error is reported only
+        // when there is no entry to return instead: an entry is progress, and the retry runs
+        // again at the next pop.
+        let retried = if self.unsubmitted {
+            self.submit_queued().err()
+        } else {
+            None
+        };
+        match (self.relay.pop(), retried) {
+            (Some(entry), _) => Ok(Some(entry)),
+            (None, Some(error)) => Err(error),
+            (None, None) => Ok(None),
+        }
+    }
 
     fn default_lineage(&self) -> Lineage {
         Lineage {
@@ -295,6 +443,47 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut> DurableRing for Dioring<B, E, C, R
             durable_through: None,
             sealed_through: None,
         }]
+    }
+}
+
+impl<B, E, C, R> RegisteredBufferRing for Dioring<B, E, C, R>
+where
+    B: Send + 'static,
+    E: EpochId + Send + Sync + 'static,
+    C: Send + 'static,
+    R: IoBufMut,
+{
+    type Registered = R;
+
+    fn registered_buffer(&mut self, i: u32) -> io::Result<&[u8]> {
+        self.registration()?.get(i)
+    }
+
+    fn registered_buffer_mut(&mut self, i: u32) -> io::Result<&mut [u8]> {
+        self.registration()?.get_mut(i)
+    }
+
+    fn write_registered_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        epoch: Epoch<Self::Ids>,
+        context: C,
+        options: WriteOptions<Self::Ids>,
+    ) -> PushResult<Self> {
+        self.push_write_registered(file, offset, span, epoch, context, options)
+    }
+
+    fn read_registered_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        context: C,
+        options: ReadOptions<Self::Ids>,
+    ) -> PushResult<Self> {
+        self.push_read_registered(file, offset, span, context, options)
     }
 }
 

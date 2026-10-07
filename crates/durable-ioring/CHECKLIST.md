@@ -34,28 +34,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.1** -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-321)
 
-- [ ] **DI-3.2.2.1** -- **Plain I/O, and the delivery every front end shares.** Re-planned
-  2026-10-07 from `DI-3.2.2`, which also held the Model A front end (now `DI-3.2.2.2`). `write`,
-  `read` and their `_with` and
-  registered-span forms, `add_file` and `add_file_with`, with the consumer's context passed through
-  to each `OpCompletion` and every refusal handing back what it took (`UnknownFile`,
-  `NoRegisteredBuffers`, `Ring`). The delivery: `EventDelivery`'s callback moves ring completions
-  into dioring's queue, `pop` serves it, and the readiness signal is set as
-  [DI-D-28](DESIGN-NOTES.md#di-d-28) states. Writes are tagged and recorded, but nothing is sealed
-  yet. **The conformance oracle starts here**, with this step's rules -- one completion per
-  operation, its context handed back -- and beside it the readiness signal's harness check, which
-  the oracle cannot make because it sees entries, not wakes: push into an empty queue and assert
-  the signal is set; drain; assert the next push sets it again. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the front end binds only to
-  `EventDelivery`'s specified callback contract -- called with the ring lock released, and possibly
-  concurrently -- never to how its delivery loop happens to work. **What it relies on from the
-  ring's completions, already specified:** `try_pop` hands an operation's payload back by that call
-  and no other, and every operation completes exactly once with the identity it was built with, a
-  completion for anything not in flight being a defect that panics
-  ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface), done and recorded as the ring crate's [D-83](../windows-ioring-sys/DESIGN-NOTES.md#d-83). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). The readiness event [DI-D-28](DESIGN-NOTES.md#di-d-28) describes must be created and set under `#![forbid(unsafe_code)]`, and no lower crate offered a safe event that could be set; the engineer placed one in a new crate (2026-10-07). `windows-threadpool-sys`' `M-T14.1` moves onto it first, as part of the same work. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+- [x] **DI-3.2.2.1** -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3221)
 
 - [ ] **DI-3.2.2.2** -- **The Model A front end.** Split from `DI-3.2.2` on 2026-10-07: DI-2.3 decided
   its behaviour, but [API.md](API.md) never sketched its API, so it needs design before code. What
@@ -96,7 +75,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `default_lineage()`, with every rule of the steps above holding per lineage
   ([DI-D-19](DESIGN-NOTES.md#di-d-19)). Gated operations held until their epoch is durable, ending
   as `NeverIssued` when it is abandoned, a gate on an abandoned epoch refused as `GateAbandoned`,
-  and a gate cycle refused as `GateCycle` ([DI-D-23](DESIGN-NOTES.md#di-d-23)). Flush domains
+  and a gate cycle refused as `GateCycle` ([DI-D-23](DESIGN-NOTES.md#di-d-23)). Make
+  `WriteOptions::gate` and `ReadOptions::gate` public again: `DI-3.2.2.1` made them crate-private,
+  because until gates are honoured a public setter would let a gated operation be issued ungated. Flush domains
   narrowing a failure's reach -- intersection for the default provider, containment for a provider's
   domain, a file declared with none reaching every file ([DI-D-21](DESIGN-NOTES.md#di-d-21)) -- and
   `ImportScope`.
@@ -129,6 +110,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   [D-80](../windows-ioring-sys/DESIGN-NOTES.md#d-80) and
   [D-81](../windows-ioring-sys/DESIGN-NOTES.md#d-81)), keeping the `path`. This must land before
   dioring's first release PR merges, because its publish job fails on a path-only dependency.
+  `DI-3.2.2.1` added two more path-only dependencies, pinned the same way: `win-sync-sys` (the
+  readiness signal's `Event`), at its first release, and `windows-threadpool-sys` (the readiness
+  check's wait), at the release carrying its `M-T14.1` (`From<Event> for WaitableHandle`).
 
 - [ ] **DI-3.6** -- **Emit the delay events** DI-2.11 designs, from a manifest-based ETW provider
   that dioring owns. Gated on DI-3.2, which creates the code the events describe. Carries what

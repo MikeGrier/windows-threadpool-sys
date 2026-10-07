@@ -8,8 +8,16 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::io;
 
-use crate::types::{Entry, LineageInfo, PushError};
+use win_shared_os_owned_handle::SharedHandle;
+use win_sync_sys::Event;
+use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
+
+use crate::types::{
+    AddFileError, Entry, Epoch, FileKey, FileOptions, LineageInfo, PushError, ReadOptions,
+    WriteOptions,
+};
 
 #[cfg(test)]
 mod tests;
@@ -60,11 +68,216 @@ pub trait DurableRing {
     /// The consumer's per-operation context, handed back with each completion.
     type Context;
 
+    /// A duplicate of the readiness signal (DI-D-28): an auto-reset event the instance owns, set
+    /// after an entry becomes poppable and at least whenever the queue goes from empty to
+    /// non-empty. One waiter; pop until `None` after every wake; a wake with nothing to pop is
+    /// normal.
+    ///
+    /// An [`Event`] rather than a bare handle, so a front end can give it to a thread-pool wait
+    /// without `unsafe`: an `Event` is guaranteed to be an event, never a mutex.
+    ///
+    /// # Errors
+    ///
+    /// The error from duplicating the event's handle.
+    fn readiness(&mut self) -> io::Result<Event>;
+
+    /// `add_file_with` with default options: no declared flush domains.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_file_with`](Self::add_file_with).
+    fn add_file(&mut self, key: FileKey, file: SharedHandle) -> Result<(), AddFileError> {
+        self.add_file_with(key, file, FileOptions::new())
+    }
+
+    /// Give the instance a file after construction, under a key unique within the instance.
+    ///
+    /// # Errors
+    ///
+    /// An [`AddFileError`] handing back the file and its options, when a file is already present
+    /// under `key`.
+    fn add_file_with(
+        &mut self,
+        key: FileKey,
+        file: SharedHandle,
+        options: FileOptions,
+    ) -> Result<(), AddFileError>;
+
     /// The lineage that always exists.
     fn default_lineage(&self) -> Lin<Self>;
 
     /// Every live lineage, the default among them.
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>>;
+
+    /// `write_with` with default options: cached.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_with`](Self::write_with).
+    fn write(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: Self::Buffer,
+        epoch: Epoch<Self::Ids>,
+        context: Self::Context,
+    ) -> PushResult<Self>
+    where
+        Self::Buffer: IoBuf,
+    {
+        self.write_with(file, offset, buffer, epoch, context, WriteOptions::new())
+    }
+
+    /// Write `buffer` to `file` at `offset`, tagged with `epoch`. The buffer and the context come
+    /// back on the operation's completion.
+    ///
+    /// # Errors
+    ///
+    /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
+    /// given, an epoch whose lineage is not one of the instance's, or a ring that refused the push.
+    fn write_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: Self::Buffer,
+        epoch: Epoch<Self::Ids>,
+        context: Self::Context,
+        options: WriteOptions<Self::Ids>,
+    ) -> PushResult<Self>
+    where
+        Self::Buffer: IoBuf;
+
+    /// `read_with` with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_with`](Self::read_with).
+    fn read(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: Self::Buffer,
+        context: Self::Context,
+    ) -> PushResult<Self>
+    where
+        Self::Buffer: IoBufMut,
+    {
+        self.read_with(file, offset, buffer, context, ReadOptions::new())
+    }
+
+    /// Read from `file` at `offset` into `buffer`. Reads take no part in durability. The buffer,
+    /// filled, and the context come back on the operation's completion.
+    ///
+    /// # Errors
+    ///
+    /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
+    /// given or a ring that refused the push.
+    fn read_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        buffer: Self::Buffer,
+        context: Self::Context,
+        options: ReadOptions<Self::Ids>,
+    ) -> PushResult<Self>
+    where
+        Self::Buffer: IoBufMut;
+
+    /// The next entry, or `None` when the queue is empty. Never waits; wait on
+    /// [`readiness`](Self::readiness).
+    ///
+    /// # Errors
+    ///
+    /// An implementation's own failure to make progress, reported where the consumer will see it.
+    /// dioring's is a submission it retried and the kernel refused again: the operations stay
+    /// queued, and the next push or pop retries.
+    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
+}
+
+/// The registered-buffer extension (DI-D-24): operations on spans of buffers registered with the
+/// instance's ring when it was built. An extension because an implementation without a wioring
+/// may have none.
+pub trait RegisteredBufferRing: DurableRing {
+    /// The registered-buffer type.
+    type Registered: IoBufMut;
+
+    /// The bytes of registered buffer `i`.
+    ///
+    /// # Errors
+    ///
+    /// Refused while an operation is reading into it, for an index out of range, or on an
+    /// instance built without registered buffers.
+    fn registered_buffer(&mut self, i: u32) -> io::Result<&[u8]>;
+
+    /// The bytes of registered buffer `i`, mutably.
+    ///
+    /// # Errors
+    ///
+    /// Refused while any operation uses it, for an index out of range, or on an instance built
+    /// without registered buffers.
+    fn registered_buffer_mut(&mut self, i: u32) -> io::Result<&mut [u8]>;
+
+    /// `write_registered_with` with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_registered_with`](Self::write_registered_with).
+    fn write_registered(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        epoch: Epoch<Self::Ids>,
+        context: Self::Context,
+    ) -> PushResult<Self> {
+        self.write_registered_with(file, offset, span, epoch, context, WriteOptions::new())
+    }
+
+    /// Write `span` of the registered buffers to `file` at `offset`, tagged with `epoch`. Its
+    /// completion carries no buffer: the bytes belong to the registration.
+    ///
+    /// # Errors
+    ///
+    /// A [`PushError`] handing back the context, as for [`DurableRing::write_with`], and for an
+    /// instance built without registered buffers or a span the registration does not contain.
+    fn write_registered_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        epoch: Epoch<Self::Ids>,
+        context: Self::Context,
+        options: WriteOptions<Self::Ids>,
+    ) -> PushResult<Self>;
+
+    /// `read_registered_with` with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_registered_with`](Self::read_registered_with).
+    fn read_registered(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        context: Self::Context,
+    ) -> PushResult<Self> {
+        self.read_registered_with(file, offset, span, context, ReadOptions::new())
+    }
+
+    /// Read from `file` at `offset` into `span` of the registered buffers.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_registered_with`](Self::write_registered_with), less the epoch.
+    fn read_registered_with(
+        &mut self,
+        file: FileKey,
+        offset: u64,
+        span: RegisteredSpan,
+        context: Self::Context,
+        options: ReadOptions<Self::Ids>,
+    ) -> PushResult<Self>;
 }
 
 /// An implementation's lineage type.

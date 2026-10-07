@@ -13,12 +13,13 @@
 mod contract;
 mod dioring;
 mod ids;
+pub mod oracle;
 mod provider;
 mod types;
 
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, Identities, Lin, OpIdOf, PushResult,
-    TokenOf,
+    RegisteredBufferRing, TokenOf,
 };
 pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal};
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
@@ -30,3 +31,8 @@ pub use types::{
     ReadOptions, RemoveFileError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
     SuspectSet, SuspectWrite, WriteCaching, WriteOptions,
 };
+// The types the contract's signatures name from the crates it is built on, so a consumer needs no
+// direct dependency on them to call it.
+pub use win_shared_os_owned_handle::SharedHandle;
+pub use win_sync_sys::Event;
+pub use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};

@@ -2381,6 +2381,31 @@ thread pool, which treats a wait on a mutex as undefined -- so adopting an exist
 `Event` must be `unsafe`. Recorded as [WS-D-4](../crates/win-sync-sys/DESIGN-NOTES.md#ws-d-4),
 with the rest in that crate's [DESIGN-NOTES.md](../crates/win-sync-sys/DESIGN-NOTES.md).
 
+## DI-3.2.2 is implemented in part, and split (2026-10-07)
+
+Implementing DI-3.2.2 surfaced that it held two things of different readiness. Plain I/O with the
+delivery every front end shares was fully specified by DI-D-18 and DI-D-28, and was built as
+`DI-3.2.2.1`. The Model A front end type was decided in behaviour by DI-2.3 but never sketched as an
+API -- no name, constructor, choice of which `&mut self` operations it offers as `&self`, or
+teardown shape -- so it became `DI-3.2.2.2`, with those questions listed for the engineer rather
+than answered in code.
+
+Three things were decided while building the first half, each recorded where it binds rather than
+here:
+
+- `readiness()` returns the `win-sync-sys` `Event` rather than an `OwnedHandle`. This was the purpose
+  of creating that crate: the readiness check, and any Model A front end, must wait on the signal
+  through a thread-pool wait, and only an `Event` can be handed to one without `unsafe`. DI-D-28
+  carries the amendment.
+- The gate setters are withheld until gates are honoured (`DI-3.2.5`), so a gated operation cannot
+  be issued ungated in the meantime.
+- The conformance oracle is a public module, `durable_ioring::oracle`, with the readiness check
+  beside it.
+
+One measurement came out of the caching option's test: `IoRing`'s write-through flag fails with
+Win32 error 509 on any handle opened for cached I/O and succeeds on an unbuffered one. The ring
+crate's documentation never said so; it is queued as that crate's `M32.1`.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

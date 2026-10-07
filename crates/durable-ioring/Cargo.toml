@@ -21,6 +21,12 @@ windows-ioring-sys = { path = "../windows-ioring-sys" }
 # The contract's file type (DI-D-29): a consumer's file is a `SharedHandle`, and dioring hands that
 # same handle to the ring, which takes the type directly.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+# The readiness signal's type (DI-D-28): an `Event`, so a front end can hand it to a thread-pool
+# wait without `unsafe`. Path only, as for the ring crate: it is unreleased, and DI-3.5 pins it.
+win-sync-sys = { path = "../win-sync-sys" }
+# The thread-pool wait the conformance module's readiness check waits through. Path only: it needs
+# `From<Event> for WaitableHandle`, which is unreleased, and DI-3.5 pins it.
+windows-threadpool-sys = { path = "../windows-threadpool-sys" }
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it would render an

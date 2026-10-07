@@ -7,7 +7,9 @@ name = "durable-ioring"
 version = "0.1.0"
 dependencies = [
  "win-shared-os-owned-handle",
+ "win-sync-sys",
  "windows-ioring-sys",
+ "windows-threadpool-sys",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 {
   "package": "durable-ioring",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); and the relay's two debug assertions, for a completion with no sidecar and for a covering flush before seals exist.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -50,6 +50,158 @@
       "why": "Epochs of two lineages are unrelated (DI-D-19); ordering them by id alone would let a seal in one lineage appear to cover another's.",
       "find": ["        (self.lineage == other.lineage).then(|| self.id.cmp(&other.id))"],
       "replace": ["        Some(self.id.cmp(&other.id))"]
+    },
+    {
+      "name": "DI-3.2.2.1: the relay drops every completion",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
+      "find": ["            queue.push_back(entry);\n"],
+      "replace": ["            drop(entry);\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the readiness event is never set",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "DI-D-28: a waiter would sleep through every entry. Only the readiness check sees it -- the other tests poll -- which is why that check exists beside the oracle.",
+      "find": ["            let set = self.readiness.set();\n"],
+      "replace": ["            let set: io::Result<()> = Ok(());\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "The empty-to-non-empty transition is the one DI-D-28 requires: a single waiter that has popped to None sleeps until it. Caught by the readiness check's first push.",
+      "find": ["        if was_empty {\n"],
+      "replace": ["        if !was_empty {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: a completion reports no bytes transferred",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "The count is the kernel's, and a short transfer is the consumer's to handle; reporting zero hides what happened.",
+      "find": ["                        Outcome::Transferred(u32::try_from(transferred).unwrap_or(u32::MAX))\n"],
+      "replace": ["                        Outcome::Transferred(0)\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: a failed operation is reported as a transfer",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "A write the kernel refused, reported as written, is a lost write the consumer cannot see. Caught by the read-only-handle test and by the caching test.",
+      "find": ["                    Err(error) => Outcome::Failed(error),\n"],
+      "replace": ["                    Err(_) => Outcome::Transferred(0),\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: a write is recorded as a read",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "The write's tag is what durability will be computed from (DI-3.2.3). The oracle's kind rule catches it in every test that writes.",
+      "find": ["            OpKind::Write { epoch },\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"],
+      "replace": ["            OpKind::Read,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: operation identities are not advanced",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "Two operations under one identity cannot be told apart. The oracle's duplicate-identity rule, and the push-order test.",
+      "find": ["        self.next_op += 1;\n"],
+      "replace": ["\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: a push naming an unknown file is not refused",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "The refusal must hand back the buffer and the context; without it the push reaches a lookup that cannot succeed.",
+      "find": ["        if !self.files.contains_key(&file) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: another instance's lineage is accepted",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "A write tagged with a lineage this instance does not have names an epoch nothing here could ever seal.",
+      "find": ["            && !self.is_live(epoch.lineage)\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: a span operation without a registration is not refused",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "NoRegisteredBuffers is the refusal that hands the context back; without it the push reaches a registration that does not exist.",
+      "find": ["        if needs_registration && self.registered.is_none() {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the write-through choice is dropped",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-2.6: dioring hides no knob the platform offers. Caught because the platform answers differently: a write-through write fails on a cached handle, so a dropped flag turns that failure into a success.",
+      "find": ["        WriteCaching::WriteThrough => RingCaching::WriteThrough,\n"],
+      "replace": ["        WriteCaching::WriteThrough => RingCaching::Cached,\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: add_file accepts a key already in use",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Two files under one key would make every report naming it ambiguous; the refusal hands the file back.",
+      "find": ["        if self.files.contains_key(&key) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the oracle misses a second completion",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle is the one definition of one-completion-per-operation; a second completion must be named as such.",
+      "find": ["            return Err(if self.completed.contains(&op) {\n"],
+      "replace": ["            return Err(if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the oracle misses an identity reused after completing",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "An identity returned again once its first operation completed would let the second's completion pass as the first's.",
+      "find": ["        if self.completed.contains(&op) || self.outstanding.contains_key(&op) {\n"],
+      "replace": ["        if self.outstanding.contains_key(&op) {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the oracle ignores the kind",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "What was pushed comes back: a completion reporting another kind or epoch is a violation.",
+      "find": ["        if pushed.kind != completion.kind {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the oracle ignores the context",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The consumer's context is handed back unchanged; this is the oracle's half of that rule.",
+      "find": ["        if pushed.context != completion.context {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the oracle finishes with operations outstanding",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A lost completion is invisible to every rule that looks at entries; only finish names it.",
+      "find": ["        if self.outstanding.is_empty() {\n"],
+      "replace": ["        if true {\n"]
+    },
+    {
+      "name": "DI-3.2.2.1: the readiness check does not require a second wake",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The second half of DI-D-28's check: a signal set once and never again. Caught by the fake that sets only once.",
+      "find": ["            .map_err(|_| ReadinessFailure::NotSetAgain)?;\n"],
+      "replace": ["            .ok();\n"]
+    },
+    {
+      "name": "CONTROL: the relay tests emptiness by length",
+      "file": "src/dioring/relay.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself, on code every test runs: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["            let was_empty = queue.is_empty();\n"],
+      "replace": ["            let was_empty = queue.len() == 0;\n"]
     },
     {
       "name": "CONTROL: the registration timeout's message is reworded",

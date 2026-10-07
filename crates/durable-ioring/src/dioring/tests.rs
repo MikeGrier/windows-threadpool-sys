@@ -15,6 +15,9 @@ use crate::ids::DioringIds;
 use crate::provider::{DurabilityProvider, FlushRequest};
 use crate::types::{FileKey, FileOptions, FlushDomain};
 
+// Pushes, completions and the readiness signal: DI-3.2.2.1.
+mod pushes;
+
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;
 
