@@ -1,0 +1,55 @@
+{
+  "package": "win-job-launcher",
+  "description": "Sabotages for the job-object launcher the sabotage harness runs every phase through. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "Two properties are deliberately ABSENT, because no test can observe them deterministically. (1) Creating the command SUSPENDED closes the window between CreateProcess and AssignProcessToJobObject in which the command could start a process outside the job; dropping CREATE_SUSPENDED leaves every test green, because none of them can arrange to spawn inside that window. (2) Terminating strays explicitly when the command exits, and waiting for the job to empty, makes the tree gone BEFORE the launcher exits; dropping it leaves every test green, because the job is kill-on-close and the launcher's own exit takes the strays down a moment later -- the difference is ordering, which a test reading after the launcher exits cannot see. Recording either with expect:'survives' would assert it is harmless, which is false.",
+  "sabotages": [
+    {
+      "name": "the command is never put in the job",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "The launcher's whole reason to exist. Without the assignment the job is empty, so terminating it kills nothing, and the descendants the harness needs dead outlive the bound -- while the launcher still reports a timeout.",
+      "find": ["    if let Err(e) = job.assign(child.as_handle()) {"],
+      "replace": ["    if let Err(e) = Ok::<(), io::Error>(()) {"]
+    },
+    {
+      "name": "the bound is never enforced",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "Waiting INFINITE turns the bound into no bound: a hung command hangs the launcher, which is the failure the launcher was written to end.",
+      "find": ["    let waited = unsafe { WaitForSingleObject(child.as_raw_handle(), bound) };"],
+      "replace": ["    let waited = unsafe { WaitForSingleObject(child.as_raw_handle(), u32::MAX) };"]
+    },
+    {
+      "name": "the job is not kill-on-close",
+      "file": "src/job.rs",
+      "expect": "caught",
+      "why": "Kill-on-close is what takes the tree down when the launcher itself is killed -- the harness's backstop when the launcher overruns. Without it, killing the launcher orphans everything it started.",
+      "find": ["        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;"],
+      "replace": ["        limits.BasicLimitInformation.LimitFlags = 0;"]
+    },
+    {
+      "name": "strays left by an exiting command are not counted",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "A command that exits while its descendants run is reported as a clean exit with no sign of them. The count is the only evidence the harness gets that a suite left processes behind.",
+      "find": ["    let strays = at_exit.map_or(0, |a| a.active_processes);"],
+      "replace": ["    let strays = at_exit.map_or(0, |a| a.active_processes * 0);"]
+    },
+    {
+      "name": "non-ASCII text is written raw into the result",
+      "file": "src/outcome.rs",
+      "expect": "caught",
+      "why": "Windows PowerShell 5.1 reads an unmarked file in the ANSI code page, so a raw UTF-8 error message from a localised Windows would reach the harness mangled.",
+      "find": ["            ' '..='~' => out.push(c),"],
+      "replace": ["            ' '..='~' | '\\u{80}'.. => out.push(c),"]
+    },
+    {
+      "name": "CONTROL: the stray-termination trace is reworded",
+      "file": "src/launch.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader of a trace sees and nothing a test claims, so it MUST survive -- if it comes back caught, the tests are matching on incidental wording rather than on behaviour.",
+      "find": ["            \"terminating {strays} stray process(es) still in the job\""],
+      "replace": ["            \"killing {strays} process(es) left in the job\""]
+    }
+  ]
+}

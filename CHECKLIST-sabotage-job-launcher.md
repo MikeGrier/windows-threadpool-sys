@@ -18,7 +18,7 @@ Feature-scoped: deleted when complete, its content moved to the root
   timeout below the job's so a stall uploads its transcripts. Landed as e6cd07d3,
   before this checklist existed.
 
-- [ ] **JL-1.2** -- **The launcher crate, `crates/win-job-launcher` (a binary of
+- [x] **JL-1.2** -- **The launcher crate, `crates/win-job-launcher` (a binary of
   the same name, `publish = false`).** Runs one command inside a fresh job
   object under a wall-clock bound, redirecting its stdout and stderr to files, and
   writes the outcome (exited with a code, timed out and killed, or not started) to

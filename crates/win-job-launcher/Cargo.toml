@@ -1,0 +1,28 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-job-launcher"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Runs one command inside a fresh Windows job object under a wall-clock bound, and kills the whole process tree at the bound."
+
+# Tooling for this repository's sabotage harness, not library surface. It is
+# absent from release-please's config for the same reason, so no commit here
+# versions or releases anything.
+publish = false
+
+[dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	# `CreateJobObjectW` takes a `SECURITY_ATTRIBUTES`, so windows-sys gates it
+	# behind this feature even though the launcher passes none.
+	"Win32_Security",
+	"Win32_System_Diagnostics_ToolHelp",
+	"Win32_System_JobObjects",
+	"Win32_System_Threading",
+] }
