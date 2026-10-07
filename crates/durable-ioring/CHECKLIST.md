@@ -51,7 +51,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   completion for anything not in flight being a defect that panics
   ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface), done and recorded as the ring crate's [D-83](../windows-ioring-sys/DESIGN-NOTES.md#d-83). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
 - [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
   provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
