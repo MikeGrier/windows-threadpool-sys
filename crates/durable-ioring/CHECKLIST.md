@@ -32,14 +32,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
     `ContractChecker`: it accepts the legal-but-surprising sequences as carefully as it rejects the
     illegal ones, and says which rules the stream cannot show.
 
-- [ ] **DI-3.2.1** -- **Types, trait and construction.** The shared types, identities and
-  `DurableRing` trait from [API.md](API.md)'s sketch move into the crate as code, `Dioring::new`
-  builds an `IoRing` with dioring's sidecar, registers construction files through
-  `register_shared_files` ([D-81](../windows-ioring-sys/DESIGN-NOTES.md#d-81)) and buffers, and
-  interns flush domains. The refusals: a duplicate `FileKey`, a domain named twice, and a failed
-  registration, each returning what it was given in `SetupError`. The crate's documentation includes
-  CONTRACT.md (`#[doc = include_str!(...)]`), so the contract has one home. Decide here what becomes
-  of API.md's sketch once code carries its types, since two copies would drift.
+- [x] **DI-3.2.1** -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-321)
 
 - [ ] **DI-3.2.2** -- **Plain I/O, and the Model A front end.** `write`, `read` and their `_with` and
   registered-span forms, `add_file` and `add_file_with`, with the consumer's context passed through

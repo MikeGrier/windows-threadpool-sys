@@ -1,0 +1,63 @@
+{
+  "package": "durable-ioring",
+  "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each.",
+  "sabotages": [
+    {
+      "name": "DI-3.2.1: a duplicate file key is not refused",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Two files under one key would make every report naming that key ambiguous, and the second would silently replace the first in the instance's records while the ring still holds both.",
+      "find": ["        if let Some(key) = first_repeat(files.iter().map(|f| f.key)) {"],
+      "replace": ["        if let Some(key) = first_repeat(std::iter::empty::<FileKey>()) {"]
+    },
+    {
+      "name": "DI-3.2.1: a provider naming a domain twice is not refused",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-27 refuses it at construction, because a domain served twice would be answered twice for one seal.",
+      "find": ["        if let Some(domain) = first_repeat(provider_domains.iter().cloned()) {"],
+      "replace": ["        if let Some(domain) = first_repeat(std::iter::empty::<FlushDomain>()) {"]
+    },
+    {
+      "name": "DI-3.2.1: construction files are not registered",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A file given at construction must be held by the ring for its life (D-81); without the registration nothing holds it once the consumer's clone is gone.",
+      "find": ["    if files.is_empty() {"],
+      "replace": ["    if files.is_empty() || !files.is_empty() {"]
+    },
+    {
+      "name": "DI-3.2.1: a domain repeated within one file counts twice",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A file's domains are a set; a repeat would make intersection and containment checks see a domain more than once.",
+      "find": ["    ids.dedup();"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.1: every instance gets the same instance id",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "The instance id is what lets an instance refuse another's lineages, operations and failures. A repeated one makes a foreign identity indistinguishable from a native one.",
+      "find": ["        Self(NEXT.fetch_add(1, AtomicOrdering::Relaxed))"],
+      "replace": ["        Self(NEXT.load(AtomicOrdering::Relaxed))"]
+    },
+    {
+      "name": "DI-3.2.1: epochs of different lineages compare by id",
+      "file": "src/types.rs",
+      "expect": "caught",
+      "why": "Epochs of two lineages are unrelated (DI-D-19); ordering them by id alone would let a seal in one lineage appear to cover another's.",
+      "find": ["        (self.lineage == other.lineage).then(|| self.id.cmp(&other.id))"],
+      "replace": ["        Some(self.id.cmp(&other.id))"]
+    },
+    {
+      "name": "CONTROL: the registration timeout's message is reworded",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. Nothing asserts on this wording, and no test reaches it, so the change must survive; if it comes back caught, something is matching incidental text.",
+      "find": ["                \"the ring did not complete a registration within {}s\","],
+      "replace": ["                \"no registration completion arrived within {}s\","]
+    }
+  ]
+}

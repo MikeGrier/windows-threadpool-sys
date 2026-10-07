@@ -14,9 +14,8 @@ sections 2 and 4 where noted. Section 11 is the options pattern
 [DI-D-30](DESIGN-NOTES.md#di-d-30)). The document spells out [CONTRACT.md](CONTRACT.md); where
 they disagree, the contract wins.
 
-The sketch at the end compiles against `windows-ioring-sys` by path
-([DI-D-16](DESIGN-NOTES.md#di-d-16)) under the pinned toolchain, clippy clean, with bodies
-`todo!()`. It is marked `ignore` until DI-3.1 gives it a crate.
+The sketch at the end is the design the crate is built from, and is superseded by the crate's
+code for whatever the code carries; see its heading.
 
 ## The choices
 
@@ -360,6 +359,11 @@ gate epoch is durable; fails if it was abandoned -- was derived from DI-1.2 and 
 engineer.
 
 ## The sketch
+
+**Superseded by the crate's code ([src/lib.rs](src/lib.rs)) for every type and method the code
+carries; kept, frozen, as the design of what is not yet built.** Where the two differ, the code is
+right and the sketch is history. It is not edited to follow the code: each `DI-3.2` step builds
+from it, and the code is where the result lives.
 
 ```rust,ignore
 use std::cmp::Ordering;

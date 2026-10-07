@@ -1205,3 +1205,24 @@ DI-D-16's claim that a path-only dependency stops a publish was checked, not ass
 `cargo publish --dry-run` refuses with "all dependencies must have a version requirement
 specified when publishing", naming `windows-ioring-sys`. So dioring's first release cannot
 publish until `DI-3.5` pins that version.
+
+## Moved 2026-10-07 17:05:12 -04:00 -- DI-3.2.1: types, trait and construction
+
+### <a id="di-321"></a>DI-3.2.1 -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. *(completed 2026-10-07 17:05:12 -04:00)*
+
+The shared types, `DioringIds` and its identities, and `DurableRing` are code in
+[src/](src/lib.rs). The trait carries what this step implements -- its associated types,
+`default_lineage` and `lineages` -- and grows with each later step. `DomainCompletion` exists so the
+provider trait can be named, and gains its answers in `DI-3.2.6`. `Dioring::new` refuses a duplicate
+key and a provider domain named twice before creating anything, and a ring that cannot be created
+or cannot register; every refusal hands back what it was given. The crate's documentation is
+[CONTRACT.md](CONTRACT.md).
+
+**API.md's sketch** is marked superseded by the code for what the code carries, and kept frozen as
+the design of what is not yet built; the code wins where they differ.
+
+Two findings. The kernel accepts queue sizes of zero, so ring creation is refused here with
+`u32::MAX` instead. And no input tried makes a registration fail at completion -- a thread handle
+and a zero-length buffer both registered -- so those error paths are unreached by tests;
+[dioring.rs](src/dioring.rs) says what would reach them, and [sabotage.json](sabotage.json) records
+it. Six sabotages, each caught, and a control that survives.
