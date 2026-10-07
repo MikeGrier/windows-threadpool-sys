@@ -5,6 +5,7 @@ on:
   push:
     tags:
       - 'win-numa-sys-v*'
+      - 'win-shared-os-owned-handle-v*'
       - 'windows-file-enumeration-sys-v*'
       - 'windows-file-watcher-v*'
       - 'windows-file-watcher-example-test-harness-v*'
@@ -31,6 +32,7 @@ on:
         type: choice
         options:
           - win-numa-sys
+          - win-shared-os-owned-handle
           - windows-file-enumeration-sys
           - windows-file-watcher
           - windows-file-watcher-example-test-harness
@@ -111,7 +113,7 @@ jobs:
       - name: Wait for workspace-sibling dependencies on crates.io
         shell: bash
         run: |
-          workspace_crates="win-numa-sys windows-file-enumeration-sys windows-file-watcher windows-file-watcher-example-test-harness windows-impersonation-token-sys windows-ioring-sys windows-namespace-request-sys windows-overlapped-io-sys windows-thread-ambient-sys windows-threadpool-sys windows-topology-sys windows-waitable-queues wtf-string"
+          workspace_crates="win-numa-sys win-shared-os-owned-handle windows-file-enumeration-sys windows-file-watcher windows-file-watcher-example-test-harness windows-impersonation-token-sys windows-ioring-sys windows-namespace-request-sys windows-overlapped-io-sys windows-thread-ambient-sys windows-threadpool-sys windows-topology-sys windows-waitable-queues wtf-string"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           # `tr -d '\r'` is load-bearing on the Windows runner: jq.exe writes
           # CRLF, and `read` splits on LF alone, so without this the last field
