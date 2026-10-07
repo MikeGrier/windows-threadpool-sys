@@ -112,7 +112,7 @@ any callback API owes its users.
 
 - [x] **M31.1** -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m311)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2.1` (dioring's plain I/O and the delivery its front ends share), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
 - [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
   `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)

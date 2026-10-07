@@ -25,7 +25,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   - **The worked-example doctests** land in `DI-3.2.4`, on a fault seam built there, rather than
     waiting for the fault-injecting implementation, `DI-3.3`.
   - **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)), formerly `DI-3.7`, is folded
-    into these steps: `DI-3.2.2` builds it, and each later step adds the rules it implements, so
+    into these steps: `DI-3.2.2.1` builds it, and each later step adds the rules it implements, so
     dioring's own tests bind to it from the start. It is a reusable checker over the event stream,
     owned by dioring, that every implementation of the trait runs in its tests -- dioring's own,
     the fault-injecting one (`DI-3.3`), and layers above. Modelled on `windows-file-watcher`'s
@@ -34,10 +34,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.1** -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-321)
 
-- [ ] **DI-3.2.2** -- **Plain I/O, and the Model A front end.** `write`, `read` and their `_with` and
+- [ ] **DI-3.2.2.1** -- **Plain I/O, and the delivery every front end shares.** Re-planned
+  2026-10-07 from `DI-3.2.2`, which also held the Model A front end (now `DI-3.2.2.2`). `write`,
+  `read` and their `_with` and
   registered-span forms, `add_file` and `add_file_with`, with the consumer's context passed through
   to each `OpCompletion` and every refusal handing back what it took (`UnknownFile`,
-  `NoRegisteredBuffers`, `Ring`). The front end: `EventDelivery`'s callback moves ring completions
+  `NoRegisteredBuffers`, `Ring`). The delivery: `EventDelivery`'s callback moves ring completions
   into dioring's queue, `pop` serves it, and the readiness signal is set as
   [DI-D-28](DESIGN-NOTES.md#di-d-28) states. Writes are tagged and recorded, but nothing is sealed
   yet. **The conformance oracle starts here**, with this step's rules -- one completion per
@@ -54,6 +56,18 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface), done and recorded as the ring crate's [D-83](../windows-ioring-sys/DESIGN-NOTES.md#d-83). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). The readiness event [DI-D-28](DESIGN-NOTES.md#di-d-28) describes must be created and set under `#![forbid(unsafe_code)]`, and no lower crate offered a safe event that could be set; the engineer placed one in a new crate (2026-10-07). `windows-threadpool-sys`' `M-T14.1` moves onto it first, as part of the same work. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
+- [ ] **DI-3.2.2.2** -- **The Model A front end.** Split from `DI-3.2.2` on 2026-10-07: DI-2.3 decided
+  its behaviour, but [API.md](API.md) never sketched its API, so it needs design before code. What
+  is decided ([DI-D-18](DESIGN-NOTES.md#di-d-18), and DI-2.3's points 1-3 and 8 in
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#di-23)): a type written once over the trait
+  that owns the delivery, with `&self` methods usable from any thread; it hands entries strictly
+  one at a time, in queue order, to a consumer callback on a pool thread, with no lock held, so the
+  callback may call back in; dioring's lock is taken before the ring's. It waits on `readiness()`
+  through a thread-pool wait. **Open, for the engineer:** its name and constructor; which of the
+  trait's `&mut self` operations it offers as `&self`, and how (mirrored methods, or a closure over
+  the instance under its lock); and its teardown, which DI-2.7 point 5 orders -- delivery quiesced
+  before the state it reaches is released.
 
 - [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
   provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
@@ -128,8 +142,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
     that it must.
 
 - [x] **DI-3.7** -- **Folded into `DI-3.2` by the engineer, 2026-10-07: the conformance oracle
-  is built from `DI-3.2.2`, and each later step adds its rules.** What the oracle is, and the
-  readiness signal's harness check beside it, are stated under `DI-3.2` and `DI-3.2.2`.
+  is built from `DI-3.2.2.1`, and each later step adds its rules.** What the oracle is, and the
+  readiness signal's harness check beside it, are stated under `DI-3.2` and `DI-3.2.2.1`.
 
 - [ ] **DI-3.8** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
   dispatches each seal's work by flush domain to providers registered with it when it is built,
