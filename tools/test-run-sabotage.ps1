@@ -387,14 +387,19 @@ if ($Shard -lt 0) {
         $running = @()
         for ($i = 0; $i -lt $Jobs; $i++) {
             $out = Join-Path ([System.IO.Path]::GetTempPath()) "sab-shard-$PID-$i.txt"
+            # Every value quoted for the command line: Start-Process joins the
+            # list as text, and $PSCommandPath, -Name and the launcher's path
+            # (under TEMP) can each hold a space.
+            $shardArguments = @(
+                '-NoProfile', '-File', $PSCommandPath,
+                '-Name', $Name, '-Shard', $i, '-ShardCount', $Jobs, '-LauncherPath', $script:Launcher
+            ) | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }
             $running += [pscustomobject]@{
                 Index   = $i
                 Output  = $out
                 Process = Start-Process -FilePath $shell -PassThru -NoNewWindow `
                     -RedirectStandardOutput $out -RedirectStandardError "$out.err" `
-                    -ArgumentList @(
-                    '-NoProfile', '-File', $PSCommandPath,
-                    '-Name', $Name, '-Shard', $i, '-ShardCount', $Jobs, '-LauncherPath', $script:Launcher)
+                    -ArgumentList $shardArguments
             }
         }
 

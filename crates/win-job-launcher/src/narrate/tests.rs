@@ -40,6 +40,43 @@ fn errors_are_written_whether_or_not_tracing() {
 }
 
 #[test]
+fn every_physical_line_of_a_multiline_error_carries_the_prefix() {
+    let mut n = Narrator::new(Vec::new(), false);
+    n.error(format_args!("bad flag\nusage: win-job-launcher ..."));
+    assert_eq!(
+        text(n),
+        format!("{PREFIX}: error: bad flag\n{PREFIX}: usage: win-job-launcher ...\n")
+    );
+}
+
+#[test]
+fn every_physical_line_of_a_multiline_trace_carries_the_prefix_and_stamp() {
+    let mut n = Narrator::new(Vec::new(), true);
+    n.trace(format_args!("a\nb\r\nc"));
+    let out = text(n);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3, "{out:?}");
+    for (line, expected) in lines.iter().zip(["a", "b", "c"]) {
+        assert!(line.starts_with(&format!("{PREFIX} +")), "{out:?}");
+        assert!(line.ends_with(&format!("s: {expected}")), "{out:?}");
+    }
+}
+
+#[test]
+fn an_empty_message_is_still_one_prefixed_line() {
+    let mut n = Narrator::new(Vec::new(), false);
+    n.error(format_args!(""));
+    assert_eq!(text(n), format!("{PREFIX}: error: \n"));
+}
+
+#[test]
+fn a_trailing_newline_does_not_add_a_blank_prefixed_line() {
+    let mut n = Narrator::new(Vec::new(), false);
+    n.error(format_args!("one\n"));
+    assert_eq!(text(n), format!("{PREFIX}: error: one\n"));
+}
+
+#[test]
 fn each_call_is_one_line_in_order() {
     let mut n = Narrator::new(Vec::new(), true);
     n.trace(format_args!("one"));

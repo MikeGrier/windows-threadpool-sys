@@ -40,13 +40,27 @@ impl<W: Write> Narrator<W> {
     pub fn trace(&mut self, message: fmt::Arguments<'_>) {
         if self.trace {
             let seconds = self.start.elapsed().as_secs_f64();
-            let _ = writeln!(self.out, "{PREFIX} +{seconds:.3}s: {message}");
+            let head = format!("{PREFIX} +{seconds:.3}s:");
+            self.lines(&head, &head, message);
         }
     }
 
-    /// A failure the caller must see, traced or not.
+    /// A failure the caller must see, traced or not. A message of several lines
+    /// is written as several lines, each with the prefix; only the first says
+    /// `error`.
     pub fn error(&mut self, message: fmt::Arguments<'_>) {
-        let _ = writeln!(self.out, "{PREFIX}: error: {message}");
+        self.lines(&format!("{PREFIX}: error:"), &format!("{PREFIX}:"), message);
+    }
+
+    /// Writes `message` one physical line at a time, so no line reaches a
+    /// shared log without its prefix. Best-effort, like every write here.
+    fn lines(&mut self, first: &str, rest: &str, message: fmt::Arguments<'_>) {
+        let text = message.to_string();
+        let mut lines = text.lines();
+        let _ = writeln!(self.out, "{first} {}", lines.next().unwrap_or_default());
+        for line in lines {
+            let _ = writeln!(self.out, "{rest} {line}");
+        }
     }
 
     /// Time since the narrator was made.

@@ -410,6 +410,10 @@ fn a_refused_command_line_exits_2_and_writes_no_result() {
         stderr.contains("--timeout-ms") && stderr.contains("usage:"),
         "{stderr}"
     );
+    assert!(
+        stderr.lines().all(|l| l.starts_with("win-job-launcher:")),
+        "every line of the refusal carries the prefix: {stderr}"
+    );
 }
 
 #[test]

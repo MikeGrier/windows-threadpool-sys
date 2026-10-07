@@ -375,30 +375,6 @@ $script:LauncherGraceSeconds = 30
 # How long to wait, after stopping a launcher that overran, for it to be gone.
 $script:LauncherStopSeconds = 10
 
-# One argument, quoted for a command line the way the MSVC runtime -- and
-# Rust's std, which the launcher parses with -- splits it back apart.
-# Start-Process passes -ArgumentList through as text, so without this a path
-# containing a space arrives as two arguments.
-function ConvertTo-NativeArgument {
-    param([AllowEmptyString()][string] $Value)
-    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
-    $text = New-Object System.Text.StringBuilder
-    [void]$text.Append('"')
-    $backslashes = 0
-    foreach ($c in $Value.ToCharArray()) {
-        if ($c -eq [char]'\') { $backslashes++; continue }
-        # Backslashes are literal except before a quote, where each must be
-        # doubled and the quote itself escaped.
-        if ($c -eq [char]'"') { [void]$text.Append([char]'\', 2 * $backslashes + 1) }
-        elseif ($backslashes -gt 0) { [void]$text.Append([char]'\', $backslashes) }
-        [void]$text.Append($c)
-        $backslashes = 0
-    }
-    # Trailing backslashes precede the closing quote, so they double too.
-    if ($backslashes -gt 0) { [void]$text.Append([char]'\', 2 * $backslashes) }
-    [void]$text.Append('"')
-    return $text.ToString()
-}
 
 # The launcher's result, or $null when there is none to read: it failed before
 # writing one, or wrote something that is not a JSON object. Through
