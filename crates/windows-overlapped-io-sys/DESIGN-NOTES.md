@@ -439,8 +439,8 @@ not close a single misbehaving or finished endpoint without either running down 
 other endpoint's in-flight work too) or accepting the unsafety.
 
 `AssociatedEndpoint` has exactly one owner (`!Clone`), so the fix reuses the same shape `CompletionPort` already
-applies to itself (see "Voluntary rundown and `Drop`" above), rather than `windows-ioring-sys`'s `Arc`-based
-`SharedFile` (that mechanism is for genuine multi-owner sharing, which this endpoint does not have and should
+applies to itself (see "Voluntary rundown and `Drop`" above), rather than the `Arc`-based `SharedHandle`
+that `windows-ioring-sys` uses (that mechanism is for genuine multi-owner sharing, which this endpoint does not have and should
 not pay for):
 
 - `PortState` gained a `Mutex<HashMap<usize, Arc<AtomicUsize>>>` keyed by completion key, one entry per live
