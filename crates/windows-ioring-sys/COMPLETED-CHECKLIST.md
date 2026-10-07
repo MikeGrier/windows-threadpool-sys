@@ -6220,3 +6220,54 @@ Opened 2026-10-04. The review found that a raw push could still reach a false qu
       `kernel-seam` tests in `ring::tests` that forge the kernel's answer -- never minted,
       duplicate, the minted control, and the unwind case -- and by the two `D-79` cases in
       [sabotage.json](sabotage.json).
+
+## Moved 2026-10-05 19:58:47 -04:00 -- M30.1, a refused push hands back what it was given
+
+### <a id="m301"></a>M30.1 -- A refused owned push hands back its payload and sidecar in a `PushRefused`. *(completed 2026-10-05 19:58:47 -04:00)*
+
+The decision is [D-80](DESIGN-NOTES.md#d-80). Points recorded only here:
+
+- **Scope widened by one method, on the item's own wording.** `register_buffers` takes ownership
+  of the caller's buffers and dropped them on refusal, including on a full queue, which it
+  documents a retry for. It is an owned push by the item's definition, so it returns
+  `PushRefused<Vec<B>, ()>`. Its length checks now run before any address is taken, so a
+  refusal can still hand the `Vec` back whole.
+- **Not covered: a registration whose completion fails.** `PendingBufferRegistration::claim_if`
+  still drops the buffers when the registration op completes with an error (D-18). That is not a
+  refused push: the kernel saw the addresses, and the claim is what proves it has finished
+  with them. Whether it should hand them back is a separate question, left open.
+- **Not covered by a test: the `Unsupported` refusal.** Every ring on the development machine
+  supports every op a push requires, so no test can produce that refusal on demand. It returns
+  through the same `refuse!` macro as the oversized-buffer and foreign-registration refusals,
+  and those are tested; the "a refusal before the build drops the payload" sabotage case
+  patches the macro once for all of them.
+- **Breaking-change reach.** No crate outside `windows-ioring-sys` calls an owned push. Inside,
+  `?` and `.expect(..)` absorbed nearly every call site. The ones that changed read `.kind()`
+  off the error, which is now `refused.error.kind()`; `ring_copy`'s `submit_one` gained an
+  `io::Error: From<E>` bound.
+
+## Moved 2026-10-05 20:09:31 -04:00 -- M30 complete: M30.2, safe file registration
+
+M30 was opened from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+"DI-2.2: what the ring crate cannot give dioring safely") to close two gaps in the safe surface,
+fixed here rather than in a wrapper crate by the engineer's direction. `M30.1` is archived
+[above](#m301).
+
+### <a id="m302"></a>M30.2 -- `Batch::register_shared_files` registers files safely, with the ring holding them for its life. *(completed 2026-10-05 20:09:31 -04:00)*
+
+The decision is [D-81](DESIGN-NOTES.md#d-81). Points recorded only here:
+
+- **The release does not wait on the close succeeding**, although the item's target said it
+  "waits for the close". It still happens *after* `CloseIoRing`; it is just not conditional on
+  the close's result. A quiesced ring has nothing in flight that could use a handle. Gating on the
+  close's success would also leave the rundown gate untestable: the only ring whose rundown can
+  be made to fail on demand is the null-handle one, whose close always fails too.
+- **The "released after the close" ordering has no test.** No observation can distinguish a
+  handle closed just before `CloseIoRing` from one closed just after. It is argued in D-81 and
+  in the comment at the release.
+- **Naming left to the engineer.** M8.6's convention would give the safe method the plain name
+  `register_files` and rename the `unsafe` one to `register_files_raw`. That breaks every caller,
+  so this item stayed additive as planned.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M2` -> `DI-2.2` (composition with `IoRing<T, X>`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

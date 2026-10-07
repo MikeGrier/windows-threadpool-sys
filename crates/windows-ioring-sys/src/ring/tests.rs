@@ -297,6 +297,85 @@ fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
     );
 }
 
+// --- The registered files outlive the ring (M30.2, D-81) ---
+//
+// `Batch::register_shared_files` hands the ring files whose handles the kernel
+// may reference for the ring's whole life. `Drop` releases them only on a
+// quiesced rundown, after `CloseIoRing`, and leaks them otherwise. The two
+// tests below use the null-handle ring, whose close the kernel refuses: the
+// release must not depend on the close succeeding, or a quiesced ring with a
+// failed close would leak every file it registered.
+
+/// Two real file handles, to stand for a registration's files. No SQE is ever
+/// built from them; they are only something for `Drop` to decide about.
+fn two_shared_files() -> Vec<crate::batch::SharedFile> {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    (0..2)
+        .map(|_| {
+            let file = std::fs::File::open(&exe).expect("open the test binary for read");
+            crate::batch::SharedFile::new(std::os::windows::io::OwnedHandle::from(file))
+        })
+        .collect()
+}
+
+/// As [`the_registration_arrays_are_never_dropped_by_the_compiler`]: only the
+/// field's type stops the compiler freeing the files on the failed-rundown
+/// path, so the type is what this pins.
+#[test]
+fn the_registered_files_are_never_dropped_by_the_compiler() {
+    fn pinned(ring: &IoRing) -> &std::mem::ManuallyDrop<Vec<crate::batch::SharedFile>> {
+        &ring.registered_files
+    }
+    let _ = pinned;
+}
+
+/// The accepting direction: a quiesced ring releases every registered file,
+/// even when its close is refused.
+#[test]
+fn a_quiesced_ring_releases_its_registered_files() {
+    let before = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        ring.hold_registered_shared_files(two_shared_files());
+        assert_eq!(ring.accounting.outstanding(), 0, "nothing is outstanding");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 2,
+        "a ring with nothing outstanding must release every registered file"
+    );
+}
+
+/// The refusing direction: a ring whose rundown fails keeps its registered
+/// files, so a handle the kernel may still use is never closed under it.
+/// Dropped during an unwind for the reason given on
+/// [`a_ring_whose_rundown_fails_keeps_its_registration_arrays`].
+#[test]
+fn a_ring_whose_rundown_fails_keeps_its_registered_files() {
+    let before = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        ring.hold_registered_shared_files(two_shared_files());
+        ring.accounting
+            .reserve_user_data()
+            .expect("a fresh ring's identity space is not exhausted");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after, before,
+        "a ring that could not prove quiescence must not close a handle the kernel may still use"
+    );
+}
+
 // --- The fault-injection seam (M16.3) ---
 
 /// A real completion for a real, finished operation.

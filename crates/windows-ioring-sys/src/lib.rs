@@ -39,7 +39,8 @@
 //! There are two coherent high-performance shapes for consuming completions,
 //! and picking the wrong one costs more than any API detail in this crate.
 //!
-//! **Model A -- shared queue, kernel load-balances.** A pool of threads waits;
+//! **Model A, threadless dispatch -- shared queue, kernel load-balances.** A
+//! pool of threads waits;
 //! work is handed to whichever thread the system picks next. This is
 //! `EventDelivery`: the ring's completion event wired to a thread-pool wait,
 //! so no thread of yours ever blocks on I/O. Load balancing is automatic and
@@ -50,7 +51,8 @@
 //! configuration. See `examples/model_a_delivery.rs` for a full worked
 //! example (M6.2).
 //!
-//! **Model B -- shared-nothing execution domains.** One pinned thread per
+//! **Model B, dedicated domain thread -- shared-nothing execution domains.**
+//! One pinned thread per
 //! domain, owning its ring, its buffer pool, and its shard of the
 //! application's state, with no cross-thread synchronization on the data
 //! path -- a pinned thread parked directly in [`Batch::submit_and_wait`] *is*
@@ -211,7 +213,7 @@ pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(windows)]
-pub use error::{IoRingError, IoRingErrorExt, RingCondition};
+pub use error::{IoRingError, IoRingErrorExt, PushRefused, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy

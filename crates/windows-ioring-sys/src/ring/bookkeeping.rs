@@ -417,6 +417,21 @@ impl<T, X> IoRing<T, X> {
         self.late_read.file_handles.as_ptr()
     }
 
+    /// Keep the files a safe file registration queued for the rest of the
+    /// ring's life (M30.2, [D-81](../../DESIGN-NOTES.md#d-81)). `Drop`
+    /// releases them after `CloseIoRing` on a quiesced rundown, and leaks
+    /// them otherwise.
+    ///
+    /// Called only once the registration has queued: a refused one hands its
+    /// files back instead, since the kernel never saw their handles.
+    pub(crate) fn hold_registered_shared_files(&mut self, files: Vec<crate::batch::SharedFile>) {
+        debug_assert!(
+            self.registered_files.is_empty(),
+            "a ring accepts at most one file registration, so this must only be set once"
+        );
+        *self.registered_files = files;
+    }
+
     /// Release the buffer array held for a `BuildIoRingRegisterBuffers` call
     /// that then failed.
     ///

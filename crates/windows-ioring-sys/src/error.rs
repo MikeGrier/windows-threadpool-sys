@@ -212,11 +212,11 @@ impl IoRingError {
 /// match batch.read_owned(file, vec![0_u8; 4096], (), 0, PushOptions::new()) {
 ///     Ok(_id) => {}
 ///     // Backpressure, not a failure: submit and drain, then retry.
-///     Err(error) if error.is_submission_queue_full() => {
+///     Err(refused) if refused.error.is_submission_queue_full() => {
 ///         batch.submit()?;
 ///         return Ok(());
 ///     }
-///     Err(error) => return Err(error),
+///     Err(refused) => return Err(refused.into()),
 /// }
 /// # Ok(())
 /// # }
@@ -288,6 +288,107 @@ impl fmt::Display for IoRingError {
 }
 
 impl std::error::Error for IoRingError {}
+
+/// A push the ring refused, carrying everything the push was given (M30.1,
+/// [D-80](../DESIGN-NOTES.md#d-80)).
+///
+/// Every owned push returns this on refusal: the [`io::Error`] that explains
+/// it, the payload the push took (`None` for one that takes no payload, such
+/// as a flush, a cancel or a registered-span push), and the sidecar `extra`.
+/// [`Batch::register_buffers`](crate::Batch::register_buffers) returns one too,
+/// with the whole `Vec` of buffers as its payload and `()` as its sidecar.
+/// A refused push queued nothing, so nothing will ever complete to hand these
+/// back; this is the only way back.
+///
+/// The commonest refusal is `IORING_E_SUBMISSION_QUEUE_FULL`. No caller can
+/// rule it out beforehand, because building the operation is the test, and it
+/// is exactly the case where the caller wants the same buffer for a retry:
+///
+/// ```no_run
+/// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedFile};
+///
+/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedFile) -> std::io::Result<()> {
+/// let mut batch = Batch::new(ring);
+/// if let Err(refused) = batch.read_owned(file, vec![0_u8; 4096], (), 0, PushOptions::new()) {
+///     if !refused.error.is_submission_queue_full() {
+///         return Err(refused.into());
+///     }
+///     // Backpressure, not a failure: submit what is queued, then retry with
+///     // the buffer the refusal handed back.
+///     batch.submit()?;
+///     let buffer = refused.payload.expect("a read takes a payload");
+///     let mut batch = Batch::new(ring);
+///     batch.read_owned(file, buffer, (), 0, PushOptions::new())?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A caller that wants only the error converts with `?` or `.into()`, which
+/// keeps the error unchanged (so [`IoRingErrorExt`] still finds the
+/// `HRESULT`) and drops the payload and sidecar there, by the caller's
+/// choice rather than the ring's.
+///
+/// The ring-owned parts of an operation are not returned: a file guard and a
+/// registered-buffer use belong to the ring, never to the caller, and are
+/// released.
+///
+/// `Debug` and `Display` are written by hand so they place no bound on `T`
+/// or `X`. A consumer's buffer type need not be `Debug` for `.expect(..)` to
+/// compile.
+#[non_exhaustive]
+pub struct PushRefused<T, X> {
+    /// Why the push was refused.
+    pub error: io::Error,
+    /// The payload the push took, or `None` if it took none.
+    pub payload: Option<T>,
+    /// The sidecar the push took.
+    pub extra: X,
+}
+
+impl<T, X> PushRefused<T, X> {
+    pub(crate) fn new(error: io::Error, payload: Option<T>, extra: X) -> Self {
+        Self {
+            error,
+            payload,
+            extra,
+        }
+    }
+
+    /// Discard the payload and sidecar, keeping only the error.
+    #[must_use]
+    pub fn into_error(self) -> io::Error {
+        self.error
+    }
+}
+
+impl<T, X> From<PushRefused<T, X>> for io::Error {
+    fn from(refused: PushRefused<T, X>) -> Self {
+        refused.error
+    }
+}
+
+impl<T, X> fmt::Debug for PushRefused<T, X> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PushRefused")
+            .field("error", &self.error)
+            .field("payload", &self.payload.as_ref().map(|_| ".."))
+            .field("extra", &format_args!(".."))
+            .finish()
+    }
+}
+
+impl<T, X> fmt::Display for PushRefused<T, X> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "push refused: {}", self.error)
+    }
+}
+
+impl<T, X> std::error::Error for PushRefused<T, X> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
 
 /// Convert a native call's `HRESULT` into `Ok(())` or a wrapped
 /// [`IoRingError`], following the `FAILED(hr)` convention (a negative

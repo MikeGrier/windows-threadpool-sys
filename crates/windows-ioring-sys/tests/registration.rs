@@ -217,10 +217,15 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
         .expect("buffer registration succeeded");
 
     let mut batch = Batch::new(&mut ring);
-    let error = batch
+    let refused = batch
         .register_buffers(vec![vec![0_u8; 8]])
         .expect_err("a second buffer registration must be refused");
-    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(refused.error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        refused.payload.as_deref(),
+        Some(&[vec![0_u8; 8]][..]),
+        "a refused registration hands its buffers back (D-80)"
+    );
     drop(batch);
 
     drop(registered_buffers);
@@ -537,9 +542,15 @@ fn a_registered_file_from_a_different_ring_is_rejected() {
     let buffer = vec![0_u8; 8];
     // SAFETY: never actually queued -- the ring-identity check rejects this
     // before any `Build*` call runs.
-    let error = unsafe { batch.read_raw_owned(registered_file, buffer, (), 0, PushOptions::new()) }
-        .expect_err("a RegisteredFile from a different ring must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let refused =
+        unsafe { batch.read_raw_owned(registered_file, buffer, (), 0, PushOptions::new()) }
+            .expect_err("a RegisteredFile from a different ring must be rejected");
+    assert_eq!(refused.error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        refused.payload.as_deref(),
+        Some(&[0_u8; 8][..]),
+        "a refused push hands its buffer back (D-80)"
+    );
 }
 
 #[test]
@@ -561,9 +572,11 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
     let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
 
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `handle` stays open for the whole test. (Registering is still
-    // unsafe -- the handles must outlive the ring -- it is only *using* the
-    // resulting index that M10.4 made safe.)
+    // SAFETY: `handle` stays open for the whole test. (This registers through
+    // the `unsafe` method, whose caller keeps the handles open; the safe
+    // `register_shared_files` (D-81) is exercised in
+    // `shared_file_registration.rs`. Either way it is *using* the resulting
+    // index that M10.4 made safe.)
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
@@ -708,10 +721,21 @@ fn a_registration_refused_by_a_full_queue_can_be_retried() {
     let file_error = unsafe { batch.register_files(&[handle]) }
         .expect_err("a full queue must refuse the file registration");
     assert!(file_error.is_submission_queue_full(), "{file_error:?}");
-    let buffer_error = batch
+    let buffer_refused = batch
         .register_buffers(vec![vec![0_u8; 64]])
         .expect_err("a full queue must refuse the buffer registration");
-    assert!(buffer_error.is_submission_queue_full(), "{buffer_error:?}");
+    assert!(
+        buffer_refused.error.is_submission_queue_full(),
+        "{buffer_refused:?}"
+    );
+    // The refused registration hands its buffers back whole (D-80): the
+    // retry below could reuse them, and a caller whose buffers were placed
+    // with care must not lose them to backpressure.
+    assert_eq!(
+        buffer_refused.payload.as_deref(),
+        Some(&[vec![0_u8; 64]][..]),
+        "a refused registration hands its buffers back"
+    );
     batch
         .submit_and_wait(queued, 5_000)
         .expect("submit the filler");
@@ -880,10 +904,14 @@ fn the_safe_api_rejects_a_registered_file_from_a_different_ring() {
         .expect("index 0 exists");
 
     let mut batch = Batch::new(&mut ring_b);
-    let error = batch
+    let refused = batch
         .read_owned(&registered_file, vec![0_u8; 8], (), 0, PushOptions::new())
         .expect_err("a RegisteredFile from a different ring must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(refused.error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        refused.payload.is_some(),
+        "a refused push hands its buffer back (D-80)"
+    );
     drop(batch);
 
     // And the rejection cost ring b nothing: no identity was reserved, so
@@ -942,7 +970,11 @@ fn a_registered_buffers_from_a_different_ring_is_rejected() {
         )
     }
     .expect_err("a RegisteredBuffers from a different ring must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(error.error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.payload.is_none(),
+        "a registered-span push takes no payload"
+    );
 
     drop(registered_buffers);
 }
@@ -1279,7 +1311,7 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
             WriteCaching::Cached,
         )
         .expect_err("a span longer than the registered buffer must be refused");
-    assert_eq!(too_long.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(too_long.error.kind(), std::io::ErrorKind::InvalidInput);
 
     // Closes the handle; `span_path` then removes the file as it drops below.
     drop(span_file);

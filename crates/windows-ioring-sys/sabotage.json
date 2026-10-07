@@ -1216,6 +1216,114 @@
       "replace": [
         ""
       ]
+    },
+    {
+      "name": "M30.1: a failed build drops the payload instead of handing it back",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "The pre-M30.1 behaviour, restored at the one site every owned push's build failure goes through. Caught by push_refusal.rs, which fills a real submission queue so the build itself fails, and asserts the same allocation comes back. Only a full queue reaches this site on demand: the pre-build refusals return through the refuse! macro instead, which is the next case.",
+      "find": [
+        "                Err(PushRefused::new(error, payload, extra))\n"
+      ],
+      "replace": [
+        "                Err(PushRefused::new(error, None::<T>, extra))\n"
+      ]
+    },
+    {
+      "name": "M30.1: a refusal before the build drops the payload",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The checks before the build -- an oversized buffer, a foreign registration or file, an unsupported op -- all return through refuse!, so one patch reaches every one of them. Caught by the oversized-buffer tests in submission_lifecycle.rs and the foreign-file tests in registration.rs, which assert the buffer comes back.",
+      "find": [
+        "            Err(error) => return Err(PushRefused::new(error, $payload, $extra)),\n"
+      ],
+      "replace": [
+        "            Err(error) => return Err(PushRefused::new(error, None, $extra)),\n"
+      ]
+    },
+    {
+      "name": "M30.1: a failed buffer-registration build drops the buffers",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "register_buffers is an owned push too: it takes the caller's buffers, which may have been placed with care, and a full queue is the refusal it documents a retry for. Caught by the full-queue registration retry test in registration.rs.",
+      "find": [
+        "            return Err(PushRefused::new(error, Some(buffers), ()));\n"
+      ],
+      "replace": [
+        "            return Err(PushRefused::new(error, None, ()));\n"
+      ]
+    },
+    {
+      "name": "M30.1: a failed build keeps the registration in use",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "What the ring held for the operation -- the file guard and the registered-buffer use -- belongs to the ring and must be released, not returned and not leaked. Forgetting it leaves the registration's use count raised for good. Caught by push_refusal.rs's registered-write case, which asserts the count is back to zero after the refusal.",
+      "find": [
+        "                drop(held);\n"
+      ],
+      "replace": [
+        "                std::mem::forget(held);\n"
+      ]
+    },
+    {
+      "name": "M30.1 control: the explicit release of what the ring held is cosmetic",
+      "file": "src/batch.rs",
+      "expect": "survives",
+      "why": "Removing drop(held) changes nothing: held is a by-value parameter and drops at the end of the call either way. Recorded so the case above is read correctly -- it is forgetting the hold that the suite catches, not the absence of the explicit drop -- and so the explicit drop is not later mistaken for load-bearing.",
+      "find": [
+        "                drop(held);\n"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M30.2: the ring releases its registered files on a failed rundown",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "Releases the files on every path instead of only on a quiesced rundown, so a ring that cannot prove the kernel is finished closes handles the kernel may still use. Caught by ring::tests' failed-rundown case, which drives Drop with the null-handle ring and a reserved identity. The release deliberately does not depend on the close succeeding: if it did, that null-handle test could not tell the two gates apart.",
+      "find": [
+        "        if let Some(files) = released_files {\n"
+      ],
+      "replace": [
+        "        if let Some(files) = released_files.or_else(|| Some(unsafe { ManuallyDrop::take(&mut self.registered_files) })) {\n"
+      ]
+    },
+    {
+      "name": "M30.2: the ring never closes its registered files",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The counter in Drop records the decision, not the close, so this leaks the files after counting them. Caught only by shared_file_registration.rs, which watches the handle from outside: an exclusive open must succeed once the ring is dropped. That is the observation the counter cannot make.",
+      "find": [
+        "            drop(files);\n"
+      ],
+      "replace": [
+        "            std::mem::forget(files);\n"
+      ]
+    },
+    {
+      "name": "M30.2: register_shared_files lets go of the files it registered",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The whole safety argument of the method: the ring, not the caller, keeps the handles open. Dropping the files once queued closes the caller's last handle under a live registration. Caught by shared_file_registration.rs, which drops every caller clone and then requires the file still be held open, and reads through each registered index.",
+      "find": [
+        "                self.ring.hold_registered_shared_files(files);\n"
+      ],
+      "replace": [
+        "                drop(files);\n"
+      ]
+    },
+    {
+      "name": "M30.2: a refused shared-file registration drops the files",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "D-80 for the registration: the refusal must hand the files back for the retry. Caught by the full-queue and second-registration cases in shared_file_registration.rs.",
+      "find": [
+        "            Err(error) => Err(PushRefused::new(error, Some(files), ())),\n"
+      ],
+      "replace": [
+        "            Err(error) => Err(PushRefused::new(error, None, ())),\n"
+      ]
     }
   ]
 }

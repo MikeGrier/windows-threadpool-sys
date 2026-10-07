@@ -18,7 +18,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::buf::{IoBuf, IoBufMut};
-use crate::error::check;
+use crate::error::{PushRefused, check};
 use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
 use crate::token::OperationId;
 
@@ -476,7 +476,10 @@ mod sealed {
 /// so something must keep it open until the kernel is finished; a
 /// `RegisteredFile` is an index into a table the ring itself owns, minted by
 /// this crate and checked against the minting ring, so there is nothing for a
-/// caller to keep alive. Both are therefore safe to push, and neither needs
+/// caller to keep alive per push. (The handles behind that table are kept
+/// open for the ring's life either by [`Batch::register_files`]' caller, under
+/// its `unsafe` contract, or by the ring itself after
+/// [`Batch::register_shared_files`].) Both are therefore safe to push, and neither needs
 /// `unsafe` -- which is why [`Batch::read_owned`] and its siblings are generic over
 /// this trait rather than hardcoding `SharedFile`.
 ///
@@ -1263,16 +1266,14 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     }
 
     /// The shared tail of every inventory push: stow on success; on failure,
-    /// release the reservation and **drop** the payload and its registration
-    /// lease, returning only the error. The caller does not get the payload
-    /// back -- the public pushes document the same -- so nothing may be built
-    /// on recovering it from a failed push.
+    /// release the reservation, release what the ring held for the operation
+    /// (the file guard and any registered-buffer use), and hand the payload
+    /// and sidecar back in a [`PushRefused`] ([D-80](../DESIGN-NOTES.md#d-80)).
     ///
-    /// The failure path is the mirror image of the borrowed push's, and
-    /// for the same reason. A `Build*` that fails queued no SQE, so nothing
-    /// will ever complete to reclaim what it holds -- which makes dropping
-    /// normally correct here, where leaking is correct once the kernel has
-    /// seen the address.
+    /// Handing back is sound for the same reason dropping was before it: a
+    /// `Build*` that fails queued no SQE, so the kernel never saw the address
+    /// and nothing will ever complete against it. Leaking is correct only once
+    /// the kernel *has* seen an address, which a failed build rules out.
     fn finish_owned(
         &mut self,
         hr: windows_sys::core::HRESULT,
@@ -1280,7 +1281,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         payload: Option<T>,
         extra: X,
         held: Held,
-    ) -> io::Result<OperationId> {
+    ) -> Result<OperationId, PushRefused<T, X>> {
         match check(hr) {
             Ok(()) => {
                 self.ring.stow(
@@ -1295,8 +1296,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             }
             Err(error) => {
                 self.ring.cancel_reservation(id.user_data());
-                drop((payload, held));
-                Err(error)
+                drop(held);
+                Err(PushRefused::new(error, payload, extra))
             }
         }
     }

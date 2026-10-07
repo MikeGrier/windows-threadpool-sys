@@ -70,3 +70,95 @@ from an absence.
   stalled factory ever made a worker, and the same session spans the poke, so the before/after
   contrast survives the move. Whether it is worth building depends on whether `M-T7.1` is resumed,
   which is a decision for the engineer rather than something this item should assume.
+
+## M29 -- The `epoch_log` sample treats a failed commit as repairable by a later one
+
+Opened 2026-10-05 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+Scenarios 1 and 2). Queued here rather than in [durable-ioring](../durable-ioring/CHECKLIST.md)
+because the sample is wrong whatever becomes of that crate
+([DI-D-7](../durable-ioring/DESIGN-NOTES.md#di-d-7)).
+
+- [ ] **M29.1** -- **Stop letting a later successful commit report an earlier failed epoch durable.**
+  `Committer::claim` in [commit.rs](examples/epoch_log/commit.rs) argues under "A failed commit is
+  not permanent, and that is not a loophole" that commit *N+1*'s covering flush settles a failed
+  commit *N*, and advances `durable_through` past it. That holds only if the writes in the suspect
+  window -- every write pushed before the failure was observed that no earlier successful covering
+  flush covers -- are re-issued before
+  the later flush. Without that, a lower layer that discarded the data on the failed flush (the
+  documented Linux behaviour, and undocumented either way on Windows) leaves *N* reported durable
+  and gone. Correct the code and its rustdoc so the watermark stays at the last epoch below the
+  failure, and update `commit/tests.rs`, which presumably pins the current behaviour. **Sweep the
+  same reasoning** in [checkpoint.rs](examples/epoch_log/checkpoint.rs) (its `settle` advances by
+  `max`; a later checkpoint rewrites the whole record, which is the re-issue case, so it may be
+  correct -- argue it either way in the code) and in
+  [strategy.rs](examples/epoch_log/strategy.rs)'s `settle`, and check
+  [contract.rs](examples/epoch_log/contract.rs) for a statement that relies on it.
+
+## M31 -- `EventDelivery`'s callback contract is specified, not incidental
+
+Opened 2026-10-05 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+"DI-2.3: completion routing"). durable-ioring's design ([DI-D-18](../durable-ioring/DESIGN-NOTES.md#di-d-18))
+needs two properties of the
+`on_completion` callback. Today they hold only as implementation: the comments on the private
+`drain` and on the callback body say so, but `EventDelivery::new`'s rustdoc does not. Relying on
+them as they stand would bind a consumer to incidental behaviour. The engineer's framing: using
+it "without permission" is not better than getting it properly supported.
+
+This does **not** make the ring a synchronization provider. That is out of this crate's scope, and
+no consumer may share the ring's lock. It states two properties of this crate's own callback that
+any callback API owes its users.
+
+- [ ] **M31.1** -- **State and pin `on_completion`'s re-entrancy and concurrency on the public
+  surface.**
+  - **Re-entrancy:** `on_completion` is called with the ring's lock released, so it may call
+    `EventDelivery::scope` and submit without deadlocking.
+  - **Concurrency:** two invocations may run at once on different pool threads, and completions
+    handed to concurrent invocations carry no order relative to each other. A consumer that needs
+    an order must impose it. The drain-rearm-drain shape is what produces the overlap.
+  - Both go in `EventDelivery::new`'s rustdoc, and in [DESIGN-NOTES.md](DESIGN-NOTES.md) as a
+    decision, so a later change to the delivery loop has a stated contract to answer to.
+  - **Tests, in both directions:** a callback that calls `scope()` and pushes completes, which a
+    lock held across the callback would turn into a deadlock -- run it with a bounded wait so a
+    regression fails rather than hangs. The concurrency statement is a permission, not a
+    promise, so it is asserted by documentation; do not write a test that requires overlap to be
+    observed.
+  - **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
+    re-entrancy test fails.
+
+- [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
+  `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)
+  makes a completion for anything not in flight a panicking defect; the restatement added nothing
+  a consumer could rely on, and its `compile_fail` doctest would have pinned an implementation
+  detail.
+
+- [ ] **M31.3** -- **`SharedFile` adopts `win-shared-os-owned-handle`'s `SharedHandle`.** Opened
+  2026-10-06 from durable-ioring's DI-2.17 ([DI-D-29](../durable-ioring/DESIGN-NOTES.md#di-d-29)) as
+  `From<Arc<OwnedHandle>> for SharedFile`; reworded 2026-10-07, when the engineer moved the shared
+  handle into its own crate ([win-shared-os-owned-handle](../win-shared-os-owned-handle/README.md),
+  published at 0.1.0) so that crates wrapping `Arc<OwnedHandle>` share one type. durable-ioring
+  gives files as `SharedHandle`, and handing the ring the same handle should need no duplicate and
+  no conversion. That crate's `SH-1+.1` is this adoption.
+  - **Shape:** `pub type SharedFile = SharedHandle;` keeps every existing use compiling -- `new`,
+    `From<OwnedHandle>`, `Clone`, `Debug` -- and adds what `SharedFile` lacked, lending its handle
+    (`AsHandle`). The crate-private `raw_handle` becomes `as_raw_handle`, since an inherent method
+    cannot be added to a foreign type. Expected not to be breaking; confirm before choosing the
+    commit type, since a downstream trait implemented for both names would now conflict.
+  - Record it in [DESIGN-NOTES.md](DESIGN-NOTES.md), and say in `SharedFile`'s rustdoc that it is
+    `SharedHandle`.
+  - **Test, both directions:** the handle stays open while an operation is in flight after the
+    caller drops every clone it holds, and closes once the last clone and the operation are both
+    gone.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2` (dioring over `windows-ioring-sys`), whose Model A front end relies on `M31.1`'s contract and whose file type relies on `M31.3`. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## M31+ -- ETW for the ring's own lock (withdrawn)
+
+Opened and withdrawn 2026-10-06 in the durable-ioring design session.
+
+- [x] **M31+.1** -- **Withdrawn 2026-10-06: the ring crate publishes no ETW provider of its own.**
+  It would have timed contended acquisitions of `EventDelivery`'s mutex. The engineer: "the etw
+  events we publish give a surface for diagnosis of issues; clients don't want to search around
+  across providers to try to correlate issues." durable-ioring publishes the one surface, and sees
+  this lock's contention as a slow call into the ring, timed at its boundary.

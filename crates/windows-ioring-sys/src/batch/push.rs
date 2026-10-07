@@ -14,6 +14,20 @@
 
 use super::*;
 
+/// Unwrap a check made before the build, or return a [`PushRefused`] handing
+/// back what the push was given (M30.1, [D-80](../../DESIGN-NOTES.md#d-80)).
+///
+/// `payload` and `extra` are moved only on the refusing arm, which returns, so
+/// the push keeps both on the arm that continues.
+macro_rules! refuse {
+    ($result:expr, $payload:expr, $extra:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(PushRefused::new(error, $payload, $extra)),
+        }
+    };
+}
+
 impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`,
     /// whose buffer the **ring** holds (`D-71`, `D-73`).
@@ -37,8 +51,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// than `u32::MAX`; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room (M3.3, not
     /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
-    /// `BuildIoRingWriteFile`. On any error the buffer is dropped normally,
-    /// not leaked or handed back.
+    /// `BuildIoRingWriteFile`. On any error the buffer and `extra` are handed
+    /// back in the [`PushRefused`] ([D-80](../../DESIGN-NOTES.md#d-80)).
     pub unsafe fn write_raw_owned(
         &mut self,
         file: impl Into<FileRef>,
@@ -47,15 +61,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<OperationId>
+    ) -> Result<OperationId, PushRefused<T, X>>
     where
         T: IoBuf,
     {
-        self.require(Op::Write)?;
-        let len = checked_len(buffer.bytes_len())?;
+        refuse!(self.require(Op::Write), Some(buffer), extra);
+        let len = refuse!(checked_len(buffer.bytes_len()), Some(buffer), extra);
         let address = buffer.stable_ptr().cast::<c_void>().cast_mut();
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+        let target = refuse!(
+            handle_ref(file.into(), self.ring.ring_id()),
+            Some(buffer),
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), Some(buffer), extra);
         // SAFETY: as `write_raw` -- `address` is `IoBuf`'s promised stable
         // pointer, valid for `len` bytes, and stays valid across the move into
         // the inventory because that stability is the trait's contract rather
@@ -92,15 +110,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         offset: u64,
         options: PushOptions,
-    ) -> io::Result<OperationId>
+    ) -> Result<OperationId, PushRefused<T, X>>
     where
         T: IoBufMut,
     {
-        self.require(Op::Read)?;
-        let len = checked_len(buffer.bytes_len())?;
+        refuse!(self.require(Op::Read), Some(buffer), extra);
+        let len = refuse!(checked_len(buffer.bytes_len()), Some(buffer), extra);
         let address = buffer.stable_mut_ptr().cast::<c_void>();
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+        let target = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            Some(buffer),
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), Some(buffer), extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: None,
@@ -138,15 +160,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<OperationId>
+    ) -> Result<OperationId, PushRefused<T, X>>
     where
         T: IoBuf,
     {
-        self.require(Op::Write)?;
-        let len = checked_len(buffer.bytes_len())?;
+        refuse!(self.require(Op::Write), Some(buffer), extra);
+        let len = refuse!(checked_len(buffer.bytes_len()), Some(buffer), extra);
         let address = buffer.stable_ptr().cast::<c_void>().cast_mut();
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+        let target = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            Some(buffer),
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), Some(buffer), extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: None,
@@ -193,10 +219,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// than `u32::MAX`; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room (M3.3, not
     /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
-    /// `BuildIoRingReadFile`. On any error the buffer is **dropped normally**,
-    /// not leaked and not handed back: the return carries only an
-    /// [`io::Error`], and a `Build*` that failed queued no SQE, so nothing will
-    /// ever complete to reclaim it.
+    /// `BuildIoRingReadFile`. On any error the buffer and `extra` are **handed
+    /// back** in the [`PushRefused`] ([D-80](../../DESIGN-NOTES.md#d-80)): a
+    /// refused push queued no SQE, so nothing will ever complete to return
+    /// them, and the refusal is the only way back.
     pub unsafe fn read_raw_owned(
         &mut self,
         file: impl Into<FileRef>,
@@ -204,15 +230,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         offset: u64,
         options: PushOptions,
-    ) -> io::Result<OperationId>
+    ) -> Result<OperationId, PushRefused<T, X>>
     where
         T: IoBufMut,
     {
-        self.require(Op::Read)?;
-        let len = checked_len(buffer.bytes_len())?;
+        refuse!(self.require(Op::Read), Some(buffer), extra);
+        let len = refuse!(checked_len(buffer.bytes_len()), Some(buffer), extra);
         let address = buffer.stable_mut_ptr().cast::<c_void>();
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+        let target = refuse!(
+            handle_ref(file.into(), self.ring.ring_id()),
+            Some(buffer),
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), Some(buffer), extra);
         // SAFETY: as `read_raw` -- `address` is `IoBufMut`'s promised stable
         // pointer, valid for `len` bytes, and it stays valid across the move
         // into the inventory below because that stability is the trait's
@@ -341,10 +371,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         coverage: FlushCoverage,
         mode: FlushMode,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Flush)?;
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Flush), None, extra);
+        let target = refuse!(handle_ref(file.into(), self.ring.ring_id()), None, extra);
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         // SAFETY: as `flush_raw` -- `file` is the caller's to keep alive,
         // forwarded from this function's own contract; there is no buffer.
         let hr = unsafe {
@@ -387,10 +417,14 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         coverage: FlushCoverage,
         mode: FlushMode,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Flush)?;
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Flush), None, extra);
+        let target = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            None,
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: None,
@@ -439,11 +473,15 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         file: &F,
         target: OperationId,
         extra: X,
-    ) -> io::Result<OperationId> {
+    ) -> Result<OperationId, PushRefused<T, X>> {
         if target.ring_id() != self.ring.ring_id() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "this OperationId was minted by a different IoRing",
+            return Err(PushRefused::new(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "this OperationId was minted by a different IoRing",
+                ),
+                None,
+                extra,
             ));
         }
         self.cancel_owned_raw(file, target.user_data(), extra)
@@ -470,10 +508,14 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         file: &F,
         target: usize,
         extra: X,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Cancel)?;
-        let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Cancel), None, extra);
+        let handle = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            None,
+            extra
+        );
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: None,
@@ -565,10 +607,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Every handle in `handles` must be valid, and must remain valid for
     /// as long as the resulting registration is used -- for the ring's
     /// remaining life, since Win32 has no unregister call (M8, PR #20
-    /// review response). There is no safe counterpart: the ring's inventory
-    /// ties what it holds to one push's own completion, and that cannot
-    /// express a lifetime spanning arbitrarily many later reads and writes
-    /// against every registered index.
+    /// review response). Prefer [`Batch::register_shared_files`], the safe
+    /// counterpart, which discharges this by having the ring own the handles
+    /// for its whole life ([D-81](../../DESIGN-NOTES.md#d-81)). This method
+    /// remains for a caller whose handles cannot be `SharedFile`s.
     ///
     /// # Errors
     ///
@@ -620,6 +662,54 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         })
     }
 
+    /// Queue registration of `files` as a ring's file-handle table, with the
+    /// **ring** holding every file for the rest of its life (M30.2,
+    /// [D-81](../../DESIGN-NOTES.md#d-81)).
+    ///
+    /// The safe counterpart to [`Batch::register_files`], and the same
+    /// registration in every other respect: one per ring, shared with that
+    /// method, so a ring has at most one file registration whichever call
+    /// made it; a zero-length `files` spends nothing; the `i`-th file is
+    /// [`RegisteredFiles::get`]`(i)` once the registration is claimed.
+    ///
+    /// `register_files` is `unsafe` because Win32 has no unregister, so the
+    /// handles must stay open for the ring's remaining life, and nothing a
+    /// single push holds lasts that long. The ring itself does: it keeps
+    /// `files` beside the arrays the kernel reads late, and its `Drop`
+    /// releases them only after `CloseIoRing`, and only once rundown has
+    /// proved nothing is outstanding -- otherwise it leaks them, as it does
+    /// every other thing the kernel may still be using
+    /// ([D-73](../../DESIGN-NOTES.md#d-73)). A caller may drop its own clones
+    /// as soon as this returns.
+    ///
+    /// A registration whose *completion* reports failure has still spent the
+    /// ring's one registration, and the ring keeps the files anyway: it cannot
+    /// prove the kernel took no reference to them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::register_files`]. On any error `files` is handed back in
+    /// the [`PushRefused`]: a refused registration queued nothing, so the
+    /// kernel never saw a handle.
+    pub fn register_shared_files(
+        &mut self,
+        files: Vec<SharedFile>,
+    ) -> Result<PendingFileRegistration, PushRefused<Vec<SharedFile>, ()>> {
+        let handles: Vec<HANDLE> = files.iter().map(SharedFile::raw_handle).collect();
+        // SAFETY: every handle belongs to a `SharedFile` in `files`, which the
+        // ring takes below and holds until `Drop` has closed the ring -- or
+        // forever, if rundown cannot prove the kernel is finished. The ring
+        // therefore outlives every use of the registration, which is the
+        // whole of `register_files`' contract.
+        match unsafe { self.register_files(&handles) } {
+            Ok(pending) => {
+                self.ring.hold_registered_shared_files(files);
+                Ok(pending)
+            }
+            Err(error) => Err(PushRefused::new(error, Some(files), ())),
+        }
+    }
+
     /// Queue registration of `buffers` as a ring's registered-buffer table
     /// (M5.2).
     ///
@@ -647,33 +737,49 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// # Errors
     ///
     /// As [`Batch::register_files`], for [`Op::RegisterBuffers`](crate::Op::RegisterBuffers)
-    /// and `BuildIoRingRegisterBuffers`.
+    /// and `BuildIoRingRegisterBuffers`, plus [`io::ErrorKind::InvalidInput`]
+    /// if any buffer is longer than `u32::MAX`. On any error `buffers` is
+    /// handed back whole in the [`PushRefused`]
+    /// ([D-80](../../DESIGN-NOTES.md#d-80)): the kernel never saw an address
+    /// from a refused registration.
     pub fn register_buffers<B: IoBufMut>(
         &mut self,
         mut buffers: Vec<B>,
-    ) -> io::Result<PendingBufferRegistration<B>> {
-        self.require(Op::RegisterBuffers)?;
+    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>> {
+        refuse!(self.require(Op::RegisterBuffers), Some(buffers), ());
         if self.ring.registered_buffer_count() > 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "this ring already has a buffer registration; BuildIoRingRegisterBuffers \
-                 replaces the whole table, so a second call would invalidate every buffer \
-                 index already handed out",
+            return Err(PushRefused::new(
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "this ring already has a buffer registration; BuildIoRingRegisterBuffers \
+                     replaces the whole table, so a second call would invalidate every buffer \
+                     index already handed out",
+                ),
+                Some(buffers),
+                (),
             ));
         }
-        let count = checked_len(buffers.len())?;
+        let count = refuse!(checked_len(buffers.len()), Some(buffers), ());
         let base_index = self.ring.registered_buffer_count();
-        let mut infos = Vec::with_capacity(buffers.len());
-        let mut registered_lens = Vec::with_capacity(buffers.len());
-        for buffer in &mut buffers {
-            let length = checked_len(buffer.bytes_len())?;
-            registered_lens.push(length);
-            infos.push(IORING_BUFFER_INFO {
+        // Every length is checked before any address is taken, so a refusal
+        // can still hand `buffers` back: nothing borrows it yet.
+        let registered_lens = refuse!(
+            buffers
+                .iter()
+                .map(|buffer| checked_len(buffer.bytes_len()))
+                .collect::<io::Result<Vec<u32>>>(),
+            Some(buffers),
+            ()
+        );
+        let infos: Vec<IORING_BUFFER_INFO> = buffers
+            .iter_mut()
+            .zip(&registered_lens)
+            .map(|(buffer, &length)| IORING_BUFFER_INFO {
                 Address: buffer.stable_mut_ptr().cast::<c_void>(),
                 Length: length,
-            });
-        }
-        let user_data = self.ring.reserve_user_data()?;
+            })
+            .collect();
+        let user_data = refuse!(self.ring.reserve_user_data(), Some(buffers), ());
         // The array must outlive this call: the kernel reads it when the
         // registration op runs, during a later `SubmitIoRing`, not here
         // (D-32, measured). Hand it to the ring, which holds it until it can
@@ -691,7 +797,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
             self.ring.release_unqueued_buffer_infos();
-            return Err(error);
+            return Err(PushRefused::new(error, Some(buffers), ()));
         }
         self.ring.reserve_registered_buffers(count);
         Ok(PendingBufferRegistration {
@@ -735,12 +841,12 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Read)?;
-        self.check_registration_ring(registration)?;
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let index = registration.checked_span(span)?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Read), None, extra);
+        refuse!(self.check_registration_ring(registration), None, extra);
+        let target = refuse!(handle_ref(file.into(), self.ring.ring_id()), None, extra);
+        let index = refuse!(registration.checked_span(span), None, extra);
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: None,
             registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
@@ -777,12 +883,16 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         extra: X,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Read)?;
-        self.check_registration_ring(registration)?;
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let index = registration.checked_span(span)?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Read), None, extra);
+        refuse!(self.check_registration_ring(registration), None, extra);
+        let target = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            None,
+            extra
+        );
+        let index = refuse!(registration.checked_span(span), None, extra);
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
@@ -838,12 +948,12 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         file_offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Write)?;
-        self.check_registration_ring(registration)?;
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let index = registration.checked_span(span)?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Write), None, extra);
+        refuse!(self.check_registration_ring(registration), None, extra);
+        let target = refuse!(handle_ref(file.into(), self.ring.ring_id()), None, extra);
+        let index = refuse!(registration.checked_span(span), None, extra);
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: None,
             registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),
@@ -893,12 +1003,16 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         file_offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<OperationId> {
-        self.require(Op::Write)?;
-        self.check_registration_ring(registration)?;
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let index = registration.checked_span(span)?;
-        let (user_data, id) = self.begin_owned()?;
+    ) -> Result<OperationId, PushRefused<T, X>> {
+        refuse!(self.require(Op::Write), None, extra);
+        refuse!(self.check_registration_ring(registration), None, extra);
+        let target = refuse!(
+            handle_ref(file.as_file_ref(), self.ring.ring_id()),
+            None,
+            extra
+        );
+        let index = refuse!(registration.checked_span(span), None, extra);
+        let (user_data, id) = refuse!(self.begin_owned(), None, extra);
         let held = Held {
             guard: Some(file.guard().into()),
             registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),

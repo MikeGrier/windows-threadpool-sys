@@ -374,9 +374,13 @@ fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
     let mut batch = Batch::new(&mut ring);
     // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
     // rejected before the handle would be used.
-    let error = unsafe { batch.read_raw_owned(NULL_FILE, HugeBuffer, (), 0, PushOptions::new()) }
+    let refused = unsafe { batch.read_raw_owned(NULL_FILE, HugeBuffer, (), 0, PushOptions::new()) }
         .expect_err("an oversized buffer must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(refused.error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        refused.payload.is_some(),
+        "a refusal before the build must hand the buffer back (D-80)"
+    );
     drop(batch);
     assert_eq!(
         ring.outstanding(),
@@ -391,7 +395,7 @@ fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: as above.
-    let error = unsafe {
+    let refused = unsafe {
         batch.write_raw_owned(
             NULL_FILE,
             HugeBuffer,
@@ -402,7 +406,11 @@ fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
         )
     }
     .expect_err("an oversized buffer must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(refused.error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        refused.payload.is_some(),
+        "a refusal before the build must hand the buffer back (D-80)"
+    );
     drop(batch);
     assert_eq!(
         ring.outstanding(),

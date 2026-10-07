@@ -431,6 +431,52 @@ Rationale: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#machine-checking-what-is-ar
      most: left unswept it would recreate, in the same crate, the orphaned commitment M30.4 exists
      to fix.
 
+## M38 -- Terminology follow-ups
+
+Opened 2026-10-05 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
+The engineer's rule for any terminology change: **live material may be updated; historical
+records are not rewritten.** Live means current documents, code, comments and open checklist items.
+Historical means `COMPLETED-*` archives, `design-sessions/`, measurement captures and changelogs.
+
+- [ ] **M38.1** -- **Use the Model A and Model B labels at the first use in each live file.** The
+  engineer named the two delivery architectures: Model A is **threadless dispatch** and Model B is
+  the **dedicated domain thread**. The labels are already at the four definition sites in
+  `windows-ioring-sys` -- [D-3](crates/windows-ioring-sys/DESIGN-NOTES.md#d-3), the "Two delivery
+  architectures" section of that file, its [README.md](crates/windows-ioring-sys/README.md) and the
+  crate rustdoc in [lib.rs](crates/windows-ioring-sys/src/lib.rs) -- and in durable-ioring's
+  `DI-2.3`. Remaining: the first mention of either model in every other live file, labelled the
+  same way ("Model B, dedicated domain thread"). Later mentions in the same file stay bare, because
+  a label on every use buries the prose. Find the population with a command at the time of the
+  work, not from a list written here. The files touched include rustdoc and code comments in
+  `windows-ioring-sys`, `windows-threadpool-sys`, `windows-topology-sys` and `windows-file-watcher`,
+  and the root [DESIGN-NOTES.md](DESIGN-NOTES.md). Commit as `docs`, one commit per crate so each
+  scope stays accurate.
+
+## M39 -- A locality helper: a file's flush domains from Windows' storage topology
+
+Opened 2026-10-06 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
+durable-ioring takes, per file, a set of opaque **flush-domain** keys
+([DI-D-21](crates/durable-ioring/DESIGN-NOTES.md#di-d-21)) and never looks at Windows' storage
+stack itself. Something has to derive those keys. That derivation is policy -- deciding what counts
+as one domain -- so it does not belong in a `-sys` crate. It is built on the per-call entries in
+`windows-namespace-request-sys`' `NR-2` ([CHECKLIST.md](crates/windows-namespace-request-sys/CHECKLIST.md)).
+
+- [ ] **M39.1** -- **Decide where the helper lives.** Candidates: a new crate (a facility, so no
+  `win-` prefix by [the naming rule](DESIGN-NOTES.md#new-crates-take-the-win-prefix)); the io-domains
+  planner, which already owns residency and placement; or the consumer's own code, with this
+  workspace providing only the calls. An engineer's decision; record it as a root decision.
+
+- [ ] **M39.2** -- **Build the traversal and its keys.** File handle, to volume GUID path, to disk
+  extents, to each disk's unique identifier and NUMA node; a virtual disk recursively through its
+  backing file; an SMB path to server and share. Output: the file's set of flush-domain keys, each
+  with the attributes a planner wants (the NUMA node, the volume, the kind of domain), and an
+  explicit *unknown* when a hop fails rather than a guess. Known blind spots, to be stated in its
+  documentation rather than papered over: a Storage Spaces virtual disk hides its pool members,
+  which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
+  domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
@@ -448,6 +494,12 @@ Ungated work with no identified predecessor deliverable.
   [DESIGN-NOTES.md](DESIGN-NOTES.md#new-crates-take-the-win-prefix) makes the go-forward convention.
   **Horizon work, deliberately unscheduled**, and the cost is not uniform -- so this item is a
   decision before it is a rename.
+
+  **Scope clarified 2026-10-05**: the `win-` prefix covers crates that layer safe abstractions more
+  or less directly over Windows APIs, and a new facility is named for what it provides instead (see
+  the decision's amended text). So this decision now has a first step: classify each existing crate
+  as a direct layer or a facility. A facility's answer may be a name with no platform prefix rather
+  than `win-`. The counts below predate the clarification and describe every `windows-*` crate.
 
   **Three are nearly free**: `windows-guard-alloc`, `windows-placement-probe` and
   `windows-platform-probes` carry `publish = false`, so they are a directory move plus path

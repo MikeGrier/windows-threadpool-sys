@@ -94,14 +94,16 @@ in [DESIGN-NOTES.md](DESIGN-NOTES.md), including why the NUMA node is the wrong
 key for partitioning rings and why buffer placement likely matters more than
 thread placement.
 
-**Model A -- shared queue, kernel load-balances.** `EventDelivery` wires the
+**Model A, threadless dispatch -- shared queue, kernel load-balances.**
+`EventDelivery` wires the
 ring's completion event to a `ThreadpoolWait` from `windows-threadpool-sys`, so
 no thread of yours ever blocks on I/O. Start here; see
 [examples/model_a_delivery.rs](examples/model_a_delivery.rs) for a full worked
 example that submits without waiting and receives every completion on a pool
 thread.
 
-**Model B -- shared-nothing execution domains.** One pinned thread per domain,
+**Model B, dedicated domain thread -- shared-nothing execution domains.** One
+pinned thread per domain,
 owning its ring, its buffer pool, and its shard of the work, parked directly in
 `Batch::submit_and_wait` -- the fused submit-and-wait *is* the event loop. This
 is the shape `IoRing`'s own API is built for.

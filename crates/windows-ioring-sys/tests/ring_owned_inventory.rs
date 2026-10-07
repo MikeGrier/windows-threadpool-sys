@@ -312,10 +312,15 @@ fn a_cancel_refuses_an_operation_id_minted_by_a_different_ring() {
             .expect_err("an OperationId from another ring must be refused")
     };
     assert_eq!(
-        refused.kind(),
+        refused.error.kind(),
         std::io::ErrorKind::InvalidInput,
         "a foreign identity is bad input, not a kernel failure"
     );
+    assert_eq!(
+        refused.extra, "home",
+        "a refused cancel hands its sidecar back (D-80)"
+    );
+    assert!(refused.payload.is_none(), "a cancel takes no payload");
 
     // The acceptance.
     let home_id = {

@@ -1,0 +1,188 @@
+# Checklist: durable-ioring
+
+What this component is: [COMPONENT.md](COMPONENT.md). Decisions: [DESIGN-NOTES.md](DESIGN-NOTES.md).
+The session behind both: [DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).
+
+DI-M1, the contract, and DI-M2, the API shape, are complete -- see [CONTRACT.md](CONTRACT.md),
+[API.md](API.md) and the archive in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Nothing is
+implemented; code begins at DI-M3. The flush-failure spike (DI-M4) runs alongside and gates
+nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
+convention.
+
+## DI-M3 -- First implementations
+
+Graduated from the parked DI-M3+ on 2026-10-07, once DI-M2 was complete; its items were renumbered
+from `DI-3+.n` to `DI-3.n`, which older records still cite.
+
+- [ ] **DI-3.1** -- **Scaffold the crate**: `Cargo.toml` inheriting the workspace's edition and
+  MSRV, workspace membership, `#![forbid(unsafe_code)]`, and the release-please and publish-workflow
+  entries. The `windows-ioring-sys` dependency is **path only**, with no `version`
+  ([DI-D-16](DESIGN-NOTES.md#di-d-16)); `DI-3.5` pins it before release.
+  `win-shared-os-owned-handle`, for the file type ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is already
+  published, so it is a normal `version` and `path` dependency.
+
+- [ ] **DI-3.2** -- **dioring over `windows-ioring-sys`**, implementing the contract in
+  [CONTRACT.md](CONTRACT.md). The crate's documentation includes CONTRACT.md
+  (`#[doc = include_str!(...)]`) so the contract has one home; and its worked examples -- the healing
+  trace and the many-to-many failures -- become compiled doctests driven by the fault-injecting
+  implementation (DI-3.3), so a behaviour change that invalidates them breaks the build.
+  **Constraint from DI-1.2 Q4:** "a failure is observed" is one transition, reachable at any drain
+  point, with its cause (flush, import) as a field -- no import-specific state or edge. Prefer
+  enforcing it in the types (the cause is data on one variant, not a variant of its own) over a
+  test that could be skipped. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the Model A
+  front end binds only to `EventDelivery`'s specified callback contract -- called with the ring
+  lock released, and possibly concurrently -- never to how its delivery loop happens to work.
+  **What it relies on from the ring's completions, already specified:** `try_pop` hands an
+  operation's payload back by that call and no other, and every operation completes exactly once
+  with the identity it was built with, a completion for anything not in flight being a defect that
+  panics ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface) and `M31.3` (`SharedFile` adopts `SharedHandle`, so a consumer's file reaches the ring without a duplicate handle or a conversion, [DI-D-29](DESIGN-NOTES.md#di-d-29)). See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+
+- [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
+  short writes and failed points on demand, deterministically. It answers the problem that flush
+  failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
+  crate's, in the spirit of
+  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1.
+
+- [ ] **DI-3.4** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
+  ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
+
+- [ ] **DI-3.5** -- **Pin `windows-ioring-sys` by version once the set of changes is about to
+  release** ([DI-D-16](DESIGN-NOTES.md#di-d-16)). Gated on that release, not on DI-3.4. Add the
+  `version` of the `windows-ioring-sys` release carrying everything dioring relies on (at least
+  [D-80](../windows-ioring-sys/DESIGN-NOTES.md#d-80) and
+  [D-81](../windows-ioring-sys/DESIGN-NOTES.md#d-81)), keeping the `path`. This must land before
+  dioring's first release PR merges, because its publish job fails on a path-only dependency.
+
+- [ ] **DI-3.6** -- **Emit the delay events** DI-2.11 designs, from a manifest-based ETW provider
+  that dioring owns. Gated on DI-3.2, which creates the code the events describe. Carries what
+  DI-2.11 deliberately left to implementation:
+  - **Identity per event** -- what each event names (instance, lineage, epoch id, domain, lock),
+    "going to depend on the event" (the engineer), and how the generic epoch id is rendered.
+  - **The time base**, chosen from observed timelines: interrupt time,
+    `QueryInterruptTimePrecise`, or the performance counter.
+  - **The provider's name and GUID**, and whether it stands alone or joins a workspace scheme.
+  - **Installing the manifest**: how an application shipping dioring registers it, or documents
+    that it must.
+
+- [ ] **DI-3.7** -- **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)): a reusable
+  checker over the event stream, owned by dioring, that every implementation of the trait runs in
+  its tests -- dioring's own, the fault-injecting one (DI-3.3), and layers above. Modelled on
+  `windows-file-watcher`'s `ContractChecker`: it accepts the legal-but-surprising sequences as
+  carefully as it rejects the illegal ones, and says which rules the stream cannot show. Built
+  alongside DI-3.2, so dioring's own tests bind to it from the start. Beside it, the readiness
+  signal's harness check ([DI-D-28](DESIGN-NOTES.md#di-d-28)): push into an empty queue and assert
+  the signal is set; drain; assert the next push sets it again.
+
+- [ ] **DI-3.8** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
+  dispatches each seal's work by flush domain to providers registered with it when it is built,
+  refuses a domain routed twice at build time, and passes each domain's outcome back as it
+  arrives. It emits through dioring's own ETW provider ([DI-D-26](DESIGN-NOTES.md#di-d-26)), so
+  the diagnostic surface stays one. Tested alone against fake providers. Gated on the provider
+  trait from DI-2.12.
+
+## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
+
+- [ ] **DI-4.1** -- **The flush-failure spike** ([D-44](../windows-ioring-sys/DESIGN-NOTES.md#d-44)).
+  Make a flush fail on a real Windows stack and observe whether a later flush covers, or hides, the
+  earlier loss -- separately for buffered and `NO_BUFFERING` handles -- whether a rewrite plus a
+  successful flush re-establishes durability, and whether a write-back failure is reported to every
+  handle open on the file or only to one (which decides how often the external-failure import of
+  DI-1.2 is needed), and whether another handle's failed flush on the same device observably loses
+  this handle's unflushed `NO_BUFFERING` writes. Windows documents none of this; the contract is
+  justified on the permitted response space and does not wait for the answer. Producing the failure
+  on demand is the hard part (a detachable VHD or an error-injecting filter are the candidates).
+
+## DI-M5+ -- The retention layer (parked behind DI-M3)
+
+- [ ] **DI-5+.1** -- **A separate crate that retains written data until it is durable and can rewrite
+  it after a failure**, built on DI-1.2's resolution protocol and the inventory, and resolving
+  overlapping suspect writes newest-wins, and resolving at the granularity of individual buffers it
+  can reissue (DI-1.2 Q6). The layer [DI-D-5](DESIGN-NOTES.md#di-d-5) moves out of
+  this crate; its first natural consumers are log-less designs such as FAT. Needs its own name and
+  component when it begins.
+
+## DI-M6+ -- Deliberately coarse (parked behind DI-M3)
+
+Left coarse on purpose, per the workspace's resolution-gradient rule: each needs a working
+implementation before it is answerable.
+
+- [ ] **DI-6+.1** -- **Measure alternating rings**, which stretch "one durability sequence per
+  instance" to two `IoRing`s, and the conditions under which dioring's own use of a ring barrier
+  beats completion-gated flushes (DI-6+.5). The consumer-facing strategy comparison is gone:
+  [DI-D-22](DESIGN-NOTES.md#di-d-22) offers the consumer no choice.
+
+- [ ] **DI-6+.5** -- **Choose the flush mechanism dynamically.** The engineer, 2026-10-06: "as
+  perf optimizations we may want to note if specialized flush domains are in use at all, or which
+  are in a given ring so that we may apply a different synchronization strategy dynamically."
+  [DI-D-22](DESIGN-NOTES.md#di-d-22) keeps the consumer from choosing; this is dioring choosing
+  for itself, per seal, where a ring barrier adds no coupling of its own. Working position, coarse:
+  - *State to keep:* whether any file declares domains at all (if none does, every file
+    intersects every other, so no lineages are separable and the barrier cannot break the
+    expectation), and per interned domain a count of operations outstanding on the ring, so a seal
+    can tell whether everything it would wait on intersects its own domains.
+  - *What the barrier buys:* the flush can go into the same submission as the writes it covers,
+    with no round trip -- the case of a log append followed by a commit on one file.
+  - *What it still costs when allowed:* it waits on unrelated earlier work, including reads and
+    the lineage's own later epochs, and N flushes run one after another, so it suits few files
+    on a quiet ring. Which policy wins is workload-dependent, so this item restores a
+    measurement for DI-6+.1 to carry, and DI-2.11's events record which mechanism each seal used.
+  - *The common case:* the engineer, 2026-10-06: "at least "naive" meaning no files with any flush
+    domains set will be common." That is the case where the barrier is always admissible, decided
+    by one flag rather than per-domain counts, so it is the first case to build and measure --
+    the choice there is purely one of performance.
+  Applies to the default provider (DI-2.12), the only one that uses dioring's wioring.
+  Gated on DI-3.2.
+
+- [ ] **DI-6+.6** -- **Make the default provider cheaper than per-file sync.** From DI-2.12 point 1;
+  the engineer, 2026-10-06, asked these be recorded as "optimizations we should strongly consider",
+  then: "this is a performance feature that we will tackle during development and if we can't make
+  it safe, we will omit it. It is not required for shipping." Gated on DI-3.2. Candidates:
+  - *One device sync per flush domain, for declared cache-free files.* Write-through and no
+    buffering "are good for the filesystem cache but don't issue the flush at the device level, and
+    fua is largely ignored nowadays" (the engineer), so such files still need a device sync. The
+    consumer declares in `FileOptions` that a handle was opened `FILE_FLAG_NO_BUFFERING` with
+    `FILE_FLAG_WRITE_THROUGH`, and dioring issues one syncing flush per flush domain, on one of its
+    declared files. **The open safety question, settled during development or the feature is
+    omitted:** Windows does not document that a flush on one file commits the device cache behind
+    the others; if adopted, that becomes part of the consumer's warranty for the domain, not an
+    assumption of dioring's. Also open: the representative flush should use the default mode, since
+    a cheaper mode on a clean file may not send the device sync. A failed flush puts the whole
+    domain at risk, as DI-D-21 already scopes.
+  - *One flush per volume*, opt-in: `FlushFileBuffers` on a volume handle flushes "all open files on
+    a volume", but "The caller must have administrative privileges" and it flushes other processes'
+    files too. Whether IoRing's flush accepts a volume handle is unverified.
+  - *A cheaper flush mode per file* (`Data`, `MinMetadata`), chosen in `FileOptions`.
+
+- [ ] **DI-6+.8** -- **A completion fence.** From DI-2.6 point 3; parked, neither added nor dropped,
+  because neither the engineer nor the assistant sees a use yet ("I assume the use of it would be
+  the next layer up"). What it would be: a consumer-posted entry delivered by `pop` only once every
+  operation pushed before it has completed -- a completion sequencing point, saying nothing about
+  durability. Submission order needs no marker, since `OpId` is ordered by push order
+  ([DI-D-15](DESIGN-NOTES.md#di-d-15)). dioring would deliver the fence from its own bookkeeping
+  rather than a drain-flagged `Nop`, which would wait on everything on the ring -- the coupling
+  [DI-D-22](DESIGN-NOTES.md#di-d-22) avoided -- and could therefore scope it to a lineage or a set
+  of files. A likely user is the retention layer (DI-5+.1), releasing buffers at a fence.
+
+- [ ] **DI-6+.7** -- **Credit one provider call to other seals.** From DI-2.4 point 3, which settled
+  the contract: a call must make the sealing lineage's named writes durable, and making more durable
+  is "not incorrect, that's a performance issue" (the engineer, 2026-10-06). The optimization: a
+  call names every completed, not-yet-durable write on the files it covers, whichever lineage made
+  it, so its success can be credited and a later seal -- or one arriving while the call is in
+  flight, for writes that completed before it was issued -- needs no call of its own. Crediting is
+  safe only for writes the call named, since the provider's warranty covers what it was asked
+  about; coverage nobody asked for is never credited. It adds no failure exposure (those writes
+  share the files, so DI-D-21 already puts them at risk) and no coupling between separable
+  lineages, which share no files. Applies to every provider, so it lives in dioring's core.
+  Gated on DI-3.2.
+
+- [x] **DI-6+.3** -- **Withdrawn: rebinding a file to a new handle is not this layer's**
+  ([DI-D-11](DESIGN-NOTES.md#di-d-11)). Nothing remains to do here; the obligation it left is in
+  DI-2.2.
+
+- [ ] **DI-6+.4** -- **A dioring-mediated cancel.** Not in v1 (the engineer's lean): cancel
+  guarantees no response time, so it does not deliver what shutdown or deadlines want, and draining
+  serves shutdown already. When it is taken up, the accounting is that a cancelled write's outcome is
+  indeterminate, so it joins the suspect set and its epoch cannot be reported durable until resolved.
+  The v1 design must not foreclose adding it.

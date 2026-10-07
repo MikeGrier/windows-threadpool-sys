@@ -635,6 +635,12 @@ pub struct IoRing<T = (), X = ()> {
     /// unwind out of that path's assert before any later line of the body
     /// could intervene. PR #113 review.
     late_read: ManuallyDrop<LateReadArrays>,
+    /// The files [`crate::Batch::register_shared_files`] registered, held for
+    /// the ring's life because Win32 has no unregister (M30.2,
+    /// [D-81](../DESIGN-NOTES.md#d-81)). Released by `Drop` after
+    /// `CloseIoRing`, and only on the proof `late_read` waits for; leaked
+    /// otherwise.
+    registered_files: ManuallyDrop<Vec<crate::batch::SharedFile>>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -695,6 +701,7 @@ impl<T, X> std::fmt::Debug for IoRing<T, X> {
             .field("accounting", &self.accounting)
             .field("late_read_buffer_infos", &self.late_read.buffer_infos.len())
             .field("late_read_file_handles", &self.late_read.file_handles.len())
+            .field("registered_files", &self.registered_files.len())
             .field("completion_event", &self.completion_event)
             .finish()
     }
@@ -781,6 +788,7 @@ impl<T, X> IoRing<T, X> {
             supported_ops,
             accounting: Accounting::new(),
             late_read: ManuallyDrop::new(LateReadArrays::default()),
+            registered_files: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         })
@@ -1187,6 +1195,7 @@ impl IoRing {
             supported_ops: OpSupport::default(),
             accounting: Accounting::new(),
             late_read: ManuallyDrop::new(LateReadArrays::default()),
+            registered_files: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
         }
@@ -1267,6 +1276,7 @@ impl<T, X> Drop for IoRing<T, X> {
         // The kernel reads them when the registration op runs (D-32), and a
         // failed rundown is precisely the case where this ring cannot say
         // whether that has happened.
+        let mut released_files = None;
         if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds and no registration op can still
@@ -1287,11 +1297,24 @@ impl<T, X> Drop for IoRing<T, X> {
                 LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));
             }
             drop(arrays);
+            // Taken now, released only after the close below (D-81).
+            //
+            // SAFETY: as above; the field is not read again.
+            released_files = Some(unsafe { ManuallyDrop::take(&mut self.registered_files) });
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
         // (or made a best-effort attempt to, above).
         let hr = unsafe { CloseIoRing(self.handle) };
+        // Whether the kernel references a registered handle until the ring
+        // closes is undocumented, so the handles outlive the close. They are
+        // released before the assert below, which would otherwise unwind past
+        // this line.
+        if let Some(files) = released_files {
+            #[cfg(test)]
+            REGISTERED_FILES_RELEASED.with(|released| released.set(released.get() + files.len()));
+            drop(files);
+        }
         debug_assert!(
             hr >= 0 || std::thread::panicking(),
             "CloseIoRing failed: 0x{:08X}",
@@ -1328,6 +1351,13 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     pub(crate) static LATE_READ_ARRAYS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// How many registered `SharedFile`s `IoRing`'s `Drop` has released on the
+// calling thread (D-81). Thread-local for the reason `DROP_RUNS` is.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REGISTERED_FILES_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Pop one completion, bounded, for tests that need a real one.
