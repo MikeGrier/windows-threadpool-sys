@@ -127,7 +127,7 @@ any callback API owes its users.
   - **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
     re-entrancy test fails.
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2` (dioring over `windows-ioring-sys`), whose Model A front end relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
 - [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
   `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)

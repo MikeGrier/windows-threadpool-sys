@@ -16,23 +16,85 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 - [x] **DI-3.1** -- The crate is scaffolded: a workspace member with `#![forbid(unsafe_code)]`, registered for release and publication. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-31)
 
 - [ ] **DI-3.2** -- **dioring over `windows-ioring-sys`**, implementing the contract in
-  [CONTRACT.md](CONTRACT.md). The crate's documentation includes CONTRACT.md
-  (`#[doc = include_str!(...)]`) so the contract has one home; and its worked examples -- the healing
-  trace and the many-to-many failures -- become compiled doctests driven by the fault-injecting
-  implementation (DI-3.3), so a behaviour change that invalidates them breaks the build.
-  **Constraint from DI-1.2 Q4:** "a failure is observed" is one transition, reachable at any drain
-  point, with its cause (flush, import) as a field -- no import-specific state or edge. Prefer
-  enforcing it in the types (the cause is data on one variant, not a variant of its own) over a
-  test that could be skipped. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the Model A
-  front end binds only to `EventDelivery`'s specified callback contract -- called with the ring
-  lock released, and possibly concurrently -- never to how its delivery loop happens to work.
-  **What it relies on from the ring's completions, already specified:** `try_pop` hands an
-  operation's payload back by that call and no other, and every operation completes exactly once
-  with the identity it was built with, a completion for anything not in flight being a defect that
-  panics ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
+  [CONTRACT.md](CONTRACT.md), in the steps `DI-3.2.1` to `DI-3.2.7` below; checked when the last of
+  them is. Re-planned 2026-10-07: as one item it covered the whole contract, and two of its
+  requirements sat on items numbered after it. Each step lands what it implements, with its tests,
+  and adds to the trait only the methods it implements -- the crate is unreleased, so the trait
+  grows rather than shipping `todo!()` bodies. Two questions are **open, and the engineer's**:
+  - **The worked-example doctests.** The healing trace and the many-to-many failures were to become
+    compiled doctests driven by the fault-injecting implementation, `DI-3.3`, which comes after
+    this item. Either they move to `DI-3.3`, or a fault seam lands early enough for `DI-3.2.4`.
+  - **The conformance oracle.** `DI-3.7` is to be built "alongside" this item, so dioring's own tests
+    bind to it from the start. Either it folds into these steps, or it stays its own item and the
+    steps adopt it from `DI-3.2.3` on.
+
+- [ ] **DI-3.2.1** -- **Types, trait and construction.** The shared types, identities and
+  `DurableRing` trait from [API.md](API.md)'s sketch move into the crate as code, `Dioring::new`
+  builds an `IoRing` with dioring's sidecar, registers construction files through
+  `register_shared_files` ([D-81](../windows-ioring-sys/DESIGN-NOTES.md#d-81)) and buffers, and
+  interns flush domains. The refusals: a duplicate `FileKey`, a domain named twice, and a failed
+  registration, each returning what it was given in `SetupError`. The crate's documentation includes
+  CONTRACT.md (`#[doc = include_str!(...)]`), so the contract has one home. Decide here what becomes
+  of API.md's sketch once code carries its types, since two copies would drift.
+
+- [ ] **DI-3.2.2** -- **Plain I/O, and the Model A front end.** `write`, `read` and their `_with` and
+  registered-span forms, `add_file` and `add_file_with`, with the consumer's context passed through
+  to each `OpCompletion` and every refusal handing back what it took (`UnknownFile`,
+  `NoRegisteredBuffers`, `Ring`). The front end: `EventDelivery`'s callback moves ring completions
+  into dioring's queue, `pop` serves it, and the readiness signal is set as
+  [DI-D-28](DESIGN-NOTES.md#di-d-28) states. Writes are tagged and recorded, but nothing is sealed
+  yet. **Constraint from [DI-D-18](DESIGN-NOTES.md#di-d-18):** the front end binds only to
+  `EventDelivery`'s specified callback contract -- called with the ring lock released, and possibly
+  concurrently -- never to how its delivery loop happens to work. **What it relies on from the
+  ring's completions, already specified:** `try_pop` hands an operation's payload back by that call
+  and no other, and every operation completes exactly once with the identity it was built with, a
+  completion for anything not in flight being a defect that panics
+  ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M31` -> `M31.1` (state and pin `on_completion`'s re-entrancy and concurrency on the public surface). Its `M31.3`, the ring taking `SharedHandle` so a consumer's file reaches it without a duplicate handle or a conversion ([DI-D-29](DESIGN-NOTES.md#di-d-29)), is done. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
+- [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
+  provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
+  default lineage. Coverage as CONTRACT.md defines it: a write is named to the default provider
+  only after it is observed complete, and the default flushes each of its files through the
+  instance's ring. Guarantees 1, 2, 3, 5, 6 and 7: `Durable` as a prefix, after the completions it
+  covers, never retracted; a late write refused as `Sealed`; asking again answered by
+  `AlreadySealed` with the epoch's state.
+
+- [ ] **DI-3.2.4** -- **Failures and their resolution.** A failed flush recorded as a failure whose
+  suspect set is frozen at observation, by push order ([DI-D-12](DESIGN-NOTES.md#di-d-12));
+  `Failed` with its identity and affine token; `take_token`, and a dropped token as `close`;
+  heal (effective at the first seal after it), abandon (`Abandoned`) and close; `resolve`, validated
+  whole and applied atomically, handing its tokens back when refused; `Blocked`; `import_failure`;
+  and the inventory, `failures()`. **Constraint from DI-1.2 Q4:** "a failure is observed" is one
+  transition, reachable at any drain point, with its cause (flush, import) as a field -- no
+  import-specific state or edge. Prefer enforcing it in the types (the cause is data on one variant,
+  not a variant of its own) over a test that could be skipped. Its tests need flush failures on
+  demand; check whether `windows-ioring-sys`' `fault-injection` feature can fail a flush, before
+  building anything for it.
+
+- [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
+  `default_lineage()`, with every rule of the steps above holding per lineage
+  ([DI-D-19](DESIGN-NOTES.md#di-d-19)). Gated operations held until their epoch is durable, ending
+  as `NeverIssued` when it is abandoned, a gate on an abandoned epoch refused as `GateAbandoned`,
+  and a gate cycle refused as `GateCycle` ([DI-D-23](DESIGN-NOTES.md#di-d-23)). Flush domains
+  narrowing a failure's reach -- intersection for the default provider, containment for a provider's
+  domain, a file declared with none reaching every file ([DI-D-21](DESIGN-NOTES.md#di-d-21)) -- and
+  `ImportScope`.
+
+- [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
+  serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`
+  answered once from any thread, with a failure as `Cause::Provider` and a completion dropped
+  unanswered as `Cause::ProviderAbandoned`; the readiness signal set by provider answers
+  ([DI-D-27](DESIGN-NOTES.md#di-d-27)). A write is durable when every domain of its file has
+  succeeded.
+
+- [ ] **DI-3.2.7** -- **Ending.** `remove_file` refused while the file has anything in flight, held
+  or uncovered, reported whole in `FileBusy`; `retire_lineage` and `LineageBusy`; `end_lineage` and
+  `LineageEnded` ([DI-D-30](DESIGN-NOTES.md#di-d-30)); and `close` and drop, waiting for every
+  kernel operation and provider call in flight and returning `Leftovers`
+  ([DI-D-25](DESIGN-NOTES.md#di-d-25)), with no callback after the end and tracing rather than
+  panicking while unwinding.
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush
   failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
