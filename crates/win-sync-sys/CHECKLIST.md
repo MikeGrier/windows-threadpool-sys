@@ -34,8 +34,9 @@ milestones when the first of these is taken up.
   they bring is pinning, since none of them may move once in use.
 
 - [ ] **WS-inf.2** -- **Named objects, `OpenEvent`, and private namespaces.** Not decided
-  ([WS-D-1](DESIGN-NOTES.md#ws-d-1)); whether private namespaces belong here or with
-  `windows-namespace-request-sys` is part of the question.
+  ([WS-D-1](DESIGN-NOTES.md#ws-d-1)). If taken up they belong here, and adding them changes nothing
+  that exists; the open part is where an owned security-attributes type lives, since the one in
+  `windows-namespace-request-sys` sits in a crate about the file-system namespace.
 
 - [ ] **WS-inf.3** -- **Whether the workspace's private events move onto `Event`.** Each is the
   engineer's decision, taken per crate. Found by sweeping non-test sources for raw `CreateEventW`,
