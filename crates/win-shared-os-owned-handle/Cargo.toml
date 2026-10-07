@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-shared-os-owned-handle"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A shared owner of a Windows handle: std's OwnedHandle behind a reference count, cheap to clone, lending its handle, and giving it back to the last holder. No unsafe code and no native API surface."
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root);
+# "os-owned-handle" mirrors `std::os::windows::io::OwnedHandle`, which is all this crate wraps. No
+# `-sys`: it exposes no native API and contains no `unsafe`.
+
+[dependencies]
+# None. The crate is std's `OwnedHandle` and `Arc` and nothing more.
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it would render an
+# almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
