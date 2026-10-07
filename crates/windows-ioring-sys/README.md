@@ -20,11 +20,11 @@ push an entry in a hash map holding its payload
 Submit a read, then pop its completion once it is ready:
 
 ```rust,no_run
-use windows_ioring_sys::{Batch, IoRing, SharedFile};
+use windows_ioring_sys::{Batch, IoRing, SharedHandle};
 use std::os::windows::io::OwnedHandle;
 
 let file = std::fs::File::open(r"C:\some\file.bin")?;
-let shared = SharedFile::new(OwnedHandle::from(file));
+let shared = SharedHandle::new(OwnedHandle::from(file));
 // The ring holds each operation's buffer, so `T` says what it holds.
 let mut ring = IoRing::<Vec<u8>>::with_inventory(8, 8)?;
 

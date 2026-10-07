@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, PushOptions,
-    RegisteredSpan, SharedFile, WriteCaching,
+    RegisteredSpan, SharedHandle, WriteCaching,
 };
 
 /// How long a completion this test caused is allowed to take to arrive.
@@ -279,7 +279,8 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         offset: 0,
         len: 256,
     };
-    let shared = windows_ioring_sys::SharedFile::new(file.try_clone().expect("clone file").into());
+    let shared =
+        windows_ioring_sys::SharedHandle::new(file.try_clone().expect("clone file").into());
     batch
         .read_registered_owned(
             &shared,
@@ -1254,7 +1255,7 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
     // drop in reverse declaration order. Same ordering as the three helpers in
     // `tests/common/mod.rs`, which return `(TempPath, handle)` for this reason.
     let span_path = temp_file("registered-span-bound");
-    let span_file = SharedFile::new(
+    let span_file = SharedHandle::new(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)

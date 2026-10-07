@@ -125,6 +125,10 @@ windows-threadpool-sys = { version = "0.2.0", path = "../windows-threadpool-sys"
 # anyone who bound to it, and supplies the IoBuf/IoBufMut impls that the
 # allocator crate deliberately does not define.
 win-numa-sys = { version = "0.1.0", path = "../win-numa-sys" }
+# A file pushed through the ring is a `SharedHandle`, the workspace's one shared owner of a
+# handle, in place of this crate's former `SharedFile` (D-82). Re-exported, so a caller can name it
+# without adding the crate.
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this

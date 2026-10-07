@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, Completion, FlushCoverage, FlushMode, InjectedFailure, IoBuf, IoBufMut, IoRing,
-    IoRingErrorExt, PushOptions, RingCondition, SharedFile, WriteCaching,
+    IoRingErrorExt, PushOptions, RingCondition, SharedHandle, WriteCaching,
 };
 
 mod common;
@@ -334,7 +334,7 @@ fn event_delivery_hands_a_failed_completion_to_the_callback() {
     // that never sees the failure cannot handle it.
     let path = temp_file("delivery");
     std::fs::write(&path, b"x").expect("create the fixture");
-    let file = SharedFile::new(
+    let file = SharedHandle::new(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)

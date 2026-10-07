@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile};
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedHandle};
 
 const LEN: usize = 4096;
 
@@ -132,11 +132,11 @@ fn a_second_pop_finds_nothing_held_for_the_same_identity() {
 /// the ring is holding a guard that outlives it.
 #[test]
 fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
-    use windows_ioring_sys::SharedFile;
+    use windows_ioring_sys::SharedHandle;
 
     let (path, file) = fixture("guarded");
     let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
-    let shared = SharedFile::new(file.into());
+    let shared = SharedHandle::new(file.into());
 
     {
         let mut batch = Batch::new(&mut ring);
@@ -269,7 +269,7 @@ fn a_cancel_refuses_an_operation_id_minted_by_a_different_ring() {
     // this test passing for the wrong reason.
     let path = common::TempPath::new("inventory", "cross-ring-cancel");
     std::fs::write(&path, b"x").expect("create fixture");
-    let file = SharedFile::new(
+    let file = SharedHandle::new(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)

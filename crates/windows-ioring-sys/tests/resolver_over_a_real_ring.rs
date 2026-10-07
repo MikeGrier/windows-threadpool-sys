@@ -30,7 +30,7 @@
 use std::os::windows::io::AsRawHandle;
 
 use windows_ioring_sys::sys::{Resolver, ResolverConfig};
-use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, SharedFile};
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, SharedHandle};
 
 /// The ring these tests drive.
 ///
@@ -44,7 +44,7 @@ type ResolverRing = IoRing;
 /// crate's own `Build*` path is exercised exactly as it would be otherwise.
 mod common;
 
-fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
+fn scratch(tag: &str) -> (common::TempPath, SharedHandle) {
     let path = common::TempPath::new("m26-3", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -53,7 +53,7 @@ fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
         .open(&path)
         .expect("a scratch file");
     assert!(!file.as_raw_handle().is_null());
-    (path, SharedFile::new(file.into()))
+    (path, SharedHandle::new(file.into()))
 }
 
 #[test]
