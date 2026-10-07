@@ -40,7 +40,7 @@ use windows_guard_alloc::poison;
 use windows_guard_alloc::witness::Witness;
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile, WriteCaching,
+    Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedHandle, WriteCaching,
 };
 
 /// How long a completion this test caused is allowed to take to arrive.
@@ -135,13 +135,13 @@ fn await_one<T, X>(ring: &mut IoRing<T, X>) -> windows_ioring_sys::HeldCompletio
         .expect("a completion arrived within the bound")
 }
 
-fn open_shared(path: &std::path::Path, write: bool) -> SharedFile {
+fn open_shared(path: &std::path::Path, write: bool) -> SharedHandle {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(write)
         .open(path)
         .expect("open the fixture file");
-    SharedFile::new(OwnedHandle::from(file))
+    SharedHandle::new(OwnedHandle::from(file))
 }
 
 #[test]

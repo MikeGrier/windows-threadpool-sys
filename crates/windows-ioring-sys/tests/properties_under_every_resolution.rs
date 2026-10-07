@@ -75,7 +75,7 @@ mod common;
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::sys::{Resolver, ResolverWatch, Responses};
 use windows_ioring_sys::{
-    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, WriteCaching,
+    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedHandle, WriteCaching,
 };
 use windows_sys::core::HRESULT;
 
@@ -222,7 +222,7 @@ struct Coverage {
 
 struct Run {
     ring: PropertyRing,
-    file: SharedFile,
+    file: SharedHandle,
     contract: RingContract,
     /// The resolution's own record, so a declined submit can be recognised by
     /// asking the resolver rather than by matching an `HRESULT` here.
@@ -276,7 +276,7 @@ impl Run {
             .open(path)?;
         Ok(Self {
             ring: PropertyRing::with_inventory(64, 128)?,
-            file: SharedFile::new(file.into()),
+            file: SharedHandle::new(file.into()),
             contract: RingContract::new(),
             watch,
             declined: 0,
@@ -699,7 +699,7 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
     let guard = windows_ioring_sys::sys::install(Box::new(Stalled));
     let mut ring = PropertyRing::with_inventory(64, 128).expect("a ring");
     let path = common::TempPath::new("m26-4", "stalled");
-    let file = SharedFile::new(
+    let file = SharedHandle::new(
         std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)

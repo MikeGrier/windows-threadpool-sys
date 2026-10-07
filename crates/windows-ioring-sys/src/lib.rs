@@ -204,7 +204,7 @@ mod token;
 pub use batch::{
     Batch, FileRef, FileTarget, FlushCoverage, FlushMode, PendingBufferRegistration,
     PendingFileRegistration, PushOptions, RegisteredBuffers, RegisteredFile, RegisteredFiles,
-    RegisteredSpan, RegisteredUse, SharedFile, WriteCaching,
+    RegisteredSpan, RegisteredUse, WriteCaching,
 };
 #[cfg(windows)]
 pub use buf::{IoBuf, IoBufMut};
@@ -226,6 +226,11 @@ pub use ring::{
 };
 #[cfg(windows)]
 pub use token::OperationId;
+/// The file type a safe push takes: a shared owner of a handle, from
+/// `win-shared-os-owned-handle`, re-exported so it can be named without that
+/// crate. It replaced this crate's own `SharedFile` (D-82).
+#[cfg(windows)]
+pub use win_shared_os_owned_handle::SharedHandle;
 // Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
 // and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
 // who already bound to it. The `IoBuf`/`IoBufMut` impls live in

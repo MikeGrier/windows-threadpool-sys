@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use windows_ioring_sys::sys::{Resolver, ResolverConfig};
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedHandle, WriteCaching,
 };
 
 /// Seeds each calibration sweeps.
@@ -68,7 +68,7 @@ const BUDGET: usize = 512;
 
 mod common;
 
-fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
+fn scratch(tag: &str) -> (common::TempPath, SharedHandle) {
     let path = common::TempPath::new("m26-5", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -76,7 +76,7 @@ fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
         .write(true)
         .open(&path)
         .expect("a scratch file");
-    (path, SharedFile::new(file.into()))
+    (path, SharedHandle::new(file.into()))
 }
 
 /// The ring these calibrations drive.

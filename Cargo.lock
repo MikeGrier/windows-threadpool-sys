@@ -178,6 +178,7 @@ version = "0.6.0"
 dependencies = [
  "serde_json",
  "win-numa-sys",
+ "win-shared-os-owned-handle",
  "windows-guard-alloc",
  "windows-overlapped-io-sys",
  "windows-sys",

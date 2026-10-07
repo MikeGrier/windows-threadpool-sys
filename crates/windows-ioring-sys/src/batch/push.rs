@@ -19,8 +19,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// whose buffer the **ring** holds (`D-71`, `D-73`).
     ///
     /// The raw counterpart to [`Batch::write_owned`]: prefer that unless `file`
-    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
-    /// bookkeeping.
+    /// needs to address a raw `FileRef` directly, without a `SharedHandle`'s
+    /// shared-ownership bookkeeping.
     ///
     /// # Safety
     ///
@@ -171,8 +171,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// name (`D-71`, `D-73`).
     ///
     /// The raw counterpart to [`Batch::read_owned`]: prefer that unless `file`
-    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
-    /// bookkeeping. The caller hands over the buffer and its sidecar and
+    /// needs to address a raw `FileRef` directly, without a `SharedHandle`'s
+    /// shared-ownership bookkeeping. The caller hands over the buffer and its sidecar and
     /// receives an [`OperationId`], which names the operation and grants
     /// nothing; the buffer comes back from [`IoRing::try_pop`] and from nowhere
     /// else. A consumer that never holds a token cannot lose one, which is the
