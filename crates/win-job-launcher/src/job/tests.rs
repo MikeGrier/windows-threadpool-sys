@@ -76,6 +76,20 @@ fn closing_the_job_kills_its_process() {
 }
 
 #[test]
+fn contains_says_whether_a_process_is_in_the_job() {
+    let job = Job::new_kill_on_close().expect("create a job");
+    let mut child = suspended(0);
+    assert!(
+        !job.contains(child.as_handle()).unwrap(),
+        "not yet assigned"
+    );
+    job.assign(child.as_handle()).expect("assign");
+    assert!(job.contains(child.as_handle()).unwrap(), "assigned");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
 fn a_process_that_has_already_exited_cannot_be_assigned() {
     let job = Job::new_kill_on_close().expect("create a job");
     let mut child = suspended(0);

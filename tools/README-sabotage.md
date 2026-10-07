@@ -320,7 +320,9 @@ bound it terminates the whole job in one call and waits for it to empty before
 reporting, so every descendant dies -- including one whose parent has already
 exited, which a walk of parent PIDs cannot find. It writes the outcome to a
 result file the harness reads; the harness keeps only a backstop, and stopping
-the launcher takes its tree down with it.
+the launcher takes its tree down with it. The command is created as a member of
+the job rather than assigned to it afterwards, so there is no moment at which it
+exists outside the job.
 
 This replaced a walk of the process tree through WMI, which had no bound of its
 own: a CI sweep once sat for its job's whole hour inside it, with no evidence of
@@ -331,8 +333,9 @@ from the real tree, never the copy, so sweeping the launcher's own manifest
 cannot sabotage its supervisor. `-LauncherPath` supplies one already built.
 `-TraceLaunches` has the launcher narrate each step on the console, which is
 what a stalled CI job leaves behind; the sweep workflow turns it on. A launcher
-that fails -- no result, or overrunning its own bound -- is reported as
-`INFRASTRUCTURE`, never as a catch.
+that fails -- no result, overrunning its own bound, or an outcome whose cleanup
+it could not confirm (`confirmed` false, on an exit or on a timeout alike) -- is
+reported as `INFRASTRUCTURE`, never as a catch.
 
 ## Manifest format
 

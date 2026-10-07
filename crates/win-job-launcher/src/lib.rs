@@ -11,9 +11,10 @@
 //!
 //! # What the launcher guarantees
 //!
-//! - **Every descendant is in the job.** The command is created suspended,
-//!   assigned to the job, and only then resumed, so nothing it starts can be
-//!   created outside the job.
+//! - **Every descendant is in the job.** The command is created as a member of
+//!   the job, named in `PROC_THREAD_ATTRIBUTE_JOB_LIST`, so there is no moment
+//!   at which it, or anything it starts, exists outside the job -- including a
+//!   moment in which the launcher could be killed.
 //! - **The bound kills the tree.** At the bound the whole job is terminated in
 //!   one call, and the launcher waits a further [`launch::CONFIRM_BOUND`] for
 //!   the job to empty before reporting.
@@ -21,13 +22,19 @@
 //!   launcher itself is killed, closing its job handle kills the tree.
 //! - **Nothing outlives the command either.** Processes still in the job when
 //!   the command exits are terminated, and counted in the result as strays.
+//! - **Cleanup is never assumed.** Both the `exited` and the `timed-out` outcome
+//!   say whether the job was seen empty afterwards, and an unconfirmed cleanup is
+//!   a result a caller must not score as the command's own.
 //! - **One result, written whole.** The outcome is written to the result file as
 //!   one line of JSON, through a temporary file and a rename, so a reader sees
 //!   the complete result or none. See [`outcome`] for the format.
 //!
 //! The command's stdin is null; its stdout and stderr go to the files named on
-//! the command line. Its arguments are passed through `std::process::Command`,
-//! which owns their quoting and the running of `.cmd`/`.bat` files.
+//! the command line, and they are the only handles it inherits. The launcher
+//! creates the process itself, because the standard library cannot name a job at
+//! creation on the pinned toolchain; [`process`] says how it finds the program,
+//! quotes the arguments, and runs `.cmd` and `.bat` files -- and which arguments
+//! it refuses for those.
 #![cfg(windows)]
 #![warn(missing_docs)]
 
@@ -36,4 +43,4 @@ pub mod job;
 pub mod launch;
 pub mod narrate;
 pub mod outcome;
-pub mod suspended;
+pub mod process;

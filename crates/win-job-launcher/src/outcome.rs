@@ -6,9 +6,15 @@
 //!
 //! | `outcome` | Meaning | Further fields |
 //! |---|---|---|
-//! | `exited` | The command exited by itself before the bound. | `code`, `strays` |
+//! | `exited` | The command exited by itself before the bound. | `code`, `strays`, `confirmed` |
 //! | `timed-out` | The bound was reached and the job was terminated. | `confirmed` |
 //! | `not-started` | The command never ran. | `error`, `osError` |
+//!
+//! `confirmed` is the launcher's statement that cleanup is finished: the job
+//! was terminated and then seen to hold no process. On `exited` it is `true`
+//! with no stray to clean up as well as after one was cleaned up; `false`
+//! means the launcher could not establish that the tree is gone, and the
+//! outcome is not one a caller may score as the command's own result.
 //!
 //! Every outcome carries `elapsedMs`, and carries the job's accounting
 //! (`totalProcesses`, `activeProcesses`, `userCpuMs`, `kernelCpuMs`) whenever a
@@ -67,11 +73,15 @@ pub enum Outcome {
         code: i32,
         /// Processes still in the job when the command exited.
         strays: u32,
+        /// Whether the job was seen empty afterwards, having been terminated
+        /// if it was not already.
+        confirmed: bool,
     },
-    /// Killed at the bound. `confirmed` is whether the job was seen empty
-    /// within the confirmation bound afterwards.
+    /// Killed at the bound. `confirmed` is whether the job was terminated and
+    /// then seen empty within the confirmation bound.
     TimedOut {
-        /// Whether the job emptied within the confirmation bound.
+        /// Whether the termination succeeded and the job emptied within the
+        /// confirmation bound.
         confirmed: bool,
     },
     /// Never ran, with the reason and the Windows error code when there is one.
@@ -122,10 +132,15 @@ impl Report {
         };
 
         match &self.outcome {
-            Outcome::Exited { code, strays } => {
+            Outcome::Exited {
+                code,
+                strays,
+                confirmed,
+            } => {
                 field(keys::OUTCOME, &quoted(outcomes::EXITED));
                 field(keys::CODE, &code.to_string());
                 field(keys::STRAYS, &strays.to_string());
+                field(keys::CONFIRMED, if *confirmed { "true" } else { "false" });
             }
             Outcome::TimedOut { confirmed } => {
                 field(keys::OUTCOME, &quoted(outcomes::TIMED_OUT));

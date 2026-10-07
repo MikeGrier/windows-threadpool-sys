@@ -1002,6 +1002,30 @@ Test-Case 'a launcher that writes no result is no verdict, and stops the sweep a
     finally { Remove-Fixture $root }
 }
 
+foreach ($case in @(
+        @{ Name = 'exits'; Json = '{"outcome":"exited","code":0,"strays":1,"confirmed":false,"elapsedMs":1}'; Outcome = 'exited' },
+        @{ Name = 'is killed at the bound'; Json = '{"outcome":"timed-out","confirmed":false,"elapsedMs":1}'; Outcome = 'timed-out' })) {
+    Test-Case "a launcher that could not confirm the tree gone when the command $($case.Name) is no verdict" {
+        # Scoring either as the command's own result would credit a catch (or
+        # take a pass) beside a tree that may still be running. The fake writes
+        # the result a real launcher would after a termination that did not take.
+        $root = New-Fixture -Manifest (New-Spec)
+        try {
+            $stub = New-Stub -Behaviour 'fail' -Root $root
+            $fake = Join-Path $root 'stubs\unconfirmed-launcher.cmd'
+            $script = "@echo off`r`n:next`r`nif `"%~1`"==`"`" exit /b 1`r`nif `"%~1`"==`"--result`" goto found`r`n" +
+                "shift`r`ngoto next`r`n:found`r`n> `"%~2`" echo $($case.Json)`r`nexit /b 0`r`n"
+            [System.IO.File]::WriteAllText($fake, $script)
+            $result = Invoke-Harness -Root $root -Arguments @(
+                '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-LauncherPath', $fake)
+            Assert-Equal 2 $result.ExitCode $result.Output
+            Assert-Match "could not confirm the command's process tree was gone \(outcome $($case.Outcome)\)" $result.Output
+            Assert-Match 'The baseline could not be supervised: win-job-launcher failed' $result.Output
+        }
+        finally { Remove-Fixture $root }
+    }
+}
+
 Test-Case 'a launcher that overruns its own bound is stopped by the backstop' {
     # The baseline's bound is the BUILD bound, set to its minimum here, so the
     # backstop fires at that plus the launcher's grace. The fake's ping outlives

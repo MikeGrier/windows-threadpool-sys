@@ -3,20 +3,18 @@
 
 use std::fs::File;
 use std::io::{self, Write};
-use std::os::windows::io::{AsHandle, AsRawHandle};
-use std::os::windows::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::os::windows::io::AsRawHandle;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
-use windows_sys::Win32::System::Threading::{CREATE_SUSPENDED, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use crate::cli::Invocation;
 use crate::job::Job;
 use crate::narrate::Narrator;
 use crate::outcome::{Accounting, Outcome, Report};
-use crate::suspended::resume_threads;
+use crate::process::{self, Process};
 
 /// How long, after terminating the job, the launcher waits to see it empty
 /// before reporting. Termination is asynchronous; reporting before the tree is
@@ -50,7 +48,7 @@ pub fn run<W: Write>(invocation: &Invocation, n: &mut Narrator<W>) -> Report {
     // SAFETY: the child's handle is live for as long as `child` is.
     let waited = unsafe { WaitForSingleObject(child.as_raw_handle(), bound) };
     match waited {
-        WAIT_OBJECT_0 => exited(child, &job, n),
+        WAIT_OBJECT_0 => exited(&child, &job, n),
         WAIT_TIMEOUT => timed_out(&child, &job, bound, n),
         // Unreachable in practice: the handle is one this process owns and
         // holds open, with SYNCHRONIZE access. Reported rather than ignored,
@@ -63,68 +61,28 @@ pub fn run<W: Write>(invocation: &Invocation, n: &mut Narrator<W>) -> Report {
     }
 }
 
-/// Creates the command suspended, puts it in the job, and resumes it -- so
-/// nothing it starts can be created outside the job.
+/// Creates the command as a member of the job, so that nothing it starts, and
+/// not the command itself, can ever exist outside it.
 fn spawn_in_job<W: Write>(
     invocation: &Invocation,
     job: &Job,
     n: &mut Narrator<W>,
-) -> Result<Child, (&'static str, io::Error)> {
+) -> Result<Process, (&'static str, io::Error)> {
     let stdout = File::create(&invocation.stdout).map_err(|e| ("could not create --stdout", e))?;
     let stderr = File::create(&invocation.stderr).map_err(|e| ("could not create --stderr", e))?;
 
-    let mut child = Command::new(&invocation.program)
-        .args(&invocation.args)
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr)
-        .creation_flags(CREATE_SUSPENDED)
-        .spawn()
+    let child = process::spawn_in_job(job, &invocation.program, &invocation.args, &stdout, &stderr)
         .map_err(|e| ("could not start the command", e))?;
-    let pid = child.id();
-    n.trace(format_args!("created PID {pid} suspended"));
-
-    if let Err(e) = job.assign(child.as_handle()) {
-        abandon(&mut child);
-        return Err(("could not put the command in the job", e));
-    }
-    n.trace(format_args!("assigned PID {pid} to the job"));
-
-    match resume_threads(pid) {
-        Ok(0) => {
-            abandon(&mut child);
-            Err((
-                "could not resume the command",
-                io::Error::other("the snapshot found no thread for it"),
-            ))
-        }
-        Ok(threads) => {
-            n.trace(format_args!("resumed {threads} thread(s) of PID {pid}"));
-            Ok(child)
-        }
-        Err(e) => {
-            abandon(&mut child);
-            Err(("could not resume the command", e))
-        }
-    }
+    n.trace(format_args!("created PID {} in the job", child.id()));
+    Ok(child)
 }
 
-/// Kills a command that never got to run. Best-effort: it is suspended, so it
-/// has done nothing, and it is in the job if assignment got that far.
-fn abandon(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn exited<W: Write>(mut child: Child, job: &Job, n: &mut Narrator<W>) -> Report {
-    let status = match child.wait() {
-        Ok(status) => status,
+fn exited<W: Write>(child: &Process, job: &Job, n: &mut Narrator<W>) -> Report {
+    let code = match child.exit_code() {
+        Ok(code) => code,
         // Unreachable in practice: the process has already been seen to exit.
         Err(e) => panic!("the command exited but its status could not be read: {e}"),
     };
-    let code = status
-        .code()
-        .expect("a Windows process always has an exit code");
     let at_exit = read_accounting(job, n);
     let strays = at_exit.map_or(0, |a| a.active_processes);
     n.trace(format_args!(
@@ -132,17 +90,30 @@ fn exited<W: Write>(mut child: Child, job: &Job, n: &mut Narrator<W>) -> Report 
         n.elapsed().as_millis(),
         describe(at_exit)
     ));
-    if strays > 0 {
+    // With the accounting unreadable there is no evidence the job is empty, so
+    // it is cleaned up and confirmed as if it were not.
+    let confirmed = if strays > 0 || at_exit.is_none() {
         n.trace(format_args!(
             "terminating {strays} stray process(es) still in the job"
         ));
-        terminate(job, n);
-        confirm_empty(job, None, n);
-    }
-    report(n, Outcome::Exited { code, strays }, at_exit)
+        let terminated = terminate(job, n);
+        let emptied = confirm_empty(job, None, n);
+        terminated && emptied
+    } else {
+        true
+    };
+    report(
+        n,
+        Outcome::Exited {
+            code,
+            strays,
+            confirmed,
+        },
+        at_exit,
+    )
 }
 
-fn timed_out<W: Write>(child: &Child, job: &Job, bound: u32, n: &mut Narrator<W>) -> Report {
+fn timed_out<W: Write>(child: &Process, job: &Job, bound: u32, n: &mut Narrator<W>) -> Report {
     // Read before the kill: CPU time against the bound is what tells a spin
     // from a parked wait.
     let at_bound = read_accounting(job, n);
@@ -150,24 +121,39 @@ fn timed_out<W: Write>(child: &Child, job: &Job, bound: u32, n: &mut Narrator<W>
         "the bound of {bound}ms was reached; {}",
         describe(at_bound)
     ));
-    terminate(job, n);
-    let confirmed = confirm_empty(job, Some(child), n);
-    report(n, Outcome::TimedOut { confirmed }, at_bound)
+    let terminated = terminate(job, n);
+    let emptied = confirm_empty(job, Some(child), n);
+    report(
+        n,
+        Outcome::TimedOut {
+            confirmed: terminated && emptied,
+        },
+        at_bound,
+    )
 }
 
-fn terminate<W: Write>(job: &Job, n: &mut Narrator<W>) {
+/// Terminates the job, and says whether the call succeeded.
+fn terminate<W: Write>(job: &Job, n: &mut Narrator<W>) -> bool {
     n.trace(format_args!("calling TerminateJobObject"));
     match job.terminate(KILLED_EXIT_CODE) {
-        Ok(()) => n.trace(format_args!("TerminateJobObject returned")),
-        // Not fatal: the job is kill-on-close, so the launcher's own exit still
-        // takes the tree down. The confirmation below reports whether it went.
-        Err(e) => n.error(format_args!("TerminateJobObject failed: {e}")),
+        Ok(()) => {
+            n.trace(format_args!("TerminateJobObject returned"));
+            true
+        }
+        // The caller still waits for the job to empty, but a failed call is
+        // never reported as a confirmed cleanup: the job is kill-on-close, so
+        // the launcher's own exit would take the tree down, and the result is
+        // written before that.
+        Err(e) => {
+            n.error(format_args!("TerminateJobObject failed: {e}"));
+            false
+        }
     }
 }
 
 /// Waits up to [`CONFIRM_BOUND`] for `child` to be signalled and the job to
 /// hold no process, and says whether both happened.
-fn confirm_empty<W: Write>(job: &Job, child: Option<&Child>, n: &mut Narrator<W>) -> bool {
+fn confirm_empty<W: Write>(job: &Job, child: Option<&Process>, n: &mut Narrator<W>) -> bool {
     let deadline = Instant::now() + CONFIRM_BOUND;
     if let Some(child) = child {
         let ms = u32::try_from(CONFIRM_BOUND.as_millis()).expect("the bound fits a u32");

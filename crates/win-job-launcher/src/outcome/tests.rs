@@ -30,11 +30,37 @@ fn not_started(error: &str) -> String {
     )
 }
 
+fn exited(code: i32) -> Outcome {
+    Outcome::Exited {
+        code,
+        strays: 0,
+        confirmed: true,
+    }
+}
+
 #[test]
-fn an_exit_reports_its_code_and_strays() {
+fn an_exit_reports_its_code_strays_and_whether_cleanup_was_confirmed() {
     assert_eq!(
-        report(Outcome::Exited { code: 0, strays: 0 }, Some(ACCOUNTING)),
-        r#"{"outcome":"exited","code":0,"strays":0,"elapsedMs":1500,"totalProcesses":3,"activeProcesses":1,"userCpuMs":12345,"kernelCpuMs":67}"#
+        report(
+            Outcome::Exited {
+                code: 0,
+                strays: 0,
+                confirmed: true
+            },
+            Some(ACCOUNTING)
+        ),
+        r#"{"outcome":"exited","code":0,"strays":0,"confirmed":true,"elapsedMs":1500,"totalProcesses":3,"activeProcesses":1,"userCpuMs":12345,"kernelCpuMs":67}"#
+    );
+    assert_eq!(
+        report(
+            Outcome::Exited {
+                code: 0,
+                strays: 1,
+                confirmed: false
+            },
+            None
+        ),
+        r#"{"outcome":"exited","code":0,"strays":1,"confirmed":false,"elapsedMs":1500}"#
     );
 }
 
@@ -44,19 +70,20 @@ fn an_ntstatus_exit_code_is_written_signed() {
         Outcome::Exited {
             code: -1_073_741_502,
             strays: 2,
+            confirmed: true,
         },
         None,
     );
     assert_eq!(
         json,
-        r#"{"outcome":"exited","code":-1073741502,"strays":2,"elapsedMs":1500}"#
+        r#"{"outcome":"exited","code":-1073741502,"strays":2,"confirmed":true,"elapsedMs":1500}"#
     );
 }
 
 #[test]
 fn the_extreme_exit_codes_round_trip() {
     for code in [i32::MIN, -1, 1, 101, i32::MAX] {
-        let json = report(Outcome::Exited { code, strays: 0 }, None);
+        let json = report(exited(code), None);
         assert!(json.contains(&format!(r#""code":{code},"#)), "{json}");
     }
 }
@@ -135,7 +162,7 @@ fn printable_ascii_passes_through_unchanged() {
 #[test]
 fn every_report_is_one_line() {
     for outcome in [
-        Outcome::Exited { code: 1, strays: 0 },
+        exited(1),
         Outcome::TimedOut { confirmed: true },
         Outcome::NotStarted {
             error: String::from("line one\nline two"),
@@ -183,7 +210,7 @@ fn a_stale_result_is_replaced() {
     let path = dir.join("result.json");
     fs::write(&path, "stale").unwrap();
     let r = Report {
-        outcome: Outcome::Exited { code: 0, strays: 0 },
+        outcome: exited(0),
         elapsed_ms: 1,
         accounting: None,
     };
@@ -197,7 +224,7 @@ fn a_result_that_cannot_be_written_is_an_error_and_leaves_nothing() {
     let dir = scratch("unwritable");
     let path = dir.join("no such directory").join("result.json");
     let r = Report {
-        outcome: Outcome::Exited { code: 0, strays: 0 },
+        outcome: exited(0),
         elapsed_ms: 1,
         accounting: None,
     };
@@ -214,7 +241,7 @@ fn a_failed_rename_removes_its_temporary() {
     let path = dir.join("result.json");
     fs::create_dir(&path).unwrap();
     let r = Report {
-        outcome: Outcome::Exited { code: 0, strays: 0 },
+        outcome: exited(0),
         elapsed_ms: 1,
         accounting: None,
     };

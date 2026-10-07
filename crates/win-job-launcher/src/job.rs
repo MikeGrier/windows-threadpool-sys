@@ -3,11 +3,11 @@
 
 use std::ffi::c_void;
 use std::io;
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr;
 
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
@@ -77,6 +77,20 @@ impl Job {
         Ok(())
     }
 
+    /// Whether `process` is in the job.
+    ///
+    /// # Errors
+    ///
+    /// The OS error from `IsProcessInJob`.
+    pub fn contains(&self, process: BorrowedHandle<'_>) -> io::Result<bool> {
+        let mut result = 0;
+        // SAFETY: both handles are live for the call, and `result` is writable.
+        if unsafe { IsProcessInJob(process.as_raw_handle(), self.raw(), &raw mut result) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(result != 0)
+    }
+
     /// Terminates every process in the job, giving each `exit_code`. Returns
     /// once termination has been initiated; [`Job::accounting`] shows when it
     /// has finished.
@@ -124,6 +138,12 @@ impl Job {
 
     fn raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
         self.0.as_raw_handle()
+    }
+}
+
+impl AsRawHandle for Job {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.raw()
     }
 }
 

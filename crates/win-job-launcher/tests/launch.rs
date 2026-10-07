@@ -191,7 +191,7 @@ fn a_command_that_exits_reports_its_code() {
     );
     assert!(
         run.result()
-            .starts_with(r#"{"outcome":"exited","code":3,"strays":0,"#),
+            .starts_with(r#"{"outcome":"exited","code":3,"strays":0,"confirmed":true,"#),
         "{}",
         run.result()
     );
@@ -347,6 +347,10 @@ fn processes_left_behind_when_the_command_exits_are_killed_and_counted() {
         "no stray was counted: {result}"
     );
     assert!(
+        result.contains(r#""confirmed":true,"#),
+        "the cleanup was not confirmed: {result}"
+    );
+    assert!(
         becomes_free(&s.path("marker.txt")),
         "the stray still holds the marker"
     );
@@ -363,9 +367,9 @@ fn a_command_that_cannot_be_found_is_not_started() {
         "{}",
         run.result()
     );
-    // `std` searches the path itself and reports a miss without a Windows
-    // error code, so `osError` may be null here; the field is always present.
-    assert!(run.result().contains(r#""osError":"#), "{}", run.result());
+    // The launcher finds the program itself, so a miss carries the Windows
+    // error code: ERROR_FILE_NOT_FOUND.
+    assert!(run.result().contains(r#""osError":2,"#), "{}", run.result());
 }
 
 #[test]
@@ -443,9 +447,7 @@ fn trace_narrates_each_step_of_a_kill() {
     let trace = run.launcher_stderr();
     for step in [
         "created a kill-on-close job",
-        "suspended",
-        "assigned PID",
-        "resumed 1 thread(s)",
+        " in the job",
         "the bound of 300ms was reached; job: ",
         "calling TerminateJobObject",
         "TerminateJobObject returned",
@@ -455,6 +457,10 @@ fn trace_narrates_each_step_of_a_kill() {
     ] {
         assert!(trace.contains(step), "missing {step:?} in:\n{trace}");
     }
+    assert!(
+        !trace.contains("suspended") && !trace.contains("resumed"),
+        "the command is created in the job, not suspended and resumed: {trace}"
+    );
     assert!(
         trace.lines().all(|l| l.starts_with("win-job-launcher +")),
         "{trace}"

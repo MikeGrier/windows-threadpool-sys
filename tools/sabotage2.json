@@ -61,6 +61,14 @@
       "replace": ["        return [pscustomobject]@{ Outcome = 'passed'; Code = $null; Seconds = $elapsed }"]
     },
     {
+      "name": "a launcher that could not confirm the tree gone is scored as the command's own result",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "An unconfirmed termination beside a 'caught' is the false positive the whole launcher exists to prevent: the kill did not take, and the harness credits the suite anyway. The same field on an exit gates a 'passed' or 'failed' next to a tree that may still be running.",
+      "find": ["        $result.confirmed -ne $true) {"],
+      "replace": ["        $false) {"]
+    },
+    {
       "name": "a launcher that wrote no result is scored as a failed suite",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",

@@ -221,7 +221,7 @@
 
 .PARAMETER TraceLaunches
     Have win-job-launcher narrate every phase it runs, step by step, on this
-    tool's console: the job created, the command resumed, and -- for a hang --
+    tool's console: the job created, the command created in it, and -- for a hang --
     the job's accounting at the bound, the termination, and the confirmation
     that the tree is gone. Off by default; the sweep workflow turns it on.
 
@@ -487,6 +487,17 @@ function Invoke-Bounded {
     }
 
     $outcomes = $script:LauncherOutcome
+    # Cleanup the launcher could not confirm is not a verdict on the command,
+    # either way. A kill that did not take is the exact case a catch must not be
+    # credited for, and a "passed" or "failed" beside a tree that may still be
+    # running is not one the next phase can trust -- so it is the launcher that
+    # failed, and the run is INFRASTRUCTURE, not a result.
+    if (($result.outcome -eq $outcomes.Exited -or $result.outcome -eq $outcomes.TimedOut) -and
+        $result.confirmed -ne $true) {
+        Write-Report ("    win-job-launcher could not confirm the command's process tree was gone " +
+            "(outcome $($result.outcome)); the run is not scored.") -Level bad
+        return [pscustomobject]@{ Outcome = 'launcher-failed'; Code = $process.ExitCode; Seconds = $elapsed }
+    }
     if ($result.outcome -eq $outcomes.Exited) {
         $code = [int]$result.code
         # Spelled as an if/else rather than a ternary on purpose: `? :` is
@@ -504,9 +515,6 @@ function Invoke-Bounded {
         return [pscustomobject]@{ Outcome = $outcome; Code = $code; Seconds = $elapsed }
     }
     if ($result.outcome -eq $outcomes.TimedOut) {
-        if (-not $result.confirmed) {
-            Write-Report '    win-job-launcher could not confirm the hung tree was gone.' -Level bad
-        }
         return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }
     }
     if ($result.outcome -eq $outcomes.NotStarted) {

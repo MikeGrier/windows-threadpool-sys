@@ -1,15 +1,15 @@
 {
   "package": "win-job-launcher",
   "description": "Sabotages for the job-object launcher the sabotage harness runs every phase through. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Two properties are deliberately ABSENT, because no test can observe them deterministically. (1) Creating the command SUSPENDED closes the window between CreateProcess and AssignProcessToJobObject in which the command could start a process outside the job; dropping CREATE_SUSPENDED leaves every test green, because none of them can arrange to spawn inside that window. (2) Terminating strays explicitly when the command exits, and waiting for the job to empty, makes the tree gone BEFORE the launcher exits; dropping it leaves every test green, because the job is kill-on-close and the launcher's own exit takes the strays down a moment later -- the difference is ordering, which a test reading after the launcher exits cannot see. Recording either with expect:'survives' would assert it is harmless, which is false.",
+  "notCoveredHere": "Three properties are deliberately ABSENT, because no test can observe them deterministically. (1) That a failed TerminateJobObject, or a job that never empties, is reported with confirmed:false rather than true: nothing here can make the OS refuse the call or keep a process alive through it, so `terminated && emptied` degrading to `emptied` leaves every test green. The harness side of the same property -- an unconfirmed outcome is no verdict -- IS covered, in tools/test-run-sabotage.ps1, by a fake launcher that writes the unconfirmed result. (2) Terminating strays explicitly when the command exits, and waiting for the job to empty, makes the tree gone BEFORE the launcher exits; dropping the wait leaves every test green, because the job is kill-on-close and the launcher's own exit takes the strays down a moment later -- the difference is ordering, which a test reading after the launcher exits cannot see. (3) That the three standard handles are the ONLY ones inherited is covered by tests/inheritance.rs, but only against a handle that is inheritable when the launcher spawns; a launcher that inherited every inheritable handle AND had none to leak would pass. Recording any of these with expect:'survives' would assert it is harmless, which is false.",
   "sabotages": [
     {
       "name": "the command is never put in the job",
-      "file": "src/launch.rs",
+      "file": "src/process.rs",
       "expect": "caught",
-      "why": "The launcher's whole reason to exist. Without the assignment the job is empty, so terminating it kills nothing, and the descendants the harness needs dead outlive the bound -- while the launcher still reports a timeout.",
-      "find": ["    if let Err(e) = job.assign(child.as_handle()) {"],
-      "replace": ["    if let Err(e) = Ok::<(), io::Error>(()) {"]
+      "why": "The launcher's whole reason to exist. Without the extended startup information the job list is never read, so the command is created outside the job: terminating the job kills nothing, and the descendants the harness needs dead outlive the bound -- while the launcher still reports a timeout.",
+      "find": ["            EXTENDED_STARTUPINFO_PRESENT,"],
+      "replace": ["            0,"]
     },
     {
       "name": "the bound is never enforced",
