@@ -2579,6 +2579,43 @@ others. The shapes are recorded as DI-D-39, for the engineer to confirm. One con
 not name: once `Healed` is in the stream, the oracle can require a `Durable` to follow it, and now
 does.
 
+## Lineage handles (2026-10-08)
+
+On DI-3.2.5's open question -- what `epoch_state` answers for a lineage the instance does not have --
+the engineer asked how instance A could have any insight into instance B's state. It cannot, and
+the question never asked it to: an `Epoch` carries its lineage, so a caller can hand A an epoch of
+B's, and A must say "not mine" rather than panic, as its other calls already did. The harder half is
+A's own retired lineages.
+
+The engineer then asked what Rust practice is, and whether a lineage should be registered and
+returned as a lifetime-managed type instead of passing arbitrary values. The assistant set out the
+API Guidelines' preference (C-VALIDATE: types over checks, checks over panics), plain IDs checked at
+run time, owned handles, and branded lifetimes, and noted that failures already split a `Copy`
+name from an affine token. Values written into a consumer's logs must stay plain, so handles help
+the live operations, not stored values.
+
+The engineer's first answers: dropping the handle ends the lineage and the handle is `#[must_use]`;
+the handle comes back from construction; "apply the rule that makes them consistent, I don't want to
+mis-specify"; and the handle joins the contract trait. Asked for feedback first ("if something is a
+bad answer or is inconsistent, I expect feedback before proceeding"), the assistant raised:
+
+- **A conflict:** the default lineage can be neither ended nor retired (DI-D-19, DI-D-30), so its
+  handle's drop needed an answer.
+- **A sharp edge:** `#[must_use]` does not catch `let _ =` or a handle dropped with its struct, so
+  an accidental release abandons pending work.
+- **The rule, stated:** acting on a lineage takes its handle; naming or asking takes the plain value
+  and says "not this instance's" explicitly. Applying it exposed two existing inconsistencies:
+  `durable_through` and `sealed_through` answered `None` for both "nothing yet" and "not mine", and
+  `import_failure` of a missing lineage made an empty failure.
+- **A question:** whether an explicit `retire` stays.
+
+The engineer proposed that the returned lineage be an `Arc`, with the instance keeping a reference
+to the default's. The assistant: the lineage then ends when its last handle is released, which
+makes the default's permanence a consequence of the instance's reference rather than an exception;
+`end` and `retire` must take the last handle by value, or a surviving handle could name a dead
+lineage; and the `Arc` belongs inside a newtype. The engineer: "yes I think this is the coherent
+answer." Recorded as DI-D-40.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

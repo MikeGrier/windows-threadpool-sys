@@ -62,11 +62,17 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   lineage's held writes, a failure belongs to each lineage it suspects a write of, and
   `ImportScope::Lineage` narrows to that lineage's writes. (Flush-domain reach for flush failures
   and imports landed in `DI-3.2.4`, where the suspect set is defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34);
-  containment for a provider's domain is `DI-3.2.6`'s.) **Open, for the engineer, before this
-  step:** what `epoch_state` answers for an
-  epoch of a lineage the instance does not have. `EpochState` has no value for it, so since
-  `DI-3.2.3` dioring panics there ([DI-D-33](DESIGN-NOTES.md#di-d-33)); a retired lineage raises
-  the same question, which is why it is settled here.
+  containment for a provider's domain is `DI-3.2.6`'s.) **Lineage handles**
+  ([DI-D-40](DESIGN-NOTES.md#di-d-40)): a `Clone` handle over an `Arc`, `#[must_use]`, an
+  associated type of the contract beside `FailureToken`, reaching dioring through a `Weak`.
+  `Dioring::new` and `mint_lineage` return one; the instance keeps a reference to the default's and
+  hands out clones. Releasing the last handle ends the lineage; `end` and `retire` take the handle
+  by value and succeed only when it is the last. Pushing and sealing take the handle, with
+  another instance's refused. Naming or asking takes the plain value and answers "not this
+  instance's" explicitly: `epoch_state` stops panicking, `durable_through` and `sealed_through`
+  tell "nothing yet" from "not this instance's", and `import_failure` refuses a lineage the
+  instance does not have. The fake implementation and the oracle follow the trait, and CONTRACT.md
+  states the handle, its release, and the rule. Large enough that it may split when started.
 
 - [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
   serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`

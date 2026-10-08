@@ -207,6 +207,8 @@ accounting the contract rests on.
 
 ### 12. Lineages, and what an epoch is
 
+**Amended by [DI-D-40](DESIGN-NOTES.md#di-d-40): the operations that act on a lineage take a `Clone` handle, which ends the lineage when its last copy is released; the default lineage's handle comes back from construction, and the instance keeps a reference to it.**
+
 *(DI-2.9, [DI-D-19](DESIGN-NOTES.md#di-d-19).)* An instance holds several **durability
 lineages**. Each has its own epoch space, seal point, high-water mark and failure set, and every
 rule in sections 1-11 and in [CONTRACT.md](CONTRACT.md) applies within a lineage.
@@ -338,6 +340,8 @@ as it will on every implementation.
   (`windows-ioring-sys` D-82).
 
 ### 18. Ending a lineage
+
+**Amended by [DI-D-40](DESIGN-NOTES.md#di-d-40): releasing a lineage's last handle ends it too, and `end` and `retire` take the last handle by value.**
 
 *(DI-2.13, [DI-D-30](DESIGN-NOTES.md#di-d-30).)* `end_lineage(lineage)` is for a holder that will
 not finish a lineage. It abandons every epoch of the lineage not yet durable -- sealed ones whose
