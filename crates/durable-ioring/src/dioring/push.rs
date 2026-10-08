@@ -7,6 +7,7 @@
 //! (`windows-ioring-sys`' D-80).
 
 use std::io;
+use std::sync::Arc;
 
 use windows_ioring_sys::{
     Batch, IoBuf, IoBufMut, OperationId, PushOptions, PushRefused, RegisteredBuffers,
@@ -321,6 +322,7 @@ where
                 file,
                 record.target.flush_target(),
                 record.routing,
+                Arc::clone(&record.domains),
             );
         }
         core.unsubmitted = batch.submit().is_err();

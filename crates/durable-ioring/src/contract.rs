@@ -15,8 +15,8 @@ use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
-    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
-    PushError, ReadOptions, WriteOptions,
+    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
+    ImportScope, LineageInfo, PushError, ReadOptions, Resolution, ResolveError, WriteOptions,
 };
 
 #[cfg(test)]
@@ -194,9 +194,11 @@ pub trait DurableRing {
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
 
     /// Seal every epoch of `through`'s lineage at or below it, and ask for them to be made
-    /// durable (DI-D-9). A new seal is answered on the queue, by `Durable { through }` once every
-    /// write it covers is covered successfully; a request at or below the seal point is a no-op
-    /// answered here with the epoch's state (guarantee 7).
+    /// durable (DI-D-9). A new seal is answered on the queue (guarantee 4): by `Failed` if one of
+    /// its own flushes fails, by `Blocked` if they succeed but an unresolved failure holds an
+    /// epoch at or below it, and in every case by `Durable { through }` once the high-water mark
+    /// reaches it. A request at or below the seal point is a no-op answered here with the epoch's
+    /// state (guarantee 7).
     ///
     /// # Errors
     ///
@@ -216,6 +218,30 @@ pub trait DurableRing {
 
     /// An epoch's state.
     fn epoch_state(&self, epoch: Epoch<Self::Ids>) -> EpochState<Self::Ids>;
+
+    /// Resolve one or more failures, each by its token: `Heal`, effective when the first seal made
+    /// after this call finishes successfully, or `Abandon`, effective at once (DI-D-12 (c)). The
+    /// call is validated whole and applied at one point in observation order.
+    ///
+    /// # Errors
+    ///
+    /// For a token another instance minted. Nothing changes, and every token is handed back.
+    fn resolve(
+        &mut self,
+        items: Vec<(TokenOf<Self>, Resolution)>,
+    ) -> Result<(), ResolveError<Self::Ids>>;
+
+    /// Record a failure learned of outside the instance (DI-D-12 (h)). Its suspect set is built by
+    /// the same rule as any other's, within `scope`, and its token arrives with its `Failed` entry.
+    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureIdOf<Self>;
+
+    /// The unresolved failures, in the order they were observed.
+    fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
+
+    /// A token for an unresolved failure whose token is not live -- it was closed or dropped.
+    /// `None` otherwise, including for a failure that is resolved, another instance's, or healed
+    /// and waiting for its seal.
+    fn take_token(&mut self, failure: FailureIdOf<Self>) -> Option<TokenOf<Self>>;
 }
 
 /// The registered-buffer extension (DI-D-24): operations on spans of buffers registered with the

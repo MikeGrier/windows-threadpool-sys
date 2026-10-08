@@ -68,9 +68,25 @@ fn a_token_names_its_failure() {
         instance: InstanceId::next(),
         seq: 7,
     };
-    let token = FailureToken { id };
+    let (token, _) = FailureToken::mint(id);
     assert_eq!(token.id(), id);
     assert_eq!(<DioringIds<u64> as Identities>::token_id(&token), id);
+}
+
+#[test]
+fn a_token_is_live_until_it_is_closed_or_dropped() {
+    let id = FailureId {
+        instance: InstanceId::next(),
+        seq: 0,
+    };
+    let (token, live) = FailureToken::mint(id);
+    assert!(live.load(std::sync::atomic::Ordering::Acquire));
+    token.close();
+    assert!(!live.load(std::sync::atomic::Ordering::Acquire));
+
+    let (token, live) = FailureToken::mint(id);
+    drop(token);
+    assert!(!live.load(std::sync::atomic::Ordering::Acquire));
 }
 
 /// An epoch-id type with no `Hash` and no `Default`.

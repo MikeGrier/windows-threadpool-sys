@@ -20,10 +20,12 @@ use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
-use crate::contract::{DurableRing, EntryOf, EpochIdOf, Lin, PushResult, RegisteredBufferRing};
+use crate::contract::{
+    DurableRing, EntryOf, EpochIdOf, FailureIdOf, Lin, PushResult, RegisteredBufferRing, TokenOf,
+};
 use crate::types::{
-    AddFileError, DurabilityRequest, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
-    ReadOptions, WriteOptions,
+    AddFileError, DurabilityRequest, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
+    ImportScope, LineageInfo, ReadOptions, Resolution, ResolveError, WriteOptions,
 };
 
 #[cfg(test)]
@@ -216,6 +218,33 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// [`DurableRing::epoch_state`].
     pub fn epoch_state(&self, epoch: Epoch<D::Ids>) -> EpochState<D::Ids> {
         self.with(|ring| ring.epoch_state(epoch))
+    }
+
+    /// [`DurableRing::resolve`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::resolve`].
+    pub fn resolve(
+        &self,
+        items: Vec<(TokenOf<D>, Resolution)>,
+    ) -> Result<(), ResolveError<D::Ids>> {
+        self.with(|ring| ring.resolve(items))
+    }
+
+    /// [`DurableRing::import_failure`].
+    pub fn import_failure(&self, scope: ImportScope<D::Ids>) -> FailureIdOf<D> {
+        self.with(|ring| ring.import_failure(scope))
+    }
+
+    /// [`DurableRing::failures`].
+    pub fn failures(&self) -> Vec<FailureInfo<D::Ids>> {
+        self.with(|ring| ring.failures())
+    }
+
+    /// [`DurableRing::take_token`].
+    pub fn take_token(&self, failure: FailureIdOf<D>) -> Option<TokenOf<D>> {
+        self.with(|ring| ring.take_token(failure))
     }
 }
 

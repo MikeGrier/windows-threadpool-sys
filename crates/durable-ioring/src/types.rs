@@ -77,6 +77,11 @@ pub struct SuspectWrite<V: Identities> {
 pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
 
 impl<V: Identities> SuspectSet<V> {
+    /// Freeze `writes`, in push order.
+    pub(crate) fn new(writes: Vec<SuspectWrite<V>>) -> Self {
+        Self(writes.into())
+    }
+
     /// The set's writes. The one borrow the API returns, into frozen shared data that nothing
     /// can change.
     pub fn writes(&self) -> &[SuspectWrite<V>] {

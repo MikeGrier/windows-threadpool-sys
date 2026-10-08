@@ -28,9 +28,11 @@ use win_sync_sys::{Event, ResetMode};
 use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
 
 use super::Sidecar;
-use super::durability::{Due, Durability, Flush};
+use super::durability::{Due, Durability, Event as Synthesized, Flush};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, Lineage};
+#[cfg(feature = "fault-injection")]
+use crate::types::FileKey;
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
 /// An entry of a dioring instance's queue.
@@ -60,6 +62,10 @@ pub(crate) struct Core<E: EpochId + 'static, B, C> {
     pub(crate) unsubmitted: bool,
     /// The instance is ending: no callback may reach the ring again.
     closed: bool,
+    /// Failures armed by the fault seam: the next flush of the file to complete reports the Win32
+    /// error instead of what the kernel did.
+    #[cfg(feature = "fault-injection")]
+    pub(crate) injected: Vec<(FileKey, u32)>,
 }
 
 /// The state dioring's delivery callback reaches.
@@ -76,11 +82,13 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
         Ok(Self {
             core: Mutex::new(Core {
                 queue: VecDeque::new(),
-                lineage: Durability::new(),
+                lineage: Durability::new(default_lineage),
                 default_lineage,
                 unpushed: Vec::new(),
                 unsubmitted: false,
                 closed: false,
+                #[cfg(feature = "fault-injection")]
+                injected: Vec::new(),
             }),
             readiness: Event::new(ResetMode::Auto, false)?,
             ring: OnceLock::new(),
@@ -175,8 +183,17 @@ where
                 }
             }
             Some((_, Sidecar::Commit { through, file })) => {
-                core.lineage
-                    .flushed(through.id, file, completion.result().is_ok())
+                #[cfg(feature = "fault-injection")]
+                let completion = match core.injected.iter().position(|(f, _)| *f == file) {
+                    Some(index) => {
+                        let (_, code) = core.injected.remove(index);
+                        completion
+                            .with_injected_failure(windows_ioring_sys::InjectedFailure::Win32(code))
+                    }
+                    None => completion,
+                };
+                let result = completion.result().map(|_| ());
+                core.lineage.flushed(through.id, file, result)
             }
             None => {
                 debug_assert!(false, "a completion for an operation dioring did not push");
@@ -198,8 +215,7 @@ where
         // `ring` is dropped here, before the core is unlocked.
     }
 
-    /// Act on what a change made due: append a `Durable` entry for each seal now durable, and push
-    /// every flush now due, with any the ring refused before, then submit -- which also retries a
+    /// Act on what a change made due: append its entries, in order, and push every flush now due, with any the ring refused before, then submit -- which also retries a
     /// submission that failed earlier. Returns the submission's error, if it failed: the
     /// operations stay queued, and the next submission issues them.
     pub(crate) fn apply(
@@ -208,7 +224,7 @@ where
         due: Due<E, FlushTarget>,
         ring: &Delivery<E, B, C>,
     ) -> Option<io::Error> {
-        self.append_durable(core, &due.durable);
+        self.append_events(core, due.events);
         let mut flushes = std::mem::take(&mut core.unpushed);
         flushes.extend(due.flushes);
         if flushes.is_empty() && !core.unsubmitted {
@@ -246,19 +262,27 @@ where
 
     /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
     fn apply_without_ring(&self, core: &mut Core<E, B, C>, due: Due<E, FlushTarget>) {
-        self.append_durable(core, &due.durable);
+        self.append_events(core, due.events);
         core.unpushed.extend(due.flushes);
     }
 
-    fn append_durable(&self, core: &mut Core<E, B, C>, durable: &[E]) {
+    fn append_events(&self, core: &mut Core<E, B, C>, events: Vec<Synthesized<E>>) {
         let lineage = core.default_lineage;
-        for &through in durable {
-            self.append(
-                core,
-                Entry::Durable {
+        for event in events {
+            let entry = match event {
+                Synthesized::Durable(through) => Entry::Durable {
                     through: Epoch::new(lineage, through),
                 },
-            );
+                Synthesized::Blocked { through, by } => Entry::Blocked {
+                    through: Epoch::new(lineage, through),
+                    by,
+                },
+                Synthesized::Failed(failed) => Entry::Failed(failed),
+                Synthesized::Abandoned { failure, suspect } => {
+                    Entry::Abandoned { failure, suspect }
+                }
+            };
+            self.append(core, entry);
         }
     }
 }

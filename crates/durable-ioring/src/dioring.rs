@@ -14,18 +14,19 @@ use windows_ioring_sys::{
 };
 
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
-use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::provider::DurabilityProvider;
 use crate::types::{
-    AddFileError, DurabilityRequest, Epoch, EpochState, FileKey, FileOptions, FlushDomain,
-    LineageInfo, OpKind, ReadOptions, WriteOptions,
+    AddFileError, Cause, DurabilityRequest, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
+    FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions, Resolution, ResolveError,
+    WriteOptions,
 };
 
 mod durability;
 mod push;
 mod relay;
 
-use durability::{Due, Routing, Sealing, State};
+use durability::{Due, Reach, Routing, Sealing, State};
 use relay::{Delivery, FlushTarget, Relay};
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
@@ -142,7 +143,8 @@ pub(crate) struct DomainId(u32);
 /// empty set means unknown, which intersects every file.
 pub(crate) struct FileRecord {
     pub(crate) target: FileSlot,
-    pub(crate) domains: Box<[DomainId]>,
+    /// Shared with the record of each write to the file, which a failure's reach is judged by.
+    pub(crate) domains: Arc<[DomainId]>,
     /// Who answers for its writes, from its domains and the provider's (DI-D-27).
     pub(crate) routing: Routing,
 }
@@ -167,7 +169,7 @@ fn routing(file: &[DomainId], served: Option<&ProviderSlot<impl EpochId>>) -> Ro
 pub(crate) struct ProviderSlot<E: EpochId + 'static> {
     #[expect(dead_code, reason = "the provider is called from DI-3.2.6")]
     pub(crate) provider: Box<dyn DurabilityProvider<DioringIds<E>>>,
-    pub(crate) domains: Box<[DomainId]>,
+    pub(crate) domains: Arc<[DomainId]>,
 }
 
 /// dioring's record of each operation, carried as the ring crate's sidecar. The consumer's
@@ -437,6 +439,13 @@ where
         // reported only when there is no entry to return instead: an entry is progress, and the
         // retry runs again at the next pop.
         let mut core = self.relay.lock();
+        // Recorded on whichever thread observed it, usually a pool thread; asserted here, where a
+        // panic fails the consumer's call rather than aborting the process.
+        debug_assert!(
+            core.lineage.inconsistency().is_none(),
+            "dioring's durability state is inconsistent: {:?}",
+            core.lineage.inconsistency()
+        );
         let retried = self.relay.apply(&mut core, Due::default(), &self.delivery);
         match (Relay::pop(&mut core), retried) {
             (Some(entry), _) => Ok(Some(entry)),
@@ -506,6 +515,69 @@ where
             sealed_through: core.lineage.sealed_through(),
         }]
     }
+
+    fn resolve(
+        &mut self,
+        items: Vec<(FailureToken, Resolution)>,
+    ) -> Result<(), ResolveError<Self::Ids>> {
+        let mut core = self.relay.lock();
+        let due = core.lineage.resolve(items)?;
+        self.relay.apply(&mut core, due, &self.delivery);
+        Ok(())
+    }
+
+    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureId {
+        let reach = self.reach(&scope);
+        let mut core = self.relay.lock();
+        let (id, due) = core.lineage.import(Cause::Imported { scope }, &reach);
+        self.relay.apply(&mut core, due, &self.delivery);
+        id
+    }
+
+    fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
+        self.relay.lock().lineage.failures()
+    }
+
+    fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {
+        self.relay.lock().lineage.take_token(failure)
+    }
+}
+
+impl<B, E, C, R> Dioring<B, E, C, R>
+where
+    B: Send + 'static,
+    E: EpochId + Send + Sync + 'static,
+    C: Send + 'static,
+    R: IoBufMut,
+{
+    /// The files an imported failure reaches (DI-D-21). A domain no file was declared with reaches
+    /// only the files declared with none; with one lineage, naming it is naming the instance.
+    fn reach(&self, scope: &ImportScope<DioringIds<E>>) -> Reach {
+        match scope {
+            ImportScope::All => Reach::All,
+            ImportScope::Lineage(lineage) if self.is_live(*lineage) => Reach::All,
+            ImportScope::Lineage(_) => Reach::Nothing,
+            ImportScope::Domains(domains) => Reach::Domains(
+                domains
+                    .iter()
+                    .filter_map(|domain| self.domains.get(domain).copied())
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// The fault seam (`DI-3.2.4`): failures on demand, for tests and for the contract's worked
+/// examples. It transforms a flush's real completion through `windows-ioring-sys`' own seam, so
+/// the flush still reaches the kernel and only the answer dioring sees changes.
+#[cfg(feature = "fault-injection")]
+impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
+    /// Make the next flush of `file` to complete report the Win32 error `code` -- for example
+    /// `1117`, `ERROR_IO_DEVICE` -- whatever the kernel answered. Armed failures for one file are
+    /// used in the order they were armed. The flush may already be in flight.
+    pub fn fail_next_flush(&mut self, file: FileKey, code: u32) {
+        self.relay.lock().injected.push((file, code));
+    }
 }
 
 impl<B, E, C, R> RegisteredBufferRing for Dioring<B, E, C, R>
@@ -563,7 +635,9 @@ fn epoch_state<E: EpochId + 'static>(state: State) -> EpochState<DioringIds<E>> 
     match state {
         State::Open => EpochState::Open,
         State::Pending => EpochState::Pending,
+        State::Blocked(by) => EpochState::Blocked(by),
         State::Durable => EpochState::Durable,
+        State::Abandoned => EpochState::Abandoned,
     }
 }
 
@@ -662,7 +736,7 @@ fn first_repeat<T: Eq + std::hash::Hash + Clone>(values: impl IntoIterator<Item 
 fn intern_all(
     table: &mut HashMap<FlushDomain, DomainId>,
     domains: impl IntoIterator<Item = FlushDomain>,
-) -> Box<[DomainId]> {
+) -> Arc<[DomainId]> {
     let mut ids: Vec<DomainId> = domains
         .into_iter()
         .map(|domain| {
@@ -674,5 +748,5 @@ fn intern_all(
         .collect();
     ids.sort_unstable();
     ids.dedup();
-    ids.into_boxed_slice()
+    ids.into()
 }

@@ -11,10 +11,11 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 
 use crate::contract::{DurableRing, EntryOf, PushResult};
-use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
-    OpCompletion, OpKind, Outcome, ReadOptions, WriteOptions,
+    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
+    ImportScope, LineageInfo, OpCompletion, OpKind, Outcome, ReadOptions, Resolution, ResolveError,
+    WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -158,5 +159,21 @@ impl DurableRing for Fake {
 
     fn epoch_state(&self, _epoch: Epoch<V>) -> EpochState<V> {
         EpochState::Open
+    }
+
+    fn resolve(&mut self, _items: Vec<(FailureToken, Resolution)>) -> Result<(), ResolveError<V>> {
+        unimplemented!("the fake observes no failures")
+    }
+
+    fn import_failure(&mut self, _scope: ImportScope<V>) -> FailureId {
+        unimplemented!("the fake observes no failures")
+    }
+
+    fn failures(&self) -> Vec<FailureInfo<V>> {
+        Vec::new()
+    }
+
+    fn take_token(&mut self, _failure: FailureId) -> Option<FailureToken> {
+        None
     }
 }

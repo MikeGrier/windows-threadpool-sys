@@ -45,20 +45,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.3** -- Seals and durability in one lineage, through the built-in default provider: `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, with `Durable` reported as a prefix after the completions it covers. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-323)
 
-- [ ] **DI-3.2.4** -- **Failures and their resolution.** A failed flush recorded as a failure whose
-  suspect set is frozen at observation, by push order ([DI-D-12](DESIGN-NOTES.md#di-d-12));
-  `Failed` with its identity and affine token; `take_token`, and a dropped token as `close`;
-  heal (effective at the first seal after it), abandon (`Abandoned`) and close; `resolve`, validated
-  whole and applied atomically, handing its tokens back when refused; `Blocked`; `import_failure`;
-  and the inventory, `failures()`. **Constraint from DI-1.2 Q4:** "a failure is observed" is one
-  transition, reachable at any drain point, with its cause (flush, import) as a field -- no
-  import-specific state or edge. Prefer enforcing it in the types (the cause is data on one variant,
-  not a variant of its own) over a test that could be skipped. **A fault seam lands here**, because
-  this step's tests need flush failures on demand and so do CONTRACT.md's worked examples: the
-  healing trace and the many-to-many failures become compiled doctests driven by it, so a
-  behaviour change that invalidates them breaks the build. The seam must therefore be reachable
-  from doctests, not only from `cfg(test)`. Check first whether `windows-ioring-sys`'
-  `fault-injection` feature can fail a flush; `DI-3.3` may build on the seam rather than beside it.
+- [x] **DI-3.2.4** -- Failures and their resolution: `Failed`, heal, abandon and close, `resolve`, `Blocked`, `import_failure`, the inventory, and a fault seam that drives CONTRACT.md's worked examples as doctests. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-324)
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
@@ -66,10 +53,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   as `NeverIssued` when it is abandoned, a gate on an abandoned epoch refused as `GateAbandoned`,
   and a gate cycle refused as `GateCycle` ([DI-D-23](DESIGN-NOTES.md#di-d-23)). Make
   `WriteOptions::gate` and `ReadOptions::gate` public again: `DI-3.2.2.1` made them crate-private,
-  because until gates are honoured a public setter would let a gated operation be issued ungated. Flush domains
-  narrowing a failure's reach -- intersection for the default provider, containment for a provider's
-  domain, a file declared with none reaching every file ([DI-D-21](DESIGN-NOTES.md#di-d-21)) -- and
-  `ImportScope`. **Open, for the engineer, before this step:** what `epoch_state` answers for an
+  because until gates are honoured a public setter would let a gated operation be issued ungated.
+  Failures become the instance's rather than the default lineage's: a suspect set spans every
+  lineage's held writes, a failure belongs to each lineage it suspects a write of, and
+  `ImportScope::Lineage` narrows to that lineage's writes. (Flush-domain reach for flush failures
+  and imports landed in `DI-3.2.4`, where the suspect set is defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34);
+  containment for a provider's domain is `DI-3.2.6`'s.) **Open, for the engineer, before this
+  step:** whether a write to an open epoch already abandoned is accepted, as it is since `DI-3.2.4`,
+  or refused, as a gate on one is (`GateAbandoned`). **Also open:** what `epoch_state` answers for an
   epoch of a lineage the instance does not have. `EpochState` has no value for it, so since
   `DI-3.2.3` dioring panics there ([DI-D-33](DESIGN-NOTES.md#di-d-33)); a retired lineage raises
   the same question, which is why it is settled here.
@@ -79,7 +70,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   answered once from any thread, with a failure as `Cause::Provider` and a completion dropped
   unanswered as `Cause::ProviderAbandoned`; the readiness signal set by provider answers
   ([DI-D-27](DESIGN-NOTES.md#di-d-27)). A write is durable when every domain of its file has
-  succeeded.
+  succeeded. A provider's failure of domain D reaches the held writes of every file whose declared
+  domains contain D, and every file declared with none ([DI-D-21](DESIGN-NOTES.md#di-d-21)); it
+  is observed through the same transition as a failed flush, with its own `Reach`.
 
 - [ ] **DI-3.2.7** -- **Ending.** `remove_file` refused while the file has anything in flight, held
   or uncovered, reported whole in `FileBusy`; `retire_lineage` and `LineageBusy`; `end_lineage` and

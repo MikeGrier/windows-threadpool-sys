@@ -18,6 +18,7 @@ use crate::ids::DioringIds;
 use crate::oracle::ConformanceOracle;
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, OpKind, PushRefusal,
+    Resolution,
 };
 
 type Ring = Dioring<Vec<u8>, u64, u32>;
@@ -180,6 +181,50 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
     }
     assert_eq!(delivery.durable_through(lineage), Some(1));
     assert_eq!(delivery.epoch_state(epoch), EpochState::Durable);
+}
+
+#[test]
+fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
+    let temp = temp();
+    let mut ring = instance(&temp, Vec::new());
+    ring.fail_next_flush(FILE, 1117);
+    let (tx, rx) = mpsc::channel();
+    let delivery = EntryDelivery::new(
+        ring,
+        move |entry: RingEntry, handle| {
+            // No panic here: it would be on a pool thread. The outcome is sent instead.
+            let seen = match entry {
+                Entry::Op(_) => "op",
+                Entry::Failed(failed) => {
+                    match handle.resolve(vec![(failed.token, Resolution::Abandon)]) {
+                        Ok(()) => "failed, abandoned from the handler",
+                        Err(_) => "failed, and the handle refused to resolve it",
+                    }
+                }
+                Entry::Abandoned { .. } => "abandoned",
+                Entry::Durable { .. } => "durable",
+                _ => "something else",
+            };
+            let _ = tx.send(seen);
+        },
+        None,
+    )
+    .expect("start delivery");
+    let epoch = Epoch::new(delivery.default_lineage(), 1);
+    delivery
+        .write(FILE, 0, vec![1; 8], epoch, 0)
+        .expect("push a write");
+    let op = rx.recv_timeout(BOUND);
+    delivery.make_durable_through(epoch).expect("seal");
+    let rest: Vec<&str> = (0..3).filter_map(|_| rx.recv_timeout(BOUND).ok()).collect();
+    let expected = ["failed, abandoned from the handler", "abandoned", "durable"];
+    if op != Ok("op") || rest != expected {
+        // As below: a handler stuck on the instance's lock must fail the test, not hang its drop.
+        std::mem::forget(delivery);
+        panic!("expected the write, then its failure, abandonment and Durable: {op:?} {rest:?}");
+    }
+    assert!(delivery.failures().is_empty());
+    assert_eq!(delivery.epoch_state(epoch), EpochState::Abandoned);
 }
 
 #[test]

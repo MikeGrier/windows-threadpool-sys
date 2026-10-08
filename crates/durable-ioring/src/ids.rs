@@ -5,7 +5,8 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 
 use crate::contract::{EpochId, Identities};
 
@@ -56,17 +57,42 @@ pub struct FailureId {
 }
 
 /// dioring's failure token: the one thing that resolves its failure. At most one is live per
-/// failure (DI-D-12).
+/// failure (DI-D-12). Resolving consumes it; dropping it is [`close`](Self::close).
 #[must_use = "an unresolved failure stalls the high-water mark; heal, abandon, or close it"]
 #[derive(Debug)]
 pub struct FailureToken {
     pub(crate) id: FailureId,
+    /// Shared with the instance's record of the failure, which reads it to know whether a token is
+    /// live and so whether the inventory may hand out another.
+    pub(crate) live: Arc<AtomicBool>,
 }
 
 impl FailureToken {
+    /// A live token for `id`, and the flag its drop clears.
+    pub(crate) fn mint(id: FailureId) -> (Self, Arc<AtomicBool>) {
+        let live = Arc::new(AtomicBool::new(true));
+        (
+            Self {
+                id,
+                live: Arc::clone(&live),
+            },
+            live,
+        )
+    }
+
     /// The failure this token resolves.
     pub fn id(&self) -> FailureId {
         self.id
+    }
+
+    /// Set the failure aside, unresolved: it stays in the inventory, which can hand out its token
+    /// again (DI-D-12 (c)). The same as dropping the token.
+    pub fn close(self) {}
+}
+
+impl Drop for FailureToken {
+    fn drop(&mut self) {
+        self.live.store(false, AtomicOrdering::Release);
     }
 }
 

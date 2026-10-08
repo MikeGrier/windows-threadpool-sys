@@ -1378,3 +1378,60 @@ The item as it stood at completion:
   instance's ring. Guarantees 1, 2, 3, 5, 6 and 7: `Durable` as a prefix, after the completions it
   covers, never retracted; a late write refused as `Sealed`; asking again answered by
   `AlreadySealed` with the epoch's state.
+
+## Moved 2026-10-07 21:17:47 -04:00 -- DI-3.2.4: failures and their resolution
+
+### <a id="di-324"></a>DI-3.2.4 -- Failures and their resolution: `Failed`, heal, abandon and close, `resolve`, `Blocked`, `import_failure`, the inventory, and a fault seam that drives CONTRACT.md's worked examples as doctests. *(completed 2026-10-07 21:17:47 -04:00)*
+
+How it is built is [DI-D-34](DESIGN-NOTES.md#di-d-34) (the assistant's, for the engineer to
+confirm). The trait gained `resolve`, `import_failure`, `failures` and `take_token`, mirrored on
+`DeliveryHandle` ([DI-D-32](DESIGN-NOTES.md#di-d-32)); `FailureToken` gained its liveness flag,
+`close`, and a drop that closes. Flush-domain reach for flush failures and imports was built here
+rather than in `DI-3.2.5`, because the suspect set is defined here; `DI-3.2.5` and `DI-3.2.6` were
+re-worded to say what remains for each.
+
+**The fault seam.** `windows-ioring-sys`' `fault-injection` feature can fail a flush:
+`Completion::with_injected_failure` transforms a real completion, and dioring's callback receives
+exactly that `Completion`. So dioring's seam builds on it -- `Dioring::fail_next_flush(file, code)`
+behind a `fault-injection` feature of its own -- and `DI-3.3` can build on that in turn. A self
+dev-dependency enables it for every test build, which is what lets the doctests use it.
+
+**Tests.** The durability core, without I/O (`dioring/durability/tests/failures.rs`): what a failed
+flush suspects, in push order and including writes in flight and above the seal; freezing; finality;
+reach by domain, for flushes and every import scope; a failure holding only its own epochs;
+`Blocked`, including for a seal finished before the failure arrived; both of CONTRACT.md's traces;
+a heal made after a seal not taking effect at it, and one waiting past a seal that failed; abandon
+at once, including an open epoch; a refused resolution; and the token's liveness. Against real files
+through the seam (`dioring/tests/failures.rs`): the cause and the error passed through, healing,
+`Blocked` then abandonment, domain reach, every import scope, a foreign token refused, a closed
+failure's token taken again, and an armed failure used only by its own file. Through Model A: a
+handler abandoning a failure through its handle. **The oracle gained this step's rules**: `Durable`
+never passes a failure neither healed nor abandoned; a failure's identity is new and its suspects
+are accepted writes with their epochs, in push order, none already durable; and `Abandoned` and
+`Blocked` name a live failure -- each tested in both directions, with `ConformanceOracle::healed` to
+report a heal. **CONTRACT.md's worked examples** are now `rust` blocks, compiled and run as
+doctests; the many-to-many example's second ending was corrected to match the contract's own rule.
+
+**Verification.** Sixteen new sabotages, each caught, and the DI-3.2.3 entries the rewrite moved
+re-anchored. Two existing sabotages turned out to be caught only by a process abort -- a debug
+assertion firing in the delivery callback -- so the core now records an inconsistency and `pop`
+asserts on it, and both fail as ordinary tests. The manifest now runs `--no-fail-fast`, so the
+doctests run under every sabotage: three sabotages fail them, which is the evidence they are live.
+The test binary ran 30 times without a failure.
+
+The item as it stood at completion:
+
+- [x] **DI-3.2.4** -- **Failures and their resolution.** A failed flush recorded as a failure whose
+  suspect set is frozen at observation, by push order ([DI-D-12](DESIGN-NOTES.md#di-d-12));
+  `Failed` with its identity and affine token; `take_token`, and a dropped token as `close`;
+  heal (effective at the first seal after it), abandon (`Abandoned`) and close; `resolve`, validated
+  whole and applied atomically, handing its tokens back when refused; `Blocked`; `import_failure`;
+  and the inventory, `failures()`. **Constraint from DI-1.2 Q4:** "a failure is observed" is one
+  transition, reachable at any drain point, with its cause (flush, import) as a field -- no
+  import-specific state or edge. Prefer enforcing it in the types (the cause is data on one variant,
+  not a variant of its own) over a test that could be skipped. **A fault seam lands here**, because
+  this step's tests need flush failures on demand and so do CONTRACT.md's worked examples: the
+  healing trace and the many-to-many failures become compiled doctests driven by it, so a
+  behaviour change that invalidates them breaks the build. The seam must therefore be reachable
+  from doctests, not only from `cfg(test)`. Check first whether `windows-ioring-sys`'
+  `fault-injection` feature can fail a flush; `DI-3.3` may build on the seam rather than beside it.

@@ -11,6 +11,9 @@ use crate::fake::{Fake, Signals};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
+// The failure rules: DI-3.2.4.
+mod failures;
+
 type V = DioringIds<u64>;
 type Oracle = ConformanceOracle<V, u32>;
 type TestEntry = Entry<V, Vec<u8>, u32>;

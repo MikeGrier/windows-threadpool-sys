@@ -19,6 +19,8 @@ use crate::types::{FileKey, FileOptions, FlushDomain};
 mod pushes;
 // Seals and durability in the default lineage: DI-3.2.3.
 mod seals;
+// Failures and their resolution, through the fault seam: DI-3.2.4.
+mod failures;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

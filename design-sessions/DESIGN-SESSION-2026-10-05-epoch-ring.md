@@ -2449,6 +2449,40 @@ One question has no answer in the contract: what `epoch_state` reports for an ep
 instance does not have. Every `EpochState` value would be false, so dioring panics, documented on the
 method. It is queued for the engineer under `DI-3.2.5`, where a retired lineage raises it again.
 
+## DI-3.2.4: failures in one lineage (2026-10-07)
+
+The engineer asked for `DI-3.2.4` to be implemented. DI-D-12 had settled what a failure is and how
+it is resolved; what was left was the mechanism, recorded as DI-D-34 for confirmation. The ring
+crate's fault seam turned out to be enough to fail a flush, because it transforms the very
+`Completion` dioring's callback receives, so dioring's seam is a thin layer over it.
+
+Decisions taken in the code, each because the contract's sentence admitted more than one reading:
+
+- **"The first seal made after the heal"** is read as the first such seal whose flushes all
+  succeed. Read strictly, a heal whose seal failed would never take effect, and its failure would
+  stall the mark for good.
+- **A pending heal holds the token.** The contract does not say whether a healed-but-not-yet-
+  effective failure can have its token taken again; answering no keeps "at most one live token"
+  true without a second resolution path.
+- **Flush-domain reach was built here, not in `DI-3.2.5`.** The suspect set is defined in this
+  step, and an instance-wide interim is not merely imprecise: an abandon over it abandons epochs no
+  failure put at risk.
+
+Two things the contract text and the code disagreed on. The many-to-many example's second ending
+said the mark "moves past" the abandoned epochs; the contract's own resolution rule says an epoch
+passes only once every failure containing it is resolved, and F1's heal is not in effect until a
+seal. The example was corrected, not the rule. And the healing trace shows one `Durable` where
+dioring appends one per seal; the compiled example asserts the outcome -- durable through 42, 41
+durable -- rather than the count.
+
+Building it found a weakness the earlier steps had left: a debug assertion in the durability core
+fires on the delivery callback's pool thread, where a panic aborts the whole test process. Two old
+sabotages were being scored as caught only because the process crashed. The core now records the
+inconsistency and `pop` asserts on it on the consumer's thread.
+
+One question is left for the engineer under `DI-3.2.5`: whether a write to an open epoch that was
+already abandoned should be refused, as a gate on one is.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

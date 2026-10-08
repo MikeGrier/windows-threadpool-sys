@@ -6,6 +6,7 @@ version = 4
 name = "durable-ioring"
 version = "0.1.0"
 dependencies = [
+ "durable-ioring",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "windows-ioring-sys",

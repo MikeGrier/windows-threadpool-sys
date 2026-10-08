@@ -28,6 +28,19 @@ win-sync-sys = { path = "../win-sync-sys" }
 # `From<Event> for WaitableHandle`, which is unreleased, and DI-3.5 pins it.
 windows-threadpool-sys = { path = "../windows-threadpool-sys" }
 
+[features]
+# The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by
+# default; nothing in production has a use for it. Built on the ring crate's own seam, which
+# transforms a real completion rather than fabricating one, so it cannot cause undefined behaviour,
+# only the wrong answer it was asked for.
+fault-injection = ["windows-ioring-sys/fault-injection"]
+
+[dev-dependencies]
+# This crate's own tests, and the worked examples in CONTRACT.md -- compiled as doctests -- drive
+# failures through the seam, so every test build enables it: a feature gate a plain `cargo test`
+# skips would leave those examples unrun.
+durable-ioring = { path = ".", features = ["fault-injection"] }
+
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it would render an
 # almost-empty crate.

@@ -373,49 +373,245 @@ Nothing is left unspecified at the contract's level. The concrete types are spec
 
 ## Worked examples
 
-The traces use illustrative names. `->` is a call the consumer makes; `<-` is an event it pops.
-Every write is in the default lineage, so the lineage is not shown.
+Each example is dioring running the trace in its comments, compiled and run as a test, so a change
+that breaks one breaks the build. In the comments, `->` is a call the consumer makes and `<-` an
+entry it pops. Every write is in the default lineage, so the lineage is not shown. A flush failure
+cannot be provoked on a healthy machine, so each example arms one with dioring's fault seam,
+`fail_next_flush`, which makes the next flush of a file report the error given whatever the device
+answered. Setting up the instance, and a `pop_until` that pops until an entry it is looking for, are
+hidden.
 
 ### Healing a failure
 
-```text
--> write(tag 41, A) ; write(tag 41, B) ; write(tag 41, C)
--> make_durable_through(41)                 // seals everything <= 41
-<- WriteDone(A) ; WriteDone(B) ; WriteDone(C)
-<- Failed { failure: F1, cause: Flush, suspect: [A@41, B@41, C@41] }
-                                            // durable_through() stays 40
--> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
--> write(tag 42, A') ; write(tag 42, B') ; write(tag 42, C')
--> heal(F1)                                 // "I have re-issued what I need"
--> make_durable_through(42)                 // the first seal after the heal
-<- WriteDone(A') ; WriteDone(B') ; WriteDone(C')
-<- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
+```rust
+# use std::os::windows::io::OwnedHandle;
+# use std::time::{Duration, Instant};
+# use durable_ioring::*;
+# type Ring = Dioring<Vec<u8>>;
+# const FILE: FileKey = FileKey(1);
+# fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
+#     let started = Instant::now();
+#     loop {
+#         match ring.pop().expect("pop") {
+#             Some(entry) if stop(&entry) => return entry,
+#             Some(_) => {}
+#             None => {
+#                 assert!(started.elapsed() < Duration::from_secs(10), "nothing arrived");
+#                 std::thread::sleep(Duration::from_millis(1));
+#             }
+#         }
+#     }
+# }
+# let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
+# std::fs::write(&path, [0u8; 64])?;
+# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let mut ring = Ring::new(Setup {
+#     submission_queue_size: 64,
+#     completion_queue_size: 64,
+#     files: vec![FileSetup {
+#         key: FILE,
+#         file: SharedHandle::new(OwnedHandle::from(file)),
+#         options: FileOptions::new(),
+#     }],
+#     buffers: Vec::new(),
+#     provider: None,
+# })
+# .expect("an instance");
+let lineage = ring.default_lineage();
+let tag = |n: u64| Epoch::new(lineage, n);
+
+// -> write(tag 41, A) ; write(tag 41, B) ; write(tag 41, C)
+for offset in [0, 8, 16] {
+    ring.write(FILE, offset, vec![1; 8], tag(41), ()).expect("a write");
+}
+ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal issues
+// -> make_durable_through(41)                 // seals everything <= 41
+ring.make_durable_through(tag(41))?;
+// <- WriteDone(A) ; WriteDone(B) ; WriteDone(C)
+// <- Failed { failure: F1, cause: Flush, suspect: [A@41, B@41, C@41] }
+let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
+    unreachable!()
+};
+assert!(matches!(f1.cause, Cause::Flush { .. }));
+assert_eq!(f1.suspect.writes().len(), 3);
+assert_eq!(ring.durable_through(lineage), None); // nothing is durable yet
+// -> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
+let refused = ring.write(FILE, 0, vec![2; 8], tag(41), ()).expect_err("41 is sealed");
+assert!(matches!(refused.reason, PushRefusal::Sealed { .. }));
+// -> write(tag 42, A') ; write(tag 42, B') ; write(tag 42, C')
+for offset in [0, 8, 16] {
+    ring.write(FILE, offset, vec![2; 8], tag(42), ()).expect("a write");
+}
+// -> heal(F1)                                 // "I have re-issued what I need"
+ring.resolve(vec![(f1.token, Resolution::Heal)]).expect("heal");
+// -> make_durable_through(42)                 // the first seal after the heal
+ring.make_durable_through(tag(42))?;
+// <- WriteDone(A') ; WriteDone(B') ; WriteDone(C')
+// <- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(42)));
+assert_eq!(ring.epoch_state(tag(41)), EpochState::Durable);
+assert!(ring.failures().is_empty());
+# drop(ring);
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
 ```
 
-Without the heal, the last line is `Blocked { through: 42, by: F1 }`: 42's own flush succeeded, but
+Without the heal, the last entry is `Blocked { through: 42, by: F1 }`: 42's own flush succeeded, but
 the high-water mark cannot pass the unresolved failure at 41.
 
 ### Failures and epochs are many-to-many
 
-```text
--> write(tag 41, A)
--> make_durable_through(41)                 // seals 41
--> write(tag 43, P)                         // 43 is open
-<- WriteDone(A) ; WriteDone(P)
-<- Failed { failure: F1, cause: Flush, suspect: [A@41, P@43] }
-                                            // one failure, two epochs: sealed 41 and open 43
--> write(tag 43, R)                         // still allowed: 43 is open
-<- WriteDone(R)
--> import_failure()                         // the consumer learned of an outside failure
-<- Failed { failure: F2, cause: Imported, suspect: [A@41, P@43, R@43] }
-                                            // epoch 43 now sits in F1 and F2
+`P` is pushed before the seal, rather than after it as a consumer might, so that it is certainly
+pushed before the failure is observed: the seal's flush is issued as soon as `A` completes.
+
+```rust
+# use std::os::windows::io::OwnedHandle;
+# use std::time::{Duration, Instant};
+# use durable_ioring::*;
+# type Ring = Dioring<Vec<u8>>;
+# const FILE: FileKey = FileKey(1);
+# fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
+#     let started = Instant::now();
+#     loop {
+#         match ring.pop().expect("pop") {
+#             Some(entry) if stop(&entry) => return entry,
+#             Some(_) => {}
+#             None => {
+#                 assert!(started.elapsed() < Duration::from_secs(10), "nothing arrived");
+#                 std::thread::sleep(Duration::from_millis(1));
+#             }
+#         }
+#     }
+# }
+# let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
+# std::fs::write(&path, [0u8; 64])?;
+# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let mut ring = Ring::new(Setup {
+#     submission_queue_size: 64,
+#     completion_queue_size: 64,
+#     files: vec![FileSetup {
+#         key: FILE,
+#         file: SharedHandle::new(OwnedHandle::from(file)),
+#         options: FileOptions::new(),
+#     }],
+#     buffers: Vec::new(),
+#     provider: None,
+# })
+# .expect("an instance");
+let lineage = ring.default_lineage();
+let tag = |n: u64| Epoch::new(lineage, n);
+let ops = |set: &SuspectSet<DioringIds<u64>>| set.writes().iter().map(|w| w.op).collect::<Vec<_>>();
+
+// -> write(tag 41, A) ; write(tag 43, P)      // 43 is open
+let a = ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
+let p = ring.write(FILE, 8, vec![1; 8], tag(43), ()).expect("a write");
+ring.fail_next_flush(FILE, 1117);
+// -> make_durable_through(41)                 // seals 41
+ring.make_durable_through(tag(41))?;
+// <- WriteDone(A) ; WriteDone(P)
+// <- Failed { failure: F1, cause: Flush, suspect: [A@41, P@43] }
+let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
+    unreachable!()
+};
+assert_eq!(ops(&f1.suspect), [a, p]); // one failure, two epochs: sealed 41 and open 43
+// -> write(tag 43, R)                         // still allowed: 43 is open
+let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
+// <- WriteDone(R)
+pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
+// -> import_failure()                         // the consumer learned of an outside failure
+let f2_id = ring.import_failure(ImportScope::All);
+// <- Failed { failure: F2, cause: Imported, suspect: [A@41, P@43, R@43] }
+let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
+    unreachable!()
+};
+assert_eq!(f2.id, f2_id);
+assert_eq!(ops(&f2.suspect), [a, p, r]); // epoch 43 now sits in F1 and F2
+
+// The first ending: heal both. Re-issue A, P and R under tag 44, resolve both in one atomic
+// call, and seal 44.
+for offset in [0, 8, 16] {
+    ring.write(FILE, offset, vec![2; 8], tag(44), ()).expect("a write");
+}
+ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Heal)])
+    .expect("heal both");
+ring.make_durable_through(tag(44))?;
+// <- Durable { through: 44 }                  // 41 and 43 passed once both failures were resolved
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(44)));
+assert_eq!(ring.epoch_state(tag(41)), EpochState::Durable);
+assert_eq!(ring.epoch_state(tag(43)), EpochState::Durable);
+# drop(ring);
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
 ```
 
-Two ways it can end:
+The second ending: **heal F1, abandon F2.** Epochs 41 and 43 both sit in F2, so both become
+**abandoned** -- one abandonment is enough -- even though F1 was healed. The high-water mark moves
+past them once every failure containing them is resolved: F2 at once, and F1 when its heal takes
+effect, at the first seal made after it. Any operation gated on 41 or 43 fails as never issued.
 
-- **Heal both.** Re-issue A, P and R under tag 44, then `resolve([F1: heal, F2: heal])` in one
-  atomic call and `make_durable_through(44)`. `Durable { through: 44 }` follows: 41 and 43 are durable,
-  having passed only once both failures containing them were resolved.
-- **Heal F1, abandon F2.** Epochs 41 and 43 both sit in F2, so both become **abandoned** -- one
-  abandonment is enough -- even though F1 was healed. The high-water mark moves past them, and any operation
-  gated on 41 or 43 fails as never issued.
+```rust
+# use std::os::windows::io::OwnedHandle;
+# use std::time::{Duration, Instant};
+# use durable_ioring::*;
+# type Ring = Dioring<Vec<u8>>;
+# const FILE: FileKey = FileKey(1);
+# fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
+#     let started = Instant::now();
+#     loop {
+#         match ring.pop().expect("pop") {
+#             Some(entry) if stop(&entry) => return entry,
+#             Some(_) => {}
+#             None => {
+#                 assert!(started.elapsed() < Duration::from_secs(10), "nothing arrived");
+#                 std::thread::sleep(Duration::from_millis(1));
+#             }
+#         }
+#     }
+# }
+# let path = std::env::temp_dir().join(format!("durable-ioring-abandon-{}", std::process::id()));
+# std::fs::write(&path, [0u8; 64])?;
+# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let mut ring = Ring::new(Setup {
+#     submission_queue_size: 64,
+#     completion_queue_size: 64,
+#     files: vec![FileSetup {
+#         key: FILE,
+#         file: SharedHandle::new(OwnedHandle::from(file)),
+#         options: FileOptions::new(),
+#     }],
+#     buffers: Vec::new(),
+#     provider: None,
+# })
+# .expect("an instance");
+# let lineage = ring.default_lineage();
+# let tag = |n: u64| Epoch::new(lineage, n);
+# ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
+# ring.write(FILE, 8, vec![1; 8], tag(43), ()).expect("a write");
+# ring.fail_next_flush(FILE, 1117);
+# ring.make_durable_through(tag(41))?;
+# let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
+#     unreachable!()
+# };
+# let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
+# pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
+# ring.import_failure(ImportScope::All);
+# let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
+#     unreachable!()
+# };
+// The trace above, to F2's arrival, is hidden. Then:
+ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Abandon)])
+    .expect("heal F1, abandon F2");
+// <- Abandoned { failure: F2, suspect: [A@41, P@43, R@43] }
+pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
+assert_eq!(ring.epoch_state(tag(41)), EpochState::Abandoned);
+assert_eq!(ring.epoch_state(tag(43)), EpochState::Abandoned);
+// -> make_durable_through(44)                 // F1's heal takes effect here
+ring.make_durable_through(tag(44))?;
+// <- Durable { through: 44 }                  // "durable through 44" means durable or abandoned
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(44)));
+assert_eq!(ring.durable_through(lineage), Some(44));
+assert_eq!(ring.epoch_state(tag(43)), EpochState::Abandoned);
+# drop(ring);
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```

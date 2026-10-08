@@ -6,7 +6,8 @@
 //!
 //! The stream is what the consumer sees: each accepted push, reported to the oracle with
 //! [`ConformanceOracle::pushed`]; each seal the instance accepted as new, reported with
-//! [`ConformanceOracle::sealed`]; and each popped entry, reported with
+//! [`ConformanceOracle::sealed`]; each failure the consumer healed, reported with
+//! [`ConformanceOracle::healed`]; and each popped entry, reported with
 //! [`ConformanceOracle::observe`]. The oracle grows with the implementation (DI-3.2): each step
 //! adds the rules it implements, and every rule cites the contract's statement of it.
 //!
@@ -25,6 +26,16 @@
 //!   seal of n's lineage at or above n.
 //! - **`Durable` follows the writes it covers** (guarantee 5): it arrives after the completion of
 //!   every write of n's lineage tagged at or below n.
+//! - **`Durable` waits for every failure holding it** (DI-D-12 (f)): it passes no epoch of its
+//!   lineage that a reported failure contains, unless that failure was healed or abandoned.
+//! - **A failure is new, and suspects only accepted writes** (DI-D-12 (b)): its identity was never
+//!   reported before, and every suspect write was accepted as a write tagged with the epoch
+//!   reported, listed in push order.
+//! - **Finality** (guarantee 3): no suspect write is of an epoch its lineage was already reported
+//!   durable through.
+//! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
+//!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
+//!   containing an epoch of n's lineage at or below n.
 //!
 //! # Deliberately not checked
 //!
@@ -40,9 +51,13 @@
 //!   the high-water mark did pass it -- and the contract promises an answer per request, not a
 //!   rising sequence.
 //! - **That every request is answered** (guarantee 4): a seal that stays pending is legal while a
-//!   provider has not answered, and a failure's answer is `DI-3.2.4`'s. Its rule lands with it.
-//! - **The entries later steps define** -- `Failed`, `Blocked`, `Abandoned` and `LineageEnded` --
-//!   are accepted unexamined until the steps that produce them add their rules.
+//!   provider has not answered, and the stream cannot show that a provider has not.
+//! - **Which writes a failure should have suspected.** That depends on the order the instance
+//!   observed things in and on the files' declared flush domains, neither of which the stream
+//!   carries; so the members are checked, not the set's extent.
+//! - **When a heal takes effect.** It waits for a seal the stream cannot tell apart from others,
+//!   so a `Durable` that passes a healed failure is accepted whenever it comes.
+//! - **`LineageEnded`**, accepted unexamined until the step that produces it adds its rules.
 //!
 //! # What the stream cannot show
 //!
@@ -60,7 +75,7 @@ use std::time::Duration;
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
-use crate::types::{Entry, Epoch, OpKind};
+use crate::types::{Entry, Epoch, OpKind, SuspectWrite};
 
 #[cfg(test)]
 mod tests;
@@ -129,6 +144,60 @@ pub enum Violation<V: Identities> {
         /// A covered write not yet completed.
         op: V::OpId,
     },
+    /// `Durable` past an epoch a failure contains that was neither healed nor abandoned.
+    DurableThroughFailure {
+        /// What was reported.
+        through: Epoch<V>,
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Failed` with an identity already reported.
+    DuplicateFailure {
+        /// The repeated identity.
+        failure: V::FailureId,
+    },
+    /// A suspect write that was not accepted as a write with the epoch reported.
+    SuspectNotPushed {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write.
+        op: V::OpId,
+    },
+    /// A suspect set not in push order.
+    SuspectsOutOfOrder {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// A suspect write of an epoch already reported durable (guarantee 3).
+    SuspectAlreadyDurable {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write.
+        op: V::OpId,
+    },
+    /// `Abandoned` for a failure not reported, or already abandoned.
+    AbandonedUnknown {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Abandoned` with a suspect set other than the one `Failed` reported.
+    AbandonedSuspectChanged {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Blocked` by a failure that is not live, or holds no epoch at or below the request.
+    BlockedByUnrelated {
+        /// What was reported.
+        through: Epoch<V>,
+        /// The failure named.
+        by: V::FailureId,
+    },
+}
+
+/// A failure reported and not yet abandoned.
+struct Reported<V: Identities> {
+    suspect: Vec<(V::OpId, Epoch<V>)>,
+    healed: bool,
 }
 
 /// The contract's rules over one instance's event stream. `C` is the consumer's context type;
@@ -138,6 +207,14 @@ pub struct ConformanceOracle<V: Identities, C> {
     completed: HashSet<V::OpId>,
     /// Each lineage's seal point.
     sealed: HashMap<V::Lineage, V::EpochId>,
+    /// Every accepted write's epoch, kept after it completes: a failure may suspect it later.
+    writes: HashMap<V::OpId, Epoch<V>>,
+    /// The highest `Durable` reported for each lineage.
+    durable: HashMap<V::Lineage, V::EpochId>,
+    /// The failures reported and not abandoned.
+    failures: HashMap<V::FailureId, Reported<V>>,
+    /// Every failure identity reported.
+    failure_ids: HashSet<V::FailureId>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -147,6 +224,18 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             outstanding: HashMap::new(),
             completed: HashSet::new(),
             sealed: HashMap::new(),
+            writes: HashMap::new(),
+            durable: HashMap::new(),
+            failures: HashMap::new(),
+            failure_ids: HashSet::new(),
+        }
+    }
+
+    /// Report a failure the consumer healed: `resolve` accepted `Heal` for it. Abandoning needs no
+    /// report; the `Abandoned` entry is the record.
+    pub fn healed(&mut self, failure: V::FailureId) {
+        if let Some(reported) = self.failures.get_mut(&failure) {
+            reported.healed = true;
         }
     }
 
@@ -180,6 +269,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
                 sealed_through,
             });
         }
+        if let OpKind::Write { epoch } = kind {
+            self.writes.insert(op, epoch);
+        }
         self.outstanding.insert(op, Pushed { kind, context });
         Ok(())
     }
@@ -193,7 +285,12 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         let completion = match entry {
             Entry::Op(completion) => completion,
             Entry::Durable { through } => return self.durable(*through),
-            _ => return Ok(()),
+            Entry::Failed(failed) => return self.failed(failed.id, failed.suspect.writes()),
+            Entry::Abandoned { failure, suspect } => {
+                return self.abandoned(*failure, suspect.writes());
+            }
+            Entry::Blocked { through, by } => return self.blocked(*through, *by),
+            Entry::LineageEnded { .. } => return Ok(()),
         };
         let op = completion.id;
         let Some(pushed) = self.outstanding.remove(&op) else {
@@ -217,7 +314,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         Ok(())
     }
 
-    fn durable(&self, through: Epoch<V>) -> Result<(), Violation<V>> {
+    fn durable(&mut self, through: Epoch<V>) -> Result<(), Violation<V>> {
         if self
             .sealed
             .get(&through.lineage)
@@ -236,9 +333,83 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
                 }
                 _ => None,
             });
-        match uncompleted {
-            Some(op) => Err(Violation::DurableBeforeCompletion { through, op }),
-            None => Ok(()),
+        if let Some(op) = uncompleted {
+            return Err(Violation::DurableBeforeCompletion { through, op });
+        }
+        if let Some(failure) = self.failures.iter().find_map(|(id, reported)| {
+            (!reported.healed && holds(reported, through)).then_some(*id)
+        }) {
+            return Err(Violation::DurableThroughFailure { through, failure });
+        }
+        let point = self.durable.entry(through.lineage).or_insert(through.id);
+        if through.id > *point {
+            *point = through.id;
+        }
+        Ok(())
+    }
+
+    fn failed(
+        &mut self,
+        failure: V::FailureId,
+        suspect: &[SuspectWrite<V>],
+    ) -> Result<(), Violation<V>> {
+        if !self.failure_ids.insert(failure) {
+            return Err(Violation::DuplicateFailure { failure });
+        }
+        for write in suspect {
+            if self.writes.get(&write.op) != Some(&write.epoch) {
+                return Err(Violation::SuspectNotPushed {
+                    failure,
+                    op: write.op,
+                });
+            }
+            if self
+                .durable
+                .get(&write.epoch.lineage)
+                .is_some_and(|&durable| write.epoch.id <= durable)
+            {
+                return Err(Violation::SuspectAlreadyDurable {
+                    failure,
+                    op: write.op,
+                });
+            }
+        }
+        if suspect.windows(2).any(|pair| pair[0].op >= pair[1].op) {
+            return Err(Violation::SuspectsOutOfOrder { failure });
+        }
+        self.failures.insert(
+            failure,
+            Reported {
+                suspect: suspect.iter().map(|w| (w.op, w.epoch)).collect(),
+                healed: false,
+            },
+        );
+        Ok(())
+    }
+
+    fn abandoned(
+        &mut self,
+        failure: V::FailureId,
+        suspect: &[SuspectWrite<V>],
+    ) -> Result<(), Violation<V>> {
+        let Some(reported) = self.failures.remove(&failure) else {
+            return Err(Violation::AbandonedUnknown { failure });
+        };
+        if !reported
+            .suspect
+            .iter()
+            .copied()
+            .eq(suspect.iter().map(|w| (w.op, w.epoch)))
+        {
+            return Err(Violation::AbandonedSuspectChanged { failure });
+        }
+        Ok(())
+    }
+
+    fn blocked(&self, through: Epoch<V>, by: V::FailureId) -> Result<(), Violation<V>> {
+        match self.failures.get(&by) {
+            Some(reported) if holds(reported, through) => Ok(()),
+            _ => Err(Violation::BlockedByUnrelated { through, by }),
         }
     }
 
@@ -261,6 +432,14 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             })
         }
     }
+}
+
+/// Whether a reported failure contains an epoch of `through`'s lineage at or below it.
+fn holds<V: Identities>(reported: &Reported<V>, through: Epoch<V>) -> bool {
+    reported
+        .suspect
+        .iter()
+        .any(|(_, epoch)| epoch.lineage == through.lineage && epoch.id <= through.id)
 }
 
 impl<V: Identities, C: PartialEq> Default for ConformanceOracle<V, C> {
