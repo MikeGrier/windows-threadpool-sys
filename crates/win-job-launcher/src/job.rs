@@ -6,11 +6,13 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr;
 
+use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject,
 };
 
 use crate::outcome::Accounting;
@@ -20,6 +22,10 @@ mod tests;
 
 /// `JOBOBJECT_BASIC_ACCOUNTING_INFORMATION` counts CPU time in 100 ns ticks.
 const TICKS_PER_MS: i64 = 10_000;
+
+/// How many process ids [`Job::process_ids`] makes room for at first; it asks
+/// again with room for all of them when there are more.
+const INITIAL_PROCESS_IDS: usize = 64;
 
 /// An anonymous job object, kill-on-close: when the last handle to it closes --
 /// including because this process died -- every process still in it is
@@ -104,6 +110,71 @@ impl Job {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// The ids of the processes in the job now.
+    ///
+    /// Unlike [`Job::accounting`]'s active count, this names them, so a caller
+    /// can tell a process it knows about from one it does not. The count lags:
+    /// a process that has exited -- its handle signalled -- can still be counted
+    /// active for a moment afterwards.
+    ///
+    /// # Errors
+    ///
+    /// The OS error from `QueryInformationJobObject`.
+    pub fn process_ids(&self) -> io::Result<Vec<u32>> {
+        self.process_ids_with_capacity(INITIAL_PROCESS_IDS)
+    }
+
+    fn process_ids_with_capacity(&self, mut capacity: usize) -> io::Result<Vec<u32>> {
+        loop {
+            // Whole `usize` words, so the buffer is aligned for the structure
+            // and its ids, which are pointer-sized.
+            let bytes = size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>()
+                + capacity.saturating_sub(1) * size_of::<usize>();
+            let mut buffer = vec![0_usize; bytes.div_ceil(size_of::<usize>())];
+            // SAFETY: the handle is live; the buffer is writable for `bytes`
+            // bytes, which is the length passed, and the returned-length
+            // pointer may be null.
+            let ok = unsafe {
+                QueryInformationJobObject(
+                    self.raw(),
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast::<c_void>(),
+                    u32::try_from(bytes).expect("the list's size fits a u32"),
+                    ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                let e = io::Error::last_os_error();
+                // The list did not fit. The header, which is written even
+                // then, says how many processes there are.
+                if e.raw_os_error() == Some(ERROR_MORE_DATA.cast_signed()) {
+                    let list = buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+                    // SAFETY: the buffer is at least one header long and the
+                    // OS wrote the header.
+                    let assigned = unsafe { (*list).NumberOfAssignedProcesses } as usize;
+                    capacity = assigned.max(capacity.saturating_mul(2));
+                    continue;
+                }
+                return Err(e);
+            }
+            let list = buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+            // SAFETY: the call succeeded, so the header and
+            // `NumberOfProcessIdsInList` ids after it are written; the ids
+            // start at the address of the `ProcessIdList` field.
+            let ids = unsafe {
+                let count = (*list).NumberOfProcessIdsInList as usize;
+                std::slice::from_raw_parts(
+                    ptr::addr_of!((*list).ProcessIdList).cast::<usize>(),
+                    count,
+                )
+            };
+            return Ok(ids
+                .iter()
+                .map(|&id| u32::try_from(id).expect("a process id fits a u32"))
+                .collect());
+        }
     }
 
     /// The job's process counts and CPU time so far.

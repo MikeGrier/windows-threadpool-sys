@@ -76,6 +76,84 @@ fn closing_the_job_kills_its_process() {
 }
 
 #[test]
+fn a_new_job_lists_no_processes() {
+    let job = Job::new_kill_on_close().expect("create a job");
+    assert_eq!(job.process_ids().unwrap(), Vec::<u32>::new());
+}
+
+#[test]
+fn an_assigned_process_is_listed_by_its_id() {
+    let job = Job::new_kill_on_close().expect("create a job");
+    let mut child = suspended(0);
+    job.assign(child.as_handle()).expect("assign");
+    assert_eq!(job.process_ids().unwrap(), [child.id()]);
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn every_assigned_process_is_listed_and_only_those() {
+    let job = Job::new_kill_on_close().expect("create a job");
+    let mut children: Vec<Child> = (0..5).map(|_| suspended(0)).collect();
+    for child in &children {
+        job.assign(child.as_handle()).expect("assign");
+    }
+    let outside = suspended(0);
+    let mut listed = job.process_ids().unwrap();
+    listed.sort_unstable();
+    let mut expected: Vec<u32> = children.iter().map(Child::id).collect();
+    expected.sort_unstable();
+    assert_eq!(listed, expected);
+    assert!(!listed.contains(&outside.id()));
+    for child in &mut children {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    let mut outside = outside;
+    outside.kill().unwrap();
+    outside.wait().unwrap();
+}
+
+#[test]
+fn a_list_longer_than_the_room_made_for_it_is_read_whole() {
+    // Room for one id, with five processes: the first call is too small, and
+    // the retry has to be sized from what the OS reported.
+    let job = Job::new_kill_on_close().expect("create a job");
+    let mut children: Vec<Child> = (0..5).map(|_| suspended(0)).collect();
+    for child in &children {
+        job.assign(child.as_handle()).expect("assign");
+    }
+    let mut listed = job.process_ids_with_capacity(1).unwrap();
+    listed.sort_unstable();
+    let mut expected: Vec<u32> = children.iter().map(Child::id).collect();
+    expected.sort_unstable();
+    assert_eq!(listed, expected);
+    for child in &mut children {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}
+
+#[test]
+fn a_terminated_process_leaves_the_list() {
+    let job = Job::new_kill_on_close().expect("create a job");
+    let mut child = suspended(0);
+    job.assign(child.as_handle()).expect("assign");
+    job.terminate(1).unwrap();
+    child.wait().unwrap();
+    // The list, like the count, may name the process for a moment after it is
+    // gone; it must be empty soon.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !job.process_ids().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "still listed after 5s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn contains_says_whether_a_process_is_in_the_job() {
     let job = Job::new_kill_on_close().expect("create a job");
     let mut child = suspended(0);

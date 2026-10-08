@@ -28,6 +28,14 @@
       "replace": ["        .filter(|_| true)"]
     },
     {
+      "name": "the command itself is counted as a stray",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "The job still lists the command for a moment after its handle is signalled, so counting every listed process reports a command that left nothing behind as having left one. It showed up as a rare failure on CI, never locally; the count is judged here on the ids, where the race does not reach.",
+      "find": ["    u32::try_from(ids.iter().filter(|&&id| id != command).count())"],
+      "replace": ["    u32::try_from(ids.iter().filter(|&&id| id != 0).count())"]
+    },
+    {
       "name": "the bound is never enforced",
       "file": "src/launch.rs",
       "expect": "caught",

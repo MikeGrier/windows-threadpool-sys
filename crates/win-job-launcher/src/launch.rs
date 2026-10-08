@@ -16,6 +16,9 @@ use crate::narrate::Narrator;
 use crate::outcome::{Accounting, Outcome, Report};
 use crate::process::{self, Process};
 
+#[cfg(test)]
+mod tests;
+
 /// How long, after terminating the job, the launcher waits to see it empty
 /// before reporting. Termination is asynchronous; reporting before the tree is
 /// gone would let a caller go on to touch files the tree still holds open.
@@ -84,15 +87,20 @@ fn exited<W: Write>(child: &Process, job: &Job, n: &mut Narrator<W>) -> Report {
         Err(e) => panic!("the command exited but its status could not be read: {e}"),
     };
     let at_exit = read_accounting(job, n);
-    let strays = at_exit.map_or(0, |a| a.active_processes);
+    // Strays are the processes in the job that are not the command itself. The
+    // accounting's active count cannot say that: it lags, and still counts the
+    // command for a moment after its handle is signalled, which reported a
+    // command that left nothing behind as having left a process.
+    let others = other_processes(job, child.id(), n);
+    let strays = others.unwrap_or(0);
     n.trace(format_args!(
         "the command exited with code {code} after {}ms; {}",
         n.elapsed().as_millis(),
         describe(at_exit)
     ));
-    // With the accounting unreadable there is no evidence the job is empty, so
-    // it is cleaned up and confirmed as if it were not.
-    let confirmed = if strays > 0 || at_exit.is_none() {
+    // With the process list unreadable there is no evidence the job holds only
+    // the command, so it is cleaned up and confirmed as if it held more.
+    let confirmed = if strays > 0 || others.is_none() {
         n.trace(format_args!(
             "terminating {strays} stray process(es) still in the job"
         ));
@@ -111,6 +119,24 @@ fn exited<W: Write>(child: &Process, job: &Job, n: &mut Narrator<W>) -> Report {
         },
         at_exit,
     )
+}
+
+/// How many processes other than `command` are in the job, or `None` when the
+/// job's process list could not be read.
+fn other_processes<W: Write>(job: &Job, command: u32, n: &mut Narrator<W>) -> Option<u32> {
+    match job.process_ids() {
+        Ok(ids) => Some(strays_among(&ids, command)),
+        Err(e) => {
+            n.error(format_args!("could not read the job's process list: {e}"));
+            None
+        }
+    }
+}
+
+/// How many of `ids` are not `command`.
+fn strays_among(ids: &[u32], command: u32) -> u32 {
+    u32::try_from(ids.iter().filter(|&&id| id != command).count())
+        .expect("a job holds fewer than u32::MAX processes")
 }
 
 fn timed_out<W: Write>(child: &Process, job: &Job, bound: u32, n: &mut Narrator<W>) -> Report {
