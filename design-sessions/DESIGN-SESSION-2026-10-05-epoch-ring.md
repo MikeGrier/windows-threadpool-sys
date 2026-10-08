@@ -2489,6 +2489,14 @@ refusal's shape: a new `EpochAbandoned` variant rather than reusing `Sealed`, wh
 why an open epoch is refused; and `Sealed` checked first, so a sealed abandoned epoch keeps the
 answer it already had.
 
+The engineer then asked what DI-D-32 was asking them to ratify, finding the row too dense to tell.
+Restated as two questions -- mirrored `&self` methods on the handle rather than a closure lending
+`&mut` to the instance, at the cost of keeping the handle in step with the trait; and ending by
+stopping delivery first, with `into_inner` returning the instance and its undelivered entries --
+the engineer confirmed both: "yes mirrored", and of the second, "I don't see how else it could
+work". The row's enumeration of mirrored methods, stale after two steps had added to it, was
+replaced by the rule it follows and a pointer to the code.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
