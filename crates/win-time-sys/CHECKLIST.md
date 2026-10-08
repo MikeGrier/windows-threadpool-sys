@@ -8,10 +8,7 @@ WT-M1, the crate and its clocks, is complete and archived in
 
 - [x] **WT-2.1** -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-21)
 
-- [ ] **WT-2.2.1** -- **`Steady`** ([WT-D-9](DESIGN-NOTES.md#wt-d-9)): the marker trait for a clock
-  whose readings never decrease, implemented by the four interrupt clocks and `PerformanceClock` and
-  not by the system clocks. The tests that no clock goes backwards are bound to the trait, so every
-  `Steady` clock is held to it; a `compile_fail` doctest shows a system clock is not `Steady`.
+- [x] **WT-2.2.1** -- `Steady`, the marker trait for a clock whose readings never decrease, made by the interrupt and performance clocks and not by the system clocks. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-221)
 
 - [ ] **WT-2.2.2** -- **durable-ioring's timestamps use a `Steady` interrupt-time clock,
   `InterruptClock` by default** ([DI-D-37](../durable-ioring/DESIGN-NOTES.md#di-d-37),

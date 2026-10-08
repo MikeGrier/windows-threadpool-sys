@@ -13,6 +13,9 @@ Two layers, kept apart because they vary independently:
   because their types differ.
 - **A clock** is a way to read "now" on one timeline. Several clocks can share a timeline, differing
   only in what a reading costs and how fresh it is.
+- **A steady clock** is one whose readings never decrease, and says so by implementing `Steady`.
+  Code that relies on the promise names it in its bounds, and a test's mock clock that implements it
+  takes on the promise too. Every clock here is steady except the two system clocks.
 
 The timelines are system time (UTC, 100 ns ticks since 1601), interrupt time (100 ns ticks since
 boot), unbiased interrupt time (the same, leaving out time asleep), and the performance counter.

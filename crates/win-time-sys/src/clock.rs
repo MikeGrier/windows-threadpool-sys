@@ -48,3 +48,33 @@ pub trait Clock {
     /// The current point on the timeline.
     fn now(&self) -> TimePoint<Self::Timeline>;
 }
+
+/// A clock whose readings never decrease: a reading taken after another is at or after it
+/// ([WT-D-9]).
+///
+/// A promise rather than a check. Implementing it is how a clock -- a test's mock included -- says
+/// it keeps the promise, and code that relies on the promise names `Steady` in its bounds, so a
+/// clock that does not make it fails to compile there. It promises direction only: not a rate, not
+/// freshness, and not that two readings differ, which a plain interrupt-time clock does not for a
+/// whole system tick.
+///
+/// The interrupt clocks and the performance clock make it. The system clocks do not, because
+/// setting the time moves them backwards:
+///
+/// ```
+/// use win_time_sys::{InterruptClock, PerformanceClock, Steady};
+///
+/// fn stamps_with<C: Steady>(_: C) {}
+/// stamps_with(InterruptClock);
+/// stamps_with(PerformanceClock);
+/// ```
+///
+/// ```compile_fail,E0277
+/// use win_time_sys::{PreciseSystemClock, Steady};
+///
+/// fn stamps_with<C: Steady>(_: C) {}
+/// stamps_with(PreciseSystemClock);
+/// ```
+///
+/// [WT-D-9]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/win-time-sys/DESIGN-NOTES.md#wt-d-9
+pub trait Steady: Clock {}

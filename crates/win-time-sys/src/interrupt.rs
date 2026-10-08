@@ -22,7 +22,7 @@ use windows_sys::Win32::System::WindowsProgramming::{
     QueryUnbiasedInterruptTimePrecise,
 };
 
-use crate::clock::Clock;
+use crate::clock::{Clock, Steady};
 use crate::timeline::{HUNDRED_NANOSECOND_TICKS, TimePoint, Timeline};
 
 #[cfg(test)]
@@ -126,3 +126,10 @@ impl Clock for PreciseUnbiasedInterruptClock {
         TimePoint::from_ticks(ticks)
     }
 }
+
+// Both timelines count up from the start of the boot and are never set, so none of their four
+// clocks goes backwards.
+impl Steady for InterruptClock {}
+impl Steady for PreciseInterruptClock {}
+impl Steady for UnbiasedInterruptClock {}
+impl Steady for PreciseUnbiasedInterruptClock {}

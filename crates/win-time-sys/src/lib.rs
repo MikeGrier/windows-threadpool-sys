@@ -12,7 +12,7 @@ mod performance;
 mod system;
 mod timeline;
 
-pub use clock::Clock;
+pub use clock::{Clock, Steady};
 pub use interrupt::{
     InterruptClock, InterruptTime, PreciseInterruptClock, PreciseUnbiasedInterruptClock,
     UnbiasedInterruptClock, UnbiasedInterruptTime,

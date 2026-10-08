@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
 
 use super::{PerformanceClock, PerformanceCounter};
-use crate::{Clock, Timeline};
+use crate::{Clock, Steady, Timeline};
 
 /// Shorter than the finest system clock tick, 0.5 ms.
 const WITHIN_A_TICK: Duration = Duration::from_micros(50);
@@ -19,14 +19,19 @@ fn spin(duration: Duration) {
     }
 }
 
-#[test]
-fn the_clock_never_goes_backwards() {
-    let mut last = PerformanceClock.now();
+/// What `Steady` promises, over a thousand readings.
+fn never_goes_backwards<C: Steady>(clock: C) {
+    let mut last = clock.now();
     for _ in 0..1_000 {
-        let next = PerformanceClock.now();
+        let next = clock.now();
         assert!(next >= last, "{next:?} after {last:?}");
         last = next;
     }
+}
+
+#[test]
+fn the_clock_never_goes_backwards() {
+    never_goes_backwards(PerformanceClock);
 }
 
 #[test]

@@ -10,7 +10,7 @@ use super::{
     InterruptClock, InterruptTime, PreciseInterruptClock, PreciseUnbiasedInterruptClock,
     UnbiasedInterruptClock, UnbiasedInterruptTime,
 };
-use crate::{Clock, Ticks, Timeline};
+use crate::{Clock, Steady, Ticks, Timeline};
 
 /// Longer than the coarsest system clock tick, 15.625 ms, with room to spare.
 const ACROSS_A_TICK: Duration = Duration::from_millis(50);
@@ -24,7 +24,8 @@ fn spin(duration: Duration) {
     }
 }
 
-fn never_goes_backwards<C: Clock>(clock: C) {
+/// What `Steady` promises, over a thousand readings.
+fn never_goes_backwards<C: Steady>(clock: C) {
     let mut last = clock.now();
     for _ in 0..1_000 {
         let next = clock.now();

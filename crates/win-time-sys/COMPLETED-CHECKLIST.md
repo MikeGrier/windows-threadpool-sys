@@ -216,3 +216,35 @@ The item as it stood at completion:
 
 - [x] **WT-2.1** -- **`windows-threadpool-sys` reads interrupt time through this crate**, retiring its
   crate-private `heal::now()`, so the workspace has one reader of its one time base.
+
+## Moved 2026-10-08 00:29:30 -04:00 -- WT-2.2.1: Steady
+
+### <a id="wt-221"></a>WT-2.2.1 -- `Steady`, the marker trait for a clock whose readings never decrease, made by the interrupt and performance clocks and not by the system clocks. *(completed 2026-10-08 00:29:30 -04:00)*
+
+`pub trait Steady: Clock {}`, in `clock.rs` and exported from the crate root
+([WT-D-9](DESIGN-NOTES.md#wt-d-9)). Its documentation states the promise -- a reading taken after
+another is at or after it -- and what it does not promise: a rate, freshness, or that two readings
+differ. `InterruptClock`, `PreciseInterruptClock`, `UnbiasedInterruptClock`,
+`PreciseUnbiasedInterruptClock` and `PerformanceClock` implement it; `CoarseSystemClock` and
+`PreciseSystemClock` do not. The README's description of the layers names it.
+
+**Tests.** The helpers that check a thousand readings never go backwards now take `C: Steady`, so they
+are the trait's promise checked on every clock that makes it; the performance clock's check became
+such a helper too. A passing doctest uses `InterruptClock` and `PerformanceClock` where `Steady` is
+required, and a `compile_fail` doctest pinned to `E0277` shows `PreciseSystemClock` is refused there.
+The test binary ran 30 times in sequence without a failure.
+
+**Verification.** Three sabotages, each as declared: a system clock claiming `Steady` is caught by the
+`compile_fail` doctest, and the performance and plain interrupt clocks losing their implementations
+are refused by the build, with the `E0277` message naming each. Added to `notCoveredHere`: a clock
+that claims `Steady` with no test holding it to the promise, since the tests list their clocks by hand
+and Rust cannot enumerate a trait's implementations; and a mock elsewhere that breaks the promise,
+which is its owner's to catch. Every entry behaved as declared: the whole manifest ran, then the two
+`refused-by-build` entries again after being reclassified from `caught`.
+
+The item as it stood at completion:
+
+- [x] **WT-2.2.1** -- **`Steady`** ([WT-D-9](DESIGN-NOTES.md#wt-d-9)): the marker trait for a clock
+  whose readings never decrease, implemented by the four interrupt clocks and `PerformanceClock` and
+  not by the system clocks. The tests that no clock goes backwards are bound to the trait, so every
+  `Steady` clock is held to it; a `compile_fail` doctest shows a system clock is not `Steady`.

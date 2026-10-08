@@ -1,7 +1,7 @@
 {
   "package": "win-time-sys",
   "description": "Sabotages for win-time-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Three defects in the interrupt-time clocks no test can catch. A plain clock reading the precise call is more precise, not wrong: the difference is cost, which WT-1.6's probe measures. A clock reading the other interrupt timeline -- biased for unbiased, or the reverse -- gives identical values on a machine that has never slept, which a CI host need not have done. And QueryUnbiasedInterruptTime's failure, asserted in debug builds, is documented to happen only for a null pointer, which a reference cannot be. Likewise QueryPerformanceCounter's and QueryPerformanceFrequency's, which are documented to always succeed on Windows XP and later. Reading the performance counter's frequency on every call rather than once is not caught either: the frequency is fixed at boot, so it changes what a call costs, never what it answers.",
+  "notCoveredHere": "Three defects in the interrupt-time clocks no test can catch. A plain clock reading the precise call is more precise, not wrong: the difference is cost, which WT-1.6's probe measures. A clock reading the other interrupt timeline -- biased for unbiased, or the reverse -- gives identical values on a machine that has never slept, which a CI host need not have done. And QueryUnbiasedInterruptTime's failure, asserted in debug builds, is documented to happen only for a null pointer, which a reference cannot be. Likewise QueryPerformanceCounter's and QueryPerformanceFrequency's, which are documented to always succeed on Windows XP and later. Reading the performance counter's frequency on every call rather than once is not caught either: the frequency is fixed at boot, so it changes what a call costs, never what it answers. A clock that claims Steady with no test holding it to the promise is not caught: the tests list their clocks by hand, because Rust cannot enumerate a trait's implementations, and the bound on the test helper only stops a clock that does not claim it from being checked as if it did. A mock clock elsewhere that breaks the promise is its owner's to catch, not this crate's.",
   "sabotages": [
     {
       "name": "WT-1.2: points order backwards",
@@ -202,6 +202,32 @@
       "why": "The manifest checking itself: a count below zero is exactly what is_negative tests, so this is an equivalent change on code every duration test runs.",
       "find": ["        (!self.is_negative()).then(|| self.abs_duration())\n"],
       "replace": ["        (self.count >= 0).then(|| self.abs_duration())\n"]
+    },
+    {
+      "name": "WT-2.2.1: a system clock claims to be steady",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The promise Steady carries is the one thing a bound on it buys. A system clock moves backwards when the time is set, so code that took one as steady would be relying on a promise nothing keeps.",
+      "find": ["impl Clock for PreciseSystemClock {\n"],
+      "replace": ["impl crate::clock::Steady for PreciseSystemClock {}\n\nimpl Clock for PreciseSystemClock {\n"]
+    },
+    {
+      "name": "WT-2.2.1: the performance clock stops claiming to be steady",
+      "file": "src/performance.rs",
+      "expect": "refused-by-build",
+      "buildError": "the trait bound `PerformanceClock: Steady` is not satisfied",
+      "why": "The other direction: a clock that keeps the promise but does not make it cannot be used where it is needed. Refused at compile time, because the test that holds a clock to the promise takes only a Steady one.",
+      "find": ["impl Steady for PerformanceClock {}\n"],
+      "replace": ["\n"]
+    },
+    {
+      "name": "WT-2.2.1: the plain interrupt clock stops claiming to be steady",
+      "file": "src/interrupt.rs",
+      "expect": "refused-by-build",
+      "buildError": "the trait bound `InterruptClock: Steady` is not satisfied",
+      "why": "InterruptClock is the workspace's time base and the clock durable-ioring stamps with by default, through a Steady bound. Refused at compile time, as for the performance clock.",
+      "find": ["impl Steady for InterruptClock {}\n"],
+      "replace": ["\n"]
     }
   ]
 }

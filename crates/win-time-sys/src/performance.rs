@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-use crate::clock::Clock;
+use crate::clock::{Clock, Steady};
 use crate::timeline::{TimePoint, Timeline};
 
 #[cfg(test)]
@@ -58,6 +58,9 @@ impl Clock for PerformanceClock {
         TimePoint::from_ticks(ticks.cast_unsigned())
     }
 }
+
+// The counter is steady within a boot and never set.
+impl Steady for PerformanceClock {}
 
 /// The counter's frequency, in ticks per second.
 fn frequency() -> NonZeroU64 {
