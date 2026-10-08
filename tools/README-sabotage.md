@@ -325,8 +325,9 @@ the job rather than assigned to it afterwards, so there is no moment at which it
 exists outside the job.
 
 This replaced a walk of the process tree through WMI, which had no bound of its
-own: a CI sweep once sat for its job's whole hour inside it, with no evidence of
-which call it was in.
+own. It was the only unbounded step on the path of a CI sweep that once sat for
+its job's whole hour with no evidence of where; that the sweep sat inside the
+walk was never established.
 
 The harness builds the launcher from this checkout at the start of a sweep --
 from the real tree, never the copy, so sweeping the launcher's own manifest

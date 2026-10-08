@@ -3884,11 +3884,12 @@ tag-push workflow after merge; no release or tag was created locally.
 ## Moved 2026-10-07 15:52:29 -04:00 -- JL: the sabotage harness kills a hung run through a job object
 
 A sabotage sweep of `windows-waitable-queues` sat for its job's full hour on one
-entry (run 37656687292), inside the harness's kill: a WMI walk of the process
-tree with no bound of its own, which also cannot find a descendant whose parent
-has exited. The kill now runs through a kill-on-close Windows job object, owned
-by a launcher written in Rust -- the engineer's choice over a C# helper, so the
-repository takes on no further language.
+entry (run 37656687292). The harness's kill was a WMI walk of the process tree
+with no bound of its own, the only unbounded step on that entry's path, which
+also cannot find a descendant whose parent has exited. Where the hour went was
+never established. The kill now runs through a kill-on-close Windows job object,
+owned by a launcher written in Rust -- the engineer's choice over a C# helper, so
+the repository takes on no further language.
 
 ### <a id="jl-11"></a>JL-1.1 -- Narrate each kill, and let a stalled sweep upload its transcripts. *(completed 2026-10-07 15:08:45 UTC-04:00)*
 

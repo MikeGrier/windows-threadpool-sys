@@ -413,7 +413,8 @@ function Read-LauncherResult {
 # kill-on-close job object, so at the bound every descendant is killed in one
 # call -- including one whose parent has already exited, which no walk of
 # parent PIDs can find. It replaced exactly such a walk: a WMI query per level
-# with no bound of its own, inside which a CI sweep once stalled for an hour.
+# with no bound of its own, the only unbounded step on the path of a CI sweep
+# that once sat for an hour. Where in that path it sat was never established.
 # See crates/win-job-launcher for what the launcher guarantees.
 function Invoke-Bounded {
     param(
@@ -480,8 +481,8 @@ function Invoke-Bounded {
         $stopped = 'It exited'
         if (-not $process.HasExited) { $stopped = "It did not exit within $($script:LauncherStopSeconds)s" }
         Exit-WithMessage (@(
-                "win-job-launcher overran its bound and was stopped by the backstop. $stopped, and its closing"
-                "its job handle is the only thing that ends cargo's process tree, which this tool cannot confirm."
+                "win-job-launcher overran its bound and was stopped by the backstop. $stopped."
+                "Closing its job handle is the only thing that ends cargo's process tree now, and this tool cannot confirm that it did."
                 "The sweep stops rather than patch and run beside a tree that may still be alive."
                 "That is this tool's machinery, not the suite."
             ) -join "`n") 2
