@@ -9,7 +9,10 @@ WT-M1, the crate and its clocks, is complete and archived in
 - [x] **WT-2.1** -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-21)
 
 - [ ] **WT-2.2** -- **durable-ioring's timestamps use `InterruptClock`**
-  ([DI-D-37](../durable-ioring/DESIGN-NOTES.md#di-d-37)).
+  ([DI-D-37](../durable-ioring/DESIGN-NOTES.md#di-d-37)): dioring depends on this crate, and its
+  first timestamp -- when a failure was observed, carried by its `Failed` entry and by the
+  inventory ([DI-D-36](../durable-ioring/DESIGN-NOTES.md#di-d-36)) -- is read through
+  `InterruptClock`. The marking timestamps `DI-3.2.4.2` adds use the same reading.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` ->
   > `DI-3.2.4.2` (nullifiers, whose markings and `Failed` entries are timestamped). See
