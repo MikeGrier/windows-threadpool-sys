@@ -56,8 +56,8 @@
       "file": "src/launch.rs",
       "expect": "caught",
       "why": "A command that exits while its descendants run is reported as a clean exit with no sign of them. The count is the only evidence the harness gets that a suite left processes behind.",
-      "find": ["    let strays = at_exit.map_or(0, |a| a.active_processes);"],
-      "replace": ["    let strays = at_exit.map_or(0, |a| a.active_processes * 0);"]
+      "find": ["    let strays = others.unwrap_or(0);"],
+      "replace": ["    let strays = others.unwrap_or(0) * 0;"]
     },
     {
       "name": "non-ASCII text is written raw into the result",
