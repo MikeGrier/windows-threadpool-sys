@@ -35,7 +35,7 @@
 //!
 //! **Not yet here**, and left visibly undone rather than approximated: a write to a file a consumer
 //! provider serves leaves its seal unfinished, because providers are `DI-3.2.6`'s; and failures are
-//! the lineage's own until `DI-3.2.5` makes them the instance's, shared by every lineage with a
+//! the lineage's own until `DI-3.2.5.1` makes them the instance's, shared by every lineage with a
 //! write in the suspect set.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

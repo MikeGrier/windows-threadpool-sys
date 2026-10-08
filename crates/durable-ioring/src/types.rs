@@ -450,7 +450,7 @@ impl<V: Identities> WriteOptions<V> {
     /// Hold the write until `epoch` is durable; it fails as `NeverIssued` if `epoch` is
     /// abandoned (contract guarantee 9).
     ///
-    /// Crate-private until gates are honoured (DI-3.2.5): a public setter before then would let a
+    /// Crate-private until gates are honoured (DI-3.2.5.2): a public setter before then would let a
     /// gated write be issued as an ungated one.
     #[cfg_attr(
         not(test),
@@ -484,7 +484,7 @@ impl<V: Identities> ReadOptions<V> {
 
     /// Hold the read until `epoch` is durable.
     ///
-    /// Crate-private until gates are honoured (DI-3.2.5), as for writes.
+    /// Crate-private until gates are honoured (DI-3.2.5.2), as for writes.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "public once gates are honoured: DI-3.2.5")

@@ -255,7 +255,7 @@ where
     }
 
     /// Whether `lineage` is one of this instance's live lineages. Only the default exists until
-    /// lineages can be minted (DI-3.2.5); a lineage of another instance never is.
+    /// lineages can be minted (DI-3.2.5.1); a lineage of another instance never is.
     pub(crate) fn is_live(&self, lineage: Lineage) -> bool {
         lineage.instance == self.instance && lineage.seq == 0
     }
@@ -350,7 +350,7 @@ where
     }
 }
 
-/// No public setter makes a gate until gates are honoured (DI-3.2.5); one here would be a
+/// No public setter makes a gate until gates are honoured (DI-3.2.5.2); one here would be a
 /// crate-internal caller's defect.
 fn no_gate<E: EpochId + 'static>(gate: Option<Epoch<V<E>>>) {
     debug_assert!(gate.is_none(), "a gate before gates are honoured");

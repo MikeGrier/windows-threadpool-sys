@@ -51,28 +51,46 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.4.2** -- Markings: a failure records what happens to its suspect writes afterwards -- nullified, short, or covered -- reports each as `Marked`, and ends with a final record, `Abandoned` or the new `Healed`; every failure carries its error code, read with `ErrorCode::of`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3242)
 
-- [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
-  `default_lineage()`, with every rule of the steps above holding per lineage
-  ([DI-D-19](DESIGN-NOTES.md#di-d-19)). Gated operations held until their epoch is durable, ending
-  as `NeverIssued` when it is abandoned, a gate on an abandoned epoch refused as `GateAbandoned`,
-  and a gate cycle refused as `GateCycle` ([DI-D-23](DESIGN-NOTES.md#di-d-23)). Make
+- [ ] **DI-3.2.5.1** -- **Lineage handles, minting, ending, and failures across lineages.**
+  `mint_lineage`, `lineages()` and `default_lineage()`, with every rule of the steps above holding
+  per lineage ([DI-D-19](DESIGN-NOTES.md#di-d-19)); ending and retiring
+  ([DI-D-30](DESIGN-NOTES.md#di-d-30)). **Lineage handles** ([DI-D-40](DESIGN-NOTES.md#di-d-40)):
+  a `Clone` handle over an `Arc`, `#[must_use]`, an associated type of the contract beside
+  `FailureToken`, reaching dioring through a `Weak`. `Dioring::new` and `mint_lineage` return one;
+  the instance keeps a reference to the default's and hands out clones. Releasing the last handle
+  ends the lineage; `end` and `retire` take the handle by value and succeed only when it is the
+  last. Pushing and sealing take the handle, with another instance's refused. Naming or asking
+  takes the plain value and answers "not this instance's" explicitly: `epoch_state` stops
+  panicking, `durable_through` and `sealed_through` tell "nothing yet" from "not this
+  instance's", and `import_failure` refuses a lineage the instance does not have. **Failures
+  become the instance's** rather than the default lineage's: a suspect set spans every lineage's
+  held writes, a failure belongs to each lineage it suspects a write of, and `ImportScope::Lineage`
+  narrows to that lineage's writes. These land together with minting: once a second lineage exists,
+  a failed flush must suspect every lineage's writes to that file, or it answers wrongly in between.
+  (Flush-domain reach for flush failures and imports landed in `DI-3.2.4`, where the suspect set is
+  defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34); containment for a provider's domain is
+  `DI-3.2.6`'s.) The fake implementation and the oracle follow the trait, and CONTRACT.md states
+  the handle, its release, and the rule. **Open, for the engineer, before this step:** when a heal
+  takes effect for a failure spanning several lineages. The assistant's proposal is per lineage:
+  the failure stops holding lineage L once L's first seal made after the heal succeeds, and is
+  resolved as `Healed` only when that has happened in every lineage it belongs to. Letting one
+  lineage's seal end it everywhere would let another lineage's mark pass epochs whose re-issued
+  writes it has not committed. The cost: a failure one of whose lineages never seals again stays
+  in the inventory, healing, indefinitely.
+
+- [ ] **DI-3.2.5.2** -- **Gates.** Gated operations held until their epoch is durable, ending as
+  `NeverIssued` when it is abandoned; a gate on an abandoned epoch refused as `GateAbandoned`; and a
+  gate cycle refused as `GateCycle`, before anything is reserved, with an error naming the cycle
+  ([DI-D-23](DESIGN-NOTES.md#di-d-23)). A gate takes the plain `Epoch`, which may name another
+  lineage, and a gate on a lineage the instance does not have is refused
+  ([DI-D-40](DESIGN-NOTES.md#di-d-40)). The cycle search must follow every way reaching an epoch
+  can depend on a later one: DI-D-23 names a pending heal, and once heals take effect per lineage
+  (`DI-3.2.5.1`), reaching L:a can depend on L's next seal and on any gated write in it. Make
   `WriteOptions::gate` and `ReadOptions::gate` public again: `DI-3.2.2.1` made them crate-private,
   because until gates are honoured a public setter would let a gated operation be issued ungated.
-  Failures become the instance's rather than the default lineage's: a suspect set spans every
-  lineage's held writes, a failure belongs to each lineage it suspects a write of, and
-  `ImportScope::Lineage` narrows to that lineage's writes. (Flush-domain reach for flush failures
-  and imports landed in `DI-3.2.4`, where the suspect set is defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34);
-  containment for a provider's domain is `DI-3.2.6`'s.) **Lineage handles**
-  ([DI-D-40](DESIGN-NOTES.md#di-d-40)): a `Clone` handle over an `Arc`, `#[must_use]`, an
-  associated type of the contract beside `FailureToken`, reaching dioring through a `Weak`.
-  `Dioring::new` and `mint_lineage` return one; the instance keeps a reference to the default's and
-  hands out clones. Releasing the last handle ends the lineage; `end` and `retire` take the handle
-  by value and succeed only when it is the last. Pushing and sealing take the handle, with
-  another instance's refused. Naming or asking takes the plain value and answers "not this
-  instance's" explicitly: `epoch_state` stops panicking, `durable_through` and `sealed_through`
-  tell "nothing yet" from "not this instance's", and `import_failure` refuses a lineage the
-  instance does not have. The fake implementation and the oracle follow the trait, and CONTRACT.md
-  states the handle, its release, and the rule. Large enough that it may split when started.
+  CONTRACT.md states the gate rules, `GateCycle` included, which it does not yet mention. Gates on
+  the writer's own lineage need nothing from `DI-3.2.5.1`; gates across lineages do, so this follows
+  it.
 
 - [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
   serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`

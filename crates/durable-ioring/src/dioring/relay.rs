@@ -51,7 +51,7 @@ pub(crate) enum FlushTarget {
 /// The state under dioring's lock.
 pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     queue: VecDeque<DioringEntry<E, B, C>>,
-    /// The default lineage's durability; minted lineages are `DI-3.2.5`'s.
+    /// The default lineage's durability; minted lineages are `DI-3.2.5.1`'s.
     pub(crate) lineage: Durability<E, FlushTarget, K>,
     /// The default lineage, for the epochs its `Durable` entries and flushes name.
     default_lineage: Lineage,
