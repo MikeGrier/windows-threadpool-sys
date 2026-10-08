@@ -1,0 +1,86 @@
+{
+  "package": "win-time-sys",
+  "description": "Sabotages for win-time-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "sabotages": [
+    {
+      "name": "WT-1.2: points order backwards",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Which of two readings came first is the question most callers ask of a time point.",
+      "find": ["        self.ticks.cmp(&other.ticks)\n"],
+      "replace": ["        other.ticks.cmp(&self.ticks)\n"]
+    },
+    {
+      "name": "WT-1.2: the distance between points has its sign flipped",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Elapsed time would come out negative, and a duration from it would be refused.",
+      "find": ["        let distance = i128::from(self.ticks) - i128::from(earlier.ticks);\n"],
+      "replace": ["        let distance = i128::from(earlier.ticks) - i128::from(self.ticks);\n"]
+    },
+    {
+      "name": "WT-1.2: moving a point forwards does not check the timeline's end",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A point moved past either end would wrap to the other, silently reordering it against every other point.",
+      "find": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n        u64::try_from(moved).ok().map(Self::from_ticks)\n"],
+      "replace": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n        Some(Self::from_ticks(moved as u64))\n"]
+    },
+    {
+      "name": "WT-1.2: moving a point backwards moves it forwards",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Subtracting ticks is the opposite of adding them.",
+      "find": ["        let moved = i128::from(self.ticks) - i128::from(ticks.count);\n"],
+      "replace": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n"]
+    },
+    {
+      "name": "WT-1.2: a backwards distance becomes a duration",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A Duration cannot be negative; converting a backwards distance to its length would hide which way it pointed.",
+      "find": ["        (!self.is_negative()).then(|| self.abs_duration())\n"],
+      "replace": ["        Some(self.abs_duration())\n"]
+    },
+    {
+      "name": "WT-1.2: a duration drops its fraction of a second",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Interrupt and system time tick every 100 ns; losing the sub-second part loses almost everything a short interval measures.",
+      "find": ["        let nanos = remainder * NANOS_PER_SECOND / u128::from(per_second);\n"],
+      "replace": ["        let nanos = remainder * 0;\n"]
+    },
+    {
+      "name": "WT-1.2: ticks from a duration drop its fraction of a second",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "The same loss in the other direction.",
+      "find": ["        let part = u128::from(duration.subsec_nanos()) * per_second / NANOS_PER_SECOND;\n"],
+      "replace": ["        let part = u128::from(duration.subsec_nanos()) * 0;\n"]
+    },
+    {
+      "name": "WT-1.2: ticks from a duration too long for them wrap",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A duration that does not fit must be refused, not turned into some other count.",
+      "find": ["        i64::try_from(whole.checked_add(part)?).ok().map(Self::new)\n"],
+      "replace": ["        Some(Self::new((whole + part) as i64))\n"]
+    },
+    {
+      "name": "WT-1.2: negating the most negative distance wraps",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "i64::MIN has no opposite; wrapping returns itself, a distance pointing the wrong way.",
+      "find": ["        self.count.checked_neg().map(Self::new)\n"],
+      "replace": ["        Some(Self::new(self.count.wrapping_neg()))\n"]
+    },
+    {
+      "name": "CONTROL: a backwards distance is tested by its count",
+      "file": "src/timeline.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: a count below zero is exactly what is_negative tests, so this is an equivalent change on code every duration test runs.",
+      "find": ["        (!self.is_negative()).then(|| self.abs_duration())\n"],
+      "replace": ["        (self.count >= 0).then(|| self.abs_duration())\n"]
+    }
+  ]
+}

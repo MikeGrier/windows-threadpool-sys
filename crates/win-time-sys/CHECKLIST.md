@@ -6,10 +6,7 @@ Safe Rust over the Windows clocks. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for it
 
 - [x] **WT-1.1** -- The crate exists: a Windows-only workspace member registered for release and publication, with its README as the crate documentation and an undocumented `unsafe` refused by the build. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-11)
 
-- [ ] **WT-1.2** -- **The two layers** ([WT-D-2](DESIGN-NOTES.md#wt-d-2)): `Timeline`, `TimePoint<T>`,
-  `Ticks<T>` and `Clock`, with ordering, subtraction to `Ticks`, adding `Ticks` to a point, and
-  `Ticks` to `Duration`. Tested over a fake timeline and clock, including overflow at the edges and
-  that points on two timelines cannot be compared (a `compile_fail` doctest).
+- [x] **WT-1.2** -- The two layers: `Timeline`, `TimePoint<T>`, `Ticks<T>` and `Clock`, with their arithmetic and conversions to and from `Duration`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-12)
 
 - [ ] **WT-1.3** -- **Interrupt time and unbiased interrupt time** ([WT-D-3](DESIGN-NOTES.md#wt-d-3)):
   two timelines and four clocks over `QueryInterruptTime`, `QueryInterruptTimePrecise`,
