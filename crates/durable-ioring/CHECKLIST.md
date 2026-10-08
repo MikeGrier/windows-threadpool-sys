@@ -43,10 +43,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   that owns the delivery, with `&self` methods usable from any thread; it hands entries strictly
   one at a time, in queue order, to a consumer callback on a pool thread, with no lock held, so the
   callback may call back in; dioring's lock is taken before the ring's. It waits on `readiness()`
-  through a thread-pool wait. **Open, for the engineer:** its name and constructor; which of the
-  trait's `&mut self` operations it offers as `&self`, and how (mirrored methods, or a closure over
-  the instance under its lock); and its teardown, which DI-2.7 point 5 orders -- delivery quiesced
-  before the state it reaches is released.
+  through a thread-pool wait. **Name and constructor decided** ([DI-D-31](DESIGN-NOTES.md#di-d-31),
+  2026-10-07): `EntryDelivery<D>`, built by `EntryDelivery::new(ring, on_entry, env)`, the handler
+  `FnMut(EntryOf<D>, &DeliveryHandle<D>)`, a failure handing back the ring and the handler as
+  `DeliverySetupError`; entries queued before the handover are delivered, which `new` guarantees by
+  arming and then setting the readiness event, tested from the start. **Open, for the engineer:**
+  which of the trait's `&mut self` operations the owner and `DeliveryHandle` offer as `&self`, and
+  how (mirrored methods, or a closure over the instance under its lock); and its teardown, which
+  DI-2.7 point 5 orders -- delivery quiesced before the state it reaches is released.
 
 - [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
   provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the

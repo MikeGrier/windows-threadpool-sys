@@ -2406,6 +2406,15 @@ One measurement came out of the caching option's test: `IoRing`'s write-through 
 Win32 error 509 on any handle opened for cached I/O and succeeds on an unbuffered one. The ring
 crate's documentation never said so; it is queued as that crate's `M32.1`.
 
+Asked to suggest a name and constructor for the Model A front end, I proposed `EntryDelivery<D>`,
+named as the layer-up counterpart of the ring crate's `EventDelivery`, with
+`EntryDelivery::new(ring, on_entry, env)` taking the instance by value, a `FnMut` handler because
+delivery is serialised, a non-owning `DeliveryHandle` given to the handler so it can call back in,
+and a refusal handing back the ring and the handler. `PoolDelivery` was offered as the alternative
+naming the mechanism, and `Fn + Sync` as the alternative that would keep room to relax the
+serialisation. The engineer: "write it in". Recorded as DI-D-31. Which operations the owner and the
+handle offer, and teardown, stay open under `DI-3.2.2.2`.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
