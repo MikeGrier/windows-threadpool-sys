@@ -64,8 +64,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   without `windows-ioring-sys`' `IoRingErrorExt` (DI-D-34's question). Timestamps are interrupt time
   ([DI-D-37](DESIGN-NOTES.md#di-d-37)). The oracle gains the rules: a nullifier names a write in the
   set whose completion reported `Failed`, a short-write marking one whose completion was short, and
-  a covered marking one in a seal that later succeeded. **Blocked on** a safe interrupt-time read
-  from a lower crate (DI-D-37); where it lives is with the engineer.
+  a covered marking one in a seal that later succeeded.
+
+  > **CROSS-COMPONENT PREREQUISITE:** a safe interrupt-time read, which dioring cannot write itself
+  > (DI-D-37). It comes from `win-time-sys`, created for it: component `crates/win-time-sys` ->
+  > `WT-M1` -> `WT-1.3` (interrupt time), after `WT-1.1` and `WT-1.2`. See
+  > [CHECKLIST.md](../win-time-sys/CHECKLIST.md).
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
