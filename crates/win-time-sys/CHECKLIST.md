@@ -4,9 +4,7 @@ Safe Rust over the Windows clocks. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for it
 
 ## WT-M1 -- The crate and its clocks
 
-- [ ] **WT-1.1** -- **Scaffold the crate.** `crates/win-time-sys`, a workspace member registered for
-  release and publication, Windows-only, with a README saying what it is. Its `unsafe` is confined to
-  the Win32 calls, each with its safety argument; everything it exports is safe.
+- [x] **WT-1.1** -- The crate exists: a Windows-only workspace member registered for release and publication, with its README as the crate documentation and an undocumented `unsafe` refused by the build. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-11)
 
 - [ ] **WT-1.2** -- **The two layers** ([WT-D-2](DESIGN-NOTES.md#wt-d-2)): `Timeline`, `TimePoint<T>`,
   `Ticks<T>` and `Clock`, with ordering, subtraction to `Ticks`, adding `Ticks` to a point, and

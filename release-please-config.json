@@ -37,6 +37,10 @@
             "package-name": "win-sync-sys",
             "component": "win-sync-sys"
         },
+        "crates/win-time-sys": {
+            "package-name": "win-time-sys",
+            "component": "win-time-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"
