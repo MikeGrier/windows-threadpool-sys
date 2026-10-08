@@ -2517,6 +2517,14 @@ write-only markings, so it's not that it affects the mark per se but it affects 
 bookkeeping is reported". Recorded as DI-D-36 and queued as `DI-3.2.4.2`, with its shape still
 open.
 
+Offered four shape questions -- where markings are read, short writes, other kinds of marking, and
+records surviving resolution -- the engineer answered that all of them are useful and should be
+allowed for, and named the problem being solved: a failure arrives as "an important record of
+information which also carries unique important data (timestamp, error code)", and the design had
+nowhere to keep it. That makes the marking a carrier of the completion's data, not just a flag. Left
+open: which clock the timestamp comes from, whether `Failed` itself is timestamped, and how one
+`io::Error` reaches both the completion and the marking.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

@@ -51,15 +51,20 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [ ] **DI-3.2.4.2** -- **Nullifiers** ([DI-D-36](DESIGN-NOTES.md#di-d-36), the engineer's direction):
   a suspect write that completes as failed after its failure was observed gains an append-only
-  marking in that failure's record, so the history can be reconciled after the fact. Reporting only:
-  the mark, what holds it, and what resolution needs are unchanged. Amends CONTRACT.md's "frozen ...
-  and never grows" to "never gains a write", and DI-D-12 (b). The oracle gains a rule: a nullifier
-  names a write in the set whose completion reported `Failed`. **Open, for the engineer, before
-  building:** where the markings are read (the inventory and `Abandoned` only, the popped `Failed`
-  entry staying a snapshot; or a queue entry of their own as well); whether a short write gets a
-  marking; whether a nullifier is the only kind of marking; and how the record survives a resolved
-  failure -- a healed failure today leaves no memory and no entry, which reconciliation after the
-  fact may need.
+  marking in that failure's record, carrying the completion's error and when it was observed, so
+  the history can be reconciled after the fact. Reporting only: the mark, what holds it, and what
+  resolution needs are unchanged. Amends CONTRACT.md's "frozen ... and never grows" to "never gains
+  a write", and DI-D-12 (b). Everything DI-D-36 allows for is built here: markings in the inventory
+  and the `Abandoned` entry, and as queue entries of their own; a marking for a short write, with its
+  transferred count; a marking type open to further kinds, starting with a suspect write later
+  covered by a successful flush; and a failure's final record surviving its resolution, including a
+  heal, which needs an entry of its own. The oracle gains the rules: a nullifier names a write in the
+  set whose completion reported `Failed`, a short-write marking one whose completion was short, and
+  a covered marking one in a seal that later succeeded. **Open, for the engineer, before
+  building:** the timestamp's clock and representation; whether a `Failed` entry carries its own
+  observation time; and how the error reaches both the completion and the marking, since
+  `io::Error` is not `Clone` -- tied to DI-D-34's open question about the flush error's
+  representation.
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
