@@ -19,9 +19,9 @@
 //! core, no callback holds the delivery, and the delivery is dropped on the instance's own thread --
 //! never inside one of its callbacks, where dropping it would wait for itself.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
@@ -108,6 +108,18 @@ pub(crate) struct OpPush<E: EpochId + 'static, B, C> {
 pub(crate) struct HeldPush<E: EpochId + 'static, B, C> {
     pub(crate) op: OpPush<E, B, C>,
     pub(crate) target: FlushTarget,
+    /// The epoch it waits for, as the consumer named it.
+    pub(crate) gate: Epoch<DioringIds<E>>,
+}
+
+/// What ending an instance takes from its core, in the one locked step that closes it.
+pub(crate) struct Shut<E: EpochId + 'static, B, C, S> {
+    /// The operations held for their gates, in push order: the kernel never saw them.
+    pub(crate) held: Vec<HeldPush<E, B, C>>,
+    /// What the caller read under the same lock.
+    pub(crate) snapshot: S,
+    /// The core's first internal inconsistency, if any.
+    pub(crate) inconsistency: Option<&'static str>,
 }
 
 /// The state under dioring's lock.
@@ -132,7 +144,14 @@ pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     /// A submission failed, so pushed operations may still sit in the submission queue; the next
     /// submission issues them (the ring crate's D-5).
     pub(crate) unsubmitted: bool,
-    /// The instance is ending: no callback may reach the ring again.
+    /// The consumer operations the ring holds, by file: counted from the push to the record of
+    /// its completion, as `remove_file` reports them (DI-D-45). A file with none has no entry.
+    pub(crate) in_flight: HashMap<FileKey, usize>,
+    /// Provider completions made and not yet answered, dropped ones included: ending waits for
+    /// this to reach zero (DI-D-25).
+    unanswered: usize,
+    /// The instance is ending: no callback may reach the ring again, and nothing recorded from now
+    /// on is reported.
     closed: bool,
     /// Failures armed by the fault seam: the next flush of the file to complete reports the Win32
     /// error instead of what the kernel did.
@@ -146,6 +165,8 @@ pub(crate) struct Relay<E: EpochId + 'static, B, C, K> {
     /// Auto-reset; the consumer's `readiness()` is a duplicate of it.
     readiness: Event,
     ring: OnceLock<Weak<Delivery<E, B, C>>>,
+    /// Notified, under the core's lock, when the last unanswered provider completion is answered.
+    answered: Condvar,
 }
 
 impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
@@ -162,12 +183,15 @@ impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
                 ready: VecDeque::new(),
                 calls: Vec::new(),
                 unsubmitted: false,
+                in_flight: HashMap::new(),
+                unanswered: 0,
                 closed: false,
                 #[cfg(feature = "fault-injection")]
                 injected: Vec::new(),
             }),
             readiness: Event::new(ResetMode::Auto, false)?,
             ring: OnceLock::new(),
+            answered: Condvar::new(),
         })
     }
 
@@ -177,9 +201,41 @@ impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
         debug_assert!(attached.is_ok(), "the ring is attached once");
     }
 
-    /// No callback reaches the ring after this returns.
-    pub(crate) fn close(&self) {
-        self.lock().closed = true;
+    /// Close the core, in one locked step that also reads `snapshot` and takes every held
+    /// operation: no callback reaches the ring after this returns, nothing recorded afterwards is
+    /// reported, and requests for the provider not yet made never will be (DI-D-25, DI-D-45).
+    /// `None` if the core was already closed.
+    pub(crate) fn shut<S>(
+        &self,
+        snapshot: impl FnOnce(&Core<E, B, C, K>) -> S,
+    ) -> Option<Shut<E, B, C, S>> {
+        let mut core = self.lock();
+        if core.closed {
+            return None;
+        }
+        core.closed = true;
+        let snapshot = snapshot(&core);
+        let held = std::mem::take(&mut core.held).into_values().collect();
+        core.ready.clear();
+        core.calls.clear();
+        core.unpushed.clear();
+        Some(Shut {
+            held,
+            snapshot,
+            inconsistency: core.durability.inconsistency(),
+        })
+    }
+
+    /// Wait, with the core's lock released, until every provider completion made has been
+    /// answered or dropped (DI-D-25).
+    pub(crate) fn wait_for_answers(&self) {
+        let mut core = self.lock();
+        while core.unanswered > 0 {
+            core = self
+                .answered
+                .wait(core)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// A duplicate of the readiness event.
@@ -227,13 +283,32 @@ where
     /// inventory -- and is dropped, with a debug assertion.
     pub(crate) fn record(&self, completion: Completion, held: Option<(Option<B>, Sidecar<E, C>)>) {
         let mut core = self.lock();
+        // The instance has ended: what the completion held is dropped here, and nothing is reported
+        // or signalled. No test reaches it with a completion still to record, because ending
+        // returns only once the ring has run down, and nothing can observe the instance afterwards.
+        if core.closed {
+            return;
+        }
         let due = match held {
             Some((
                 buffer,
                 Sidecar::Consumer {
-                    id, kind, context, ..
+                    id,
+                    kind,
+                    file,
+                    context,
+                    ..
                 },
             )) => {
+                match core.in_flight.get_mut(&file) {
+                    Some(1) => {
+                        core.in_flight.remove(&file);
+                    }
+                    Some(count) => *count -= 1,
+                    None => core
+                        .durability
+                        .inconsistent("a completion for a file with nothing in flight"),
+                }
                 let outcome = match completion.result() {
                     // A transfer is never longer than the `u32` length it was pushed with.
                     Ok(transferred) => {
@@ -447,6 +522,10 @@ where
     C: Send + 'static,
     K: TimeBase,
 {
+    fn issued(&self) {
+        self.lock().unanswered += 1;
+    }
+
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
         let outcome = match outcome {
             DomainOutcome::Succeeded => Ok(()),
@@ -459,6 +538,16 @@ where
             }),
         };
         let mut core = self.lock();
+        // Counted down even once the instance has ended, which is what ending waits for.
+        match core.unanswered.checked_sub(1) {
+            Some(left) => core.unanswered = left,
+            None => core
+                .durability
+                .inconsistent("a provider answered a completion never made"),
+        }
+        if core.unanswered == 0 {
+            self.answered.notify_all();
+        }
         if core.closed {
             return;
         }

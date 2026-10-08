@@ -276,6 +276,7 @@ where
                 "refusal() checked the seal and abandonment"
             );
         }
+        let named = gate;
         let held = match gate {
             None => None,
             Some(gate) => {
@@ -321,10 +322,17 @@ where
             len,
         });
         let id = op.id;
-        if let Some(gate) = held {
+        if let (Some(gate), Some(named)) = (held, named) {
             core.durability.hold(id, accepted, gate);
             let target = record.target.flush_target();
-            core.held.insert(id.seq, HeldPush { op, target });
+            core.held.insert(
+                id.seq,
+                HeldPush {
+                    op,
+                    target,
+                    gate: named,
+                },
+            );
             // Only an accepted push spends an identity, so the identities of accepted pushes are
             // consecutive.
             self.next_op += 1;
@@ -368,6 +376,7 @@ where
         if let Some(accepted) = accepted {
             core.durability.pushed(accepted);
         }
+        *core.in_flight.entry(file).or_insert(0) += 1;
         core.unsubmitted = batch.submit().is_err();
         self.next_op += 1;
         Ok(id)
@@ -384,7 +393,7 @@ where
         let mut scope = self.delivery.scope();
         let mut batch = scope.batch();
         while let Some(&id) = core.ready.front() {
-            let Some(HeldPush { op, target }) = core.held.remove(&id.seq) else {
+            let Some(HeldPush { op, target, gate }) = core.held.remove(&id.seq) else {
                 debug_assert!(false, "a released operation with nothing held for it");
                 core.ready.pop_front();
                 continue;
@@ -421,6 +430,7 @@ where
                 Ok(_) => {
                     core.ready.pop_front();
                     core.durability.issued(id);
+                    *core.in_flight.entry(file).or_insert(0) += 1;
                 }
                 Err(refused) => {
                     let PushRefused { payload, extra, .. } = refused;
@@ -443,7 +453,7 @@ where
                         caching,
                         context,
                     };
-                    core.held.insert(id.seq, HeldPush { op, target });
+                    core.held.insert(id.seq, HeldPush { op, target, gate });
                     break;
                 }
             }

@@ -415,3 +415,62 @@ fn the_handle_reports_the_instances_lineages() {
     assert_eq!(lineages[0].lineage, lineage);
     assert_eq!(delivery.into_inner().default_lineage().lineage(), lineage);
 }
+
+#[test]
+fn close_quiesces_delivery_and_hands_back_what_is_left() {
+    let temp = temp();
+    let (delivery, rx) = forwarding(instance(&temp, Vec::new()));
+    let default = delivery.default_lineage();
+    delivery.read(FILE, 0, vec![0; 4], 1).expect("push a read");
+    assert_eq!(context(&rx.recv_timeout(BOUND).expect("the read")), 1);
+    // In another lineage: a write at 1 gated on its own lineage's 9 would close a cycle.
+    let other = delivery.mint_lineage(None);
+    let gate = Epoch::new(other.lineage(), 9);
+    let held = delivery
+        .write_with(
+            FILE,
+            0,
+            vec![2; 4],
+            default.at(1),
+            2,
+            crate::types::WriteOptions::new().gate(gate),
+        )
+        .expect("push a gated write");
+
+    let left = delivery.close();
+    assert_eq!(
+        left.held.len(),
+        1,
+        "the gated write never reached the kernel"
+    );
+    assert_eq!(left.held[0].id, held);
+    assert_eq!(left.held[0].gate, gate);
+    assert_eq!(
+        (left.held[0].buffer.as_deref(), left.held[0].context),
+        (Some(&[2u8; 4][..]), 2)
+    );
+    let lineages: Vec<_> = left.lineages.iter().map(|info| info.lineage).collect();
+    assert_eq!(lineages, [default.lineage(), other.lineage()]);
+    assert!(left.failures.is_empty());
+    assert!(
+        rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "no handler call after close"
+    );
+}
+
+#[test]
+fn a_file_is_removed_through_the_handle() {
+    let temp = temp();
+    let other = TempFile::new("delivery-other");
+    let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
+    let file = other.open();
+    delivery
+        .add_file(FileKey(2), file.clone())
+        .expect("add a file");
+    let back = delivery.remove_file(FileKey(2)).expect("remove it");
+    assert!(back.same_handle(&file));
+    assert!(matches!(
+        delivery.remove_file(FileKey(2)),
+        Err(crate::types::RemoveFileError::UnknownKey(FileKey(2)))
+    ));
+}

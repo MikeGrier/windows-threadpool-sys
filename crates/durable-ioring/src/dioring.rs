@@ -24,12 +24,13 @@ use crate::provider::{
 };
 use crate::types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions,
-    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag,
-    UnknownLineage, WriteOptions,
+    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, Leftovers, LineageInfo, OpKind,
+    ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
+    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 mod durability;
+mod ending;
 mod push;
 mod relay;
 
@@ -209,7 +210,7 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
     Consumer {
         id: OpId,
         kind: OpKind<DioringIds<E>>,
-        #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
+        /// Counted in flight for `remove_file` until the completion is recorded.
         file: FileKey,
         #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         offset: u64,
@@ -505,6 +506,10 @@ where
         Ok(())
     }
 
+    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<Self::Ids>> {
+        self.remove(key)
+    }
+
     fn write_with(
         &mut self,
         file: FileKey,
@@ -715,6 +720,24 @@ where
     fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {
         self.relay.lock().durability.take_token(failure)
     }
+
+    fn close(mut self) -> Leftovers<Self::Ids, B, C> {
+        let Some(shut) = self.end(|core| (core.durability.failures(), core.durability.lineages()))
+        else {
+            // Unreachable: `close` consumes the instance, so nothing has ended it before.
+            return Leftovers {
+                held: Vec::new(),
+                failures: Vec::new(),
+                lineages: Vec::new(),
+            };
+        };
+        let (failures, lineages) = shut.snapshot;
+        Leftovers {
+            held: shut.held.into_iter().map(ending::held_operation).collect(),
+            failures,
+            lineages,
+        }
+    }
 }
 
 impl<B, E, C, R, K> Dioring<B, E, C, R, K>
@@ -911,8 +934,10 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Drop for Dioring<B, E, C, R, K>
     fn drop(&mut self) {
         // Before the delivery is dropped, which the field drop that follows does: once the core is
         // closed no callback holds the delivery, so it is dropped here, on this thread, and not
-        // inside one of its own callbacks.
-        self.relay.close();
+        // inside one of its own callbacks. Its rundown is what waits for the kernel. Nothing to do
+        // after `close()`, which has ended the instance already; drop discards what it would have
+        // returned.
+        let _ = self.end(|_| ());
     }
 }
 

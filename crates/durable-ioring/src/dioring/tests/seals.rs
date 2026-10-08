@@ -212,6 +212,8 @@ fn a_pending_seal_reports_pending_and_holds_back_a_later_one() {
         1,
         "one request per seal: the second seal names no write, and asks nothing of the provider"
     );
+    // Ending the instance waits for every completion to be answered or dropped (DI-D-25).
+    kept.lock().expect("the requests").clear();
     harness.finish();
 }
 

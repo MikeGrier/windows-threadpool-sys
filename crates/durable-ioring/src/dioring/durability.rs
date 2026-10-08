@@ -65,6 +65,7 @@ use crate::types::{
     ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
+mod files;
 mod gates;
 mod lineages;
 mod providers;
@@ -490,18 +491,21 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
             clock,
         }
     }
-}
 
-impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
-    /// The first internal inconsistency observed, if any.
+    /// The first internal inconsistency observed, if any. Readable without a clock, so an ending
+    /// instance can report it from `Drop`.
     pub(crate) fn inconsistency(&self) -> Option<&'static str> {
         self.inconsistency
     }
 
-    fn inconsistent(&mut self, what: &'static str) {
+    /// Record `what` as an internal inconsistency, unless one is already recorded. The relay records
+    /// its own here too, so the consumer's next `pop` asserts on every kind.
+    pub(crate) fn inconsistent(&mut self, what: &'static str) {
         self.inconsistency.get_or_insert(what);
     }
+}
 
+impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// A lineage's `Lineage` name.
     fn name(&self, lineage: Key) -> Lineage {
         Lineage {

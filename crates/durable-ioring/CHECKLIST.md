@@ -16,7 +16,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 - [x] **DI-3.1** -- The crate is scaffolded: a workspace member with `#![forbid(unsafe_code)]`, registered for release and publication. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-31)
 
 - [ ] **DI-3.2** -- **dioring over `windows-ioring-sys`**, implementing the contract in
-  [CONTRACT.md](CONTRACT.md), in the steps `DI-3.2.1` to `DI-3.2.7` below; checked when the last of
+  [CONTRACT.md](CONTRACT.md), in the steps `DI-3.2.1` to `DI-3.2.8` below; checked when the last of
   them is. Re-planned 2026-10-07: as one item it covered the whole contract, and two of its
   requirements sat on items numbered after it. Each step lands what it implements, with its tests,
   and adds to the trait only the methods it implements -- the crate is unreleased, so the trait
@@ -57,12 +57,15 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.6** -- The consumer's durability provider: one request per seal, called from the consumer's next call with the lock released, answered once per domain from any thread, its failures and its silence reported with their own causes. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-326)
 
-- [ ] **DI-3.2.7** -- **Ending.** `remove_file` refused while the file has anything in flight, held
-  or uncovered, reported whole in `FileBusy`; `retire_lineage` and `LineageBusy`; `end_lineage` and
-  `LineageEnded` ([DI-D-30](DESIGN-NOTES.md#di-d-30)); and `close` and drop, waiting for every
-  kernel operation and provider call in flight and returning `Leftovers`
-  ([DI-D-25](DESIGN-NOTES.md#di-d-25)), with no callback after the end and tracing rather than
-  panicking while unwinding.
+- [x] **DI-3.2.7** -- Ending: `remove_file` refused with every hold reported at once, and `close()` and drop waiting for the kernel and the provider, `close()` handing back what is left. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-327)
+
+- [ ] **DI-3.2.8** -- **The engineer confirms or amends
+  [DI-D-45](DESIGN-NOTES.md#di-d-45)**, the shapes the assistant chose while implementing
+  `DI-3.2.7`: `FileBusy.in_flight` clearing at the kernel's completion; a suspect write, covered
+  or not, holding its file through its failure until the failure is resolved; the provider dropped
+  before ending waits; completions recorded after the end discarded unreported; and the `trace`
+  feature. A rejected point is reworked here, with its decision row amended.
+
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush
   failure cannot be produced on a healthy machine, for consumers' failure paths and not only this

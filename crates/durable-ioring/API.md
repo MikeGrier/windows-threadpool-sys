@@ -1018,7 +1018,8 @@ pub struct AddFileError {
 #[derive(Debug)]
 pub struct FileBusy<V: Identities> {
     pub file: FileKey,
-    /// Operations the kernel has not completed. Cleared by popping their completions.
+    /// Operations the kernel has not completed. Cleared as their completions arrive, which may be
+    /// before they are popped (DI-D-45).
     pub in_flight: usize,
     /// Operations held until their gate epoch is durable, and the lowest gate in each lineage
     /// gated on. Cleared when the gates are released, or fail as `NeverIssued`.
@@ -1041,7 +1042,7 @@ impl<V: Identities> std::fmt::Display for FileBusy<V> {
         if self.in_flight > 0 {
             write!(
                 f,
-                " {} operation(s) in flight, pop their completions;",
+                " {} operation(s) in flight, wait for their completions;",
                 self.in_flight
             )?;
         }
@@ -1083,7 +1084,8 @@ pub enum RemoveFileError<V: Identities> {
 #[derive(Debug)]
 pub struct LineageBusy<V: Identities> {
     pub lineage: V::Lineage,
-    /// Operations in the lineage the kernel has not completed. Cleared by popping them.
+    /// Operations in the lineage the kernel has not completed. Cleared as their completions
+    /// arrive, which may be before they are popped (DI-D-42).
     pub in_flight: usize,
     /// Operations held for a gate in the lineage, or gated on one of its epochs.
     pub held_for_gate: usize,

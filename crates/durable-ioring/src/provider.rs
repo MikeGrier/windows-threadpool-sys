@@ -64,7 +64,8 @@ pub struct FileWrites<V: Identities> {
 /// included. Success warrants that every write named for the domain is durable (the contract).
 /// Dropped unanswered, it is a failure of the domain, `Cause::ProviderAbandoned`. Answering records
 /// the outcome, and sets the readiness signal if that makes an entry poppable; it never runs
-/// delivery. Once the instance has ended, an answer does nothing.
+/// delivery. Once the instance has ended, an answer does nothing; ending waits for every completion
+/// to be answered or dropped.
 pub struct DomainCompletion {
     home: Weak<dyn Answer>,
     call: DomainCall,
@@ -72,8 +73,11 @@ pub struct DomainCompletion {
 }
 
 impl DomainCompletion {
-    /// A completion answering `call` through `home`.
+    /// A completion answering `call` through `home`, which counts it as unanswered from now.
     pub(crate) fn new(home: Weak<dyn Answer>, call: DomainCall) -> Self {
+        if let Some(home) = home.upgrade() {
+            home.issued();
+        }
         Self {
             home,
             call,
@@ -138,6 +142,10 @@ pub(crate) enum DomainOutcome {
 
 /// Where a completion's answer goes: the instance that made the request.
 pub(crate) trait Answer: Send + Sync {
+    /// A completion was made: it is unanswered until [`answer`](Self::answer) is called for it,
+    /// which its drop does if nothing else has.
+    fn issued(&self);
+
     /// Record `call`'s answer.
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome);
 }

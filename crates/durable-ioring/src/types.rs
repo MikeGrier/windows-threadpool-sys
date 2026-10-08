@@ -680,7 +680,8 @@ pub struct AddFileError {
 pub struct FileBusy<V: Identities> {
     /// The file.
     pub file: FileKey,
-    /// Operations the kernel has not completed. Cleared by popping their completions.
+    /// Operations the kernel has not completed. Cleared as their completions arrive, which may be
+    /// before they are popped (DI-D-45).
     pub in_flight: usize,
     /// Operations held until their gate epoch is durable. Cleared when the gates are released,
     /// or fail as `NeverIssued`.
@@ -705,7 +706,7 @@ impl<V: Identities> fmt::Display for FileBusy<V> {
         if self.in_flight > 0 {
             write!(
                 f,
-                " {} operation(s) in flight, pop their completions;",
+                " {} operation(s) in flight, wait for their completions;",
                 self.in_flight
             )?;
         }

@@ -33,6 +33,8 @@ mod lineages;
 mod gates;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
+// Removing a file, and ending the instance: DI-3.2.7.
+mod ending;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

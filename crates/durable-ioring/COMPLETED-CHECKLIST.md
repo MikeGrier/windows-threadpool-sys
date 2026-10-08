@@ -1599,3 +1599,16 @@ When and how the provider is called, and the shapes chosen while implementing it
   succeeded. A provider's failure of domain D reaches the held writes of every file whose declared
   domains contain D, and every file declared with none ([DI-D-21](DESIGN-NOTES.md#di-d-21)); it
   is observed through the same transition as a failed flush, with its own `Reach`.
+
+## Moved 2026-10-08 17:25:40 -04:00 -- DI-3.2.7: ending
+
+### <a id="di-327"></a>DI-3.2.7 -- Ending: `remove_file` refused with every hold reported at once, and `close()` and drop waiting for the kernel and the provider, `close()` handing back what is left. *(completed 2026-10-08 17:25:40 -04:00)*
+
+How the refusal and the ending path are built is [DI-D-45](DESIGN-NOTES.md#di-d-45); its review is `DI-3.2.8`. `retire_lineage`, `LineageBusy`, `end_lineage` and `LineageEnded` had already landed under `DI-3.2.5.1`. The item as written:
+
+**Ending.** `remove_file` refused while the file has anything in flight, held
+  or uncovered, reported whole in `FileBusy`; `retire_lineage` and `LineageBusy`; `end_lineage` and
+  `LineageEnded` ([DI-D-30](DESIGN-NOTES.md#di-d-30)); and `close` and drop, waiting for every
+  kernel operation and provider call in flight and returning `Leftovers`
+  ([DI-D-25](DESIGN-NOTES.md#di-d-25)), with no callback after the end and tracing rather than
+  panicking while unwinding.

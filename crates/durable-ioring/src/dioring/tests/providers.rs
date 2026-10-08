@@ -301,16 +301,3 @@ fn a_panic_in_the_provider_reaches_the_consumers_call_and_abandons_what_it_dropp
     );
     harness.finish();
 }
-
-#[test]
-fn an_answer_after_the_instance_is_dropped_does_nothing() {
-    let temp = temp(&[0; 16]);
-    let (provider, kept) = keeper(&["log"]);
-    let mut harness = instance(&temp, &["log"], provider);
-    harness.write(GIVEN, 0, b"log", 1, 1);
-    harness.next();
-    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
-    let request = only(&kept);
-    drop(harness);
-    succeed(request);
-}

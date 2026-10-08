@@ -16,8 +16,9 @@ use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    FileKey, FileOptions, ImportScope, LineageInfo, PushError, ReadOptions, Resolution,
-    ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    FileKey, FileOptions, ImportScope, Leftovers, LineageInfo, PushError, ReadOptions,
+    RemoveFileError, Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage,
+    WriteOptions,
 };
 
 #[cfg(test)]
@@ -109,6 +110,22 @@ pub trait DurableRing {
         file: SharedHandle,
         options: FileOptions,
     ) -> Result<(), AddFileError>;
+
+    /// Take a file back, under the key it was given with: the consumer's handle is returned. A file
+    /// given at construction stays open until the instance ends, because the ring's registration
+    /// holds it; its key may be reused at once.
+    ///
+    /// # Errors
+    ///
+    /// [`RemoveFileError::UnknownKey`] when no file is present under `key`, and
+    /// [`RemoveFileError::Busy`] while anything still holds it -- an operation in flight or held
+    /// for a gate, a write in any lineage not yet covered successfully, or an unresolved failure
+    /// suspecting a write to it -- with every hold reported at once in [`FileBusy`]. Once a file is
+    /// gone it cannot be flushed, so an epoch with an uncovered write to it could never become
+    /// durable.
+    ///
+    /// [`FileBusy`]: crate::FileBusy
+    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<Self::Ids>>;
 
     /// A handle to the lineage that always exists: a copy of the one construction returned. The
     /// instance holds a copy of its own, so the default lineage never ends while it lives.
@@ -315,6 +332,15 @@ pub trait DurableRing {
     /// `None` otherwise, including for a failure that is resolved, another instance's, or healed
     /// and waiting for its seal.
     fn take_token(&mut self, failure: FailureIdOf<Self>) -> Option<TokenOf<Self>>;
+
+    /// End the instance and hand back what is left (DI-D-25): the gated operations the kernel never
+    /// saw, with their buffers and contexts, in push order; the unresolved failures; and every
+    /// lineage with its final high-water mark. Seals and flushes nothing. Returns once every
+    /// kernel operation and every durability-provider call in flight has completed, as drop does;
+    /// entries not yet popped are discarded, and nothing already reported is undone.
+    fn close(self) -> Leftovers<Self::Ids, Self::Buffer, Self::Context>
+    where
+        Self: Sized;
 }
 
 /// The registered-buffer extension (DI-D-24): operations on spans of buffers registered with the

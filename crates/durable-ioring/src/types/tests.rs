@@ -170,7 +170,7 @@ fn file_busy_says_what_clears_each_hold_it_reports() {
     }
     .to_string();
     assert!(
-        in_flight.contains("2 operation(s) in flight, pop their completions"),
+        in_flight.contains("2 operation(s) in flight, wait for their completions"),
         "{in_flight}"
     );
 

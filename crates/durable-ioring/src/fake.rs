@@ -14,9 +14,9 @@ use crate::contract::{DurableRing, EntryOf, PushResult};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, LineageHandle, OpId};
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, ImportScope, LineageInfo, OpCompletion, OpKind, Outcome,
-    ReadOptions, Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError,
-    Tag, UnknownLineage, WriteOptions,
+    FailureInfo, FileKey, FileOptions, ImportScope, Leftovers, LineageInfo, OpCompletion, OpKind,
+    Outcome, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
+    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -112,6 +112,10 @@ impl DurableRing for Fake {
         Ok(())
     }
 
+    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<V>> {
+        Err(RemoveFileError::UnknownKey(key))
+    }
+
     fn default_lineage(&self) -> LineageHandle {
         self.default.clone()
     }
@@ -198,5 +202,13 @@ impl DurableRing for Fake {
 
     fn take_token(&mut self, _failure: FailureId) -> Option<FailureToken> {
         None
+    }
+
+    fn close(self) -> Leftovers<V, Vec<u8>, u32> {
+        Leftovers {
+            held: Vec::new(),
+            failures: Vec::new(),
+            lineages: Vec::new(),
+        }
     }
 }

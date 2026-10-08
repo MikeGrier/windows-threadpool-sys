@@ -398,6 +398,11 @@ back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
   memory or state the instance owns. dioring adds no other waiting. If the ring cannot be shown to
   have finished, its buffers are leaked rather than freed. A provider call that never completes
   means ending never completes; nothing asks the provider to stop early.
+- **The provider is let go first** ([DI-D-45](DESIGN-NOTES.md#di-d-45)). Ending drops the
+  consumer's provider before it waits, so a completion the provider keeps in itself is answered
+  as abandoned rather than holding the end up; one kept anywhere else is waited for. Every answer
+  given once ending has begun, and every operation that completes after it, is discarded
+  unreported.
 - **What is left.** Gated operations the kernel never saw, unresolved failures, and each lineage's
   final high-water mark are returned by `close()` and discarded by a drop. Nothing reported is
   undone: an epoch reported durable stays durable whether or not its event was popped.

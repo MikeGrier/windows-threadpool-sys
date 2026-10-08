@@ -2697,6 +2697,28 @@ needed: `Reach::Domains` of the one failed domain is exactly DI-D-27's rule -- f
 and files declared with none -- so the existing reach is reused. The assistant recorded the call
 rule and the smaller shapes it chose in DI-D-44 for confirmation.
 
+## Confirmations become checklist items (2026-10-08)
+
+Asked what "open confirmations" meant, the assistant said: each was a clause in a decision row,
+"decided by the assistant while implementing DI-3.2.x, to be confirmed by the engineer", tracked
+nowhere but those rows and its own end-of-turn summaries -- which the repository's rules forbid as a
+work queue -- and each checked-off item that left one had broken the move-or-spawn rule. It
+proposed one review item per decision. The engineer did not answer that, and asked for DI-3.2.7
+next; the assistant applied the rule to DI-3.2.7's own decision, DI-D-45, and left the earlier
+ones for the engineer's answer.
+
+## DI-3.2.7: ending (2026-10-08)
+
+Lineage ending and retiring had already landed in DI-3.2.5.1, so DI-3.2.7 came to `remove_file`,
+`close()` and drop. No question was open: DI-D-25 and API.md section 8 state the rules. Two shapes
+had to be chosen and one hazard found. `FileBusy`'s in-flight count clears at the kernel's
+completion, as `LineageBusy`'s already did. The hazard: DI-D-25 waits for every provider call in
+flight, and a provider that keeps its completions in itself answers them only when it is dropped,
+which a wait inside the instance's own drop would come before; so ending drops the provider first.
+Running the suite found the wait doing its job -- two tests ended an instance while holding a
+completion, and hung -- and those tests were the ones to change. Recorded in DI-D-45 for
+confirmation.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

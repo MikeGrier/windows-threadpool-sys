@@ -38,6 +38,12 @@ win-time-sys = { path = "../win-time-sys" }
 # transforms a real completion rather than fabricating one, so it cannot cause undefined behaviour,
 # only the wrong answer it was asked for.
 fault-injection = ["windows-ioring-sys/fault-injection"]
+# dioring's diagnostic records (DI-D-45), kept by the thread-pool crate's trace under target
+# `dioring` -- today, an internal inconsistency an ending instance found, which it does not panic on
+# while the thread is unwinding. Without it each record compiles to nothing. Read them with
+# `WINDOWS_THREADPOOL_TRACE=dioring` and `windows_threadpool_sys::trace::dump`, as the ring crate's
+# are (its D-79).
+trace = ["windows-threadpool-sys/trace"]
 
 [dev-dependencies]
 # This crate's own tests, and the worked examples in CONTRACT.md -- compiled as doctests -- drive

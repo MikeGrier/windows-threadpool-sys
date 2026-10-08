@@ -1084,6 +1084,174 @@
       "why": "DI-D-44: the provider may answer inside its call, and the answer takes the lock. Calling it with the lock held deadlocks the synchronous answer test, which a timeout counts as caught.",
       "find": ["        let calls = std::mem::take(&mut self.relay.lock().calls);\n"],
       "replace": ["        let mut held = self.relay.lock();\n        let calls = std::mem::take(&mut held.calls);\n"]
+    },
+    {
+      "name": "DI-3.2.7: a file with operations in flight is removed",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "API.md section 8: remove_file is refused while the file has an operation in flight.",
+      "find": ["        if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {\n"],
+      "replace": ["        if held_for_gate == 0 && holds.is_empty() {\n"]
+    },
+    {
+      "name": "DI-3.2.7: a file with operations held for a gate is removed",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "API.md section 8: a held operation is pushed to its file later, so removing the file strands it.",
+      "find": ["        if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {\n"],
+      "replace": ["        if in_flight == 0 && holds.is_empty() {\n"]
+    },
+    {
+      "name": "DI-3.2.7: the lowest gate kept is the highest",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "FileBusy.lowest_gates names the lowest gate in each lineage: the first a consumer must make durable.",
+      "find": ["                        if held.gate.id < low.id {\n"],
+      "replace": ["                        if held.gate.id > low.id {\n"]
+    },
+    {
+      "name": "CONTROL: an equal gate replaces the lowest",
+      "file": "src/dioring/ending.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. Two gates with the same id in one lineage are the same epoch, so replacing one with the other changes no report.",
+      "find": ["                        if held.gate.id < low.id {\n"],
+      "replace": ["                        if held.gate.id <= low.id {\n"]
+    },
+    {
+      "name": "DI-3.2.7: a failure does not hold its file",
+      "file": "src/dioring/durability/files.rs",
+      "expect": "caught",
+      "why": "API.md section 8: every write in an unresolved failure's suspect set holds its file, since healing it re-issues writes there.",
+      "find": ["        self.uncovered == 0 && self.failures.is_empty()\n"],
+      "replace": ["        self.uncovered == 0\n"]
+    },
+    {
+      "name": "DI-3.2.7: a suspect write is also counted as uncovered",
+      "file": "src/dioring/durability/files.rs",
+      "expect": "caught",
+      "why": "FileBusy.uncovered is outside every failure's suspect set; a suspect write is reported through its failure, and counting it twice tells the consumer to seal what sealing cannot clear.",
+      "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
+      "replace": ["            write.file == file && write.stage != Stage::InFlight\n"]
+    },
+    {
+      "name": "DI-3.2.7: a write in flight is also counted as uncovered",
+      "file": "src/dioring/durability/files.rs",
+      "expect": "caught",
+      "why": "A write in flight is the relay's to count; counting it here too reports it twice.",
+      "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
+      "replace": ["            write.file == file && !suspect.contains(&write.op.seq)\n"]
+    },
+    {
+      "name": "DI-3.2.7: the epoch to seal through is the lowest, not the highest",
+      "file": "src/dioring/durability/files.rs",
+      "expect": "caught",
+      "why": "FileBusy.uncovered_through is what to seal through to clear every uncovered write; the lowest would clear only some.",
+      "find": ["                .and_modify(|highest| *highest = (*highest).max(write.epoch))\n"],
+      "replace": ["                .and_modify(|highest| *highest = (*highest).min(write.epoch))\n"]
+    },
+    {
+      "name": "DI-3.2.7: every failure is said to hold every file",
+      "file": "src/dioring/durability/files.rs",
+      "expect": "caught",
+      "why": "A failure holds a file only when its suspect set names a write to it; reporting the rest asks the consumer to resolve failures that do not concern the file.",
+      "find": ["            for write in failure.suspect.writes().iter().filter(|w| w.file == file) {\n"],
+      "replace": ["            for write in failure.suspect.writes().iter() {\n"]
+    },
+    {
+      "name": "DI-3.2.7: a completion never clears its file's last operation",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "DI-D-45: in_flight clears as completions arrive. A count left at one refuses the file forever.",
+      "find": ["                    Some(1) => {\n                        core.in_flight.remove(&file);\n                    }\n"],
+      "replace": ["                    Some(1) => {}\n"]
+    },
+    {
+      "name": "DI-3.2.7: a push is not counted in flight",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-45: a push is counted until its completion is recorded. Uncounted, the file can be removed under it, and its completion is recorded as an inconsistency the next pop asserts on.",
+      "find": ["        *core.in_flight.entry(file).or_insert(0) += 1;\n        core.unsubmitted"],
+      "replace": ["        core.unsubmitted"]
+    },
+    {
+      "name": "DI-3.2.7: a released operation is not counted in flight",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "As for a push made at once: the released operation's completion would be an inconsistency.",
+      "find": ["                    core.durability.issued(id);\n                    *core.in_flight.entry(file).or_insert(0) += 1;\n"],
+      "replace": ["                    core.durability.issued(id);\n"]
+    },
+    {
+      "name": "DI-3.2.7: close hands back no held operation",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "DI-D-25: close() returns the gated operations the kernel never saw, with their buffers and contexts; dropping them loses the consumer's buffers.",
+      "find": ["        let held = std::mem::take(&mut core.held).into_values().collect();\n"],
+      "replace": ["        let held = Vec::new();\n"]
+    },
+    {
+      "name": "DI-3.2.7: close hands back no failure",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-25: close() returns the unresolved failures.",
+      "find": ["self.end(|core| (core.durability.failures(), core.durability.lineages()))\n"],
+      "replace": ["self.end(|core| (Vec::new(), core.durability.lineages()))\n"]
+    },
+    {
+      "name": "DI-3.2.7: ending does not wait for the provider",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "DI-D-25: ending waits for every provider call in flight, which may still be using what the instance owns.",
+      "find": ["        self.relay.wait_for_answers();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.7: ending keeps the provider while it waits",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "DI-D-45: a provider that keeps completions in itself answers them only when dropped, so a wait before the drop never ends. The test closes on another thread and calls a missed bound a hang.",
+      "find": ["        self.provider = None;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.7: a completion is not counted when made",
+      "file": "src/provider.rs",
+      "expect": "caught",
+      "why": "DI-D-45: ending waits until the count is zero, so an uncounted completion is not waited for, and its answer is recorded as an inconsistency.",
+      "find": ["        if let Some(home) = home.upgrade() {\n            home.issued();\n        }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.7: an answer does not count its completion down",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "DI-D-45: every answer counts down, after the end included. Without it ending waits forever.",
+      "find": ["            Some(left) => core.unanswered = left,\n"],
+      "replace": ["            Some(_) => {}\n"]
+    },
+    {
+      "name": "DI-3.2.7: the last answer wakes no one",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "The wait sleeps until notified; an answer that reaches zero without notifying leaves ending asleep.",
+      "find": ["            self.answered.notify_all();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.7: an inconsistency at the end is never asserted",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "DI-D-25 traces rather than panics only while unwinding; otherwise an inconsistency found at the end is a defect a debug build reports, as pop does.",
+      "find": ["                std::thread::panicking(),\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"],
+      "replace": ["                true,\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"]
+    },
+    {
+      "name": "DI-3.2.7: an inconsistency at the end panics while unwinding",
+      "file": "src/dioring/ending.rs",
+      "expect": "caught",
+      "why": "DI-D-25 and the ring crate's D-79: a second panic while unwinding aborts the process, losing the panic already in flight. The test binary aborts, which the harness counts as caught.",
+      "find": ["                std::thread::panicking(),\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"],
+      "replace": ["                false,\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"]
     }
   ]
 }

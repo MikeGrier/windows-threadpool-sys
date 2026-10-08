@@ -17,7 +17,7 @@ use crate::types::{
 };
 
 /// Write eight bytes at `offset`, tagged with `lineage`'s `epoch`, gated on `gate`.
-fn write_gated(
+pub(super) fn write_gated(
     harness: &mut Harness,
     lineage: &LineageHandle,
     offset: u64,
@@ -46,7 +46,7 @@ fn write_gated(
     id
 }
 
-fn read_gated(harness: &mut Harness, context: u32, gate: Epoch<V>) -> OpId {
+pub(super) fn read_gated(harness: &mut Harness, context: u32, gate: Epoch<V>) -> OpId {
     let id = harness
         .ring
         .read_with(GIVEN, 0, vec![0; 8], context, ReadOptions::new().gate(gate))
@@ -59,7 +59,7 @@ fn read_gated(harness: &mut Harness, context: u32, gate: Epoch<V>) -> OpId {
 }
 
 /// The next entry, which must be `Durable` through `through`.
-fn expect_durable(harness: &mut Harness, through: Epoch<V>) {
+pub(super) fn expect_durable(harness: &mut Harness, through: Epoch<V>) {
     match harness.next_entry() {
         Entry::Durable { through: reported } => assert_eq!(reported, through),
         other => panic!("expected Durable through {through:?}, got {other:?}"),
@@ -67,7 +67,7 @@ fn expect_durable(harness: &mut Harness, through: Epoch<V>) {
 }
 
 /// The next entry, which must be `id`'s completion.
-fn expect_done(harness: &mut Harness, id: OpId) -> Outcome<V> {
+pub(super) fn expect_done(harness: &mut Harness, id: OpId) -> Outcome<V> {
     match harness.next_entry() {
         Entry::Op(done) if done.id == id => done.outcome,
         other => panic!("expected {id:?}'s completion, got {other:?}"),
@@ -75,7 +75,7 @@ fn expect_done(harness: &mut Harness, id: OpId) -> Outcome<V> {
 }
 
 /// An instance with one file, and a lineage minted beside its default.
-fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
+pub(super) fn two(temp: &super::TempFile) -> (Harness, LineageHandle) {
     let mut harness = Harness::new(instance(vec![given(GIVEN, temp)], vec![vec![0; 16]]));
     let minted = harness.ring.mint_lineage(None);
     (harness, minted)

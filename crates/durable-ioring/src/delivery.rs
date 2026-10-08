@@ -26,8 +26,8 @@ use crate::contract::{
 };
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo, FileKey,
-    FileOptions, ImportScope, LineageInfo, ReadOptions, Resolution, ResolveError,
-    RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    FileOptions, ImportScope, Leftovers, LineageInfo, ReadOptions, RemoveFileError, Resolution,
+    ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -107,6 +107,15 @@ impl<D: DurableRing> DeliveryHandle<D> {
         options: FileOptions,
     ) -> Result<(), AddFileError> {
         self.with(|ring| ring.add_file_with(key, file, options))
+    }
+
+    /// [`DurableRing::remove_file`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::remove_file`].
+    pub fn remove_file(&self, key: FileKey) -> Result<SharedHandle, RemoveFileError<D::Ids>> {
+        self.with(|ring| ring.remove_file(key))
     }
 
     /// [`DurableRing::default_lineage`].
@@ -421,10 +430,11 @@ impl<D, F> fmt::Debug for DeliverySetupError<D, F> {
 ///
 /// # Ending
 ///
-/// Drop and [`into_inner`](Self::into_inner) both quiesce the delivery first: no handler call is
-/// running or will start (DI-2.7 point 5). Drop then drops the instance, and with it any entry not
-/// yet delivered; `into_inner` hands the instance back with those entries still queued, so it can
-/// be popped directly or closed.
+/// Drop, [`close`](Self::close) and [`into_inner`](Self::into_inner) all quiesce the delivery
+/// first: no handler call is running or will start (DI-2.7 point 5), so none runs once they have
+/// returned. Drop then drops the instance, and `close` closes it, each discarding any entry not yet
+/// delivered; `into_inner` hands the instance back with those entries still queued, so it can be
+/// popped directly or closed.
 pub struct EntryDelivery<D: DurableRing + Send + 'static> {
     /// `None` once the delivery has been quiesced.
     wait: Option<ThreadpoolWait>,
@@ -500,6 +510,12 @@ impl<D: DurableRing + Send + 'static> EntryDelivery<D> {
     pub fn into_inner(mut self) -> D {
         self.quiesce();
         self.inner.handle.take()
+    }
+
+    /// Quiesce the delivery and end the instance with [`DurableRing::close`], handing back what is
+    /// left. Entries not yet delivered are discarded with it.
+    pub fn close(self) -> Leftovers<D::Ids, D::Buffer, D::Context> {
+        self.into_inner().close()
     }
 
     /// Disarm the wait, wait for a delivery in progress to finish, and release the wait and the
