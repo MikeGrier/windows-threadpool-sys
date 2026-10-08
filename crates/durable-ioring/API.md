@@ -76,6 +76,8 @@ epoch above the seal point.)*
 
 ### 3. `make_durable_through` answers at once when it can
 
+**Amended by [DI-D-43](DESIGN-NOTES.md#di-d-43): it also refuses, as `SealError::GateCycle`, a seal that would close a gate cycle, and its error is `SealError` rather than `io::Error`.**
+
 It returns `Submitted` for a new seal, answered later on the queue, or `AlreadySealed(EpochState)`
 for the no-op case (guarantee 7). `EpochState` is `Open`, `Pending`, `Blocked(FailureId)`, `Durable`
 or `Abandoned`, and also answers `epoch_state(epoch)`. The high-water mark and seal point are
@@ -342,6 +344,8 @@ as it will on every implementation.
 ### 18. Ending a lineage
 
 **Amended by [DI-D-40](DESIGN-NOTES.md#di-d-40): releasing a lineage's last handle ends it too, and `end` and `retire` take the last handle by value.**
+
+**Amended by [DI-D-43](DESIGN-NOTES.md#di-d-43): a new gate on an ended lineage's epoch is refused as `UnknownLineage`, and a held write of the ended lineage ends as `NeverIssued` too.**
 
 *(DI-2.13, [DI-D-30](DESIGN-NOTES.md#di-d-30).)* `end_lineage(lineage)` is for a holder that will
 not finish a lineage. It abandons every epoch of the lineage not yet durable -- sealed ones whose

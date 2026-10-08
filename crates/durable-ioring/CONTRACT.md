@@ -110,8 +110,9 @@ Everything below either sharpens one word of that sentence or states a condition
    repair was sufficient.
 9. **Gated operations wait for durability, not for resolution.** A gated operation on epoch n is
    released when the high-water mark of n's lineage reaches n and n is durable. The gate may name
-   any lineage of the instance, including another than the operation's own. If n is abandoned, the operation fails
-   with an error saying it was never issued, so the consumer knows no bytes were written.
+   any lineage of the instance, including another than the operation's own. If n is abandoned, the
+   operation fails with an error saying it was never issued, so the consumer knows no bytes were
+   written. The rules in full are under "Gates" below.
 
 ## What this contract does not guarantee
 
@@ -414,7 +415,8 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
 - **Every epoch of it not yet durable is abandoned**, sealed ones whose flushes are still in flight
   included; a flush that finishes afterwards reports nothing. Epochs already durable stay durable.
 - **Its dependants end rather than wait.** A gated operation on one of its epochs, in any lineage,
-  ends as never issued, and a new gate on one is refused (guarantee 9).
+  ends as never issued, and so does a held write of its own; a new gate on one of its epochs is
+  refused, as for any lineage the instance cannot answer for (see "Gates").
 - **It waits for nothing and cancels no I/O.** Operations in flight complete normally and their
   completions are delivered. There is no lifetime or durability dependency to wait for, unlike
   ending an instance.
@@ -430,6 +432,37 @@ back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
 refused -- handing the handle back, with everything still holding the lineage -- unless nothing of
 it is in flight or uncovered and no unresolved failure holds it. A retired lineage is reported by no
 entry: nothing about it changed.
+
+## Gates
+
+A gate holds an operation until an epoch is durable -- release-after-durable
+([DI-D-23](DESIGN-NOTES.md#di-d-23), [DI-D-43](DESIGN-NOTES.md#di-d-43)).
+
+- **Held, then released.** A gated operation is accepted and held; nothing reaches the kernel.
+  It is released once its gate's lineage is durable through the gate, and pushed by the instance
+  at the consumer's next call on it -- normally the `pop` that returns the `Durable` entry. A gate
+  already durable holds nothing.
+- **A held write is a write of its lineage.** A seal at or above its epoch waits for it as for a
+  write in flight, so `Durable` still follows every write it covers (guarantee 5). It is not
+  suspected by a failure until it has been released, because until then nothing was written.
+- **Never issued.** A held operation whose gate is abandoned first ends as never issued, naming the
+  gate, with its buffer and context; so does a held write whose own epoch is abandoned first, since
+  no write may join an abandoned epoch (guarantee 6), naming that epoch. When both are, the gate
+  is named.
+- **Refused.** A gate naming a lineage the instance cannot answer for -- another instance's, or
+  one ended or retired -- is refused, as is a gate on an epoch already abandoned. So is a gated
+  write that would close a **cycle**: one whose gate's lineage reaching it already needs this write
+  to complete. The error names the cycle.
+- **A seal can close a cycle too, and is refused.** Which held writes a lineage must complete to
+  reach an epoch depends on the seal that will cover it -- a seal through n waits for every write
+  at or below n, and a pending heal waits for the next seal made after it. So
+  `make_durable_through` refuses a seal whose writes include a held write that, transitively,
+  waits for the seal itself; nothing is sealed, and the error names the cycle. Sealing lower first
+  releases the gates that were in the way.
+- **Reads take no part in durability**, so a gated read is on no cycle.
+
+Only gates dioring holds are seen. A consumer that waits in its own code for one lineage before
+writing another can still wait on itself.
 
 ## Not yet specified
 
@@ -493,7 +526,7 @@ for offset in [0, 8, 16] {
 }
 ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal issues
 // -> make_durable_through(41)                 // seals everything <= 41
-ring.make_durable_through(tag(41))?;
+ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(B) ; WriteDone(C)
 // <- Failed { failure: F1, cause: Flush, suspect: [A@41, B@41, C@41] }
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
@@ -512,7 +545,7 @@ for offset in [0, 8, 16] {
 // -> heal(F1)                                 // "I have re-issued what I need"
 ring.resolve(vec![(f1.token, Resolution::Heal)]).expect("heal");
 // -> make_durable_through(42)                 // the first seal after the heal
-ring.make_durable_through(tag(42))?;
+ring.make_durable_through(tag(42)).expect("a seal");
 // <- WriteDone(A') ; WriteDone(B') ; WriteDone(C')
 // <- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
 pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(42)));
@@ -574,7 +607,7 @@ let a = ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
 let p = ring.write(FILE, 8, vec![1; 8], tag(43), ()).expect("a write");
 ring.fail_next_flush(FILE, 1117);
 // -> make_durable_through(41)                 // seals 41
-ring.make_durable_through(tag(41))?;
+ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(P)
 // <- Failed { failure: F1, cause: Flush, suspect: [A@41, P@43] }
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
@@ -601,7 +634,7 @@ for offset in [0, 8, 16] {
 }
 ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Heal)])
     .expect("heal both");
-ring.make_durable_through(tag(44))?;
+ring.make_durable_through(tag(44)).expect("a seal");
 // <- Durable { through: 44 }                  // 41 and 43 passed once both failures were resolved
 pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(44)));
 assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Durable));
@@ -655,7 +688,7 @@ effect, at the first seal made after it. Any operation gated on 41 or 43 fails a
 # ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
 # ring.write(FILE, 8, vec![1; 8], tag(43), ()).expect("a write");
 # ring.fail_next_flush(FILE, 1117);
-# ring.make_durable_through(tag(41))?;
+# ring.make_durable_through(tag(41)).expect("a seal");
 # let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
 #     unreachable!()
 # };
@@ -673,7 +706,7 @@ pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
 assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Abandoned));
 assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
 // -> make_durable_through(44)                 // F1's heal takes effect here
-ring.make_durable_through(tag(44))?;
+ring.make_durable_through(tag(44)).expect("a seal");
 // <- Durable { through: 44 }                  // "durable through 44" means durable or abandoned
 pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(44)));
 assert_eq!(ring.durable_through(lineage.lineage()), Ok(Some(44)));

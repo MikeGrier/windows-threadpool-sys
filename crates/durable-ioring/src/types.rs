@@ -310,10 +310,11 @@ pub enum Outcome<V: Identities> {
     Transferred(u32),
     /// The operation reached the kernel and failed.
     Failed(io::Error),
-    /// A gated operation whose epoch was abandoned: it never reached the kernel, so nothing was
-    /// written.
+    /// A gated operation an abandoned epoch stopped before it was released: it never reached the
+    /// kernel, so nothing was written. The epoch was its gate, or -- for a write -- its own,
+    /// which no write may join once abandoned (DI-D-35, DI-D-43).
     NeverIssued {
-        /// The abandoned epoch it was gated on.
+        /// The abandoned epoch that stopped it: its gate if that was abandoned, else its own.
         abandoned: Epoch<V>,
     },
 }
@@ -431,17 +432,19 @@ pub enum PushRefusal<V: Identities> {
         /// The write's epoch.
         epoch: Epoch<V>,
     },
-    /// The lineage was never minted by this instance, or has been retired.
+    /// The write's lineage, or the gate's, is not one the instance can answer for: another
+    /// instance's, or one ended or retired (DI-D-40, DI-D-43).
     UnknownLineage(V::Lineage),
     /// The gate names an epoch already abandoned, so the operation could never be released.
     GateAbandoned {
         /// The gate.
         gate: Epoch<V>,
     },
-    /// The gate would close a cycle: releasing it already depends on this write's own epoch
-    /// becoming durable (DI-D-23).
+    /// The gate would close a cycle: its lineage reaching it already needs, transitively, this
+    /// write to complete (DI-D-23).
     GateCycle {
-        /// The epochs involved, starting at the write's own and ending at the gate.
+        /// The cycle, as [`SealError::GateCycle`] lists one, starting at this write's epoch and
+        /// its gate.
         cycle: Vec<Epoch<V>>,
     },
     /// No file was given to the instance under this key.
@@ -511,16 +514,10 @@ impl<V: Identities> WriteOptions<V> {
         self
     }
 
-    /// Hold the write until `epoch` is durable; it fails as `NeverIssued` if `epoch` is
-    /// abandoned (contract guarantee 9).
-    ///
-    /// Crate-private until gates are honoured (DI-3.2.5.2): a public setter before then would let a
-    /// gated write be issued as an ungated one.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "public once gates are honoured: DI-3.2.5")
-    )]
-    pub(crate) fn gate(mut self, epoch: Epoch<V>) -> Self {
+    /// Hold the write until `epoch` is durable; it ends as `NeverIssued` if `epoch`, or the
+    /// write's own epoch, is abandoned first (contract guarantee 9). `epoch` may be in any lineage
+    /// of the instance, the write's own included.
+    pub fn gate(mut self, epoch: Epoch<V>) -> Self {
         self.gate = Some(epoch);
         self
     }
@@ -546,14 +543,9 @@ impl<V: Identities> ReadOptions<V> {
         Self { gate: None }
     }
 
-    /// Hold the read until `epoch` is durable.
-    ///
-    /// Crate-private until gates are honoured (DI-3.2.5.2), as for writes.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "public once gates are honoured: DI-3.2.5")
-    )]
-    pub(crate) fn gate(mut self, epoch: Epoch<V>) -> Self {
+    /// Hold the read until `epoch` is durable; it ends as `NeverIssued` if `epoch` is abandoned
+    /// first. A read takes no part in durability, so it can be on no cycle.
+    pub fn gate(mut self, epoch: Epoch<V>) -> Self {
         self.gate = Some(epoch);
         self
     }
@@ -564,6 +556,41 @@ impl<V: Identities> Default for ReadOptions<V> {
         Self::new()
     }
 }
+
+/// Why `make_durable_through` was refused. Nothing was sealed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SealError<V: Identities> {
+    /// The lineage is not one the instance can answer for: the handle is another instance's
+    /// (DI-D-40).
+    UnknownLineage(V::Lineage),
+    /// The seal would close a gate cycle (DI-D-43): the writes it must wait for include a held
+    /// write whose gate's lineage reaching it needs, transitively, the seal to finish. Seal lower
+    /// first, so the gates can be released.
+    GateCycle {
+        /// The cycle: each held write's epoch followed by the gate it waits for. Each gate's
+        /// lineage reaching it needs the next write to complete, and the last gate's needs the
+        /// first's.
+        cycle: Vec<Epoch<V>>,
+    },
+}
+
+impl<V: Identities> fmt::Display for SealError<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownLineage(lineage) => {
+                write!(
+                    f,
+                    "{lineage:?} is not a lineage this instance can answer for"
+                )
+            }
+            Self::GateCycle { cycle } => {
+                write!(f, "sealing would close a gate cycle: {cycle:?}")
+            }
+        }
+    }
+}
+
+impl<V: Identities> std::error::Error for SealError<V> {}
 
 /// How a failure is resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -724,7 +751,8 @@ pub struct LineageBusy<V: Identities> {
     /// Writes in the lineage the kernel has not completed. Cleared as their completions arrive,
     /// which may be before they are popped.
     pub in_flight: usize,
-    /// Operations held for a gate in the lineage, or gated on one of its epochs.
+    /// Writes in the lineage held for a gate, and operations waiting for one of its epochs. Cleared
+    /// when the gates are released, or the operations end as `NeverIssued`.
     pub held_for_gate: usize,
     /// Writes in the lineage not yet covered successfully. Cleared by sealing them.
     pub uncovered: usize,

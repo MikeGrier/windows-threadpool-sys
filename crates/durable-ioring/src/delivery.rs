@@ -27,7 +27,7 @@ use crate::contract::{
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo, FileKey,
     FileOptions, ImportScope, LineageInfo, ReadOptions, Resolution, ResolveError,
-    RetireLineageError, Tag, UnknownLineage, WriteOptions,
+    RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -226,7 +226,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     pub fn make_durable_through(
         &self,
         through: Tag<'_, D::Ids>,
-    ) -> io::Result<DurabilityRequest<D::Ids>> {
+    ) -> Result<DurabilityRequest<D::Ids>, SealError<D::Ids>> {
         self.with(|ring| ring.make_durable_through(through))
     }
 

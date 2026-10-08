@@ -29,6 +29,8 @@ mod stamps;
 mod markings;
 // Lineage handles: minting, ending, retiring, and failures across lineages: DI-3.2.5.1.
 mod lineages;
+// Gated operations, and the cycles a push or a seal would close: DI-3.2.5.2.
+mod gates;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

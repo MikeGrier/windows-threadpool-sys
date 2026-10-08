@@ -60,7 +60,10 @@ use crate::types::{
     ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
+mod gates;
 mod lineages;
+
+pub(crate) use gates::GateState;
 #[cfg(test)]
 mod tests;
 
@@ -152,6 +155,12 @@ pub(crate) enum Event<E: EpochId + 'static> {
         lineage: Key,
         abandoned_through: Option<E>,
     },
+    /// A held operation will never be issued: the epoch named was abandoned -- its gate, or its own
+    /// (DI-D-43).
+    NeverIssued {
+        op: OpId,
+        abandoned: Gate<E>,
+    },
 }
 
 /// How a write ended, as the core needs it.
@@ -182,6 +191,8 @@ pub(crate) struct Due<E: EpochId + 'static, T> {
     pub(crate) flushes: Vec<Flush<E, T>>,
     /// Entries to append, in the order they happened.
     pub(crate) events: Vec<Event<E>>,
+    /// Held operations whose gates are now durable, to push, in the order they were released.
+    pub(crate) released: Vec<OpId>,
 }
 
 impl<E: EpochId + 'static, T> Default for Due<E, T> {
@@ -189,6 +200,7 @@ impl<E: EpochId + 'static, T> Default for Due<E, T> {
         Self {
             flushes: Vec::new(),
             events: Vec::new(),
+            released: Vec::new(),
         }
     }
 }
@@ -210,6 +222,25 @@ pub(crate) enum Sealing<E: EpochId + 'static, T> {
     Submitted(Due<E, T>),
     /// At or below the seal point: the epoch's state, and nothing changes.
     AlreadySealed(State),
+    /// Refused, and nothing changes: the seal would close this gate cycle (DI-D-43).
+    Cycle(Vec<Gate<E>>),
+}
+
+/// An epoch of a lineage, in the core's terms: what a gate names, and what a cycle lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Gate<E> {
+    pub(crate) lineage: Key,
+    pub(crate) epoch: E,
+}
+
+/// An operation held for its gate (DI-D-23): a gated write, with what it will be recorded as
+/// once issued, or a gated read.
+struct HeldOp<E, T> {
+    op: OpId,
+    write: Option<Accepted<E, T>>,
+    gate: Gate<E>,
+    /// The gate is durable, and the operation waits only to be pushed.
+    ready: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,6 +354,14 @@ struct LineageState<E> {
     abandoned: BTreeSet<E>,
     /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete.
     ended: bool,
+    /// This lineage's held writes still waiting for their gates, by epoch and push order: the
+    /// edges a cycle search follows (DI-D-43).
+    gated: BTreeMap<(E, u64), Gate<E>>,
+    /// The operations waiting for one of this lineage's epochs, by that epoch and push order.
+    waiting: BTreeSet<(E, u64)>,
+    /// This lineage's held writes, ready or not, by epoch: a seal waits for them as it does for
+    /// writes in flight (guarantee 5).
+    held_by_epoch: BTreeMap<E, usize>,
 }
 
 impl<E: EpochId> LineageState<E> {
@@ -336,6 +375,9 @@ impl<E: EpochId> LineageState<E> {
             next_seal: 0,
             abandoned: BTreeSet::new(),
             ended: false,
+            gated: BTreeMap::new(),
+            waiting: BTreeSet::new(),
+            held_by_epoch: BTreeMap::new(),
         }
     }
 
@@ -380,6 +422,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E>>,
     next_failure: u64,
+    /// The operations held for their gates, by push order.
+    held: BTreeMap<u64, HeldOp<E, T>>,
     /// The first internal inconsistency observed. Recorded rather than asserted, because most
     /// changes arrive on a pool thread, where a panic aborts the process and names no test; the
     /// consumer's next `pop` asserts on it instead, on the consumer's own thread.
@@ -399,6 +443,7 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
             writes: BTreeMap::new(),
             failures: Vec::new(),
             next_failure: 0,
+            held: BTreeMap::new(),
             inconsistency: None,
             clock,
         }
@@ -483,6 +528,12 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// A write was accepted by the ring.
     pub(crate) fn pushed(&mut self, write: Accepted<E, T>) {
+        self.in_flight(write, false);
+    }
+
+    /// Record `write` as in flight. One that was held may be at or below a seal made while it was
+    /// held; any other is above the seal point, which refused it otherwise (guarantee 6).
+    fn in_flight(&mut self, write: Accepted<E, T>, was_held: bool) {
         let Accepted {
             op,
             lineage,
@@ -498,7 +549,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             return;
         };
         debug_assert!(
-            state.sealed_through.is_none_or(|sealed| epoch > sealed),
+            was_held || state.sealed_through.is_none_or(|sealed| epoch > sealed),
             "a write at or below the seal"
         );
         *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
@@ -574,6 +625,13 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             let answer = self.state(lineage, through).unwrap_or(State::Pending);
             return Sealing::AlreadySealed(answer);
         }
+        if let Some(cycle) = self.seal_cycle(lineage, through) {
+            return Sealing::Cycle(cycle);
+        }
+        let state = self
+            .lineages
+            .get_mut(&lineage)
+            .expect("live, checked above");
         state.sealed_through = Some(through);
         let seq = state.next_seal;
         state.next_seal += 1;
@@ -688,6 +746,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                         suspect: failure.suspect,
                         markings: failure.markings,
                     });
+                    self.abandon_held(&failure.epochs, &mut due);
                 }
                 Resolution::Heal => {
                     let lineages = &self.lineages;
@@ -909,6 +968,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             self.writes
                 .retain(|_, write| write.lineage != lineage || write.epoch > through);
             due.events.push(Event::Durable { lineage, through });
+            self.release_through(lineage, through, due);
         }
         let count = self.lineages.get(&lineage).map_or(0, |s| s.seals.len());
         for index in 0..count {
@@ -933,7 +993,13 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
-        let oldest_in_flight = state.in_flight_by_epoch.keys().next().copied();
+        // A held write is outstanding as one in flight is: the seal waits for it (guarantee 5).
+        let in_flight = state.in_flight_by_epoch.keys().next().copied();
+        let held = state.held_by_epoch.keys().next().copied();
+        let oldest_in_flight = match (in_flight, held) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         for index in 0..state.seals.len() {
             if !matches!(state.seals[index].stage, SealStage::Waiting) {
                 continue;

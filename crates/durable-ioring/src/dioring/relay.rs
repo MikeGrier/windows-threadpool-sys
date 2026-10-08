@@ -19,19 +19,21 @@
 //! core, no callback holds the delivery, and the delivery is dropped on the instance's own thread --
 //! never inside one of its callbacks, where dropping it would wait for itself.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
-use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
+use windows_ioring_sys::{
+    Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile, RegisteredSpan,
+    WriteCaching as RingCaching,
+};
 
 use super::durability::{DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, WriteEnd};
 use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
-use crate::ids::{DioringIds, Home, InstanceId, Lineage};
-#[cfg(feature = "fault-injection")]
+use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::types::FileKey;
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
@@ -41,11 +43,68 @@ pub(crate) type DioringEntry<E, B, C> = Entry<DioringIds<E>, B, C>;
 /// The ring, inside its delivery.
 pub(crate) type Delivery<E, B, C> = EventDelivery<B, Sidecar<E, C>>;
 
-/// What a flush is pushed against: a file's registration, or its handle.
+/// What a flush, or a held operation, is pushed against: a file's registration, or its handle.
 #[derive(Clone, Debug)]
 pub(crate) enum FlushTarget {
     Registered(RegisteredFile),
     Shared(SharedHandle),
+}
+
+impl FlushTarget {
+    /// What a push is made against, borrowed.
+    pub(crate) fn via(&self) -> Via<'_> {
+        match self {
+            FlushTarget::Registered(index) => Via::Registered(index),
+            FlushTarget::Shared(handle) => Via::Shared(handle),
+        }
+    }
+}
+
+/// What a push is made against, borrowed from a file's slot or a held operation's target, so a
+/// push made at once clones nothing.
+#[derive(Clone, Copy)]
+pub(crate) enum Via<'a> {
+    Registered(&'a RegisteredFile),
+    Shared(&'a SharedHandle),
+}
+
+/// The push of an owned operation, made where its buffer's bound holds: `IoBuf` for a write,
+/// `IoBufMut` for a read. The caching choice is a write's alone.
+pub(crate) type OwnedPush<B, S> = for<'r, 'v> fn(
+    &mut windows_ioring_sys::Batch<'r, B, S>,
+    Via<'v>,
+    B,
+    u64,
+    RingCaching,
+    S,
+) -> Result<
+    windows_ioring_sys::OperationId,
+    windows_ioring_sys::PushRefused<B, S>,
+>;
+
+/// What an operation transfers: an owned buffer, with the push it needs, or a span of the
+/// registration.
+pub(crate) enum OpData<B, S> {
+    Owned(B, OwnedPush<B, S>),
+    Span(RegisteredSpan),
+}
+
+/// One consumer operation, as a push describes it.
+pub(crate) struct OpPush<E: EpochId + 'static, B, C> {
+    pub(crate) id: OpId,
+    pub(crate) kind: OpKind<DioringIds<E>>,
+    pub(crate) file: FileKey,
+    pub(crate) offset: u64,
+    pub(crate) data: OpData<B, Sidecar<E, C>>,
+    pub(crate) caching: RingCaching,
+    pub(crate) context: C,
+}
+
+/// An operation held for its gate, with what its push will be made against, kept until it is
+/// released or never issued (DI-D-23).
+pub(crate) struct HeldPush<E: EpochId + 'static, B, C> {
+    pub(crate) op: OpPush<E, B, C>,
+    pub(crate) target: FlushTarget,
 }
 
 /// The state under dioring's lock.
@@ -57,6 +116,12 @@ pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     instance: InstanceId,
     /// Flushes due that the ring refused, pushed again at the next chance.
     unpushed: Vec<Flush<E, FlushTarget>>,
+    /// The operations held for their gates, by push order.
+    pub(crate) held: BTreeMap<u64, HeldPush<E, B, C>>,
+    /// Held operations whose gates are durable, in the order released, waiting to be pushed by
+    /// the consumer's next call: only a call on the instance can reach the registration a
+    /// registered-span operation is pushed with.
+    pub(crate) ready: VecDeque<OpId>,
     /// A submission failed, so pushed operations may still sit in the submission queue; the next
     /// submission issues them (the ring crate's D-5).
     pub(crate) unsubmitted: bool,
@@ -86,6 +151,8 @@ impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
                 durability: Durability::new(instance, clock),
                 instance,
                 unpushed: Vec::new(),
+                held: BTreeMap::new(),
+                ready: VecDeque::new(),
                 unsubmitted: false,
                 closed: false,
                 #[cfg(feature = "fault-injection")]
@@ -242,6 +309,7 @@ where
         due: Due<E, FlushTarget>,
         ring: &Delivery<E, B, C>,
     ) -> Option<io::Error> {
+        core.ready.extend(due.released);
         self.append_events(core, due.events);
         let mut flushes = std::mem::take(&mut core.unpushed);
         flushes.extend(due.flushes);
@@ -286,6 +354,7 @@ where
 
     /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
     fn apply_without_ring(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
+        core.ready.extend(due.released);
         self.append_events(core, due.events);
         core.unpushed.extend(due.flushes);
     }
@@ -333,6 +402,25 @@ where
                     lineage: name(lineage),
                     abandoned_through,
                 },
+                Synthesized::NeverIssued { op, abandoned } => {
+                    let Some(held) = core.held.remove(&op.seq) else {
+                        debug_assert!(false, "a held operation with nothing held for it");
+                        continue;
+                    };
+                    core.ready.retain(|ready| *ready != op);
+                    Entry::Op(OpCompletion {
+                        id: op,
+                        kind: held.op.kind,
+                        outcome: Outcome::NeverIssued {
+                            abandoned: Epoch::new(name(abandoned.lineage), abandoned.epoch),
+                        },
+                        buffer: match held.op.data {
+                            OpData::Owned(buffer, _) => Some(buffer),
+                            OpData::Span(_) => None,
+                        },
+                        context: held.op.context,
+                    })
+                }
             };
             self.append(core, entry);
         }

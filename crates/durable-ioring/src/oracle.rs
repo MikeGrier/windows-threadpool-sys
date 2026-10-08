@@ -5,7 +5,7 @@
 //! copy of a rule in some other test is a check of the copy, not of the contract.
 //!
 //! The stream is what the consumer sees: each accepted push, reported to the oracle with
-//! [`ConformanceOracle::pushed`]; each seal the instance accepted as new, reported with
+//! [`ConformanceOracle::pushed`], or [`ConformanceOracle::pushed_gated`] with its gate; each seal the instance accepted as new, reported with
 //! [`ConformanceOracle::sealed`]; each failure the consumer healed, reported with
 //! [`ConformanceOracle::healed`]; and each popped entry, reported with
 //! [`ConformanceOracle::observe`]. The oracle grows with the implementation (DI-3.2): each step
@@ -51,6 +51,14 @@
 //! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
 //!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
 //!   containing an epoch of n's lineage at or below n.
+//! - **A gated operation waits for its gate** (guarantee 9): it completes, other than as never
+//!   issued, only once the stream has reported its gate's lineage durable through the gate, and
+//!   the gate not abandoned; and no failure suspects a gated write before then, since it has not
+//!   been issued.
+//! - **Never issued means abandoned** (guarantee 9, DI-D-43): `NeverIssued` comes only for a gated
+//!   operation, naming its gate or -- for a write -- its own epoch, which the stream has already
+//!   reported abandoned: by an `Abandoned` entry suspecting it, or by `LineageEnded` above its
+//!   lineage's mark.
 //! - **An ended lineage answers nothing more** (DI-D-30, DI-D-40): once its `LineageEnded` entry
 //!   has been observed, no `Durable` or `Blocked` names it, no write into it is accepted, no new
 //!   failure suspects a write of it, and it is not reported ended again. A suspect write of it
@@ -80,6 +88,9 @@
 //!   whether it was in flight when the failure was observed, how long it asked to write, and
 //!   whether its file has since been flushed are not; so each marking is checked against what it
 //!   names, and a missing one is not detected.
+//! - **That a gated operation is released promptly**, or at all: its release follows its gate's
+//!   `Durable` in no time the stream measures, and a gate can stay waiting forever legally.
+//! - **Which gate cycles were refused.** A refused push or seal is not in the stream.
 //! - **Which epochs `LineageEnded` abandons**, or that it comes at all: a lineage ends when its
 //!   last handle is released, which the stream does not carry.
 //! - **What a stamp's value is**: how it relates to wall-clock time, or to any clock outside the
@@ -115,6 +126,7 @@ mod tests;
 struct Pushed<V: Identities, C> {
     kind: OpKind<V>,
     context: C,
+    gate: Option<Epoch<V>>,
 }
 
 /// A contract rule the stream broke.
@@ -297,6 +309,35 @@ pub enum Violation<V: Identities> {
         /// The write.
         op: V::OpId,
     },
+    /// A gated operation completed, other than as never issued, before its gate was reported
+    /// durable.
+    ReleasedEarly {
+        /// The operation.
+        op: V::OpId,
+        /// Its gate.
+        gate: Epoch<V>,
+    },
+    /// A failure suspects a gated write whose gate has not been reported durable, so it cannot
+    /// have been issued.
+    SuspectStillHeld {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write.
+        op: V::OpId,
+    },
+    /// `NeverIssued` for an operation pushed without a gate.
+    NeverIssuedUngated {
+        /// The operation.
+        op: V::OpId,
+    },
+    /// `NeverIssued` naming an epoch that is neither the operation's gate nor its own, or one the
+    /// stream has not reported abandoned.
+    NeverIssuedNotAbandoned {
+        /// The operation.
+        op: V::OpId,
+        /// The epoch named.
+        abandoned: Epoch<V>,
+    },
 }
 
 /// A failure reported and not yet ended by `Abandoned` or `Healed`.
@@ -336,6 +377,8 @@ pub struct ConformanceOracle<V: Identities, C> {
     abandoned: HashMap<V::Lineage, BTreeSet<V::EpochId>>,
     /// Every lineage reported ended.
     ended_lineages: HashSet<V::Lineage>,
+    /// Every gated write's gate, kept after it completes: a failure may suspect it later.
+    gates: HashMap<V::OpId, Epoch<V>>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -353,6 +396,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             ended: HashMap::new(),
             abandoned: HashMap::new(),
             ended_lineages: HashSet::new(),
+            gates: HashMap::new(),
         }
     }
 
@@ -383,6 +427,31 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal, and
     /// [`Violation::WriteToAbandoned`] for a write into an epoch reported abandoned.
     pub fn pushed(&mut self, op: V::OpId, kind: OpKind<V>, context: C) -> Result<(), Violation<V>> {
+        self.push(op, kind, context, None)
+    }
+
+    /// Report an accepted push gated on `gate`, as [`Self::pushed`] reports one without.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pushed`].
+    pub fn pushed_gated(
+        &mut self,
+        op: V::OpId,
+        kind: OpKind<V>,
+        context: C,
+        gate: Epoch<V>,
+    ) -> Result<(), Violation<V>> {
+        self.push(op, kind, context, Some(gate))
+    }
+
+    fn push(
+        &mut self,
+        op: V::OpId,
+        kind: OpKind<V>,
+        context: C,
+        gate: Option<Epoch<V>>,
+    ) -> Result<(), Violation<V>> {
         if self.completed.contains(&op) || self.outstanding.contains_key(&op) {
             return Err(Violation::DuplicateIdentity { op });
         }
@@ -411,7 +480,17 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             }
             self.writes.insert(op, epoch);
         }
-        self.outstanding.insert(op, Pushed { kind, context });
+        if let (OpKind::Write { .. }, Some(gate)) = (kind, gate) {
+            self.gates.insert(op, gate);
+        }
+        self.outstanding.insert(
+            op,
+            Pushed {
+                kind,
+                context,
+                gate,
+            },
+        );
         Ok(())
     }
 
@@ -469,6 +548,28 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         if pushed.context != completion.context {
             return Err(Violation::ContextChanged { op });
+        }
+        match (&completion.outcome, pushed.gate) {
+            (Outcome::NeverIssued { .. }, None) => {
+                return Err(Violation::NeverIssuedUngated { op });
+            }
+            (Outcome::NeverIssued { abandoned }, Some(gate)) => {
+                let own = match completion.kind {
+                    OpKind::Write { epoch } => Some(epoch),
+                    OpKind::Read => None,
+                };
+                let named = *abandoned == gate || Some(*abandoned) == own;
+                if !named || !self.is_abandoned(*abandoned) {
+                    return Err(Violation::NeverIssuedNotAbandoned {
+                        op,
+                        abandoned: *abandoned,
+                    });
+                }
+            }
+            (_, Some(gate)) if !self.is_durable(gate) => {
+                return Err(Violation::ReleasedEarly { op, gate });
+            }
+            _ => {}
         }
         if let OpKind::Write { .. } = completion.kind {
             let ended = match &completion.outcome {
@@ -603,6 +704,14 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
                     op: write.op,
                 });
             }
+            if let Some(&gate) = self.gates.get(&write.op)
+                && !self.is_durable(gate)
+            {
+                return Err(Violation::SuspectStillHeld {
+                    failure,
+                    op: write.op,
+                });
+            }
             if self.writes.get(&write.op) != Some(&write.epoch) {
                 return Err(Violation::SuspectNotPushed {
                     failure,
@@ -666,6 +775,28 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             Some(reported) if holds(reported, through) => Ok(()),
             _ => Err(Violation::BlockedByUnrelated { through, by }),
         }
+    }
+
+    /// Whether the stream has reported `epoch` durable: its lineage's mark at or past it, and it
+    /// not abandoned.
+    fn is_durable(&self, epoch: Epoch<V>) -> bool {
+        self.durable
+            .get(&epoch.lineage)
+            .is_some_and(|&durable| epoch.id <= durable)
+            && !self.is_abandoned(epoch)
+    }
+
+    /// Whether the stream has reported `epoch` abandoned: by an `Abandoned` entry suspecting it,
+    /// or by `LineageEnded` while it was above its lineage's mark.
+    fn is_abandoned(&self, epoch: Epoch<V>) -> bool {
+        self.abandoned
+            .get(&epoch.lineage)
+            .is_some_and(|ids| ids.contains(&epoch.id))
+            || (self.ended_lineages.contains(&epoch.lineage)
+                && self
+                    .durable
+                    .get(&epoch.lineage)
+                    .is_none_or(|&durable| epoch.id > durable))
     }
 
     /// How many pushed operations have not completed.

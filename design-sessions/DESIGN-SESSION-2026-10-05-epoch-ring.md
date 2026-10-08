@@ -2651,6 +2651,34 @@ Two follow-ups belong to gates and were queued in DI-3.2.5.2, which already owns
 operations on an ended lineage's epochs end as `NeverIssued`, and `LineageBusy::held_for_gate`,
 zero until gates exist, gets counted.
 
+## DI-3.2.5.2: a seal can close a gate cycle (2026-10-08)
+
+Asked to implement DI-3.2.5.2, the assistant stopped before writing the cycle search: DI-D-23
+refused the *push* that would close a cycle, but a seal can close one too. Which held writes a
+lineage must complete to reach an epoch depends on how far the seal covering that epoch reaches, and
+the consumer chooses that after the gated writes were accepted; a pending heal waits for the next
+seal however far it reaches. The worked case: a write at M:4 gated on L:9, and one at L:9 gated on
+M:3, close nothing when pushed, yet sealing M through 5 deadlocks, while sealing through 3 first
+does not. It offered three answers -- refuse such a seal; split seals at gated epochs inside dioring;
+or leave seal-closed cycles undetected as a stated limit -- recommending the first, and two smaller
+points: a gate on an ended lineage (DI-D-30 said `GateAbandoned`, DI-D-40 and DI-D-42 made such a
+lineage unknown), and a held write whose own epoch is abandoned first.
+
+The engineer chose the first: "The answer needs to be (a) Also refuse a seal that would close a
+cycle." With it came a direction on how: the normal, non-error case must be fast; reduce everything
+to small identifiers, sorted lists and intersections, with closures over the lineages and heals in
+flight; take more time for diagnostics only once the case is known to be an error; and "Don't plan
+out the exploration of the graph so that we get the information up front if it's more costly than a
+trivialization of the graph algorithm. I've found that often these graph algorithms can be
+trivialized away from pointer chasing for the important cases."
+
+The trivialization found: what a lineage must complete to reach an epoch only grows with the epoch,
+so the search keeps one number per lineage and scans each lineage's held writes, sorted by epoch,
+once, as that number rises. A seal is tested from all the held writes beneath it at once, and only
+if that is positive, one write at a time; the path naming the cycle is a separate search on the
+error path. The two smaller points were not answered, so the assistant took its recommendations and
+recorded them, with the shapes it chose, in DI-D-43 for confirmation.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

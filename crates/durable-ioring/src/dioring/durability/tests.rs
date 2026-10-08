@@ -24,6 +24,8 @@ mod stamps;
 mod markings;
 // Minted lineages, ending and retiring them, and failures across them: DI-3.2.5.1.
 mod lineages;
+// Gates, and the cycles a push or a seal would close: DI-3.2.5.2.
+mod gates;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.
@@ -225,6 +227,8 @@ enum Seen {
     Healed(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
     /// Failure, the write marked, and how.
     Marked(u64, u64, MarkingKind),
+    /// The operation never issued, and the lineage and epoch named abandoned.
+    NeverIssued(u64, Key, u64),
 }
 
 fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
@@ -267,6 +271,9 @@ fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
             Event::Marked { failure, marking } => {
                 Seen::Marked(failure.seq, marking.write.seq, marking.kind)
             }
+            Event::NeverIssued { op, abandoned } => {
+                Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
+            }
         })
         .collect()
 }
@@ -305,6 +312,7 @@ fn submitted(sealing: Sealing<u64, &'static str>) -> Due<u64, &'static str> {
     match sealing {
         Sealing::Submitted(due) => due,
         Sealing::AlreadySealed(state) => panic!("expected a new seal, got {state:?}"),
+        Sealing::Cycle(cycle) => panic!("expected a new seal, got a cycle {cycle:?}"),
     }
 }
 
@@ -312,6 +320,7 @@ fn already(sealing: Sealing<u64, &'static str>) -> State {
     match sealing {
         Sealing::AlreadySealed(state) => state,
         Sealing::Submitted(due) => panic!("expected a request below the seal, got {due:?}"),
+        Sealing::Cycle(cycle) => panic!("expected a request below the seal, got {cycle:?}"),
     }
 }
 

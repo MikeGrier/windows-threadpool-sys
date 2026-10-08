@@ -17,6 +17,8 @@ mod failures;
 mod markings;
 // The rules for an ended lineage: DI-3.2.5.1.
 mod lineages;
+// The rules for gated operations: DI-3.2.5.2.
+mod gates;
 
 type V = DioringIds<u64>;
 type Oracle = ConformanceOracle<V, u32>;

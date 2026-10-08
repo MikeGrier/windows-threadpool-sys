@@ -5,15 +5,13 @@
 //! that `Durable` is reported only for what was sealed and only after the writes it covers
 //! (guarantee 5), without restating those rules.
 
-use std::io;
-
 use windows_ioring_sys::RegisteredSpan;
 
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, read_only, temp};
 use super::{empty, file, serves, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal, UnknownLineage,
+    DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal, SealError, UnknownLineage,
 };
 
 /// The next entry, which must be `Durable` through `id` of the default lineage.
@@ -243,7 +241,7 @@ fn another_instances_lineage_is_refused_and_has_no_seal() {
     let error = ring
         .make_durable_through(handle.at(1))
         .expect_err("a foreign lineage");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(error, SealError::UnknownLineage(foreign));
     assert_eq!(ring.sealed_through(foreign), Err(UnknownLineage(foreign)));
     assert_eq!(ring.durable_through(foreign), Err(UnknownLineage(foreign)));
     let own = Epoch::new(ring.default_lineage().lineage(), 1);

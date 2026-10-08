@@ -53,22 +53,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.5.1** -- Lineage handles, minting, ending and retiring, and failures across lineages, with a heal taking effect in each lineage separately. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3251)
 
-- [ ] **DI-3.2.5.2** -- **Gates.** Gated operations held until their epoch is durable, ending as
-  `NeverIssued` when it is abandoned; a gate on an abandoned epoch refused as `GateAbandoned`; and a
-  gate cycle refused as `GateCycle`, before anything is reserved, with an error naming the cycle
-  ([DI-D-23](DESIGN-NOTES.md#di-d-23)). A gate takes the plain `Epoch`, which may name another
-  lineage, and a gate on a lineage the instance does not have is refused
-  ([DI-D-40](DESIGN-NOTES.md#di-d-40)). The cycle search must follow every way reaching an epoch
-  can depend on a later one: DI-D-23 names a pending heal, and once heals take effect per lineage
-  (`DI-3.2.5.1`), reaching L:a can depend on L's next seal and on any gated write in it. Make
-  `WriteOptions::gate` and `ReadOptions::gate` public again: `DI-3.2.2.1` made them crate-private,
-  because until gates are honoured a public setter would let a gated operation be issued ungated.
-  CONTRACT.md states the gate rules, `GateCycle` included, which it does not yet mention. Gates on
-  the writer's own lineage need nothing from `DI-3.2.5.1`; gates across lineages do, so this follows
-  it. From `DI-3.2.5.1` ([DI-D-42](DESIGN-NOTES.md#di-d-42)): a gated operation on an epoch of a
-  lineage that ends, in any lineage, ends as `NeverIssued` ([DI-D-30](DESIGN-NOTES.md#di-d-30)),
-  and `LineageBusy::held_for_gate`, zero until now, counts the operations held for a gate in the
-  lineage or gated on one of its epochs.
+- [x] **DI-3.2.5.2** -- Gates: operations held until an epoch is durable, ended as never issued when an epoch they need is abandoned, and a push or a seal that would close a gate cycle refused. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3252)
 
 - [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
   serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`

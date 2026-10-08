@@ -46,7 +46,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// End `lineage` (DI-D-30): abandon every epoch of it not yet durable, and stop answering for
     /// it. Its flushes still out are absorbed when they answer; its writes in flight are let go as
     /// they complete, and the lineage is retired with the last. A heal waiting on it no longer
-    /// does. The lineage must be live and not the default.
+    /// does, and an operation held by a gate on one of its epochs, or a held write of its own, is
+    /// never issued (DI-D-43). The lineage must be live and not the default.
     pub(crate) fn end(&mut self, lineage: Key) -> Due<E, T> {
         let mut due = Due::default();
         let Some(state) = self
@@ -65,6 +66,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .values()
             .filter(|write| write.lineage == lineage)
             .map(|write| write.epoch)
+            .chain(state.held_by_epoch.keys().copied())
             .filter(above)
             .max();
         let abandoned_through = sealed.max(written);
@@ -81,12 +83,14 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             lineage,
             abandoned_through,
         });
+        self.end_held(lineage, &mut due);
         self.retire_if_drained(lineage);
         self.advance(due)
     }
 
-    /// Retire `lineage`, if nothing holds it: no write of it in flight or uncovered, and no
-    /// unresolved failure holding it. The lineage must be live and not the default.
+    /// Retire `lineage`, if nothing holds it: no write of it in flight, uncovered or held for a
+    /// gate, no operation held for a gate on one of its epochs, and no unresolved failure holding
+    /// it. The lineage must be live and not the default.
     pub(crate) fn retire(&mut self, lineage: Key) -> Result<(), LineageBusy<V<E>>> {
         let Some(state) = self.live(lineage).filter(|_| lineage != DEFAULT_LINEAGE) else {
             self.inconsistent("a retire of a lineage that is not live, or of the default");
@@ -104,12 +108,12 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .filter(|failure| failure.holds(lineage).is_some())
             .map(|failure| failure.id)
             .collect();
-        if in_flight > 0 || uncovered > 0 || !failures.is_empty() {
+        let held_for_gate = self.held_for_gate(lineage);
+        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {
             return Err(LineageBusy {
                 lineage: self.name(lineage),
                 in_flight,
-                // Gates are `DI-3.2.5.2`'s.
-                held_for_gate: 0,
+                held_for_gate,
                 uncovered,
                 failures,
             });

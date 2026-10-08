@@ -22,16 +22,16 @@ use crate::provider::DurabilityProvider;
 use crate::types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
     FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions,
-    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, Tag, UnknownLineage,
-    WriteOptions,
+    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 
 mod durability;
 mod push;
 mod relay;
 
-use durability::{DEFAULT_LINEAGE, Due, Reach, Routing, Sealing, State};
-use relay::{Delivery, FlushTarget, Relay};
+use durability::{DEFAULT_LINEAGE, Due, Gate, Reach, Routing, Sealing, State};
+use relay::{Core, Delivery, FlushTarget, Relay, Via};
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
 #[cfg(test)]
@@ -138,6 +138,14 @@ pub(crate) enum FileSlot {
 }
 
 impl FileSlot {
+    /// What a push to this file is made against, borrowed.
+    fn via(&self) -> Via<'_> {
+        match self {
+            FileSlot::Registered { index, .. } => Via::Registered(index),
+            FileSlot::Shared(handle) => Via::Shared(handle),
+        }
+    }
+
     /// What a flush of this file is pushed against.
     fn flush_target(&self) -> FlushTarget {
         match self {
@@ -506,7 +514,7 @@ where
             "dioring's durability state is inconsistent: {:?}",
             core.durability.inconsistency()
         );
-        let retried = self.relay.apply(&mut core, Due::default(), &self.delivery);
+        let retried = self.settle(&mut core, Due::default());
         match (Relay::pop(&mut core), retried) {
             (Some(entry), _) => Ok(Some(entry)),
             (None, Some(error)) => Err(error),
@@ -517,10 +525,10 @@ where
     fn make_durable_through(
         &mut self,
         through: Tag<'_, Self::Ids>,
-    ) -> io::Result<DurabilityRequest<Self::Ids>> {
+    ) -> Result<DurabilityRequest<Self::Ids>, SealError<Self::Ids>> {
         let through = through.epoch();
         if !self.is_live(through.lineage) {
-            return Err(foreign_lineage());
+            return Err(SealError::UnknownLineage(through.lineage));
         }
         let mut core = self.relay.lock();
         match core.durability.seal(through.lineage.seq, through.id) {
@@ -528,9 +536,12 @@ where
                 Ok(DurabilityRequest::AlreadySealed(epoch_state(state)))
             }
             Sealing::Submitted(due) => {
-                self.relay.apply(&mut core, due, &self.delivery);
+                self.settle(&mut core, due);
                 Ok(DurabilityRequest::Submitted)
             }
+            Sealing::Cycle(cycle) => Err(SealError::GateCycle {
+                cycle: self.epochs(cycle),
+            }),
         }
     }
 
@@ -589,7 +600,7 @@ where
                 Ok(lineage) => {
                     let mut core = self.relay.lock();
                     let due = core.durability.end(lineage.seq);
-                    self.relay.apply(&mut core, due, &self.delivery);
+                    self.settle(&mut core, due);
                     return Ok(());
                 }
                 Err(handle) => {
@@ -636,7 +647,7 @@ where
     ) -> Result<(), ResolveError<Self::Ids>> {
         let mut core = self.relay.lock();
         let due = core.durability.resolve(items)?;
-        self.relay.apply(&mut core, due, &self.delivery);
+        self.settle(&mut core, due);
         Ok(())
     }
 
@@ -649,7 +660,7 @@ where
         let (id, due) = core
             .durability
             .import(Cause::Imported { scope }, &reach, only);
-        self.relay.apply(&mut core, due, &self.delivery);
+        self.settle(&mut core, due);
         Ok(id)
     }
 
@@ -693,6 +704,31 @@ where
                 None,
             ),
         })
+    }
+
+    /// Act on what a consumer call made due, then push every held operation released so far: a
+    /// consumer call is the one place a released operation can be pushed (see the `push` module).
+    /// Returns the first submission error.
+    fn settle(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) -> Option<io::Error> {
+        let applied = self.relay.apply(core, due, &self.delivery);
+        let released = self.release_ready(core);
+        applied.or(released)
+    }
+
+    /// A cycle in the core's terms, as the contract reports it.
+    fn epochs(&self, cycle: Vec<Gate<E>>) -> Vec<Epoch<DioringIds<E>>> {
+        cycle
+            .into_iter()
+            .map(|at| {
+                Epoch::new(
+                    Lineage {
+                        instance: self.instance,
+                        seq: at.lineage,
+                    },
+                    at.epoch,
+                )
+            })
+            .collect()
     }
 
     /// Refuse another instance's lineage, which this one has no answer for.
@@ -778,14 +814,6 @@ fn epoch_state<E: EpochId + 'static>(state: State) -> EpochState<DioringIds<E>> 
         State::Durable => EpochState::Durable,
         State::Abandoned => EpochState::Abandoned,
     }
-}
-
-/// A seal request naming a lineage this instance does not have.
-fn foreign_lineage() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "the epoch's lineage is not one of this instance's",
-    )
 }
 
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for

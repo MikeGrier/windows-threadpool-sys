@@ -98,16 +98,16 @@
       "file": "src/dioring/push.rs",
       "expect": "caught",
       "why": "The write's tag is what durability will be computed from (DI-3.2.3). The oracle's kind rule catches it in every test that writes.",
-      "find": ["            OpKind::Write { epoch },\n            len,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"],
-      "replace": ["            OpKind::Read,\n            len,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"]
+      "find": ["            OpKind::Write { epoch: tag.epoch() },\n            len,\n            context,\n            OpData::Owned(buffer, push_owned_write::<B, Sidecar<E, C>>),\n"],
+      "replace": ["            OpKind::Read,\n            len,\n            context,\n            OpData::Owned(buffer, push_owned_write::<B, Sidecar<E, C>>),\n"]
     },
     {
       "name": "DI-3.2.2.1: operation identities are not advanced",
       "file": "src/dioring/push.rs",
       "expect": "caught",
       "why": "Two operations under one identity cannot be told apart. The oracle's duplicate-identity rule, and the push-order test.",
-      "find": ["        self.next_op += 1;\n"],
-      "replace": ["\n"]
+      "find": ["        core.unsubmitted = batch.submit().is_err();\n        self.next_op += 1;\n"],
+      "replace": ["        core.unsubmitted = batch.submit().is_err();\n"]
     },
     {
       "name": "DI-3.2.2.1: a push naming an unknown file is not refused",
@@ -282,16 +282,16 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The epoch's id would be applied to the default lineage, sealing it on another instance's say-so.",
-      "find": ["        if !self.is_live(through.lineage) {\n            return Err(foreign_lineage());\n"],
-      "replace": ["        if false {\n            return Err(foreign_lineage());\n"]
+      "find": ["        if !self.is_live(through.lineage) {\n            return Err(SealError::UnknownLineage(through.lineage));\n"],
+      "replace": ["        if false {\n            return Err(SealError::UnknownLineage(through.lineage));\n"]
     },
     {
       "name": "DI-3.2.3: no synthesized entry is appended",
       "file": "src/dioring/relay.rs",
       "expect": "caught",
       "why": "Guarantee 4: every request is answered. The state still changes, so only the queue shows it; every seal and failure test waits for its entry and times out.",
-      "find": ["    ) -> Option<io::Error> {\n        self.append_events(core, due.events);\n"],
-      "replace": ["    ) -> Option<io::Error> {\n        drop(due.events);\n"]
+      "find": ["        core.ready.extend(due.released);\n        self.append_events(core, due.events);\n        let mut flushes"],
+      "replace": ["        core.ready.extend(due.released);\n        drop(due.events);\n        let mut flushes"]
     },
     {
       "name": "DI-3.2.3: the oracle accepts a write at or below the seal",
@@ -706,16 +706,16 @@
       "file": "src/dioring/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: retiring abandons nothing, so it must be refused while an unresolved failure holds the lineage, or that failure's epochs there would be dropped unresolved. Caught by the core test whose lineage is held by a failure alone.",
-      "find": ["        if in_flight > 0 || uncovered > 0 || !failures.is_empty() {\n"],
-      "replace": ["        if in_flight > 0 || uncovered > 0 {\n"]
+      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
+      "replace": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 {\n"]
     },
     {
       "name": "DI-3.2.5.1: retiring ignores writes in flight",
       "file": "src/dioring/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: a lineage with writes in flight is not empty; retiring it would forget writes whose completions are still to come. Caught by the core test that retires with a write in flight.",
-      "find": ["        if in_flight > 0 || uncovered > 0 || !failures.is_empty() {\n"],
-      "replace": ["        if uncovered > 0 || !failures.is_empty() {\n"]
+      "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
+      "replace": ["        if held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"]
     },
     {
       "name": "DI-3.2.5.1: a flush answering after its lineage ended is reported",
@@ -796,6 +796,190 @@
       "why": "The oracle's statement that no failure observed after the end suspects the lineage. Caught by its own test.",
       "find": ["            if self.ended_lineages.contains(&write.epoch.lineage) {\n"],
       "replace": ["            if false {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a gate not yet durable is taken as durable",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "Guarantee 9: a gated operation waits for its gate. Issued at once, it runs ahead of the durability it was gated on. Caught by the oracle's released-early rule in the ring tests, and by the core tests that expect a hold.",
+      "find": ["            Some(_) => GateState::Waiting,\n"],
+      "replace": ["            Some(_) => GateState::Durable,\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a gate reached releases nothing",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "Guarantee 9: a gated operation is released once its gate is durable. Never released, it waits forever. Caught by the core release tests and the ring tests waiting for the completion.",
+      "find": ["            due.released.push(held.op);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.5.2: operations released together go in gate order",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-43: operations released at once are pushed in push order, whatever epoch each waited for, so a release reorders nothing the consumer pushed. Caught by the core push-order test.",
+      "find": ["        released.sort_unstable();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.5.2: a seal does not wait for the held writes it covers",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Guarantee 5: Durable follows every write it covers, and a held write is one. A seal that passes it reports durable a write not yet written. Caught by the core and ring tests whose seal covers a held write, and by the oracle's Durable-before-completion rule.",
+      "find": ["        let held = state.held_by_epoch.keys().next().copied();\n"],
+      "replace": ["        let held: Option<E> = None;\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: an issued write is not recorded in flight",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "A released write is issued as any write is, and its completion must find it. Caught by the core and ring tests that complete a released write.",
+      "find": ["                    self.in_flight(write, true);\n"],
+      "replace": ["                    let _ = write;\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a push cycle is not looked for",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-23: a gated write that closes a cycle is refused, or two writes wait on each other forever. Caught by the ring test that pushes the cycle.",
+      "find": ["                            core.durability.write_cycle(write, at)\n"],
+      "replace": ["                            {\n                                let _ = (write, at);\n                                None\n                            }\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a seal cycle is not looked for",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-43: a seal whose writes include one waiting, transitively, for the seal itself is refused. Accepted, nothing it covers can ever finish. Caught by the core and ring seal-cycle tests.",
+      "find": ["        if let Some(cycle) = self.seal_cycle(lineage, through) {\n"],
+      "replace": ["        if let Some(cycle) = self.seal_cycle(lineage, through).filter(|_| false) {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: the quick test is trusted as the answer",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-43: the search from every held write under a seal together can need the lowest of them without any being on a cycle, so a positive is confirmed write by write. Trusted, it refuses a seal that closes nothing. Caught by the core test of a seal the quick test suspects.",
+      "find": ["            .find(|&(write, gate)| self.needs(vec![gate], write, extra))\n"],
+      "replace": ["            .find(|_| true)\n"]
+    },
+    {
+      "name": "CONTROL: a seal is searched write by write without the quick test",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself, and the claim that the quick test only filters: the searches it skips would each answer no, so skipping it changes no answer, only the cost.",
+      "find": ["        if !self.needs(\n"],
+      "replace": ["        if false && !self.needs(\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a seal already made does not widen what reaching an epoch needs",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-43: the mark passes an epoch only with the first seal at or above it, which waits for every write it covers. Ignored, a gate on an epoch under a wide seal hides a cycle. Caught by the core test of a seal that widens a need, and by every seal-cycle test.",
+      "find": ["        if let Some((_, through)) = seals.clone().find(|&(_, through)| through >= target.epoch) {\n"],
+      "replace": ["        if let Some((_, through)) = seals.clone().find(|_| false) {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a pending heal does not widen what reaching an epoch needs",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-23 and DI-D-41: a healing failure holds its epochs until the first seal made after the heal finishes, so reaching them waits for that seal however far it reaches. Caught by the core test of the seal a pending heal waits for.",
+      "find": ["            if holds && let Some((_, through)) = seals.clone().find(|&(seq, _)| seq >= after) {\n"],
+      "replace": ["            if false && holds && let Some((_, through)) = seals.clone().find(|&(seq, _)| seq >= after) {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: the seal being considered is left out",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-43: a seal is judged as though made, or the cycle it would close is not seen. Caught by the seal-cycle tests.",
+      "find": ["            .filter(|seal| seal.lineage == target.lineage)\n"],
+      "replace": ["            .filter(|_| false)\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a held write's own abandoned epoch does not stop it",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-35 and DI-D-43: no write may join an abandoned epoch, so a held write whose own epoch is abandoned never issues. Caught by the core tests of that case.",
+      "find": ["                    .filter(|&own| hit(own))\n"],
+      "replace": ["                    .filter(|_| false)\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: ending a lineage leaves its held operations held",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-30: an ended lineage's dependants end rather than wait, and a held write of its own can never issue. Caught by the core and ring tests of ending a lineage with held operations.",
+      "find": ["        self.end_held(lineage, &mut due);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.5.2: retiring ignores held operations",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-30: a lineage with operations held in it or on it is not empty. Caught by the core retire test.",
+      "find": ["        let held_for_gate = self.held_for_gate(lineage);\n"],
+      "replace": ["        let held_for_gate = 0;\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a gate already abandoned is held",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-23: a gate on an abandoned epoch can never be released, so it is refused. Caught by the ring test that gates on one.",
+      "find": ["                    GateState::Abandoned => Some(Err(PushRefusal::GateAbandoned { gate })),\n"],
+      "replace": ["                    GateState::Abandoned => Some(Ok(at)),\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a gate on a lineage the instance cannot answer for is held",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-43: an ended lineage will never be durable, so a gate on it is refused. Caught by the ring test that gates on an ended lineage.",
+      "find": ["                    GateState::Unknown => Some(Err(PushRefusal::UnknownLineage(gate.lineage))),\n"],
+      "replace": ["                    GateState::Unknown => Some(Ok(at)),\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a gate on another instance is not refused",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-40: another instance's lineage is one this one cannot answer for. Unchecked, its sequence number is read as a lineage of this instance. Caught by the ring test that gates on one.",
+      "find": ["            && gate.lineage.instance != self.instance\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: released operations are never pushed",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-43: a released operation is pushed at the consumer's next call. Never pushed, it never completes. Caught by every ring test that waits for a gated operation.",
+      "find": ["        let released = self.release_ready(core);\n"],
+      "replace": ["        let released = None;\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: the oracle lets a gated operation complete before its gate",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement of guarantee 9. Caught by its own test.",
+      "find": ["            (_, Some(gate)) if !self.is_durable(gate) => {\n"],
+      "replace": ["            (_, Some(gate)) if false && !self.is_durable(gate) => {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: the oracle accepts NeverIssued naming an epoch not abandoned",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that never issued means abandoned. Caught by its own test.",
+      "find": ["                if !named || !self.is_abandoned(*abandoned) {\n"],
+      "replace": ["                if !named {\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: the oracle accepts a failure suspecting a held write",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that a held write was never issued, so nothing put it at risk. Caught by its own test.",
+      "find": ["            if let Some(&gate) = self.gates.get(&write.op)\n"],
+      "replace": ["            if let Some(&gate) = self.gates.get(&write.op).filter(|_| false)\n"]
+    },
+    {
+      "name": "DI-3.2.5.2: a held push spends no identity",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "Every accepted push gets its own identity, a held one included, or two operations share one: the second held operation would replace the first, and its completion could not be told apart. Caught by the ring tests that hold two operations, through the oracle's duplicate-identity rule.",
+      "find": ["            self.next_op += 1;\n            return Ok(id);\n"],
+      "replace": ["            return Ok(id);\n"]
     }
   ]
 }

@@ -35,8 +35,8 @@ pub use types::{
     EpochState, Failed, FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation,
     ImportScope, Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion, OpKind,
     Outcome, PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution, ResolveError,
-    ResolveRefusal, RetireLineageError, RetireLineageRefusal, SuspectSet, SuspectWrite, Tag,
-    UnknownLineage, WriteCaching, WriteOptions,
+    ResolveRefusal, RetireLineageError, RetireLineageRefusal, SealError, SuspectSet, SuspectWrite,
+    Tag, UnknownLineage, WriteCaching, WriteOptions,
 };
 // The types the contract's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.

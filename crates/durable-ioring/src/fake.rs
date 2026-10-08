@@ -15,8 +15,8 @@ use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, Linea
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch, EpochState,
     FailureInfo, FileKey, FileOptions, ImportScope, LineageInfo, OpCompletion, OpKind, Outcome,
-    ReadOptions, Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, Tag,
-    UnknownLineage, WriteOptions,
+    ReadOptions, Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, SealError,
+    Tag, UnknownLineage, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -165,7 +165,10 @@ impl DurableRing for Fake {
         Ok(self.queue.pop_front())
     }
 
-    fn make_durable_through(&mut self, _through: Tag<'_, V>) -> io::Result<DurabilityRequest<V>> {
+    fn make_durable_through(
+        &mut self,
+        _through: Tag<'_, V>,
+    ) -> Result<DurabilityRequest<V>, SealError<V>> {
         unimplemented!("the fake makes nothing durable")
     }
 

@@ -17,7 +17,7 @@ use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
     FileKey, FileOptions, ImportScope, LineageInfo, PushError, ReadOptions, Resolution,
-    ResolveError, RetireLineageError, Tag, UnknownLineage, WriteOptions,
+    ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -164,12 +164,15 @@ pub trait DurableRing {
     }
 
     /// Write `buffer` to `file` at `offset`, tagged with `tag`'s epoch. The buffer and the context
-    /// come back on the operation's completion.
+    /// come back on the operation's completion. With a gate in `options`, the write is held until
+    /// the gate is durable (guarantee 9), and ends as `NeverIssued` if the gate or its own epoch is
+    /// abandoned first.
     ///
     /// # Errors
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
-    /// given, another instance's lineage, or a ring that refused the push.
+    /// given, a lineage -- the write's or the gate's -- it cannot answer for, a gate already
+    /// abandoned, a gate that would close a cycle (DI-D-23), or a ring that refused the push.
     fn write_with(
         &mut self,
         file: FileKey,
@@ -201,12 +204,15 @@ pub trait DurableRing {
     }
 
     /// Read from `file` at `offset` into `buffer`. Reads take no part in durability. The buffer,
-    /// filled, and the context come back on the operation's completion.
+    /// filled, and the context come back on the operation's completion. With a gate in `options`,
+    /// the read is held until the gate is durable, and ends as `NeverIssued` if it is abandoned
+    /// first.
     ///
     /// # Errors
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
-    /// given or a ring that refused the push.
+    /// given, a gate's lineage it cannot answer for, a gate already abandoned, or a ring that
+    /// refused the push.
     fn read_with(
         &mut self,
         file: FileKey,
@@ -233,15 +239,17 @@ pub trait DurableRing {
     /// its own flushes fails, by `Blocked` if they succeed but an unresolved failure holds an
     /// epoch at or below it, and in every case by `Durable { through }` once the high-water mark
     /// reaches it. A request at or below the seal point is a no-op answered here with the epoch's
-    /// state (guarantee 7).
+    /// state (guarantee 7). A seal waits for the held gated writes it covers, as for writes in
+    /// flight.
     ///
     /// # Errors
     ///
-    /// For another instance's lineage.
+    /// A [`SealError`], with nothing sealed: for another instance's lineage, or a seal that would
+    /// close a gate cycle (DI-D-43).
     fn make_durable_through(
         &mut self,
         through: Tag<'_, Self::Ids>,
-    ) -> io::Result<DurabilityRequest<Self::Ids>>;
+    ) -> Result<DurabilityRequest<Self::Ids>, SealError<Self::Ids>>;
 
     /// The lineage's high-water mark: the highest epoch id through which every epoch is durable,
     /// or `None` until something is.
