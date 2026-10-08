@@ -22,8 +22,10 @@
 //! confirms whatever is there as though there were some.
 //!
 //! Every outcome carries `elapsedMs`, and carries the job's accounting
-//! (`totalProcesses`, `activeProcesses`, `userCpuMs`, `kernelCpuMs`) whenever a
-//! job existed to account for. `code` is the exit code as a **signed** 32-bit
+//! (`totalProcesses`, `activeProcesses`, `userCpuMs`, `kernelCpuMs`) when it
+//! could be read. The accounting is best-effort: it is absent when no job could
+//! be created, and also when reading it failed, so its absence does not show that
+//! no job existed. `code` is the exit code as a **signed** 32-bit
 //! integer, the form `%ERRORLEVEL%` and .NET's `Process.ExitCode` use, so an
 //! NTSTATUS such as `STATUS_DLL_INIT_FAILED` reads as `-1073741502`.
 //!
@@ -120,7 +122,8 @@ pub struct Report {
     pub outcome: Outcome,
     /// Time from the launcher's start to the outcome.
     pub elapsed_ms: u64,
-    /// Absent when no job could be created to account for.
+    /// Best-effort: absent when no job could be created, and also when reading
+    /// it failed, so its absence does not show that no job existed.
     pub accounting: Option<Accounting>,
 }
 

@@ -516,8 +516,10 @@ from the current run.
 
 Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
 them to stderr, and error messages name whichever of the two actually holds the
-evidence. Each phase also leaves the launcher's `.result` (`.build.result` for
-the build), the one-line JSON outcome the harness judged it by.
+evidence. Each phase the launcher reports on also leaves its `.result`
+(`.build.result` for the build), the one-line JSON outcome the harness judged it
+by. A launcher that failed leaves none, or a file that is not a result, and the
+run is `INFRASTRUCTURE`; a transcript is the evidence then.
 
 A transcript is named after its sabotage with non-alphanumerics collapsed to
 dashes, so two entries differing only in punctuation would collide; the manifest
