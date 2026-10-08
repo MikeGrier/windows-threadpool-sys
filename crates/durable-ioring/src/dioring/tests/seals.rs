@@ -8,7 +8,7 @@
 use windows_ioring_sys::RegisteredSpan;
 
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, read_only, temp};
-use super::{empty, file, serves, setup};
+use super::{empty, file, keeper, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal, SealError, UnknownLineage,
@@ -176,15 +176,16 @@ fn asking_again_at_or_below_a_durable_seal_reports_durable() {
     harness.finish();
 }
 
-/// A file routed only to the consumer's provider leaves its seal pending, because providers are
-/// not asked anything before DI-3.2.6. `Serves` panics if asked, so this also shows it is not.
+/// A file routed only to the consumer's provider leaves its seal pending until the provider
+/// answers, and this one never does.
 #[test]
 fn a_pending_seal_reports_pending_and_holds_back_a_later_one() {
     let temp = temp(&[0; 16]);
+    let (provider, kept) = keeper(&["log"]);
     let ring = Ring::new(setup(
         vec![file(GIVEN.0, &temp, &["log"])],
         Vec::new(),
-        serves(&["log"]),
+        provider,
     ))
     .expect("build an instance with a provider")
     .0;
@@ -206,6 +207,11 @@ fn a_pending_seal_reports_pending_and_holds_back_a_later_one() {
     assert_eq!(harness.state(3), EpochState::Open);
     assert_eq!(harness.durable(), None);
     assert_eq!(harness.sealed(), Some(2));
+    assert_eq!(
+        kept.lock().expect("the requests").len(),
+        1,
+        "one request per seal: the second seal names no write, and asks nothing of the provider"
+    );
     harness.finish();
 }
 

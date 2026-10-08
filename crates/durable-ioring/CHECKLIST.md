@@ -55,14 +55,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.5.2** -- Gates: operations held until an epoch is durable, ended as never issued when an epoch they need is abandoned, and a push or a seal that would close a gate cycle refused. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3252)
 
-- [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
-  serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`
-  answered once from any thread, with a failure as `Cause::Provider` and a completion dropped
-  unanswered as `Cause::ProviderAbandoned`; the readiness signal set by provider answers
-  ([DI-D-27](DESIGN-NOTES.md#di-d-27)). A write is durable when every domain of its file has
-  succeeded. A provider's failure of domain D reaches the held writes of every file whose declared
-  domains contain D, and every file declared with none ([DI-D-21](DESIGN-NOTES.md#di-d-21)); it
-  is observed through the same transition as a failed flush, with its own `Reach`.
+- [x] **DI-3.2.6** -- The consumer's durability provider: one request per seal, called from the consumer's next call with the lock released, answered once per domain from any thread, its failures and its silence reported with their own causes. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-326)
 
 - [ ] **DI-3.2.7** -- **Ending.** `remove_file` refused while the file has anything in flight, held
   or uncovered, reported whole in `FileBusy`; `retire_lineage` and `LineageBusy`; `end_lineage` and

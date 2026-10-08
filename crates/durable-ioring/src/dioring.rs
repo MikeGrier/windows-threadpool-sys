@@ -18,7 +18,10 @@ use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBuffe
 use crate::ids::{
     DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
 };
-use crate::provider::DurabilityProvider;
+use crate::provider::{
+    Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FileWrites,
+    FlushRequest,
+};
 use crate::types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
     FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions,
@@ -30,7 +33,7 @@ mod durability;
 mod push;
 mod relay;
 
-use durability::{DEFAULT_LINEAGE, Due, Gate, Reach, Routing, Sealing, State};
+use durability::{DEFAULT_LINEAGE, Due, Gate, ProviderCall, Reach, Routing, Sealing, State};
 use relay::{Core, Delivery, FlushTarget, Relay, Via};
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
@@ -128,7 +131,6 @@ pub(crate) enum FileSlot {
     /// Given at construction: the ring holds it for its life (`windows-ioring-sys` D-81).
     Registered {
         index: RegisteredFile,
-        #[expect(dead_code, reason = "handed back by remove_file: DI-3.2.7")]
         file: SharedHandle,
     },
     /// Added later: pushed through its handle, guarded per operation. The consumer's own
@@ -143,6 +145,14 @@ impl FileSlot {
         match self {
             FileSlot::Registered { index, .. } => Via::Registered(index),
             FileSlot::Shared(handle) => Via::Shared(handle),
+        }
+    }
+
+    /// The consumer's handle to the file, lent to its provider.
+    fn handle(&self) -> SharedHandle {
+        match self {
+            FileSlot::Registered { file, .. } => file.clone(),
+            FileSlot::Shared(handle) => handle.clone(),
         }
     }
 
@@ -187,9 +197,10 @@ fn routing(file: &[DomainId], served: Option<&ProviderSlot<impl EpochId>>) -> Ro
 
 /// The consumer's provider, with the domains it serves, interned and sorted.
 pub(crate) struct ProviderSlot<E: EpochId + 'static> {
-    #[expect(dead_code, reason = "the provider is called from DI-3.2.6")]
     pub(crate) provider: Box<dyn DurabilityProvider<DioringIds<E>>>,
     pub(crate) domains: Arc<[DomainId]>,
+    /// Each served domain's bytes, at its id's position in `domains`, for the requests.
+    pub(crate) names: Vec<FlushDomain>,
 }
 
 /// dioring's record of each operation, carried as the ring crate's sidecar. The consumer's
@@ -395,12 +406,28 @@ where
                 },
             );
         }
-        let provider = provider.map(|provider| ProviderSlot {
-            provider,
-            domains: intern_all(&mut domains, provider_domains),
+        let provider = provider.map(|provider| {
+            let served = intern_all(&mut domains, provider_domains);
+            let names = served
+                .iter()
+                .map(|id| {
+                    domains
+                        .iter()
+                        .find_map(|(name, interned)| (interned == id).then(|| name.clone()))
+                        .expect("a served domain was interned")
+                })
+                .collect();
+            ProviderSlot {
+                provider,
+                domains: served,
+                names,
+            }
         });
         for record in records.values_mut() {
             record.routing = routing(&record.domains, provider.as_ref());
+        }
+        if let Some(provider) = &provider {
+            (relay.lock().durability).serve(Arc::clone(&provider.domains));
         }
 
         let default = LineageHandle::mint(
@@ -432,6 +459,12 @@ where
 fn home<T: Home + 'static>(relay: &Arc<T>) -> Weak<dyn Home> {
     let home: Weak<T> = Arc::downgrade(relay);
     home
+}
+
+/// Where an instance's provider completions answer.
+fn answers<T: Answer + 'static>(relay: &Arc<T>) -> Weak<dyn Answer> {
+    let answers: Weak<T> = Arc::downgrade(relay);
+    answers
 }
 
 impl<B, E, C, R, K> DurableRing for Dioring<B, E, C, R, K>
@@ -506,20 +539,24 @@ where
         // next change, so a consumer that stops pushing still gets them issued. A failed retry is
         // reported only when there is no entry to return instead: an entry is progress, and the
         // retry runs again at the next pop.
-        let mut core = self.relay.lock();
-        // Recorded on whichever thread observed it, usually a pool thread; asserted here, where a
-        // panic fails the consumer's call rather than aborting the process.
-        debug_assert!(
-            core.durability.inconsistency().is_none(),
-            "dioring's durability state is inconsistent: {:?}",
-            core.durability.inconsistency()
-        );
-        let retried = self.settle(&mut core, Due::default());
-        match (Relay::pop(&mut core), retried) {
-            (Some(entry), _) => Ok(Some(entry)),
-            (None, Some(error)) => Err(error),
-            (None, None) => Ok(None),
-        }
+        let popped = {
+            let mut core = self.relay.lock();
+            // Recorded on whichever thread observed it, usually a pool thread; asserted here, where
+            // a panic fails the consumer's call rather than aborting the process.
+            debug_assert!(
+                core.durability.inconsistency().is_none(),
+                "dioring's durability state is inconsistent: {:?}",
+                core.durability.inconsistency()
+            );
+            let retried = self.settle(&mut core, Due::default());
+            match (Relay::pop(&mut core), retried) {
+                (Some(entry), _) => Ok(Some(entry)),
+                (None, Some(error)) => Err(error),
+                (None, None) => Ok(None),
+            }
+        };
+        self.call_provider();
+        popped
     }
 
     fn make_durable_through(
@@ -531,7 +568,7 @@ where
             return Err(SealError::UnknownLineage(through.lineage));
         }
         let mut core = self.relay.lock();
-        match core.durability.seal(through.lineage.seq, through.id) {
+        let answer = match core.durability.seal(through.lineage.seq, through.id) {
             Sealing::AlreadySealed(state) => {
                 Ok(DurabilityRequest::AlreadySealed(epoch_state(state)))
             }
@@ -542,7 +579,10 @@ where
             Sealing::Cycle(cycle) => Err(SealError::GateCycle {
                 cycle: self.epochs(cycle),
             }),
-        }
+        };
+        drop(core);
+        self.call_provider();
+        answer
     }
 
     fn durable_through(&self, lineage: Lineage) -> Result<Option<E>, UnknownLineage<Self::Ids>> {
@@ -601,6 +641,8 @@ where
                     let mut core = self.relay.lock();
                     let due = core.durability.end(lineage.seq);
                     self.settle(&mut core, due);
+                    drop(core);
+                    self.call_provider();
                     return Ok(());
                 }
                 Err(handle) => {
@@ -648,6 +690,8 @@ where
         let mut core = self.relay.lock();
         let due = core.durability.resolve(items)?;
         self.settle(&mut core, due);
+        drop(core);
+        self.call_provider();
         Ok(())
     }
 
@@ -713,6 +757,73 @@ where
         let applied = self.relay.apply(core, due, &self.delivery);
         let released = self.release_ready(core);
         applied.or(released)
+    }
+
+    /// Make every request for the consumer's provider made so far, in order, with dioring's lock
+    /// released: the provider may answer inside its call, and the answer takes the lock
+    /// (DI-D-44). Called at the end of each consumer call that can start a seal. Every request is
+    /// built before the first is made, so a panic in the provider drops the completions of those
+    /// after it unanswered: each a failure of its domain, as DI-D-27 says.
+    fn call_provider(&mut self) {
+        let calls = std::mem::take(&mut self.relay.lock().calls);
+        if calls.is_empty() {
+            return;
+        }
+        let requests: Vec<FlushRequest<DioringIds<E>>> = calls
+            .into_iter()
+            .map(|call| self.flush_request(call))
+            .collect();
+        let slot = self
+            .provider
+            .as_mut()
+            .expect("only a provider's domains make requests");
+        for request in requests {
+            slot.provider.make_durable(request);
+        }
+    }
+
+    /// A request in the core's terms, as the provider is handed it.
+    fn flush_request(&self, call: ProviderCall) -> FlushRequest<DioringIds<E>> {
+        let home = answers(&self.relay);
+        let slot = self
+            .provider
+            .as_ref()
+            .expect("only a provider's domains make requests");
+        let domains = call
+            .domains
+            .into_iter()
+            .map(|part| {
+                let at = slot
+                    .domains
+                    .binary_search(&part.domain)
+                    .expect("a request names only domains the provider serves");
+                let name = slot.names[at].clone();
+                let files = part
+                    .files
+                    .into_iter()
+                    .map(|(key, writes)| FileWrites {
+                        key,
+                        file: self.files[&key].target.handle(),
+                        writes,
+                    })
+                    .collect();
+                let completion = DomainCompletion::new(
+                    Weak::clone(&home),
+                    DomainCall {
+                        lineage: call.lineage,
+                        seal: call.seal,
+                        domain: part.domain,
+                        name: name.clone(),
+                    },
+                );
+                DomainRequest {
+                    domain: name,
+                    files,
+                    completion,
+                }
+            })
+            .collect();
+        FlushRequest { domains }
     }
 
     /// A cycle in the core's terms, as the contract reports it.

@@ -1584,3 +1584,18 @@ The engineer's decision to refuse a seal that would close a cycle, and how the s
   lineage that ends, in any lineage, ends as `NeverIssued` ([DI-D-30](DESIGN-NOTES.md#di-d-30)),
   and `LineageBusy::held_for_gate`, zero until now, counts the operations held for a gate in the
   lineage or gated on one of its epochs.
+
+## Moved 2026-10-08 16:04:04 -04:00 -- DI-3.2.6: the consumer's durability provider
+
+### <a id="di-326"></a>DI-3.2.6 -- The consumer's durability provider: one request per seal, called from the consumer's next call with the lock released, answered once per domain from any thread, its failures and its silence reported with their own causes. *(completed 2026-10-08 16:04:04 -04:00)*
+
+When and how the provider is called, and the shapes chosen while implementing it, are [DI-D-44](DESIGN-NOTES.md#di-d-44). The item as written:
+
+**The consumer's durability provider.** `Setup::provider` and the domains it
+  serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`
+  answered once from any thread, with a failure as `Cause::Provider` and a completion dropped
+  unanswered as `Cause::ProviderAbandoned`; the readiness signal set by provider answers
+  ([DI-D-27](DESIGN-NOTES.md#di-d-27)). A write is durable when every domain of its file has
+  succeeded. A provider's failure of domain D reaches the held writes of every file whose declared
+  domains contain D, and every file declared with none ([DI-D-21](DESIGN-NOTES.md#di-d-21)); it
+  is observed through the same transition as a failed flush, with its own `Reach`.

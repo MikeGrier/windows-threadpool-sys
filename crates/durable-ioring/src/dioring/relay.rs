@@ -30,12 +30,15 @@ use windows_ioring_sys::{
     WriteCaching as RingCaching,
 };
 
-use super::durability::{DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, WriteEnd};
+use super::durability::{
+    DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, ProviderCall, WriteEnd,
+};
 use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
+use crate::provider::{Answer, DomainCall, DomainOutcome};
 use crate::types::FileKey;
-use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
+use crate::types::{Cause, Entry, Epoch, OpCompletion, OpKind, Outcome};
 
 /// An entry of a dioring instance's queue.
 pub(crate) type DioringEntry<E, B, C> = Entry<DioringIds<E>, B, C>;
@@ -122,6 +125,10 @@ pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     /// the consumer's next call: only a call on the instance can reach the registration a
     /// registered-span operation is pushed with.
     pub(crate) ready: VecDeque<OpId>,
+    /// Requests for the consumer's provider, in the order made, waiting for the consumer's next
+    /// call: one made under this lock could not be answered inside the provider's call without
+    /// waiting for itself (DI-D-44).
+    pub(crate) calls: Vec<ProviderCall>,
     /// A submission failed, so pushed operations may still sit in the submission queue; the next
     /// submission issues them (the ring crate's D-5).
     pub(crate) unsubmitted: bool,
@@ -153,6 +160,7 @@ impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
                 unpushed: Vec::new(),
                 held: BTreeMap::new(),
                 ready: VecDeque::new(),
+                calls: Vec::new(),
                 unsubmitted: false,
                 closed: false,
                 #[cfg(feature = "fault-injection")]
@@ -310,6 +318,7 @@ where
         ring: &Delivery<E, B, C>,
     ) -> Option<io::Error> {
         core.ready.extend(due.released);
+        core.calls.extend(due.calls);
         self.append_events(core, due.events);
         let mut flushes = std::mem::take(&mut core.unpushed);
         flushes.extend(due.flushes);
@@ -355,6 +364,7 @@ where
     /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
     fn apply_without_ring(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
         core.ready.extend(due.released);
+        core.calls.extend(due.calls);
         self.append_events(core, due.events);
         core.unpushed.extend(due.flushes);
     }
@@ -424,6 +434,38 @@ where
             };
             self.append(core, entry);
         }
+    }
+}
+
+/// Where the consumer's provider answers (DI-D-27, DI-D-44). It runs on whatever thread answers --
+/// inside the provider's call included, which dioring never makes with this lock held -- so, like a
+/// callback, it takes the core's lock and then the ring's.
+impl<E, B, C, K> Answer for Relay<E, B, C, K>
+where
+    E: EpochId + Send + Sync + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+    K: TimeBase,
+{
+    fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
+        let outcome = match outcome {
+            DomainOutcome::Succeeded => Ok(()),
+            DomainOutcome::Failed(error) => Err(Cause::Provider {
+                domain: call.name.clone(),
+                error: Arc::new(error),
+            }),
+            DomainOutcome::Abandoned => Err(Cause::ProviderAbandoned {
+                domain: call.name.clone(),
+            }),
+        };
+        let mut core = self.lock();
+        if core.closed {
+            return;
+        }
+        let due = core
+            .durability
+            .provided(call.lineage, call.seal, call.domain, outcome);
+        self.act(&mut core, due);
     }
 }
 

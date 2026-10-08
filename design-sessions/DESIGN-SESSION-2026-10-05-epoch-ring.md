@@ -2679,6 +2679,24 @@ if that is positive, one write at a time; the path naming the cycle is a separat
 error path. The two smaller points were not answered, so the assistant took its recommendations and
 recorded them, with the shapes it chose, in DI-D-43 for confirmation.
 
+## DI-3.2.6: the consumer's provider (2026-10-08)
+
+Asked to implement DI-3.2.6, the assistant found no open design question: DI-D-27 and the contract
+already state what a request names, what success covers, what a domain's failure reaches, and that
+a dropped completion is a failure of its own cause. One thing was left to choose -- on which thread,
+and under what lock, dioring calls the provider -- and two constraints already fixed it. DI-D-27
+lets a provider answer inside `make_durable`, and that answer takes dioring's lock, so the call
+cannot be made with the lock held; and a provider panic propagates, which it can only do to a
+caller, so the call cannot be made from a completion callback on a pool thread. So a seal that
+becomes ready queues its request, and the consumer's next call on the instance makes it with the
+lock released. Every request is built before any is made, so a panic in the provider drops the rest
+and each is counted abandoned, as DI-D-27 says.
+
+The checklist item asked for a provider failure to be observed "with its own `Reach`". None was
+needed: `Reach::Domains` of the one failed domain is exactly DI-D-27's rule -- files containing it,
+and files declared with none -- so the existing reach is reused. The assistant recorded the call
+rule and the smaller shapes it chose in DI-D-44 for confirmation.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

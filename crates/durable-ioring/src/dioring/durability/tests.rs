@@ -26,6 +26,8 @@ mod markings;
 mod lineages;
 // Gates, and the cycles a push or a seal would close: DI-3.2.5.2.
 mod gates;
+// The consumer's durability provider: DI-3.2.6.
+mod providers;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.
@@ -530,11 +532,12 @@ fn a_write_a_provider_must_answer_for_leaves_its_seal_pending() {
         default: false,
         provider: true,
     };
-    let write = ops.push(&mut lineage, 1, A, only);
+    lineage.serve(Arc::from([DomainId(1)]));
+    let write = ops.push_in(&mut lineage, 1, A, only, &[1]);
     lineage.completed(write, FULL);
     assert!(
         quiet(&submitted(lineage.seal(1))),
-        "no default flush, and no provider yet"
+        "no default flush, and the provider has not answered"
     );
     assert_eq!(lineage.state(1), State::Pending);
 }
@@ -547,7 +550,8 @@ fn a_file_both_answer_for_is_flushed_and_still_waits_for_the_provider() {
         default: true,
         provider: true,
     };
-    let write = ops.push(&mut lineage, 1, A, both);
+    lineage.serve(Arc::from([DomainId(1)]));
+    let write = ops.push_in(&mut lineage, 1, A, both, &[1, 2]);
     lineage.completed(write, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     assert!(quiet(&lineage.flushed(1, A, Ok(()))));

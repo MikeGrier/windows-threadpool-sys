@@ -5,8 +5,8 @@ use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::OwnedHandle;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
@@ -31,6 +31,8 @@ mod markings;
 mod lineages;
 // Gated operations, and the cycles a push or a seal would close: DI-3.2.5.2.
 mod gates;
+// The consumer's durability provider: DI-3.2.6.
+mod providers;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;
@@ -161,6 +163,40 @@ fn serves(domains: &[&str]) -> Option<Box<dyn DurabilityProvider<V>>> {
     Some(Box::new(Serves(
         domains.iter().map(|d| domain(d)).collect(),
     )))
+}
+
+/// A provider that serves fixed domains and keeps every request it is handed, unanswered, for the
+/// test to answer through the shared list.
+#[derive(Debug)]
+pub(crate) struct Keeper {
+    domains: Vec<FlushDomain>,
+    kept: Kept,
+}
+
+/// The requests a `Keeper` has been handed and not yet given up.
+pub(crate) type Kept = Arc<Mutex<Vec<FlushRequest<V>>>>;
+
+impl DurabilityProvider<V> for Keeper {
+    fn domains(&self) -> Vec<FlushDomain> {
+        self.domains.clone()
+    }
+
+    fn make_durable(&mut self, request: FlushRequest<V>) {
+        self.kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+    }
+}
+
+/// A `Keeper` serving `domains`, and the list it keeps its requests in.
+pub(crate) fn keeper(domains: &[&str]) -> (Option<Box<dyn DurabilityProvider<V>>>, Kept) {
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let provider = Keeper {
+        domains: domains.iter().map(|d| domain(d)).collect(),
+        kept: Arc::clone(&kept),
+    };
+    (Some(Box::new(provider)), kept)
 }
 
 fn refused(

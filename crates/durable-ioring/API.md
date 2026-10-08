@@ -1122,7 +1122,13 @@ pub trait DurabilityProvider<V: Identities>: Send + Debug {
     fn domains(&self) -> Vec<FlushDomain>;
 
     /// Make the named writes durable. Returns promptly; the work may finish later, on any thread,
-    /// through each domain's completion. Holds no reference to the instance.
+    /// through each domain's completion -- inside this call included. Holds no reference to the
+    /// instance.
+    ///
+    /// dioring calls it from the consumer's own calls on the instance -- normally the `pop` that
+    /// follows the completion letting a seal start -- and never with its lock held, so an answer
+    /// given inside it is recorded at once (DI-D-44). A panic propagates to that call, and every
+    /// completion it drops unanswered is a failure of its domain.
     fn make_durable(&mut self, request: FlushRequest<V>);
 }
 

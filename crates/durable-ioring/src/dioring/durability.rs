@@ -12,11 +12,15 @@
 //! [`lineages`]'s.
 //!
 //! **How a seal proceeds.** `seal(lineage, n)` waits until no write of the lineage at or below `n`
-//! is in flight, then names every completed write of it at or below `n` not yet named, by file, and
-//! asks for one flush per file. Each write belongs to exactly one seal -- the first of its lineage
-//! at or above its epoch -- because writes at or below a seal are refused once it is made. A seal is
-//! finished when every one of its flushes has answered, and a lineage's high-water mark advances
-//! over its finished seals in order (the prefix property), past every epoch no failure holds.
+//! is in flight, then names every completed write of it at or below `n` not yet named, and asks
+//! for one flush per file the built-in default answers for, and one request to the consumer's
+//! provider naming, per domain it serves, each file's writes (DI-D-27). Each write belongs to
+//! exactly one seal -- the first of its lineage at or above its epoch -- because writes at or below
+//! a seal are refused once it is made. A write is covered successfully once every part of the seal
+//! its file depends on has answered success: its file's flush, if the default answers for it, and
+//! each domain of it the provider serves. A seal is finished when every part has answered, and a
+//! lineage's high-water mark advances over its finished seals in order (the prefix property), past
+//! every epoch no failure holds.
 //!
 //! **Failures** (DI-D-12, DI-D-34). Every write is held, in push order, from its push until it is
 //! covered successfully, fails, or its epoch is passed by its lineage's mark. That record is what a
@@ -40,8 +44,9 @@
 //! another, a mock in these tests -- so stamps are taken in observation order, and a `Steady` clock
 //! makes them never decrease in it.
 //!
-//! **Not yet here**, and left visibly undone rather than approximated: a write to a file a consumer
-//! provider serves leaves its seal unfinished, because providers are `DI-3.2.6`'s.
+//! **The consumer's provider** (DI-D-27, DI-D-44) is asked through [`Due::calls`], and answers per
+//! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
+//! its own reach: the files whose declared domains contain it, and every file declared with none.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -62,6 +67,7 @@ use crate::types::{
 
 mod gates;
 mod lineages;
+mod providers;
 
 pub(crate) use gates::GateState;
 #[cfg(test)]
@@ -193,6 +199,8 @@ pub(crate) struct Due<E: EpochId + 'static, T> {
     pub(crate) events: Vec<Event<E>>,
     /// Held operations whose gates are now durable, to push, in the order they were released.
     pub(crate) released: Vec<OpId>,
+    /// Requests for the consumer's provider, one per seal that needs it, in the order made.
+    pub(crate) calls: Vec<ProviderCall>,
 }
 
 impl<E: EpochId + 'static, T> Default for Due<E, T> {
@@ -201,8 +209,28 @@ impl<E: EpochId + 'static, T> Default for Due<E, T> {
             flushes: Vec::new(),
             events: Vec::new(),
             released: Vec::new(),
+            calls: Vec::new(),
         }
     }
+}
+
+/// One seal's request for the consumer's provider (DI-D-27), in the core's terms: per domain the
+/// provider serves that the seal touched, each file's writes named for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProviderCall {
+    pub(crate) lineage: Key,
+    /// The seal's sequence number, which its answers name.
+    pub(crate) seal: u64,
+    /// By domain, ascending; within one, files in the order first written.
+    pub(crate) domains: Vec<DomainPart>,
+}
+
+/// One domain's part of a provider request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DomainPart {
+    pub(crate) domain: DomainId,
+    /// Each file, with the writes named for this domain, in push order.
+    pub(crate) files: Vec<(FileKey, Vec<OpId>)>,
 }
 
 /// An epoch's state as its lineage sees it.
@@ -285,19 +313,29 @@ struct SealFile {
     file: FileKey,
     domains: Arc<[DomainId]>,
     answered: bool,
+    /// Answered with success.
+    ok: bool,
+}
+
+/// One domain a seal asked the consumer's provider about.
+struct SealDomain {
+    domain: DomainId,
+    answered: bool,
+    /// Answered with success.
+    ok: bool,
 }
 
 enum SealStage {
     /// A write at or below the seal is still in flight.
     Waiting,
-    /// Its flushes are out. `failed` once one failed; `provider_owed` while a write of it needs a
-    /// provider answer no provider is asked for yet.
+    /// Its flushes, and its request to the consumer's provider, are out. `failed` once one part
+    /// failed.
     Flushing {
         files: Vec<SealFile>,
+        domains: Vec<SealDomain>,
         failed: bool,
-        provider_owed: bool,
     },
-    /// Every flush answered.
+    /// Every part answered.
     Done { succeeded: bool },
 }
 
@@ -402,6 +440,7 @@ impl<E: EpochId> LineageState<E> {
             .find(|f| f.file == file && !f.answered)
             .ok_or("a flush completed that the seal did not issue")?;
         entry.answered = true;
+        entry.ok = !failed_now;
         let domains = Arc::clone(&entry.domains);
         if failed_now {
             *failed = true;
@@ -424,6 +463,8 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     next_failure: u64,
     /// The operations held for their gates, by push order.
     held: BTreeMap<u64, HeldOp<E, T>>,
+    /// The domains the consumer's provider serves, sorted; empty without one.
+    served: Arc<[DomainId]>,
     /// The first internal inconsistency observed. Recorded rather than asserted, because most
     /// changes arrive on a pool thread, where a panic aborts the process and names no test; the
     /// consumer's next `pop` asserts on it instead, on the consumer's own thread.
@@ -444,6 +485,7 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
             failures: Vec::new(),
             next_failure: 0,
             held: BTreeMap::new(),
+            served: Arc::from([]),
             inconsistency: None,
             clock,
         }
@@ -667,25 +709,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             }
         };
         match result {
-            Ok(()) => {
-                // A write a provider also answers for stays until the provider has (DI-3.2.6).
-                let covered = |write: &Write<E, T>| {
-                    write.lineage == lineage
-                        && write.stage == Stage::Named(seq)
-                        && write.file == file
-                        && !write.routing.provider
-                };
-                let ops: Vec<OpId> = self
-                    .writes
-                    .values()
-                    .filter(|write| covered(write))
-                    .map(|write| write.op)
-                    .collect();
-                self.writes.retain(|_, write| !covered(write));
-                for op in ops {
-                    self.mark(op, MarkingKind::Covered, &mut due);
-                }
-            }
+            Ok(()) => self.cover(lineage, seq, &mut due),
             Err(error) => {
                 let cause = Cause::Flush {
                     file,
@@ -1011,7 +1035,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             }
             let seq = state.seals[index].seq;
             let mut files: Vec<SealFile> = Vec::new();
-            let mut provider_owed = false;
+            let mut parts: Vec<DomainPart> = Vec::new();
             for write in self.writes.values_mut() {
                 if write.lineage != lineage
                     || write.stage != Stage::Completed
@@ -1020,12 +1044,21 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     continue;
                 }
                 write.stage = Stage::Named(seq);
-                provider_owed |= write.routing.provider;
+                if write.routing.provider {
+                    providers::name(
+                        &mut parts,
+                        &self.served,
+                        write.file,
+                        &write.domains,
+                        write.op,
+                    );
+                }
                 if write.routing.default && !files.iter().any(|f| f.file == write.file) {
                     files.push(SealFile {
                         file: write.file,
                         domains: Arc::clone(&write.domains),
                         answered: false,
+                        ok: false,
                     });
                     due.flushes.push(Flush {
                         lineage,
@@ -1035,10 +1068,26 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     });
                 }
             }
+            parts.sort_unstable_by_key(|part| part.domain);
+            let domains = parts
+                .iter()
+                .map(|part| SealDomain {
+                    domain: part.domain,
+                    answered: false,
+                    ok: false,
+                })
+                .collect();
+            if !parts.is_empty() {
+                due.calls.push(ProviderCall {
+                    lineage,
+                    seal: seq,
+                    domains: parts,
+                });
+            }
             state.seals[index].stage = SealStage::Flushing {
                 files,
+                domains,
                 failed: false,
-                provider_owed,
             };
         }
     }
@@ -1053,13 +1102,13 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         for seal in &mut state.seals {
             let SealStage::Flushing {
                 files,
+                domains,
                 failed,
-                provider_owed,
             } = &seal.stage
             else {
                 continue;
             };
-            if *provider_owed || files.iter().any(|f| !f.answered) {
+            if files.iter().any(|f| !f.answered) || domains.iter().any(|d| !d.answered) {
                 continue;
             }
             let succeeded = !*failed;
