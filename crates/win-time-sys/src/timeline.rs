@@ -16,6 +16,9 @@ mod tests;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
+/// Windows' 100-nanosecond unit, the tick of interrupt time and system time.
+pub(crate) const HUNDRED_NANOSECOND_TICKS: NonZeroU64 = NonZeroU64::new(10_000_000).unwrap();
+
 /// What a tick count means: how long one tick is, and what zero is.
 ///
 /// A timeline is a type that is never made; it exists to keep values on different timelines

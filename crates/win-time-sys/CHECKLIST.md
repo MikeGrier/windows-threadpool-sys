@@ -8,9 +8,11 @@ Safe Rust over the Windows clocks. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for it
 
 - [x] **WT-1.2** -- The two layers: `Timeline`, `TimePoint<T>`, `Ticks<T>` and `Clock`, with their arithmetic and conversions to and from `Duration`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-12)
 
-- [ ] **WT-1.3** -- **Interrupt time and unbiased interrupt time** ([WT-D-3](DESIGN-NOTES.md#wt-d-3)):
-  two timelines and four clocks over `QueryInterruptTime`, `QueryInterruptTimePrecise`,
-  `QueryUnbiasedInterruptTime` and `QueryUnbiasedInterruptTimePrecise`.
+- [x] **WT-1.3** -- Interrupt time and unbiased interrupt time: two timelines and their four clocks, plain and precise. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-13)
+
+  > **-> CROSS-COMPONENT HANDOFF:** `InterruptClock` now exists, which is what durable-ioring was
+  > waiting on: component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.4.2` (nullifiers). See
+  > [CHECKLIST.md](../durable-ioring/CHECKLIST.md). `WT-1.4` onwards do not block it.
 
 - [ ] **WT-1.4** -- **System time**: the `FileTime` timeline and its two clocks, over
   `GetSystemTimeAsFileTime` and `GetSystemTimePreciseAsFileTime`.

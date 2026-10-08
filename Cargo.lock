@@ -136,6 +136,9 @@ dependencies = [
 [[package]]
 name = "win-time-sys"
 version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
 
 [[package]]
 name = "windows-core"

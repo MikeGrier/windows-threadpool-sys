@@ -16,7 +16,34 @@ Two layers, kept apart because they vary independently:
 
 The timelines are system time (UTC, 100 ns ticks since 1601), interrupt time (100 ns ticks since
 boot), unbiased interrupt time (the same, leaving out time asleep), and the performance counter.
-Each has every clock Windows offers for it. They are planned in this crate's `CHECKLIST.md`.
+Each has every clock Windows offers for it.
+
+## What is here
+
+- **Interrupt time and unbiased interrupt time**, each with two clocks. The plain one --
+  `InterruptClock`, `UnbiasedInterruptClock` -- reads the value the kernel publishes into every
+  process, so it never enters the kernel, and is as fresh as the last system clock tick. The precise
+  one -- `PreciseInterruptClock`, `PreciseUnbiasedInterruptClock` -- reads the timer hardware, and is
+  finer. A point means nothing after a restart: both count from the start of the boot.
+
+```rust
+use std::time::Duration;
+use win_time_sys::{Clock, InterruptClock, PreciseInterruptClock, TimePoint};
+
+let start = PreciseInterruptClock.now();
+std::thread::sleep(Duration::from_millis(20));
+let elapsed = (PreciseInterruptClock.now() - start).to_duration().expect("forwards");
+assert!(elapsed >= Duration::from_millis(19));
+
+// The plain and precise clocks read one timeline, so their readings compare.
+assert!(InterruptClock.now() <= PreciseInterruptClock.now());
+
+// A point is recorded as its tick count, and read back.
+let recorded: u64 = start.ticks();
+assert_eq!(TimePoint::from_ticks(recorded), start);
+```
+
+System time and the performance counter are planned in this crate's `CHECKLIST.md`.
 
 ## What is not here
 

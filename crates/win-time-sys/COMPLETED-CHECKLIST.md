@@ -52,3 +52,37 @@ The item as it stood at completion:
   `Ticks<T>` and `Clock`, with ordering, subtraction to `Ticks`, adding `Ticks` to a point, and
   `Ticks` to `Duration`. Tested over a fake timeline and clock, including overflow at the edges and
   that points on two timelines cannot be compared (a `compile_fail` doctest).
+
+## Moved 2026-10-07 23:29:06 -04:00 -- WT-1.3: interrupt time
+
+### <a id="wt-13"></a>WT-1.3 -- Interrupt time and unbiased interrupt time: two timelines and their four clocks, plain and precise. *(completed 2026-10-07 23:29:06 -04:00)*
+
+`InterruptTime` and `UnbiasedInterruptTime`, each with a plain clock and a precise one, over the four
+`Query*InterruptTime*` calls ([WT-D-3](DESIGN-NOTES.md#wt-d-3)). The clocks are zero-sized values, as
+[WT-D-7](DESIGN-NOTES.md#wt-d-7)'s `&self` lets them be. The 100 ns period is one constant system time
+will share. `QueryUnbiasedInterruptTime`'s `BOOL` is asserted in debug builds; its documentation says
+it fails only for a null pointer. The documentation the crate quotes on resolution and cost is
+Microsoft's, cited at the module; the costs themselves are left to `WT-1.6`'s probe. The README, which
+is the crate documentation, gained what is here and a runnable example.
+
+**Tests** (`interrupt/tests.rs`), reading the real clocks: no clock goes backwards over a thousand
+readings; each precise clock advances in every one of twenty windows shorter than the finest system
+tick, which a tick-limited clock would almost surely fail; each plain clock advances across a sleep
+longer than the coarsest tick; a plain reading is never ahead of a precise one taken after it, nor more
+than a tick behind one taken before; a precise interval nests inside `Instant`'s measure of it; unbiased
+time is never ahead of interrupt time; both periods are 100 ns; and the clocks are zero-sized. A
+`compile_fail` doctest pinned to `E0308` shows the two timelines' points do not compare. The test binary
+ran 30 times in sequence without a failure.
+
+**Verification.** Four sabotages, each caught by the test named for it: each precise clock reading its
+plain call, a frozen plain clock, and a wrong period; with an equivalent change as a second control.
+Three defects no test can catch are named in the manifest's `notCoveredHere`, with why: a plain clock
+reading the precise call (more precise, not wrong -- a cost difference); a clock reading the other
+interrupt timeline (identical on a machine that has never slept); and the unreachable failure of
+`QueryUnbiasedInterruptTime`.
+
+The item as it stood at completion:
+
+- [x] **WT-1.3** -- **Interrupt time and unbiased interrupt time** ([WT-D-3](DESIGN-NOTES.md#wt-d-3)):
+  two timelines and four clocks over `QueryInterruptTime`, `QueryInterruptTimePrecise`,
+  `QueryUnbiasedInterruptTime` and `QueryUnbiasedInterruptTimePrecise`.

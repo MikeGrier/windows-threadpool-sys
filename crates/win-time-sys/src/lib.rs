@@ -7,7 +7,12 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 mod clock;
+mod interrupt;
 mod timeline;
 
 pub use clock::Clock;
+pub use interrupt::{
+    InterruptClock, InterruptTime, PreciseInterruptClock, PreciseUnbiasedInterruptClock,
+    UnbiasedInterruptClock, UnbiasedInterruptTime,
+};
 pub use timeline::{Ticks, TimePoint, Timeline};
