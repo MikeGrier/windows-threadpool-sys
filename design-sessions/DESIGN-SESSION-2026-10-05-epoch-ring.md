@@ -2506,6 +2506,17 @@ the default's unit, and flush domains scope failures rather than units of flushi
 provider is asked per domain instead (DI-D-27, built in `DI-3.2.6`), and a file can be answered for
 by both. The row now says so.
 
+Walking DI-D-34, the engineer stopped at "a write that already completed as failed isn't suspected":
+if a write fails, it didn't happen. That was the intent; the real question was narrower. A suspect
+set is frozen when its failure is observed, so a write in flight then is in it, and if that write
+then fails, nothing in the set records it. The engineer's answer: the set needs a "nullifier" item
+marking that the write didn't happen. Asked whether that should change what holds the high-water
+mark -- after it was clarified that "blocking" means only the reporting of durability, not I/O --
+the engineer set the purpose: "to enable after the fact reconciliation of the history based on
+write-only markings, so it's not that it affects the mark per se but it affects the way that
+bookkeeping is reported". Recorded as DI-D-36 and queued as `DI-3.2.4.2`, with its shape still
+open.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

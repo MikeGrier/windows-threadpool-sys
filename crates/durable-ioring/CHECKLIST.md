@@ -49,6 +49,18 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.4.1** -- A write tagged with an abandoned epoch is refused as `EpochAbandoned`, open or sealed, per the engineer's decision DI-D-35. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3241)
 
+- [ ] **DI-3.2.4.2** -- **Nullifiers** ([DI-D-36](DESIGN-NOTES.md#di-d-36), the engineer's direction):
+  a suspect write that completes as failed after its failure was observed gains an append-only
+  marking in that failure's record, so the history can be reconciled after the fact. Reporting only:
+  the mark, what holds it, and what resolution needs are unchanged. Amends CONTRACT.md's "frozen ...
+  and never grows" to "never gains a write", and DI-D-12 (b). The oracle gains a rule: a nullifier
+  names a write in the set whose completion reported `Failed`. **Open, for the engineer, before
+  building:** where the markings are read (the inventory and `Abandoned` only, the popped `Failed`
+  entry staying a snapshot; or a queue entry of their own as well); whether a short write gets a
+  marking; whether a nullifier is the only kind of marking; and how the record survives a resolved
+  failure -- a healed failure today leaves no memory and no entry, which reconciliation after the
+  fact may need.
+
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
   ([DI-D-19](DESIGN-NOTES.md#di-d-19)). Gated operations held until their epoch is durable, ending
