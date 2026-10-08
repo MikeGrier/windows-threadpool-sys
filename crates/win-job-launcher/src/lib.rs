@@ -3,7 +3,7 @@
 //! and kills the whole process tree at the bound.
 //!
 //! Written for this repository's sabotage harness,
-//! [run-sabotage.ps1](../../tools/run-sabotage.ps1), which must kill a hung test
+//! [run-sabotage.ps1](../../../tools/run-sabotage.ps1), which must kill a hung test
 //! run reliably and promptly. A parent-PID walk cannot do that: it is a query
 //! with no bound of its own, and it cannot find a descendant whose parent has
 //! already exited. A job object answers both, because membership is decided by
