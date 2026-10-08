@@ -52,10 +52,15 @@ than the code.
 
 ## The harness has its own tests
 
-[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite: 44
-cases in about 30 seconds, run by CI on every push. It stubs cargo out entirely
-through `-CargoCommand`, so nothing is built, and works against a throwaway
-two-file git repository rather than this one.
+[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite, run
+by CI on every push. It stubs cargo out through `-CargoCommand`, so no crate
+under test is built, and works against a throwaway two-file git repository
+rather than this one. The one thing it does build is
+[win-job-launcher](../crates/win-job-launcher/src/lib.rs) (see
+[How a hung run is killed](#how-a-hung-run-is-killed)) -- once per run, into a
+directory under `TEMP` keyed by the checkout's path, then handed to every case
+with `-LauncherPath` -- so the stubs run under the same supervisor a real sweep
+does.
 
 ```powershell
 .\tools\test-run-sabotage.ps1
@@ -306,6 +311,91 @@ the tests, not a failure of the run.
 already-red suite every sabotage "fails" and the sweep means nothing while
 looking like a clean bill of health. The script refuses to start otherwise.
 
+## How a hung run is killed
+
+Every phase runs through
+[win-job-launcher](../crates/win-job-launcher/src/lib.rs), which starts cargo
+inside a kill-on-close Windows job object and enforces the bound itself. At the
+bound it terminates the whole job in one call and waits for it to empty before
+reporting, so every descendant dies -- including one whose parent has already
+exited, which a walk of parent PIDs cannot find. It writes the outcome to a
+result file the harness reads; the harness keeps only a backstop, and stopping
+the launcher takes its tree down with it. The command is created as a member of
+the job rather than assigned to it afterwards, so there is no moment at which it
+exists outside the job.
+
+This replaced a walk of the process tree through WMI, which had no bound of its
+own. It was the only unbounded step on the path of a CI sweep that once sat for
+its job's whole hour with no evidence of where; that the sweep sat inside the
+walk was never established.
+
+The harness builds the launcher from this checkout at the start of a sweep --
+from the real tree, never the copy, so sweeping the launcher's own manifest
+cannot sabotage its supervisor. `-LauncherPath` supplies one already built.
+`-TraceLaunches` has the launcher narrate each step on the console, which is
+what a stalled CI job leaves behind; the sweep workflow turns it on. A launcher
+that fails -- no result, overrunning its own bound, or an outcome whose cleanup
+it could not confirm (`confirmed` false, on an exit or on a timeout alike) -- is
+reported as `INFRASTRUCTURE`, never as a catch.
+
+## Faux runs: a planned mix of passes, failures and overruns
+
+The stubs in [test-run-sabotage.ps1](test-run-sabotage.ps1) each behave one way,
+so a sweep through them can only show every entry behaving the same. To watch
+the harness handle a *mix* -- some runs that pass, some that fail, some that
+overrun their bound -- without building anything and without anything random,
+each entry carries its own planned outcome.
+
+**The plan lives in the patch.** An entry's `replace` text puts one directive
+line into a `*.faux` file, and
+[faux-cargo.cmd](faux/faux-cargo.cmd), passed as `-CargoCommand`, reads it back
+out of the harness's working copy -- the only place a sabotaged run differs from
+the baseline. So the plan is the manifest: it sits beside the entry it governs,
+needs no state shared between runs (it is correct sharded and in parallel), and
+the baseline, which has no directive, passes without being told to.
+
+| Directive | The run | Harness reports |
+|---|---|---|
+| `// faux: pass` | passes | survived |
+| `// faux: fail` | fails, exit 101 | caught |
+| `// faux: hang` | never ends | caught, HUNG, once the bound kills it |
+| `// faux: sleep <n> pass` / `fail` | takes `<n>` seconds, then passes or fails | placed under or over the bound by choosing `<n>` |
+| `// faux: build-fail` | the build phase fails | a manifest that does not compile, or `refused-by-build` if the entry names that |
+
+A directive the stub cannot read -- a typo, a missing word, anything extra after
+an otherwise valid one, or two directives -- is
+neither a pass nor a failure, since either would be scored as a result and a
+typo would then look like a finding. The stub validates the whole line against
+every valid form before reading anything out of it, and exits with the
+process-start code the harness reports as `INFRASTRUCTURE`, in every phase. Only
+`*.faux` files are searched, so a directive quoted in documentation is not a
+plan.
+
+[plan.json](faux/plan.json) is a worked mix, and
+[run-faux-plan.ps1](faux/run-faux-plan.ps1) runs it:
+
+```powershell
+.\tools\faux\run-faux-plan.ps1                  # the shipped plan, entries sharded across processes
+.\tools\faux\run-faux-plan.ps1 -Jobs 1          # serially, for a clean trace
+.\tools\faux\run-faux-plan.ps1 -Plan .\my.json  # a plan of your own
+```
+
+What makes it quick, since a faux run's cost is the time the plan asks for and
+not a build: the plan is swept in a throwaway repository holding only the plan
+and its subject, because the harness copies every tracked file of the repository
+it sweeps into a working copy per shard; the entries are spread across parallel
+shards, each with an output directory of its own, so a sweep takes about as long
+as its slowest planned run instead of the sum; and the bound defaults to a few
+seconds, since every overrun costs it. A plan's `file` is therefore the subject
+by name, `subject.faux`, and a plan is not run directly with `run-sabotage.ps1`.
+
+To write a plan, copy an entry from [plan.json](faux/plan.json) and change its
+`replace` directive and its `expect`. A run is placed against the bound by its
+`sleep`: well under it finishes, past it is killed, and an entry's own
+`timeoutSeconds` raises the bound for that entry only. The harness's own suite
+sweeps plans of this kind in its `faux runs` section, including a plan whose
+runs do *not* do what their entries declared, to show the sweep names each one.
+
 ## Manifest format
 
 JSON. `find` and `replace` are arrays of lines, joined with newlines --
@@ -426,7 +516,10 @@ from the current run.
 
 Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
 them to stderr, and error messages name whichever of the two actually holds the
-evidence.
+evidence. Each phase the launcher reports on also leaves its `.result`
+(`.build.result` for the build), the one-line JSON outcome the harness judged it
+by. A launcher that failed leaves none, or a file that is not a result, and the
+run is `INFRASTRUCTURE`; a transcript is the evidence then.
 
 A transcript is named after its sabotage with non-alphanumerics collapsed to
 dashes, so two entries differing only in punctuation would collide; the manifest

@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/win-job-launcher",
 	"crates/win-numa-sys",
 	"crates/win-shared-os-owned-handle",
 	"crates/windows-file-enumeration-sys",
