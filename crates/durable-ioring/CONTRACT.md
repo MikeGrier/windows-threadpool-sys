@@ -92,7 +92,9 @@ Everything below either sharpens one word of that sentence or states a condition
    order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).
 6. **A late write is refused, not absorbed.** Once n is sealed, a write tagged at or below n in n's
    lineage is an API violation, refused before anything is reserved; nothing reaches the kernel and
-   the buffer is returned.
+   the buffer is returned. Likewise, once an epoch is abandoned, a write tagged with it is refused,
+   open or sealed: its writes were declared lost, and none may join them
+   ([DI-D-35](DESIGN-NOTES.md#di-d-35)).
 7. **Asking again about a sealed epoch reports its state.** `make_durable_through(m)` for m at or
    below an already-sealed number is a no-op that reports m's current state -- durable, pending,
    failed, or abandoned.
@@ -282,7 +284,8 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 - Once resolved either way, it is business as usual: the high-water mark may move past an abandoned epoch,
   which is why "durable through n" means **durable or abandoned**.
 - A request left `Blocked` by a failure receives its `Durable` as soon as the failure is resolved.
-- Gated operations on an abandoned epoch fail (guarantee 9).
+- Gated operations on an abandoned epoch fail (guarantee 9), and a write tagged with one is refused
+  (guarantee 6).
 
 ### The inventory
 

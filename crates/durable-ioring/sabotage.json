@@ -454,6 +454,22 @@
       "replace": ["            Some(_) => Ok(()),\n"]
     },
     {
+      "name": "DI-3.2.4.1: a write into an abandoned epoch is not refused",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "DI-D-35: an abandoned epoch's writes were declared lost, so a write joining it would be reported with an epoch that can never be durable. Caught by the I/O test that writes into an abandoned open epoch.",
+      "find": ["            && self.relay.lock().lineage.is_abandoned(epoch.id)\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "DI-3.2.4.1: the oracle accepts a write into an abandoned epoch",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement of DI-D-35, which the I/O tests bind to.",
+      "find": ["                .is_some_and(|ids| ids.contains(&epoch.id))\n"],
+      "replace": ["                .is_some_and(|_| false)\n"]
+    },
+    {
       "name": "CONTROL: the relay tests emptiness by length",
       "file": "src/dioring/relay.rs",
       "expect": "survives",

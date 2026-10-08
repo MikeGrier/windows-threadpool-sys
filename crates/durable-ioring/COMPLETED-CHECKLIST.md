@@ -1435,3 +1435,22 @@ The item as it stood at completion:
   behaviour change that invalidates them breaks the build. The seam must therefore be reachable
   from doctests, not only from `cfg(test)`. Check first whether `windows-ioring-sys`'
   `fault-injection` feature can fail a flush; `DI-3.3` may build on the seam rather than beside it.
+
+## Moved 2026-10-07 21:24:28 -04:00 -- DI-3.2.4.1: writes into abandoned epochs refused
+
+### <a id="di-3241"></a>DI-3.2.4.1 -- A write tagged with an abandoned epoch is refused as `EpochAbandoned`, open or sealed, per the engineer's decision DI-D-35. *(completed 2026-10-07 21:24:28 -04:00)*
+
+The decision is [DI-D-35](DESIGN-NOTES.md#di-d-35), the engineer's answer to the question
+`DI-3.2.4` left open under `DI-3.2.5`. Added on 2026-10-07 as a follow-on to `DI-3.2.4` and done in
+the same session, because the question arose there and the change is the push path's alone.
+`PushRefusal::EpochAbandoned { epoch }` is checked after `Sealed`, so a sealed abandoned epoch is
+still refused as `Sealed`; CONTRACT.md's guarantee 6 and its resolution section, and API.md's
+refusal list and sketch, say so. The oracle gained the rule, applied once the `Abandoned` entry has
+been observed.
+
+**Tests:** the core reporting which epochs are abandoned; the oracle in both directions, including a
+write into the epoch before its `Abandoned` entry is seen and another lineage's same-numbered epoch;
+and, through the ring, owned and registered writes into an abandoned open epoch refused with their
+buffer and context, a write into the sealed abandoned epoch still refused as `Sealed`, and a later
+epoch accepted. **Verification:** two sabotages -- the refusal removed, and the oracle's rule
+removed -- each caught by the test named for it.

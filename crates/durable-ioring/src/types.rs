@@ -302,6 +302,12 @@ pub enum PushRefusal<V: Identities> {
         /// Its lineage's seal point.
         sealed_through: V::EpochId,
     },
+    /// The write's epoch was abandoned (DI-D-35): its writes were declared lost, so none may join
+    /// it, sealed or open. An epoch at or below the seal point is refused as `Sealed` instead.
+    EpochAbandoned {
+        /// The write's epoch.
+        epoch: Epoch<V>,
+    },
     /// The lineage was never minted by this instance, or has been retired.
     UnknownLineage(V::Lineage),
     /// The gate names an epoch already abandoned, so the operation could never be released.

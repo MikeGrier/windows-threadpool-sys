@@ -4,14 +4,15 @@
 //! test also checks that `Durable` never passes an unresolved failure and that every suspect write
 //! was accepted, in push order.
 
-use windows_ioring_sys::IoRingErrorExt;
+use windows_ioring_sys::{IoRingErrorExt, RegisteredSpan};
 
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, temp};
 use super::{empty, file, setup};
-use crate::contract::DurableRing;
+use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
-    Cause, DurabilityRequest, Entry, EpochState, Failed, ImportScope, Resolution, ResolveRefusal,
+    Cause, DurabilityRequest, Entry, EpochState, Failed, ImportScope, PushRefusal, Resolution,
+    ResolveRefusal,
 };
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
@@ -277,6 +278,58 @@ fn a_closed_failure_stays_and_its_token_can_be_taken_again() {
         harness.ring.take_token(failed.id).is_none(),
         "resolved, and leaves no memory"
     );
+    harness.finish();
+}
+
+#[test]
+fn a_write_into_an_abandoned_epoch_is_refused_with_what_it_took() {
+    let temp = temp(&[0; 64]);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], vec![vec![0; 16]]));
+    harness.write(GIVEN, 0, b"sealed", 1, 1);
+    harness.write(GIVEN, 8, b"open", 3, 2);
+    harness.next_n(2);
+    harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
+    harness.seal(1);
+    let failed = next_failed(&mut harness);
+    assert_eq!(suspects(&failed), [0, 1], "sealed 1 and open 3");
+    resolve(&mut harness, vec![(failed.token, Resolution::Abandon)]);
+    assert!(matches!(harness.next_entry(), Entry::Abandoned { .. }));
+    assert!(matches!(harness.next_entry(), Entry::Durable { .. }));
+
+    let three = harness.epoch(3);
+    let error = harness
+        .ring
+        .write(GIVEN, 0, vec![7], three, 5)
+        .expect_err("3 was abandoned, though it is open");
+    assert!(matches!(error.reason, PushRefusal::EpochAbandoned { epoch } if epoch == three));
+    assert_eq!((error.buffer, error.context), (Some(vec![7]), 5));
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: 4,
+    };
+    let error = harness
+        .ring
+        .write_registered(GIVEN, 0, span, three, 6)
+        .expect_err("a registered write to 3");
+    assert!(matches!(error.reason, PushRefusal::EpochAbandoned { .. }));
+    assert_eq!((error.buffer, error.context), (None, 6));
+    let error = harness
+        .ring
+        .write(GIVEN, 0, vec![7], harness.epoch(1), 7)
+        .expect_err("1 is sealed and abandoned");
+    assert!(
+        matches!(error.reason, PushRefusal::Sealed { .. }),
+        "the seal is checked first: {:?}",
+        error.reason
+    );
+    assert!(
+        harness.ring.pop().expect("pop").is_none(),
+        "a refused write completes nothing"
+    );
+
+    harness.write(GIVEN, 0, b"later", 4, 8);
+    harness.next();
     harness.finish();
 }
 

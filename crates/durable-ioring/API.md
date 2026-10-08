@@ -70,7 +70,9 @@ epoch they wait on. *(Amended by section 11: the gate moves into `WriteOptions` 
 `ReadOptions`, taken by the `_with` forms.)* Refusals happen before anything is reserved and return the buffer in
 `PushError<B, E>`: `Sealed` (contract guarantee 6), `GateAbandoned` (the gate can never be
 satisfied), or `Ring`. *(Amended by section 10: `PushError<B, E, C>` also returns the consumer's
-context, its buffer is `Option<B>`, and two refusals are added.)*
+context, its buffer is `Option<B>`, and two refusals are added.)* *(Amended by
+[DI-D-35](DESIGN-NOTES.md#di-d-35): `EpochAbandoned`, for a write tagged with an abandoned
+epoch above the seal point.)*
 
 ### 3. `make_durable_through` answers at once when it can
 
@@ -831,6 +833,9 @@ pub enum DurabilityRequest<V: Identities> {
 pub enum PushRefusal<V: Identities> {
     /// The write's epoch is at or below its lineage's seal point (DI-D-9 rule a).
     Sealed { epoch: Epoch<V>, sealed_through: V::EpochId },
+    /// The write's epoch was abandoned ([DI-D-35](DESIGN-NOTES.md#di-d-35)); one at or below the
+    /// seal point is refused as `Sealed` instead.
+    EpochAbandoned { epoch: Epoch<V> },
     /// The lineage was never minted by this instance, or has been retired.
     UnknownLineage(V::Lineage),
     /// The gate names an epoch already abandoned, so the operation could never be released.

@@ -276,6 +276,11 @@ impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
         self.sealed_through.filter(|&sealed| epoch <= sealed)
     }
 
+    /// Whether an abandoned failure contained `epoch`, so that no write may join it (DI-D-35).
+    pub(crate) fn is_abandoned(&self, epoch: E) -> bool {
+        self.abandoned.contains(&epoch)
+    }
+
     /// An epoch's state. Abandonment is decided when the failure is abandoned, so it is reported
     /// from then on, before the mark passes the epoch and whether or not the epoch is sealed.
     pub(crate) fn state(&self, epoch: E) -> State {

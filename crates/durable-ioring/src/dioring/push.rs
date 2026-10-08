@@ -207,11 +207,12 @@ where
     }
 
     /// Why a push must be refused before anything is reserved, if it must: the file first, then
-    /// the epoch's lineage, then its seal (guarantee 6), then the registration a registered-span
-    /// operation needs.
+    /// the epoch's lineage, then its seal (guarantee 6), then whether it was abandoned (DI-D-35),
+    /// then the registration a registered-span operation needs.
     ///
-    /// Checking the seal here and pushing after is sound because nothing seals concurrently: a
-    /// seal is the consumer's `&mut self` call, never a callback's.
+    /// Checking the seal and abandonment here and pushing after is sound because neither changes
+    /// concurrently: sealing and resolving are the consumer's `&mut self` calls, never a
+    /// callback's.
     fn refusal(
         &self,
         file: FileKey,
@@ -233,6 +234,11 @@ where
                 epoch,
                 sealed_through,
             });
+        }
+        if let Some(epoch) = epoch
+            && self.relay.lock().lineage.is_abandoned(epoch.id)
+        {
+            return Some(PushRefusal::EpochAbandoned { epoch });
         }
         if needs_registration && self.registered.is_none() {
             return Some(PushRefusal::NoRegisteredBuffers);
@@ -288,8 +294,8 @@ where
         // batch would unwind through a batch with an entry not yet submitted.
         if let OpKind::Write { epoch } = kind {
             debug_assert!(
-                core.lineage.refuses(epoch.id).is_none(),
-                "refusal() checked the seal"
+                core.lineage.refuses(epoch.id).is_none() && !core.lineage.is_abandoned(epoch.id),
+                "refusal() checked the seal and abandonment"
             );
         }
         let mut scope = self.delivery.scope();

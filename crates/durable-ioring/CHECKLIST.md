@@ -47,6 +47,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.4** -- Failures and their resolution: `Failed`, heal, abandon and close, `resolve`, `Blocked`, `import_failure`, the inventory, and a fault seam that drives CONTRACT.md's worked examples as doctests. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-324)
 
+- [x] **DI-3.2.4.1** -- A write tagged with an abandoned epoch is refused as `EpochAbandoned`, open or sealed, per the engineer's decision DI-D-35. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3241)
+
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
   ([DI-D-19](DESIGN-NOTES.md#di-d-19)). Gated operations held until their epoch is durable, ending
@@ -59,8 +61,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `ImportScope::Lineage` narrows to that lineage's writes. (Flush-domain reach for flush failures
   and imports landed in `DI-3.2.4`, where the suspect set is defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34);
   containment for a provider's domain is `DI-3.2.6`'s.) **Open, for the engineer, before this
-  step:** whether a write to an open epoch already abandoned is accepted, as it is since `DI-3.2.4`,
-  or refused, as a gate on one is (`GateAbandoned`). **Also open:** what `epoch_state` answers for an
+  step:** what `epoch_state` answers for an
   epoch of a lineage the instance does not have. `EpochState` has no value for it, so since
   `DI-3.2.3` dioring panics there ([DI-D-33](DESIGN-NOTES.md#di-d-33)); a retired lineage raises
   the same question, which is why it is settled here.

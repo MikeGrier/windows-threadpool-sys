@@ -364,6 +364,8 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
     );
     assert!(lineage.failures().is_empty());
     assert_eq!(already(lineage.seal(1)), State::Abandoned);
+    assert!(lineage.is_abandoned(1) && lineage.is_abandoned(3));
+    assert!(!lineage.is_abandoned(2) && !lineage.is_abandoned(4));
 
     assert_eq!(submitted(lineage.seal(3)).flushes, [flush(3, A)]);
     assert_eq!(durable(&lineage.flushed(3, A, Ok(()))), [3]);

@@ -22,6 +22,8 @@
 //!   with -- a read, or a write with its epoch -- and the consumer's context, unchanged.
 //! - **No write is accepted at or below its lineage's seal** (guarantee 6): such a push is refused,
 //!   so an identity returned for one is a violation.
+//! - **No write is accepted into an abandoned epoch** (DI-D-35), once its `Abandoned` entry has
+//!   been observed.
 //! - **`Durable` is reported only for what was sealed** (DI-D-9): `Durable { through: n }` needs a
 //!   seal of n's lineage at or above n.
 //! - **`Durable` follows the writes it covers** (guarantee 5): it arrives after the completion of
@@ -66,7 +68,7 @@
 //! the oracle sees entries, not wakes. The second is
 //! [`check_readiness`]'s, which runs beside the oracle (DI-D-28).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::Mutex;
 use std::sync::mpsc;
@@ -131,6 +133,13 @@ pub enum Violation<V: Identities> {
         epoch: Epoch<V>,
         /// The seal point it is at or below.
         sealed_through: V::EpochId,
+    },
+    /// A write was accepted into an epoch already reported abandoned (DI-D-35).
+    WriteToAbandoned {
+        /// The write.
+        op: V::OpId,
+        /// Its epoch.
+        epoch: Epoch<V>,
     },
     /// `Durable` for an epoch no seal of its lineage covers.
     DurableNotSealed {
@@ -215,6 +224,8 @@ pub struct ConformanceOracle<V: Identities, C> {
     failures: HashMap<V::FailureId, Reported<V>>,
     /// Every failure identity reported.
     failure_ids: HashSet<V::FailureId>,
+    /// The epochs of every abandoned failure, by lineage.
+    abandoned: HashMap<V::Lineage, BTreeSet<V::EpochId>>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -228,6 +239,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             durable: HashMap::new(),
             failures: HashMap::new(),
             failure_ids: HashSet::new(),
+            abandoned: HashMap::new(),
         }
     }
 
@@ -253,8 +265,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     ///
     /// # Errors
     ///
-    /// [`Violation::DuplicateIdentity`] if an earlier push returned `op`, and
-    /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal.
+    /// [`Violation::DuplicateIdentity`] if an earlier push returned `op`,
+    /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal, and
+    /// [`Violation::WriteToAbandoned`] for a write into an epoch reported abandoned.
     pub fn pushed(&mut self, op: V::OpId, kind: OpKind<V>, context: C) -> Result<(), Violation<V>> {
         if self.completed.contains(&op) || self.outstanding.contains_key(&op) {
             return Err(Violation::DuplicateIdentity { op });
@@ -270,6 +283,13 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             });
         }
         if let OpKind::Write { epoch } = kind {
+            if self
+                .abandoned
+                .get(&epoch.lineage)
+                .is_some_and(|ids| ids.contains(&epoch.id))
+            {
+                return Err(Violation::WriteToAbandoned { op, epoch });
+            }
             self.writes.insert(op, epoch);
         }
         self.outstanding.insert(op, Pushed { kind, context });
@@ -402,6 +422,12 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             .eq(suspect.iter().map(|w| (w.op, w.epoch)))
         {
             return Err(Violation::AbandonedSuspectChanged { failure });
+        }
+        for (_, epoch) in reported.suspect {
+            self.abandoned
+                .entry(epoch.lineage)
+                .or_default()
+                .insert(epoch.id);
         }
         Ok(())
     }

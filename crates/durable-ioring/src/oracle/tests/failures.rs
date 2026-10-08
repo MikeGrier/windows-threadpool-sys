@@ -183,6 +183,34 @@ fn abandoned_must_name_a_live_failure_with_its_reported_suspect_set() {
 }
 
 #[test]
+fn a_write_into_an_abandoned_epoch_is_a_violation_and_one_into_another_epoch_is_not() {
+    let instance = InstanceId::next();
+    let w0 = (op(instance, 0), epoch(instance, 1));
+    let w1 = (op(instance, 1), epoch(instance, 3));
+    let mut oracle = two_writes(instance);
+    oracle
+        .observe(&failed(failure(instance, 0), &[w0, w1]))
+        .expect("a failure");
+    oracle
+        .pushed(op(instance, 2), write_kind(instance, 3), 2)
+        .expect("3 is not abandoned until the entry says so");
+    oracle
+        .observe(&abandoned(failure(instance, 0), &[w0, w1]))
+        .expect("abandoned");
+    assert!(matches!(
+        oracle.pushed(op(instance, 3), write_kind(instance, 3), 3),
+        Err(Violation::WriteToAbandoned { .. })
+    ));
+    oracle
+        .pushed(op(instance, 4), write_kind(instance, 4), 4)
+        .expect("4 was not abandoned");
+    let other = InstanceId::next();
+    oracle
+        .pushed(op(other, 0), write_kind(other, 3), 0)
+        .expect("another lineage's epoch 3");
+}
+
+#[test]
 fn blocked_must_name_a_live_failure_at_or_below_the_request() {
     let instance = InstanceId::next();
     let w0 = (op(instance, 0), epoch(instance, 1));

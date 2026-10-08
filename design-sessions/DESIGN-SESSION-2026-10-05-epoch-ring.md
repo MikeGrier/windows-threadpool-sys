@@ -2483,6 +2483,12 @@ inconsistency and `pop` asserts on it on the consumer's thread.
 One question is left for the engineer under `DI-3.2.5`: whether a write to an open epoch that was
 already abandoned should be refused, as a gate on one is.
 
+The engineer answered at once: "yes a write to an epoch that has been abandoned should fail".
+Recorded as DI-D-35 and implemented as `DI-3.2.4.1`. The one choice left to the code was the
+refusal's shape: a new `EpochAbandoned` variant rather than reusing `Sealed`, which would misstate
+why an open epoch is refused; and `Sealed` checked first, so a sealed abandoned epoch keeps the
+answer it already had.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
