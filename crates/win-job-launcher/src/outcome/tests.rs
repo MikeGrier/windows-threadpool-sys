@@ -33,7 +33,7 @@ fn not_started(error: &str) -> String {
 fn exited(code: i32) -> Outcome {
     Outcome::Exited {
         code,
-        strays: 0,
+        strays: Some(0),
         confirmed: true,
     }
 }
@@ -44,7 +44,7 @@ fn an_exit_reports_its_code_strays_and_whether_cleanup_was_confirmed() {
         report(
             Outcome::Exited {
                 code: 0,
-                strays: 0,
+                strays: Some(0),
                 confirmed: true
             },
             Some(ACCOUNTING)
@@ -55,7 +55,7 @@ fn an_exit_reports_its_code_strays_and_whether_cleanup_was_confirmed() {
         report(
             Outcome::Exited {
                 code: 0,
-                strays: 1,
+                strays: Some(1),
                 confirmed: false
             },
             None
@@ -65,11 +65,39 @@ fn an_exit_reports_its_code_strays_and_whether_cleanup_was_confirmed() {
 }
 
 #[test]
+fn an_unknown_stray_count_is_null_and_never_zero() {
+    // The process list could not be read: the count is not known, which is not
+    // the same as none, and the result says so.
+    assert_eq!(
+        report(
+            Outcome::Exited {
+                code: 0,
+                strays: None,
+                confirmed: true
+            },
+            None
+        ),
+        r#"{"outcome":"exited","code":0,"strays":null,"confirmed":true,"elapsedMs":1500}"#
+    );
+    assert_ne!(
+        report(
+            Outcome::Exited {
+                code: 0,
+                strays: None,
+                confirmed: true
+            },
+            None
+        ),
+        report(exited(0), None)
+    );
+}
+
+#[test]
 fn an_ntstatus_exit_code_is_written_signed() {
     let json = report(
         Outcome::Exited {
             code: -1_073_741_502,
-            strays: 2,
+            strays: Some(2),
             confirmed: true,
         },
         None,

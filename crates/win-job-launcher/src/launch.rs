@@ -91,19 +91,24 @@ fn exited<W: Write>(child: &Process, job: &Job, n: &mut Narrator<W>) -> Report {
     // accounting's active count cannot say that: it lags, and still counts the
     // command for a moment after its handle is signalled, which reported a
     // command that left nothing behind as having left a process.
-    let others = other_processes(job, child.id(), n);
-    let strays = others.unwrap_or(0);
+    let strays = other_processes(job, child.id(), n);
     n.trace(format_args!(
         "the command exited with code {code} after {}ms; {}",
         n.elapsed().as_millis(),
         describe(at_exit)
     ));
     // With the process list unreadable there is no evidence the job holds only
-    // the command, so it is cleaned up and confirmed as if it held more.
-    let confirmed = if strays > 0 || others.is_none() {
-        n.trace(format_args!(
-            "terminating {strays} stray process(es) still in the job"
-        ));
+    // the command, so it is cleaned up and confirmed as if it held more -- and
+    // reported as unknown, not as none.
+    let confirmed = if needs_cleanup(strays) {
+        match strays {
+            Some(count) => n.trace(format_args!(
+                "terminating {count} stray process(es) still in the job"
+            )),
+            None => n.trace(format_args!(
+                "terminating whatever is still in the job; its process list could not be read"
+            )),
+        }
         let terminated = terminate(job, n);
         let emptied = confirm_empty(job, None, n);
         terminated && emptied
@@ -131,6 +136,12 @@ fn other_processes<W: Write>(job: &Job, command: u32, n: &mut Narrator<W>) -> Op
             None
         }
     }
+}
+
+/// Whether the job has to be cleaned up: unless it is known to hold nothing but
+/// the command. An unknown count is not zero.
+fn needs_cleanup(strays: Option<u32>) -> bool {
+    strays != Some(0)
 }
 
 /// How many of `ids` are not `command`.

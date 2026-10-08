@@ -530,8 +530,16 @@ function Invoke-Bounded {
         # scored as a suite that failed -- which this tool would credit as a
         # catch. See Get-ProcessStartFailure in common.ps1.
         if (Get-ProcessStartFailure $code) { $outcome = 'not-started' }
-        if ([int]$result.strays -gt 0) {
-            Write-Report ("    $($result.strays) process(es) were still running when the command exited; " +
+        # `strays` is null, not 0, when the launcher could not list the job's
+        # processes: it does not know, and says so. Looked up rather than read,
+        # for the reason `confirmed` is.
+        $strays = $result.PSObject.Properties['strays']
+        if ($null -ne $strays -and $null -eq $strays.Value) {
+            Write-Report ('    win-job-launcher could not list the processes left in the job when the ' +
+                'command exited; it killed whatever was there.') -Level note
+        }
+        elseif ($null -ne $strays -and [int]$strays.Value -gt 0) {
+            Write-Report ("    $($strays.Value) process(es) were still running when the command exited; " +
                 'win-job-launcher killed them.') -Level note
         }
         return [pscustomobject]@{ Outcome = $outcome; Code = $code; Seconds = $elapsed }

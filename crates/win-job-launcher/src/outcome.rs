@@ -16,6 +16,11 @@
 //! means the launcher could not establish that the tree is gone, and the
 //! outcome is not one a caller may score as the command's own result.
 //!
+//! `strays` is the number of processes other than the command left in the job
+//! when it exited, or `null` when the job's process list could not be read. It
+//! is `null`, not `0`, then: the launcher does not know, and it terminates and
+//! confirms whatever is there as though there were some.
+//!
 //! Every outcome carries `elapsedMs`, and carries the job's accounting
 //! (`totalProcesses`, `activeProcesses`, `userCpuMs`, `kernelCpuMs`) whenever a
 //! job existed to account for. `code` is the exit code as a **signed** 32-bit
@@ -66,13 +71,15 @@ pub mod keys {
 /// How the command ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Exited by itself. `strays` counts the processes still in the job at
-    /// that moment, which the launcher then terminated.
+    /// Exited by itself. `strays` counts the processes other than the command
+    /// still in the job at that moment, which the launcher then terminated.
     Exited {
         /// The exit code, signed.
         code: i32,
-        /// Processes still in the job when the command exited.
-        strays: u32,
+        /// Processes other than the command still in the job when it exited,
+        /// or `None` when the job's process list could not be read, so the
+        /// count is not known -- which is not the same as none.
+        strays: Option<u32>,
         /// Whether the job was seen empty afterwards, having been terminated
         /// if it was not already.
         confirmed: bool,
@@ -139,7 +146,10 @@ impl Report {
             } => {
                 field(keys::OUTCOME, &quoted(outcomes::EXITED));
                 field(keys::CODE, &code.to_string());
-                field(keys::STRAYS, &strays.to_string());
+                field(
+                    keys::STRAYS,
+                    &strays.map_or_else(|| String::from("null"), |count| count.to_string()),
+                );
                 field(keys::CONFIRMED, if *confirmed { "true" } else { "false" });
             }
             Outcome::TimedOut { confirmed } => {

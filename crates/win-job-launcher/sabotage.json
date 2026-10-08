@@ -36,6 +36,14 @@
       "replace": ["    u32::try_from(ids.iter().filter(|&&id| id != 0).count())"]
     },
     {
+      "name": "an unknown stray count is cleaned up as if there were none",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "With the job's process list unreadable the count is not zero, it is not known; reading it as zero skips the termination and confirmation and reports confirmed:true for a tree nothing looked at.",
+      "find": ["    strays != Some(0)"],
+      "replace": ["    strays.unwrap_or(0) != 0"]
+    },
+    {
       "name": "the bound is never enforced",
       "file": "src/launch.rs",
       "expect": "caught",
@@ -56,8 +64,8 @@
       "file": "src/launch.rs",
       "expect": "caught",
       "why": "A command that exits while its descendants run is reported as a clean exit with no sign of them. The count is the only evidence the harness gets that a suite left processes behind.",
-      "find": ["    let strays = others.unwrap_or(0);"],
-      "replace": ["    let strays = others.unwrap_or(0) * 0;"]
+      "find": ["    let strays = other_processes(job, child.id(), n);"],
+      "replace": ["    let strays = other_processes(job, child.id(), n).map(|_| 0);"]
     },
     {
       "name": "non-ASCII text is written raw into the result",
@@ -72,8 +80,8 @@
       "file": "src/launch.rs",
       "expect": "survives",
       "why": "The manifest checking itself. This changes what a reader of a trace sees and nothing a test claims, so it MUST survive -- if it comes back caught, the tests are matching on incidental wording rather than on behaviour.",
-      "find": ["            \"terminating {strays} stray process(es) still in the job\""],
-      "replace": ["            \"killing {strays} process(es) left in the job\""]
+      "find": ["                \"terminating {count} stray process(es) still in the job\""],
+      "replace": ["                \"killing {count} process(es) left in the job\""]
     }
   ]
 }

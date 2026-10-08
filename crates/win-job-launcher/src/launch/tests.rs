@@ -1,6 +1,25 @@
 // Copyright (c) 2026 Mike Grier
 
-use super::strays_among;
+use super::{needs_cleanup, strays_among};
+
+#[test]
+fn a_job_known_to_hold_only_the_command_needs_no_cleanup() {
+    assert!(!needs_cleanup(Some(0)));
+}
+
+#[test]
+fn a_job_holding_strays_needs_cleanup() {
+    for count in [1, 2, 10, u32::MAX] {
+        assert!(needs_cleanup(Some(count)), "{count}");
+    }
+}
+
+#[test]
+fn a_job_whose_count_is_unknown_needs_cleanup() {
+    // Not read as zero: with the process list unreadable nothing shows the job
+    // holds only the command.
+    assert!(needs_cleanup(None));
+}
 
 #[test]
 fn a_job_holding_only_the_command_has_no_strays() {

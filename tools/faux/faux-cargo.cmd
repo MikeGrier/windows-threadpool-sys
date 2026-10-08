@@ -93,11 +93,18 @@ for /f "tokens=3,4,5" %%a in ('findstr /B /C:"// faux:" "%FAUX_LINES%"') do (
 )
 rmdir /s /q "%FAUX_WORK%" 2>nul
 
+rem The seconds are decimal. `set /a` reads a leading zero as octal, so `08` would
+rem be an error and `010` would wait eight seconds, not ten; the validated digits
+rem have their leading zeros stripped first, and nothing left means zero.
+if not "%FAUX_VERB%"=="sleep" goto :valid
+set "FAUX_N="
+for /f "tokens=* delims=0" %%z in ("%FAUX_A%") do set "FAUX_N=%%z"
+if not defined FAUX_N set "FAUX_N=0"
+set "FAUX_A=%FAUX_N%"
+
 rem A sleep long enough to overflow set /a would ping for the wrong time; a bound
-rem of five digits is a day and more.
-if "%FAUX_VERB%"=="sleep" (
-  echo %FAUX_A%| findstr /R "^[0-9][0-9][0-9][0-9][0-9][0-9]" >nul && goto :bad_quiet
-)
+rem of five digits is a day and more. Judged on the value, after the zeros.
+echo %FAUX_A%| findstr /R "^[0-9][0-9][0-9][0-9][0-9][0-9]" >nul && goto :bad_quiet
 
 :valid
 rem The build phase: the harness asks for --no-run first. Only build-fail touches
@@ -109,7 +116,10 @@ if "%FAUX_VERB%"=="build-fail" exit /b 0
 if "%FAUX_VERB%"=="fail" goto :test_failed
 if "%FAUX_VERB%"=="hang" goto :hang
 
-rem sleep <n> pass|fail. `ping -n k` waits about k-1 seconds.
+rem sleep <n> pass|fail. `ping -n k` waits about k-1 seconds. The line says how
+rem long, which is what lets a test see the value that was read without waiting
+rem it out.
+echo faux-cargo: sleeping %FAUX_A% second(s)
 set /a FAUX_PINGS=%FAUX_A%+1
 ping -n %FAUX_PINGS% 127.0.0.1 >nul
 if "%FAUX_B%"=="pass" exit /b 0

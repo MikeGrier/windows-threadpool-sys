@@ -117,6 +117,14 @@
       "replace": ["        if ($code -gt 0) { $failures += $code }"]
     },
     {
+      "name": "an unknown stray count is not reported by the harness",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A null stray count means the launcher could not list the job's processes. The note is the only place the harness shows it; without it the result reads the same as a clean exit.",
+      "find": ["        if ($null -ne $strays -and $null -eq $strays.Value) {"],
+      "replace": ["        if ($false) {"]
+    },
+    {
       "name": "a launcher that wrote no result is scored as a failed suite",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",

@@ -1099,6 +1099,49 @@ Test-Case 'the faux stub takes as long as it is told to' {
     Assert-True ($r.Seconds -lt 10) "a 2-second run took $($r.Seconds)s"
 }
 
+Test-Case 'the faux stub reads the seconds of a sleep as decimal, whatever zeros lead them' {
+    # `set /a` reads a leading zero as octal: `08` is an error and `010` is eight.
+    # The stub says how long it is about to sleep, so the value it read is seen
+    # without waiting the sleep out.
+    $seen = {
+        param([string] $Seconds)
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('faux-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            [System.IO.File]::WriteAllText((Join-Path $dir 'subject.faux'), "// faux: sleep $Seconds pass`n")
+            $out = Join-Path $dir 'out.txt'
+            $p = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', "`"`"$script:FauxCargo`" test`"") `
+                -WorkingDirectory $dir -PassThru -WindowStyle Hidden -RedirectStandardOutput $out
+            $null = $p.Handle
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $line = $null
+            while ($clock.Elapsed.TotalSeconds -lt 10 -and -not $line) {
+                if (Test-Path -LiteralPath $out) {
+                    $line = Get-Content -LiteralPath $out | Where-Object { $_ -match '^faux-cargo: sleeping' } | Select-Object -First 1
+                }
+                if (-not $line) { Start-Sleep -Milliseconds 50 }
+            }
+            # The sleep is the stub's child; taking the tree down ends it at once.
+            if (-not $p.HasExited) { $null = Invoke-Native { taskkill /T /F /PID $p.Id } }
+            return $line
+        }
+        finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($row in @(@('0', 0), @('00', 0), @('000', 0), @('1', 1), @('01', 1), @('007', 7), @('08', 8),
+            @('09', 9), @('010', 10), @('0100', 100), @('000001', 1), @('00000000000042', 42))) {
+        $line = & $seen $row[0]
+        Assert-Equal "faux-cargo: sleeping $($row[1]) second(s)" "$line" "sleep $($row[0])"
+    }
+}
+
+Test-Case 'the faux stub judges the length of a sleep on its value, not on its zeros' {
+    # Six digits are refused whatever they are; zeros in front do not count.
+    $r = Invoke-FauxStub -Content "// faux: sleep 100000 pass`n"
+    Assert-Equal $script:FauxRefused $r.ExitCode 'six significant digits'
+    $r = Invoke-FauxStub -Content "// faux: sleep 000000000001 pass`n"
+    Assert-Equal 0 $r.ExitCode "twelve digits, one significant: $($r.Output)"
+}
+
 Test-Case 'the faux stub refuses a plan it cannot read, rather than scoring it' {
     # A typo must never come out as a pass or a failure: either is a verdict, and
     # would be indistinguishable from a real finding. Every phase refuses.
@@ -1410,6 +1453,32 @@ Test-Case 'a launcher that writes no result is no verdict, and stops the sweep a
         Assert-Match 'The baseline could not be supervised: win-job-launcher failed, exit 1' $result.Output
     }
     finally { Remove-Fixture $root }
+}
+
+foreach ($case in @(
+        @{ Name = 'an unknown count'; Strays = 'null'; Note = 'could not list the processes left in the job' },
+        @{ Name = 'a count of two'; Strays = '2'; Note = '2 process\(es\) were still running' })) {
+    Test-Case "a launcher that reports $($case.Name) of strays says so, and the run is still scored" {
+        # An unknown count is not a count of none, and must not read as one: the
+        # note is the only place the harness shows it. The run is scored all the
+        # same -- the launcher cleaned up and confirmed it.
+        $root = New-Fixture -Manifest (New-Spec)
+        try {
+            $stub = New-Stub -Behaviour 'fail' -Root $root
+            $fake = Join-Path $root 'stubs\strays-launcher.cmd'
+            $json = '{"outcome":"exited","code":0,"strays":' + $case.Strays + ',"confirmed":true,"elapsedMs":1}'
+            $script = "@echo off`r`n:next`r`nif `"%~1`"==`"`" exit /b 1`r`nif `"%~1`"==`"--result`" goto found`r`n" +
+                "shift`r`ngoto next`r`n:found`r`n> `"%~2`" echo $json`r`nexit /b 0`r`n"
+            [System.IO.File]::WriteAllText($fake, $script)
+            $result = Invoke-Harness -Root $root -Arguments @(
+                '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-LauncherPath', $fake)
+            Assert-Match $case.Note $result.Output 'the note about the stray count'
+            # The fake reports every run as a pass, so the baseline is green and
+            # the sabotage, declared caught, survives: scored, not infrastructure.
+            Assert-Match 'survived \(NOT caught\)' $result.Output 'the run is scored as the command''s own result'
+        }
+        finally { Remove-Fixture $root }
+    }
 }
 
 # Valid JSON that is not a launcher result must be no verdict, not a crash:
