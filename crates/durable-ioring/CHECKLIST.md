@@ -15,56 +15,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.1** -- The crate is scaffolded: a workspace member with `#![forbid(unsafe_code)]`, registered for release and publication. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-31)
 
-- [ ] **DI-3.2** -- **dioring over `windows-ioring-sys`**, implementing the contract in
-  [CONTRACT.md](CONTRACT.md), in the steps `DI-3.2.1` to `DI-3.2.8` below; checked when the last of
-  them is. Re-planned 2026-10-07: as one item it covered the whole contract, and two of its
-  requirements sat on items numbered after it. Each step lands what it implements, with its tests,
-  and adds to the trait only the methods it implements -- the crate is unreleased, so the trait
-  grows rather than shipping `todo!()` bodies. Two dependencies on later items were settled by the
-  engineer on 2026-10-07, each by bringing the work forward:
-  - **The worked-example doctests** land in `DI-3.2.4`, on a fault seam built there, rather than
-    waiting for the fault-injecting implementation, `DI-3.3`.
-  - **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)), formerly `DI-3.7`, is folded
-    into these steps: `DI-3.2.2.1` builds it, and each later step adds the rules it implements, so
-    dioring's own tests bind to it from the start. It is a reusable checker over the event stream,
-    owned by dioring, that every implementation of the trait runs in its tests -- dioring's own,
-    the fault-injecting one (`DI-3.3`), and layers above. Modelled on `windows-file-watcher`'s
-    `ContractChecker`: it accepts the legal-but-surprising sequences as carefully as it rejects the
-    illegal ones, and says which rules the stream cannot show.
-
-  **Every later step that adds a trait operation a consumer calls on a live instance also adds its
-  `&self` form to `EntryDelivery`'s `DeliveryHandle`** ([DI-D-32](DESIGN-NOTES.md#di-d-32)): the
-  handle mirrors those operations rather than lending the instance, so nothing adds them for it.
-  `pop` and `readiness` stay off it.
-
-- [x] **DI-3.2.1** -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-321)
-
-- [x] **DI-3.2.2.1** -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3221)
-
-- [x] **DI-3.2.2.2** -- The Model A front end: `EntryDelivery` and its `DeliveryHandle`, delivering entries one at a time to a handler on pool threads. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3222)
-
-- [x] **DI-3.2.3** -- Seals and durability in one lineage, through the built-in default provider: `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, with `Durable` reported as a prefix after the completions it covers. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-323)
-
-- [x] **DI-3.2.4** -- Failures and their resolution: `Failed`, heal, abandon and close, `resolve`, `Blocked`, `import_failure`, the inventory, and a fault seam that drives CONTRACT.md's worked examples as doctests. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-324)
-
-- [x] **DI-3.2.4.1** -- A write tagged with an abandoned epoch is refused as `EpochAbandoned`, open or sealed, per the engineer's decision DI-D-35. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3241)
-
-- [x] **DI-3.2.4.2** -- Markings: a failure records what happens to its suspect writes afterwards -- nullified, short, or covered -- reports each as `Marked`, and ends with a final record, `Abandoned` or the new `Healed`; every failure carries its error code, read with `ErrorCode::of`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3242)
-
-- [x] **DI-3.2.5.1** -- Lineage handles, minting, ending and retiring, and failures across lineages, with a heal taking effect in each lineage separately. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3251)
-
-- [x] **DI-3.2.5.2** -- Gates: operations held until an epoch is durable, ended as never issued when an epoch they need is abandoned, and a push or a seal that would close a gate cycle refused. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3252)
-
-- [x] **DI-3.2.6** -- The consumer's durability provider: one request per seal, called from the consumer's next call with the lock released, answered once per domain from any thread, its failures and its silence reported with their own causes. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-326)
-
-- [x] **DI-3.2.7** -- Ending: `remove_file` refused with every hold reported at once, and `close()` and drop waiting for the kernel and the provider, `close()` handing back what is left. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-327)
-
-- [ ] **DI-3.2.8** -- **The engineer confirms or amends
-  [DI-D-45](DESIGN-NOTES.md#di-d-45)**, the shapes the assistant chose while implementing
-  `DI-3.2.7`: `FileBusy.in_flight` clearing at the kernel's completion; a suspect write, covered
-  or not, holding its file through its failure until the failure is resolved; the provider dropped
-  before ending waits; completions recorded after the end discarded unreported; and the `trace`
-  feature. A rejected point is reworked here, with its decision row amended.
+- [x] **DI-3.2** -- dioring over `windows-ioring-sys`, implementing the contract in steps `DI-3.2.1` to `DI-3.2.8`, from construction through ending. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-32)
 
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush

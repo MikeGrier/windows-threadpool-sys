@@ -2717,7 +2717,8 @@ flight, and a provider that keeps its completions in itself answers them only wh
 which a wait inside the instance's own drop would come before; so ending drops the provider first.
 Running the suite found the wait doing its job -- two tests ended an instance while holding a
 completion, and hung -- and those tests were the ones to change. Recorded in DI-D-45 for
-confirmation.
+confirmation, which the engineer gave as written: "di-3.2.8: confirmed!" With it DI-3.2 -- dioring
+over the ring crate, construction through ending -- is complete.
 
 ## Open, not yet discussed
 

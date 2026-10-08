@@ -1612,3 +1612,42 @@ How the refusal and the ending path are built is [DI-D-45](DESIGN-NOTES.md#di-d-
   kernel operation and provider call in flight and returning `Leftovers`
   ([DI-D-25](DESIGN-NOTES.md#di-d-25)), with no callback after the end and tracing rather than
   panicking while unwinding.
+
+## Moved 2026-10-08 18:15:04 -04:00 -- DI-3.2.8 and DI-3.2: dioring over windows-ioring-sys
+
+### <a id="di-328"></a>DI-3.2.8 -- The engineer confirmed [DI-D-45](DESIGN-NOTES.md#di-d-45) as built. *(completed 2026-10-08 18:15:04 -04:00)*
+
+"di-3.2.8: confirmed!" -- no point was amended. The item as written:
+
+**The engineer confirms or amends
+  [DI-D-45](DESIGN-NOTES.md#di-d-45)**, the shapes the assistant chose while implementing
+  `DI-3.2.7`: `FileBusy.in_flight` clearing at the kernel's completion; a suspect write, covered
+  or not, holding its file through its failure until the failure is resolved; the provider dropped
+  before ending waits; completions recorded after the end discarded unreported; and the `trace`
+  feature. A rejected point is reworked here, with its decision row amended.
+
+### <a id="di-32"></a>DI-3.2 -- dioring over `windows-ioring-sys`, implementing the contract in steps `DI-3.2.1` to `DI-3.2.8`, from construction through ending. *(completed 2026-10-08 18:15:04 -04:00)*
+
+Each step is archived above under its own anchor. The item as written:
+
+**dioring over `windows-ioring-sys`**, implementing the contract in
+  [CONTRACT.md](CONTRACT.md), in the steps `DI-3.2.1` to `DI-3.2.8` below; checked when the last of
+  them is. Re-planned 2026-10-07: as one item it covered the whole contract, and two of its
+  requirements sat on items numbered after it. Each step lands what it implements, with its tests,
+  and adds to the trait only the methods it implements -- the crate is unreleased, so the trait
+  grows rather than shipping `todo!()` bodies. Two dependencies on later items were settled by the
+  engineer on 2026-10-07, each by bringing the work forward:
+  - **The worked-example doctests** land in `DI-3.2.4`, on a fault seam built there, rather than
+    waiting for the fault-injecting implementation, `DI-3.3`.
+  - **The conformance oracle** ([DI-D-24](DESIGN-NOTES.md#di-d-24)), formerly `DI-3.7`, is folded
+    into these steps: `DI-3.2.2.1` builds it, and each later step adds the rules it implements, so
+    dioring's own tests bind to it from the start. It is a reusable checker over the event stream,
+    owned by dioring, that every implementation of the trait runs in its tests -- dioring's own,
+    the fault-injecting one (`DI-3.3`), and layers above. Modelled on `windows-file-watcher`'s
+    `ContractChecker`: it accepts the legal-but-surprising sequences as carefully as it rejects the
+    illegal ones, and says which rules the stream cannot show.
+
+  **Every later step that adds a trait operation a consumer calls on a live instance also adds its
+  `&self` form to `EntryDelivery`'s `DeliveryHandle`** ([DI-D-32](DESIGN-NOTES.md#di-d-32)): the
+  handle mirrors those operations rather than lending the instance, so nothing adds them for it.
+  `pop` and `readiness` stay off it.
