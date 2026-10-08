@@ -27,7 +27,7 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
 
-use super::durability::{Due, Durability, Event as Synthesized, Flush};
+use super::durability::{Due, Durability, Event as Synthesized, Flush, WriteEnd};
 use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, Lineage};
@@ -166,7 +166,7 @@ where
                     }
                     Err(error) => Outcome::Failed(error),
                 };
-                let succeeded = matches!(outcome, Outcome::Transferred(_));
+                let end = WriteEnd::of(&outcome);
                 // The completion goes on the queue before anything it makes due, so a `Durable` it
                 // leads to follows it (guarantee 5).
                 self.append(
@@ -180,7 +180,10 @@ where
                     }),
                 );
                 match kind {
-                    OpKind::Write { .. } => core.lineage.completed(id, succeeded),
+                    OpKind::Write { .. } => match end {
+                        Some(end) => core.lineage.completed(id, end),
+                        None => Due::default(),
+                    },
                     OpKind::Read => Due::default(),
                 }
             }
@@ -280,9 +283,25 @@ where
                     by,
                 },
                 Synthesized::Failed(failed) => Entry::Failed(failed),
-                Synthesized::Abandoned { failure, suspect } => {
-                    Entry::Abandoned { failure, suspect }
-                }
+                Synthesized::Abandoned {
+                    failure,
+                    suspect,
+                    markings,
+                } => Entry::Abandoned {
+                    failure,
+                    suspect,
+                    markings,
+                },
+                Synthesized::Healed {
+                    failure,
+                    suspect,
+                    markings,
+                } => Entry::Healed {
+                    failure,
+                    suspect,
+                    markings,
+                },
+                Synthesized::Marked { failure, marking } => Entry::Marked { failure, marking },
             };
             self.append(core, entry);
         }

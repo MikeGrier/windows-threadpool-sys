@@ -13,6 +13,7 @@
 mod contract;
 mod delivery;
 mod dioring;
+mod error_code;
 #[cfg(test)]
 mod fake;
 mod ids;
@@ -25,15 +26,16 @@ pub use contract::{
     RegisteredBufferRing, TokenOf,
 };
 pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
-pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal};
+pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal, TimeBase};
+pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
 pub use provider::{DomainCompletion, DomainRequest, DurabilityProvider, FileWrites, FlushRequest};
 pub use types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, Failed,
     FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation, ImportScope,
-    Leftovers, LineageBusy, LineageInfo, OpCompletion, OpKind, Outcome, PushError, PushRefusal,
-    ReadOptions, RemoveFileError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
-    SuspectSet, SuspectWrite, WriteCaching, WriteOptions,
+    Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion, OpKind, Outcome,
+    PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution, ResolveError, ResolveRefusal,
+    RetireLineageError, SuspectSet, SuspectWrite, WriteCaching, WriteOptions,
 };
 // The types the contract's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.

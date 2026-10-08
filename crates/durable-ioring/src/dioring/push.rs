@@ -14,6 +14,7 @@ use windows_ioring_sys::{
     RegisteredSpan, WriteCaching as RingCaching,
 };
 
+use super::durability::Accepted;
 use super::{Dioring, FileSlot, Sidecar, TimeBase};
 use crate::contract::{EpochId, PushResult};
 use crate::ids::{DioringIds, Lineage, OpId};
@@ -52,10 +53,13 @@ where
             });
         }
         let caching = ring_caching(options.caching);
+        // A transfer is never longer than the `u32` length the ring takes.
+        let len = u32::try_from(buffer.bytes_len()).unwrap_or(u32::MAX);
         self.issue(
             file,
             offset,
             OpKind::Write { epoch },
+            len,
             context,
             move |batch, slot, _, sidecar| match slot {
                 FileSlot::Registered { index, .. } => {
@@ -91,6 +95,7 @@ where
             file,
             offset,
             OpKind::Read,
+            0,
             context,
             move |batch, slot, _, sidecar| match slot {
                 FileSlot::Registered { index, .. } => {
@@ -125,6 +130,7 @@ where
             file,
             offset,
             OpKind::Write { epoch },
+            span.len,
             context,
             move |batch, slot, registered, sidecar| {
                 let registered = registered.expect("refusal() checked for a registration");
@@ -172,6 +178,7 @@ where
             file,
             offset,
             OpKind::Read,
+            0,
             context,
             move |batch, slot, registered, sidecar| {
                 let registered = registered.expect("refusal() checked for a registration");
@@ -254,7 +261,8 @@ where
     }
 
     /// Mint the next operation's identity, record it in the sidecar with the consumer's context,
-    /// push it through `push`, record a write in its lineage, and submit -- all under dioring's
+    /// push it through `push`, record a write -- asking to write `len` bytes -- in its lineage, and
+    /// submit -- all under dioring's
     /// lock, so the write is recorded before its completion can be.
     ///
     /// A submission that fails does not undo the push: the kernel leaves the entry in the
@@ -267,6 +275,7 @@ where
         file: FileKey,
         offset: u64,
         kind: OpKind<V<E>>,
+        len: u32,
         context: C,
         push: P,
     ) -> PushResult<Self>
@@ -323,14 +332,15 @@ where
             });
         }
         if let OpKind::Write { epoch } = kind {
-            core.lineage.pushed(
-                id,
-                epoch.id,
+            core.lineage.pushed(Accepted {
+                op: id,
+                epoch: epoch.id,
                 file,
-                record.target.flush_target(),
-                record.routing,
-                Arc::clone(&record.domains),
-            );
+                target: record.target.flush_target(),
+                routing: record.routing,
+                domains: Arc::clone(&record.domains),
+                len,
+            });
         }
         core.unsubmitted = batch.submit().is_err();
         // Only an accepted push spends an identity, so the identities of accepted pushes are

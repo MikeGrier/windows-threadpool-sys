@@ -5,15 +5,18 @@ use std::sync::Arc;
 
 use win_time_sys::InterruptClock;
 
-use super::{Due, Durability, Event, Flush, Routing, Sealing, State};
+use super::{Accepted, Due, Durability, Event, Flush, Routing, Sealing, State, WriteEnd};
 use crate::dioring::{DomainId, TimeBase};
+use crate::error_code::ErrorCode;
 use crate::ids::{DioringIds, FailureToken, InstanceId, Lineage as LineageId, OpId};
-use crate::types::{FileKey, SuspectWrite};
+use crate::types::{FileKey, MarkingKind, SuspectWrite};
 
 // Failures, their reach, and their resolution: DI-3.2.4.
 mod failures;
 // Failure stamps, from the clock the core holds: WT-2.2.2.
 mod stamps;
+// Markings, and a failure's final record: DI-3.2.4.2.
+mod markings;
 
 type Lineage = Durability<u64, &'static str>;
 
@@ -24,6 +27,14 @@ const DEFAULT: Routing = Routing {
     default: true,
     provider: false,
 };
+/// The byte count every write here asks to write.
+const LEN: u32 = 8;
+/// A write that transferred everything it asked to.
+const FULL: WriteEnd = WriteEnd::Transferred(LEN);
+/// `ERROR_IO_DEVICE`, the code a failed write here reports.
+const IO_DEVICE: ErrorCode = ErrorCode::from_win32(1117);
+/// A write that completed as failed.
+const FAILED: WriteEnd = WriteEnd::Failed(Some(IO_DEVICE));
 
 fn lineage() -> Lineage {
     Durability::new(
@@ -81,7 +92,15 @@ impl Ops {
         };
         self.next += 1;
         let domains: Arc<[DomainId]> = domains.iter().map(|&d| DomainId(d)).collect();
-        lineage.pushed(op, epoch, file, target(file), routing, domains);
+        lineage.pushed(Accepted {
+            op,
+            epoch,
+            file,
+            target: target(file),
+            routing,
+            domains,
+            len: LEN,
+        });
         op
     }
 }
@@ -101,7 +120,11 @@ enum Seen {
     Durable(u64),
     Blocked(u64, u64),
     Failed(u64, Vec<u64>),
-    Abandoned(u64, Vec<u64>),
+    /// Failure, suspect writes, and each marking's write and kind.
+    Abandoned(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
+    Healed(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
+    /// Failure, the write marked, and how.
+    Marked(u64, u64, MarkingKind),
 }
 
 fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
@@ -114,11 +137,26 @@ fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
             Event::Durable(through) => Seen::Durable(*through),
             Event::Blocked { through, by } => Seen::Blocked(*through, by.seq),
             Event::Failed(failed) => Seen::Failed(failed.id.seq, ops(failed.suspect.writes())),
-            Event::Abandoned { failure, suspect } => {
-                Seen::Abandoned(failure.seq, ops(suspect.writes()))
+            Event::Abandoned {
+                failure,
+                suspect,
+                markings,
+            } => Seen::Abandoned(failure.seq, ops(suspect.writes()), marks(markings)),
+            Event::Healed {
+                failure,
+                suspect,
+                markings,
+            } => Seen::Healed(failure.seq, ops(suspect.writes()), marks(markings)),
+            Event::Marked { failure, marking } => {
+                Seen::Marked(failure.seq, marking.write.seq, marking.kind)
             }
         })
         .collect()
+}
+
+/// Markings by their write's sequence number and kind.
+fn marks(markings: &[crate::types::Marking<DioringIds<u64>>]) -> Vec<(u64, MarkingKind)> {
+    markings.iter().map(|m| (m.write.seq, m.kind)).collect()
 }
 
 fn durable(due: &Due<u64, &'static str>) -> Vec<u64> {
@@ -174,9 +212,9 @@ fn an_inconsistency_is_recorded_for_the_consumer_to_assert_on_not_panicked_on() 
     let mut lineage = lineage();
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    assert!(quiet(&lineage.completed(write, true)));
+    assert!(quiet(&lineage.completed(write, FULL)));
     assert_eq!(lineage.inconsistency(), None, "an ordinary completion");
-    assert!(quiet(&lineage.completed(write, true)));
+    assert!(quiet(&lineage.completed(write, FULL)));
     assert_eq!(lineage.inconsistency(), Some("a write completed twice"));
 
     let mut lineage = self::lineage();
@@ -211,7 +249,7 @@ fn a_seal_waits_for_its_writes_then_flushes_their_file() {
     );
     assert_eq!(lineage.state(1), State::Pending);
 
-    let due = lineage.completed(write, true);
+    let due = lineage.completed(write, FULL);
     assert_eq!(due.flushes, [flush(2, A)]);
     assert!(due.events.is_empty(), "the flush has not answered");
 
@@ -237,7 +275,7 @@ fn a_seal_flushes_each_file_once_and_waits_for_every_flush() {
         ops.push(&mut lineage, 2, A, DEFAULT),
     ];
     for write in writes {
-        assert!(quiet(&lineage.completed(write, true)));
+        assert!(quiet(&lineage.completed(write, FULL)));
     }
     let due = submitted(lineage.seal(2));
     assert_eq!(due.flushes, [flush(2, A), flush(2, B)]);
@@ -250,7 +288,7 @@ fn a_failed_write_is_named_to_no_flush() {
     let mut lineage = lineage();
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    lineage.completed(write, false);
+    lineage.completed(write, FAILED);
     let due = submitted(lineage.seal(1));
     assert!(due.flushes.is_empty());
     assert_eq!(seen(&due), [Seen::Durable(1)]);
@@ -279,7 +317,7 @@ fn asking_again_reports_the_state_and_changes_nothing() {
         "a request below does not lower the seal"
     );
 
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     lineage.flushed(3, A, Ok(()));
     assert_eq!(already(lineage.seal(1)), State::Durable);
 }
@@ -290,8 +328,8 @@ fn a_later_seal_done_first_waits_for_the_earlier_one() {
     let mut ops = Ops::new();
     let first = ops.push(&mut lineage, 1, A, DEFAULT);
     let second = ops.push(&mut lineage, 2, B, DEFAULT);
-    lineage.completed(first, true);
-    lineage.completed(second, true);
+    lineage.completed(first, FULL);
+    lineage.completed(second, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     assert_eq!(submitted(lineage.seal(2)).flushes, [flush(2, B)]);
 
@@ -314,8 +352,8 @@ fn each_write_is_named_by_the_first_seal_at_or_above_it_and_by_no_other() {
     let mut ops = Ops::new();
     let low = ops.push(&mut lineage, 1, A, DEFAULT);
     let high = ops.push(&mut lineage, 2, B, DEFAULT);
-    lineage.completed(low, true);
-    lineage.completed(high, true);
+    lineage.completed(low, FULL);
+    lineage.completed(high, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     lineage.flushed(1, A, Ok(()));
     assert_eq!(
@@ -335,7 +373,7 @@ fn a_seal_names_completed_writes_by_epoch_not_by_push_order() {
         ops.push(&mut lineage, 4, A, DEFAULT),
     ];
     for write in writes {
-        lineage.completed(write, true);
+        lineage.completed(write, FULL);
     }
     assert_eq!(
         submitted(lineage.seal(4)).flushes,
@@ -352,9 +390,9 @@ fn a_seal_waits_for_a_lower_write_in_flight_while_a_higher_one_has_completed() {
     let mut ops = Ops::new();
     let lower = ops.push(&mut lineage, 1, A, DEFAULT);
     let higher = ops.push(&mut lineage, 2, B, DEFAULT);
-    lineage.completed(higher, true);
+    lineage.completed(higher, FULL);
     assert!(quiet(&submitted(lineage.seal(2))));
-    let due = lineage.completed(lower, true);
+    let due = lineage.completed(lower, FULL);
     assert_eq!(due.flushes, [flush(2, A), flush(2, B)]);
 }
 
@@ -367,7 +405,7 @@ fn a_write_a_provider_must_answer_for_leaves_its_seal_pending() {
         provider: true,
     };
     let write = ops.push(&mut lineage, 1, A, only);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     assert!(
         quiet(&submitted(lineage.seal(1))),
         "no default flush, and no provider yet"
@@ -384,7 +422,7 @@ fn a_file_both_answer_for_is_flushed_and_still_waits_for_the_provider() {
         provider: true,
     };
     let write = ops.push(&mut lineage, 1, A, both);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     assert!(quiet(&lineage.flushed(1, A, Ok(()))));
     assert_eq!(lineage.state(1), State::Pending);

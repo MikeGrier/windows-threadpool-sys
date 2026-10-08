@@ -25,6 +25,8 @@ mod seals;
 mod failures;
 // Failure stamps, from the instance's clock: WT-2.2.2.
 mod stamps;
+// Markings, and a failure's final record: DI-3.2.4.2.
+mod markings;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

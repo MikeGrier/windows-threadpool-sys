@@ -113,6 +113,18 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
         "the heal holds it"
     );
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
+    match harness.next_entry() {
+        Entry::Healed {
+            failure,
+            suspect,
+            markings,
+        } => {
+            assert_eq!(failure, failed.id);
+            assert_eq!(suspect.writes(), failed.suspect.writes());
+            assert!(markings.is_empty(), "nothing happened to 1's writes after");
+        }
+        other => panic!("expected Healed before any Durable, got {other:?}"),
+    }
     for id in [1, 2] {
         match harness.next_entry() {
             Entry::Durable { through } => assert_eq!(through, harness.epoch(id)),
@@ -147,7 +159,9 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
     );
     resolve(&mut harness, vec![(failed.token, Resolution::Abandon)]);
     match harness.next_entry() {
-        Entry::Abandoned { failure, suspect } => {
+        Entry::Abandoned {
+            failure, suspect, ..
+        } => {
             assert_eq!(failure, failed.id);
             assert_eq!(suspect.writes().len(), 2);
         }

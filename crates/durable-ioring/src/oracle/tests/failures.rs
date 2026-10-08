@@ -46,6 +46,15 @@ fn abandoned(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
     Entry::Abandoned {
         failure: id,
         suspect: suspect(writes),
+        markings: Vec::new(),
+    }
+}
+
+fn healed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
+    Entry::Healed {
+        failure: id,
+        suspect: suspect(writes),
+        markings: Vec::new(),
     }
 }
 
@@ -146,7 +155,7 @@ fn a_failure_reaching_back_past_a_reported_durable_is_a_violation() {
 }
 
 #[test]
-fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
+fn durable_past_a_failure_is_a_violation_until_its_healed_or_abandoned_entry() {
     let instance = InstanceId::next();
     let w0 = (op(instance, 0), epoch(instance, 1));
     let durable: TestEntry = Entry::Durable {
@@ -169,6 +178,16 @@ fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
 
     let mut oracle = setup();
     oracle.healed(failure(instance, 0));
+    assert!(
+        matches!(
+            oracle.observe(&durable),
+            Err(Violation::DurableThroughFailure { .. })
+        ),
+        "healed by the consumer, but the heal has not taken effect"
+    );
+    oracle
+        .observe(&healed(failure(instance, 0), &[w0]))
+        .expect("the heal took effect");
     oracle.observe(&durable).expect("healed");
 
     let mut oracle = setup();

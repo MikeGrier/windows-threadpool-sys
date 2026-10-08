@@ -21,6 +21,13 @@
 //! abandoning makes its epochs abandoned at once, and a heal takes effect when the first seal made
 //! after it finishes with every flush successful.
 //!
+//! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
+//! what happens to its writes afterwards: a suspect write that completes failed or short, and one
+//! whose own file is then flushed successfully, each add a marking to every unresolved failure
+//! suspecting it, appended to the failure's record and reported as an entry of its own. They
+//! change nothing the mark, a hold or a resolution depends on. A failure abandoned or healed stops
+//! gaining them; its `Abandoned` or `Healed` entry carries the record as it ended.
+//!
 //! **Time** (DI-D-37, DI-D-38). A failure's observation time is read inside the transition that
 //! records it, from the clock the core holds -- `InterruptClock` unless the instance was given
 //! another, a mock in these tests -- so stamps are taken in observation order, and a `Steady` clock
@@ -41,10 +48,11 @@ use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
 
 use super::{DomainId, TimeBase};
 use crate::contract::EpochId;
+use crate::error_code::ErrorCode;
 use crate::ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
 use crate::types::{
-    Cause, Epoch, Failed, FailureInfo, FileKey, Resolution, ResolveError, ResolveRefusal,
-    SuspectSet, SuspectWrite,
+    Cause, Epoch, Failed, FailureInfo, FileKey, Marking, MarkingKind, Outcome, Resolution,
+    ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
 #[cfg(test)]
@@ -115,7 +123,38 @@ pub(crate) enum Event<E: EpochId + 'static> {
     Abandoned {
         failure: FailureId,
         suspect: SuspectSet<V<E>>,
+        markings: Vec<Marking<V<E>>>,
     },
+    Healed {
+        failure: FailureId,
+        suspect: SuspectSet<V<E>>,
+        markings: Vec<Marking<V<E>>>,
+    },
+    Marked {
+        failure: FailureId,
+        marking: Marking<V<E>>,
+    },
+}
+
+/// How a write ended, as the core needs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WriteEnd {
+    /// Completed, with the byte count its completion reported.
+    Transferred(u32),
+    /// Completed as failed, with the completion's code.
+    Failed(Option<ErrorCode>),
+}
+
+impl WriteEnd {
+    /// How a completion's outcome ended the write; `None` for one never issued, which no write
+    /// the core records can be.
+    pub(crate) fn of<I: crate::contract::Identities>(outcome: &Outcome<I>) -> Option<Self> {
+        match outcome {
+            Outcome::Transferred(transferred) => Some(Self::Transferred(*transferred)),
+            Outcome::Failed(error) => Some(Self::Failed(ErrorCode::of(error))),
+            Outcome::NeverIssued { .. } => None,
+        }
+    }
 }
 
 /// What a change made due.
@@ -164,6 +203,19 @@ enum Stage {
     Named(u64),
 }
 
+/// A write the ring accepted, as the core records it.
+pub(crate) struct Accepted<E, T> {
+    pub(crate) op: OpId,
+    pub(crate) epoch: E,
+    pub(crate) file: FileKey,
+    /// What its seal's flush is pushed against.
+    pub(crate) target: T,
+    pub(crate) routing: Routing,
+    pub(crate) domains: Arc<[DomainId]>,
+    /// The byte count it asks to write.
+    pub(crate) len: u32,
+}
+
 /// A write not yet covered successfully, failed, or passed by the mark.
 struct Write<E, T> {
     op: OpId,
@@ -172,6 +224,8 @@ struct Write<E, T> {
     target: T,
     routing: Routing,
     domains: Arc<[DomainId]>,
+    /// The byte count it asked to write, against which a completion is short.
+    len: u32,
     stage: Stage,
 }
 
@@ -219,6 +273,7 @@ struct Failure<E: EpochId + 'static> {
     cause: Cause<V<E>>,
     suspect: SuspectSet<V<E>>,
     observed: TimePoint<InterruptTime>,
+    markings: Vec<Marking<V<E>>>,
     /// The epochs of its suspect writes.
     epochs: BTreeSet<E>,
     standing: Standing,
@@ -317,15 +372,16 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// A write was accepted by the ring.
-    pub(crate) fn pushed(
-        &mut self,
-        op: OpId,
-        epoch: E,
-        file: FileKey,
-        target: T,
-        routing: Routing,
-        domains: Arc<[DomainId]>,
-    ) {
+    pub(crate) fn pushed(&mut self, write: Accepted<E, T>) {
+        let Accepted {
+            op,
+            epoch,
+            file,
+            target,
+            routing,
+            domains,
+            len,
+        } = write;
         debug_assert!(
             self.refuses(epoch).is_none(),
             "a write at or below the seal"
@@ -340,6 +396,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 target,
                 routing,
                 domains,
+                len,
                 stage: Stage::InFlight,
             },
         );
@@ -347,21 +404,30 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// A write completed. One that failed is reported on its own completion and is neither named
     /// to a flush nor suspected by a later failure (guarantee 1); a failure observed while it was
-    /// in flight keeps it, because suspect sets are frozen.
-    pub(crate) fn completed(&mut self, op: OpId, succeeded: bool) -> Due<E, T> {
+    /// in flight keeps it, because suspect sets are frozen, and marks it nullified. One that
+    /// completed short marks each failure suspecting it, and stays held.
+    pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T> {
+        let mut due = Due::default();
         let Some(write) = self.writes.get_mut(&op.seq) else {
             self.inconsistent("a write completed that was never recorded as pushed");
-            return Due::default();
+            return due;
         };
         if write.stage != Stage::InFlight {
             self.inconsistent("a write completed twice");
-            return Due::default();
+            return due;
         }
         let epoch = write.epoch;
-        if succeeded {
-            write.stage = Stage::Completed;
-        } else {
-            self.writes.remove(&op.seq);
+        match end {
+            WriteEnd::Transferred(transferred) => {
+                write.stage = Stage::Completed;
+                if transferred < write.len {
+                    self.mark(op, MarkingKind::Short { transferred }, &mut due);
+                }
+            }
+            WriteEnd::Failed(code) => {
+                self.writes.remove(&op.seq);
+                self.mark(op, MarkingKind::Nullified { code }, &mut due);
+            }
         }
         if let Some(count) = self.in_flight_by_epoch.get_mut(&epoch) {
             *count -= 1;
@@ -369,7 +435,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 self.in_flight_by_epoch.remove(&epoch);
             }
         }
-        self.advance(Due::default())
+        self.advance(due)
     }
 
     /// Seal every epoch at or below `through` (DI-D-9).
@@ -414,9 +480,21 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         match result {
             Ok(()) => {
                 // A write a provider also answers for stays until the provider has (DI-3.2.6).
-                self.writes.retain(|_, write| {
-                    write.stage != Stage::Named(seq) || write.file != file || write.routing.provider
-                });
+                let covered = |write: &Write<E, T>| {
+                    write.stage == Stage::Named(seq)
+                        && write.file == file
+                        && !write.routing.provider
+                };
+                let ops: Vec<OpId> = self
+                    .writes
+                    .values()
+                    .filter(|write| covered(write))
+                    .map(|write| write.op)
+                    .collect();
+                self.writes.retain(|_, write| !covered(write));
+                for op in ops {
+                    self.mark(op, MarkingKind::Covered, &mut due);
+                }
             }
             Err(error) => {
                 let reach = Reach::of_file(&entry.domains);
@@ -469,6 +547,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     due.events.push(Event::Abandoned {
                         failure: failure.id,
                         suspect: failure.suspect,
+                        markings: failure.markings,
                     });
                 }
                 Resolution::Heal => {
@@ -503,6 +582,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 cause: failure.cause.clone(),
                 suspect: failure.suspect.clone(),
                 observed: failure.observed,
+                markings: failure.markings.clone(),
                 token_live: match &failure.standing {
                     Standing::Open(live) => live.load(Ordering::Acquire),
                     Standing::Healing { .. } => true,
@@ -539,6 +619,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             cause: cause.clone(),
             suspect: suspect.clone(),
             observed,
+            markings: Vec::new(),
             epochs,
             standing: Standing::Open(live),
         });
@@ -550,6 +631,32 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             observed,
         }));
         id
+    }
+
+    /// Mark every unresolved failure that suspects `write` (DI-D-36), with one reading of the
+    /// clock, in observation order.
+    fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T>) {
+        let mut observed = None;
+        for failure in &mut self.failures {
+            let suspects = failure
+                .suspect
+                .writes()
+                .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)
+                .is_ok_and(|at| failure.suspect.writes()[at].op == write);
+            if !suspects {
+                continue;
+            }
+            let marking = Marking {
+                write,
+                observed: *observed.get_or_insert_with(|| self.clock.now()),
+                kind,
+            };
+            failure.markings.push(marking.clone());
+            due.events.push(Event::Marked {
+                failure: failure.id,
+                marking,
+            });
+        }
     }
 
     /// The first unresolved failure, in observation order, holding an epoch above the mark and at
@@ -580,7 +687,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// answered, advance the high-water mark, and answer the seals a failure holds.
     fn advance(&mut self, mut due: Due<E, T>) -> Due<E, T> {
         self.start_seals(&mut due);
-        self.finish_seals();
+        self.finish_seals(&mut due);
         while let Some(seal) = self.seals.front() {
             if !matches!(seal.stage, SealStage::Done { .. })
                 || self.blocking(seal.through).is_some()
@@ -651,8 +758,9 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// Mark every seal whose flushes have all answered as done. One whose flushes all succeeded
-    /// makes effective every heal made before it (DI-D-12 (c)).
-    fn finish_seals(&mut self) {
+    /// makes effective every heal made before it (DI-D-12 (c)), each reported by its `Healed`
+    /// entry.
+    fn finish_seals(&mut self, due: &mut Due<E, T>) {
         for index in 0..self.seals.len() {
             let SealStage::Flushing {
                 files,
@@ -669,8 +777,20 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             let seq = self.seals[index].seq;
             self.seals[index].stage = SealStage::Done { succeeded };
             if succeeded {
-                self.failures
-                    .retain(|f| !matches!(f.standing, Standing::Healing { after } if after <= seq));
+                let mut at = 0;
+                while at < self.failures.len() {
+                    if matches!(self.failures[at].standing, Standing::Healing { after } if after <= seq)
+                    {
+                        let failure = self.failures.remove(at);
+                        due.events.push(Event::Healed {
+                            failure: failure.id,
+                            suspect: failure.suspect,
+                            markings: failure.markings,
+                        });
+                    } else {
+                        at += 1;
+                    }
+                }
             }
         }
     }

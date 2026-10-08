@@ -49,30 +49,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.4.1** -- A write tagged with an abandoned epoch is refused as `EpochAbandoned`, open or sealed, per the engineer's decision DI-D-35. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3241)
 
-- [ ] **DI-3.2.4.2** -- **Nullifiers** ([DI-D-36](DESIGN-NOTES.md#di-d-36), the engineer's direction):
-  a suspect write that completes as failed after its failure was observed gains an append-only
-  marking in that failure's record, carrying the completion's error and when it was observed, so
-  the history can be reconciled after the fact. Reporting only: the mark, what holds it, and what
-  resolution needs are unchanged. Amends CONTRACT.md's "frozen ... and never grows" to "never gains
-  a write", and DI-D-12 (b). Everything DI-D-36 allows for is built here: markings in the inventory
-  and the `Abandoned` entry, and as queue entries of their own; a marking for a short write, with its
-  transferred count; a marking type open to further kinds, starting with a suspect write later
-  covered by a successful flush; and a failure's final record surviving its resolution, including a
-  heal, which needs an entry of its own. A `Failed` entry's own observation time lands first, with
-  the dependency, under win-time-sys' `WT-2.2.2`; every
-  failure, synchronous or asynchronous, carries its error code -- a failed completion's and a failed
-  flush's alike -- in a representation chosen here, which also settles how a consumer reads the code
-  without `windows-ioring-sys`' `IoRingErrorExt` (DI-D-34's question). Timestamps are interrupt time
-  ([DI-D-37](DESIGN-NOTES.md#di-d-37)). The oracle gains the rules: a nullifier names a write in the
-  set whose completion reported `Failed`, a short-write marking one whose completion was short, and
-  a covered marking one in a seal that later succeeded.
-
-  > **CROSS-COMPONENT PREREQUISITE:** a safe interrupt-time read, which dioring cannot write itself
-  > (DI-D-37). It comes from `win-time-sys`, created for it: component `crates/win-time-sys` ->
-  > `WT-M1` -> `WT-1.3` (interrupt time) -- landed, see
-  > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-13) -- and dioring's
-  > dependency on it, with the `Failed` entry's timestamp: `WT-M2` -> `WT-2.2.2` -- landed, see
-  > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-222).
+- [x] **DI-3.2.4.2** -- Markings: a failure records what happens to its suspect writes afterwards -- nullified, short, or covered -- reports each as `Marked`, and ends with a final record, `Abandoned` or the new `Healed`; every failure carries its error code, read with `ErrorCode::of`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3242)
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage

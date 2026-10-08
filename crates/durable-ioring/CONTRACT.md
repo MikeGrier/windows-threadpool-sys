@@ -230,8 +230,9 @@ that has not been covered successfully. Three consequences:
 - It includes writes still in flight when the failure arrived, and writes pushed after the failing
   flush itself, which the ring does not hold back. A bound based on *completion* order would be
   unsound: a write accepted before the failure can have its completion posted after it.
-- It is **frozen** when the failure is observed and never grows. A write pushed afterwards was
-  accepted after the failure, and is covered successfully later in the ordinary way.
+- It is **frozen** when the failure is observed and never gains a write. A write pushed afterwards
+  was accepted after the failure, and is covered successfully later in the ordinary way. What
+  happens to its writes afterwards is recorded as markings (below), never as a change to the set.
 - It is defined by push order, not by tag. So failures and epochs are **many-to-many**: one failure
   can span a sealed epoch, a pending one and an open one, and one open epoch can sit in several
   failures. The example at the end of this document shows both.
@@ -279,12 +280,35 @@ clock tick, and a stamp is a report: nothing the implementation decides depends 
 reads it with `InterruptClock`, or with the clock it was given by `Dioring::with_clock` -- a test's
 mock, for one -- which must promise never to run backwards (`win-time-sys`' `Steady`).
 
+### What happens to a suspect write afterwards
+
+A failure's record gains a **marking** whenever one of its suspect writes does something after the
+failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)):
+
+- **Nullified** -- the write completed as failed, so it did not happen. The marking carries the
+  completion's error code.
+- **Short** -- the write completed short, carrying the byte count its completion reported.
+- **Covered** -- the write's own file was flushed successfully, so its bytes are on the device, even
+  if the seal it belongs to failed on another file.
+
+The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
+reported by a `Marked` entry, kept in the inventory, and carried by the failure's final record. It
+exists so the history can be reconciled after the fact, and it **changes nothing**: not the
+high-water mark, not what a failure holds, and not what resolving it needs. A failure gains
+markings until it is abandoned or its heal takes effect.
+
+**Error codes.** Every failure carries its error's code, whichever way it arrives: a failed
+completion's `Outcome::Failed` error and a failed flush's `Cause::Flush` error both hold one, read
+with `ErrorCode::of`, and a nullifier carries it as an `ErrorCode`. It is the `HRESULT` the I/O
+ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`.
+
 ### Resolving a failure
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
   sealed (guarantee 6 forces that). The heal takes effect when the commit of the **first seal made
   after the heal** completes successfully -- so whatever was re-issued before the heal is covered
-  successfully later. Then the failure is resolved as healed.
+  successfully later. Then the failure is resolved as healed, and a `Healed` entry reports it --
+  before any `Durable` it lets through.
 - **Abandon.** The consumer declares the suspect writes lost. Takes effect immediately.
 - **Close.** The consumer sets the failure aside, unresolved; it stays in the inventory.
 
@@ -304,10 +328,11 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 
 ### The inventory
 
-Unresolved failures can be enumerated and each queried for its identity, cause, suspect set and the
-time it was observed.
+Unresolved failures can be enumerated and each queried for its identity, cause, suspect set, the
+time it was observed, and its markings so far.
 Resolved failures leave no memory. Because identities are never reused, an identity no longer in the
-inventory means resolved; the `Durable` or `Abandoned` event was the record.
+inventory means resolved; its `Healed` or `Abandoned` entry was the final record, with its suspect
+set and every marking it gained.
 
 ### Importing a failure
 
@@ -321,7 +346,7 @@ promptly the consumer learns.
 ## The completion queue
 
 The consumer pops **dioring's** completion queue, not the kernel ring's. It holds every completion
-the consumer should observe -- reads and writes, passed through -- plus five events dioring
+the consumer should observe -- reads and writes, passed through -- plus seven events dioring
 synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-30)):
 
 | Event | When |
@@ -329,7 +354,9 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 | `Durable { through: n }` | the high-water mark has reached n |
 | `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a flush, or a provider's domain, failed; or an import) |
 | `Blocked { through: n, by: failure }` | a request's flushes succeeded, but an unresolved failure at or below n prevents reporting it |
-| `Abandoned { failure, suspect }` | the consumer abandoned a failure |
+| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified, completed short, or covered |
+| `Abandoned { failure, suspect, markings }` | the consumer abandoned a failure: its final record |
+| `Healed { failure, suspect, markings }` | a heal took effect: the failure's final record |
 | `LineageEnded { lineage, abandoned_through }` | the consumer ended a lineage; every epoch of it not yet durable is abandoned |
 
 ## The readiness signal

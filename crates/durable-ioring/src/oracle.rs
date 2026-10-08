@@ -29,15 +29,23 @@
 //! - **`Durable` follows the writes it covers** (guarantee 5): it arrives after the completion of
 //!   every write of n's lineage tagged at or below n.
 //! - **`Durable` waits for every failure holding it** (DI-D-12 (f)): it passes no epoch of its
-//!   lineage that a reported failure contains, unless that failure was healed or abandoned.
+//!   lineage that a reported failure contains until that failure's `Healed` or `Abandoned` entry
+//!   has been observed.
 //! - **A failure is new, and suspects only accepted writes** (DI-D-12 (b)): its identity was never
 //!   reported before, and every suspect write was accepted as a write tagged with the epoch
 //!   reported, listed in push order.
 //! - **Finality** (guarantee 3): no suspect write is of an epoch its lineage was already reported
 //!   durable through.
-//! - **Failure stamps never decrease** (DI-D-38): each `Failed` was observed at or after the
-//!   `Failed` before it in the stream. Equal stamps are legal -- interrupt time's resolution is the
-//!   system clock tick -- and so is any gap.
+//! - **Stamps never decrease** (DI-D-38): each `Failed` and each `Marked` was observed at or after
+//!   the stamped entry before it in the stream. Equal stamps are legal -- interrupt time's
+//!   resolution is the system clock tick -- and so is any gap.
+//! - **A marking names what happened** (DI-D-36): `Marked` names a live failure and one of its
+//!   suspect writes, whose completion has been observed and agrees with the marking -- a
+//!   nullifier's write completed as failed, with the same code; a short marking's completed with
+//!   the byte count it carries; a covered marking's completed with a transfer.
+//! - **A final record is the record** (DI-D-36): `Abandoned` and `Healed` name a live failure, with
+//!   the suspect set `Failed` reported and every marking `Marked` reported for it, in order; and
+//!   `Healed` only for a failure the consumer healed.
 //! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
 //!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
 //!   containing an epoch of n's lineage at or below n.
@@ -61,7 +69,11 @@
 //!   observed things in and on the files' declared flush domains, neither of which the stream
 //!   carries; so the members are checked, not the set's extent.
 //! - **When a heal takes effect.** It waits for a seal the stream cannot tell apart from others,
-//!   so a `Durable` that passes a healed failure is accepted whenever it comes.
+//!   so a `Healed` entry is accepted whenever it comes after the heal.
+//! - **Which markings should have been made.** A suspect write's completion is in the stream, but
+//!   whether it was in flight when the failure was observed, how long it asked to write, and
+//!   whether its file has since been flushed are not; so each marking is checked against what it
+//!   names, and a missing one is not detected.
 //! - **`LineageEnded`**, accepted unexamined until the step that produces it adds its rules.
 //! - **What a stamp's value is**: how it relates to wall-clock time, or to any clock outside the
 //!   instance. The clock is the instance's to choose (DI-D-38), and a test's mock may run at any
@@ -86,7 +98,8 @@ use win_time_sys::{InterruptTime, TimePoint};
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
-use crate::types::{Entry, Epoch, OpKind, SuspectWrite};
+use crate::error_code::ErrorCode;
+use crate::types::{Entry, Epoch, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};
 
 #[cfg(test)]
 mod tests;
@@ -181,7 +194,7 @@ pub enum Violation<V: Identities> {
         /// The write.
         op: V::OpId,
     },
-    /// A `Failed` stamped earlier than the `Failed` before it (DI-D-38).
+    /// A `Failed` or `Marked` stamped earlier than the stamped entry before it (DI-D-38).
     StampWentBackwards {
         /// The failure.
         failure: V::FailureId,
@@ -212,6 +225,40 @@ pub enum Violation<V: Identities> {
         /// The failure.
         failure: V::FailureId,
     },
+    /// `Abandoned` or `Healed` with markings other than those `Marked` reported for the failure.
+    MarkingsChanged {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Healed` for a failure not reported, already ended, or not healed by the consumer.
+    HealedUnknown {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Healed` with a suspect set other than the one `Failed` reported.
+    HealedSuspectChanged {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Marked` for a failure not reported, or already ended.
+    MarkedUnknown {
+        /// The failure.
+        failure: V::FailureId,
+    },
+    /// `Marked` naming a write the failure does not suspect.
+    MarkingNotSuspect {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write named.
+        write: V::OpId,
+    },
+    /// `Marked` contradicting the write's own completion, or before it.
+    MarkingContradicted {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write named.
+        write: V::OpId,
+    },
     /// `Blocked` by a failure that is not live, or holds no epoch at or below the request.
     BlockedByUnrelated {
         /// What was reported.
@@ -221,10 +268,18 @@ pub enum Violation<V: Identities> {
     },
 }
 
-/// A failure reported and not yet abandoned.
+/// A failure reported and not yet ended by `Abandoned` or `Healed`.
 struct Reported<V: Identities> {
     suspect: Vec<(V::OpId, Epoch<V>)>,
+    /// The consumer healed it; its `Healed` entry may follow.
     healed: bool,
+    markings: Vec<Marking<V>>,
+}
+
+/// How a write's completion ended it, kept for the markings that may name it.
+enum Ended {
+    Transferred(u32),
+    Failed(Option<ErrorCode>),
 }
 
 /// The contract's rules over one instance's event stream. `C` is the consumer's context type;
@@ -242,8 +297,10 @@ pub struct ConformanceOracle<V: Identities, C> {
     failures: HashMap<V::FailureId, Reported<V>>,
     /// Every failure identity reported.
     failure_ids: HashSet<V::FailureId>,
-    /// The latest `Failed` entry's stamp.
+    /// The latest stamped entry's stamp.
     last_stamp: Option<TimePoint<InterruptTime>>,
+    /// How every completed write ended.
+    ended: HashMap<V::OpId, Ended>,
     /// The epochs of every abandoned failure, by lineage.
     abandoned: HashMap<V::Lineage, BTreeSet<V::EpochId>>,
 }
@@ -260,6 +317,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             failures: HashMap::new(),
             failure_ids: HashSet::new(),
             last_stamp: None,
+            ended: HashMap::new(),
             abandoned: HashMap::new(),
         }
     }
@@ -329,9 +387,21 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             Entry::Failed(failed) => {
                 return self.failed(failed.id, failed.suspect.writes(), failed.observed);
             }
-            Entry::Abandoned { failure, suspect } => {
-                return self.abandoned(*failure, suspect.writes());
+            Entry::Abandoned {
+                failure,
+                suspect,
+                markings,
+            } => {
+                return self.abandoned(*failure, suspect.writes(), markings);
             }
+            Entry::Healed {
+                failure,
+                suspect,
+                markings,
+            } => {
+                return self.healed_entry(*failure, suspect.writes(), markings);
+            }
+            Entry::Marked { failure, marking } => return self.marked(*failure, marking),
             Entry::Blocked { through, by } => return self.blocked(*through, *by),
             Entry::LineageEnded { .. } => return Ok(()),
         };
@@ -353,6 +423,82 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         if pushed.context != completion.context {
             return Err(Violation::ContextChanged { op });
+        }
+        if let OpKind::Write { .. } = completion.kind {
+            let ended = match &completion.outcome {
+                Outcome::Transferred(transferred) => Some(Ended::Transferred(*transferred)),
+                Outcome::Failed(error) => Some(Ended::Failed(ErrorCode::of(error))),
+                Outcome::NeverIssued { .. } => None,
+            };
+            if let Some(ended) = ended {
+                self.ended.insert(op, ended);
+            }
+        }
+        Ok(())
+    }
+
+    /// The stamp rule (DI-D-38), over every stamped entry.
+    fn stamped(
+        &mut self,
+        failure: V::FailureId,
+        observed: TimePoint<InterruptTime>,
+    ) -> Result<(), Violation<V>> {
+        match self.last_stamp.replace(observed) {
+            Some(previous) if observed < previous => Err(Violation::StampWentBackwards {
+                failure,
+                observed,
+                previous,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    fn marked(&mut self, failure: V::FailureId, marking: &Marking<V>) -> Result<(), Violation<V>> {
+        if !self.failures.contains_key(&failure) {
+            return Err(Violation::MarkedUnknown { failure });
+        }
+        self.stamped(failure, marking.observed)?;
+        let write = marking.write;
+        let agrees = match (marking.kind, self.ended.get(&write)) {
+            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => code == *ended,
+            (MarkingKind::Short { transferred }, Some(Ended::Transferred(ended))) => {
+                transferred == *ended
+            }
+            (MarkingKind::Covered, Some(Ended::Transferred(_))) => true,
+            _ => false,
+        };
+        let reported = self
+            .failures
+            .get_mut(&failure)
+            .expect("checked above that the failure is live");
+        if !reported.suspect.iter().any(|(op, _)| *op == write) {
+            return Err(Violation::MarkingNotSuspect { failure, write });
+        }
+        if !agrees {
+            return Err(Violation::MarkingContradicted { failure, write });
+        }
+        reported.markings.push(marking.clone());
+        Ok(())
+    }
+
+    fn healed_entry(
+        &mut self,
+        failure: V::FailureId,
+        suspect: &[SuspectWrite<V>],
+        markings: &[Marking<V>],
+    ) -> Result<(), Violation<V>> {
+        if !self.failures.get(&failure).is_some_and(|r| r.healed) {
+            return Err(Violation::HealedUnknown { failure });
+        }
+        let reported = self
+            .failures
+            .remove(&failure)
+            .expect("checked above that the failure is live");
+        if !same_suspects(&reported, suspect) {
+            return Err(Violation::HealedSuspectChanged { failure });
+        }
+        if reported.markings != markings {
+            return Err(Violation::MarkingsChanged { failure });
         }
         Ok(())
     }
@@ -379,9 +525,11 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         if let Some(op) = uncompleted {
             return Err(Violation::DurableBeforeCompletion { through, op });
         }
-        if let Some(failure) = self.failures.iter().find_map(|(id, reported)| {
-            (!reported.healed && holds(reported, through)).then_some(*id)
-        }) {
+        if let Some(failure) = self
+            .failures
+            .iter()
+            .find_map(|(id, reported)| holds(reported, through).then_some(*id))
+        {
             return Err(Violation::DurableThroughFailure { through, failure });
         }
         let point = self.durable.entry(through.lineage).or_insert(through.id);
@@ -400,15 +548,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         if !self.failure_ids.insert(failure) {
             return Err(Violation::DuplicateFailure { failure });
         }
-        if let Some(previous) = self.last_stamp.replace(observed)
-            && observed < previous
-        {
-            return Err(Violation::StampWentBackwards {
-                failure,
-                observed,
-                previous,
-            });
-        }
+        self.stamped(failure, observed)?;
         for write in suspect {
             if self.writes.get(&write.op) != Some(&write.epoch) {
                 return Err(Violation::SuspectNotPushed {
@@ -435,6 +575,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             Reported {
                 suspect: suspect.iter().map(|w| (w.op, w.epoch)).collect(),
                 healed: false,
+                markings: Vec::new(),
             },
         );
         Ok(())
@@ -444,17 +585,16 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         &mut self,
         failure: V::FailureId,
         suspect: &[SuspectWrite<V>],
+        markings: &[Marking<V>],
     ) -> Result<(), Violation<V>> {
         let Some(reported) = self.failures.remove(&failure) else {
             return Err(Violation::AbandonedUnknown { failure });
         };
-        if !reported
-            .suspect
-            .iter()
-            .copied()
-            .eq(suspect.iter().map(|w| (w.op, w.epoch)))
-        {
+        if !same_suspects(&reported, suspect) {
             return Err(Violation::AbandonedSuspectChanged { failure });
+        }
+        if reported.markings != markings {
+            return Err(Violation::MarkingsChanged { failure });
         }
         for (_, epoch) in reported.suspect {
             self.abandoned
@@ -491,6 +631,15 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             })
         }
     }
+}
+
+/// Whether a final record's suspect set is the one `Failed` reported.
+fn same_suspects<V: Identities>(reported: &Reported<V>, suspect: &[SuspectWrite<V>]) -> bool {
+    reported
+        .suspect
+        .iter()
+        .copied()
+        .eq(suspect.iter().map(|w| (w.op, w.epoch)))
 }
 
 /// Whether a reported failure contains an epoch of `through`'s lineage at or below it.

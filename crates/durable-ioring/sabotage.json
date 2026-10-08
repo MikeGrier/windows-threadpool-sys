@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The requested length push.rs records for a write is not checked through the ring: it matters only when a suspect write completes after its failure is observed, which needs the write in flight at that moment and no test can hold it there; the core's comparison against it is unit-tested, and so is the relay's mapping of a completion to how the write ended.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -98,8 +98,8 @@
       "file": "src/dioring/push.rs",
       "expect": "caught",
       "why": "The write's tag is what durability will be computed from (DI-3.2.3). The oracle's kind rule catches it in every test that writes.",
-      "find": ["            OpKind::Write { epoch },\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"],
-      "replace": ["            OpKind::Read,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"]
+      "find": ["            OpKind::Write { epoch },\n            len,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"],
+      "replace": ["            OpKind::Read,\n            len,\n            context,\n            move |batch, slot, _, sidecar| match slot {\n"]
     },
     {
       "name": "DI-3.2.2.1: operation identities are not advanced",
@@ -346,16 +346,16 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "Guarantee 3: a later failure never reaches back past a write covered successfully. Caught by the finality unit test.",
-      "find": ["                    write.stage != Stage::Named(seq) || write.file != file || write.routing.provider\n"],
-      "replace": ["                    true\n"]
+      "find": ["                self.writes.retain(|_, write| !covered(write));\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.4: a heal takes effect at a seal made before it",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (c): only a seal made after the heal covers what was re-issued before it. Caught by the unit test whose seal predates the heal.",
-      "find": ["                    .retain(|f| !matches!(f.standing, Standing::Healing { after } if after <= seq));\n"],
-      "replace": ["                    .retain(|f| !matches!(f.standing, Standing::Healing { .. }));\n"]
+      "find": ["                    if matches!(self.failures[at].standing, Standing::Healing { after } if after <= seq)\n"],
+      "replace": ["                    if matches!(self.failures[at].standing, Standing::Healing { .. })\n"]
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
@@ -418,8 +418,8 @@
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The oracle's statement of DI-D-12 (f), which the I/O tests bind to.",
-      "find": ["            (!reported.healed && holds(reported, through)).then_some(*id)\n"],
-      "replace": ["            false.then_some(*id)\n"]
+      "find": ["            .find_map(|(id, reported)| holds(reported, through).then_some(*id))\n"],
+      "replace": ["            .find_map(|(id, _)| false.then_some(*id))\n"]
     },
     {
       "name": "DI-3.2.4: the oracle accepts a suspect it never saw pushed",
@@ -506,16 +506,128 @@
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The first time fact, as the oracle checks it. Without the comparison every stamp is accepted, and a mock that broke its promise or a core that read its clock outside the lock would pass unnoticed.",
-      "find": ["            && observed < previous\n"],
-      "replace": ["            && false\n"]
+      "find": ["            Some(previous) if observed < previous => Err(Violation::StampWentBackwards {\n"],
+      "replace": ["            Some(previous) if false => Err(Violation::StampWentBackwards {\n"]
     },
     {
       "name": "WT-2.2.2: the oracle refuses equal stamps",
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The other direction of the same guard: interrupt time repeats a value for a whole system tick, so two failures in one tick carry equal stamps, and an oracle that refused them would reject a correct stream.",
-      "find": ["            && observed < previous\n"],
-      "replace": ["            && observed <= previous\n"]
+      "find": ["            Some(previous) if observed < previous => Err(Violation::StampWentBackwards {\n"],
+      "replace": ["            Some(previous) if observed <= previous => Err(Violation::StampWentBackwards {\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a suspect write that completes failed is not nullified",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The nullifier is the marking DI-D-36 exists for: without it a failure's record says nothing of a suspect write that did not happen, and reconciling the history after the fact is guesswork.",
+      "find": ["                self.mark(op, MarkingKind::Nullified { code }, &mut due);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.4.2: a full completion is marked short",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Short means fewer bytes than the write asked for. Counting an exact completion as short would mark every suspect write that completed normally, burying the ones that matter.",
+      "find": ["                if transferred < write.len {\n"],
+      "replace": ["                if transferred <= write.len {\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a short completion is not marked",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "A short write is durable only up to its count; a record that omits it overstates what reached the device.",
+      "find": ["                    self.mark(op, MarkingKind::Short { transferred }, &mut due);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.4.2: a flush covers every write of its seal, not its own file's",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Coverage is per file (DI-D-39): a seal that failed on one file has not committed that file's writes, so marking them covered -- and dropping them as covered -- is a wrong answer about what is on the device.",
+      "find": ["                    write.stage == Stage::Named(seq)\n                        && write.file == file\n"],
+      "replace": ["                    write.stage == Stage::Named(seq)\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: only the first failure suspecting a write is marked",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Failures and writes are many-to-many: a write two failures suspect belongs to both records, and each must say what happened to it.",
+      "find": ["            due.events.push(Event::Marked {\n                failure: failure.id,\n                marking,\n            });\n        }\n"],
+      "replace": ["            due.events.push(Event::Marked {\n                failure: failure.id,\n                marking,\n            });\n            break;\n        }\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a marking finds only the first suspect write",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The lookup is what ties a completion to the failures suspecting it; one that sees only the first write of each set loses the rest.",
+      "find": ["                .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)\n                .is_ok_and(|at| failure.suspect.writes()[at].op == write);\n"],
+      "replace": ["                .first()\n                .is_some_and(|suspect| suspect.op == write);\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a heal takes effect without its Healed entry",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
+      "find": ["                        due.events.push(Event::Healed {\n                            failure: failure.id,\n                            suspect: failure.suspect,\n                            markings: failure.markings,\n                        });\n"],
+      "replace": ["                        drop(failure);\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: the inventory reports no markings",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The inventory is where a consumer reads a live failure's record; reporting it without its markings hides what the stream already said.",
+      "find": ["                markings: failure.markings.clone(),\n"],
+      "replace": ["                markings: Vec::new(),\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a completion's code is lost on the way to the core",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Every failure carries its error code (DI-D-36); a nullifier that drops it records that a write failed but not how.",
+      "find": ["            Outcome::Failed(error) => Some(Self::Failed(ErrorCode::of(error))),\n"],
+      "replace": ["            Outcome::Failed(_) => Some(Self::Failed(None)),\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: the oracle accepts a nullifier with any code",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's check that a marking agrees with its write's completion is what binds the record to the stream; comparing kinds and not codes lets a wrong code through.",
+      "find": ["            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => code == *ended,\n"],
+      "replace": ["            (MarkingKind::Nullified { .. }, Some(Ended::Failed(_))) => true,\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: the oracle lets Durable pass a failure the consumer healed before its Healed entry",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The rule this item tightened: with Healed in the stream, a heal is in effect only once it is reported, and a Durable before then passed a failure still holding it.",
+      "find": ["            .find_map(|(id, reported)| holds(reported, through).then_some(*id))\n"],
+      "replace": ["            .find_map(|(id, reported)| (!reported.healed && holds(reported, through)).then_some(*id))\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: the oracle accepts an Abandoned record with other markings",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A final record is the record: one whose markings differ from those the stream reported is two histories of one failure.",
+      "find": ["            return Err(Violation::AbandonedSuspectChanged { failure });\n        }\n        if reported.markings != markings {\n"],
+      "replace": ["            return Err(Violation::AbandonedSuspectChanged { failure });\n        }\n        if false {\n"]
+    },
+    {
+      "name": "DI-3.2.4.2: a Win32 code is not masked to sixteen bits when wrapped",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "HRESULT_FROM_WIN32 keeps only the low sixteen bits; carrying more would set facility bits and name a different code.",
+      "find": ["            Self(((code & WIN32_CODE) | FROM_WIN32).cast_signed())\n"],
+      "replace": ["            Self((code | FROM_WIN32).cast_signed())\n"]
+    },
+    {
+      "name": "CONTROL: a covered write is recognised with its conditions reordered",
+      "file": "src/dioring/durability.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The three conditions are pure and independent, so their order changes no answer.",
+      "find": ["                    write.stage == Stage::Named(seq)\n                        && write.file == file\n                        && !write.routing.provider\n"],
+      "replace": ["                    write.file == file\n                        && !write.routing.provider\n                        && write.stage == Stage::Named(seq)\n"]
     },
     {
       "name": "CONTROL: the clock is read before the token is minted",

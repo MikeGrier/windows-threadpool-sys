@@ -6,7 +6,7 @@ use std::io;
 
 use win_time_sys::{Clock, InterruptClock};
 
-use super::{A, DEFAULT, Due, Ops, lineage, submitted};
+use super::{A, DEFAULT, Due, FULL, Ops, lineage, submitted};
 use crate::dioring::TimeBase;
 use crate::dioring::durability::{Durability, Event, Reach};
 use crate::dioring::tests::MockClock;
@@ -66,7 +66,7 @@ fn a_failed_flush_is_stamped_when_its_completion_is_observed_not_when_it_was_sea
     let mut lineage = mocked(&clock);
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     submitted(lineage.seal(1));
     clock.advance(900);
     let due = lineage.flushed(1, A, Err(io::Error::from_raw_os_error(1117)));

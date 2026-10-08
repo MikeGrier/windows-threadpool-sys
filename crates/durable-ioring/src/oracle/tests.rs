@@ -13,6 +13,8 @@ use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
 // The failure rules: DI-3.2.4.
 mod failures;
+// The marking rules, and a failure's final record: DI-3.2.4.2.
+mod markings;
 
 type V = DioringIds<u64>;
 type Oracle = ConformanceOracle<V, u32>;

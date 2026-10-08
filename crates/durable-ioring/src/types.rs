@@ -11,6 +11,7 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{InterruptTime, TimePoint};
 
 use crate::contract::Identities;
+use crate::error_code::ErrorCode;
 
 #[cfg(test)]
 mod tests;
@@ -73,7 +74,8 @@ pub struct SuspectWrite<V: Identities> {
     pub epoch: Epoch<V>,
 }
 
-/// A failure's suspect set: frozen when the failure is observed, shared rather than copied.
+/// A failure's suspect set: frozen when the failure is observed, shared rather than copied. It never
+/// gains a write; what happens to its writes afterwards is recorded as [`Marking`]s (DI-D-36).
 #[derive(Clone, Debug)]
 pub struct SuspectSet<V: Identities>(Arc<[SuspectWrite<V>]>);
 
@@ -192,6 +194,39 @@ pub struct Failed<V: Identities> {
     pub observed: TimePoint<InterruptTime>,
 }
 
+/// What happened to one of a failure's suspect writes after the failure was observed (DI-D-36):
+/// an append-only record, so the history can be reconciled after the fact. A marking reports;
+/// it never changes the high-water mark, what holds it, or what resolving the failure needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Marking<V: Identities> {
+    /// The suspect write it is about.
+    pub write: V::OpId,
+    /// When the instance observed it, on the failure stamps' time base (DI-D-38).
+    pub observed: TimePoint<InterruptTime>,
+    /// What happened.
+    pub kind: MarkingKind,
+}
+
+/// What a [`Marking`] records. Open to further kinds, so match it with a wildcard arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkingKind {
+    /// A nullifier: the write completed as failed, so it did not happen -- a failed write is an
+    /// error on its own completion, and nothing durable covers it (DI-D-12 (a)).
+    Nullified {
+        /// The completion's error code; see [`ErrorCode::of`].
+        code: Option<ErrorCode>,
+    },
+    /// The write completed short: durable, if at all, only up to `transferred` bytes.
+    Short {
+        /// The byte count its completion reported.
+        transferred: u32,
+    },
+    /// The write's own file was flushed successfully: its bytes are on the device, even though
+    /// the failure still suspects it.
+    Covered,
+}
+
 /// What a consumer operation was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpKind<V: Identities> {
@@ -256,12 +291,31 @@ pub enum Entry<V: Identities, B, C> {
         /// The failure in the way.
         by: V::FailureId,
     },
-    /// The consumer abandoned a failure.
+    /// The consumer abandoned a failure: its final record.
     Abandoned {
         /// The failure abandoned.
         failure: V::FailureId,
         /// Its suspect set, now declared lost.
         suspect: SuspectSet<V>,
+        /// Every marking it gained, in the order observed.
+        markings: Vec<Marking<V>>,
+    },
+    /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed, and this is its final
+    /// record.
+    Healed {
+        /// The failure healed.
+        failure: V::FailureId,
+        /// Its suspect set.
+        suspect: SuspectSet<V>,
+        /// Every marking it gained, in the order observed.
+        markings: Vec<Marking<V>>,
+    },
+    /// A failure not yet resolved gained a marking.
+    Marked {
+        /// The failure.
+        failure: V::FailureId,
+        /// The marking.
+        marking: Marking<V>,
     },
     /// `end_lineage` took effect: every epoch of `lineage` not yet durable, through
     /// `abandoned_through`, is abandoned (`None` if none was pending).
@@ -483,6 +537,8 @@ pub struct FailureInfo<V: Identities> {
     pub suspect: SuspectSet<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
     pub observed: TimePoint<InterruptTime>,
+    /// Every marking it has gained, in the order observed.
+    pub markings: Vec<Marking<V>>,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.
     pub token_live: bool,
 }

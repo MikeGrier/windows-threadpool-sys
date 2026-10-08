@@ -2567,6 +2567,18 @@ still satisfy the bound, and put four points:
 WT-2.2 was split in two, since the bound lives in win-time-sys: WT-2.2.1 adds `Steady`, and
 WT-2.2.2 has dioring adopt it.
 
+## DI-3.2.4.2: markings (2026-10-08)
+
+The engineer asked whether the item was ready, and to implement it if so. The assistant found no
+blocker: the prerequisite had landed, and DI-D-36 left the shapes and the error-code
+representation to the assistant. It named two gaps the build had to close (the core did not record
+a write's requested length, and no test can hold a write in flight across a failure) and one
+correction to the item's text: a covered marking was to name a write "in a seal that later
+succeeded", but coverage is per file, since a seal that fails on one file has still committed the
+others. The shapes are recorded as DI-D-39, for the engineer to confirm. One consequence the item did
+not name: once `Healed` is in the stream, the oracle can require a `Durable` to follow it, and now
+does.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

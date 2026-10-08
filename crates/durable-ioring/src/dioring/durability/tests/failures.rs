@@ -5,13 +5,13 @@ use std::io;
 use std::sync::Arc;
 
 use super::{
-    A, B, C, DEFAULT, Lineage, Ops, Seen, State, already, durable, flush, lineage, quiet, seen,
-    submitted, tokens,
+    A, B, C, DEFAULT, FAILED, FULL, Lineage, Ops, Seen, State, already, durable, flush, lineage,
+    quiet, seen, submitted, tokens,
 };
 use crate::dioring::DomainId;
 use crate::dioring::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
-use crate::types::{Cause, FileKey, ImportScope, Resolution, ResolveRefusal};
+use crate::types::{Cause, FileKey, ImportScope, MarkingKind, Resolution, ResolveRefusal};
 
 const D: FileKey = FileKey(4);
 
@@ -47,7 +47,7 @@ fn blocked_by(state: State) -> Option<u64> {
 fn one_failure(ops: &mut Ops) -> (Lineage, FailureToken) {
     let mut lineage = lineage();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     submitted(lineage.seal(1));
     let mut found = tokens(lineage.flushed(1, A, failed()));
     assert_eq!(found.len(), 1);
@@ -61,9 +61,9 @@ fn a_failed_flush_suspects_every_held_write_in_push_order() {
     let sealed = ops.push(&mut lineage, 1, A, DEFAULT);
     let failed_write = ops.push(&mut lineage, 1, B, DEFAULT);
     let open = ops.push(&mut lineage, 3, C, DEFAULT);
-    lineage.completed(sealed, true);
-    lineage.completed(failed_write, false);
-    lineage.completed(open, true);
+    lineage.completed(sealed, FULL);
+    lineage.completed(failed_write, FAILED);
+    lineage.completed(open, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     let in_flight = ops.push(&mut lineage, 2, B, DEFAULT);
 
@@ -86,7 +86,7 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
     let mut ops = Ops::new();
     let (mut lineage, token) = one_failure(&mut ops);
     let later = ops.push(&mut lineage, 2, B, DEFAULT);
-    lineage.completed(later, true);
+    lineage.completed(later, FULL);
     assert_eq!(submitted(lineage.seal(2)).flushes, [flush(2, B)]);
     assert_eq!(
         seen(&lineage.flushed(2, B, Ok(()))),
@@ -112,7 +112,7 @@ fn a_suspect_set_is_frozen_and_a_later_seal_it_holds_is_answered_blocked() {
     assert_eq!(
         seen(&due),
         [
-            Seen::Abandoned(0, vec![0]),
+            Seen::Abandoned(0, vec![0], vec![]),
             Seen::Durable(1),
             Seen::Durable(2)
         ]
@@ -127,8 +127,8 @@ fn a_write_already_covered_is_never_suspected() {
     let mut ops = Ops::new();
     let on_a = ops.push(&mut lineage, 1, A, DEFAULT);
     let on_b = ops.push(&mut lineage, 1, B, DEFAULT);
-    lineage.completed(on_a, true);
-    lineage.completed(on_b, true);
+    lineage.completed(on_a, FULL);
+    lineage.completed(on_b, FULL);
     submitted(lineage.seal(1));
     assert!(quiet(&lineage.flushed(1, A, Ok(()))));
     assert_eq!(
@@ -139,11 +139,11 @@ fn a_write_already_covered_is_never_suspected() {
 
     let mut lineage = super::lineage();
     let first = ops.push(&mut lineage, 1, A, DEFAULT);
-    lineage.completed(first, true);
+    lineage.completed(first, FULL);
     submitted(lineage.seal(1));
     assert_eq!(durable(&lineage.flushed(1, A, Ok(()))), [1]);
     let second = ops.push(&mut lineage, 2, A, DEFAULT);
-    lineage.completed(second, true);
+    lineage.completed(second, FULL);
     submitted(lineage.seal(2));
     assert_eq!(
         seen(&lineage.flushed(2, A, failed())),
@@ -163,7 +163,7 @@ fn a_failed_flush_reaches_the_files_whose_domains_intersect_its_own_and_every_un
         ops.push(&mut lineage, 1, D, DEFAULT),
     ];
     for write in writes {
-        lineage.completed(write, true);
+        lineage.completed(write, FULL);
     }
     assert_eq!(submitted(lineage.seal(1)).flushes.len(), 4);
     assert_eq!(
@@ -238,8 +238,8 @@ fn a_failure_observed_after_a_later_seal_finished_answers_it_blocked() {
     let mut ops = Ops::new();
     let first = ops.push(&mut lineage, 1, A, DEFAULT);
     let second = ops.push(&mut lineage, 2, B, DEFAULT);
-    lineage.completed(first, true);
-    lineage.completed(second, true);
+    lineage.completed(first, FULL);
+    lineage.completed(second, FULL);
     submitted(lineage.seal(1));
     submitted(lineage.seal(2));
     assert!(quiet(&lineage.flushed(2, B, Ok(()))));
@@ -256,19 +256,24 @@ fn a_heal_takes_effect_at_the_first_seal_after_it() {
     let mut ops = Ops::new();
     for file in [A, B, C] {
         let write = ops.push(&mut lineage, 41, file, DEFAULT);
-        lineage.completed(write, true);
+        lineage.completed(write, FULL);
     }
     submitted(lineage.seal(41));
     let mut token = tokens(lineage.flushed(41, A, failed()));
-    assert!(quiet(&lineage.flushed(41, B, Ok(()))));
-    assert!(
-        quiet(&lineage.flushed(41, C, Ok(()))),
-        "41 was answered by its Failed"
+    assert_eq!(
+        seen(&lineage.flushed(41, B, Ok(()))),
+        [Seen::Marked(0, 1, MarkingKind::Covered)],
+        "B's write is covered by B's flush, though 41 failed on A"
+    );
+    assert_eq!(
+        seen(&lineage.flushed(41, C, Ok(()))),
+        [Seen::Marked(0, 2, MarkingKind::Covered)],
+        "41 was answered by its Failed, so only the marking is due"
     );
     assert_eq!(lineage.refuses(41), Some(41));
     for file in [A, B, C] {
         let write = ops.push(&mut lineage, 42, file, DEFAULT);
-        lineage.completed(write, true);
+        lineage.completed(write, FULL);
     }
 
     let due = lineage
@@ -285,7 +290,18 @@ fn a_heal_takes_effect_at_the_first_seal_after_it() {
     assert_eq!(submitted(lineage.seal(42)).flushes.len(), 3);
     assert!(quiet(&lineage.flushed(42, A, Ok(()))));
     assert!(quiet(&lineage.flushed(42, B, Ok(()))));
-    assert_eq!(durable(&lineage.flushed(42, C, Ok(()))), [41, 42]);
+    assert_eq!(
+        seen(&lineage.flushed(42, C, Ok(()))),
+        [
+            Seen::Healed(
+                0,
+                vec![0, 1, 2],
+                vec![(1, MarkingKind::Covered), (2, MarkingKind::Covered)]
+            ),
+            Seen::Durable(41),
+            Seen::Durable(42),
+        ]
+    );
     assert!(
         lineage.failures().is_empty(),
         "a resolved failure leaves no memory"
@@ -298,7 +314,7 @@ fn a_seal_made_before_the_heal_does_not_make_it_effective() {
     let mut ops = Ops::new();
     let (mut lineage, token) = one_failure(&mut ops);
     let write = ops.push(&mut lineage, 2, A, DEFAULT);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     submitted(lineage.seal(2));
     lineage
         .resolve(vec![(token, Resolution::Heal)])
@@ -319,7 +335,7 @@ fn a_heal_waits_for_a_seal_that_succeeds() {
         .resolve(vec![(first, Resolution::Heal)])
         .expect("heal");
     let write = ops.push(&mut lineage, 2, A, DEFAULT);
-    lineage.completed(write, true);
+    lineage.completed(write, FULL);
     submitted(lineage.seal(2));
     let due = lineage.flushed(2, A, failed());
     assert_eq!(
@@ -343,8 +359,8 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
     let mut ops = Ops::new();
     let sealed = ops.push(&mut lineage, 1, A, DEFAULT);
     let open = ops.push(&mut lineage, 3, A, DEFAULT);
-    lineage.completed(sealed, true);
-    lineage.completed(open, true);
+    lineage.completed(sealed, FULL);
+    lineage.completed(open, FULL);
     submitted(lineage.seal(1));
     let token = tokens(lineage.flushed(1, A, failed())).remove(0);
 
@@ -353,7 +369,7 @@ fn abandoning_takes_effect_at_once_and_abandons_every_epoch_the_failure_contains
         .expect("abandon");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(0, vec![0, 1]), Seen::Durable(1)]
+        [Seen::Abandoned(0, vec![0, 1], vec![]), Seen::Durable(1)]
     );
     assert_eq!(lineage.state(1), State::Abandoned);
     assert_eq!(lineage.state(2), State::Open);
@@ -380,13 +396,13 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
     let a = ops.push(&mut lineage, 41, A, DEFAULT);
     submitted(lineage.seal(41));
     let p = ops.push(&mut lineage, 43, A, DEFAULT);
-    lineage.completed(a, true);
-    lineage.completed(p, true);
+    lineage.completed(a, FULL);
+    lineage.completed(p, FULL);
     let due = lineage.flushed(41, A, failed());
     assert_eq!(seen(&due), [Seen::Failed(0, vec![a.seq, p.seq])]);
     let f1 = tokens(due).remove(0);
     let r = ops.push(&mut lineage, 43, A, DEFAULT);
-    lineage.completed(r, true);
+    lineage.completed(r, FULL);
     let (_, due) = import(&mut lineage, &Reach::All);
     assert_eq!(seen(&due), [Seen::Failed(1, vec![a.seq, p.seq, r.seq])]);
     let f2 = tokens(due).remove(0);
@@ -396,7 +412,7 @@ fn one_abandonment_abandons_an_epoch_that_still_waits_for_every_failure_containi
         .expect("resolve both");
     assert_eq!(
         seen(&due),
-        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq])],
+        [Seen::Abandoned(1, vec![a.seq, p.seq, r.seq], vec![])],
         "41 still sits in failure 0, whose heal waits for a seal"
     );
     assert_eq!(lineage.state(41), State::Abandoned);

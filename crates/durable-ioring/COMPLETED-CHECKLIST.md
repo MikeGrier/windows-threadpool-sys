@@ -1454,3 +1454,80 @@ and, through the ring, owned and registered writes into an abandoned open epoch 
 buffer and context, a write into the sealed abandoned epoch still refused as `Sealed`, and a later
 epoch accepted. **Verification:** two sabotages -- the refusal removed, and the oracle's rule
 removed -- each caught by the test named for it.
+
+## Moved 2026-10-08 10:41:11 -04:00 -- DI-3.2.4.2: markings and a failure's final record
+
+### <a id="di-3242"></a>DI-3.2.4.2 -- Markings: a failure records what happens to its suspect writes afterwards -- nullified, short, or covered -- reports each as `Marked`, and ends with a final record, `Abandoned` or the new `Healed`; every failure carries its error code, read with `ErrorCode::of`. *(completed 2026-10-08 10:41:11 -04:00)*
+
+The shapes are [DI-D-39](DESIGN-NOTES.md#di-d-39), decided while implementing and awaiting the
+engineer's confirmation; the direction is [DI-D-36](DESIGN-NOTES.md#di-d-36).
+
+- **Types.** `Marking { write, observed, kind }`; `MarkingKind`, non-exhaustive: `Nullified { code }`,
+  `Short { transferred }`, `Covered`. `ErrorCode`, an `HRESULT` newtype in its own module, with
+  `of(&io::Error)`, `from_win32`, `from_hresult`, `hresult` and `win32`. `Entry::Marked`, and
+  `Entry::Healed { failure, suspect, markings }`; `Entry::Abandoned` and `FailureInfo` gain
+  `markings`. All re-exported, with `TimeBase`, which WT-2.2.2 had left unexported although it
+  bounds `Dioring::with_clock`.
+- **Core.** The core records each write's requested length at push, through a new `Accepted`
+  value. A suspect write completing failed or short marks every unresolved failure suspecting it,
+  and one whose own file's flush succeeds is marked covered, all at one clock reading. A heal taking
+  effect emits `Healed` before any `Durable` it lets through. The relay maps a completion's outcome
+  to how the write ended (`WriteEnd::of`).
+- **Oracle.** Each marking is checked against its write's completion; one stamp order covers
+  `Failed` and `Marked`; a final record must carry exactly the markings reported; `Healed` is
+  accepted once and only for a failure the consumer healed. With `Healed` in the stream, a
+  `Durable` passing a failure must now follow that failure's `Healed` or `Abandoned` entry, which
+  removed "when a heal takes effect" from what the oracle leaves unchecked.
+- **Contract.** A suspect set "never gains a write" rather than "never grows"; a new section on
+  markings and error codes; the queue table gains `Marked` and `Healed`; the inventory reports
+  markings; a heal is reported by `Healed`. DI-D-13 is marked amended for the two entries.
+
+**One correction to the item as written.** Its oracle rule said a covered marking names a write "in a
+seal that later succeeded". Coverage is per file: a seal that fails on file A has still committed
+file B, whose writes are on the device. So a write is covered when its own file's flush succeeds,
+and `a_flush_failure_on_one_file_leaves_the_writes_another_file_flushed_covered` pins that down.
+
+**Tests.** Core: a nullifier with its code; a write failed before observation neither suspected nor
+marked; a full completion unmarked; short, including zero bytes, staying held; covered, and still
+held; covered per file; one write marking two failures at one reading; abandoning carrying the
+record and ending it; a heal's `Healed` record before its `Durable`s, with markings gained while
+healing; the inventory as markings accrue; and `WriteEnd::of`. `ErrorCode`'s arithmetic and reading.
+Oracle: markings agreeing with completions accepted, contradicting ones and early ones refused; a
+marking for a write not suspected, or a failure not live, refused; one stamp order; final records
+exact; `Healed` once and only when healed. Through the ring: an import's suspect write covered and
+abandoned with its marking; a heal's record carrying a covered marking; a flush failure's code read
+with `ErrorCode::of`. Three existing heal tests changed to expect `Healed`, and the covered
+markings a partly failed seal now produces. The test binary ran 30 times in sequence without a
+failure.
+
+**Not reachable through the ring:** a nullifier or short marking needs the suspect write in flight
+when the failure is observed, which no test can hold it to; the core's tests cover both, and the
+manifest's `notCoveredHere` names the requested-length wiring this leaves unchecked.
+
+**Verification.** Thirteen sabotages, each caught: no nullifier; a full completion marked short; no
+short marking; coverage per seal rather than per file; only the first failure marked; only the first
+suspect found; no `Healed`; an inventory without markings; a lost code; the oracle ignoring codes;
+the oracle letting `Durable` pass a healed failure before `Healed`; the oracle ignoring a final
+record's markings; a Win32 code unmasked. That last one first survived, because the test's extra
+bit fell inside the facility field; the test now uses a bit outside it. A control, reordering the
+covered test's conditions, survives.
+
+The item as it stood at completion:
+
+- [x] **DI-3.2.4.2** -- **Nullifiers** ([DI-D-36](DESIGN-NOTES.md#di-d-36), the engineer's direction):
+  a suspect write that completes as failed after its failure was observed gains an append-only
+  marking in that failure's record, carrying the completion's error and when it was observed, so
+  the history can be reconciled after the fact. Reporting only: the mark, what holds it, and what
+  resolution needs are unchanged. Amends CONTRACT.md's "frozen ... and never grows" to "never gains
+  a write", and DI-D-12 (b). Everything DI-D-36 allows for is built here: markings in the inventory
+  and the `Abandoned` entry, and as queue entries of their own; a marking for a short write, with its
+  transferred count; a marking type open to further kinds, starting with a suspect write later
+  covered by a successful flush; and a failure's final record surviving its resolution, including a
+  heal, which needs an entry of its own. A `Failed` entry's own observation time lands first, with
+  the dependency, under win-time-sys' `WT-2.2.2`; every
+  failure, synchronous or asynchronous, carries its error code -- a failed completion's and a failed
+  flush's alike -- in a representation chosen here, which also settles how a consumer reads the code
+  without `windows-ioring-sys`' `IoRingErrorExt` (DI-D-34's question). Timestamps are interrupt time
+  ([DI-D-37](DESIGN-NOTES.md#di-d-37)). The oracle gains the rules: a nullifier names a write in the
+  set whose completion reported `Failed`, a short-write marking one whose completion was short, and
+  a covered marking one in a seal that later succeeded.
