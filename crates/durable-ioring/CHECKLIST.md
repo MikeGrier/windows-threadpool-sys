@@ -17,6 +17,49 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2** -- dioring over `windows-ioring-sys`, implementing the contract in steps `DI-3.2.1` to `DI-3.2.8`, from construction through ending. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-32)
 
+- [ ] **DI-3.9** -- **The engineer confirms or amends the shapes the assistant chose while
+  implementing `DI-3.2`**, one decision per step below; checked when the last of them is. The code
+  binds to each already, because the steps could not be built without choosing; what is open is
+  the review. A rejected point is reworked in its step, with its decision row amended. Placed
+  before `DI-3.3`, because a reworked point can change the trait the fault-injecting
+  implementation implements. Each step reviews only what its decision row marks as the
+  assistant's: where the engineer had already decided part of a row, that part is not reopened.
+
+- [ ] **DI-3.9.1** -- **[DI-D-34](DESIGN-NOTES.md#di-d-34)**, from `DI-3.2.4`: a failed flush and
+  an import as one transition; reach by declared flush domains, a domain no file declared reaching
+  only the undeclared files; what the core records of each write, and when an epoch passes the
+  mark; what abandon, heal and `resolve` do and answer; an internal inconsistency recorded on a
+  pool thread and asserted by the consumer's next `pop`; and the fault seam,
+  `fail_next_flush`, behind the `fault-injection` feature that every test build enables.
+
+- [ ] **DI-3.9.2** -- **[DI-D-39](DESIGN-NOTES.md#di-d-39)**, from `DI-3.2.4.2`, less what
+  [DI-D-42](DESIGN-NOTES.md#di-d-42) amended: `Marking { write, observed, kind }` with a
+  non-exhaustive `MarkingKind`; when each marking is made, a covered one by the write's own file's
+  flush rather than by its seal; where markings are read; error codes, read with `ErrorCode::of`;
+  and the oracle's rules for markings.
+
+- [ ] **DI-3.9.3** -- **[DI-D-42](DESIGN-NOTES.md#di-d-42)**, from `DI-3.2.5.1`: `Tag` borrowing
+  the handle, never the instance; construction returning the default lineage's handle beside the
+  instance; `Result<_, UnknownLineage>` for a name the instance cannot answer for; the end and
+  retire refusals, handing the handle back; an ended lineage not live from the moment it ends;
+  `LineageEnded.abandoned_through`; ending a lineage releasing a heal that waits on it; the
+  oracle's rules for an ended lineage; and a handle's release running on whichever thread drops
+  the last copy.
+
+- [ ] **DI-3.9.4** -- **[DI-D-43](DESIGN-NOTES.md#di-d-43)**'s assistant-chosen part, from
+  `DI-3.2.5.2` -- the refusal of a seal that closes a cycle is the engineer's own: a gate naming an
+  ended or retired lineage refused as `UnknownLineage`; a held write whose own epoch is abandoned
+  ending as `NeverIssued` naming that epoch; a held write outstanding for its lineage's seals and
+  suspected by no failure until released; `SealError` in place of `io::Error`; a cycle listed as
+  each held write's epoch followed by its gate; and released operations pushed at the consumer's
+  next call.
+
+- [ ] **DI-3.9.5** -- **[DI-D-44](DESIGN-NOTES.md#di-d-44)**, from `DI-3.2.6`: the provider
+  called from the consumer's next call with dioring's lock released; every request built before
+  any is made; what a request names, and in what order; when a write is covered; a domain's
+  failure observed with `Reach::Domains` of that one domain; and answers no request asked for
+  recorded as inconsistencies.
+
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush
   failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
