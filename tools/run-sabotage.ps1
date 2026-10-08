@@ -456,9 +456,15 @@ function Invoke-Bounded {
     # WaitForExit: that overload also waits for redirected streams, and once sat
     # 31 minutes on a 60-second bound while a hung grandchild held them open.
     # HasExited only asks the kernel whether the process is signalled.
+    #
+    # Timed by the Stopwatch, which is monotonic, and not by comparing Get-Date
+    # against a deadline: the system clock can be stepped back -- by a time sync,
+    # or a VM resuming -- and a deadline on it would then be pushed out by as
+    # much, which is no bound on the one wait whose job is to be one. A clock step
+    # cannot be produced in a test, so this is held by this comment, not by one.
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    $deadline = (Get-Date).AddSeconds($Seconds + $script:LauncherGraceSeconds)
-    while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+    $limit = $Seconds + $script:LauncherGraceSeconds
+    while (-not $process.HasExited -and $clock.Elapsed.TotalSeconds -lt $limit) {
         Start-Sleep -Milliseconds 100
     }
     $clock.Stop()
@@ -474,8 +480,9 @@ function Invoke-Bounded {
         Write-Report ("    win-job-launcher (PID $($process.Id)) overran its ${Seconds}s bound by " +
             "$($script:LauncherGraceSeconds)s; stopping it.") -Level bad
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $stopDeadline = (Get-Date).AddSeconds($script:LauncherStopSeconds)
-        while (-not $process.HasExited -and (Get-Date) -lt $stopDeadline) {
+        # The same monotonic clock, for the same reason as above.
+        $stopClock = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $process.HasExited -and $stopClock.Elapsed.TotalSeconds -lt $script:LauncherStopSeconds) {
             Start-Sleep -Milliseconds 100
         }
         $stopped = 'It exited'
