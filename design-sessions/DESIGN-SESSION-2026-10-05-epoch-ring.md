@@ -2415,6 +2415,14 @@ naming the mechanism, and `Fn + Sync` as the alternative that would keep room to
 serialisation. The engineer: "write it in". Recorded as DI-D-31. Which operations the owner and the
 handle offer, and teardown, stay open under `DI-3.2.2.2`.
 
+The engineer then asked for `DI-3.2.2.2` to be implemented with those two still open. I decided them
+on analytic grounds and recorded them as DI-D-32 for confirmation: the handle mirrors the trait's
+consumer operations as `&self` methods, because a closure over `&mut D` is the ring crate's D-43
+defect at this layer -- it lets the instance be replaced under an armed wait -- and would also hand
+out `pop` and `readiness`; and ending quiesces the delivery first, with `into_inner` returning the
+instance so it can still be closed. The mirroring has a standing cost -- each later step must extend
+the handle -- which `DI-3.2`'s parent item now states.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

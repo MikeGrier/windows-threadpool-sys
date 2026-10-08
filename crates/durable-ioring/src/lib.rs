@@ -11,7 +11,10 @@
 #![warn(missing_docs)]
 
 mod contract;
+mod delivery;
 mod dioring;
+#[cfg(test)]
+mod fake;
 mod ids;
 pub mod oracle;
 mod provider;
@@ -21,6 +24,7 @@ pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, Identities, Lin, OpIdOf, PushResult,
     RegisteredBufferRing, TokenOf,
 };
+pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal};
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
 pub use provider::{DomainCompletion, DomainRequest, DurabilityProvider, FileWrites, FlushRequest};

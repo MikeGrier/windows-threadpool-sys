@@ -1293,3 +1293,46 @@ The item as it stood at completion:
   and no other, and every operation completes exactly once with the identity it was built with, a
   completion for anything not in flight being a defect that panics
   ([D-79](../windows-ioring-sys/DESIGN-NOTES.md#d-79)).
+
+## Moved 2026-10-07 20:14:18 -04:00 -- DI-3.2.2.2: the Model A front end
+
+### <a id="di-3222"></a>DI-3.2.2.2 -- The Model A front end: `EntryDelivery` and its `DeliveryHandle`, delivering entries one at a time to a handler on pool threads. *(completed 2026-10-07 20:14:18 -04:00)*
+
+The decisions are [DI-D-31](DESIGN-NOTES.md#di-d-31) (the engineer's: name and constructor) and
+[DI-D-32](DESIGN-NOTES.md#di-d-32) (the assistant's, on analytic grounds, for the engineer to
+confirm: mirrored `&self` methods rather than a closure over the instance, because the ring crate's
+D-43 measured a closure over `&mut` silently stopping delivery; and ending by quiescing first, with
+`into_inner` handing the instance back). `EntryOf<D>: Send`, proposed in DI-D-31, proved
+unnecessary and is noted there.
+
+**Tests** (`delivery/tests.rs`): the handover backlog delivered in queue order after its wake was
+consumed; a failed setup handing back the instance and the handler; every push through the owner
+delivered once, under the oracle; the handler pushing through its handle; four threads pushing
+through `&self` while no two handler calls overlap; `into_inner` losing nothing and leaving a working
+instance; drop with operations in flight returning; refusals through the handle; registered bytes
+and spans through the handle; and the lineages it reports. The oracle tests' fake moved to
+`src/fake.rs` so both suites use it, gaining a failing `readiness` and contexts that number its
+entries.
+
+**Verification.** Three sabotages, each caught by the test its `why` names: no signal at the
+handover, a wake that stops after one entry, and the handler run with the instance's lock held --
+the push-from-the-handler test leaks the front end on failure, so that one fails at its bound rather
+than hanging. The test binary ran 30 times without a failure.
+
+The item as it stood at completion:
+
+- [x] **DI-3.2.2.2** -- **The Model A front end.** Split from `DI-3.2.2` on 2026-10-07: DI-2.3 decided
+  its behaviour, but [API.md](API.md) never sketched its API, so it needs design before code. What
+  is decided ([DI-D-18](DESIGN-NOTES.md#di-d-18), and DI-2.3's points 1-3 and 8 in
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#di-23)): a type written once over the trait
+  that owns the delivery, with `&self` methods usable from any thread; it hands entries strictly
+  one at a time, in queue order, to a consumer callback on a pool thread, with no lock held, so the
+  callback may call back in; dioring's lock is taken before the ring's. It waits on `readiness()`
+  through a thread-pool wait. **Name and constructor decided** ([DI-D-31](DESIGN-NOTES.md#di-d-31),
+  2026-10-07): `EntryDelivery<D>`, built by `EntryDelivery::new(ring, on_entry, env)`, the handler
+  `FnMut(EntryOf<D>, &DeliveryHandle<D>)`, a failure handing back the ring and the handler as
+  `DeliverySetupError`; entries queued before the handover are delivered, which `new` guarantees by
+  arming and then setting the readiness event, tested from the start. **Open, for the engineer:**
+  which of the trait's `&mut self` operations the owner and `DeliveryHandle` offer as `&self`, and
+  how (mirrored methods, or a closure over the instance under its lock); and its teardown, which
+  DI-2.7 point 5 orders -- delivery quiesced before the state it reaches is released.

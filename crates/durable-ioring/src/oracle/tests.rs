@@ -3,20 +3,13 @@
 //! broken and accepted when kept, and the readiness check failing for an implementation that
 //! breaks either half of DI-D-28's rule.
 
-use std::collections::VecDeque;
 use std::io;
 use std::time::Duration;
 
-use win_shared_os_owned_handle::SharedHandle;
-use win_sync_sys::{Event, ResetMode};
-
 use super::{ConformanceOracle, ReadinessFailure, Violation, check_readiness};
-use crate::contract::{DurableRing, EntryOf, PushResult};
+use crate::fake::{Fake, Signals};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
-use crate::types::{
-    AddFileError, Entry, Epoch, FileKey, FileOptions, LineageInfo, OpCompletion, OpKind, Outcome,
-    ReadOptions, WriteOptions,
-};
+use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
 type V = DioringIds<u64>;
 type Oracle = ConformanceOracle<V, u32>;
@@ -210,116 +203,6 @@ fn finish_names_every_operation_still_outstanding() {
     };
     ops.sort_by_key(|op| op.seq);
     assert_eq!(ops, [op(instance, 0), op(instance, 2)]);
-}
-
-/// How the fake sets its readiness signal.
-#[derive(Clone, Copy, PartialEq)]
-enum Signals {
-    /// On every empty-to-non-empty transition, as DI-D-28 requires.
-    OnEveryTransition,
-    /// Never.
-    Never,
-    /// On the first transition only.
-    OnceOnly,
-}
-
-/// The least implementation the readiness check can run against: a queue and a signal, with an
-/// operation that completes the moment it is pushed.
-struct Fake {
-    instance: InstanceId,
-    signal: Event,
-    signals: Signals,
-    queue: VecDeque<EntryOf<Self>>,
-    next: u64,
-    transitions: u32,
-}
-
-impl Fake {
-    fn new(signals: Signals) -> Self {
-        Self {
-            instance: InstanceId::next(),
-            signal: Event::new(ResetMode::Auto, false).expect("create the signal"),
-            signals,
-            queue: VecDeque::new(),
-            next: 0,
-            transitions: 0,
-        }
-    }
-
-    fn complete_one(&mut self) {
-        let id = op(self.instance, self.next);
-        self.next += 1;
-        let was_empty = self.queue.is_empty();
-        self.queue.push_back(done(id, OpKind::Read, 0));
-        if was_empty {
-            self.transitions += 1;
-            let set = match self.signals {
-                Signals::OnEveryTransition => true,
-                Signals::Never => false,
-                Signals::OnceOnly => self.transitions == 1,
-            };
-            if set {
-                self.signal.set().expect("set the signal");
-            }
-        }
-    }
-}
-
-impl DurableRing for Fake {
-    type Ids = V;
-    type Buffer = Vec<u8>;
-    type Context = u32;
-
-    fn readiness(&mut self) -> io::Result<Event> {
-        self.signal.try_clone()
-    }
-
-    fn add_file_with(
-        &mut self,
-        _key: FileKey,
-        _file: SharedHandle,
-        _options: FileOptions,
-    ) -> Result<(), AddFileError> {
-        Ok(())
-    }
-
-    fn default_lineage(&self) -> Lineage {
-        Lineage {
-            instance: self.instance,
-            seq: 0,
-        }
-    }
-
-    fn lineages(&self) -> Vec<LineageInfo<V>> {
-        Vec::new()
-    }
-
-    fn write_with(
-        &mut self,
-        _file: FileKey,
-        _offset: u64,
-        _buffer: Vec<u8>,
-        _epoch: Epoch<V>,
-        _context: u32,
-        _options: WriteOptions<V>,
-    ) -> PushResult<Self> {
-        unimplemented!("the readiness check pushes through its own closure")
-    }
-
-    fn read_with(
-        &mut self,
-        _file: FileKey,
-        _offset: u64,
-        _buffer: Vec<u8>,
-        _context: u32,
-        _options: ReadOptions<V>,
-    ) -> PushResult<Self> {
-        unimplemented!("the readiness check pushes through its own closure")
-    }
-
-    fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
-        Ok(self.queue.pop_front())
-    }
 }
 
 #[test]

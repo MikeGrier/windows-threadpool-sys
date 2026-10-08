@@ -1,7 +1,7 @@
 {
   "package": "durable-ioring",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); and the relay's two debug assertions, for a completion with no sidecar and for a covering flush before seals exist.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); and the relay's two debug assertions, for a completion with no sidecar and for a covering flush before seals exist. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -194,6 +194,30 @@
       "why": "The second half of DI-D-28's check: a signal set once and never again. Caught by the fake that sets only once.",
       "find": ["            .map_err(|_| ReadinessFailure::NotSetAgain)?;\n"],
       "replace": ["            .ok();\n"]
+    },
+    {
+      "name": "DI-3.2.2.2: the handover does not set the signal",
+      "file": "src/delivery.rs",
+      "expect": "caught",
+      "why": "DI-D-31's handover guarantee: entries queued before the front end took the instance, whose wake was already consumed, are stranded without it. Caught by the backlog test, which consumes that wake first.",
+      "find": ["        if let Err(error) = kick.set() {\n"],
+      "replace": ["        if let Err(error) = Ok::<(), std::io::Error>(()) {\n"]
+    },
+    {
+      "name": "DI-3.2.2.2: a wake delivers one entry and stops",
+      "file": "src/delivery.rs",
+      "expect": "caught",
+      "why": "DI-D-28: a waiter pops to None after every wake. Stopping early leaves entries that no later wake announces.",
+      "find": ["        (*handler)(entry, &inner.handle);\n"],
+      "replace": ["        (*handler)(entry, &inner.handle);\n        break;\n"]
+    },
+    {
+      "name": "DI-3.2.2.2: the handler runs with the instance's lock held",
+      "file": "src/delivery.rs",
+      "expect": "caught",
+      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop.",
+      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(entry, &inner.handle);\n"],
+      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(entry, &inner.handle));\n"]
     },
     {
       "name": "CONTROL: the relay tests emptiness by length",

@@ -32,24 +32,16 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
     `ContractChecker`: it accepts the legal-but-surprising sequences as carefully as it rejects the
     illegal ones, and says which rules the stream cannot show.
 
+  **Every later step that adds a trait operation a consumer calls on a live instance also adds its
+  `&self` form to `EntryDelivery`'s `DeliveryHandle`** ([DI-D-32](DESIGN-NOTES.md#di-d-32)): the
+  handle mirrors those operations rather than lending the instance, so nothing adds them for it.
+  `pop` and `readiness` stay off it.
+
 - [x] **DI-3.2.1** -- Types, trait and construction: the shared types, identities and trait in code, and `Dioring::new` with its refusals. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-321)
 
 - [x] **DI-3.2.2.1** -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3221)
 
-- [ ] **DI-3.2.2.2** -- **The Model A front end.** Split from `DI-3.2.2` on 2026-10-07: DI-2.3 decided
-  its behaviour, but [API.md](API.md) never sketched its API, so it needs design before code. What
-  is decided ([DI-D-18](DESIGN-NOTES.md#di-d-18), and DI-2.3's points 1-3 and 8 in
-  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#di-23)): a type written once over the trait
-  that owns the delivery, with `&self` methods usable from any thread; it hands entries strictly
-  one at a time, in queue order, to a consumer callback on a pool thread, with no lock held, so the
-  callback may call back in; dioring's lock is taken before the ring's. It waits on `readiness()`
-  through a thread-pool wait. **Name and constructor decided** ([DI-D-31](DESIGN-NOTES.md#di-d-31),
-  2026-10-07): `EntryDelivery<D>`, built by `EntryDelivery::new(ring, on_entry, env)`, the handler
-  `FnMut(EntryOf<D>, &DeliveryHandle<D>)`, a failure handing back the ring and the handler as
-  `DeliverySetupError`; entries queued before the handover are delivered, which `new` guarantees by
-  arming and then setting the readiness event, tested from the start. **Open, for the engineer:**
-  which of the trait's `&mut self` operations the owner and `DeliveryHandle` offer as `&self`, and
-  how (mirrored methods, or a closure over the instance under its lock); and its teardown, which
+- [x] **DI-3.2.2.2** -- The Model A front end: `EntryDelivery` and its `DeliveryHandle`, delivering entries one at a time to a handler on pool threads. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3222)
   DI-2.7 point 5 orders -- delivery quiesced before the state it reaches is released.
 
 - [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default

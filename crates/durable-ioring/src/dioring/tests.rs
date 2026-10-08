@@ -44,10 +44,10 @@ pub(crate) fn empty() -> Ring {
 }
 
 /// A temporary file, removed when dropped.
-struct TempFile(PathBuf);
+pub(crate) struct TempFile(pub(crate) PathBuf);
 
 impl TempFile {
-    fn new(tag: &str) -> Self {
+    pub(crate) fn new(tag: &str) -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(
             "durable-ioring-setup-{tag}-{}-{}",
@@ -58,7 +58,7 @@ impl TempFile {
         Self(path)
     }
 
-    fn open(&self) -> SharedHandle {
+    pub(crate) fn open(&self) -> SharedHandle {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
