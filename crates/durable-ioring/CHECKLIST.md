@@ -59,7 +59,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   transferred count; a marking type open to further kinds, starting with a suspect write later
   covered by a successful flush; and a failure's final record surviving its resolution, including a
   heal, which needs an entry of its own. A `Failed` entry's own observation time lands first, with
-  the dependency, under win-time-sys' `WT-2.2`; every
+  the dependency, under win-time-sys' `WT-2.2.2`; every
   failure, synchronous or asynchronous, carries its error code -- a failed completion's and a failed
   flush's alike -- in a representation chosen here, which also settles how a consumer reads the code
   without `windows-ioring-sys`' `IoRingErrorExt` (DI-D-34's question). Timestamps are interrupt time
@@ -71,7 +71,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   > (DI-D-37). It comes from `win-time-sys`, created for it: component `crates/win-time-sys` ->
   > `WT-M1` -> `WT-1.3` (interrupt time) -- landed, see
   > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-13) -- and dioring's
-  > dependency on it, with the `Failed` entry's timestamp: `WT-M2` -> `WT-2.2`, see
+  > dependency on it, with the `Failed` entry's timestamp: `WT-M2` -> `WT-2.2.2`, see
   > [CHECKLIST.md](../win-time-sys/CHECKLIST.md).
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
@@ -124,7 +124,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `DI-3.2.2.1` added two more path-only dependencies, pinned the same way: `win-sync-sys` (the
   readiness signal's `Event`), at its first release, and `windows-threadpool-sys` (the readiness
   check's wait), at the release carrying its `M-T14.1` (`From<Event> for WaitableHandle`).
-  win-time-sys' `WT-2.2` adds a fourth, `win-time-sys` (the failure timestamps' clock), at its
+  win-time-sys' `WT-2.2.2` adds a fourth, `win-time-sys` (the failure timestamps' clock), at its
   first release.
 
 - [ ] **DI-3.6** -- **Emit the delay events** DI-2.11 designs, from a manifest-based ETW provider

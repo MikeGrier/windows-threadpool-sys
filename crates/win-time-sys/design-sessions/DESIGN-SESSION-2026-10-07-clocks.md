@@ -36,3 +36,14 @@ fact that there are different 'getters' is orthogonal" -- asked whether it could
 assistant mapped it to chrono's own structure: a timeline (period and epoch) as the data type, and a
 clock as a getter on it, with unbiased interrupt time its own timeline because sleep separates it from
 interrupt time.
+
+**`Steady`, and a mock clock's contract (2026-10-08).** Adopting the crate in durable-ioring
+(WT-2.2), the engineer asked for its core to be generic over a clock and to accept a mock clock that
+"must act contractually and rationally with regards to other observable time facts". `Clock` alone
+promised no direction, so the assistant proposed `Steady`, a marker trait promising readings never
+decrease; the engineer: "the contract is what you think it should be" (WT-D-9). On how far a mock
+must agree with time seen elsewhere, the engineer described a timed wait portioned out in collusion
+with a mock -- 30 minutes made to pass in 5 seconds, with the code none the wiser -- recorded as a
+working position in [DESIGN-NOTES.md](../DESIGN-NOTES.md) and parked as WT-inf.2. The full exchange is
+in durable-ioring's session log,
+[DESIGN-SESSION-2026-10-05-epoch-ring.md](../../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).

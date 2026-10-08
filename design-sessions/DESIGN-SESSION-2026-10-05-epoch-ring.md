@@ -2534,6 +2534,39 @@ blocker surfaced: dioring forbids `unsafe`, and the only interrupt-time wrapper 
 `windows-threadpool-sys`' crate-private one, so where a safe public read lives is a placement
 question for the engineer.
 
+## A clock the core is given (2026-10-08)
+
+Implementing WT-2.2 -- dioring's first timestamp, the observation time on a `Failed` entry -- the
+assistant first gave the core a function pointer for its clock, keeping it free of I/O. The
+engineer: "The core should be generic over a clock and should be able to take a 'mock clock' to be
+driven however that clock wants to act. It must act contractually and rationally with regards to
+other observable time facts."
+
+The assistant pointed out that `Clock` promised nothing about direction -- the system clocks go
+backwards when the time is set -- so a mock on interrupt time's timeline could run backwards and
+still satisfy the bound, and put four points:
+
+1. A marker trait `Steady: Clock`, promising readings never decrease, as the contract a mock signs.
+   The engineer: "the contract is what you think it should be." (WT-D-9.)
+2. The time facts dioring states: failure stamps never decrease in observation order, and the
+   inventory reports the stamp the entry carried; the oracle checks them. "correct".
+3. How far a mock must agree with time observed outside dioring. The engineer: some facts may slide
+   and others are contractually significant. Code should almost never use timestamps, but it may use
+   a timed wait resumed until the whole amount has accumulated, to simulate a sleep; then the
+   clock's accounting must be rational enough for that to work -- not wall-clock time, but
+   affordances for the wait to collude with a mock, so that code which "thinks" it waits 30 minutes
+   sees them pass in 5 seconds, the time base advancing correspondingly and the event signalled at
+   the right time, "with the code none the wiser". It "would require collusion to enable
+   correctly". Recorded in win-time-sys as a working position, parked as WT-inf.2 until a timed
+   wait exists to collude with.
+4. Whether `Dioring` takes the clock too, or only the core. The engineer: "I don't have a good idea
+   on how to go with this. I will take your advice." The advice: the instance too, as a defaulted
+   parameter -- the code that waits sits above or beside an instance, so a mock that colludes with
+   it must be the instance's, and a default leaves every existing spelling unchanged. (DI-D-38.)
+
+WT-2.2 was split in two, since the bound lives in win-time-sys: WT-2.2.1 adds `Steady`, and
+WT-2.2.2 has dioring adopt it.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
