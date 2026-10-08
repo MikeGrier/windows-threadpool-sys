@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::Event;
+use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady};
 use windows_ioring_sys::{
     Batch, Completion, EventDelivery, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers,
     RegisteredFile, RegisteredFiles, RegisteredSpan,
@@ -32,6 +33,14 @@ use relay::{Delivery, FlushTarget, Relay};
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// A clock dioring can stamp with: one on interrupt time, its one time base (DI-D-37), whose readings
+/// never decrease (`Steady`), and that can be held under the lock pool threads take (DI-D-38).
+/// [`InterruptClock`] is the default; a test may give an instance its own mock, which takes on
+/// `Steady`'s promise by implementing it. Implemented for every type that meets those bounds.
+pub trait TimeBase: Clock<Timeline = InterruptTime> + Steady + Send + 'static {}
+
+impl<K: Clock<Timeline = InterruptTime> + Steady + Send + 'static> TimeBase for K {}
 
 /// How long construction waits for each registration's completion. A registration is a
 /// bookkeeping operation the kernel completes at once; the bound exists so a ring that never
@@ -192,19 +201,21 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
 }
 
 /// dioring: `B` is the owned buffer type, `E` the epoch-id type, `C` the consumer's
-/// per-operation context, and `R` the registered-buffer type.
+/// per-operation context, `R` the registered-buffer type, and `K` the clock it stamps failures with
+/// (a [`TimeBase`]; [`InterruptClock`] unless built with [`Dioring::with_clock`]).
 ///
 /// The ring is handed to `EventDelivery`, whose callbacks move each completion into dioring's own
 /// queue and set the readiness event, and the consumer pops that queue (DI-D-18, DI-D-28). So
 /// the buffer, epoch-id and context types cross to pool threads and must be `Send`; the epoch-id
 /// type must also be `Sync`, because a failure's suspect set is shared.
-pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>> {
+pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>, K = InterruptClock>
+{
     pub(crate) instance: InstanceId,
     /// The ring, inside its delivery. Declared before `registered`: dropping it quiesces the
     /// delivery callbacks and then closes the ring, so both happen before the buffers the ring
     /// registered are released (DI-2.7 point 5, the ring crate's D-13 order).
     pub(crate) delivery: Arc<Delivery<E, B, C>>,
-    pub(crate) relay: Arc<Relay<E, B, C>>,
+    pub(crate) relay: Arc<Relay<E, B, C, K>>,
     pub(crate) files: HashMap<FileKey, FileRecord>,
     /// The interning table. An entry lives for the instance's life: the number of distinct
     /// domains is the number of devices and shares the consumer touches.
@@ -223,7 +234,8 @@ where
     R: IoBufMut,
 {
     /// Build an instance, make the ring's registrations, and wire its delivery. Blocks until both
-    /// registrations have completed.
+    /// registrations have completed. Failures are stamped with [`InterruptClock`]; see
+    /// [`Dioring::with_clock`] for another clock.
     ///
     /// # Errors
     ///
@@ -232,6 +244,25 @@ where
     /// to deliver its completions. The checks that need no ring run first, so a refusal for
     /// either of the first two creates nothing.
     pub fn new(setup: Setup<E, R>) -> Result<Self, SetupError<E, R>> {
+        Self::with_clock(setup, InterruptClock)
+    }
+}
+
+impl<B, E, C, R, K> Dioring<B, E, C, R, K>
+where
+    B: Send + 'static,
+    E: EpochId + Send + Sync + 'static,
+    C: Send + 'static,
+    R: IoBufMut,
+    K: TimeBase,
+{
+    /// [`Dioring::new`], stamping failures with `clock` (DI-D-38): a test's mock, for one, which
+    /// must keep [`Steady`]'s promise that its readings never decrease.
+    ///
+    /// # Errors
+    ///
+    /// As [`Dioring::new`].
+    pub fn with_clock(setup: Setup<E, R>, clock: K) -> Result<Self, SetupError<E, R>> {
         let Setup {
             submission_queue_size,
             completion_queue_size,
@@ -259,7 +290,7 @@ where
         }
 
         let instance = InstanceId::next();
-        let relay = match Relay::new(Lineage { instance, seq: 0 }) {
+        let relay = match Relay::new(Lineage { instance, seq: 0 }, clock) {
             Ok(relay) => Arc::new(relay),
             Err(error) => {
                 return Err(SetupError {
@@ -367,12 +398,13 @@ where
     }
 }
 
-impl<B, E, C, R> DurableRing for Dioring<B, E, C, R>
+impl<B, E, C, R, K> DurableRing for Dioring<B, E, C, R, K>
 where
     B: Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
     R: IoBufMut,
+    K: TimeBase,
 {
     type Ids = DioringIds<E>;
     type Buffer = B;
@@ -543,12 +575,13 @@ where
     }
 }
 
-impl<B, E, C, R> Dioring<B, E, C, R>
+impl<B, E, C, R, K> Dioring<B, E, C, R, K>
 where
     B: Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
     R: IoBufMut,
+    K: TimeBase,
 {
     /// The files an imported failure reaches (DI-D-21). A domain no file was declared with reaches
     /// only the files declared with none; with one lineage, naming it is naming the instance.
@@ -571,7 +604,7 @@ where
 /// examples. It transforms a flush's real completion through `windows-ioring-sys`' own seam, so
 /// the flush still reaches the kernel and only the answer dioring sees changes.
 #[cfg(feature = "fault-injection")]
-impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
+impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Dioring<B, E, C, R, K> {
     /// Make the next flush of `file` to complete report the Win32 error `code` -- for example
     /// `1117`, `ERROR_IO_DEVICE` -- whatever the kernel answered. Armed failures for one file are
     /// used in the order they were armed. The flush may already be in flight.
@@ -580,12 +613,13 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut> Dioring<B, E, C, R> {
     }
 }
 
-impl<B, E, C, R> RegisteredBufferRing for Dioring<B, E, C, R>
+impl<B, E, C, R, K> RegisteredBufferRing for Dioring<B, E, C, R, K>
 where
     B: Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
     R: IoBufMut,
+    K: TimeBase,
 {
     type Registered = R;
 
@@ -621,7 +655,7 @@ where
     }
 }
 
-impl<B, E: EpochId + 'static, C, R: IoBufMut> Drop for Dioring<B, E, C, R> {
+impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Drop for Dioring<B, E, C, R, K> {
     fn drop(&mut self) {
         // Before the delivery is dropped, which the field drop that follows does: once the core is
         // closed no callback holds the delivery, so it is dropped here, on this thread, and not

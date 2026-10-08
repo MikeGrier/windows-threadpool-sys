@@ -27,6 +27,10 @@ win-sync-sys = { path = "../win-sync-sys" }
 # The thread-pool wait the conformance module's readiness check waits through. Path only: it needs
 # `From<Event> for WaitableHandle`, which is unreleased, and DI-3.5 pins it.
 windows-threadpool-sys = { path = "../windows-threadpool-sys" }
+# dioring's one time base, interrupt time (DI-D-37), read through `InterruptClock`: dioring forbids
+# `unsafe`, so it cannot call `QueryInterruptTime` itself. Path only, as for the ring crate: it is
+# unreleased, and DI-3.5 pins it.
+win-time-sys = { path = "../win-time-sys" }
 
 [features]
 # The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by

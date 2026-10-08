@@ -21,6 +21,11 @@
 //! abandoning makes its epochs abandoned at once, and a heal takes effect when the first seal made
 //! after it finishes with every flush successful.
 //!
+//! **Time** (DI-D-37, DI-D-38). A failure's observation time is read inside the transition that
+//! records it, from the clock the core holds -- `InterruptClock` unless the instance was given
+//! another, a mock in these tests -- so stamps are taken in observation order, and a `Steady` clock
+//! makes them never decrease in it.
+//!
 //! **Not yet here**, and left visibly undone rather than approximated: a write to a file a consumer
 //! provider serves leaves its seal unfinished, because providers are `DI-3.2.6`'s; and failures are
 //! the lineage's own until `DI-3.2.5` makes them the instance's, shared by every lineage with a
@@ -32,7 +37,9 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::DomainId;
+use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
+
+use super::{DomainId, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
 use crate::types::{
@@ -211,13 +218,14 @@ struct Failure<E: EpochId + 'static> {
     id: FailureId,
     cause: Cause<V<E>>,
     suspect: SuspectSet<V<E>>,
+    observed: TimePoint<InterruptTime>,
     /// The epochs of its suspect writes.
     epochs: BTreeSet<E>,
     standing: Standing,
 }
 
-/// One lineage's durability state.
-pub(crate) struct Durability<E: EpochId + 'static, T> {
+/// One lineage's durability state, stamping failures with `K`'s readings.
+pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     lineage: Lineage,
     sealed_through: Option<E>,
     durable_through: Option<E>,
@@ -235,10 +243,11 @@ pub(crate) struct Durability<E: EpochId + 'static, T> {
     /// changes arrive on a pool thread, where a panic aborts the process and names no test; the
     /// consumer's next `pop` asserts on it instead, on the consumer's own thread.
     inconsistency: Option<&'static str>,
+    clock: K,
 }
 
-impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
-    pub(crate) fn new(lineage: Lineage) -> Self {
+impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
+    pub(crate) fn new(lineage: Lineage, clock: K) -> Self {
         Self {
             lineage,
             sealed_through: None,
@@ -251,9 +260,12 @@ impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
             next_failure: 0,
             abandoned: BTreeSet::new(),
             inconsistency: None,
+            clock,
         }
     }
+}
 
+impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// The first internal inconsistency observed, if any.
     pub(crate) fn inconsistency(&self) -> Option<&'static str> {
         self.inconsistency
@@ -490,6 +502,7 @@ impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
                 id: failure.id,
                 cause: failure.cause.clone(),
                 suspect: failure.suspect.clone(),
+                observed: failure.observed,
                 token_live: match &failure.standing {
                     Standing::Open(live) => live.load(Ordering::Acquire),
                     Standing::Healing { .. } => true,
@@ -520,10 +533,12 @@ impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
         self.next_failure += 1;
         let (token, live) = FailureToken::mint(id);
         let suspect = SuspectSet::new(suspect);
+        let observed = self.clock.now();
         self.failures.push(Failure {
             id,
             cause: cause.clone(),
             suspect: suspect.clone(),
+            observed,
             epochs,
             standing: Standing::Open(live),
         });
@@ -532,6 +547,7 @@ impl<E: EpochId + 'static, T: Clone> Durability<E, T> {
             token,
             cause,
             suspect,
+            observed,
         }));
         id
     }

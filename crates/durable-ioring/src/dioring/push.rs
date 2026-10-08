@@ -14,7 +14,7 @@ use windows_ioring_sys::{
     RegisteredSpan, WriteCaching as RingCaching,
 };
 
-use super::{Dioring, FileSlot, Sidecar};
+use super::{Dioring, FileSlot, Sidecar, TimeBase};
 use crate::contract::{EpochId, PushResult};
 use crate::ids::{DioringIds, Lineage, OpId};
 use crate::types::{
@@ -23,12 +23,13 @@ use crate::types::{
 
 type V<E> = DioringIds<E>;
 
-impl<B, E, C, R> Dioring<B, E, C, R>
+impl<B, E, C, R, K> Dioring<B, E, C, R, K>
 where
     B: Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
     R: IoBufMut,
+    K: TimeBase,
 {
     pub(crate) fn push_write(
         &mut self,

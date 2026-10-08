@@ -10,11 +10,12 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
 use win_shared_os_owned_handle::SharedHandle;
+use win_time_sys::InterruptClock;
 use windows_ioring_sys::RegisteredSpan;
 
 use super::{TempFile, V, empty, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
-use crate::dioring::{Dioring, FileSetup, Setup};
+use crate::dioring::{Dioring, FileSetup, Setup, TimeBase};
 use crate::ids::OpId;
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
@@ -22,8 +23,9 @@ use crate::types::{
     PushRefusal, WriteCaching, WriteOptions,
 };
 
-/// The instances here carry a `u32` context, so the oracle can compare them.
-pub(super) type Ring = Dioring<Vec<u8>, u64, u32>;
+/// The instances here carry a `u32` context, so the oracle can compare them, and stamp failures
+/// with `K`.
+pub(super) type Ring<K = InterruptClock> = Dioring<Vec<u8>, u64, u32, Vec<u8>, K>;
 pub(super) type Completed = OpCompletion<V, Vec<u8>, u32>;
 pub(super) type RingEntry = Entry<V, Vec<u8>, u32>;
 
@@ -50,11 +52,23 @@ pub(super) fn read_only(temp: &TempFile) -> SharedHandle {
 }
 
 pub(super) fn instance(files: Vec<FileSetup>, buffers: Vec<Vec<u8>>) -> Ring {
-    Ring::new(Setup {
-        submission_queue_size: QUEUE,
-        completion_queue_size: QUEUE,
-        ..setup(files, buffers, None)
-    })
+    instance_with_clock(files, buffers, InterruptClock)
+}
+
+/// An instance stamping failures with `clock`.
+pub(super) fn instance_with_clock<K: TimeBase>(
+    files: Vec<FileSetup>,
+    buffers: Vec<Vec<u8>>,
+    clock: K,
+) -> Ring<K> {
+    Ring::with_clock(
+        Setup {
+            submission_queue_size: QUEUE,
+            completion_queue_size: QUEUE,
+            ..setup(files, buffers, None)
+        },
+        clock,
+    )
     .expect("build an instance")
 }
 
@@ -67,13 +81,13 @@ pub(super) fn given(key: FileKey, temp: &TempFile) -> FileSetup {
 }
 
 /// An instance and the oracle watching its stream.
-pub(super) struct Harness {
-    pub(super) ring: Ring,
+pub(super) struct Harness<K = InterruptClock> {
+    pub(super) ring: Ring<K>,
     pub(super) oracle: ConformanceOracle<V, u32>,
 }
 
-impl Harness {
-    pub(super) fn new(ring: Ring) -> Self {
+impl<K: TimeBase> Harness<K> {
+    pub(super) fn new(ring: Ring<K>) -> Self {
         Self {
             ring,
             oracle: ConformanceOracle::new(),

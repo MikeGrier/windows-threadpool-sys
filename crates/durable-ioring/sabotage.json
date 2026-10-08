@@ -484,6 +484,46 @@
       "why": "The manifest checking itself. Nothing asserts on this wording, and no test reaches it, so the change must survive; if it comes back caught, something is matching incidental text.",
       "find": ["                \"the ring did not complete a registration within {}s\","],
       "replace": ["                \"no registration completion arrived within {}s\","]
+    },
+    {
+      "name": "WT-2.2.2: every failure is stamped with a fixed point, not the clock",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The stamp is the one thing the clock is held for. A core that never reads it reports a time that says nothing about when the failure was observed.",
+      "find": ["        let observed = self.clock.now();\n"],
+      "replace": ["        let observed = win_time_sys::TimePoint::from_ticks(0);\n"]
+    },
+    {
+      "name": "WT-2.2.2: the inventory reports a reading taken when asked",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The second time fact: the inventory reports the stamp the Failed entry carried. Re-reading the clock would report when the consumer asked, which drifts from the entry and from every other record of the failure.",
+      "find": ["                observed: failure.observed,\n"],
+      "replace": ["                observed: self.clock.now(),\n"]
+    },
+    {
+      "name": "WT-2.2.2: the oracle accepts a stamp that went backwards",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The first time fact, as the oracle checks it. Without the comparison every stamp is accepted, and a mock that broke its promise or a core that read its clock outside the lock would pass unnoticed.",
+      "find": ["            && observed < previous\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "WT-2.2.2: the oracle refuses equal stamps",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The other direction of the same guard: interrupt time repeats a value for a whole system tick, so two failures in one tick carry equal stamps, and an oracle that refused them would reject a correct stream.",
+      "find": ["            && observed < previous\n"],
+      "replace": ["            && observed <= previous\n"]
+    },
+    {
+      "name": "CONTROL: the clock is read before the token is minted",
+      "file": "src/dioring/durability.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
+      "find": ["        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n        let observed = self.clock.now();\n"],
+      "replace": ["        let observed = self.clock.now();\n        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n"]
     }
   ]
 }

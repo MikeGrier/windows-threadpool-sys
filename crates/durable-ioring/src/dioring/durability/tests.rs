@@ -3,13 +3,17 @@
 
 use std::sync::Arc;
 
+use win_time_sys::InterruptClock;
+
 use super::{Due, Durability, Event, Flush, Routing, Sealing, State};
-use crate::dioring::DomainId;
+use crate::dioring::{DomainId, TimeBase};
 use crate::ids::{DioringIds, FailureToken, InstanceId, Lineage as LineageId, OpId};
 use crate::types::{FileKey, SuspectWrite};
 
 // Failures, their reach, and their resolution: DI-3.2.4.
 mod failures;
+// Failure stamps, from the clock the core holds: WT-2.2.2.
+mod stamps;
 
 type Lineage = Durability<u64, &'static str>;
 
@@ -22,10 +26,13 @@ const DEFAULT: Routing = Routing {
 };
 
 fn lineage() -> Lineage {
-    Durability::new(LineageId {
-        instance: InstanceId::next(),
-        seq: 0,
-    })
+    Durability::new(
+        LineageId {
+            instance: InstanceId::next(),
+            seq: 0,
+        },
+        InterruptClock,
+    )
 }
 
 fn target(file: FileKey) -> &'static str {
@@ -49,14 +56,20 @@ impl Ops {
         }
     }
 
-    fn push(&mut self, lineage: &mut Lineage, epoch: u64, file: FileKey, routing: Routing) -> OpId {
+    fn push<K: TimeBase>(
+        &mut self,
+        lineage: &mut Durability<u64, &'static str, K>,
+        epoch: u64,
+        file: FileKey,
+        routing: Routing,
+    ) -> OpId {
         self.push_in(lineage, epoch, file, routing, &[])
     }
 
     /// Push a write to a file declared with `domains`.
-    fn push_in(
+    fn push_in<K: TimeBase>(
         &mut self,
-        lineage: &mut Lineage,
+        lineage: &mut Durability<u64, &'static str, K>,
         epoch: u64,
         file: FileKey,
         routing: Routing,

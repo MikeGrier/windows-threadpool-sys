@@ -8,6 +8,7 @@ use std::io;
 use std::sync::Arc;
 
 use win_shared_os_owned_handle::SharedHandle;
+use win_time_sys::{InterruptTime, TimePoint};
 
 use crate::contract::Identities;
 
@@ -185,6 +186,10 @@ pub struct Failed<V: Identities> {
     pub cause: Cause<V>,
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
+    /// When the instance observed it, on interrupt time, dioring's one time base (DI-D-37). Its
+    /// resolution is the system clock tick, so failures observed within one tick carry equal
+    /// stamps.
+    pub observed: TimePoint<InterruptTime>,
 }
 
 /// What a consumer operation was.
@@ -476,6 +481,8 @@ pub struct FailureInfo<V: Identities> {
     pub cause: Cause<V>,
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
+    /// When the instance observed it: the same stamp its `Failed` entry carried.
+    pub observed: TimePoint<InterruptTime>,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.
     pub token_live: bool,
 }

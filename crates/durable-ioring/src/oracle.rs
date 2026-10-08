@@ -35,6 +35,9 @@
 //!   reported, listed in push order.
 //! - **Finality** (guarantee 3): no suspect write is of an epoch its lineage was already reported
 //!   durable through.
+//! - **Failure stamps never decrease** (DI-D-38): each `Failed` was observed at or after the
+//!   `Failed` before it in the stream. Equal stamps are legal -- interrupt time's resolution is the
+//!   system clock tick -- and so is any gap.
 //! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
 //!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
 //!   containing an epoch of n's lineage at or below n.
@@ -60,11 +63,16 @@
 //! - **When a heal takes effect.** It waits for a seal the stream cannot tell apart from others,
 //!   so a `Durable` that passes a healed failure is accepted whenever it comes.
 //! - **`LineageEnded`**, accepted unexamined until the step that produces it adds its rules.
+//! - **What a stamp's value is**: how it relates to wall-clock time, or to any clock outside the
+//!   instance. The clock is the instance's to choose (DI-D-38), and a test's mock may run at any
+//!   rate, so long as it never runs backwards.
 //!
 //! # What the stream cannot show
 //!
 //! Whether the bytes reached the file at the offset given; whether a reported `Durable` is true,
-//! which only the device knows; and whether the readiness signal was set when it should have been:
+//! which only the device knows; whether the inventory reports a failure with the stamp its `Failed`
+//! entry carried, since the inventory is not in the stream; and whether the readiness signal was
+//! set when it should have been:
 //! the oracle sees entries, not wakes. The second is
 //! [`check_readiness`]'s, which runs beside the oracle (DI-D-28).
 
@@ -74,6 +82,7 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use win_time_sys::{InterruptTime, TimePoint};
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
@@ -172,6 +181,15 @@ pub enum Violation<V: Identities> {
         /// The write.
         op: V::OpId,
     },
+    /// A `Failed` stamped earlier than the `Failed` before it (DI-D-38).
+    StampWentBackwards {
+        /// The failure.
+        failure: V::FailureId,
+        /// Its stamp.
+        observed: TimePoint<InterruptTime>,
+        /// The previous failure's stamp.
+        previous: TimePoint<InterruptTime>,
+    },
     /// A suspect set not in push order.
     SuspectsOutOfOrder {
         /// The failure.
@@ -224,6 +242,8 @@ pub struct ConformanceOracle<V: Identities, C> {
     failures: HashMap<V::FailureId, Reported<V>>,
     /// Every failure identity reported.
     failure_ids: HashSet<V::FailureId>,
+    /// The latest `Failed` entry's stamp.
+    last_stamp: Option<TimePoint<InterruptTime>>,
     /// The epochs of every abandoned failure, by lineage.
     abandoned: HashMap<V::Lineage, BTreeSet<V::EpochId>>,
 }
@@ -239,6 +259,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             durable: HashMap::new(),
             failures: HashMap::new(),
             failure_ids: HashSet::new(),
+            last_stamp: None,
             abandoned: HashMap::new(),
         }
     }
@@ -305,7 +326,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         let completion = match entry {
             Entry::Op(completion) => completion,
             Entry::Durable { through } => return self.durable(*through),
-            Entry::Failed(failed) => return self.failed(failed.id, failed.suspect.writes()),
+            Entry::Failed(failed) => {
+                return self.failed(failed.id, failed.suspect.writes(), failed.observed);
+            }
             Entry::Abandoned { failure, suspect } => {
                 return self.abandoned(*failure, suspect.writes());
             }
@@ -372,9 +395,19 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         &mut self,
         failure: V::FailureId,
         suspect: &[SuspectWrite<V>],
+        observed: TimePoint<InterruptTime>,
     ) -> Result<(), Violation<V>> {
         if !self.failure_ids.insert(failure) {
             return Err(Violation::DuplicateFailure { failure });
+        }
+        if let Some(previous) = self.last_stamp.replace(observed)
+            && observed < previous
+        {
+            return Err(Violation::StampWentBackwards {
+                failure,
+                observed,
+                previous,
+            });
         }
         for write in suspect {
             if self.writes.get(&write.op) != Some(&write.epoch) {

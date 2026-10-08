@@ -9,6 +9,7 @@ dependencies = [
  "durable-ioring",
  "win-shared-os-owned-handle",
  "win-sync-sys",
+ "win-time-sys",
  "windows-ioring-sys",
  "windows-threadpool-sys",
 ]

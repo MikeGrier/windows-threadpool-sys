@@ -6,6 +6,7 @@ use crate::FileKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, OpId};
 use crate::oracle::Violation;
 use crate::types::{Cause, Entry, Epoch, Failed, ImportScope, SuspectSet, SuspectWrite};
+use win_time_sys::TimePoint;
 
 fn failure(instance: InstanceId, seq: u64) -> FailureId {
     FailureId { instance, seq }
@@ -24,7 +25,12 @@ fn suspect(writes: &[(OpId, Epoch<V>)]) -> SuspectSet<V> {
     )
 }
 
+/// A `Failed` stamped at zero, so a test that is not about stamps never trips the stamp rule.
 fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
+    failed_at(id, writes, 0)
+}
+
+fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> TestEntry {
     Entry::Failed(Failed {
         id,
         token: FailureToken::mint(id).0,
@@ -32,6 +38,7 @@ fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
             scope: ImportScope::All,
         },
         suspect: suspect(writes),
+        observed: TimePoint::from_ticks(ticks),
     })
 }
 
@@ -90,6 +97,32 @@ fn a_failure_suspecting_accepted_writes_in_push_order_is_accepted_and_others_are
         oracle.observe(&failed(failure(instance, 4), &[w1, w0])),
         Err(Violation::SuspectsOutOfOrder { .. })
     ));
+}
+
+#[test]
+fn failure_stamps_may_repeat_or_rise_but_never_fall() {
+    let instance = InstanceId::next();
+    let mut oracle = Oracle::new();
+    oracle
+        .observe(&failed_at(failure(instance, 0), &[], 500))
+        .expect("the first stamp, whatever it is");
+    oracle
+        .observe(&failed_at(failure(instance, 1), &[], 500))
+        .expect("within one tick: equal");
+    oracle
+        .observe(&failed_at(failure(instance, 2), &[], 9_000))
+        .expect("any gap");
+    match oracle.observe(&failed_at(failure(instance, 3), &[], 8_999)) {
+        Err(Violation::StampWentBackwards {
+            failure: named,
+            observed,
+            previous,
+        }) => {
+            assert_eq!(named, failure(instance, 3));
+            assert_eq!((observed.ticks(), previous.ticks()), (8_999, 9_000));
+        }
+        other => panic!("expected StampWentBackwards, got {other:?}"),
+    }
 }
 
 #[test]

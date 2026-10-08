@@ -39,4 +39,5 @@ pub use types::{
 // direct dependency on them to call it.
 pub use win_shared_os_owned_handle::SharedHandle;
 pub use win_sync_sys::Event;
+pub use win_time_sys::{InterruptTime, TimePoint};
 pub use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};

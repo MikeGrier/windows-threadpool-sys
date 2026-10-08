@@ -264,6 +264,21 @@ the `Failed` event, can be passed around, and is consumed by heal, abandon or cl
 most one live token; dropping a token is `close()`, and the failure's token can be taken from the
 inventory again. Another instance's identity or token is refused.
 
+### When a failure was observed
+
+Each failure carries the time it was observed, on interrupt time, the one time base
+([DI-D-37](DESIGN-NOTES.md#di-d-37), [DI-D-38](DESIGN-NOTES.md#di-d-38)). Two facts about it are
+part of the contract:
+
+- **Stamps never decrease in observation order**: each `Failed` entry carries a stamp at or after
+  the one before it in the queue.
+- **The inventory reports the stamp the `Failed` entry carried**, not a reading taken when asked.
+
+Nothing else is promised. Equal stamps are normal, since interrupt time's resolution is the system
+clock tick, and a stamp is a report: nothing the implementation decides depends on one. dioring
+reads it with `InterruptClock`, or with the clock it was given by `Dioring::with_clock` -- a test's
+mock, for one -- which must promise never to run backwards (`win-time-sys`' `Steady`).
+
 ### Resolving a failure
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
@@ -289,7 +304,8 @@ its tokens back. Resolution is per failure ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 
 ### The inventory
 
-Unresolved failures can be enumerated and each queried for its identity, cause and suspect set.
+Unresolved failures can be enumerated and each queried for its identity, cause, suspect set and the
+time it was observed.
 Resolved failures leave no memory. Because identities are never reused, an identity no longer in the
 inventory means resolved; the `Durable` or `Abandoned` event was the record.
 
@@ -311,7 +327,7 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 | Event | When |
 |---|---|
 | `Durable { through: n }` | the high-water mark has reached n |
-| `Failed { failure, token, cause, suspect }` | a durability failure was observed (a flush, or a provider's domain, failed; or an import) |
+| `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a flush, or a provider's domain, failed; or an import) |
 | `Blocked { through: n, by: failure }` | a request's flushes succeeded, but an unresolved failure at or below n prevents reporting it |
 | `Abandoned { failure, suspect }` | the consumer abandoned a failure |
 | `LineageEnded { lineage, abandoned_through }` | the consumer ended a lineage; every epoch of it not yet durable is abandoned |

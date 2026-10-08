@@ -27,8 +27,8 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
 
-use super::Sidecar;
 use super::durability::{Due, Durability, Event as Synthesized, Flush};
+use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, Lineage};
 #[cfg(feature = "fault-injection")]
@@ -49,10 +49,10 @@ pub(crate) enum FlushTarget {
 }
 
 /// The state under dioring's lock.
-pub(crate) struct Core<E: EpochId + 'static, B, C> {
+pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     queue: VecDeque<DioringEntry<E, B, C>>,
     /// The default lineage's durability; minted lineages are `DI-3.2.5`'s.
-    pub(crate) lineage: Durability<E, FlushTarget>,
+    pub(crate) lineage: Durability<E, FlushTarget, K>,
     /// The default lineage, for the epochs its `Durable` entries and flushes name.
     default_lineage: Lineage,
     /// Flushes due that the ring refused, pushed again at the next chance.
@@ -69,20 +69,21 @@ pub(crate) struct Core<E: EpochId + 'static, B, C> {
 }
 
 /// The state dioring's delivery callback reaches.
-pub(crate) struct Relay<E: EpochId + 'static, B, C> {
-    core: Mutex<Core<E, B, C>>,
+pub(crate) struct Relay<E: EpochId + 'static, B, C, K> {
+    core: Mutex<Core<E, B, C, K>>,
     /// Auto-reset; the consumer's `readiness()` is a duplicate of it.
     readiness: Event,
     ring: OnceLock<Weak<Delivery<E, B, C>>>,
 }
 
-impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
-    /// An empty queue, nothing sealed, and an unsignalled readiness event.
-    pub(crate) fn new(default_lineage: Lineage) -> io::Result<Self> {
+impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
+    /// An empty queue, nothing sealed, and an unsignalled readiness event; failures are stamped
+    /// with `clock`.
+    pub(crate) fn new(default_lineage: Lineage, clock: K) -> io::Result<Self> {
         Ok(Self {
             core: Mutex::new(Core {
                 queue: VecDeque::new(),
-                lineage: Durability::new(default_lineage),
+                lineage: Durability::new(default_lineage, clock),
                 default_lineage,
                 unpushed: Vec::new(),
                 unsubmitted: false,
@@ -111,14 +112,14 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
         self.readiness.try_clone()
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Core<E, B, C>> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Core<E, B, C, K>> {
         // A panic while the core was held leaves it consistent: each update is completed before
         // anything that can panic runs.
         self.core.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The next entry, if any.
-    pub(crate) fn pop(core: &mut Core<E, B, C>) -> Option<DioringEntry<E, B, C>> {
+    pub(crate) fn pop(core: &mut Core<E, B, C, K>) -> Option<DioringEntry<E, B, C>> {
         core.queue.pop_front()
     }
 
@@ -126,7 +127,7 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
     /// poppable before the event is set, and every empty-to-non-empty transition sets it
     /// (DI-D-28). A transition the consumer races -- popping the entry before the set lands --
     /// leaves it a wake with nothing to pop, which the contract calls normal.
-    fn append(&self, core: &mut Core<E, B, C>, entry: DioringEntry<E, B, C>) {
+    fn append(&self, core: &mut Core<E, B, C, K>, entry: DioringEntry<E, B, C>) {
         let was_empty = core.queue.is_empty();
         core.queue.push_back(entry);
         if was_empty {
@@ -137,11 +138,12 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
     }
 }
 
-impl<E, B, C> Relay<E, B, C>
+impl<E, B, C, K> Relay<E, B, C, K>
 where
     E: EpochId + Send + Sync + 'static,
     B: Send + 'static,
     C: Send + 'static,
+    K: TimeBase,
 {
     /// Record one ring completion. Called from `EventDelivery`'s callback, on a pool thread.
     ///
@@ -220,7 +222,7 @@ where
     /// operations stay queued, and the next submission issues them.
     pub(crate) fn apply(
         &self,
-        core: &mut Core<E, B, C>,
+        core: &mut Core<E, B, C, K>,
         due: Due<E, FlushTarget>,
         ring: &Delivery<E, B, C>,
     ) -> Option<io::Error> {
@@ -261,12 +263,12 @@ where
     }
 
     /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
-    fn apply_without_ring(&self, core: &mut Core<E, B, C>, due: Due<E, FlushTarget>) {
+    fn apply_without_ring(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
         self.append_events(core, due.events);
         core.unpushed.extend(due.flushes);
     }
 
-    fn append_events(&self, core: &mut Core<E, B, C>, events: Vec<Synthesized<E>>) {
+    fn append_events(&self, core: &mut Core<E, B, C, K>, events: Vec<Synthesized<E>>) {
         let lineage = core.default_lineage;
         for event in events {
             let entry = match event {

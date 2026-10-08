@@ -5,9 +5,11 @@ use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::OwnedHandle;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use win_shared_os_owned_handle::SharedHandle;
+use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
 
 use super::{Dioring, FileSetup, FileSlot, Setup, SetupError, SetupRefusal};
 use crate::contract::DurableRing;
@@ -21,6 +23,8 @@ mod pushes;
 mod seals;
 // Failures and their resolution, through the fault seam: DI-3.2.4.
 mod failures;
+// Failure stamps, from the instance's clock: WT-2.2.2.
+mod stamps;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;
@@ -41,6 +45,34 @@ fn setup(
         provider,
     }
 }
+
+/// A mock interrupt-time clock a test moves by hand (DI-D-38). Clones share one reading, so a test
+/// keeps a clone to move the clock it gave away. It keeps `Steady`'s promise by construction: it
+/// only moves forwards.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MockClock(Arc<AtomicU64>);
+
+impl MockClock {
+    /// A clock reading `ticks`.
+    pub(crate) fn at(ticks: u64) -> Self {
+        Self(Arc::new(AtomicU64::new(ticks)))
+    }
+
+    /// Move the clock forwards by `ticks`.
+    pub(crate) fn advance(&self, ticks: u64) {
+        self.0.fetch_add(ticks, Ordering::SeqCst);
+    }
+}
+
+impl Clock for MockClock {
+    type Timeline = InterruptTime;
+
+    fn now(&self) -> TimePoint<InterruptTime> {
+        TimePoint::from_ticks(self.0.load(Ordering::SeqCst))
+    }
+}
+
+impl Steady for MockClock {}
 
 /// An instance given nothing.
 pub(crate) fn empty() -> Ring {
