@@ -11,11 +11,12 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 
 use crate::contract::{DurableRing, EntryOf, PushResult};
-use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, LineageHandle, OpId};
 use crate::types::{
-    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
-    ImportScope, LineageInfo, OpCompletion, OpKind, Outcome, ReadOptions, Resolution, ResolveError,
-    WriteOptions,
+    AddFileError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch, EpochState,
+    FailureInfo, FileKey, FileOptions, ImportScope, LineageInfo, OpCompletion, OpKind, Outcome,
+    ReadOptions, Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, Tag,
+    UnknownLineage, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -33,6 +34,8 @@ pub(crate) enum Signals {
 
 pub(crate) struct Fake {
     instance: InstanceId,
+    /// Its one lineage, which reports to no instance.
+    default: LineageHandle,
     pub(crate) signal: Event,
     signals: Signals,
     queue: VecDeque<EntryOf<Self>>,
@@ -44,8 +47,10 @@ pub(crate) struct Fake {
 
 impl Fake {
     pub(crate) fn new(signals: Signals) -> Self {
+        let instance = InstanceId::next();
         Self {
-            instance: InstanceId::next(),
+            instance,
+            default: LineageHandle::detached(Lineage { instance, seq: 0 }),
             signal: Event::new(ResetMode::Auto, false).expect("create the signal"),
             signals,
             queue: VecDeque::new(),
@@ -107,15 +112,30 @@ impl DurableRing for Fake {
         Ok(())
     }
 
-    fn default_lineage(&self) -> Lineage {
-        Lineage {
-            instance: self.instance,
-            seq: 0,
-        }
+    fn default_lineage(&self) -> LineageHandle {
+        self.default.clone()
+    }
+
+    fn mint_lineage(&mut self, _description: Option<String>) -> LineageHandle {
+        unimplemented!("the fake has only its default lineage")
     }
 
     fn lineages(&self) -> Vec<LineageInfo<V>> {
         Vec::new()
+    }
+
+    fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<V>> {
+        Err(EndLineageError {
+            reason: EndLineageRefusal::Default,
+            handle,
+        })
+    }
+
+    fn retire_lineage(&mut self, handle: LineageHandle) -> Result<(), RetireLineageError<V>> {
+        Err(RetireLineageError {
+            reason: RetireLineageRefusal::Default,
+            handle,
+        })
     }
 
     fn write_with(
@@ -123,7 +143,7 @@ impl DurableRing for Fake {
         _file: FileKey,
         _offset: u64,
         _buffer: Vec<u8>,
-        _epoch: Epoch<V>,
+        _tag: Tag<'_, V>,
         _context: u32,
         _options: WriteOptions<V>,
     ) -> PushResult<Self> {
@@ -145,27 +165,27 @@ impl DurableRing for Fake {
         Ok(self.queue.pop_front())
     }
 
-    fn make_durable_through(&mut self, _through: Epoch<V>) -> io::Result<DurabilityRequest<V>> {
+    fn make_durable_through(&mut self, _through: Tag<'_, V>) -> io::Result<DurabilityRequest<V>> {
         unimplemented!("the fake makes nothing durable")
     }
 
-    fn durable_through(&self, _lineage: Lineage) -> Option<u64> {
-        None
+    fn durable_through(&self, _lineage: Lineage) -> Result<Option<u64>, UnknownLineage<V>> {
+        Ok(None)
     }
 
-    fn sealed_through(&self, _lineage: Lineage) -> Option<u64> {
-        None
+    fn sealed_through(&self, _lineage: Lineage) -> Result<Option<u64>, UnknownLineage<V>> {
+        Ok(None)
     }
 
-    fn epoch_state(&self, _epoch: Epoch<V>) -> EpochState<V> {
-        EpochState::Open
+    fn epoch_state(&self, _epoch: Epoch<V>) -> Result<EpochState<V>, UnknownLineage<V>> {
+        Ok(EpochState::Open)
     }
 
     fn resolve(&mut self, _items: Vec<(FailureToken, Resolution)>) -> Result<(), ResolveError<V>> {
         unimplemented!("the fake observes no failures")
     }
 
-    fn import_failure(&mut self, _scope: ImportScope<V>) -> FailureId {
+    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<FailureId, UnknownLineage<V>> {
         unimplemented!("the fake observes no failures")
     }
 

@@ -21,11 +21,13 @@ use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
 use crate::contract::{
-    DurableRing, EntryOf, EpochIdOf, FailureIdOf, Lin, PushResult, RegisteredBufferRing, TokenOf,
+    DurableRing, EntryOf, EpochIdOf, FailureIdOf, HandleOf, Lin, PushResult, RegisteredBufferRing,
+    TokenOf,
 };
 use crate::types::{
-    AddFileError, DurabilityRequest, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
-    ImportScope, LineageInfo, ReadOptions, Resolution, ResolveError, WriteOptions,
+    AddFileError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo, FileKey,
+    FileOptions, ImportScope, LineageInfo, ReadOptions, Resolution, ResolveError,
+    RetireLineageError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -108,13 +110,36 @@ impl<D: DurableRing> DeliveryHandle<D> {
     }
 
     /// [`DurableRing::default_lineage`].
-    pub fn default_lineage(&self) -> Lin<D> {
+    pub fn default_lineage(&self) -> HandleOf<D> {
         self.with(|ring| ring.default_lineage())
+    }
+
+    /// [`DurableRing::mint_lineage`].
+    pub fn mint_lineage(&self, description: Option<String>) -> HandleOf<D> {
+        self.with(|ring| ring.mint_lineage(description))
     }
 
     /// [`DurableRing::lineages`].
     pub fn lineages(&self) -> Vec<LineageInfo<D::Ids>> {
         self.with(|ring| ring.lineages())
+    }
+
+    /// [`DurableRing::end_lineage`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::end_lineage`].
+    pub fn end_lineage(&self, handle: HandleOf<D>) -> Result<(), EndLineageError<D::Ids>> {
+        self.with(|ring| ring.end_lineage(handle))
+    }
+
+    /// [`DurableRing::retire_lineage`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::retire_lineage`].
+    pub fn retire_lineage(&self, handle: HandleOf<D>) -> Result<(), RetireLineageError<D::Ids>> {
+        self.with(|ring| ring.retire_lineage(handle))
     }
 
     /// [`DurableRing::write`].
@@ -127,13 +152,13 @@ impl<D: DurableRing> DeliveryHandle<D> {
         file: FileKey,
         offset: u64,
         buffer: D::Buffer,
-        epoch: Epoch<D::Ids>,
+        tag: Tag<'_, D::Ids>,
         context: D::Context,
     ) -> PushResult<D>
     where
         D::Buffer: IoBuf,
     {
-        self.with(|ring| ring.write(file, offset, buffer, epoch, context))
+        self.with(|ring| ring.write(file, offset, buffer, tag, context))
     }
 
     /// [`DurableRing::write_with`].
@@ -146,14 +171,14 @@ impl<D: DurableRing> DeliveryHandle<D> {
         file: FileKey,
         offset: u64,
         buffer: D::Buffer,
-        epoch: Epoch<D::Ids>,
+        tag: Tag<'_, D::Ids>,
         context: D::Context,
         options: WriteOptions<D::Ids>,
     ) -> PushResult<D>
     where
         D::Buffer: IoBuf,
     {
-        self.with(|ring| ring.write_with(file, offset, buffer, epoch, context, options))
+        self.with(|ring| ring.write_with(file, offset, buffer, tag, context, options))
     }
 
     /// [`DurableRing::read`].
@@ -200,23 +225,44 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// As [`DurableRing::make_durable_through`].
     pub fn make_durable_through(
         &self,
-        through: Epoch<D::Ids>,
+        through: Tag<'_, D::Ids>,
     ) -> io::Result<DurabilityRequest<D::Ids>> {
         self.with(|ring| ring.make_durable_through(through))
     }
 
     /// [`DurableRing::durable_through`].
-    pub fn durable_through(&self, lineage: Lin<D>) -> Option<EpochIdOf<D>> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::durable_through`].
+    pub fn durable_through(
+        &self,
+        lineage: Lin<D>,
+    ) -> Result<Option<EpochIdOf<D>>, UnknownLineage<D::Ids>> {
         self.with(|ring| ring.durable_through(lineage))
     }
 
     /// [`DurableRing::sealed_through`].
-    pub fn sealed_through(&self, lineage: Lin<D>) -> Option<EpochIdOf<D>> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::sealed_through`].
+    pub fn sealed_through(
+        &self,
+        lineage: Lin<D>,
+    ) -> Result<Option<EpochIdOf<D>>, UnknownLineage<D::Ids>> {
         self.with(|ring| ring.sealed_through(lineage))
     }
 
     /// [`DurableRing::epoch_state`].
-    pub fn epoch_state(&self, epoch: Epoch<D::Ids>) -> EpochState<D::Ids> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::epoch_state`].
+    pub fn epoch_state(
+        &self,
+        epoch: Epoch<D::Ids>,
+    ) -> Result<EpochState<D::Ids>, UnknownLineage<D::Ids>> {
         self.with(|ring| ring.epoch_state(epoch))
     }
 
@@ -233,7 +279,14 @@ impl<D: DurableRing> DeliveryHandle<D> {
     }
 
     /// [`DurableRing::import_failure`].
-    pub fn import_failure(&self, scope: ImportScope<D::Ids>) -> FailureIdOf<D> {
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::import_failure`].
+    pub fn import_failure(
+        &self,
+        scope: ImportScope<D::Ids>,
+    ) -> Result<FailureIdOf<D>, UnknownLineage<D::Ids>> {
         self.with(|ring| ring.import_failure(scope))
     }
 
@@ -281,10 +334,10 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<D::Ids>,
+        tag: Tag<'_, D::Ids>,
         context: D::Context,
     ) -> PushResult<D> {
-        self.with(|ring| ring.write_registered(file, offset, span, epoch, context))
+        self.with(|ring| ring.write_registered(file, offset, span, tag, context))
     }
 
     /// [`RegisteredBufferRing::write_registered_with`].
@@ -297,11 +350,11 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<D::Ids>,
+        tag: Tag<'_, D::Ids>,
         context: D::Context,
         options: WriteOptions<D::Ids>,
     ) -> PushResult<D> {
-        self.with(|ring| ring.write_registered_with(file, offset, span, epoch, context, options))
+        self.with(|ring| ring.write_registered_with(file, offset, span, tag, context, options))
     }
 
     /// [`RegisteredBufferRing::read_registered`].

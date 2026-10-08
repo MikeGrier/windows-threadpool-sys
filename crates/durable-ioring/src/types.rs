@@ -21,8 +21,9 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileKey(pub u64);
 
-/// An epoch: an epoch id within a lineage. Every place the API takes or reports an epoch uses
-/// this, so the lineage is always explicit.
+/// An epoch: an epoch id within a lineage, by the lineage's plain name. What the API reports, and
+/// what names or asks about an epoch -- a gate, a query -- takes; what acts on a lineage takes a
+/// [`Tag`] instead (DI-D-40). Plain data, so a consumer can keep it in its own records.
 ///
 /// Only `PartialOrd`: epochs of different lineages are unrelated, so `partial_cmp` is `None`
 /// for them, and within one lineage they order by id.
@@ -47,6 +48,68 @@ impl<V: Identities> PartialOrd for Epoch<V> {
     }
 }
 
+/// What acts on an epoch of a live lineage: an epoch id, with the lineage's handle (DI-D-40). A
+/// write is tagged with one, and a seal names one, so neither can name a lineage that is not live.
+/// Borrows the handle, never the instance.
+pub struct Tag<'h, V: Identities> {
+    handle: &'h V::LineageHandle,
+    id: V::EpochId,
+}
+
+impl<'h, V: Identities> Tag<'h, V> {
+    /// Epoch `id` of `handle`'s lineage.
+    pub fn new(handle: &'h V::LineageHandle, id: V::EpochId) -> Self {
+        Self { handle, id }
+    }
+
+    /// The lineage's handle.
+    pub fn handle(&self) -> &'h V::LineageHandle {
+        self.handle
+    }
+
+    /// The epoch id.
+    pub fn id(&self) -> V::EpochId {
+        self.id
+    }
+
+    /// The epoch, by the lineage's plain name.
+    pub fn epoch(&self) -> Epoch<V> {
+        Epoch::new(V::handle_lineage(self.handle), self.id)
+    }
+}
+
+impl<V: Identities> Clone for Tag<'_, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V: Identities> Copy for Tag<'_, V> {}
+
+impl<V: Identities> fmt::Debug for Tag<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Tag").field(&self.epoch()).finish()
+    }
+}
+
+/// A plain lineage, or an epoch of one, that the instance cannot answer for: another instance's,
+/// or one ended or retired (DI-D-40). The instance keeps no memory of a lineage once it is gone,
+/// as it keeps none of a resolved failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownLineage<V: Identities>(pub V::Lineage);
+
+impl<V: Identities> fmt::Display for UnknownLineage<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?} is not a lineage this instance can answer for",
+            self.0
+        )
+    }
+}
+
+impl<V: Identities> std::error::Error for UnknownLineage<V> {}
+
 /// One lineage, as the enumeration reports it. Owned, so holding it borrows nothing.
 #[derive(Clone, Debug)]
 pub struct LineageInfo<V: Identities> {
@@ -54,7 +117,8 @@ pub struct LineageInfo<V: Identities> {
     pub lineage: V::Lineage,
     /// The consumer's description, if one was supplied when the lineage was minted.
     pub description: Option<Arc<str>>,
-    /// The instance's default lineage, which always exists and cannot be retired.
+    /// The instance's default lineage, which never ends while the instance lives: the instance
+    /// holds a copy of its handle.
     pub is_default: bool,
     /// The lineage's high-water mark: the highest id through which every epoch is durable or
     /// abandoned, or `None` before anything is.
@@ -657,7 +721,8 @@ pub enum RemoveFileError<V: Identities> {
 pub struct LineageBusy<V: Identities> {
     /// The lineage.
     pub lineage: V::Lineage,
-    /// Operations in the lineage the kernel has not completed. Cleared by popping them.
+    /// Writes in the lineage the kernel has not completed. Cleared as their completions arrive,
+    /// which may be before they are popped.
     pub in_flight: usize,
     /// Operations held for a gate in the lineage, or gated on one of its epochs.
     pub held_for_gate: usize,
@@ -669,20 +734,42 @@ pub struct LineageBusy<V: Identities> {
 
 /// Why `end_lineage` was refused.
 #[derive(Debug)]
-pub enum EndLineageError<V: Identities> {
-    /// Never minted by this instance, or already ended or retired.
-    UnknownLineage(V::Lineage),
+pub enum EndLineageRefusal<V: Identities> {
+    /// Another instance's lineage.
+    Foreign(V::Lineage),
     /// The default lineage cannot be ended; end the instance instead.
     Default,
+    /// Another copy of the handle exists; the lineage ends with its last.
+    Shared,
+}
+
+/// A refused `end_lineage`, handing the handle back.
+#[derive(Debug)]
+pub struct EndLineageError<V: Identities> {
+    /// Why.
+    pub reason: EndLineageRefusal<V>,
+    /// The handle it was given.
+    pub handle: V::LineageHandle,
 }
 
 /// Why `retire_lineage` was refused.
 #[derive(Debug)]
-pub enum RetireLineageError<V: Identities> {
-    /// Never minted by this instance, or already retired.
-    UnknownLineage(V::Lineage),
+pub enum RetireLineageRefusal<V: Identities> {
+    /// Another instance's lineage.
+    Foreign(V::Lineage),
     /// The default lineage always exists.
     Default,
-    /// The lineage is not empty; see [`LineageBusy`].
+    /// Another copy of the handle exists; only the last can retire the lineage.
+    Shared,
+    /// The lineage has work outstanding; see [`LineageBusy`].
     Busy(LineageBusy<V>),
+}
+
+/// A refused `retire_lineage`, handing the handle back.
+#[derive(Debug)]
+pub struct RetireLineageError<V: Identities> {
+    /// Why.
+    pub reason: RetireLineageRefusal<V>,
+    /// The handle it was given.
+    pub handle: V::LineageHandle,
 }

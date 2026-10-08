@@ -22,20 +22,21 @@ mod provider;
 mod types;
 
 pub use contract::{
-    DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, Identities, Lin, OpIdOf, PushResult,
-    RegisteredBufferRing, TokenOf,
+    DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
+    PushResult, RegisteredBufferRing, TokenOf,
 };
 pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal, TimeBase};
 pub use error_code::ErrorCode;
-pub use ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
+pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
 pub use provider::{DomainCompletion, DomainRequest, DurabilityProvider, FileWrites, FlushRequest};
 pub use types::{
-    AddFileError, Cause, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, Failed,
-    FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation, ImportScope,
-    Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion, OpKind, Outcome,
-    PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution, ResolveError, ResolveRefusal,
-    RetireLineageError, SuspectSet, SuspectWrite, WriteCaching, WriteOptions,
+    AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
+    EpochState, Failed, FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation,
+    ImportScope, Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion, OpKind,
+    Outcome, PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution, ResolveError,
+    ResolveRefusal, RetireLineageError, RetireLineageRefusal, SuspectSet, SuspectWrite, Tag,
+    UnknownLineage, WriteCaching, WriteOptions,
 };
 // The types the contract's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.

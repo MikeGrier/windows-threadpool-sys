@@ -27,10 +27,10 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
 
-use super::durability::{Due, Durability, Event as Synthesized, Flush, WriteEnd};
+use super::durability::{DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, WriteEnd};
 use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
-use crate::ids::{DioringIds, Lineage};
+use crate::ids::{DioringIds, Home, InstanceId, Lineage};
 #[cfg(feature = "fault-injection")]
 use crate::types::FileKey;
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
@@ -51,10 +51,10 @@ pub(crate) enum FlushTarget {
 /// The state under dioring's lock.
 pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     queue: VecDeque<DioringEntry<E, B, C>>,
-    /// The default lineage's durability; minted lineages are `DI-3.2.5.1`'s.
-    pub(crate) lineage: Durability<E, FlushTarget, K>,
-    /// The default lineage, for the epochs its `Durable` entries and flushes name.
-    default_lineage: Lineage,
+    /// The durability of every lineage.
+    pub(crate) durability: Durability<E, FlushTarget, K>,
+    /// The instance, for the lineages its entries and flushes name.
+    instance: InstanceId,
     /// Flushes due that the ring refused, pushed again at the next chance.
     unpushed: Vec<Flush<E, FlushTarget>>,
     /// A submission failed, so pushed operations may still sit in the submission queue; the next
@@ -79,12 +79,12 @@ pub(crate) struct Relay<E: EpochId + 'static, B, C, K> {
 impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
     /// An empty queue, nothing sealed, and an unsignalled readiness event; failures are stamped
     /// with `clock`.
-    pub(crate) fn new(default_lineage: Lineage, clock: K) -> io::Result<Self> {
+    pub(crate) fn new(instance: InstanceId, clock: K) -> io::Result<Self> {
         Ok(Self {
             core: Mutex::new(Core {
                 queue: VecDeque::new(),
-                lineage: Durability::new(default_lineage, clock),
-                default_lineage,
+                durability: Durability::new(instance, clock),
+                instance,
                 unpushed: Vec::new(),
                 unsubmitted: false,
                 closed: false,
@@ -181,7 +181,7 @@ where
                 );
                 match kind {
                     OpKind::Write { .. } => match end {
-                        Some(end) => core.lineage.completed(id, end),
+                        Some(end) => core.durability.completed(id, end),
                         None => Due::default(),
                     },
                     OpKind::Read => Due::default(),
@@ -198,13 +198,25 @@ where
                     None => completion,
                 };
                 let result = completion.result().map(|_| ());
-                core.lineage.flushed(through.id, file, result)
+                if through.lineage.instance == core.instance {
+                    core.durability
+                        .flushed(through.lineage.seq, through.id, file, result)
+                } else {
+                    debug_assert!(false, "a flush for another instance's lineage");
+                    Due::default()
+                }
             }
             None => {
                 debug_assert!(false, "a completion for an operation dioring did not push");
                 Due::default()
             }
         };
+        self.act(&mut core, due);
+    }
+
+    /// Act on what a change made off the consumer's call path -- in a callback, or in a handle's
+    /// release -- unless the instance is ending.
+    fn act(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
         if core.closed {
             return;
         }
@@ -213,16 +225,17 @@ where
             Some(ring) => {
                 // A failed submission stays flagged for the consumer's next push or pop to retry
                 // and report.
-                let _ = self.apply(&mut core, due, &ring);
+                let _ = self.apply(core, due, &ring);
             }
-            None => self.apply_without_ring(&mut core, due),
+            None => self.apply_without_ring(core, due),
         }
         // `ring` is dropped here, before the core is unlocked.
     }
 
-    /// Act on what a change made due: append its entries, in order, and push every flush now due, with any the ring refused before, then submit -- which also retries a
-    /// submission that failed earlier. Returns the submission's error, if it failed: the
-    /// operations stay queued, and the next submission issues them.
+    /// Act on what a change made due: append its entries, in order, and push every flush now due,
+    /// with any the ring refused before, then submit -- which also retries a submission that failed
+    /// earlier. Returns the submission's error, if it failed: the operations stay queued, and the
+    /// next submission issues them.
     pub(crate) fn apply(
         &self,
         core: &mut Core<E, B, C, K>,
@@ -235,12 +248,18 @@ where
         if flushes.is_empty() && !core.unsubmitted {
             return None;
         }
-        let lineage = core.default_lineage;
+        let instance = core.instance;
         let mut scope = ring.scope();
         let mut batch = scope.batch();
         for flush in flushes {
             let sidecar = Sidecar::Commit {
-                through: Epoch::new(lineage, flush.through),
+                through: Epoch::new(
+                    Lineage {
+                        instance,
+                        seq: flush.lineage,
+                    },
+                    flush.through,
+                ),
                 file: flush.file,
             };
             let pushed = match &flush.target {
@@ -272,14 +291,19 @@ where
     }
 
     fn append_events(&self, core: &mut Core<E, B, C, K>, events: Vec<Synthesized<E>>) {
-        let lineage = core.default_lineage;
+        let instance = core.instance;
+        let name = |seq| Lineage { instance, seq };
         for event in events {
             let entry = match event {
-                Synthesized::Durable(through) => Entry::Durable {
-                    through: Epoch::new(lineage, through),
+                Synthesized::Durable { lineage, through } => Entry::Durable {
+                    through: Epoch::new(name(lineage), through),
                 },
-                Synthesized::Blocked { through, by } => Entry::Blocked {
-                    through: Epoch::new(lineage, through),
+                Synthesized::Blocked {
+                    lineage,
+                    through,
+                    by,
+                } => Entry::Blocked {
+                    through: Epoch::new(name(lineage), through),
                     by,
                 },
                 Synthesized::Failed(failed) => Entry::Failed(failed),
@@ -302,8 +326,40 @@ where
                     markings,
                 },
                 Synthesized::Marked { failure, marking } => Entry::Marked { failure, marking },
+                Synthesized::LineageEnded {
+                    lineage,
+                    abandoned_through,
+                } => Entry::LineageEnded {
+                    lineage: name(lineage),
+                    abandoned_through,
+                },
             };
             self.append(core, entry);
         }
+    }
+}
+
+/// Where a lineage's handles report the release of the last of them (DI-D-40). It runs on whatever
+/// thread dropped that handle, so, like a callback, it takes the core's lock and then the ring's.
+impl<E, B, C, K> Home for Relay<E, B, C, K>
+where
+    E: EpochId + Send + Sync + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+    K: TimeBase,
+{
+    fn release(&self, lineage: Lineage) {
+        let mut core = self.lock();
+        // A lineage already ended or retired, or another instance's, has nothing left to end; the
+        // default's last handle is the instance's own, released as the instance ends.
+        if core.closed
+            || lineage.instance != core.instance
+            || lineage.seq == DEFAULT_LINEAGE
+            || !core.durability.is_live(lineage.seq)
+        {
+            return;
+        }
+        let due = core.durability.end(lineage.seq);
+        self.act(&mut core, due);
     }
 }

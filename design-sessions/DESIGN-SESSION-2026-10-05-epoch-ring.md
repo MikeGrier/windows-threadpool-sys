@@ -2628,6 +2628,29 @@ failures across lineages together (`DI-3.2.5.1`), then gates (`DI-3.2.5.2`). The
 split", then "let's go with per lineage for now. we can worry about more complex cases later if
 necessary." Recorded as DI-D-41, keeping "for now" as its reopen condition.
 
+## DI-3.2.5.1: lineage handles (2026-10-08)
+
+The engineer asked for DI-3.2.5.1 to be implemented. It needed no further question: DI-D-40 and
+DI-D-41 had settled the semantics and left the signatures to the item. The assistant recorded the
+shapes it chose as DI-D-42, for the engineer to confirm. Four of them change behaviour the earlier
+steps had, and are worth the engineer's eye in particular:
+
+- **A failure that suspects nothing heals at once.** DI-D-41's rule, applied to a failure that
+  belongs to no lineage. With one lineage such a heal used to wait for the next seal; one existing
+  test relied on that and now gives its failure a suspect write.
+- **The oracle's DI-D-39 tightening is withdrawn.** It required a `Durable` that passes a healed
+  failure to follow the failure's `Healed` entry. Per-lineage heals break that: one lineage's
+  `Durable` legitimately comes first, while the failure still holds another. The stream cannot show
+  which lineage's seal made a heal effective, so the rule reverts to "healed or abandoned".
+- **An ended lineage stops being live at once**, though the core keeps its writes in flight until
+  they complete, so that a failure already suspecting one still gains its marking.
+- **Ending a lineage releases a heal waiting for it**, so `Healed` can follow `LineageEnded`
+  directly.
+
+Two follow-ups belong to gates and were queued in DI-3.2.5.2, which already owns them: gated
+operations on an ended lineage's epochs end as `NeverIssued`, and `LineageBusy::held_for_gate`,
+zero until gates exist, gets counted.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

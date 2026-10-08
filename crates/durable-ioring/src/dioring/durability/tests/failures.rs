@@ -36,6 +36,24 @@ fn import(lineage: &mut Lineage, reach: &Reach) -> (FailureId, super::Due<u64, &
     )
 }
 
+/// An import confined to lineage `only`.
+fn import_only(
+    lineage: &mut Lineage,
+    reach: &Reach,
+    only: Option<u64>,
+) -> (FailureId, super::Due<u64, &'static str>) {
+    lineage.0.import(
+        Cause::Imported {
+            scope: ImportScope::All,
+        },
+        reach,
+        only,
+    )
+}
+
+/// A lineage key no lineage has.
+const NO_LINEAGE: Option<u64> = Some(99);
+
 fn blocked_by(state: State) -> Option<u64> {
     match state {
         State::Blocked(by) => Some(by.seq),
@@ -186,13 +204,13 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
     ops.push_in(&mut lineage, 1, B, DEFAULT, &[2]);
     ops.push(&mut lineage, 1, C, DEFAULT);
     let cases = [
-        (domains(&[1]), vec![0, 2]),
-        (domains(&[9]), vec![2]),
-        (Reach::Nothing, vec![]),
-        (Reach::All, vec![0, 1, 2]),
+        (domains(&[1]), None, vec![0, 2]),
+        (domains(&[9]), None, vec![2]),
+        (Reach::All, NO_LINEAGE, vec![]),
+        (Reach::All, None, vec![0, 1, 2]),
     ];
-    for (seq, (reach, expected)) in cases.into_iter().enumerate() {
-        let (id, due) = import(&mut lineage, &reach);
+    for (seq, (reach, only, expected)) in cases.into_iter().enumerate() {
+        let (id, due) = import_only(&mut lineage, &reach, only);
         assert_eq!(id.seq, seq as u64);
         assert_eq!(
             seen(&due),
@@ -223,7 +241,7 @@ fn a_failure_holds_only_the_epochs_it_contains() {
         "the failure holds epoch 5 alone"
     );
 
-    let (_, due) = import(&mut lineage, &Reach::Nothing);
+    let (_, due) = import_only(&mut lineage, &Reach::All, NO_LINEAGE);
     assert_eq!(seen(&due), [Seen::Failed(1, vec![])]);
     assert_eq!(
         durable(&submitted(lineage.seal(4))),

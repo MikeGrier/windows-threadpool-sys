@@ -12,7 +12,9 @@ use windows_ioring_sys::RegisteredSpan;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, read_only, temp};
 use super::{empty, file, serves, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
-use crate::types::{DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal};
+use crate::types::{
+    DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal, UnknownLineage,
+};
 
 /// The next entry, which must be `Durable` through `id` of the default lineage.
 fn expect_durable(harness: &mut Harness, id: u64) {
@@ -26,23 +28,19 @@ fn expect_durable(harness: &mut Harness, id: u64) {
 fn a_seal_after_its_writes_completed_is_reported_durable() {
     let temp = temp(&[0; 64]);
     let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
-    let lineage = harness.ring.default_lineage();
-    assert_eq!(harness.ring.epoch_state(harness.epoch(1)), EpochState::Open);
-    assert_eq!(harness.ring.sealed_through(lineage), None);
+    assert_eq!(harness.state(1), EpochState::Open);
+    assert_eq!(harness.sealed(), None);
 
     harness.write(GIVEN, 0, b"first", 1, 1);
     harness.write(GIVEN, 8, b"second", 1, 2);
     harness.next_n(2);
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
-    assert_eq!(harness.ring.sealed_through(lineage), Some(1));
+    assert_eq!(harness.sealed(), Some(1));
     expect_durable(&mut harness, 1);
 
-    assert_eq!(harness.ring.durable_through(lineage), Some(1));
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(1)),
-        EpochState::Durable
-    );
-    assert_eq!(harness.ring.epoch_state(harness.epoch(2)), EpochState::Open);
+    assert_eq!(harness.durable(), Some(1));
+    assert_eq!(harness.state(1), EpochState::Durable);
+    assert_eq!(harness.state(2), EpochState::Open);
     let lineages = harness.ring.lineages();
     assert_eq!(lineages.len(), 1);
     assert_eq!(
@@ -62,10 +60,7 @@ fn a_seal_with_nothing_written_is_durable_through_every_epoch_below_it() {
     assert_eq!(harness.seal(3), DurabilityRequest::Submitted);
     expect_durable(&mut harness, 3);
     for id in [1, 2, 3] {
-        assert_eq!(
-            harness.ring.epoch_state(harness.epoch(id)),
-            EpochState::Durable
-        );
+        assert_eq!(harness.state(id), EpochState::Durable);
     }
     harness.finish();
 }
@@ -128,7 +123,7 @@ fn writes_at_or_below_the_seal_are_refused_with_what_they_took() {
         let epoch = harness.epoch(id);
         let error = harness
             .ring
-            .write(GIVEN, 0, vec![7], epoch, context)
+            .write(GIVEN, 0, vec![7], harness.default.at(id), context)
             .expect_err("a write at or below the seal");
         assert!(
             matches!(error.reason, PushRefusal::Sealed { epoch: e, sealed_through: 2 } if e == epoch),
@@ -142,10 +137,9 @@ fn writes_at_or_below_the_seal_are_refused_with_what_they_took() {
         offset: 0,
         len: 4,
     };
-    let epoch = harness.epoch(2);
     let error = harness
         .ring
-        .write_registered(GIVEN, 0, span, epoch, 3)
+        .write_registered(GIVEN, 0, span, harness.default.at(2), 3)
         .expect_err("a registered write at the seal");
     assert!(matches!(
         error.reason,
@@ -194,9 +188,9 @@ fn a_pending_seal_reports_pending_and_holds_back_a_later_one() {
         Vec::new(),
         serves(&["log"]),
     ))
-    .expect("build an instance with a provider");
+    .expect("build an instance with a provider")
+    .0;
     let mut harness = Harness::new(ring);
-    let lineage = harness.ring.default_lineage();
     harness.write(GIVEN, 0, b"log", 1, 1);
     harness.next();
 
@@ -210,13 +204,10 @@ fn a_pending_seal_reports_pending_and_holds_back_a_later_one() {
         harness.ring.pop().expect("pop").is_none(),
         "no Durable passes a pending seal"
     );
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(2)),
-        EpochState::Pending
-    );
-    assert_eq!(harness.ring.epoch_state(harness.epoch(3)), EpochState::Open);
-    assert_eq!(harness.ring.durable_through(lineage), None);
-    assert_eq!(harness.ring.sealed_through(lineage), Some(2));
+    assert_eq!(harness.state(2), EpochState::Pending);
+    assert_eq!(harness.state(3), EpochState::Open);
+    assert_eq!(harness.durable(), None);
+    assert_eq!(harness.sealed(), Some(2));
     harness.finish();
 }
 
@@ -247,26 +238,29 @@ fn a_failed_write_is_not_covered_and_does_not_hold_its_seal() {
 #[test]
 fn another_instances_lineage_is_refused_and_has_no_seal() {
     let mut ring = instance(Vec::new(), Vec::new());
-    let foreign = empty().default_lineage();
+    let handle = empty().default_lineage();
+    let foreign = handle.lineage();
     let error = ring
-        .make_durable_through(Epoch::new(foreign, 1))
+        .make_durable_through(handle.at(1))
         .expect_err("a foreign lineage");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(ring.sealed_through(foreign), None);
-    assert_eq!(ring.durable_through(foreign), None);
-    let own = Epoch::new(ring.default_lineage(), 1);
+    assert_eq!(ring.sealed_through(foreign), Err(UnknownLineage(foreign)));
+    assert_eq!(ring.durable_through(foreign), Err(UnknownLineage(foreign)));
+    let own = Epoch::new(ring.default_lineage().lineage(), 1);
     assert_eq!(
         ring.epoch_state(own),
-        EpochState::Open,
+        Ok(EpochState::Open),
         "nothing was sealed"
     );
     assert!(ring.pop().expect("pop").is_none());
 }
 
 #[test]
-#[should_panic(expected = "is not a lineage of this instance")]
-fn the_state_of_another_instances_epoch_panics() {
+fn the_state_of_another_instances_epoch_is_refused() {
     let ring = instance(Vec::new(), Vec::new());
-    let foreign = empty().default_lineage();
-    let _ = ring.epoch_state(Epoch::new(foreign, 1));
+    let foreign = empty().default_lineage().lineage();
+    assert_eq!(
+        ring.epoch_state(Epoch::new(foreign, 1)),
+        Err(UnknownLineage(foreign))
+    );
 }

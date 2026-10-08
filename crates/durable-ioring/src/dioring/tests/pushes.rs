@@ -16,11 +16,11 @@ use windows_ioring_sys::RegisteredSpan;
 use super::{TempFile, V, empty, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::dioring::{Dioring, FileSetup, Setup, TimeBase};
-use crate::ids::OpId;
+use crate::ids::{Lineage, LineageHandle, OpId};
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, FileKey, FileOptions, OpCompletion, OpKind, Outcome,
-    PushRefusal, WriteCaching, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, OpCompletion, OpKind,
+    Outcome, PushRefusal, WriteCaching, WriteOptions,
 };
 
 /// The instances here carry a `u32` context, so the oracle can compare them, and stamp failures
@@ -70,6 +70,7 @@ pub(super) fn instance_with_clock<K: TimeBase>(
         clock,
     )
     .expect("build an instance")
+    .0
 }
 
 pub(super) fn given(key: FileKey, temp: &TempFile) -> FileSetup {
@@ -84,18 +85,41 @@ pub(super) fn given(key: FileKey, temp: &TempFile) -> FileSetup {
 pub(super) struct Harness<K = InterruptClock> {
     pub(super) ring: Ring<K>,
     pub(super) oracle: ConformanceOracle<V, u32>,
+    /// A handle to the instance's default lineage, which every write here is tagged in.
+    pub(super) default: LineageHandle,
 }
 
 impl<K: TimeBase> Harness<K> {
     pub(super) fn new(ring: Ring<K>) -> Self {
         Self {
+            default: ring.default_lineage(),
             ring,
             oracle: ConformanceOracle::new(),
         }
     }
 
+    /// The default lineage.
+    pub(super) fn lineage(&self) -> Lineage {
+        self.default.lineage()
+    }
+
     pub(super) fn epoch(&self, id: u64) -> Epoch<V> {
-        Epoch::new(self.ring.default_lineage(), id)
+        Epoch::new(self.lineage(), id)
+    }
+
+    /// The default lineage's seal point.
+    pub(super) fn sealed(&self) -> Option<u64> {
+        (self.ring.sealed_through(self.lineage())).expect("the default lineage is live")
+    }
+
+    /// The default lineage's high-water mark.
+    pub(super) fn durable(&self) -> Option<u64> {
+        (self.ring.durable_through(self.lineage())).expect("the default lineage is live")
+    }
+
+    /// The state of the default lineage's epoch `id`.
+    pub(super) fn state(&self, id: u64) -> EpochState<V> {
+        (self.ring.epoch_state(self.epoch(id))).expect("the default lineage is live")
     }
 
     pub(super) fn write(
@@ -106,11 +130,25 @@ impl<K: TimeBase> Harness<K> {
         epoch: u64,
         context: u32,
     ) -> OpId {
-        let epoch = self.epoch(epoch);
+        let default = self.default.clone();
+        self.write_in(&default, file, offset, bytes, epoch, context)
+    }
+
+    /// Write `bytes` tagged with epoch `epoch` of `lineage`'s lineage.
+    pub(super) fn write_in(
+        &mut self,
+        lineage: &LineageHandle,
+        file: FileKey,
+        offset: u64,
+        bytes: &[u8],
+        epoch: u64,
+        context: u32,
+    ) -> OpId {
         let id = self
             .ring
-            .write(file, offset, bytes.to_vec(), epoch, context)
+            .write(file, offset, bytes.to_vec(), lineage.at(epoch), context)
             .expect("push a write");
+        let epoch = Epoch::new(lineage.lineage(), epoch);
         self.pushed(id, OpKind::Write { epoch }, context);
         id
     }
@@ -165,13 +203,19 @@ impl<K: TimeBase> Harness<K> {
     /// Ask for durability through `id` in the default lineage, reporting a new seal to the
     /// oracle.
     pub(super) fn seal(&mut self, id: u64) -> DurabilityRequest<V> {
-        let through = self.epoch(id);
+        let default = self.default.clone();
+        self.seal_in(&default, id)
+    }
+
+    /// Ask for durability through `id` in `lineage`'s lineage, reporting a new seal to the
+    /// oracle.
+    pub(super) fn seal_in(&mut self, lineage: &LineageHandle, id: u64) -> DurabilityRequest<V> {
         let answer = self
             .ring
-            .make_durable_through(through)
-            .expect("seal the default lineage");
+            .make_durable_through(lineage.at(id))
+            .expect("seal a live lineage");
         if answer == DurabilityRequest::Submitted {
-            self.oracle.sealed(through);
+            self.oracle.sealed(Epoch::new(lineage.lineage(), id));
         }
         answer
     }
@@ -252,7 +296,7 @@ fn spans_of_the_registered_buffers_round_trip() {
     };
     let write = harness
         .ring
-        .write_registered(GIVEN, 8, span, epoch, 1)
+        .write_registered(GIVEN, 8, span, harness.default.at(1), 1)
         .expect("push a registered write");
     harness.pushed(write, OpKind::Write { epoch }, 1);
     let written = harness.next();
@@ -332,8 +376,8 @@ fn operation_identities_follow_push_order() {
             pair[1]
         );
     }
-    let other = empty().default_lineage();
-    assert_ne!(other, harness.ring.default_lineage());
+    let other = empty().default_lineage().lineage();
+    assert_ne!(other, harness.lineage());
     harness.next_n(5);
     harness.finish();
 }
@@ -395,7 +439,7 @@ fn the_caching_choice_reaches_the_kernel() {
                 GIVEN,
                 0,
                 b"through".to_vec(),
-                epoch,
+                harness.default.at(1),
                 context,
                 WriteOptions::new().caching(caching),
             )
@@ -417,7 +461,8 @@ fn the_caching_choice_reaches_the_kernel() {
 #[test]
 fn pushes_naming_a_file_the_instance_was_not_given_are_refused_with_what_they_took() {
     let mut ring = instance(Vec::new(), vec![vec![0; 16]]);
-    let epoch = Epoch::new(ring.default_lineage(), 1);
+    let default = ring.default_lineage();
+    let epoch = default.at(1);
     let span = RegisteredSpan {
         buffer_index: 0,
         offset: 0,
@@ -456,8 +501,10 @@ fn pushes_naming_a_file_the_instance_was_not_given_are_refused_with_what_they_to
 fn a_write_tagged_with_another_instances_lineage_is_refused() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(vec![given(GIVEN, &temp)], vec![vec![0; 16]]);
-    let foreign = empty().default_lineage();
-    let epoch = Epoch::new(foreign, 1);
+    // A handle to a lineage of an instance already gone: it names a lineage, and nothing more.
+    let handle = empty().default_lineage();
+    let foreign = handle.lineage();
+    let epoch = handle.at(1);
 
     let error = ring
         .write(GIVEN, 0, vec![1], epoch, 1)
@@ -481,7 +528,8 @@ fn a_write_tagged_with_another_instances_lineage_is_refused() {
 fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(vec![given(GIVEN, &temp)], Vec::new());
-    let epoch = Epoch::new(ring.default_lineage(), 1);
+    let default = ring.default_lineage();
+    let epoch = default.at(1);
     let span = RegisteredSpan {
         buffer_index: 0,
         offset: 0,
@@ -513,7 +561,8 @@ fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
 fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(vec![given(GIVEN, &temp)], vec![vec![0; 16]]);
-    let epoch = Epoch::new(ring.default_lineage(), 1);
+    let default = ring.default_lineage();
+    let epoch = default.at(1);
     let outside = RegisteredSpan {
         buffer_index: 0,
         offset: 8,
@@ -632,7 +681,8 @@ fn dropping_an_instance_with_operations_in_flight_returns() {
     let temp = temp(&[0; 256]);
     let (dropped, done) = std::sync::mpsc::channel();
     let mut ring = instance(vec![given(GIVEN, &temp)], Vec::new());
-    let epoch = Epoch::new(ring.default_lineage(), 1);
+    let default = ring.default_lineage();
+    let epoch = default.at(1);
     for i in 0..16 {
         ring.write(GIVEN, i * 16, vec![1; 16], epoch, i as u32)
             .expect("push a write");

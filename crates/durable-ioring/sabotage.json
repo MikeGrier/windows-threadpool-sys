@@ -242,16 +242,16 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "A heal takes effect at the first seal after it that finishes successfully (DI-D-12 (c)); a seal whose own flush failed has re-issued nothing safely. Caught by the unit test whose second seal fails after a heal.",
-      "find": ["                *failed = true;\n"],
-      "replace": ["\n"]
+      "find": ["            *failed = true;\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.3: a later seal is reported past a pending one",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
-      "find": ["        while let Some(seal) = self.seals.front() {", "            if !matches!(seal.stage, SealStage::Done { .. })", "                || self.blocking(seal.through).is_some()", "            {", "                break;", "            }", "            let through = seal.through;", "            self.seals.pop_front();"],
-      "replace": ["        while let Some(seal) = self.seals.back() {", "            if !matches!(seal.stage, SealStage::Done { .. })", "                || self.blocking(seal.through).is_some()", "            {", "                break;", "            }", "            let through = seal.through;", "            self.seals.pop_back();"]
+      "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_front();\n"],
+      "replace": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.back()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_back();\n"]
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
@@ -266,16 +266,16 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "Guarantee 7: asking again about a sealed epoch reports its state, and a durable epoch reports Durable.",
-      "find": ["        if self.durable_through.is_some_and(|durable| epoch <= durable) {\n"],
-      "replace": ["        if self.durable_through.is_some_and(|_| false) {\n"]
+      "find": ["            .is_some_and(|durable| epoch <= durable)\n"],
+      "replace": ["            .is_some_and(|_| false)\n"]
     },
     {
       "name": "DI-3.2.3: a write at or below the seal is not refused",
       "file": "src/dioring/push.rs",
       "expect": "caught",
       "why": "Guarantee 6: a late write is refused before anything is reserved, with its buffer handed back. Absorbed, it would join an epoch already reported durable.",
-      "find": ["            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id)\n"],
-      "replace": ["            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id).filter(|_| false)\n"]
+      "find": ["                (self.relay.lock().durability).refuses(epoch.lineage.seq, epoch.id)\n"],
+      "replace": ["                (self.relay.lock().durability).refuses(epoch.lineage.seq, epoch.id).filter(|_| false)\n"]
     },
     {
       "name": "DI-3.2.3: a seal naming another instance's lineage is accepted",
@@ -354,31 +354,31 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (c): only a seal made after the heal covers what was re-issued before it. Caught by the unit test whose seal predates the heal.",
-      "find": ["                    if matches!(self.failures[at].standing, Standing::Healing { after } if after <= seq)\n"],
-      "replace": ["                    if matches!(self.failures[at].standing, Standing::Healing { .. })\n"]
+      "find": ["                        && pending.get(&lineage).is_some_and(|&after| after <= seq)\n"],
+      "replace": ["                        && pending.contains_key(&lineage)\n"]
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch is abandoned if any failure containing it was. Reported Durable instead, the consumer would believe lost writes are on the media. Caught by the state assertions, unit, I/O and the worked examples.",
-      "find": ["                    self.abandoned.extend(failure.epochs.iter().copied());\n"],
-      "replace": ["\n"]
+      "find": ["                            state.abandoned.extend(epochs.iter().copied());\n"],
+      "replace": ["                            let _ = (state, epochs);\n"]
     },
     {
       "name": "DI-3.2.4: no failure holds the high-water mark",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch passes only when every failure containing it is resolved. Caught everywhere a failure is expected to block, and by the oracle's Durable-through-failure rule.",
-      "find": ["            return None;\n        }\n        let lower = self\n"],
-      "replace": ["            return None;\n        }\n        if true {\n            return None;\n        }\n        let lower = self\n"]
+      "find": ["            return None;\n        }\n        let lower = durable.map_or(Bound::Unbounded, Bound::Excluded);\n"],
+      "replace": ["            return None;\n        }\n        if true {\n            return None;\n        }\n        let lower = durable.map_or(Bound::Unbounded, Bound::Excluded);\n"]
     },
     {
       "name": "DI-3.2.4: Blocked is never appended",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-13: a request whose flushes succeeded but which a failure holds is answered Blocked, never left silent. Caught by the Blocked tests, unit and I/O.",
-      "find": ["                due.events.push(Event::Blocked { through, by });\n"],
+      "find": ["                due.events.push(Event::Blocked {\n                    lineage,\n                    through,\n                    by,\n                });\n"],
       "replace": ["                let _ = by;\n"]
     },
     {
@@ -386,7 +386,7 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): another instance's token is refused, and the call hands every token back. Caught by the refusal tests; resolving it trips the debug assertion for a token with no failure.",
-      "find": ["            .find(|id| id.instance != self.lineage.instance)\n"],
+      "find": ["            .find(|id| id.instance != self.instance)\n"],
       "replace": ["            .find(|_| false)\n"]
     },
     {
@@ -418,8 +418,8 @@
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "The oracle's statement of DI-D-12 (f), which the I/O tests bind to.",
-      "find": ["            .find_map(|(id, reported)| holds(reported, through).then_some(*id))\n"],
-      "replace": ["            .find_map(|(id, _)| false.then_some(*id))\n"]
+      "find": ["            (!reported.healed && holds(reported, through)).then_some(*id)\n"],
+      "replace": ["            (false && !reported.healed && holds(reported, through)).then_some(*id)\n"]
     },
     {
       "name": "DI-3.2.4: the oracle accepts a suspect it never saw pushed",
@@ -458,7 +458,7 @@
       "file": "src/dioring/push.rs",
       "expect": "caught",
       "why": "DI-D-35: an abandoned epoch's writes were declared lost, so a write joining it would be reported with an epoch that can never be durable. Caught by the I/O test that writes into an abandoned open epoch.",
-      "find": ["            && self.relay.lock().lineage.is_abandoned(epoch.id)\n"],
+      "find": ["            && (self.relay.lock().durability).is_abandoned(epoch.lineage.seq, epoch.id)\n"],
       "replace": ["            && false\n"]
     },
     {
@@ -530,8 +530,8 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "Short means fewer bytes than the write asked for. Counting an exact completion as short would mark every suspect write that completed normally, burying the ones that matter.",
-      "find": ["                if transferred < write.len {\n"],
-      "replace": ["                if transferred <= write.len {\n"]
+      "find": ["                if transferred < len {\n"],
+      "replace": ["                if transferred <= len {\n"]
     },
     {
       "name": "DI-3.2.4.2: a short completion is not marked",
@@ -546,8 +546,8 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "Coverage is per file (DI-D-39): a seal that failed on one file has not committed that file's writes, so marking them covered -- and dropping them as covered -- is a wrong answer about what is on the device.",
-      "find": ["                    write.stage == Stage::Named(seq)\n                        && write.file == file\n"],
-      "replace": ["                    write.stage == Stage::Named(seq)\n"]
+      "find": ["                        && write.stage == Stage::Named(seq)\n                        && write.file == file\n"],
+      "replace": ["                        && write.stage == Stage::Named(seq)\n"]
     },
     {
       "name": "DI-3.2.4.2: only the first failure suspecting a write is marked",
@@ -570,8 +570,8 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
-      "find": ["                        due.events.push(Event::Healed {\n                            failure: failure.id,\n                            suspect: failure.suspect,\n                            markings: failure.markings,\n                        });\n"],
-      "replace": ["                        drop(failure);\n"]
+      "find": ["                let failure = self.failures.remove(at);\n                due.events.push(Event::Healed {\n                    failure: failure.id,\n                    suspect: failure.suspect,\n                    markings: failure.markings,\n                });\n"],
+      "replace": ["                let failure = self.failures.remove(at);\n                drop(failure);\n"]
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
@@ -598,12 +598,12 @@
       "replace": ["            (MarkingKind::Nullified { .. }, Some(Ended::Failed(_))) => true,\n"]
     },
     {
-      "name": "DI-3.2.4.2: the oracle lets Durable pass a failure the consumer healed before its Healed entry",
+      "name": "DI-3.2.5.1: the oracle holds Durable for a healed failure until its Healed entry",
       "file": "src/oracle.rs",
       "expect": "caught",
-      "why": "The rule this item tightened: with Healed in the stream, a heal is in effect only once it is reported, and a Durable before then passed a failure still holding it.",
-      "find": ["            .find_map(|(id, reported)| holds(reported, through).then_some(*id))\n"],
-      "replace": ["            .find_map(|(id, reported)| (!reported.healed && holds(reported, through)).then_some(*id))\n"]
+      "why": "Inverted by DI-D-42: a heal takes effect in each lineage separately (DI-D-41), so one lineage's Durable may pass a failure the consumer healed before the failure's Healed entry, which waits for every lineage it held. Restoring DI-D-39's tighter rule would reject that legal stream. Caught by the oracle's own test and by the ring test of a failure spanning two lineages.",
+      "find": ["            (!reported.healed && holds(reported, through)).then_some(*id)\n"],
+      "replace": ["            holds(reported, through).then_some(*id)\n"]
     },
     {
       "name": "DI-3.2.4.2: the oracle accepts an Abandoned record with other markings",
@@ -625,9 +625,9 @@
       "name": "CONTROL: a covered write is recognised with its conditions reordered",
       "file": "src/dioring/durability.rs",
       "expect": "survives",
-      "why": "The manifest checking itself. The three conditions are pure and independent, so their order changes no answer.",
-      "find": ["                    write.stage == Stage::Named(seq)\n                        && write.file == file\n                        && !write.routing.provider\n"],
-      "replace": ["                    write.file == file\n                        && !write.routing.provider\n                        && write.stage == Stage::Named(seq)\n"]
+      "why": "The manifest checking itself. The four conditions are pure and independent, so their order changes no answer.",
+      "find": ["                    write.lineage == lineage\n                        && write.stage == Stage::Named(seq)\n                        && write.file == file\n                        && !write.routing.provider\n"],
+      "replace": ["                    write.file == file\n                        && !write.routing.provider\n                        && write.lineage == lineage\n                        && write.stage == Stage::Named(seq)\n"]
     },
     {
       "name": "CONTROL: the clock is read before the token is minted",
@@ -636,6 +636,166 @@
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
       "find": ["        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n        let observed = self.clock.now();\n"],
       "replace": ["        let observed = self.clock.now();\n        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: releasing a lineage's last handle does not end it",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "DI-D-40: the last handle's release is how a holder that will not finish a lineage ends it. Ignored, the lineage would live on with nothing able to seal it, its epochs neither durable nor abandoned. Caught by the ring test that drops the last copy and waits for LineageEnded.",
+      "find": ["        let due = core.durability.end(lineage.seq);\n        self.act(&mut core, due);\n"],
+      "replace": ["        let due = Due::default();\n        self.act(&mut core, due);\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: ending a lineage abandons nothing",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-30: every epoch not yet durable is abandoned, and LineageEnded says through which. Caught by the core tests that end a lineage with sealed, written and in-flight epochs.",
+      "find": ["        let abandoned_through = sealed.max(written);\n"],
+      "replace": ["        let abandoned_through = sealed.max(written).filter(|_| false);\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: an ended lineage stays live",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-42: an ended lineage is not live from the moment it ends, though it stays recorded while its writes in flight drain; answering for it then would report state the instance no longer keeps. Caught by the core tests that query a draining lineage.",
+      "find": ["    fn live(&self, lineage: Key) -> Option<&LineageState<E>> {\n        self.lineages.get(&lineage).filter(|state| !state.ended)\n"],
+      "replace": ["    fn live(&self, lineage: Key) -> Option<&LineageState<E>> {\n        self.lineages.get(&lineage).filter(|_| true)\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a heal takes effect in every lineage at the first one's seal",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-41: each lineage's re-issued writes are committed only by its own next seal, so one lineage's seal ending the failure everywhere lets another's mark pass epochs it has not committed -- a wrong answer. Caught by the core and ring tests of a failure spanning two lineages, whose Healed must wait for the second seal.",
+      "find": ["                        pending.remove(&lineage);\n"],
+      "replace": ["                        pending.clear();\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a heal never releases a lineage it reached",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-41: once a lineage's next seal succeeds after the heal, the failure stops holding that lineage, whose mark may pass it before the failure is healed everywhere. Caught by the tests whose first lineage reports Durable while the failure still holds the second.",
+      "find": ["            Standing::Healing { pending } => pending.contains_key(&lineage).then_some(epochs),\n"],
+      "replace": ["            Standing::Healing { .. } => Some(epochs),\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: ending a lineage does not release a heal waiting for it",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-42: a lineage that ends will never seal again, so a heal waiting for its seal would wait forever. Caught by the core and ring tests that end the lineage a heal still waits for.",
+      "find": ["                pending.remove(&lineage);\n"],
+      "replace": ["                let _ = pending;\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a failure observed after the end suspects the ended lineage's writes",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-30: an ended lineage answers nothing more, and a failure belongs to every lineage it suspects -- one that has ended could never resolve its part. Caught by the core test that observes a failure after the end, and the oracle's rule.",
+      "find": ["            .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))\n"],
+      "replace": ["            .filter(|write| lineages.contains_key(&write.lineage))\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: an import scoped to a lineage is not confined to it",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
+      "find": ["                (Reach::All, Some(lineage.seq))\n"],
+      "replace": ["                (Reach::All, None)\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-30: retiring abandons nothing, so it must be refused while an unresolved failure holds the lineage, or that failure's epochs there would be dropped unresolved. Caught by the core test whose lineage is held by a failure alone.",
+      "find": ["        if in_flight > 0 || uncovered > 0 || !failures.is_empty() {\n"],
+      "replace": ["        if in_flight > 0 || uncovered > 0 {\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: retiring ignores writes in flight",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-30: a lineage with writes in flight is not empty; retiring it would forget writes whose completions are still to come. Caught by the core test that retires with a write in flight.",
+      "find": ["        if in_flight > 0 || uncovered > 0 || !failures.is_empty() {\n"],
+      "replace": ["        if uncovered > 0 || !failures.is_empty() {\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a flush answering after its lineage ended is reported",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-30: a flush that finishes after the end reports nothing. Answered, it finds the ended lineage's seals cleared and records an inconsistency. Caught by the core test whose flush answers while the lineage drains a write in flight.",
+      "find": ["            Some(state) if !state.ended => state.answer(through, file, result.is_err()),\n"],
+      "replace": ["            Some(state) => state.answer(through, file, result.is_err()),\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a lineage key is reused",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-19: a lineage is never reused, including after retirement, so a name a consumer kept never comes to mean another lineage. Caught by the core tests that mint twice.",
+      "find": ["        self.next_lineage += 1;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.2.5.1: the default lineage can be ended",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-40: the default lineage cannot be ended, and the refusal says why. Without the check the instance's own copy makes the handle shared, so the refusal names the wrong reason. Caught by the ring test of end_lineage's refusals.",
+      "find": ["        } else if lineage.seq == DEFAULT_LINEAGE {\n            EndLineageRefusal::Default\n"],
+      "replace": ["        } else if false {\n            EndLineageRefusal::Default\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a shared handle is retired",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-40: retire succeeds only through the lineage's last handle, so no surviving copy names a retired lineage. Caught by the ring test that offers a copy.",
+      "find": ["        } else if !handle.is_last() {\n            RetireLineageRefusal::Shared\n"],
+      "replace": ["        } else if false {\n            RetireLineageRefusal::Shared\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: a handle consumed by end_lineage stays armed",
+      "file": "src/ids.rs",
+      "expect": "caught",
+      "why": "Disarming is what stops the last handle, consumed by end_lineage or retire_lineage, from ending the lineage again as it is released: end_lineage would end it twice, recording an inconsistency the next pop asserts on. First recorded as an equivalent CONTROL, on the argument that a release finds the lineage no longer live; running it hung, because retire_lineage then consumed the handle under the core's lock, which a release takes. It now releases the lock first. Caught by the ring tests of end_lineage.",
+      "find": ["                held.armed = false;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "CONTROL: the abandoned-through bound takes its operands in the other order",
+      "file": "src/dioring/durability/lineages.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The maximum of two values does not depend on their order.",
+      "find": ["        let abandoned_through = sealed.max(written);\n"],
+      "replace": ["        let abandoned_through = written.max(sealed);\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: the oracle accepts a lineage ended twice",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that a lineage ends once. Caught by its own test.",
+      "find": ["                return if self.ended_lineages.insert(*lineage) {\n"],
+      "replace": ["                return if self.ended_lineages.insert(*lineage) || true {\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: the oracle accepts Durable for an ended lineage",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that an ended lineage answers nothing more. Caught by its own test.",
+      "find": ["    fn durable(&mut self, through: Epoch<V>) -> Result<(), Violation<V>> {\n        if self.ended_lineages.contains(&through.lineage) {\n"],
+      "replace": ["    fn durable(&mut self, through: Epoch<V>) -> Result<(), Violation<V>> {\n        if false && self.ended_lineages.contains(&through.lineage) {\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: the oracle accepts a write into an ended lineage",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that no write joins an ended lineage. Caught by its own test.",
+      "find": ["            && self.ended_lineages.contains(&epoch.lineage)\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "DI-3.2.5.1: the oracle accepts a failure suspecting an ended lineage",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle's statement that no failure observed after the end suspects the lineage. Caught by its own test.",
+      "find": ["            if self.ended_lineages.contains(&write.epoch.lineage) {\n"],
+      "replace": ["            if false {\n"]
     }
   ]
 }

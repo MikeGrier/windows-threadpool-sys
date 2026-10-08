@@ -38,7 +38,10 @@ fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_abandoning_carr
     let mut harness = Harness::new(instance(vec![given(GIVEN, &file)], Vec::new()));
     let write = harness.write(GIVEN, 0, b"covered", 2, 1);
     harness.next();
-    harness.ring.import_failure(ImportScope::All);
+    harness
+        .ring
+        .import_failure(ImportScope::All)
+        .expect("import");
     let failed = next_failed(&mut harness);
     assert_eq!(failed.suspect.writes()[0].op, write);
 

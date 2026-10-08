@@ -1,25 +1,32 @@
 // Copyright (c) 2026 Mike Grier
-//! One lineage's durability state, without I/O: the writes not yet covered, the seals in progress,
-//! the failures not yet resolved, and the high-water mark (DI-D-9, DI-D-12, DI-D-22).
+//! An instance's durability state, without I/O: each lineage's seals and high-water mark, the
+//! writes not yet covered, and the failures not yet resolved (DI-D-9, DI-D-12, DI-D-19, DI-D-22).
 //!
 //! Every change returns what it makes due -- flushes to push, and entries to append, in the order
 //! they happened -- and the caller does the I/O and appends the entries. So this module decides and
 //! the relay acts, as DI-D-18's I/O-free core intends, and these rules are tested without a ring.
 //!
-//! **How a seal proceeds.** `seal(n)` waits until no write of the lineage at or below `n` is in
-//! flight, then names every completed write at or below `n` not yet named, by file, and asks for
-//! one flush per file. Each write belongs to exactly one seal -- the first at or above its epoch --
-//! because writes at or below a seal are refused once it is made. A seal is finished when every one
-//! of its flushes has answered, and the high-water mark advances over finished seals in order (the
-//! prefix property), past every epoch no unresolved failure holds.
+//! **Lineages** (DI-D-19). Each lineage has its own seal point, seals, high-water mark and
+//! abandoned epochs, keyed by the sequence number its `Lineage` carries; the default lineage's is
+//! zero. Writes and failures are the instance's. Minting, ending and retiring are
+//! [`lineages`]'s.
+//!
+//! **How a seal proceeds.** `seal(lineage, n)` waits until no write of the lineage at or below `n`
+//! is in flight, then names every completed write of it at or below `n` not yet named, by file, and
+//! asks for one flush per file. Each write belongs to exactly one seal -- the first of its lineage
+//! at or above its epoch -- because writes at or below a seal are refused once it is made. A seal is
+//! finished when every one of its flushes has answered, and a lineage's high-water mark advances
+//! over its finished seals in order (the prefix property), past every epoch no failure holds.
 //!
 //! **Failures** (DI-D-12, DI-D-34). Every write is held, in push order, from its push until it is
-//! covered successfully, fails, or its epoch is passed by the mark. That record is what a failure's
-//! suspect set is frozen from: the held writes whose file the failure reaches, in push order, at the
-//! moment it is observed. A failed flush and an import are one transition with the cause as data
-//! (DI-1.2 Q4). An epoch passes the mark only when every failure containing it is resolved;
-//! abandoning makes its epochs abandoned at once, and a heal takes effect when the first seal made
-//! after it finishes with every flush successful.
+//! covered successfully, fails, or its epoch is passed by its lineage's mark. That record is what a
+//! failure's suspect set is frozen from: the held writes of every live lineage whose file the
+//! failure reaches, in push order, at the moment it is observed. A failed flush and an import are
+//! one transition with the cause as data (DI-1.2 Q4). A failure belongs to every lineage it
+//! suspects a write of, and holds each: an epoch passes its lineage's mark only when no failure
+//! holds it. Abandoning makes its epochs abandoned at once. A heal takes effect per lineage
+//! (DI-D-41): the failure stops holding lineage L once L's first seal made after the heal finishes
+//! with every flush successful, and is healed once it holds none.
 //!
 //! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
 //! what happens to its writes afterwards: a suspect write that completes failed or short, and one
@@ -34,9 +41,7 @@
 //! makes them never decrease in it.
 //!
 //! **Not yet here**, and left visibly undone rather than approximated: a write to a file a consumer
-//! provider serves leaves its seal unfinished, because providers are `DI-3.2.6`'s; and failures are
-//! the lineage's own until `DI-3.2.5.1` makes them the instance's, shared by every lineage with a
-//! write in the suspect set.
+//! provider serves leaves its seal unfinished, because providers are `DI-3.2.6`'s.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -49,16 +54,23 @@ use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
 use super::{DomainId, TimeBase};
 use crate::contract::EpochId;
 use crate::error_code::ErrorCode;
-use crate::ids::{DioringIds, FailureId, FailureToken, Lineage, OpId};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
     Cause, Epoch, Failed, FailureInfo, FileKey, Marking, MarkingKind, Outcome, Resolution,
     ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
+mod lineages;
 #[cfg(test)]
 mod tests;
 
 type V<E> = DioringIds<E>;
+
+/// A lineage's key within its instance: the sequence number its `Lineage` carries.
+pub(crate) type Key = u64;
+
+/// The default lineage's key.
+pub(crate) const DEFAULT_LINEAGE: Key = 0;
 
 /// Who must answer for a file's writes (DI-D-27): the built-in default, by flushing the file,
 /// and the consumer's provider, for the domains it serves.
@@ -77,8 +89,6 @@ pub(crate) enum Reach {
     All,
     /// Every file whose declared domains intersect these, and every file declared with none.
     Domains(Arc<[DomainId]>),
-    /// No file: an import naming a lineage the instance does not have.
-    Nothing,
 }
 
 impl Reach {
@@ -95,7 +105,6 @@ impl Reach {
     fn reaches(&self, file: &[DomainId]) -> bool {
         match self {
             Reach::All => true,
-            Reach::Nothing => false,
             Reach::Domains(domains) => {
                 file.is_empty() || file.iter().any(|domain| domains.contains(domain))
             }
@@ -103,19 +112,24 @@ impl Reach {
     }
 }
 
-/// A flush now due: seal `through`'s flush of `file`, through `target`.
+/// A flush now due: `lineage`'s seal `through`'s flush of `file`, through `target`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Flush<E, T> {
+    pub(crate) lineage: Key,
     pub(crate) through: E,
     pub(crate) file: FileKey,
     pub(crate) target: T,
 }
 
-/// An entry a change made due, in the lineage's terms.
+/// An entry a change made due, in the core's terms.
 #[derive(Debug)]
 pub(crate) enum Event<E: EpochId + 'static> {
-    Durable(E),
+    Durable {
+        lineage: Key,
+        through: E,
+    },
     Blocked {
+        lineage: Key,
         through: E,
         by: FailureId,
     },
@@ -133,6 +147,10 @@ pub(crate) enum Event<E: EpochId + 'static> {
     Marked {
         failure: FailureId,
         marking: Marking<V<E>>,
+    },
+    LineageEnded {
+        lineage: Key,
+        abandoned_through: Option<E>,
     },
 }
 
@@ -175,7 +193,7 @@ impl<E: EpochId + 'static, T> Default for Due<E, T> {
     }
 }
 
-/// An epoch's state as this lineage sees it.
+/// An epoch's state as its lineage sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Open,
@@ -199,13 +217,14 @@ enum Stage {
     InFlight,
     /// Completed successfully, and not yet named to a seal.
     Completed,
-    /// Named to the seal with this sequence number.
+    /// Named to its lineage's seal with this sequence number.
     Named(u64),
 }
 
 /// A write the ring accepted, as the core records it.
 pub(crate) struct Accepted<E, T> {
     pub(crate) op: OpId,
+    pub(crate) lineage: Key,
     pub(crate) epoch: E,
     pub(crate) file: FileKey,
     /// What its seal's flush is pushed against.
@@ -216,9 +235,10 @@ pub(crate) struct Accepted<E, T> {
     pub(crate) len: u32,
 }
 
-/// A write not yet covered successfully, failed, or passed by the mark.
+/// A write not yet covered successfully, failed, or passed by its lineage's mark.
 struct Write<E, T> {
     op: OpId,
+    lineage: Key,
     epoch: E,
     file: FileKey,
     target: T,
@@ -251,7 +271,7 @@ enum SealStage {
 }
 
 struct Seal<E> {
-    /// Counts seals made, so a heal knows which seals come after it.
+    /// Counts the lineage's seals, so a heal knows which seals come after it.
     seq: u64,
     through: E,
     stage: SealStage,
@@ -263,9 +283,10 @@ struct Seal<E> {
 enum Standing {
     /// Open to resolution; the flag is its token's, set while the token is live.
     Open(Arc<AtomicBool>),
-    /// Healed, effective when a seal with this sequence number or later finishes successfully.
-    /// The heal holds the token, so the inventory does not hand out another.
-    Healing { after: u64 },
+    /// Healed, and still holding the lineages named here, each until its seal with this sequence
+    /// number or later finishes successfully (DI-D-41). Healed once it names none. The heal holds
+    /// the token, so the inventory does not hand out another.
+    Healing { pending: BTreeMap<Key, u64> },
 }
 
 struct Failure<E: EpochId + 'static> {
@@ -274,26 +295,91 @@ struct Failure<E: EpochId + 'static> {
     suspect: SuspectSet<V<E>>,
     observed: TimePoint<InterruptTime>,
     markings: Vec<Marking<V<E>>>,
-    /// The epochs of its suspect writes.
-    epochs: BTreeSet<E>,
+    /// The epochs of its suspect writes, by lineage: the lineages it belongs to.
+    epochs: BTreeMap<Key, BTreeSet<E>>,
     standing: Standing,
 }
 
-/// One lineage's durability state, stamping failures with `K`'s readings.
-pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
-    lineage: Lineage,
+impl<E: EpochId + 'static> Failure<E> {
+    /// The epochs of `lineage` this failure holds, if it holds the lineage at all.
+    fn holds(&self, lineage: Key) -> Option<&BTreeSet<E>> {
+        let epochs = self.epochs.get(&lineage)?;
+        match &self.standing {
+            Standing::Open(_) => Some(epochs),
+            Standing::Healing { pending } => pending.contains_key(&lineage).then_some(epochs),
+        }
+    }
+}
+
+/// One lineage's own state.
+struct LineageState<E> {
+    description: Option<Arc<str>>,
     sealed_through: Option<E>,
     durable_through: Option<E>,
-    /// The writes not yet covered, keyed by push order.
-    writes: BTreeMap<u64, Write<E, T>>,
     in_flight_by_epoch: BTreeMap<E, usize>,
     seals: VecDeque<Seal<E>>,
     next_seal: u64,
+    /// Every epoch an abandoned failure contained.
+    abandoned: BTreeSet<E>,
+    /// Ended (DI-D-30): it answers nothing more, and is retired once its writes in flight complete.
+    ended: bool,
+}
+
+impl<E: EpochId> LineageState<E> {
+    fn new(description: Option<Arc<str>>) -> Self {
+        Self {
+            description,
+            sealed_through: None,
+            durable_through: None,
+            in_flight_by_epoch: BTreeMap::new(),
+            seals: VecDeque::new(),
+            next_seal: 0,
+            abandoned: BTreeSet::new(),
+            ended: false,
+        }
+    }
+
+    /// Record seal `through`'s flush of `file` as answered, and as failed if it did: the seal's
+    /// sequence number and the file's domains, or what about the answer is inconsistent.
+    fn answer(
+        &mut self,
+        through: E,
+        file: FileKey,
+        failed_now: bool,
+    ) -> Result<(u64, Arc<[DomainId]>), &'static str> {
+        let seal = self
+            .seals
+            .iter_mut()
+            .find(|seal| seal.through == through)
+            .ok_or("a flush completed for a seal that does not exist")?;
+        let SealStage::Flushing { files, failed, .. } = &mut seal.stage else {
+            return Err("a flush completed for a seal not flushing");
+        };
+        let entry = files
+            .iter_mut()
+            .find(|f| f.file == file && !f.answered)
+            .ok_or("a flush completed that the seal did not issue")?;
+        entry.answered = true;
+        let domains = Arc::clone(&entry.domains);
+        if failed_now {
+            *failed = true;
+            seal.answered = true;
+        }
+        Ok((seal.seq, domains))
+    }
+}
+
+/// An instance's durability state, stamping failures with `K`'s readings.
+pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
+    instance: InstanceId,
+    /// Every lineage not yet retired, by key.
+    lineages: BTreeMap<Key, LineageState<E>>,
+    next_lineage: Key,
+    /// The writes not yet covered, keyed by push order.
+    writes: BTreeMap<u64, Write<E, T>>,
     /// The unresolved failures, in observation order.
     failures: Vec<Failure<E>>,
     next_failure: u64,
-    /// Every epoch an abandoned failure contained.
-    abandoned: BTreeSet<E>,
     /// The first internal inconsistency observed. Recorded rather than asserted, because most
     /// changes arrive on a pool thread, where a panic aborts the process and names no test; the
     /// consumer's next `pop` asserts on it instead, on the consumer's own thread.
@@ -302,18 +388,17 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
 }
 
 impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
-    pub(crate) fn new(lineage: Lineage, clock: K) -> Self {
+    /// An instance's state, with its default lineage.
+    pub(crate) fn new(instance: InstanceId, clock: K) -> Self {
+        let mut lineages = BTreeMap::new();
+        lineages.insert(DEFAULT_LINEAGE, LineageState::new(None));
         Self {
-            lineage,
-            sealed_through: None,
-            durable_through: None,
+            instance,
+            lineages,
+            next_lineage: DEFAULT_LINEAGE + 1,
             writes: BTreeMap::new(),
-            in_flight_by_epoch: BTreeMap::new(),
-            seals: VecDeque::new(),
-            next_seal: 0,
             failures: Vec::new(),
             next_failure: 0,
-            abandoned: BTreeSet::new(),
             inconsistency: None,
             clock,
         }
@@ -330,51 +415,77 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         self.inconsistency.get_or_insert(what);
     }
 
-    pub(crate) fn sealed_through(&self) -> Option<E> {
-        self.sealed_through
-    }
-
-    pub(crate) fn durable_through(&self) -> Option<E> {
-        self.durable_through
-    }
-
-    /// The seal point, if a write tagged `epoch` would land at or below it (guarantee 6).
-    pub(crate) fn refuses(&self, epoch: E) -> Option<E> {
-        self.sealed_through.filter(|&sealed| epoch <= sealed)
-    }
-
-    /// Whether an abandoned failure contained `epoch`, so that no write may join it (DI-D-35).
-    pub(crate) fn is_abandoned(&self, epoch: E) -> bool {
-        self.abandoned.contains(&epoch)
-    }
-
-    /// An epoch's state. Abandonment is decided when the failure is abandoned, so it is reported
-    /// from then on, before the mark passes the epoch and whether or not the epoch is sealed.
-    pub(crate) fn state(&self, epoch: E) -> State {
-        if self.abandoned.contains(&epoch) {
-            return State::Abandoned;
+    /// A lineage's `Lineage` name.
+    fn name(&self, lineage: Key) -> Lineage {
+        Lineage {
+            instance: self.instance,
+            seq: lineage,
         }
-        if self.sealed_through.is_none_or(|sealed| epoch > sealed) {
-            return State::Open;
+    }
+
+    /// The lineage's state, if it is live: minted, and neither ended nor retired.
+    fn live(&self, lineage: Key) -> Option<&LineageState<E>> {
+        self.lineages.get(&lineage).filter(|state| !state.ended)
+    }
+
+    /// The lineage's seal point; `None` for a lineage not live.
+    pub(crate) fn sealed_through(&self, lineage: Key) -> Option<Option<E>> {
+        self.live(lineage).map(|state| state.sealed_through)
+    }
+
+    /// The lineage's high-water mark; `None` for a lineage not live.
+    pub(crate) fn durable_through(&self, lineage: Key) -> Option<Option<E>> {
+        self.live(lineage).map(|state| state.durable_through)
+    }
+
+    /// The seal point, if a write to `lineage` tagged `epoch` would land at or below it
+    /// (guarantee 6).
+    pub(crate) fn refuses(&self, lineage: Key, epoch: E) -> Option<E> {
+        self.live(lineage)?
+            .sealed_through
+            .filter(|&sealed| epoch <= sealed)
+    }
+
+    /// Whether an abandoned failure contained `lineage`'s `epoch`, so that no write may join it
+    /// (DI-D-35).
+    pub(crate) fn is_abandoned(&self, lineage: Key, epoch: E) -> bool {
+        self.live(lineage)
+            .is_some_and(|state| state.abandoned.contains(&epoch))
+    }
+
+    /// An epoch's state; `None` for a lineage not live. Abandonment is decided when the failure is
+    /// abandoned, so it is reported from then on, before the mark passes the epoch and whether or
+    /// not the epoch is sealed.
+    pub(crate) fn state(&self, lineage: Key, epoch: E) -> Option<State> {
+        let state = self.live(lineage)?;
+        if state.abandoned.contains(&epoch) {
+            return Some(State::Abandoned);
         }
-        if self.durable_through.is_some_and(|durable| epoch <= durable) {
-            return State::Durable;
+        if state.sealed_through.is_none_or(|sealed| epoch > sealed) {
+            return Some(State::Open);
         }
-        let finished = self
+        if state
+            .durable_through
+            .is_some_and(|durable| epoch <= durable)
+        {
+            return Some(State::Durable);
+        }
+        let finished = state
             .seals
             .iter()
             .find(|seal| seal.through >= epoch)
             .is_some_and(|seal| matches!(seal.stage, SealStage::Done { .. }));
-        match self.blocking(epoch) {
+        Some(match self.blocking(lineage, epoch) {
             Some(by) if finished => State::Blocked(by),
             _ => State::Pending,
-        }
+        })
     }
 
     /// A write was accepted by the ring.
     pub(crate) fn pushed(&mut self, write: Accepted<E, T>) {
         let Accepted {
             op,
+            lineage,
             epoch,
             file,
             target,
@@ -382,15 +493,20 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             domains,
             len,
         } = write;
+        let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
+            self.inconsistent("a write was pushed to a lineage that is not live");
+            return;
+        };
         debug_assert!(
-            self.refuses(epoch).is_none(),
+            state.sealed_through.is_none_or(|sealed| epoch > sealed),
             "a write at or below the seal"
         );
-        *self.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
+        *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
         self.writes.insert(
             op.seq,
             Write {
                 op,
+                lineage,
                 epoch,
                 file,
                 target,
@@ -405,7 +521,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// A write completed. One that failed is reported on its own completion and is neither named
     /// to a flush nor suspected by a later failure (guarantee 1); a failure observed while it was
     /// in flight keeps it, because suspect sets are frozen, and marks it nullified. One that
-    /// completed short marks each failure suspecting it, and stays held.
+    /// completed short marks each failure suspecting it, and stays held. A write of an ended
+    /// lineage is let go either way.
     pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T> {
         let mut due = Due::default();
         let Some(write) = self.writes.get_mut(&op.seq) else {
@@ -416,11 +533,15 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             self.inconsistent("a write completed twice");
             return due;
         }
-        let epoch = write.epoch;
+        let (lineage, epoch, len) = (write.lineage, write.epoch, write.len);
+        let ended = self.lineages.get(&lineage).is_none_or(|state| state.ended);
         match end {
             WriteEnd::Transferred(transferred) => {
                 write.stage = Stage::Completed;
-                if transferred < write.len {
+                if ended {
+                    self.writes.remove(&op.seq);
+                }
+                if transferred < len {
                     self.mark(op, MarkingKind::Short { transferred }, &mut due);
                 }
             }
@@ -429,59 +550,70 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 self.mark(op, MarkingKind::Nullified { code }, &mut due);
             }
         }
-        if let Some(count) = self.in_flight_by_epoch.get_mut(&epoch) {
+        if let Some(state) = self.lineages.get_mut(&lineage)
+            && let Some(count) = state.in_flight_by_epoch.get_mut(&epoch)
+        {
             *count -= 1;
             if *count == 0 {
-                self.in_flight_by_epoch.remove(&epoch);
+                state.in_flight_by_epoch.remove(&epoch);
             }
+        }
+        if ended {
+            self.retire_if_drained(lineage);
         }
         self.advance(due)
     }
 
-    /// Seal every epoch at or below `through` (DI-D-9).
-    pub(crate) fn seal(&mut self, through: E) -> Sealing<E, T> {
-        if self.sealed_through.is_some_and(|sealed| through <= sealed) {
-            return Sealing::AlreadySealed(self.state(through));
+    /// Seal every epoch of `lineage` at or below `through` (DI-D-9). The lineage must be live.
+    pub(crate) fn seal(&mut self, lineage: Key, through: E) -> Sealing<E, T> {
+        let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
+            self.inconsistent("a seal of a lineage that is not live");
+            return Sealing::Submitted(Due::default());
+        };
+        if state.sealed_through.is_some_and(|sealed| through <= sealed) {
+            let answer = self.state(lineage, through).unwrap_or(State::Pending);
+            return Sealing::AlreadySealed(answer);
         }
-        self.sealed_through = Some(through);
-        self.seals.push_back(Seal {
-            seq: self.next_seal,
+        state.sealed_through = Some(through);
+        let seq = state.next_seal;
+        state.next_seal += 1;
+        state.seals.push_back(Seal {
+            seq,
             through,
             stage: SealStage::Waiting,
             answered: false,
         });
-        self.next_seal += 1;
         Sealing::Submitted(self.advance(Due::default()))
     }
 
-    /// Seal `through`'s flush of `file` completed. Success covers the writes it was issued for; a
-    /// failure is observed at once, and is the seal's answer.
+    /// `lineage`'s seal `through`'s flush of `file` completed. Success covers the writes it was
+    /// issued for; a failure is observed at once, and is the seal's answer. A flush of an ended
+    /// lineage reports nothing (DI-D-30).
     pub(crate) fn flushed(
         &mut self,
+        lineage: Key,
         through: E,
         file: FileKey,
         result: io::Result<()>,
     ) -> Due<E, T> {
         let mut due = Due::default();
-        let Some(seal) = self.seals.iter_mut().find(|seal| seal.through == through) else {
-            self.inconsistent("a flush completed for a seal that does not exist");
-            return due;
+        let answered = match self.lineages.get_mut(&lineage) {
+            Some(state) if !state.ended => state.answer(through, file, result.is_err()),
+            _ => return due,
         };
-        let SealStage::Flushing { files, failed, .. } = &mut seal.stage else {
-            self.inconsistent("a flush completed for a seal not flushing");
-            return due;
+        let (seq, domains) = match answered {
+            Ok(answered) => answered,
+            Err(what) => {
+                self.inconsistent(what);
+                return due;
+            }
         };
-        let Some(entry) = files.iter_mut().find(|f| f.file == file && !f.answered) else {
-            self.inconsistent("a flush completed that the seal did not issue");
-            return due;
-        };
-        entry.answered = true;
-        let seq = seal.seq;
         match result {
             Ok(()) => {
                 // A write a provider also answers for stays until the provider has (DI-3.2.6).
                 let covered = |write: &Write<E, T>| {
-                    write.stage == Stage::Named(seq)
+                    write.lineage == lineage
+                        && write.stage == Stage::Named(seq)
                         && write.file == file
                         && !write.routing.provider
                 };
@@ -497,23 +629,26 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 }
             }
             Err(error) => {
-                let reach = Reach::of_file(&entry.domains);
-                *failed = true;
-                seal.answered = true;
                 let cause = Cause::Flush {
                     file,
                     error: Arc::new(error),
                 };
-                self.observe(cause, &reach, &mut due);
+                self.observe(cause, &Reach::of_file(&domains), None, &mut due);
             }
         }
         self.advance(due)
     }
 
-    /// A failure the consumer learned of outside the instance (DI-D-12 (h)).
-    pub(crate) fn import(&mut self, cause: Cause<V<E>>, reach: &Reach) -> (FailureId, Due<E, T>) {
+    /// A failure the consumer learned of outside the instance (DI-D-12 (h)), reaching the writes
+    /// `reach` covers -- of lineage `only`, if one is named.
+    pub(crate) fn import(
+        &mut self,
+        cause: Cause<V<E>>,
+        reach: &Reach,
+        only: Option<Key>,
+    ) -> (FailureId, Due<E, T>) {
         let mut due = Due::default();
-        let id = self.observe(cause, reach, &mut due);
+        let id = self.observe(cause, reach, only, &mut due);
         (id, self.advance(due))
     }
 
@@ -526,7 +661,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         if let Some(foreign) = items
             .iter()
             .map(|(token, _)| token.id)
-            .find(|id| id.instance != self.lineage.instance)
+            .find(|id| id.instance != self.instance)
         {
             return Err(ResolveError {
                 reason: ResolveRefusal::Foreign(foreign),
@@ -543,7 +678,11 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             match resolution {
                 Resolution::Abandon => {
                     let failure = self.failures.remove(index);
-                    self.abandoned.extend(failure.epochs.iter().copied());
+                    for (lineage, epochs) in &failure.epochs {
+                        if let Some(state) = self.lineages.get_mut(lineage) {
+                            state.abandoned.extend(epochs.iter().copied());
+                        }
+                    }
                     due.events.push(Event::Abandoned {
                         failure: failure.id,
                         suspect: failure.suspect,
@@ -551,12 +690,22 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     });
                 }
                 Resolution::Heal => {
-                    self.failures[index].standing = Standing::Healing {
-                        after: self.next_seal,
-                    };
+                    let lineages = &self.lineages;
+                    let pending = self.failures[index]
+                        .epochs
+                        .keys()
+                        .filter_map(|key| {
+                            lineages
+                                .get(key)
+                                .filter(|state| !state.ended)
+                                .map(|state| (*key, state.next_seal))
+                        })
+                        .collect();
+                    self.failures[index].standing = Standing::Healing { pending };
                 }
             }
         }
+        self.release_healed(&mut due);
         Ok(self.advance(due))
     }
 
@@ -591,23 +740,45 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .collect()
     }
 
-    /// Record a failure: its suspect set is every held write its reach covers, in push order,
-    /// frozen now (DI-D-12 (b)). The one transition every cause takes.
-    fn observe(&mut self, cause: Cause<V<E>>, reach: &Reach, due: &mut Due<E, T>) -> FailureId {
-        let lineage = self.lineage;
+    /// Record a failure: its suspect set is every held write of a live lineage -- of `only`, if
+    /// named -- whose file its reach covers, in push order, frozen now (DI-D-12 (b)). The one
+    /// transition every cause takes.
+    fn observe(
+        &mut self,
+        cause: Cause<V<E>>,
+        reach: &Reach,
+        only: Option<Key>,
+        due: &mut Due<E, T>,
+    ) -> FailureId {
+        let instance = self.instance;
+        let lineages = &self.lineages;
         let suspect: Vec<SuspectWrite<V<E>>> = self
             .writes
             .values()
+            .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
+            .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))
             .filter(|write| reach.reaches(&write.domains))
             .map(|write| SuspectWrite {
                 op: write.op,
                 file: write.file,
-                epoch: Epoch::new(lineage, write.epoch),
+                epoch: Epoch::new(
+                    Lineage {
+                        instance,
+                        seq: write.lineage,
+                    },
+                    write.epoch,
+                ),
             })
             .collect();
-        let epochs = suspect.iter().map(|write| write.epoch.id).collect();
+        let mut epochs: BTreeMap<Key, BTreeSet<E>> = BTreeMap::new();
+        for write in &suspect {
+            epochs
+                .entry(write.epoch.lineage.seq)
+                .or_default()
+                .insert(write.epoch.id);
+        }
         let id = FailureId {
-            instance: lineage.instance,
+            instance,
             seq: self.next_failure,
         };
         self.next_failure += 1;
@@ -659,79 +830,127 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         }
     }
 
-    /// The first unresolved failure, in observation order, holding an epoch above the mark and at
-    /// or below `through`.
-    fn blocking(&self, through: E) -> Option<FailureId> {
-        if self
-            .durable_through
-            .is_some_and(|durable| durable >= through)
-        {
+    /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
+    /// `Healed` entry (DI-D-41).
+    fn release_healed(&mut self, due: &mut Due<E, T>) {
+        let mut at = 0;
+        while at < self.failures.len() {
+            if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
+            {
+                let failure = self.failures.remove(at);
+                due.events.push(Event::Healed {
+                    failure: failure.id,
+                    suspect: failure.suspect,
+                    markings: failure.markings,
+                });
+            } else {
+                at += 1;
+            }
+        }
+    }
+
+    /// The first unresolved failure, in observation order, holding an epoch of `lineage` above its
+    /// mark and at or below `through`.
+    fn blocking(&self, lineage: Key, through: E) -> Option<FailureId> {
+        let durable = self.lineages.get(&lineage)?.durable_through;
+        if durable.is_some_and(|durable| durable >= through) {
             return None;
         }
-        let lower = self
-            .durable_through
-            .map_or(Bound::Unbounded, Bound::Excluded);
+        let lower = durable.map_or(Bound::Unbounded, Bound::Excluded);
         self.failures
             .iter()
             .find(|failure| {
-                failure
-                    .epochs
-                    .range((lower, Bound::Included(through)))
-                    .next()
-                    .is_some()
+                failure.holds(lineage).is_some_and(|epochs| {
+                    epochs
+                        .range((lower, Bound::Included(through)))
+                        .next()
+                        .is_some()
+                })
             })
             .map(|failure| failure.id)
     }
 
-    /// Start every seal whose writes have all completed, finish every seal whose flushes have all
-    /// answered, advance the high-water mark, and answer the seals a failure holds.
+    /// For every live lineage: start every seal whose writes have all completed, and finish every
+    /// seal whose flushes have all answered. Then report the heals that took effect, advance each
+    /// lineage's high-water mark, and answer the seals a failure holds.
     fn advance(&mut self, mut due: Due<E, T>) -> Due<E, T> {
-        self.start_seals(&mut due);
-        self.finish_seals(&mut due);
-        while let Some(seal) = self.seals.front() {
-            if !matches!(seal.stage, SealStage::Done { .. })
-                || self.blocking(seal.through).is_some()
-            {
-                break;
-            }
-            let through = seal.through;
-            self.seals.pop_front();
-            self.durable_through = Some(through);
-            // Only writes whose flush failed are left at or below a finished seal; once the mark
-            // passes them, no later failure can reach back to them (guarantee 3).
-            self.writes.retain(|_, write| write.epoch > through);
-            due.events.push(Event::Durable(through));
+        let live: Vec<Key> = self
+            .lineages
+            .iter()
+            .filter(|(_, state)| !state.ended)
+            .map(|(key, _)| *key)
+            .collect();
+        for &lineage in &live {
+            self.start_seals(lineage, &mut due);
+            self.finish_seals(lineage);
         }
-        for index in 0..self.seals.len() {
-            let seal = &self.seals[index];
-            if seal.answered || !matches!(seal.stage, SealStage::Done { succeeded: true }) {
-                continue;
-            }
-            if let Some(by) = self.blocking(seal.through) {
-                let through = seal.through;
-                self.seals[index].answered = true;
-                due.events.push(Event::Blocked { through, by });
-            }
+        self.release_healed(&mut due);
+        for &lineage in &live {
+            self.advance_mark(lineage, &mut due);
         }
         due
     }
 
-    fn start_seals(&mut self, due: &mut Due<E, T>) {
-        let oldest_in_flight = self.in_flight_by_epoch.keys().next().copied();
-        for index in 0..self.seals.len() {
-            if !matches!(self.seals[index].stage, SealStage::Waiting) {
+    /// Advance `lineage`'s high-water mark over its finished seals, in order, and answer the seals
+    /// a failure holds.
+    fn advance_mark(&mut self, lineage: Key, due: &mut Due<E, T>) {
+        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {
+            if !matches!(seal.stage, SealStage::Done { .. })
+                || self.blocking(lineage, seal.through).is_some()
+            {
+                break;
+            }
+            let through = seal.through;
+            let state = self.lineages.get_mut(&lineage).expect("found above");
+            state.seals.pop_front();
+            state.durable_through = Some(through);
+            // Only writes whose flush failed are left at or below a finished seal; once the mark
+            // passes them, no later failure can reach back to them (guarantee 3).
+            self.writes
+                .retain(|_, write| write.lineage != lineage || write.epoch > through);
+            due.events.push(Event::Durable { lineage, through });
+        }
+        let count = self.lineages.get(&lineage).map_or(0, |s| s.seals.len());
+        for index in 0..count {
+            let seal = &self.lineages[&lineage].seals[index];
+            if seal.answered || !matches!(seal.stage, SealStage::Done { succeeded: true }) {
                 continue;
             }
-            let through = self.seals[index].through;
+            let through = seal.through;
+            if let Some(by) = self.blocking(lineage, through) {
+                let state = self.lineages.get_mut(&lineage).expect("counted above");
+                state.seals[index].answered = true;
+                due.events.push(Event::Blocked {
+                    lineage,
+                    through,
+                    by,
+                });
+            }
+        }
+    }
+
+    fn start_seals(&mut self, lineage: Key, due: &mut Due<E, T>) {
+        let Some(state) = self.lineages.get_mut(&lineage) else {
+            return;
+        };
+        let oldest_in_flight = state.in_flight_by_epoch.keys().next().copied();
+        for index in 0..state.seals.len() {
+            if !matches!(state.seals[index].stage, SealStage::Waiting) {
+                continue;
+            }
+            let through = state.seals[index].through;
             if oldest_in_flight.is_some_and(|oldest| oldest <= through) {
                 // Seals are in ascending order, so no later one is ready either.
                 break;
             }
-            let seq = self.seals[index].seq;
+            let seq = state.seals[index].seq;
             let mut files: Vec<SealFile> = Vec::new();
             let mut provider_owed = false;
             for write in self.writes.values_mut() {
-                if write.stage != Stage::Completed || write.epoch > through {
+                if write.lineage != lineage
+                    || write.stage != Stage::Completed
+                    || write.epoch > through
+                {
                     continue;
                 }
                 write.stage = Stage::Named(seq);
@@ -743,13 +962,14 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                         answered: false,
                     });
                     due.flushes.push(Flush {
+                        lineage,
                         through,
                         file: write.file,
                         target: write.target.clone(),
                     });
                 }
             }
-            self.seals[index].stage = SealStage::Flushing {
+            state.seals[index].stage = SealStage::Flushing {
                 files,
                 failed: false,
                 provider_owed,
@@ -757,16 +977,19 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         }
     }
 
-    /// Mark every seal whose flushes have all answered as done. One whose flushes all succeeded
-    /// makes effective every heal made before it (DI-D-12 (c)), each reported by its `Healed`
-    /// entry.
-    fn finish_seals(&mut self, due: &mut Due<E, T>) {
-        for index in 0..self.seals.len() {
+    /// Mark every seal of `lineage` whose flushes have all answered as done. One whose flushes all
+    /// succeeded makes every heal made before it effective in this lineage (DI-D-41); a failure is
+    /// healed once that has happened in every lineage it held.
+    fn finish_seals(&mut self, lineage: Key) {
+        let Some(state) = self.lineages.get_mut(&lineage) else {
+            return;
+        };
+        for seal in &mut state.seals {
             let SealStage::Flushing {
                 files,
                 failed,
                 provider_owed,
-            } = &self.seals[index].stage
+            } = &seal.stage
             else {
                 continue;
             };
@@ -774,24 +997,28 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 continue;
             }
             let succeeded = !*failed;
-            let seq = self.seals[index].seq;
-            self.seals[index].stage = SealStage::Done { succeeded };
+            let seq = seal.seq;
+            seal.stage = SealStage::Done { succeeded };
             if succeeded {
-                let mut at = 0;
-                while at < self.failures.len() {
-                    if matches!(self.failures[at].standing, Standing::Healing { after } if after <= seq)
+                for failure in &mut self.failures {
+                    if let Standing::Healing { pending } = &mut failure.standing
+                        && pending.get(&lineage).is_some_and(|&after| after <= seq)
                     {
-                        let failure = self.failures.remove(at);
-                        due.events.push(Event::Healed {
-                            failure: failure.id,
-                            suspect: failure.suspect,
-                            markings: failure.markings,
-                        });
-                    } else {
-                        at += 1;
+                        pending.remove(&lineage);
                     }
                 }
             }
+        }
+    }
+
+    /// Retire an ended lineage whose writes in flight have all completed.
+    fn retire_if_drained(&mut self, lineage: Key) {
+        if self
+            .lineages
+            .get(&lineage)
+            .is_some_and(|state| state.ended && state.in_flight_by_epoch.is_empty())
+        {
+            self.lineages.remove(&lineage);
         }
     }
 }

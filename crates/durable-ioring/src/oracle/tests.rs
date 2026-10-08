@@ -15,6 +15,8 @@ use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 mod failures;
 // The marking rules, and a failure's final record: DI-3.2.4.2.
 mod markings;
+// The rules for an ended lineage: DI-3.2.5.1.
+mod lineages;
 
 type V = DioringIds<u64>;
 type Oracle = ConformanceOracle<V, u32>;

@@ -51,29 +51,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.2.4.2** -- Markings: a failure records what happens to its suspect writes afterwards -- nullified, short, or covered -- reports each as `Marked`, and ends with a final record, `Abandoned` or the new `Healed`; every failure carries its error code, read with `ErrorCode::of`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3242)
 
-- [ ] **DI-3.2.5.1** -- **Lineage handles, minting, ending, and failures across lineages.**
-  `mint_lineage`, `lineages()` and `default_lineage()`, with every rule of the steps above holding
-  per lineage ([DI-D-19](DESIGN-NOTES.md#di-d-19)); ending and retiring
-  ([DI-D-30](DESIGN-NOTES.md#di-d-30)). **Lineage handles** ([DI-D-40](DESIGN-NOTES.md#di-d-40)):
-  a `Clone` handle over an `Arc`, `#[must_use]`, an associated type of the contract beside
-  `FailureToken`, reaching dioring through a `Weak`. `Dioring::new` and `mint_lineage` return one;
-  the instance keeps a reference to the default's and hands out clones. Releasing the last handle
-  ends the lineage; `end` and `retire` take the handle by value and succeed only when it is the
-  last. Pushing and sealing take the handle, with another instance's refused. Naming or asking
-  takes the plain value and answers "not this instance's" explicitly: `epoch_state` stops
-  panicking, `durable_through` and `sealed_through` tell "nothing yet" from "not this
-  instance's", and `import_failure` refuses a lineage the instance does not have. **Failures
-  become the instance's** rather than the default lineage's: a suspect set spans every lineage's
-  held writes, a failure belongs to each lineage it suspects a write of, and `ImportScope::Lineage`
-  narrows to that lineage's writes. These land together with minting: once a second lineage exists,
-  a failed flush must suspect every lineage's writes to that file, or it answers wrongly in between.
-  (Flush-domain reach for flush failures and imports landed in `DI-3.2.4`, where the suspect set is
-  defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34); containment for a provider's domain is
-  `DI-3.2.6`'s.) The fake implementation and the oracle follow the trait, and CONTRACT.md states
-  the handle, its release, and the rule. **A heal takes effect per lineage**
-  ([DI-D-41](DESIGN-NOTES.md#di-d-41)): a healed failure stops holding lineage L once L's first
-  seal made after the heal succeeds, and is resolved as `Healed` only when that has happened in
-  every lineage it belongs to; CONTRACT.md's "Resolving a failure" says so.
+- [x] **DI-3.2.5.1** -- Lineage handles, minting, ending and retiring, and failures across lineages, with a heal taking effect in each lineage separately. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-3251)
 
 - [ ] **DI-3.2.5.2** -- **Gates.** Gated operations held until their epoch is durable, ending as
   `NeverIssued` when it is abandoned; a gate on an abandoned epoch refused as `GateAbandoned`; and a
@@ -87,7 +65,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   because until gates are honoured a public setter would let a gated operation be issued ungated.
   CONTRACT.md states the gate rules, `GateCycle` included, which it does not yet mention. Gates on
   the writer's own lineage need nothing from `DI-3.2.5.1`; gates across lineages do, so this follows
-  it.
+  it. From `DI-3.2.5.1` ([DI-D-42](DESIGN-NOTES.md#di-d-42)): a gated operation on an epoch of a
+  lineage that ends, in any lineage, ends as `NeverIssued` ([DI-D-30](DESIGN-NOTES.md#di-d-30)),
+  and `LineageBusy::held_for_gate`, zero until now, counts the operations held for a gate in the
+  lineage or gated on one of its epochs.
 
 - [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
   serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`

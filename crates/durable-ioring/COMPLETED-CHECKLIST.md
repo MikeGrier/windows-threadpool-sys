@@ -1531,3 +1531,33 @@ The item as it stood at completion:
   ([DI-D-37](DESIGN-NOTES.md#di-d-37)). The oracle gains the rules: a nullifier names a write in the
   set whose completion reported `Failed`, a short-write marking one whose completion was short, and
   a covered marking one in a seal that later succeeded.
+
+## Moved 2026-10-08 13:28:56 -04:00 -- DI-3.2.5.1: lineage handles and failures across lineages
+
+### <a id="di-3251"></a>DI-3.2.5.1 -- Lineage handles, minting, ending and retiring, and failures across lineages, with a heal taking effect in each lineage separately. *(completed 2026-10-08 13:28:56 -04:00)*
+
+How it was built is [DI-D-42](DESIGN-NOTES.md#di-d-42). The item as written:
+
+**Lineage handles, minting, ending, and failures across lineages.**
+  `mint_lineage`, `lineages()` and `default_lineage()`, with every rule of the steps above holding
+  per lineage ([DI-D-19](DESIGN-NOTES.md#di-d-19)); ending and retiring
+  ([DI-D-30](DESIGN-NOTES.md#di-d-30)). **Lineage handles** ([DI-D-40](DESIGN-NOTES.md#di-d-40)):
+  a `Clone` handle over an `Arc`, `#[must_use]`, an associated type of the contract beside
+  `FailureToken`, reaching dioring through a `Weak`. `Dioring::new` and `mint_lineage` return one;
+  the instance keeps a reference to the default's and hands out clones. Releasing the last handle
+  ends the lineage; `end` and `retire` take the handle by value and succeed only when it is the
+  last. Pushing and sealing take the handle, with another instance's refused. Naming or asking
+  takes the plain value and answers "not this instance's" explicitly: `epoch_state` stops
+  panicking, `durable_through` and `sealed_through` tell "nothing yet" from "not this
+  instance's", and `import_failure` refuses a lineage the instance does not have. **Failures
+  become the instance's** rather than the default lineage's: a suspect set spans every lineage's
+  held writes, a failure belongs to each lineage it suspects a write of, and `ImportScope::Lineage`
+  narrows to that lineage's writes. These land together with minting: once a second lineage exists,
+  a failed flush must suspect every lineage's writes to that file, or it answers wrongly in between.
+  (Flush-domain reach for flush failures and imports landed in `DI-3.2.4`, where the suspect set is
+  defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34); containment for a provider's domain is
+  `DI-3.2.6`'s.) The fake implementation and the oracle follow the trait, and CONTRACT.md states
+  the handle, its release, and the rule. **A heal takes effect per lineage**
+  ([DI-D-41](DESIGN-NOTES.md#di-d-41)): a healed failure stops holding lineage L once L's first
+  seal made after the heal succeeds, and is resolved as `Healed` only when that has happened in
+  every lineage it belongs to; CONTRACT.md's "Resolving a failure" says so.

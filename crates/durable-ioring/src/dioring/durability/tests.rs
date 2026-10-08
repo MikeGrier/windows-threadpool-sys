@@ -1,15 +1,20 @@
 // Copyright (c) 2026 Mike Grier
-//! Unit tests for one lineage's durability state, without a ring.
+//! Unit tests for an instance's durability state, without a ring.
 
+use std::io;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use win_time_sys::InterruptClock;
 
-use super::{Accepted, Due, Durability, Event, Flush, Routing, Sealing, State, WriteEnd};
+use super::{
+    Accepted, DEFAULT_LINEAGE, Due, Durability, Event, Flush, Key, Reach, Routing, Sealing, State,
+    WriteEnd,
+};
 use crate::dioring::{DomainId, TimeBase};
 use crate::error_code::ErrorCode;
-use crate::ids::{DioringIds, FailureToken, InstanceId, Lineage as LineageId, OpId};
-use crate::types::{FileKey, MarkingKind, SuspectWrite};
+use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
+use crate::types::{Cause, FileKey, MarkingKind, SuspectWrite};
 
 // Failures, their reach, and their resolution: DI-3.2.4.
 mod failures;
@@ -17,8 +22,82 @@ mod failures;
 mod stamps;
 // Markings, and a failure's final record: DI-3.2.4.2.
 mod markings;
+// Minted lineages, ending and retiring them, and failures across them: DI-3.2.5.1.
+mod lineages;
 
-type Lineage = Durability<u64, &'static str>;
+/// The core, answering for its default lineage: the one every test here exercises unless it mints
+/// another. Every other method is the core's own, through `Deref`.
+struct One<K = InterruptClock>(Durability<u64, &'static str, K>);
+
+impl<K> Deref for One<K> {
+    type Target = Durability<u64, &'static str, K>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<K> DerefMut for One<K> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<K: TimeBase> One<K> {
+    fn with_clock(clock: K) -> Self {
+        Self(Durability::new(InstanceId::next(), clock))
+    }
+
+    fn sealed_through(&self) -> Option<u64> {
+        self.0
+            .sealed_through(DEFAULT_LINEAGE)
+            .expect("the default lineage is live")
+    }
+
+    fn durable_through(&self) -> Option<u64> {
+        self.0
+            .durable_through(DEFAULT_LINEAGE)
+            .expect("the default lineage is live")
+    }
+
+    fn state(&self, epoch: u64) -> State {
+        self.0
+            .state(DEFAULT_LINEAGE, epoch)
+            .expect("the default lineage is live")
+    }
+
+    fn refuses(&self, epoch: u64) -> Option<u64> {
+        self.0.refuses(DEFAULT_LINEAGE, epoch)
+    }
+
+    fn is_abandoned(&self, epoch: u64) -> bool {
+        self.0.is_abandoned(DEFAULT_LINEAGE, epoch)
+    }
+
+    fn seal(&mut self, through: u64) -> Sealing<u64, &'static str> {
+        self.0.seal(DEFAULT_LINEAGE, through)
+    }
+
+    fn flushed(
+        &mut self,
+        through: u64,
+        file: FileKey,
+        result: io::Result<()>,
+    ) -> Due<u64, &'static str> {
+        self.0.flushed(DEFAULT_LINEAGE, through, file, result)
+    }
+
+    /// An import confined to no lineage.
+    fn import(
+        &mut self,
+        cause: Cause<DioringIds<u64>>,
+        reach: &Reach,
+    ) -> (FailureId, Due<u64, &'static str>) {
+        self.0.import(cause, reach, None)
+    }
+}
+
+type Lineage = One;
 
 const A: FileKey = FileKey(1);
 const B: FileKey = FileKey(2);
@@ -37,13 +116,7 @@ const IO_DEVICE: ErrorCode = ErrorCode::from_win32(1117);
 const FAILED: WriteEnd = WriteEnd::Failed(Some(IO_DEVICE));
 
 fn lineage() -> Lineage {
-    Durability::new(
-        LineageId {
-            instance: InstanceId::next(),
-            seq: 0,
-        },
-        InterruptClock,
-    )
+    One::with_clock(InterruptClock)
 }
 
 fn target(file: FileKey) -> &'static str {
@@ -69,7 +142,7 @@ impl Ops {
 
     fn push<K: TimeBase>(
         &mut self,
-        lineage: &mut Durability<u64, &'static str, K>,
+        lineage: &mut One<K>,
         epoch: u64,
         file: FileKey,
         routing: Routing,
@@ -80,7 +153,20 @@ impl Ops {
     /// Push a write to a file declared with `domains`.
     fn push_in<K: TimeBase>(
         &mut self,
-        lineage: &mut Durability<u64, &'static str, K>,
+        lineage: &mut One<K>,
+        epoch: u64,
+        file: FileKey,
+        routing: Routing,
+        domains: &[u32],
+    ) -> OpId {
+        self.push_to(lineage, DEFAULT_LINEAGE, epoch, file, routing, domains)
+    }
+
+    /// Push a write to lineage `key`, of a file declared with `domains`.
+    fn push_to<K: TimeBase>(
+        &mut self,
+        lineage: &mut One<K>,
+        key: Key,
         epoch: u64,
         file: FileKey,
         routing: Routing,
@@ -94,6 +180,7 @@ impl Ops {
         let domains: Arc<[DomainId]> = domains.iter().map(|&d| DomainId(d)).collect();
         lineage.pushed(Accepted {
             op,
+            lineage: key,
             epoch,
             file,
             target: target(file),
@@ -106,7 +193,12 @@ impl Ops {
 }
 
 fn flush(through: u64, file: FileKey) -> Flush<u64, &'static str> {
+    flush_of(DEFAULT_LINEAGE, through, file)
+}
+
+fn flush_of(lineage: Key, through: u64, file: FileKey) -> Flush<u64, &'static str> {
     Flush {
+        lineage,
         through,
         file,
         target: target(file),
@@ -117,8 +209,16 @@ fn flush(through: u64, file: FileKey) -> Flush<u64, &'static str> {
 /// suspect sets by the sequence numbers of their writes.
 #[derive(Debug, PartialEq, Eq)]
 enum Seen {
+    /// The default lineage's.
     Durable(u64),
+    /// The default lineage's: the seal, and the failure.
     Blocked(u64, u64),
+    /// Another lineage's: the lineage, and the seal.
+    DurableIn(Key, u64),
+    /// Another lineage's: the lineage, the seal, and the failure.
+    BlockedIn(Key, u64, u64),
+    /// The lineage, and the highest epoch abandoned.
+    LineageEnded(Key, Option<u64>),
     Failed(u64, Vec<u64>),
     /// Failure, suspect writes, and each marking's write and kind.
     Abandoned(u64, Vec<u64>, Vec<(u64, MarkingKind)>),
@@ -134,8 +234,25 @@ fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
     due.events
         .iter()
         .map(|event| match event {
-            Event::Durable(through) => Seen::Durable(*through),
-            Event::Blocked { through, by } => Seen::Blocked(*through, by.seq),
+            Event::Durable {
+                lineage: DEFAULT_LINEAGE,
+                through,
+            } => Seen::Durable(*through),
+            Event::Durable { lineage, through } => Seen::DurableIn(*lineage, *through),
+            Event::Blocked {
+                lineage: DEFAULT_LINEAGE,
+                through,
+                by,
+            } => Seen::Blocked(*through, by.seq),
+            Event::Blocked {
+                lineage,
+                through,
+                by,
+            } => Seen::BlockedIn(*lineage, *through, by.seq),
+            Event::LineageEnded {
+                lineage,
+                abandoned_through,
+            } => Seen::LineageEnded(*lineage, *abandoned_through),
             Event::Failed(failed) => Seen::Failed(failed.id.seq, ops(failed.suspect.writes())),
             Event::Abandoned {
                 failure,

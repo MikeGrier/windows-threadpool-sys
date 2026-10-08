@@ -35,6 +35,12 @@ Everything below either sharpens one word of that sentence or states a condition
   point, high-water mark and set of failures ([DI-D-19](DESIGN-NOTES.md#di-d-19)). An instance has
   a default lineage and may mint more at any time. Every rule in this document about epochs, seals
   and the high-water mark applies within one lineage.
+- **Lineage handle.** What the consumer holds a lineage through ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
+  Copies may be made freely; the lineage lives while any copy does, and releasing the last ends it.
+  A write's tag and a seal each borrow one, so neither can name a lineage that has ended. The
+  instance keeps a copy of its default lineage's, so the default lives as long as the instance.
+  Queries and entries name a lineage by its plain `Copy` name instead, and an instance answers a
+  name it cannot answer for -- another instance's, or one ended or retired -- by refusing it.
 - **Epoch, epoch id.** Every write carries an epoch: a lineage plus an **epoch id** the consumer
   chooses, of a type the consumer chooses (a `u64` by default) -- a journal transaction ID or a log
   sequence number can be the id directly. "Id" rather than "number", because it need not be one.
@@ -255,7 +261,8 @@ so it relies on what the consumer declares ([DI-D-21](DESIGN-NOTES.md#di-d-21)):
 The declarations must be complete; see what this contract requires of the consumer. Each suspect
 write is reported with its identity, the consumer's file identity and its epoch -- not its extent,
 which the consumer supplied and can track by the write's identity -- and a failure
-belongs to every lineage that has a write in its suspect set.
+belongs to every lineage that has a write in its suspect set, and holds each until it is resolved
+there. A failure whose suspect set is empty belongs to no lineage.
 
 ### How a failure is named
 
@@ -305,10 +312,13 @@ ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`.
 ### Resolving a failure
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
-  sealed (guarantee 6 forces that). The heal takes effect when the commit of the **first seal made
-  after the heal** completes successfully -- so whatever was re-issued before the heal is covered
-  successfully later. Then the failure is resolved as healed, and a `Healed` entry reports it --
-  before any `Durable` it lets through.
+  sealed (guarantee 6 forces that). The heal takes effect **in each lineage the failure holds
+  separately**, when the commit of that lineage's **first seal made after the heal** completes
+  successfully -- so whatever was re-issued there before the heal is covered successfully later
+  ([DI-D-41](DESIGN-NOTES.md#di-d-41)). From then the failure no longer holds that lineage, whose
+  high-water mark may pass it. Once it holds none -- at once, for a failure that belongs to no
+  lineage -- it is resolved as healed, and a `Healed` entry reports it, before any `Durable` that
+  the last lineage's seal lets through. A lineage that ends no longer holds a heal back.
 - **Abandon.** The consumer declares the suspect writes lost. Takes effect immediately.
 - **Close.** The consumer sets the failure aside, unresolved; it stays in the inventory.
 
@@ -357,7 +367,7 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 | `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified, completed short, or covered |
 | `Abandoned { failure, suspect, markings }` | the consumer abandoned a failure: its final record |
 | `Healed { failure, suspect, markings }` | a heal took effect: the failure's final record |
-| `LineageEnded { lineage, abandoned_through }` | the consumer ended a lineage; every epoch of it not yet durable is abandoned |
+| `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned |
 
 ## The readiness signal
 
@@ -397,7 +407,9 @@ back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
 
 ## Ending a lineage
 
-A holder that will not finish a lineage ends it ([DI-D-30](DESIGN-NOTES.md#di-d-30)).
+A holder that will not finish a lineage ends it ([DI-D-30](DESIGN-NOTES.md#di-d-30)), by releasing
+its last handle or by giving that handle to `end_lineage`, which is refused -- and hands the handle
+back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
 
 - **Every epoch of it not yet durable is abandoned**, sealed ones whose flushes are still in flight
   included; a flush that finishes afterwards reports nothing. Epochs already durable stay durable.
@@ -406,11 +418,18 @@ A holder that will not finish a lineage ends it ([DI-D-30](DESIGN-NOTES.md#di-d-
 - **It waits for nothing and cancels no I/O.** Operations in flight complete normally and their
   completions are delivered. There is no lifetime or durability dependency to wait for, unlike
   ending an instance.
-- **Its handle is refused at once**, and the lineage is retired once its operations in flight have
-  drained.
+- **It answers nothing more.** No handle to it remains, and the instance answers its name as one it
+  cannot answer for. It is retired once its operations in flight have drained; their completions
+  are delivered, and a failure that already suspected one of them still gains its marking.
 - **A failure shared with another lineage stays unresolved** for that lineage; ending one lineage
-  resolves nothing on another's behalf.
+  resolves nothing on another's behalf. A heal waiting for the ended lineage's next seal no longer
+  waits for it.
 - **The default lineage cannot be ended**; a consumer walking away from it ends the instance.
+
+**Retiring** a lineage, through its last handle, ends it without abandoning anything, so it is
+refused -- handing the handle back, with everything still holding the lineage -- unless nothing of
+it is in flight or uncovered and no unresolved failure holds it. A retired lineage is reported by no
+entry: nothing about it changed.
 
 ## Not yet specified
 
@@ -421,7 +440,9 @@ Nothing is left unspecified at the contract's level. The concrete types are spec
 
 Each example is dioring running the trace in its comments, compiled and run as a test, so a change
 that breaks one breaks the build. In the comments, `->` is a call the consumer makes and `<-` an
-entry it pops. Every write is in the default lineage, so the lineage is not shown. A flush failure
+entry it pops. Every write is in the default lineage, so the lineage is not shown; construction
+returns a handle to it, and `tag(n)` is its epoch n as a write or a seal takes it, `epoch(n)` as a
+query or an entry names it. A flush failure
 cannot be provoked on a healthy machine, so each example arms one with dioring's fault seam,
 `fail_next_flush`, which makes the next flush of a file report the error given whatever the device
 answered. Setting up the instance, and a `pop_until` that pops until an entry it is looking for, are
@@ -451,7 +472,7 @@ hidden.
 # let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
-# let mut ring = Ring::new(Setup {
+# let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![FileSetup {
@@ -463,8 +484,8 @@ hidden.
 #     provider: None,
 # })
 # .expect("an instance");
-let lineage = ring.default_lineage();
-let tag = |n: u64| Epoch::new(lineage, n);
+let tag = |n: u64| lineage.at(n); // what a write or a seal takes
+let epoch = |n: u64| Epoch::new(lineage.lineage(), n); // what a query or an entry names
 
 // -> write(tag 41, A) ; write(tag 41, B) ; write(tag 41, C)
 for offset in [0, 8, 16] {
@@ -480,7 +501,7 @@ let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) 
 };
 assert!(matches!(f1.cause, Cause::Flush { .. }));
 assert_eq!(f1.suspect.writes().len(), 3);
-assert_eq!(ring.durable_through(lineage), None); // nothing is durable yet
+assert_eq!(ring.durable_through(lineage.lineage()), Ok(None)); // nothing is durable yet
 // -> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
 let refused = ring.write(FILE, 0, vec![2; 8], tag(41), ()).expect_err("41 is sealed");
 assert!(matches!(refused.reason, PushRefusal::Sealed { .. }));
@@ -494,8 +515,8 @@ ring.resolve(vec![(f1.token, Resolution::Heal)]).expect("heal");
 ring.make_durable_through(tag(42))?;
 // <- WriteDone(A') ; WriteDone(B') ; WriteDone(C')
 // <- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
-pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(42)));
-assert_eq!(ring.epoch_state(tag(41)), EpochState::Durable);
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(42)));
+assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Durable));
 assert!(ring.failures().is_empty());
 # drop(ring);
 # std::fs::remove_file(&path)?;
@@ -532,7 +553,7 @@ pushed before the failure is observed: the seal's flush is issued as soon as `A`
 # let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
-# let mut ring = Ring::new(Setup {
+# let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![FileSetup {
@@ -544,8 +565,8 @@ pushed before the failure is observed: the seal's flush is issued as soon as `A`
 #     provider: None,
 # })
 # .expect("an instance");
-let lineage = ring.default_lineage();
-let tag = |n: u64| Epoch::new(lineage, n);
+let tag = |n: u64| lineage.at(n); // what a write or a seal takes
+let epoch = |n: u64| Epoch::new(lineage.lineage(), n); // what a query or an entry names
 let ops = |set: &SuspectSet<DioringIds<u64>>| set.writes().iter().map(|w| w.op).collect::<Vec<_>>();
 
 // -> write(tag 41, A) ; write(tag 43, P)      // 43 is open
@@ -565,7 +586,7 @@ let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 // <- WriteDone(R)
 pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
 // -> import_failure()                         // the consumer learned of an outside failure
-let f2_id = ring.import_failure(ImportScope::All);
+let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance");
 // <- Failed { failure: F2, cause: Imported, suspect: [A@41, P@43, R@43] }
 let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
@@ -582,9 +603,9 @@ ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Heal)])
     .expect("heal both");
 ring.make_durable_through(tag(44))?;
 // <- Durable { through: 44 }                  // 41 and 43 passed once both failures were resolved
-pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(44)));
-assert_eq!(ring.epoch_state(tag(41)), EpochState::Durable);
-assert_eq!(ring.epoch_state(tag(43)), EpochState::Durable);
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(44)));
+assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Durable));
+assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Durable));
 # drop(ring);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())
@@ -617,7 +638,7 @@ effect, at the first seal made after it. Any operation gated on 41 or 43 fails a
 # let path = std::env::temp_dir().join(format!("durable-ioring-abandon-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
-# let mut ring = Ring::new(Setup {
+# let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![FileSetup {
@@ -629,8 +650,8 @@ effect, at the first seal made after it. Any operation gated on 41 or 43 fails a
 #     provider: None,
 # })
 # .expect("an instance");
-# let lineage = ring.default_lineage();
-# let tag = |n: u64| Epoch::new(lineage, n);
+# let tag = |n: u64| lineage.at(n);
+# let epoch = |n: u64| Epoch::new(lineage.lineage(), n);
 # ring.write(FILE, 0, vec![1; 8], tag(41), ()).expect("a write");
 # ring.write(FILE, 8, vec![1; 8], tag(43), ()).expect("a write");
 # ring.fail_next_flush(FILE, 1117);
@@ -640,7 +661,7 @@ effect, at the first seal made after it. Any operation gated on 41 or 43 fails a
 # };
 # let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 # pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
-# ring.import_failure(ImportScope::All);
+# ring.import_failure(ImportScope::All).expect("the whole instance");
 # let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
 #     unreachable!()
 # };
@@ -649,14 +670,14 @@ ring.resolve(vec![(f1.token, Resolution::Heal), (f2.token, Resolution::Abandon)]
     .expect("heal F1, abandon F2");
 // <- Abandoned { failure: F2, suspect: [A@41, P@43, R@43] }
 pop_until(&mut ring, |e| matches!(e, Entry::Abandoned { .. }));
-assert_eq!(ring.epoch_state(tag(41)), EpochState::Abandoned);
-assert_eq!(ring.epoch_state(tag(43)), EpochState::Abandoned);
+assert_eq!(ring.epoch_state(epoch(41)), Ok(EpochState::Abandoned));
+assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
 // -> make_durable_through(44)                 // F1's heal takes effect here
 ring.make_durable_through(tag(44))?;
 // <- Durable { through: 44 }                  // "durable through 44" means durable or abandoned
-pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == tag(44)));
-assert_eq!(ring.durable_through(lineage), Some(44));
-assert_eq!(ring.epoch_state(tag(43)), EpochState::Abandoned);
+pop_until(&mut ring, |e| matches!(e, Entry::Durable { through } if *through == epoch(44)));
+assert_eq!(ring.durable_through(lineage.lineage()), Ok(Some(44)));
+assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Abandoned));
 # drop(ring);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())

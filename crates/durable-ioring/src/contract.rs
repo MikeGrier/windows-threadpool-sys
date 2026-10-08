@@ -15,8 +15,9 @@ use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
-    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
-    ImportScope, LineageInfo, PushError, ReadOptions, Resolution, ResolveError, WriteOptions,
+    AddFileError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
+    FileKey, FileOptions, ImportScope, LineageInfo, PushError, ReadOptions, Resolution,
+    ResolveError, RetireLineageError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -51,9 +52,15 @@ pub trait Identities: Copy + Debug + Eq + Hash + 'static {
     /// The only thing that can resolve a failure: affine, move-only, and dropping it is closing
     /// it (DI-D-12).
     type FailureToken: Debug;
+    /// A live lineage's handle (DI-D-40): what acts on the lineage. `Clone`; releasing the last
+    /// copy ends the lineage.
+    type LineageHandle: Clone + Debug;
 
     /// The failure a token resolves.
     fn token_id(token: &Self::FailureToken) -> Self::FailureId;
+
+    /// The lineage a handle names.
+    fn handle_lineage(handle: &Self::LineageHandle) -> Self::Lineage;
 }
 
 /// The contract: an instance that takes tagged writes and reports durability by epoch.
@@ -103,11 +110,39 @@ pub trait DurableRing {
         options: FileOptions,
     ) -> Result<(), AddFileError>;
 
-    /// The lineage that always exists.
-    fn default_lineage(&self) -> Lin<Self>;
+    /// A handle to the lineage that always exists: a copy of the one construction returned. The
+    /// instance holds a copy of its own, so the default lineage never ends while it lives.
+    fn default_lineage(&self) -> HandleOf<Self>;
+
+    /// A new lineage, with an optional description for the consumer's own reports (DI-D-19).
+    /// Releasing the last copy of its handle ends it (DI-D-40).
+    fn mint_lineage(&mut self, description: Option<String>) -> HandleOf<Self>;
 
     /// Every live lineage, the default among them.
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>>;
+
+    /// End a lineage through its last handle (DI-D-30): every epoch of it not yet durable is
+    /// abandoned, reported by a `LineageEnded` entry, and the lineage is retired once its
+    /// operations in flight have completed. Releasing the last handle does the same.
+    ///
+    /// # Errors
+    ///
+    /// An [`EndLineageError`] handing the handle back: for another instance's lineage, the default
+    /// lineage, or a handle that is not the lineage's last copy.
+    fn end_lineage(&mut self, handle: HandleOf<Self>) -> Result<(), EndLineageError<Self::Ids>>;
+
+    /// Retire a lineage through its last handle, abandoning nothing: refused unless nothing of it
+    /// is in flight, uncovered, or held by an unresolved failure.
+    ///
+    /// # Errors
+    ///
+    /// A [`RetireLineageError`] handing the handle back: for another instance's lineage, the
+    /// default lineage, a handle that is not the lineage's last copy, or a lineage with work
+    /// outstanding.
+    fn retire_lineage(
+        &mut self,
+        handle: HandleOf<Self>,
+    ) -> Result<(), RetireLineageError<Self::Ids>>;
 
     /// `write_with` with default options: cached.
     ///
@@ -119,28 +154,28 @@ pub trait DurableRing {
         file: FileKey,
         offset: u64,
         buffer: Self::Buffer,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: Self::Context,
     ) -> PushResult<Self>
     where
         Self::Buffer: IoBuf,
     {
-        self.write_with(file, offset, buffer, epoch, context, WriteOptions::new())
+        self.write_with(file, offset, buffer, tag, context, WriteOptions::new())
     }
 
-    /// Write `buffer` to `file` at `offset`, tagged with `epoch`. The buffer and the context come
-    /// back on the operation's completion.
+    /// Write `buffer` to `file` at `offset`, tagged with `tag`'s epoch. The buffer and the context
+    /// come back on the operation's completion.
     ///
     /// # Errors
     ///
     /// A [`PushError`] handing back the buffer and the context, for a file the instance was not
-    /// given, an epoch whose lineage is not one of the instance's, or a ring that refused the push.
+    /// given, another instance's lineage, or a ring that refused the push.
     fn write_with(
         &mut self,
         file: FileKey,
         offset: u64,
         buffer: Self::Buffer,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: Self::Context,
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self>
@@ -193,7 +228,7 @@ pub trait DurableRing {
     /// queued, and the next push or pop retries.
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
 
-    /// Seal every epoch of `through`'s lineage at or below it, and ask for them to be made
+    /// Seal every epoch of `through`'s lineage at or below its epoch, and ask for them to be made
     /// durable (DI-D-9). A new seal is answered on the queue (guarantee 4): by `Failed` if one of
     /// its own flushes fails, by `Blocked` if they succeed but an unresolved failure holds an
     /// epoch at or below it, and in every case by `Durable { through }` once the high-water mark
@@ -202,25 +237,47 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// For a lineage that is not one of the instance's.
+    /// For another instance's lineage.
     fn make_durable_through(
         &mut self,
-        through: Epoch<Self::Ids>,
+        through: Tag<'_, Self::Ids>,
     ) -> io::Result<DurabilityRequest<Self::Ids>>;
 
-    /// The lineage's high-water mark: the highest epoch id through which every epoch is durable.
-    /// `None` until something is, and for a lineage that is not one of the instance's.
-    fn durable_through(&self, lineage: Lin<Self>) -> Option<EpochIdOf<Self>>;
+    /// The lineage's high-water mark: the highest epoch id through which every epoch is durable,
+    /// or `None` until something is.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownLineage`] for a lineage the instance cannot answer for: another instance's, or one
+    /// ended or retired (DI-D-40).
+    fn durable_through(
+        &self,
+        lineage: Lin<Self>,
+    ) -> Result<Option<EpochIdOf<Self>>, UnknownLineage<Self::Ids>>;
 
-    /// The lineage's seal point. `None` until something is sealed, and for a lineage that is not
-    /// one of the instance's.
-    fn sealed_through(&self, lineage: Lin<Self>) -> Option<EpochIdOf<Self>>;
+    /// The lineage's seal point, or `None` until something is sealed.
+    ///
+    /// # Errors
+    ///
+    /// As [`durable_through`](Self::durable_through).
+    fn sealed_through(
+        &self,
+        lineage: Lin<Self>,
+    ) -> Result<Option<EpochIdOf<Self>>, UnknownLineage<Self::Ids>>;
 
     /// An epoch's state.
-    fn epoch_state(&self, epoch: Epoch<Self::Ids>) -> EpochState<Self::Ids>;
+    ///
+    /// # Errors
+    ///
+    /// As [`durable_through`](Self::durable_through), for the epoch's lineage.
+    fn epoch_state(
+        &self,
+        epoch: Epoch<Self::Ids>,
+    ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>>;
 
-    /// Resolve one or more failures, each by its token: `Heal`, effective when the first seal made
-    /// after this call finishes successfully, or `Abandon`, effective at once (DI-D-12 (c)). The
+    /// Resolve one or more failures, each by its token: `Heal`, effective in each lineage the
+    /// failure holds when that lineage's first seal made after this call finishes successfully
+    /// (DI-D-41), or `Abandon`, effective at once (DI-D-12 (c)). The
     /// call is validated whole and applied at one point in observation order.
     ///
     /// # Errors
@@ -233,7 +290,15 @@ pub trait DurableRing {
 
     /// Record a failure learned of outside the instance (DI-D-12 (h)). Its suspect set is built by
     /// the same rule as any other's, within `scope`, and its token arrives with its `Failed` entry.
-    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureIdOf<Self>;
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownLineage`] for a scope naming a lineage the instance cannot answer for; nothing is
+    /// recorded.
+    fn import_failure(
+        &mut self,
+        scope: ImportScope<Self::Ids>,
+    ) -> Result<FailureIdOf<Self>, UnknownLineage<Self::Ids>>;
 
     /// The unresolved failures, in the order they were observed.
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;
@@ -277,13 +342,13 @@ pub trait RegisteredBufferRing: DurableRing {
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: Self::Context,
     ) -> PushResult<Self> {
-        self.write_registered_with(file, offset, span, epoch, context, WriteOptions::new())
+        self.write_registered_with(file, offset, span, tag, context, WriteOptions::new())
     }
 
-    /// Write `span` of the registered buffers to `file` at `offset`, tagged with `epoch`. Its
+    /// Write `span` of the registered buffers to `file` at `offset`, tagged with `tag`'s epoch. Its
     /// completion carries no buffer: the bytes belong to the registration.
     ///
     /// # Errors
@@ -295,7 +360,7 @@ pub trait RegisteredBufferRing: DurableRing {
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: Self::Context,
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self>;
@@ -338,6 +403,8 @@ pub type OpIdOf<D> = <<D as DurableRing>::Ids as Identities>::OpId;
 pub type FailureIdOf<D> = <<D as DurableRing>::Ids as Identities>::FailureId;
 /// An implementation's failure token.
 pub type TokenOf<D> = <<D as DurableRing>::Ids as Identities>::FailureToken;
+/// An implementation's lineage handle.
+pub type HandleOf<D> = <<D as DurableRing>::Ids as Identities>::LineageHandle;
 /// An implementation's epoch-id type.
 pub type EpochIdOf<D> = <<D as DurableRing>::Ids as Identities>::EpochId;
 /// An implementation's queue entry.

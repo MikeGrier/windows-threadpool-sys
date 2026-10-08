@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
@@ -15,11 +15,14 @@ use windows_ioring_sys::{
 };
 
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
-use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
+use crate::ids::{
+    DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
+};
 use crate::provider::DurabilityProvider;
 use crate::types::{
-    AddFileError, Cause, DurabilityRequest, Epoch, EpochState, FailureInfo, FileKey, FileOptions,
-    FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions, Resolution, ResolveError,
+    AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
+    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, LineageInfo, OpKind, ReadOptions,
+    Resolution, ResolveError, RetireLineageError, RetireLineageRefusal, Tag, UnknownLineage,
     WriteOptions,
 };
 
@@ -27,7 +30,7 @@ mod durability;
 mod push;
 mod relay;
 
-use durability::{Due, Reach, Routing, Sealing, State};
+use durability::{DEFAULT_LINEAGE, Due, Reach, Routing, Sealing, State};
 use relay::{Delivery, FlushTarget, Relay};
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
@@ -224,6 +227,9 @@ pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>,
     pub(crate) provider: Option<ProviderSlot<E>>,
     /// The next operation's sequence number.
     pub(crate) next_op: u64,
+    /// A copy of the default lineage's handle, so the default lineage lives as long as the
+    /// instance does (DI-D-40).
+    pub(crate) default: LineageHandle,
 }
 
 impl<B, E, C, R> Dioring<B, E, C, R>
@@ -234,8 +240,9 @@ where
     R: IoBufMut,
 {
     /// Build an instance, make the ring's registrations, and wire its delivery. Blocks until both
-    /// registrations have completed. Failures are stamped with [`InterruptClock`]; see
-    /// [`Dioring::with_clock`] for another clock.
+    /// registrations have completed. Returns the instance with a handle to its default lineage
+    /// (DI-D-40). Failures are stamped with [`InterruptClock`]; see [`Dioring::with_clock`] for
+    /// another clock.
     ///
     /// # Errors
     ///
@@ -243,7 +250,7 @@ where
     /// domain named twice, or a ring that could not be created, make a registration, or be wired
     /// to deliver its completions. The checks that need no ring run first, so a refusal for
     /// either of the first two creates nothing.
-    pub fn new(setup: Setup<E, R>) -> Result<Self, SetupError<E, R>> {
+    pub fn new(setup: Setup<E, R>) -> Result<(Self, LineageHandle), SetupError<E, R>> {
         Self::with_clock(setup, InterruptClock)
     }
 }
@@ -262,7 +269,10 @@ where
     /// # Errors
     ///
     /// As [`Dioring::new`].
-    pub fn with_clock(setup: Setup<E, R>, clock: K) -> Result<Self, SetupError<E, R>> {
+    pub fn with_clock(
+        setup: Setup<E, R>,
+        clock: K,
+    ) -> Result<(Self, LineageHandle), SetupError<E, R>> {
         let Setup {
             submission_queue_size,
             completion_queue_size,
@@ -290,7 +300,7 @@ where
         }
 
         let instance = InstanceId::next();
-        let relay = match Relay::new(Lineage { instance, seq: 0 }, clock) {
+        let relay = match Relay::new(instance, clock) {
             Ok(relay) => Arc::new(relay),
             Err(error) => {
                 return Err(SetupError {
@@ -385,17 +395,35 @@ where
             record.routing = routing(&record.domains, provider.as_ref());
         }
 
-        Ok(Self {
-            instance,
-            delivery,
-            relay,
-            files: records,
-            domains,
-            registered,
-            provider,
-            next_op: 0,
-        })
+        let default = LineageHandle::mint(
+            Lineage {
+                instance,
+                seq: DEFAULT_LINEAGE,
+            },
+            home(&relay),
+        );
+        let handle = default.clone();
+        Ok((
+            Self {
+                instance,
+                delivery,
+                relay,
+                files: records,
+                domains,
+                registered,
+                provider,
+                next_op: 0,
+                default,
+            },
+            handle,
+        ))
     }
+}
+
+/// Where an instance's lineage handles report their release.
+fn home<T: Home + 'static>(relay: &Arc<T>) -> Weak<dyn Home> {
+    let home: Weak<T> = Arc::downgrade(relay);
+    home
 }
 
 impl<B, E, C, R, K> DurableRing for Dioring<B, E, C, R, K>
@@ -441,14 +469,14 @@ where
         file: FileKey,
         offset: u64,
         buffer: B,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: C,
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self>
     where
         B: IoBuf,
     {
-        self.push_write(file, offset, buffer, epoch, context, options)
+        self.push_write(file, offset, buffer, tag, context, options)
     }
 
     fn read_with(
@@ -474,9 +502,9 @@ where
         // Recorded on whichever thread observed it, usually a pool thread; asserted here, where a
         // panic fails the consumer's call rather than aborting the process.
         debug_assert!(
-            core.lineage.inconsistency().is_none(),
+            core.durability.inconsistency().is_none(),
             "dioring's durability state is inconsistent: {:?}",
-            core.lineage.inconsistency()
+            core.durability.inconsistency()
         );
         let retried = self.relay.apply(&mut core, Due::default(), &self.delivery);
         match (Relay::pop(&mut core), retried) {
@@ -488,13 +516,14 @@ where
 
     fn make_durable_through(
         &mut self,
-        through: Epoch<Self::Ids>,
+        through: Tag<'_, Self::Ids>,
     ) -> io::Result<DurabilityRequest<Self::Ids>> {
+        let through = through.epoch();
         if !self.is_live(through.lineage) {
             return Err(foreign_lineage());
         }
         let mut core = self.relay.lock();
-        match core.lineage.seal(through.id) {
+        match core.durability.seal(through.lineage.seq, through.id) {
             Sealing::AlreadySealed(state) => {
                 Ok(DurabilityRequest::AlreadySealed(epoch_state(state)))
             }
@@ -505,47 +534,100 @@ where
         }
     }
 
-    fn durable_through(&self, lineage: Lineage) -> Option<E> {
-        self.is_live(lineage)
-            .then(|| self.relay.lock().lineage.durable_through())
-            .flatten()
+    fn durable_through(&self, lineage: Lineage) -> Result<Option<E>, UnknownLineage<Self::Ids>> {
+        self.ours(lineage)?;
+        (self.relay.lock().durability)
+            .durable_through(lineage.seq)
+            .ok_or(UnknownLineage(lineage))
     }
 
-    fn sealed_through(&self, lineage: Lineage) -> Option<E> {
-        self.is_live(lineage)
-            .then(|| self.relay.lock().lineage.sealed_through())
-            .flatten()
+    fn sealed_through(&self, lineage: Lineage) -> Result<Option<E>, UnknownLineage<Self::Ids>> {
+        self.ours(lineage)?;
+        (self.relay.lock().durability)
+            .sealed_through(lineage.seq)
+            .ok_or(UnknownLineage(lineage))
     }
 
-    /// # Panics
-    ///
-    /// If `epoch`'s lineage is not one of this instance's: the contract has no state to report for
-    /// it, and any answer would be false.
-    fn epoch_state(&self, epoch: Epoch<Self::Ids>) -> EpochState<Self::Ids> {
-        assert!(
-            self.is_live(epoch.lineage),
-            "{:?} is not a lineage of this instance",
-            epoch.lineage
-        );
-        epoch_state(self.relay.lock().lineage.state(epoch.id))
+    fn epoch_state(
+        &self,
+        epoch: Epoch<Self::Ids>,
+    ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>> {
+        self.ours(epoch.lineage)?;
+        (self.relay.lock().durability)
+            .state(epoch.lineage.seq, epoch.id)
+            .map(epoch_state)
+            .ok_or(UnknownLineage(epoch.lineage))
     }
 
-    fn default_lineage(&self) -> Lineage {
-        Lineage {
-            instance: self.instance,
-            seq: 0,
-        }
+    fn default_lineage(&self) -> LineageHandle {
+        self.default.clone()
+    }
+
+    fn mint_lineage(&mut self, description: Option<String>) -> LineageHandle {
+        let seq = self.relay.lock().durability.mint(description);
+        LineageHandle::mint(
+            Lineage {
+                instance: self.instance,
+                seq,
+            },
+            home(&self.relay),
+        )
     }
 
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
-        let core = self.relay.lock();
-        vec![LineageInfo {
-            lineage: self.default_lineage(),
-            description: None,
-            is_default: true,
-            durable_through: core.lineage.durable_through(),
-            sealed_through: core.lineage.sealed_through(),
-        }]
+        self.relay.lock().durability.lineages()
+    }
+
+    fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<Self::Ids>> {
+        let lineage = handle.lineage();
+        let reason = if lineage.instance != self.instance {
+            EndLineageRefusal::Foreign(lineage)
+        } else if lineage.seq == DEFAULT_LINEAGE {
+            EndLineageRefusal::Default
+        } else {
+            match handle.take_last() {
+                Ok(lineage) => {
+                    let mut core = self.relay.lock();
+                    let due = core.durability.end(lineage.seq);
+                    self.relay.apply(&mut core, due, &self.delivery);
+                    return Ok(());
+                }
+                Err(handle) => {
+                    return Err(EndLineageError {
+                        reason: EndLineageRefusal::Shared,
+                        handle,
+                    });
+                }
+            }
+        };
+        Err(EndLineageError { reason, handle })
+    }
+
+    fn retire_lineage(
+        &mut self,
+        handle: LineageHandle,
+    ) -> Result<(), RetireLineageError<Self::Ids>> {
+        let lineage = handle.lineage();
+        let reason = if lineage.instance != self.instance {
+            RetireLineageRefusal::Foreign(lineage)
+        } else if lineage.seq == DEFAULT_LINEAGE {
+            RetireLineageRefusal::Default
+        } else if !handle.is_last() {
+            RetireLineageRefusal::Shared
+        } else {
+            // Unlocked before the handle is consumed: a handle's release takes this lock.
+            let retired = self.relay.lock().durability.retire(lineage.seq);
+            match retired {
+                Err(busy) => RetireLineageRefusal::Busy(busy),
+                Ok(()) => {
+                    // The last copy, owned here, so none can be made.
+                    let taken = handle.take_last();
+                    debug_assert!(taken.is_ok(), "the last handle, owned here");
+                    return Ok(());
+                }
+            }
+        };
+        Err(RetireLineageError { reason, handle })
     }
 
     fn resolve(
@@ -553,25 +635,30 @@ where
         items: Vec<(FailureToken, Resolution)>,
     ) -> Result<(), ResolveError<Self::Ids>> {
         let mut core = self.relay.lock();
-        let due = core.lineage.resolve(items)?;
+        let due = core.durability.resolve(items)?;
         self.relay.apply(&mut core, due, &self.delivery);
         Ok(())
     }
 
-    fn import_failure(&mut self, scope: ImportScope<Self::Ids>) -> FailureId {
-        let reach = self.reach(&scope);
+    fn import_failure(
+        &mut self,
+        scope: ImportScope<Self::Ids>,
+    ) -> Result<FailureId, UnknownLineage<Self::Ids>> {
+        let (reach, only) = self.reach(&scope)?;
         let mut core = self.relay.lock();
-        let (id, due) = core.lineage.import(Cause::Imported { scope }, &reach);
+        let (id, due) = core
+            .durability
+            .import(Cause::Imported { scope }, &reach, only);
         self.relay.apply(&mut core, due, &self.delivery);
-        id
+        Ok(id)
     }
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
-        self.relay.lock().lineage.failures()
+        self.relay.lock().durability.failures()
     }
 
     fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {
-        self.relay.lock().lineage.take_token(failure)
+        self.relay.lock().durability.take_token(failure)
     }
 }
 
@@ -583,19 +670,37 @@ where
     R: IoBufMut,
     K: TimeBase,
 {
-    /// The files an imported failure reaches (DI-D-21). A domain no file was declared with reaches
-    /// only the files declared with none; with one lineage, naming it is naming the instance.
-    fn reach(&self, scope: &ImportScope<DioringIds<E>>) -> Reach {
-        match scope {
-            ImportScope::All => Reach::All,
-            ImportScope::Lineage(lineage) if self.is_live(*lineage) => Reach::All,
-            ImportScope::Lineage(_) => Reach::Nothing,
-            ImportScope::Domains(domains) => Reach::Domains(
-                domains
-                    .iter()
-                    .filter_map(|domain| self.domains.get(domain).copied())
-                    .collect(),
+    /// The files an imported failure reaches (DI-D-21), and the one lineage it is confined to, if
+    /// the scope names one. A domain no file was declared with reaches only the files declared
+    /// with none.
+    fn reach(
+        &self,
+        scope: &ImportScope<DioringIds<E>>,
+    ) -> Result<(Reach, Option<u64>), UnknownLineage<DioringIds<E>>> {
+        Ok(match scope {
+            ImportScope::All => (Reach::All, None),
+            ImportScope::Lineage(lineage) if self.is_live(*lineage) => {
+                (Reach::All, Some(lineage.seq))
+            }
+            ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
+            ImportScope::Domains(domains) => (
+                Reach::Domains(
+                    domains
+                        .iter()
+                        .filter_map(|domain| self.domains.get(domain).copied())
+                        .collect(),
+                ),
+                None,
             ),
+        })
+    }
+
+    /// Refuse another instance's lineage, which this one has no answer for.
+    fn ours(&self, lineage: Lineage) -> Result<(), UnknownLineage<DioringIds<E>>> {
+        if lineage.instance == self.instance {
+            Ok(())
+        } else {
+            Err(UnknownLineage(lineage))
         }
     }
 }
@@ -636,11 +741,11 @@ where
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<Self::Ids>,
+        tag: Tag<'_, Self::Ids>,
         context: C,
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self> {
-        self.push_write_registered(file, offset, span, epoch, context, options)
+        self.push_write_registered(file, offset, span, tag, context, options)
     }
 
     fn read_registered_with(

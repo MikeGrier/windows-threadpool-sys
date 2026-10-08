@@ -5,10 +5,11 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, Weak};
 
 use crate::contract::{EpochId, Identities};
+use crate::types::Tag;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +33,104 @@ impl InstanceId {
 pub struct Lineage {
     pub(crate) instance: InstanceId,
     pub(crate) seq: u64,
+}
+
+/// What a lineage's handle reaches when its last copy is released: the instance that minted it.
+pub(crate) trait Home: Send + Sync {
+    /// The last handle of `lineage` was released: end the lineage (DI-D-30, DI-D-40).
+    fn release(&self, lineage: Lineage);
+}
+
+/// A home that never exists, for a handle whose instance keeps nothing to end.
+#[cfg(test)]
+struct Nowhere;
+
+#[cfg(test)]
+impl Home for Nowhere {
+    fn release(&self, _: Lineage) {}
+}
+
+/// What every copy of one lineage's handle shares.
+struct Held {
+    lineage: Lineage,
+    home: Weak<dyn Home>,
+    /// Cleared when the lineage is ended or retired through its last handle, so releasing that
+    /// handle ends nothing a second time.
+    armed: bool,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if self.armed
+            && let Some(home) = self.home.upgrade()
+        {
+            home.release(self.lineage);
+        }
+    }
+}
+
+/// dioring's handle to a live lineage (DI-D-40): what pushing into the lineage and sealing it
+/// take. Cloning it is cheap, and every copy names the same lineage.
+///
+/// **Releasing the last copy ends the lineage** (DI-D-30): every epoch of it not yet durable is
+/// abandoned, and a `LineageEnded` entry reports it. `#[must_use]` warns when a returned handle is
+/// discarded unused, but not for `let _ = ...`, which releases it at once, nor for a handle
+/// dropped with whatever held it -- so keep a copy for as long as the lineage's work matters. The
+/// default lineage never ends this way: the instance holds a copy of its own.
+#[must_use = "releasing a lineage's last handle ends the lineage, abandoning every epoch of it not yet durable"]
+#[derive(Clone)]
+pub struct LineageHandle(Arc<Held>);
+
+impl LineageHandle {
+    /// A handle to `lineage`, whose last release ends it through `home`.
+    pub(crate) fn mint(lineage: Lineage, home: Weak<dyn Home>) -> Self {
+        Self(Arc::new(Held {
+            lineage,
+            home,
+            armed: true,
+        }))
+    }
+
+    /// A handle to `lineage` that ends nothing when released.
+    #[cfg(test)]
+    pub(crate) fn detached(lineage: Lineage) -> Self {
+        Self::mint(lineage, Weak::<Nowhere>::new())
+    }
+
+    /// The lineage, by its `Copy` name: what entries, reports and a consumer's own records use.
+    pub fn lineage(&self) -> Lineage {
+        self.0.lineage
+    }
+
+    /// Epoch `id` of this lineage, as a write or a seal takes it.
+    pub fn at<E: EpochId + 'static>(&self, id: E) -> Tag<'_, DioringIds<E>> {
+        Tag::new(self, id)
+    }
+
+    /// Whether this is the lineage's only remaining copy.
+    pub(crate) fn is_last(&self) -> bool {
+        Arc::strong_count(&self.0) == 1
+    }
+
+    /// Consume the lineage's last handle without ending the lineage through it, because the caller
+    /// is ending or retiring it explicitly. Hands the handle back if another copy exists.
+    pub(crate) fn take_last(self) -> Result<Lineage, Self> {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut held) => {
+                held.armed = false;
+                Ok(held.lineage)
+            }
+            Err(shared) => Err(Self(shared)),
+        }
+    }
+}
+
+impl Debug for LineageHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("LineageHandle")
+            .field(&self.0.lineage)
+            .finish()
+    }
 }
 
 /// dioring's identity for one pushed operation. Ordered by push order within an instance;
@@ -132,8 +231,13 @@ impl<E: EpochId + 'static> Identities for DioringIds<E> {
     type OpId = OpId;
     type FailureId = FailureId;
     type FailureToken = FailureToken;
+    type LineageHandle = LineageHandle;
 
     fn token_id(token: &FailureToken) -> FailureId {
         token.id()
+    }
+
+    fn handle_lineage(handle: &LineageHandle) -> Lineage {
+        handle.lineage()
     }
 }

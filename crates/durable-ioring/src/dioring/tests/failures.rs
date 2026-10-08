@@ -12,7 +12,7 @@ use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
     Cause, DurabilityRequest, Entry, EpochState, Failed, ImportScope, PushRefusal, Resolution,
-    ResolveRefusal,
+    ResolveRefusal, UnknownLineage,
 };
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
@@ -73,12 +73,8 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
         other => panic!("expected a flush failure, got {other:?}"),
     }
     assert_eq!(suspects(&failed), [0, 1]);
-    let lineage = harness.ring.default_lineage();
-    assert_eq!(harness.ring.durable_through(lineage), None);
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(1)),
-        EpochState::Blocked(failed.id)
-    );
+    assert_eq!(harness.durable(), None);
+    assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
     assert_eq!(
         harness.seal(1),
         DurabilityRequest::AlreadySealed(EpochState::Blocked(failed.id))
@@ -100,7 +96,7 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
     let failed = failed_seal(&mut harness);
     let refused = harness
         .ring
-        .write(GIVEN, 0, vec![1], harness.epoch(1), 9)
+        .write(GIVEN, 0, vec![1], harness.default.at(1), 9)
         .expect_err("1 is sealed");
     assert_eq!(refused.context, 9);
 
@@ -132,10 +128,7 @@ fn a_healed_failure_is_passed_at_the_first_seal_after_the_heal() {
         }
     }
     assert!(harness.ring.failures().is_empty());
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(1)),
-        EpochState::Durable
-    );
+    assert_eq!(harness.state(1), EpochState::Durable);
     harness.finish();
 }
 
@@ -153,10 +146,7 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
         }
         other => panic!("expected Blocked, got {other:?}"),
     }
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(2)),
-        EpochState::Blocked(failed.id)
-    );
+    assert_eq!(harness.state(2), EpochState::Blocked(failed.id));
     resolve(&mut harness, vec![(failed.token, Resolution::Abandon)]);
     match harness.next_entry() {
         Entry::Abandoned {
@@ -175,14 +165,8 @@ fn without_the_heal_a_later_seal_is_answered_blocked() {
         }
     }
     assert_eq!(durable, [harness.epoch(1), harness.epoch(2)]);
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(1)),
-        EpochState::Abandoned
-    );
-    assert_eq!(
-        harness.ring.epoch_state(harness.epoch(2)),
-        EpochState::Durable
-    );
+    assert_eq!(harness.state(1), EpochState::Abandoned);
+    assert_eq!(harness.state(2), EpochState::Durable);
     harness.finish();
 }
 
@@ -198,7 +182,8 @@ fn a_failed_flush_reaches_only_files_sharing_a_declared_domain() {
         Vec::new(),
         None,
     ))
-    .expect("an instance with two domains");
+    .expect("an instance with two domains")
+    .0;
     let mut harness = Harness::new(ring);
     harness.write(GIVEN, 0, b"log", 1, 1);
     harness.write(ADDED, 0, b"data", 1, 2);
@@ -220,17 +205,22 @@ fn an_import_suspects_what_its_scope_reaches() {
         Vec::new(),
         None,
     ))
-    .expect("an instance with a declared and an unknown file");
+    .expect("an instance with a declared and an unknown file")
+    .0;
     let mut harness = Harness::new(ring);
     harness.write(GIVEN, 0, b"log", 1, 1);
     harness.write(ADDED, 0, b"data", 1, 2);
     harness.next_n(2);
-    let lineage = harness.ring.default_lineage();
-    let foreign = empty().default_lineage();
+    let lineage = harness.lineage();
+    let foreign = empty().default_lineage().lineage();
+    assert_eq!(
+        harness.ring.import_failure(ImportScope::Lineage(foreign)),
+        Err(UnknownLineage(foreign)),
+        "a lineage the instance cannot answer for is refused, and nothing is recorded"
+    );
     let cases = [
         (ImportScope::All, vec![0, 1]),
         (ImportScope::Lineage(lineage), vec![0, 1]),
-        (ImportScope::Lineage(foreign), vec![]),
         (ImportScope::Domains(vec![super::domain("disk-2")]), vec![1]),
         (
             ImportScope::Domains(vec![super::domain("disk-1")]),
@@ -238,13 +228,13 @@ fn an_import_suspects_what_its_scope_reaches() {
         ),
     ];
     for (scope, expected) in cases {
-        let id = harness.ring.import_failure(scope.clone());
+        let id = harness.ring.import_failure(scope.clone()).expect("import");
         let failed = next_failed(&mut harness);
         assert_eq!(failed.id, id);
         assert!(matches!(failed.cause, Cause::Imported { scope: ref s } if *s == scope));
         assert_eq!(suspects(&failed), expected, "{scope:?}");
     }
-    assert_eq!(harness.ring.failures().len(), 5);
+    assert_eq!(harness.ring.failures().len(), 4);
     harness.finish();
 }
 
@@ -254,7 +244,7 @@ fn a_resolution_naming_another_instances_failure_is_refused_whole() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
     let ours = failed_seal(&mut harness);
     let mut other = instance(Vec::new(), Vec::new());
-    other.import_failure(ImportScope::All);
+    other.import_failure(ImportScope::All).expect("import");
     let theirs = match other.pop().expect("pop") {
         Some(Entry::Failed(failed)) => failed,
         other => panic!("expected Failed, got {other:?}"),
@@ -313,7 +303,7 @@ fn a_write_into_an_abandoned_epoch_is_refused_with_what_it_took() {
     let three = harness.epoch(3);
     let error = harness
         .ring
-        .write(GIVEN, 0, vec![7], three, 5)
+        .write(GIVEN, 0, vec![7], harness.default.at(3), 5)
         .expect_err("3 was abandoned, though it is open");
     assert!(matches!(error.reason, PushRefusal::EpochAbandoned { epoch } if epoch == three));
     assert_eq!((error.buffer, error.context), (Some(vec![7]), 5));
@@ -324,13 +314,13 @@ fn a_write_into_an_abandoned_epoch_is_refused_with_what_it_took() {
     };
     let error = harness
         .ring
-        .write_registered(GIVEN, 0, span, three, 6)
+        .write_registered(GIVEN, 0, span, harness.default.at(3), 6)
         .expect_err("a registered write to 3");
     assert!(matches!(error.reason, PushRefusal::EpochAbandoned { .. }));
     assert_eq!((error.buffer, error.context), (None, 6));
     let error = harness
         .ring
-        .write(GIVEN, 0, vec![7], harness.epoch(1), 7)
+        .write(GIVEN, 0, vec![7], harness.default.at(1), 7)
         .expect_err("1 is sealed and abandoned");
     assert!(
         matches!(error.reason, PushRefusal::Sealed { .. }),

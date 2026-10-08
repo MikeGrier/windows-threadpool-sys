@@ -6,10 +6,10 @@
 use std::io;
 
 use super::{
-    A, B, DEFAULT, Due, FAILED, FULL, IO_DEVICE, Lineage, Ops, Seen, flush, lineage, seen,
+    A, B, DEFAULT, Due, FAILED, FULL, IO_DEVICE, Lineage, One, Ops, Seen, flush, lineage, seen,
     submitted, tokens,
 };
-use crate::dioring::durability::{Durability, Reach, WriteEnd};
+use crate::dioring::durability::{Reach, WriteEnd};
 use crate::dioring::tests::MockClock;
 use crate::ids::{InstanceId, Lineage as LineageId};
 use crate::types::{Cause, ImportScope, MarkingKind, Outcome, Resolution};
@@ -141,13 +141,7 @@ fn a_flush_failure_on_one_file_leaves_the_writes_another_file_flushed_covered() 
 #[test]
 fn a_write_two_failures_suspect_marks_both_with_one_reading() {
     let clock = MockClock::at(900);
-    let mut lineage: Durability<u64, &'static str, MockClock> = Durability::new(
-        LineageId {
-            instance: InstanceId::next(),
-            seq: 0,
-        },
-        clock.clone(),
-    );
+    let mut lineage = One::with_clock(clock.clone());
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
     let cause = || Cause::Imported {

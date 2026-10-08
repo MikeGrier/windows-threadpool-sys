@@ -29,8 +29,10 @@
 //! - **`Durable` follows the writes it covers** (guarantee 5): it arrives after the completion of
 //!   every write of n's lineage tagged at or below n.
 //! - **`Durable` waits for every failure holding it** (DI-D-12 (f)): it passes no epoch of its
-//!   lineage that a reported failure contains until that failure's `Healed` or `Abandoned` entry
-//!   has been observed.
+//!   lineage that a reported failure contains until the consumer has healed that failure or its
+//!   `Abandoned` entry has been observed. A heal takes effect in each lineage separately
+//!   (DI-D-41), and the failure's `Healed` entry follows only once it has in every lineage it
+//!   held, so one lineage's `Durable` may pass a healed failure before that entry.
 //! - **A failure is new, and suspects only accepted writes** (DI-D-12 (b)): its identity was never
 //!   reported before, and every suspect write was accepted as a write tagged with the epoch
 //!   reported, listed in push order.
@@ -49,6 +51,10 @@
 //! - **`Abandoned` and `Blocked` name a live failure**: `Abandoned` one reported and not yet
 //!   abandoned, with the suspect set it was reported with; `Blocked { through: n, by }` one
 //!   containing an epoch of n's lineage at or below n.
+//! - **An ended lineage answers nothing more** (DI-D-30, DI-D-40): once its `LineageEnded` entry
+//!   has been observed, no `Durable` or `Blocked` names it, no write into it is accepted, no new
+//!   failure suspects a write of it, and it is not reported ended again. A suspect write of it
+//!   still in flight may be marked as it completes, because the failures suspecting it are.
 //!
 //! # Deliberately not checked
 //!
@@ -74,7 +80,8 @@
 //!   whether it was in flight when the failure was observed, how long it asked to write, and
 //!   whether its file has since been flushed are not; so each marking is checked against what it
 //!   names, and a missing one is not detected.
-//! - **`LineageEnded`**, accepted unexamined until the step that produces it adds its rules.
+//! - **Which epochs `LineageEnded` abandons**, or that it comes at all: a lineage ends when its
+//!   last handle is released, which the stream does not carry.
 //! - **What a stamp's value is**: how it relates to wall-clock time, or to any clock outside the
 //!   instance. The clock is the instance's to choose (DI-D-38), and a test's mock may run at any
 //!   rate, so long as it never runs backwards.
@@ -266,6 +273,30 @@ pub enum Violation<V: Identities> {
         /// The failure named.
         by: V::FailureId,
     },
+    /// `LineageEnded` for a lineage already reported ended.
+    LineageEndedTwice {
+        /// The lineage.
+        lineage: V::Lineage,
+    },
+    /// `Durable` or `Blocked` for a lineage already reported ended.
+    AnsweredAfterEnd {
+        /// What was reported.
+        through: Epoch<V>,
+    },
+    /// A write was accepted into a lineage already reported ended.
+    WriteToEndedLineage {
+        /// The write.
+        op: V::OpId,
+        /// Its epoch.
+        epoch: Epoch<V>,
+    },
+    /// A failure reported after a lineage ended suspects a write of it.
+    SuspectOfEndedLineage {
+        /// The failure.
+        failure: V::FailureId,
+        /// The write.
+        op: V::OpId,
+    },
 }
 
 /// A failure reported and not yet ended by `Abandoned` or `Healed`.
@@ -303,6 +334,8 @@ pub struct ConformanceOracle<V: Identities, C> {
     ended: HashMap<V::OpId, Ended>,
     /// The epochs of every abandoned failure, by lineage.
     abandoned: HashMap<V::Lineage, BTreeSet<V::EpochId>>,
+    /// Every lineage reported ended.
+    ended_lineages: HashSet<V::Lineage>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -319,6 +352,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             last_stamp: None,
             ended: HashMap::new(),
             abandoned: HashMap::new(),
+            ended_lineages: HashSet::new(),
         }
     }
 
@@ -345,11 +379,17 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     /// # Errors
     ///
     /// [`Violation::DuplicateIdentity`] if an earlier push returned `op`,
+    /// [`Violation::WriteToEndedLineage`] for a write into a lineage reported ended,
     /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal, and
     /// [`Violation::WriteToAbandoned`] for a write into an epoch reported abandoned.
     pub fn pushed(&mut self, op: V::OpId, kind: OpKind<V>, context: C) -> Result<(), Violation<V>> {
         if self.completed.contains(&op) || self.outstanding.contains_key(&op) {
             return Err(Violation::DuplicateIdentity { op });
+        }
+        if let OpKind::Write { epoch } = kind
+            && self.ended_lineages.contains(&epoch.lineage)
+        {
+            return Err(Violation::WriteToEndedLineage { op, epoch });
         }
         if let OpKind::Write { epoch } = kind
             && let Some(&sealed_through) = self.sealed.get(&epoch.lineage)
@@ -403,7 +443,13 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             }
             Entry::Marked { failure, marking } => return self.marked(*failure, marking),
             Entry::Blocked { through, by } => return self.blocked(*through, *by),
-            Entry::LineageEnded { .. } => return Ok(()),
+            Entry::LineageEnded { lineage, .. } => {
+                return if self.ended_lineages.insert(*lineage) {
+                    Ok(())
+                } else {
+                    Err(Violation::LineageEndedTwice { lineage: *lineage })
+                };
+            }
         };
         let op = completion.id;
         let Some(pushed) = self.outstanding.remove(&op) else {
@@ -504,6 +550,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     }
 
     fn durable(&mut self, through: Epoch<V>) -> Result<(), Violation<V>> {
+        if self.ended_lineages.contains(&through.lineage) {
+            return Err(Violation::AnsweredAfterEnd { through });
+        }
         if self
             .sealed
             .get(&through.lineage)
@@ -525,11 +574,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         if let Some(op) = uncompleted {
             return Err(Violation::DurableBeforeCompletion { through, op });
         }
-        if let Some(failure) = self
-            .failures
-            .iter()
-            .find_map(|(id, reported)| holds(reported, through).then_some(*id))
-        {
+        if let Some(failure) = self.failures.iter().find_map(|(id, reported)| {
+            (!reported.healed && holds(reported, through)).then_some(*id)
+        }) {
             return Err(Violation::DurableThroughFailure { through, failure });
         }
         let point = self.durable.entry(through.lineage).or_insert(through.id);
@@ -550,6 +597,12 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         self.stamped(failure, observed)?;
         for write in suspect {
+            if self.ended_lineages.contains(&write.epoch.lineage) {
+                return Err(Violation::SuspectOfEndedLineage {
+                    failure,
+                    op: write.op,
+                });
+            }
             if self.writes.get(&write.op) != Some(&write.epoch) {
                 return Err(Violation::SuspectNotPushed {
                     failure,
@@ -606,6 +659,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     }
 
     fn blocked(&self, through: Epoch<V>, by: V::FailureId) -> Result<(), Violation<V>> {
+        if self.ended_lineages.contains(&through.lineage) {
+            return Err(Violation::AnsweredAfterEnd { through });
+        }
         match self.failures.get(&by) {
             Some(reported) if holds(reported, through) => Ok(()),
             _ => Err(Violation::BlockedByUnrelated { through, by }),

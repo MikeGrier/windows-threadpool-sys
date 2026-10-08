@@ -13,7 +13,7 @@ use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
 
 use super::{Dioring, FileSetup, FileSlot, Setup, SetupError, SetupRefusal};
 use crate::contract::DurableRing;
-use crate::ids::DioringIds;
+use crate::ids::{DioringIds, LineageHandle};
 use crate::provider::{DurabilityProvider, FlushRequest};
 use crate::types::{FileKey, FileOptions, FlushDomain};
 
@@ -27,6 +27,8 @@ mod failures;
 mod stamps;
 // Markings, and a failure's final record: DI-3.2.4.2.
 mod markings;
+// Lineage handles: minting, ending, retiring, and failures across lineages: DI-3.2.5.1.
+mod lineages;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;
@@ -78,7 +80,9 @@ impl Steady for MockClock {}
 
 /// An instance given nothing.
 pub(crate) fn empty() -> Ring {
-    Ring::new(setup(Vec::new(), Vec::new(), None)).expect("build an empty instance")
+    Ring::new(setup(Vec::new(), Vec::new(), None))
+        .expect("build an empty instance")
+        .0
 }
 
 /// A temporary file, removed when dropped.
@@ -157,7 +161,9 @@ fn serves(domains: &[&str]) -> Option<Box<dyn DurabilityProvider<V>>> {
     )))
 }
 
-fn refused(result: Result<Ring, SetupError<u64, Vec<u8>>>) -> SetupError<u64, Vec<u8>> {
+fn refused(
+    result: Result<(Ring, LineageHandle), SetupError<u64, Vec<u8>>>,
+) -> SetupError<u64, Vec<u8>> {
     match result {
         Ok(_) => panic!("construction should have been refused"),
         Err(error) => error,
@@ -180,7 +186,7 @@ fn an_instance_has_only_its_default_lineage_to_begin_with() {
     assert_eq!(lineages.len(), 1);
     let default = &lineages[0];
     assert!(default.is_default);
-    assert_eq!(default.lineage, ring.default_lineage());
+    assert_eq!(default.lineage, ring.default_lineage().lineage());
     assert!(default.description.is_none());
     assert!(default.durable_through.is_none());
     assert!(default.sealed_through.is_none());
@@ -189,10 +195,10 @@ fn an_instance_has_only_its_default_lineage_to_begin_with() {
 #[test]
 fn each_instance_has_its_own_default_lineage() {
     let (a, b) = (empty(), empty());
-    assert_ne!(a.default_lineage(), b.default_lineage());
+    assert_ne!(a.default_lineage().lineage(), b.default_lineage().lineage());
     assert_eq!(
-        a.default_lineage(),
-        a.default_lineage(),
+        a.default_lineage().lineage(),
+        a.default_lineage().lineage(),
         "stable for one instance"
     );
 }
@@ -207,7 +213,7 @@ fn files_given_at_construction_are_registered_in_order() {
         .enumerate()
         .map(|(i, t)| file(10 + i as u64, t, &[]))
         .collect();
-    let ring = Ring::new(setup(files, Vec::new(), None)).expect("build");
+    let ring = Ring::new(setup(files, Vec::new(), None)).expect("build").0;
     for i in 0..3_u32 {
         match &ring.files[&FileKey(10 + u64::from(i))].target {
             FileSlot::Registered { index, .. } => assert_eq!(index.index(), i),
@@ -219,7 +225,9 @@ fn files_given_at_construction_are_registered_in_order() {
 #[test]
 fn the_ring_holds_construction_files_until_the_instance_is_dropped() {
     let temp = TempFile::new("held");
-    let ring = Ring::new(setup(vec![file(1, &temp, &[])], Vec::new(), None)).expect("build");
+    let ring = Ring::new(setup(vec![file(1, &temp, &[])], Vec::new(), None))
+        .expect("build")
+        .0;
     assert!(temp.is_held(), "the instance holds the file it was given");
     drop(ring);
     assert!(!temp.is_held(), "dropping the instance releases it");
@@ -300,7 +308,9 @@ fn domains_are_interned_once_per_distinct_bytes() {
         file(2, &temps[1], &["B", "C", "B"]),
         file(3, &temps[2], &[]),
     ];
-    let ring = Ring::new(setup(files, Vec::new(), serves(&["C", "D"]))).expect("build");
+    let ring = Ring::new(setup(files, Vec::new(), serves(&["C", "D"])))
+        .expect("build")
+        .0;
     assert_eq!(ring.domains.len(), 4, "A, B, C and D, once each");
     let id = |name: &str| ring.domains[&domain(name)];
     let of = |key: u64| ring.files[&FileKey(key)].domains.clone();
@@ -328,15 +338,18 @@ fn domains_are_interned_once_per_distinct_bytes() {
 
 #[test]
 fn buffers_given_at_construction_are_registered() {
-    let ring = Ring::new(setup(Vec::new(), vec![vec![0; 64], vec![0; 128]], None)).expect("build");
+    let ring = Ring::new(setup(Vec::new(), vec![vec![0; 64], vec![0; 128]], None))
+        .expect("build")
+        .0;
     assert_eq!(ring.registered.as_ref().expect("registered").len(), 2);
 }
 
 #[test]
 fn files_and_buffers_are_registered_together() {
     let temp = TempFile::new("both");
-    let ring =
-        Ring::new(setup(vec![file(1, &temp, &["A"])], vec![vec![0; 32]], None)).expect("build");
+    let ring = Ring::new(setup(vec![file(1, &temp, &["A"])], vec![vec![0; 32]], None))
+        .expect("build")
+        .0;
     assert_eq!(ring.files.len(), 1);
     assert_eq!(ring.registered.as_ref().expect("registered").len(), 1);
     assert!(temp.is_held());
@@ -353,7 +366,8 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         buffers: Vec::new(),
         provider: None,
     })
-    .expect("build");
+    .expect("build")
+    .0;
     assert_eq!(ring.lineages().len(), 1);
 }
 

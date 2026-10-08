@@ -19,7 +19,7 @@ use super::{Dioring, FileSlot, Sidecar, TimeBase};
 use crate::contract::{EpochId, PushResult};
 use crate::ids::{DioringIds, Lineage, OpId};
 use crate::types::{
-    Epoch, FileKey, OpKind, PushError, PushRefusal, ReadOptions, WriteCaching, WriteOptions,
+    Epoch, FileKey, OpKind, PushError, PushRefusal, ReadOptions, Tag, WriteCaching, WriteOptions,
 };
 
 type V<E> = DioringIds<E>;
@@ -37,7 +37,7 @@ where
         file: FileKey,
         offset: u64,
         buffer: B,
-        epoch: Epoch<V<E>>,
+        tag: Tag<'_, V<E>>,
         context: C,
         options: WriteOptions<V<E>>,
     ) -> PushResult<Self>
@@ -45,6 +45,7 @@ where
         B: IoBuf,
     {
         no_gate(options.gate);
+        let epoch = tag.epoch();
         if let Some(reason) = self.refusal(file, Some(epoch), false) {
             return Err(PushError {
                 reason,
@@ -113,11 +114,12 @@ where
         file: FileKey,
         offset: u64,
         span: RegisteredSpan,
-        epoch: Epoch<V<E>>,
+        tag: Tag<'_, V<E>>,
         context: C,
         options: WriteOptions<V<E>>,
     ) -> PushResult<Self> {
         no_gate(options.gate);
+        let epoch = tag.epoch();
         if let Some(reason) = self.refusal(file, Some(epoch), true) {
             return Err(PushError {
                 reason,
@@ -220,7 +222,8 @@ where
     ///
     /// Checking the seal and abandonment here and pushing after is sound because neither changes
     /// concurrently: sealing and resolving are the consumer's `&mut self` calls, never a
-    /// callback's.
+    /// callback's. Nor does the lineage end meanwhile, on another thread: the push's tag borrows
+    /// one of its handles, so the last cannot be released until the push returns.
     fn refusal(
         &self,
         file: FileKey,
@@ -236,7 +239,8 @@ where
             return Some(PushRefusal::UnknownLineage(epoch.lineage));
         }
         if let Some(epoch) = epoch
-            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id)
+            && let Some(sealed_through) =
+                (self.relay.lock().durability).refuses(epoch.lineage.seq, epoch.id)
         {
             return Some(PushRefusal::Sealed {
                 epoch,
@@ -244,7 +248,7 @@ where
             });
         }
         if let Some(epoch) = epoch
-            && self.relay.lock().lineage.is_abandoned(epoch.id)
+            && (self.relay.lock().durability).is_abandoned(epoch.lineage.seq, epoch.id)
         {
             return Some(PushRefusal::EpochAbandoned { epoch });
         }
@@ -254,16 +258,15 @@ where
         None
     }
 
-    /// Whether `lineage` is one of this instance's live lineages. Only the default exists until
-    /// lineages can be minted (DI-3.2.5.1); a lineage of another instance never is.
+    /// Whether `lineage` is one of this instance's live lineages: minted by it, and neither ended
+    /// nor retired. Takes dioring's lock, so it is never called while that is held.
     pub(crate) fn is_live(&self, lineage: Lineage) -> bool {
-        lineage.instance == self.instance && lineage.seq == 0
+        lineage.instance == self.instance && self.relay.lock().durability.is_live(lineage.seq)
     }
 
     /// Mint the next operation's identity, record it in the sidecar with the consumer's context,
     /// push it through `push`, record a write -- asking to write `len` bytes -- in its lineage, and
-    /// submit -- all under dioring's
-    /// lock, so the write is recorded before its completion can be.
+    /// submit -- all under dioring's lock, so the write is recorded before its completion can be.
     ///
     /// A submission that fails does not undo the push: the kernel leaves the entry in the
     /// submission queue, and the next submission issues it (the ring crate's D-5). So the push
@@ -304,7 +307,10 @@ where
         // batch would unwind through a batch with an entry not yet submitted.
         if let OpKind::Write { epoch } = kind {
             debug_assert!(
-                core.lineage.refuses(epoch.id).is_none() && !core.lineage.is_abandoned(epoch.id),
+                core.durability
+                    .refuses(epoch.lineage.seq, epoch.id)
+                    .is_none()
+                    && !core.durability.is_abandoned(epoch.lineage.seq, epoch.id),
                 "refusal() checked the seal and abandonment"
             );
         }
@@ -332,8 +338,9 @@ where
             });
         }
         if let OpKind::Write { epoch } = kind {
-            core.lineage.pushed(Accepted {
+            core.durability.pushed(Accepted {
                 op: id,
+                lineage: epoch.lineage.seq,
                 epoch: epoch.id,
                 file,
                 target: record.target.flush_target(),

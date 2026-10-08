@@ -154,8 +154,10 @@ fn a_failure_reaching_back_past_a_reported_durable_is_a_violation() {
         .expect("3 is above the mark");
 }
 
+/// A heal takes effect in each lineage separately (DI-D-41), so a `Durable` may pass a failure the
+/// consumer healed before its `Healed` entry, which waits for every lineage the failure held.
 #[test]
-fn durable_past_a_failure_is_a_violation_until_its_healed_or_abandoned_entry() {
+fn durable_past_a_failure_is_a_violation_until_it_is_healed_or_abandoned() {
     let instance = InstanceId::next();
     let w0 = (op(instance, 0), epoch(instance, 1));
     let durable: TestEntry = Entry::Durable {
@@ -178,17 +180,17 @@ fn durable_past_a_failure_is_a_violation_until_its_healed_or_abandoned_entry() {
 
     let mut oracle = setup();
     oracle.healed(failure(instance, 0));
-    assert!(
-        matches!(
-            oracle.observe(&durable),
-            Err(Violation::DurableThroughFailure { .. })
-        ),
-        "healed by the consumer, but the heal has not taken effect"
-    );
+    oracle
+        .observe(&durable)
+        .expect("healed by the consumer, its Healed entry not yet come");
     oracle
         .observe(&healed(failure(instance, 0), &[w0]))
-        .expect("the heal took effect");
-    oracle.observe(&durable).expect("healed");
+        .expect("the heal took effect in every lineage");
+
+    let mut oracle = setup();
+    oracle
+        .observe(&healed(failure(instance, 0), &[w0]))
+        .expect_err("Healed for a failure the consumer did not heal");
 
     let mut oracle = setup();
     oracle

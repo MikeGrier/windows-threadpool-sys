@@ -6,26 +6,20 @@ use std::io;
 
 use win_time_sys::{Clock, InterruptClock};
 
-use super::{A, DEFAULT, Due, FULL, Ops, lineage, submitted};
+use super::{A, DEFAULT, Due, FULL, One, Ops, lineage, submitted};
 use crate::dioring::TimeBase;
-use crate::dioring::durability::{Durability, Event, Reach};
+use crate::dioring::durability::{Event, Reach};
 use crate::dioring::tests::MockClock;
-use crate::ids::{FailureToken, InstanceId, Lineage as LineageId};
+use crate::ids::FailureToken;
 use crate::types::{Cause, ImportScope, Resolution};
 
-type Mocked = Durability<u64, &'static str, MockClock>;
+type Mocked = One<MockClock>;
 
 fn mocked(clock: &MockClock) -> Mocked {
-    Durability::new(
-        LineageId {
-            instance: InstanceId::next(),
-            seq: 0,
-        },
-        clock.clone(),
-    )
+    One::with_clock(clock.clone())
 }
 
-fn import<K: TimeBase>(lineage: &mut Durability<u64, &'static str, K>) -> Due<u64, &'static str> {
+fn import<K: TimeBase>(lineage: &mut One<K>) -> Due<u64, &'static str> {
     let cause = Cause::Imported {
         scope: ImportScope::All,
     };
@@ -44,7 +38,7 @@ fn stamps(due: &Due<u64, &'static str>) -> Vec<u64> {
 }
 
 /// The inventory's stamps, in observation order.
-fn inventory<K: TimeBase>(lineage: &Durability<u64, &'static str, K>) -> Vec<u64> {
+fn inventory<K: TimeBase>(lineage: &One<K>) -> Vec<u64> {
     lineage
         .failures()
         .iter()
@@ -109,6 +103,8 @@ fn the_inventory_keeps_each_failures_own_stamp_in_observation_order() {
 fn a_healed_failure_keeps_its_stamp_while_its_heal_is_pending() {
     let clock = MockClock::at(300);
     let mut lineage = mocked(&clock);
+    // Suspected, so the failure holds the lineage and the heal waits for its next seal.
+    Ops::new().push(&mut lineage, 1, A, DEFAULT);
     let token: FailureToken = import(&mut lineage)
         .events
         .into_iter()

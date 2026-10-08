@@ -28,7 +28,7 @@ fn dioring_names_its_identities_for_any_epoch_id_type() {
 
 /// Written against the trait, as a consumer would: it must compile for any implementation.
 fn default_is_listed<D: DurableRing>(ring: &D) -> bool {
-    let default: Lin<D> = ring.default_lineage();
+    let default: Lin<D> = D::Ids::handle_lineage(&ring.default_lineage());
     ring.lineages()
         .iter()
         .any(|info| info.is_default && info.lineage == default)

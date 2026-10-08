@@ -25,7 +25,10 @@ fn next_failed<K: TimeBase>(harness: &mut Harness<K>) -> Failed<V> {
 }
 
 fn import<K: TimeBase>(harness: &mut Harness<K>) -> Failed<V> {
-    harness.ring.import_failure(ImportScope::All);
+    harness
+        .ring
+        .import_failure(ImportScope::All)
+        .expect("import");
     next_failed(harness)
 }
 
@@ -74,7 +77,10 @@ fn stamps_follow_the_clock_and_the_oracle_accepts_them_equal_or_rising() {
 fn an_instance_built_with_new_stamps_with_interrupt_time() {
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     let before = InterruptClock.now();
-    harness.ring.import_failure(ImportScope::All);
+    harness
+        .ring
+        .import_failure(ImportScope::All)
+        .expect("import");
     let after = InterruptClock.now();
     let failed = next_failed(&mut harness);
     assert!(

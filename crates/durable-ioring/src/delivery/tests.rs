@@ -48,6 +48,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         provider: None,
     })
     .expect("build an instance")
+    .0
 }
 
 /// A front end whose handler forwards every entry to the returned receiver.
@@ -130,10 +131,11 @@ fn every_operation_pushed_through_the_owner_is_delivered_once() {
     let temp = temp();
     let (delivery, rx) = forwarding(instance(&temp, Vec::new()));
     let mut oracle = ConformanceOracle::<V, u32>::new();
-    let epoch = Epoch::new(delivery.default_lineage(), 1);
+    let default = delivery.default_lineage();
+    let epoch = Epoch::new(default.lineage(), 1);
     for i in 0..16_u32 {
         let id = delivery
-            .write(FILE, u64::from(i) * 16, vec![i as u8; 16], epoch, i)
+            .write(FILE, u64::from(i) * 16, vec![i as u8; 16], default.at(1), i)
             .expect("push a write");
         oracle
             .pushed(id, OpKind::Write { epoch }, i)
@@ -156,9 +158,9 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
         instance(&temp, Vec::new()),
         move |entry: RingEntry, handle| {
             if let Entry::Op(completion) = &entry {
-                let through = Epoch::new(handle.default_lineage(), 1);
+                let default = handle.default_lineage();
                 let answer = handle
-                    .make_durable_through(through)
+                    .make_durable_through(default.at(1))
                     .expect("seal from inside the handler");
                 assert_eq!(answer, DurabilityRequest::Submitted, "{:?}", completion.id);
             }
@@ -167,10 +169,11 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
         None,
     )
     .expect("start delivery");
-    let lineage = delivery.default_lineage();
+    let default = delivery.default_lineage();
+    let lineage = default.lineage();
     let epoch = Epoch::new(lineage, 1);
     delivery
-        .write(FILE, 0, vec![1; 8], epoch, 0)
+        .write(FILE, 0, vec![1; 8], default.at(1), 0)
         .expect("push a write");
     let delivered: Vec<RingEntry> = (0..2).filter_map(|_| rx.recv_timeout(BOUND).ok()).collect();
     let durable = matches!(delivered.as_slice(), [Entry::Op(_), Entry::Durable { through }] if *through == epoch);
@@ -179,8 +182,8 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
         std::mem::forget(delivery);
         panic!("expected the write's completion and then Durable through 1: {delivered:?}");
     }
-    assert_eq!(delivery.durable_through(lineage), Some(1));
-    assert_eq!(delivery.epoch_state(epoch), EpochState::Durable);
+    assert_eq!(delivery.durable_through(lineage), Ok(Some(1)));
+    assert_eq!(delivery.epoch_state(epoch), Ok(EpochState::Durable));
 }
 
 #[test]
@@ -210,12 +213,13 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
         None,
     )
     .expect("start delivery");
-    let epoch = Epoch::new(delivery.default_lineage(), 1);
+    let default = delivery.default_lineage();
+    let epoch = Epoch::new(default.lineage(), 1);
     delivery
-        .write(FILE, 0, vec![1; 8], epoch, 0)
+        .write(FILE, 0, vec![1; 8], default.at(1), 0)
         .expect("push a write");
     let op = rx.recv_timeout(BOUND);
-    delivery.make_durable_through(epoch).expect("seal");
+    delivery.make_durable_through(default.at(1)).expect("seal");
     let rest: Vec<&str> = (0..3).filter_map(|_| rx.recv_timeout(BOUND).ok()).collect();
     let expected = ["failed, abandoned from the handler", "abandoned", "durable"];
     if op != Ok("op") || rest != expected {
@@ -224,7 +228,7 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
         panic!("expected the write, then its failure, abandonment and Durable: {op:?} {rest:?}");
     }
     assert!(delivery.failures().is_empty());
-    assert_eq!(delivery.epoch_state(epoch), EpochState::Abandoned);
+    assert_eq!(delivery.epoch_state(epoch), Ok(EpochState::Abandoned));
 }
 
 #[test]
@@ -377,14 +381,14 @@ fn registered_buffers_are_reached_through_the_handle() {
     delivery
         .with_registered_buffer_mut(0, |bytes| bytes[..6].copy_from_slice(b"handle"))
         .expect("fill buffer 0");
-    let epoch = Epoch::new(delivery.default_lineage(), 1);
+    let default = delivery.default_lineage();
     let span = |buffer_index| RegisteredSpan {
         buffer_index,
         offset: 0,
         len: 6,
     };
     delivery
-        .write_registered(FILE, 100, span(0), epoch, 1)
+        .write_registered(FILE, 100, span(0), default.at(1), 1)
         .expect("push a registered write");
     assert_eq!(context(&rx.recv_timeout(BOUND).expect("the write")), 1);
     delivery
@@ -405,9 +409,9 @@ fn registered_buffers_are_reached_through_the_handle() {
 fn the_handle_reports_the_instances_lineages() {
     let temp = temp();
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
-    let lineage = delivery.default_lineage();
+    let lineage = delivery.default_lineage().lineage();
     let lineages = delivery.lineages();
     assert_eq!(lineages.len(), 1);
     assert_eq!(lineages[0].lineage, lineage);
-    assert_eq!(delivery.into_inner().default_lineage(), lineage);
+    assert_eq!(delivery.into_inner().default_lineage().lineage(), lineage);
 }
