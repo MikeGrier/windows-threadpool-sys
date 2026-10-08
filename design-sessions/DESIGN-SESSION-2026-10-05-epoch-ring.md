@@ -2497,6 +2497,15 @@ the engineer confirmed both: "yes mirrored", and of the second, "I don't see how
 work". The row's enumeration of mirrored methods, stale after two steps had added to it, was
 replaced by the rule it follows and a pointer to the code.
 
+DI-D-33 was restated the same way, as four choices: the delivery callback pushes the flushes a
+completion makes due; a seal waits for its writes in flight and then flushes each file once; one
+`Durable` per seal rather than one coalesced entry; and an I/O-free core. The engineer confirmed
+all four ("all is true"), and asked whether "each file" needed to map to flush domains or durability
+providers. It does not for the built-in default: a flush in `IoRing` is a file handle's, so a file is
+the default's unit, and flush domains scope failures rather than units of flushing. A consumer
+provider is asked per domain instead (DI-D-27, built in `DI-3.2.6`), and a file can be answered for
+by both. The row now says so.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
