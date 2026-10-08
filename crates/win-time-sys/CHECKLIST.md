@@ -14,8 +14,7 @@ Safe Rust over the Windows clocks. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for it
   > waiting on: component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.4.2` (nullifiers). See
   > [CHECKLIST.md](../durable-ioring/CHECKLIST.md). `WT-1.4` onwards do not block it.
 
-- [ ] **WT-1.4** -- **System time**: the `FileTime` timeline and its two clocks, over
-  `GetSystemTimeAsFileTime` and `GetSystemTimePreciseAsFileTime`.
+- [x] **WT-1.4** -- System time: the `FileTime` timeline and its coarse and precise clocks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-14)
 
 - [ ] **WT-1.5** -- **Performance time**: the timeline over QPC's frequency, read once and kept, and
   its clock over `QueryPerformanceCounter`'s raw ticks ([WT-D-4](DESIGN-NOTES.md#wt-d-4)).

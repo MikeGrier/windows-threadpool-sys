@@ -86,3 +86,32 @@ The item as it stood at completion:
 - [x] **WT-1.3** -- **Interrupt time and unbiased interrupt time** ([WT-D-3](DESIGN-NOTES.md#wt-d-3)):
   two timelines and four clocks over `QueryInterruptTime`, `QueryInterruptTimePrecise`,
   `QueryUnbiasedInterruptTime` and `QueryUnbiasedInterruptTimePrecise`.
+
+## Moved 2026-10-07 23:45:07 -04:00 -- WT-1.4: system time
+
+### <a id="wt-14"></a>WT-1.4 -- System time: the `FileTime` timeline and its coarse and precise clocks. *(completed 2026-10-07 23:45:07 -04:00)*
+
+`FileTime` -- 100 ns ticks since 1601-01-01 UTC -- with `CoarseSystemClock` over
+`GetSystemTimeAsFileTime` and `PreciseSystemClock` over `GetSystemTimePreciseAsFileTime`
+([WT-D-3](DESIGN-NOTES.md#wt-d-3)). The documentation says plainly that system time is not steady --
+it moves when the time is set, backwards included -- and leaves elapsed time to interrupt time. A
+`FILETIME`'s two halves are joined in one function, tested directly. No conversion to
+`std::time::SystemTime` is offered, per [WT-D-1](DESIGN-NOTES.md#wt-d-1).
+
+**Tests** (`system/tests.rs`), reading the real clocks: a precise reading lies between two of
+`SystemTime::now`, which reads the same call -- the check that the epoch and the halves are right;
+a coarse reading lags a precise one by at most a tick; the precise clock advances within fractions of
+the finest tick and the coarse one across the coarsest; a precise interval nests inside `Instant`'s;
+the period; zero-sized clocks; and the halves joined in the right order. Because system time is not
+steady, no test asserts it never goes backwards. A `compile_fail` doctest pinned to `E0308` shows its
+points do not compare with interrupt time's. The test binary ran 30 times in sequence without a
+failure.
+
+**Verification.** Four sabotages, each caught: the precise clock reading the coarse call, a frozen
+coarse clock, the halves swapped, and the high half shifted too little; with adding the halves rather
+than or-ing them as a third control. The whole manifest ran as declared.
+
+The item as it stood at completion:
+
+- [x] **WT-1.4** -- **System time**: the `FileTime` timeline and its two clocks, over
+  `GetSystemTimeAsFileTime` and `GetSystemTimePreciseAsFileTime`.

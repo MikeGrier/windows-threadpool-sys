@@ -25,6 +25,10 @@ Each has every clock Windows offers for it.
   process, so it never enters the kernel, and is as fresh as the last system clock tick. The precise
   one -- `PreciseInterruptClock`, `PreciseUnbiasedInterruptClock` -- reads the timer hardware, and is
   finer. A point means nothing after a restart: both count from the start of the boot.
+- **System time**, the `FileTime` timeline: UTC wall-clock time, which means something after a
+  restart and on another machine, but is not steady -- it moves when the time is set, backwards
+  included. `CoarseSystemClock` reads it as of the last system clock tick; `PreciseSystemClock` to
+  under a microsecond, through the same call `std::time::SystemTime::now` makes.
 
 ```rust
 use std::time::Duration;
@@ -43,7 +47,7 @@ let recorded: u64 = start.ticks();
 assert_eq!(TimePoint::from_ticks(recorded), start);
 ```
 
-System time and the performance counter are planned in this crate's `CHECKLIST.md`.
+The performance counter is planned in this crate's `CHECKLIST.md`.
 
 ## What is not here
 

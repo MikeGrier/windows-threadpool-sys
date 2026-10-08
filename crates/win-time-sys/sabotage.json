@@ -108,6 +108,46 @@
       "replace": ["pub(crate) const HUNDRED_NANOSECOND_TICKS: NonZeroU64 = NonZeroU64::new(1_000_000).unwrap();\n"]
     },
     {
+      "name": "WT-1.4: the precise system clock reads the coarse one",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "A precise clock no finer than the system tick; caught by the test that needs it to advance within a fraction of the finest tick.",
+      "find": ["        unsafe { GetSystemTimePreciseAsFileTime(&mut time) };\n"],
+      "replace": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n"]
+    },
+    {
+      "name": "WT-1.4: the coarse system clock is frozen",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "A reading must be the kernel's, not a constant; caught by the test that needs the coarse clock to advance across a tick.",
+      "find": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n        point(time)\n"],
+      "replace": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n        point(FILETIME::default())\n"]
+    },
+    {
+      "name": "WT-1.4: a FILETIME's halves are put together the wrong way round",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The count would be meaningless. Caught by the comparison with std's own reading of the same call, and by the test of the halves.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwLowDateTime) << 32) | u64::from(time.dwHighDateTime))\n"]
+    },
+    {
+      "name": "WT-1.4: a FILETIME's high half is shifted too little",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The high half would overlap the low one; caught by the same two tests.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 16) | u64::from(time.dwLowDateTime))\n"]
+    },
+    {
+      "name": "CONTROL: a FILETIME's halves are added rather than or-ed",
+      "file": "src/system.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on code every system-time test runs: the halves cannot overlap, so adding them is or-ing them.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) + u64::from(time.dwLowDateTime))\n"]
+    },
+    {
       "name": "CONTROL: the plain interrupt clock types its out-parameter",
       "file": "src/interrupt.rs",
       "expect": "survives",
