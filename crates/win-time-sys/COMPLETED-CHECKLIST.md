@@ -248,3 +248,61 @@ The item as it stood at completion:
   whose readings never decrease, implemented by the four interrupt clocks and `PerformanceClock` and
   not by the system clocks. The tests that no clock goes backwards are bound to the trait, so every
   `Steady` clock is held to it; a `compile_fail` doctest shows a system clock is not `Steady`.
+
+## Moved 2026-10-08 00:47:42 -04:00 -- WT-2.2.2, and WT-M2 complete: adoption
+
+WT-M2 completed with this item; its heading and its items' stubs left [CHECKLIST.md](CHECKLIST.md)
+together. The milestone's closing checks: the default workspace builds with no warnings in debug and
+release, and the tests and doctests of this crate, `windows-threadpool-sys` and durable-ioring pass.
+The branch is not pushed: it waits on the engineer.
+
+### <a id="wt-222"></a>WT-2.2.2 -- durable-ioring stamps failures with a `Steady` interrupt-time clock, `InterruptClock` by default, given through a type parameter on its core and on `Dioring`. *(completed 2026-10-08 00:47:42 -04:00)*
+
+Implemented in durable-ioring
+([DI-D-38](../durable-ioring/DESIGN-NOTES.md#di-d-38)), which now depends on this crate:
+
+- `Failed` and `FailureInfo` carry `observed: TimePoint<InterruptTime>`, read inside the transition
+  that records the failure, under dioring's lock; the inventory reports the stamp recorded then, not
+  a new reading. durable-ioring re-exports `TimePoint` and `InterruptTime`.
+- `TimeBase` names the bound once: `Clock<Timeline = InterruptTime> + Steady + Send + 'static`, with
+  a blanket implementation. The core holds a `K: TimeBase`, and `Dioring<B, E, C, R, K =
+  InterruptClock>` threads it through; `Dioring::new` is unchanged and `Dioring::with_clock` takes a
+  clock. `Drop` and the fault seam carry no clock bound, as a `Drop` impl cannot add one.
+- The conformance oracle gains `StampWentBackwards`: each `Failed` must carry a stamp at or after the
+  previous one's. CONTRACT.md states the two time facts, and DI-D-12 (e) is marked amended.
+
+**Tests.** A `MockClock` in dioring's test helpers, which only moves forwards, so it keeps the promise
+it makes by implementing `Steady`. Core tests, against the mock: an import, and a flush failure
+stamped when its completion is observed rather than when sealed; equal stamps within one reading and
+rising ones after; the inventory reporting the entry's stamp, each failure's own, and a healing
+failure's; and the default clock's stamp lying between two interrupt-time readings. I/O tests,
+through real instances and the oracle: a mock-clocked instance stamping a failed flush and an import
+with its readings, the inventory agreeing; and an instance built with `new` stamping with interrupt
+time. An oracle test accepts a first stamp, an equal one and a gap, and refuses one that falls. The
+test binary ran 30 times in sequence without a failure.
+
+**Verification.** Five sabotages, each as declared: a fixed stamp, an inventory that re-reads the
+clock, an oracle that accepts a falling stamp, and one that refuses an equal stamp, each caught; and
+reading the clock before the token is minted, a control, survives. durable-ioring's whole manifest
+then ran as declared.
+
+The item as it stood at completion:
+
+- [x] **WT-2.2.2** -- **durable-ioring's timestamps use a `Steady` interrupt-time clock,
+  `InterruptClock` by default** ([DI-D-37](../durable-ioring/DESIGN-NOTES.md#di-d-37),
+  [DI-D-38](../durable-ioring/DESIGN-NOTES.md#di-d-38)): dioring depends on this crate; its core
+  and `Dioring` are generic over the clock, with a constructor that takes one; and its first
+  timestamp -- when a failure was observed, carried by its `Failed` entry and by the inventory
+  ([DI-D-36](../durable-ioring/DESIGN-NOTES.md#di-d-36)) -- is read from it. The oracle checks that
+  failure stamps never decrease in queue order, and CONTRACT.md states both time facts. The marking
+  timestamps `DI-3.2.4.2` adds use the same clock.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` ->
+  > `DI-3.2.4.2` (nullifiers, whose markings and `Failed` entries are timestamped). See
+  > [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+The milestone's stubs as they stood when it left [CHECKLIST.md](CHECKLIST.md):
+
+- [x] **WT-2.1** -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-21)
+- [x] **WT-2.2.1** -- `Steady`, the marker trait for a clock whose readings never decrease, made by the interrupt and performance clocks and not by the system clocks. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-221)
+- [x] **WT-2.2.2** -- durable-ioring stamps failures with a `Steady` interrupt-time clock, `InterruptClock` by default, given through a type parameter on its core and on `Dioring`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-222)

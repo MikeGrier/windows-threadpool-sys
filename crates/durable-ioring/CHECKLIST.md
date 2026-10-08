@@ -71,8 +71,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   > (DI-D-37). It comes from `win-time-sys`, created for it: component `crates/win-time-sys` ->
   > `WT-M1` -> `WT-1.3` (interrupt time) -- landed, see
   > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-13) -- and dioring's
-  > dependency on it, with the `Failed` entry's timestamp: `WT-M2` -> `WT-2.2.2`, see
-  > [CHECKLIST.md](../win-time-sys/CHECKLIST.md).
+  > dependency on it, with the `Failed` entry's timestamp: `WT-M2` -> `WT-2.2.2` -- landed, see
+  > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-222).
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
