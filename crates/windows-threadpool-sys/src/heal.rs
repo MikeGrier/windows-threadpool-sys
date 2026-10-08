@@ -52,7 +52,7 @@ pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle
 // that is not there in a `--no-default-features` test build.
 #[cfg(all(test, feature = "self-heal"))]
 pub(crate) use on::{
-    FORCE_HEALER_START_FAILURE, FORCE_REPAIR_FAILURE_FOR, HOLD_REPAIR_CALLBACK_FOR,
+    FORCE_HEALER_START_FAILURE, ForcedRepairFailure, HOLD_REPAIR_CALLBACK_FOR,
     HOLD_REPAIR_CALLBACK_MS, REPAIR_CALLBACK_INSIDE, TICK_GATE, is_retirable, tick_inner,
 };
 
@@ -1196,7 +1196,7 @@ mod on {
         retire_idle();
     }
 
-    /// Force [`create_repair`] to fail for one pool, so the untracked path can
+    /// Force [`arm_repair`] to fail for one pool, so the untracked path can
     /// be tested.
     ///
     /// That path is reached only when `CreateThreadpoolWork` fails, which means
@@ -1204,14 +1204,67 @@ mod on {
     /// demand, and the error edge would otherwise be written but never
     /// executed. This makes it reachable deterministically.
     ///
-    /// **Keyed to a single pool, not a plain on/off flag.** The registry is
+    /// **Keyed to pools, not a plain on/off flag.** The registry is
     /// process-wide and these tests run as threads in one process, so a boolean
     /// here fails registrations belonging to whichever unrelated test happens
     /// to be creating an object at the time. Measured: it did exactly that on
     /// the first run, failing `a_dispatch_after_the_cancellation_is_what_counts`
-    /// rather than anything it had to do with. Zero means no pool is forced.
+    /// rather than anything it had to do with.
+    ///
+    /// **A list of keys, not one slot.** A single slot kept unrelated tests out
+    /// but let the tests that force a failure undo each other: one's key
+    /// replaced another's, or one's release cleared the slot while the other
+    /// was still relying on it. Measured: an intermittent failure in two of them,
+    /// in about one run in thirty. Each [`ForcedRepairFailure`] adds its own
+    /// entry and removes only that entry.
     #[cfg(test)]
-    pub(crate) static FORCE_REPAIR_FAILURE_FOR: AtomicUsize = AtomicUsize::new(0);
+    static FORCED_REPAIR_FAILURES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    #[cfg(test)]
+    fn forced_repair_failures() -> std::sync::MutexGuard<'static, Vec<usize>> {
+        FORCED_REPAIR_FAILURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// [`arm_repair`] fails for one pool while this is live and not yet
+    /// lifted -- the only way the untracked path can be reached in a test.
+    #[cfg(test)]
+    pub(crate) struct ForcedRepairFailure {
+        key: usize,
+        lifted: std::sync::atomic::AtomicBool,
+    }
+
+    #[cfg(test)]
+    impl ForcedRepairFailure {
+        pub(crate) fn for_pool(key: usize) -> Self {
+            forced_repair_failures().push(key);
+            Self {
+                key,
+                lifted: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        /// End this forcing now rather than at drop; a second call does
+        /// nothing. Removes one entry for this key, so another forcing of the
+        /// same pool stays in force.
+        pub(crate) fn lift(&self) {
+            if self.lifted.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let mut forced = forced_repair_failures();
+            if let Some(at) = forced.iter().position(|&key| key == self.key) {
+                forced.swap_remove(at);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    impl Drop for ForcedRepairFailure {
+        fn drop(&mut self) {
+            self.lift();
+        }
+    }
 
     /// Make [`ensure_running`] report that no healer is available.
     ///
@@ -1237,7 +1290,7 @@ mod on {
     /// entry retirable -- and the callback returning. Nothing can land a
     /// retirement in that window by timing, so a test widens it.
     ///
-    /// **Keyed to one pool, like `FORCE_REPAIR_FAILURE_FOR` and for the same
+    /// **Keyed to one pool, like [`ForcedRepairFailure`] and for the same
     /// reason.** The registry is process-wide and these tests are threads in
     /// one process, so an unkeyed hold catches whichever repair happens to
     /// dispatch -- including one submitted by another test before this one
@@ -1273,7 +1326,7 @@ mod on {
     fn arm_repair(entry: &Arc<PoolEntry>) -> bool {
         let key = entry.key;
         #[cfg(test)]
-        if key != 0 && FORCE_REPAIR_FAILURE_FOR.load(Ordering::SeqCst) == key {
+        if key != 0 && forced_repair_failures().contains(&key) {
             return false;
         }
         // The address of the entry's allocation, which is stable for as long as

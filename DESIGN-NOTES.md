@@ -1144,10 +1144,13 @@ the panic reports the violation, it must not cause one.
 **Reachability is a question this crate could not otherwise ask.** The path runs
 only when `CreateThreadpoolWork` fails, which means the process is out of
 memory, so the error edge would have been written and never executed. A
-test-only `FORCE_REPAIR_FAILURE_FOR` makes it reachable, **keyed to one pool
+test-only `ForcedRepairFailure` guard makes it reachable, **keyed to pools
 rather than switched on globally** -- these tests run as threads in one process
 against a process-wide registry, and a boolean there failed an unrelated test's
-registration on the first run.
+registration on the first run. **It holds a list of keys, not one slot:** a
+single slot kept unrelated tests out but let the tests that force a failure
+undo each other, which made them fail intermittently (see the thread pool's
+[RESOLVED-TEST-FAILURES.md](crates/windows-threadpool-sys/RESOLVED-TEST-FAILURES.md)).
 
 ### The cancelling release is a separate method
 

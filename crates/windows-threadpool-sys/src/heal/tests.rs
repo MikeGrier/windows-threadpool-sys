@@ -1178,23 +1178,48 @@ mod on {
         );
     }
 
-    /// Force this pool's repair allocation to fail for as long as this lives.
+    use crate::heal::ForcedRepairFailure;
+
+    /// Two forcings that overlap leave each other in force: neither's start
+    /// replaces the other's, and neither's end lifts the other.
     ///
-    /// Keyed to one pool rather than switched on globally, so a test using it
-    /// cannot fail a registration belonging to a test running beside it.
-    struct ForcedRepairFailure;
+    /// The regression this guards was one slot shared by every forcing test,
+    /// which made two of them fail intermittently when they ran side by side.
+    /// Sequenced here, so the overlap happens every run rather than by chance.
+    #[test]
+    fn overlapping_forced_failures_do_not_undo_each_other() {
+        let first = ThreadpoolPool::new().expect("create pool");
+        let second = ThreadpoolPool::new().expect("create pool");
+        let (a, b) = (first.as_raw() as usize, second.as_raw() as usize);
+        let registered = |key: usize| crate::heal::entries().iter().any(|e| e.key() == key);
+        // Each registration is held while it is checked: an entry a dropped
+        // registration made can retire at once, which would make "not
+        // registered" true whether or not the forcing held.
+        let refused = |key: usize| {
+            let _held = crate::heal::register(key);
+            !registered(key)
+        };
 
-    impl ForcedRepairFailure {
-        fn for_pool(key: usize) -> Self {
-            crate::heal::FORCE_REPAIR_FAILURE_FOR.store(key, Ordering::SeqCst);
-            Self
-        }
-    }
+        let forced_a = ForcedRepairFailure::for_pool(a);
+        let forced_b = ForcedRepairFailure::for_pool(b);
+        assert!(refused(a), "b's forcing replaced a's");
 
-    impl Drop for ForcedRepairFailure {
-        fn drop(&mut self) {
-            crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
-        }
+        drop(forced_b);
+        assert!(refused(a), "ending b's forcing lifted a's");
+
+        let again = ForcedRepairFailure::for_pool(a);
+        again.lift();
+        again.lift();
+        assert!(
+            refused(a),
+            "lifting a second forcing of a -- twice -- lifted the first"
+        );
+
+        drop(forced_a);
+        assert!(
+            !refused(b),
+            "b is no longer forced, so it registers -- and the check can see an entry"
+        );
     }
 
     /// An object whose pool could not be registered still marks that pool when

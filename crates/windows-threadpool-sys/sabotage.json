@@ -370,6 +370,38 @@
       "replace": [
         "        let reset = if manual_reset {\n            ResetMode::Auto\n        } else {\n            ResetMode::Manual\n        };\n"
       ]
+    },
+    {
+      "name": "a forced repair failure replaces every other one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The test seam's own defect, which made two self-heal tests fail intermittently: one slot shared by every forcing test, so a second forcing replaced the first. The tests that rely on a forced failure would then pass or fail by scheduling.",
+      "find": ["            forced_repair_failures().push(key);\n"],
+      "replace": ["            let mut forced = forced_repair_failures();\n            forced.clear();\n            forced.push(key);\n"]
+    },
+    {
+      "name": "ending a forced repair failure ends every other one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The other half of the same defect: the slot was cleared when any forcing ended, so a test still inside its forced scope found its pool registering after all.",
+      "find": ["            if let Some(at) = forced.iter().position(|&key| key == self.key) {\n                forced.swap_remove(at);\n            }\n"],
+      "replace": ["            forced.clear();\n"]
+    },
+    {
+      "name": "lifting a forced repair failure twice removes another forcing of the same pool",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "A forcing may be lifted early and then dropped, as the cleanup-group test does; without the once-only guard the drop removes a second entry for the key, which belongs to another forcing of the same pool.",
+      "find": ["            if self.lifted.swap(true, Ordering::SeqCst) {\n                return;\n            }\n"],
+      "replace": ["            self.lifted.store(true, Ordering::SeqCst);\n"]
+    },
+    {
+      "name": "CONTROL: a lifted forcing is removed in order rather than swapped out",
+      "file": "src/heal.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The forced keys are a multiset that is only searched, never read in order, so which removal is used changes nothing a test can see.",
+      "find": ["                forced.swap_remove(at);\n"],
+      "replace": ["                forced.remove(at);\n"]
     }
   ]
 }
