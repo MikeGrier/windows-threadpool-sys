@@ -187,3 +187,32 @@ The milestone's stubs as they stood when it left [CHECKLIST.md](CHECKLIST.md):
 - [x] **WT-1.4** -- System time: the `FileTime` timeline and its coarse and precise clocks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-14)
 - [x] **WT-1.5** -- Performance time: the `PerformanceCounter` timeline, its frequency read once and kept, and `PerformanceClock` over QPC's raw ticks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-15)
 - [x] **WT-1.6** -- A cost probe: the `clock_costs` example times every clock on the machine it runs on and reports what it observed. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-16)
+
+## Moved 2026-10-08 00:10:01 -04:00 -- WT-2.1: the thread pool reads interrupt time through this crate
+
+### <a id="wt-21"></a>WT-2.1 -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. *(completed 2026-10-08 00:10:01 -04:00)*
+
+The self-heal's crate-private `heal::now()` no longer calls `QueryInterruptTime` itself: its body is
+`InterruptClock.now().ticks()`, and its `unsafe` block is gone with the call. The function stays, as
+a `u64` adapter, because every stamp it feeds is an `AtomicU64` -- a `TimePoint` cannot sit in an
+atomic -- and because its call sites are what three of the thread pool's sabotages anchor on.
+`OVERDUE_AFTER` stays a raw count of 100 ns ticks for the same reason. `win-time-sys` is an optional
+dependency of the thread pool, pulled in by `self-heal` alone, which no longer needs
+`windows-sys/Win32_System_WindowsProgramming`; a consumer who turns `self-heal` off compiles neither.
+
+**Behaviour is unchanged**, so the commit is a `refactor` and cuts no release. The values are the
+same counter's, read by the same call: `InterruptClock` is `QueryInterruptTime`
+([WT-D-3](DESIGN-NOTES.md#wt-d-3)).
+
+**Verification.** The thread pool's whole suite passed, doctests included, with default features and
+built with `--no-default-features`. The three sabotages anchored on `now()` call sites -- a
+cancellation that does not arm a repair, a dispatch that never updates its stamp, and a repair
+waited on forever -- were each still caught. The thirty-run check of the self-heal tests turned up
+an intermittent failure in two tests that force a repair-allocation failure; the unchanged tree
+showed it too, so it predates this item. It is recorded in the thread pool's
+[UNRESOLVED-TEST-FAILURES.md](../windows-threadpool-sys/UNRESOLVED-TEST-FAILURES.md).
+
+The item as it stood at completion:
+
+- [x] **WT-2.1** -- **`windows-threadpool-sys` reads interrupt time through this crate**, retiring its
+  crate-private `heal::now()`, so the workspace has one reader of its one time base.

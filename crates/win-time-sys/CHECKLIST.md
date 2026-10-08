@@ -6,8 +6,7 @@ WT-M1, the crate and its clocks, is complete and archived in
 
 ## WT-M2 -- Adoption
 
-- [ ] **WT-2.1** -- **`windows-threadpool-sys` reads interrupt time through this crate**, retiring its
-  crate-private `heal::now()`, so the workspace has one reader of its one time base.
+- [x] **WT-2.1** -- `windows-threadpool-sys` reads interrupt time through `InterruptClock`, so the workspace has one reader of its one time base. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#wt-21)
 
 - [ ] **WT-2.2** -- **durable-ioring's timestamps use `InterruptClock`**
   ([DI-D-37](../durable-ioring/DESIGN-NOTES.md#di-d-37)).

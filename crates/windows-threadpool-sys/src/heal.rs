@@ -120,12 +120,12 @@ mod on {
     use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
+    use win_time_sys::{Clock, InterruptClock};
     use windows_sys::Win32::Foundation::FALSE;
     use windows_sys::Win32::System::Threading::{
         CloseThreadpoolWork, CreateThreadpoolWork, PTP_CALLBACK_INSTANCE, PTP_WORK,
         SubmitThreadpoolWork, WaitForThreadpoolWorkCallbacks,
     };
-    use windows_sys::Win32::System::WindowsProgramming::QueryInterruptTime;
 
     /// What this crate knows about one pool.
     ///
@@ -735,7 +735,9 @@ mod on {
         true
     }
 
-    /// The interrupt-time counter, which every stamp here is measured on.
+    /// The interrupt-time counter, which every stamp here is measured on, read
+    /// through `win-time-sys`' `InterruptClock` -- the workspace's one reader of
+    /// its one time base -- as a raw count of 100 ns ticks for the atomics.
     ///
     /// `QueryInterruptTime` rather than `QueryPerformanceCounter` because the
     /// only question asked of these values is which of two came first: the
@@ -768,10 +770,7 @@ mod on {
     /// [`PoolEntry::stamp_cancelled`]. Resolution was never the risk; ordering
     /// was.
     pub(crate) fn now() -> u64 {
-        let mut ticks = 0_u64;
-        // SAFETY: the out-parameter is a live local for the duration of the call.
-        unsafe { QueryInterruptTime(&raw mut ticks) };
-        ticks
+        InterruptClock.now().ticks()
     }
 
     impl Drop for Registration {
