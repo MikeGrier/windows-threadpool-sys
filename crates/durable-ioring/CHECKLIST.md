@@ -68,8 +68,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
   > **CROSS-COMPONENT PREREQUISITE:** a safe interrupt-time read, which dioring cannot write itself
   > (DI-D-37). It comes from `win-time-sys`, created for it: component `crates/win-time-sys` ->
-  > `WT-M1` -> `WT-1.3` (interrupt time), after `WT-1.1` and `WT-1.2`. See
-  > [CHECKLIST.md](../win-time-sys/CHECKLIST.md).
+  > `WT-M1` -> `WT-1.3` (interrupt time) -- landed, see
+  > [COMPLETED-CHECKLIST.md](../win-time-sys/COMPLETED-CHECKLIST.md#wt-13).
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
