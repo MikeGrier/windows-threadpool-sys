@@ -156,6 +156,22 @@
       "replace": ["        TimePoint::from_ticks(0)\n"]
     },
     {
+      "name": "WT-1.6: the probe's median is the upper middle sample",
+      "file": "examples/clock_costs/main.rs",
+      "expect": "caught",
+      "why": "The probe reports the lower middle of an even count, as documented; the batch count is odd, so this matters only to the arithmetic's own test, which is where it is checked.",
+      "find": ["        median: samples[(samples.len() - 1) / 2],\n"],
+      "replace": ["        median: samples[samples.len() / 2],\n"]
+    },
+    {
+      "name": "WT-1.6: the probe counts a repeated reading as a step of zero",
+      "file": "examples/clock_costs/main.rs",
+      "expect": "caught",
+      "why": "A step is a change; a clock read twice in one tick has not stepped, and a zero step would hide its real granularity.",
+      "find": ["        .filter_map(|pair| pair[1].checked_sub(pair[0]).filter(|step| *step > 0))\n"],
+      "replace": ["        .filter_map(|pair| pair[1].checked_sub(pair[0]))\n"]
+    },
+    {
       "name": "CONTROL: the performance count is cast rather than reinterpreted",
       "file": "src/performance.rs",
       "expect": "survives",

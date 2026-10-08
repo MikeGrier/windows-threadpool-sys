@@ -31,6 +31,11 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_WindowsProgramming",
 ] }
 
+[[example]]
+name = "clock_costs"
+# Its summary and report arithmetic has unit tests; the measurement itself is the machine's.
+test = true
+
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.

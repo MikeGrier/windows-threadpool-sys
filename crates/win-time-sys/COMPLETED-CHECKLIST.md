@@ -144,3 +144,46 @@ The item as it stood at completion:
 
 - [x] **WT-1.5** -- **Performance time**: the timeline over QPC's frequency, read once and kept, and
   its clock over `QueryPerformanceCounter`'s raw ticks ([WT-D-4](DESIGN-NOTES.md#wt-d-4)).
+
+## Moved 2026-10-07 23:55:08 -04:00 -- WT-1.6, and WT-M1 complete: the crate and its clocks
+
+WT-M1 completed with this item; its heading and its items' stubs left [CHECKLIST.md](CHECKLIST.md)
+together. The milestone's closing checks: the default workspace builds with no warnings in debug and
+release, and this crate's tests, doctests and the example's tests pass. The branch is not pushed: it
+waits on the engineer.
+
+### <a id="wt-16"></a>WT-1.6 -- A cost probe: the `clock_costs` example times every clock on the machine it runs on and reports what it observed. *(completed 2026-10-07 23:55:08 -04:00)*
+
+Placed as an example in this crate rather than in `windows-platform-probes`, because an example
+ships with the published crate and the probe exists for consumers' hardware
+([WT-D-8](DESIGN-NOTES.md#wt-d-8), for the engineer to confirm). For each of the seven clocks, and
+`Instant` and `SystemTime` for reference, it reports the least, median and most cost per read over
+thirty-one batches of ten thousand reads, timed with `Instant` after a warm-up batch, and the smallest
+step seen between readings that differ. It compares nothing and quotes nothing into the
+documentation; all of its output goes through one writer. The README says what it measures and how
+to run it.
+
+**Tests** (`examples/clock_costs/tests.rs`, run by `cargo test` because the example is declared
+`test = true`): the summary's least, lower-middle median and most for odd, even and single counts,
+and none for no samples; the smallest step ignoring repeats and backward moves, and none for a clock
+that never moved; and the report naming every clock and saying when no step was seen. The probe was
+run in release on the development machine and completed in a fraction of a second.
+
+**Verification.** Two sabotages, each caught by the test named for it: an upper-middle median, and a
+repeated reading counted as a zero step. The whole manifest ran as declared.
+
+The item as it stood at completion:
+
+- [x] **WT-1.6** -- **A cost probe**: time each clock on the machine it runs on and report what was
+  observed, so the choice between getters rests on the consumer's own hardware rather than on figures
+  quoted from elsewhere. Where it lives -- an example here, or `windows-platform-probes` -- is decided
+  with the item.
+
+The milestone's stubs as they stood when it left [CHECKLIST.md](CHECKLIST.md):
+
+- [x] **WT-1.1** -- The crate exists: a Windows-only workspace member registered for release and publication, with its README as the crate documentation and an undocumented `unsafe` refused by the build. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-11)
+- [x] **WT-1.2** -- The two layers: `Timeline`, `TimePoint<T>`, `Ticks<T>` and `Clock`, with their arithmetic and conversions to and from `Duration`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-12)
+- [x] **WT-1.3** -- Interrupt time and unbiased interrupt time: two timelines and their four clocks, plain and precise. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-13)
+- [x] **WT-1.4** -- System time: the `FileTime` timeline and its coarse and precise clocks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-14)
+- [x] **WT-1.5** -- Performance time: the `PerformanceCounter` timeline, its frequency read once and kept, and `PerformanceClock` over QPC's raw ticks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-15)
+- [x] **WT-1.6** -- A cost probe: the `clock_costs` example times every clock on the machine it runs on and reports what it observed. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-16)

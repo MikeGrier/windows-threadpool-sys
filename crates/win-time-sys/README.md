@@ -51,6 +51,17 @@ let recorded: u64 = start.ticks();
 assert_eq!(TimePoint::from_ticks(recorded), start);
 ```
 
+## What a reading costs
+
+That depends on the processor, the hypervisor and how the performance counter is backed, so the
+crate does not say. It measures instead: the `clock_costs` example reads every clock in timed
+batches on the machine it runs on, and reports the cost per read and the smallest step it saw, with
+`std`'s two readings beside them for reference.
+
+```text
+cargo run --release -p win-time-sys --example clock_costs
+```
+
 ## What is not here
 
 - **Time zones.** System time is UTC and the others have no calendar meaning. Zones belong to the
