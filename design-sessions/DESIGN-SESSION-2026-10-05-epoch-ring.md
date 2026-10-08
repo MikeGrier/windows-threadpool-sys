@@ -2616,6 +2616,18 @@ makes the default's permanence a consequence of the instance's reference rather 
 lineage; and the `Arc` belongs inside a newtype. The engineer: "yes I think this is the coherent
 answer." Recorded as DI-D-40.
 
+## DI-3.2.5 split, and heals across lineages (2026-10-08)
+
+Asked whether DI-3.2.5 was ready, the assistant found one unsettled question: when a heal takes
+effect for a failure spanning several lineages, since DI-D-12 (c)'s "the first seal made after the
+heal" named no lineage. It proposed per lineage -- each lineage's re-issued writes are committed
+only by its own next seal, so one lineage's seal ending the failure everywhere would let another's
+mark pass epochs it had not committed -- at the cost of a failure staying in the inventory while
+one of its lineages never seals. It also proposed splitting the item: handles, minting, ending and
+failures across lineages together (`DI-3.2.5.1`), then gates (`DI-3.2.5.2`). The engineer: "do the
+split", then "let's go with per lineage for now. we can worry about more complex cases later if
+necessary." Recorded as DI-D-41, keeping "for now" as its reopen condition.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

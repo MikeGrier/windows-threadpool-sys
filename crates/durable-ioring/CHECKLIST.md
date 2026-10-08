@@ -70,13 +70,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   (Flush-domain reach for flush failures and imports landed in `DI-3.2.4`, where the suspect set is
   defined -- [DI-D-34](DESIGN-NOTES.md#di-d-34); containment for a provider's domain is
   `DI-3.2.6`'s.) The fake implementation and the oracle follow the trait, and CONTRACT.md states
-  the handle, its release, and the rule. **Open, for the engineer, before this step:** when a heal
-  takes effect for a failure spanning several lineages. The assistant's proposal is per lineage:
-  the failure stops holding lineage L once L's first seal made after the heal succeeds, and is
-  resolved as `Healed` only when that has happened in every lineage it belongs to. Letting one
-  lineage's seal end it everywhere would let another lineage's mark pass epochs whose re-issued
-  writes it has not committed. The cost: a failure one of whose lineages never seals again stays
-  in the inventory, healing, indefinitely.
+  the handle, its release, and the rule. **A heal takes effect per lineage**
+  ([DI-D-41](DESIGN-NOTES.md#di-d-41)): a healed failure stops holding lineage L once L's first
+  seal made after the heal succeeds, and is resolved as `Healed` only when that has happened in
+  every lineage it belongs to; CONTRACT.md's "Resolving a failure" says so.
 
 - [ ] **DI-3.2.5.2** -- **Gates.** Gated operations held until their epoch is durable, ending as
   `NeverIssued` when it is abandoned; a gate on an abandoned epoch refused as `GateAbandoned`; and a
