@@ -115,3 +115,32 @@ The item as it stood at completion:
 
 - [x] **WT-1.4** -- **System time**: the `FileTime` timeline and its two clocks, over
   `GetSystemTimeAsFileTime` and `GetSystemTimePreciseAsFileTime`.
+
+## Moved 2026-10-07 23:48:47 -04:00 -- WT-1.5: performance time
+
+### <a id="wt-15"></a>WT-1.5 -- Performance time: the `PerformanceCounter` timeline, its frequency read once and kept, and `PerformanceClock` over QPC's raw ticks. *(completed 2026-10-07 23:48:47 -04:00)*
+
+The timeline is named `PerformanceCounter` -- what [WT-D-3](DESIGN-NOTES.md#wt-d-3) calls
+"Performance" -- and its clock `PerformanceClock`, over `QueryPerformanceCounter`'s raw ticks rather
+than `Instant` ([WT-D-4](DESIGN-NOTES.md#wt-d-4)). Its period is `QueryPerformanceFrequency`, read on
+first use and kept in a `OnceLock`, which Microsoft documents as fixed at boot. Both calls are
+documented to always succeed on Windows XP and later: the counter's result is asserted in debug
+builds, and the frequency's in every build, since a zero period would make every conversion wrong.
+The README now lists all four timelines.
+
+**Tests** (`performance/tests.rs`), reading the real counter: it never goes backwards; it advances in
+every one of twenty windows shorter than the finest system tick; the period equals the frequency
+Windows reports, and is the same on every call; an interval nests inside `Instant`'s measure of it --
+with no tolerance on the upper side, since `Instant` reads the same counter; and the clock is
+zero-sized. A `compile_fail` doctest pinned to `E0308` shows its points do not compare with interrupt
+time's. The test binary ran 30 times in sequence without a failure.
+
+**Verification.** Two sabotages, each caught: a period of twice the frequency, and a frozen clock;
+with reinterpreting the count by `as` as a fourth control. Added to `notCoveredHere`: QPC's
+documented-unreachable failures, and reading the frequency on every call, which changes a call's
+cost and never its answer. The whole manifest ran as declared.
+
+The item as it stood at completion:
+
+- [x] **WT-1.5** -- **Performance time**: the timeline over QPC's frequency, read once and kept, and
+  its clock over `QueryPerformanceCounter`'s raw ticks ([WT-D-4](DESIGN-NOTES.md#wt-d-4)).

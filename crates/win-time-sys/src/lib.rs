@@ -8,6 +8,7 @@
 
 mod clock;
 mod interrupt;
+mod performance;
 mod system;
 mod timeline;
 
@@ -16,5 +17,6 @@ pub use interrupt::{
     InterruptClock, InterruptTime, PreciseInterruptClock, PreciseUnbiasedInterruptClock,
     UnbiasedInterruptClock, UnbiasedInterruptTime,
 };
+pub use performance::{PerformanceClock, PerformanceCounter};
 pub use system::{CoarseSystemClock, FileTime, PreciseSystemClock};
 pub use timeline::{Ticks, TimePoint, Timeline};

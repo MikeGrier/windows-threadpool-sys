@@ -1,7 +1,7 @@
 {
   "package": "win-time-sys",
   "description": "Sabotages for win-time-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Three defects in the interrupt-time clocks no test can catch. A plain clock reading the precise call is more precise, not wrong: the difference is cost, which WT-1.6's probe measures. A clock reading the other interrupt timeline -- biased for unbiased, or the reverse -- gives identical values on a machine that has never slept, which a CI host need not have done. And QueryUnbiasedInterruptTime's failure, asserted in debug builds, is documented to happen only for a null pointer, which a reference cannot be.",
+  "notCoveredHere": "Three defects in the interrupt-time clocks no test can catch. A plain clock reading the precise call is more precise, not wrong: the difference is cost, which WT-1.6's probe measures. A clock reading the other interrupt timeline -- biased for unbiased, or the reverse -- gives identical values on a machine that has never slept, which a CI host need not have done. And QueryUnbiasedInterruptTime's failure, asserted in debug builds, is documented to happen only for a null pointer, which a reference cannot be. Likewise QueryPerformanceCounter's and QueryPerformanceFrequency's, which are documented to always succeed on Windows XP and later. Reading the performance counter's frequency on every call rather than once is not caught either: the frequency is fixed at boot, so it changes what a call costs, never what it answers.",
   "sabotages": [
     {
       "name": "WT-1.2: points order backwards",
@@ -138,6 +138,30 @@
       "why": "The high half would overlap the low one; caught by the same two tests.",
       "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
       "replace": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 16) | u64::from(time.dwLowDateTime))\n"]
+    },
+    {
+      "name": "WT-1.5: the performance counter's period is twice its frequency",
+      "file": "src/performance.rs",
+      "expect": "caught",
+      "why": "Every duration measured on the counter would be half its length. Caught by the comparison with the frequency Windows reports and with Instant, which reads the same counter.",
+      "find": ["    NonZeroU64::new(per_second.cast_unsigned()).expect(\"a performance counter frequency of zero\")\n"],
+      "replace": ["    NonZeroU64::new(per_second.cast_unsigned() * 2).expect(\"a performance counter frequency of zero\")\n"]
+    },
+    {
+      "name": "WT-1.5: the performance clock is frozen",
+      "file": "src/performance.rs",
+      "expect": "caught",
+      "why": "A reading must be the counter's, not a constant.",
+      "find": ["        TimePoint::from_ticks(ticks.cast_unsigned())\n"],
+      "replace": ["        TimePoint::from_ticks(0)\n"]
+    },
+    {
+      "name": "CONTROL: the performance count is cast rather than reinterpreted",
+      "file": "src/performance.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on code every performance test runs: for a count that is never negative, `as u64` and `cast_unsigned` are the same bits.",
+      "find": ["        TimePoint::from_ticks(ticks.cast_unsigned())\n"],
+      "replace": ["        TimePoint::from_ticks(ticks as u64)\n"]
     },
     {
       "name": "CONTROL: a FILETIME's halves are added rather than or-ed",

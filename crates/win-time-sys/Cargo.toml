@@ -23,9 +23,10 @@ categories = ["api-bindings", "os::windows-apis", "date-and-time"]
 #
 # `Win32_System_WindowsProgramming` is the four interrupt-time reads.
 # `Win32_System_SystemInformation` is the two system-time reads, and `Win32_Foundation` the
-# `FILETIME` they write.
+# `FILETIME` they write. `Win32_System_Performance` is QPC's counter and frequency.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
+	"Win32_System_Performance",
 	"Win32_System_SystemInformation",
 	"Win32_System_WindowsProgramming",
 ] }

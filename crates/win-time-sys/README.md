@@ -29,6 +29,10 @@ Each has every clock Windows offers for it.
   restart and on another machine, but is not steady -- it moves when the time is set, backwards
   included. `CoarseSystemClock` reads it as of the last system clock tick; `PreciseSystemClock` to
   under a microsecond, through the same call `std::time::SystemTime::now` makes.
+- **The performance counter**, the `PerformanceCounter` timeline, read by `PerformanceClock`: QPC's
+  raw ticks at its frequency, which Windows fixes at boot. `std::time::Instant` reads the same
+  counter but keeps its value to itself; here a point is a count that can be recorded. Its zero is
+  unspecified, so a point means nothing after a restart.
 
 ```rust
 use std::time::Duration;
@@ -46,8 +50,6 @@ assert!(InterruptClock.now() <= PreciseInterruptClock.now());
 let recorded: u64 = start.ticks();
 assert_eq!(TimePoint::from_ticks(recorded), start);
 ```
-
-The performance counter is planned in this crate's `CHECKLIST.md`.
 
 ## What is not here
 

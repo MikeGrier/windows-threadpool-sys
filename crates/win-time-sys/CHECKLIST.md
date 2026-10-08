@@ -16,8 +16,7 @@ Safe Rust over the Windows clocks. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for it
 
 - [x] **WT-1.4** -- System time: the `FileTime` timeline and its coarse and precise clocks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-14)
 
-- [ ] **WT-1.5** -- **Performance time**: the timeline over QPC's frequency, read once and kept, and
-  its clock over `QueryPerformanceCounter`'s raw ticks ([WT-D-4](DESIGN-NOTES.md#wt-d-4)).
+- [x] **WT-1.5** -- Performance time: the `PerformanceCounter` timeline, its frequency read once and kept, and `PerformanceClock` over QPC's raw ticks. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#wt-15)
 
 - [ ] **WT-1.6** -- **A cost probe**: time each clock on the machine it runs on and report what was
   observed, so the choice between getters rests on the consumer's own hardware rather than on figures
