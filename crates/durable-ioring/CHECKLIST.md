@@ -42,15 +42,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 - [x] **DI-3.2.2.1** -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3221)
 
 - [x] **DI-3.2.2.2** -- The Model A front end: `EntryDelivery` and its `DeliveryHandle`, delivering entries one at a time to a handler on pool threads. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-3222)
-  DI-2.7 point 5 orders -- delivery quiesced before the state it reaches is released.
 
-- [ ] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
-  provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
-  default lineage. Coverage as CONTRACT.md defines it: a write is named to the default provider
-  only after it is observed complete, and the default flushes each of its files through the
-  instance's ring. Guarantees 1, 2, 3, 5, 6 and 7: `Durable` as a prefix, after the completions it
-  covers, never retracted; a late write refused as `Sealed`; asking again answered by
-  `AlreadySealed` with the epoch's state.
+- [x] **DI-3.2.3** -- Seals and durability in one lineage, through the built-in default provider: `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, with `Durable` reported as a prefix after the completions it covers. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#di-323)
 
 - [ ] **DI-3.2.4** -- **Failures and their resolution.** A failed flush recorded as a failure whose
   suspect set is frozen at observation, by push order ([DI-D-12](DESIGN-NOTES.md#di-d-12));
@@ -76,7 +69,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   because until gates are honoured a public setter would let a gated operation be issued ungated. Flush domains
   narrowing a failure's reach -- intersection for the default provider, containment for a provider's
   domain, a file declared with none reaching every file ([DI-D-21](DESIGN-NOTES.md#di-d-21)) -- and
-  `ImportScope`.
+  `ImportScope`. **Open, for the engineer, before this step:** what `epoch_state` answers for an
+  epoch of a lineage the instance does not have. `EpochState` has no value for it, so since
+  `DI-3.2.3` dioring panics there ([DI-D-33](DESIGN-NOTES.md#di-d-33)); a retired lineage raises
+  the same question, which is why it is settled here.
 
 - [ ] **DI-3.2.6** -- **The consumer's durability provider.** `Setup::provider` and the domains it
   serves; one `FlushRequest` per seal, naming files and `OpId`s per domain; `DomainCompletion`

@@ -1336,3 +1336,45 @@ The item as it stood at completion:
   which of the trait's `&mut self` operations the owner and `DeliveryHandle` offer as `&self`, and
   how (mirrored methods, or a closure over the instance under its lock); and its teardown, which
   DI-2.7 point 5 orders -- delivery quiesced before the state it reaches is released.
+
+## Moved 2026-10-07 20:38:53 -04:00 -- DI-3.2.3: seals and durability in one lineage
+
+### <a id="di-323"></a>DI-3.2.3 -- Seals and durability in one lineage, through the built-in default provider: `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, with `Durable` reported as a prefix after the completions it covers. *(completed 2026-10-07 20:38:53 -04:00)*
+
+How it is built is [DI-D-33](DESIGN-NOTES.md#di-d-33) (the assistant's, implementing DI-D-9 and
+DI-D-22, for the engineer to confirm): one lineage's durability is an I/O-free state machine,
+`dioring/durability.rs`, held under dioring's lock with the queue; the delivery callback records
+each completion there and pushes the flushes it makes due while still holding it. Two cases are
+left pending rather than approximated, each already the work of a later step: a flush that fails
+(`DI-3.2.4`) and a write whose file a consumer provider serves (`DI-3.2.6`). What `epoch_state`
+answers for another instance's lineage is left open for the engineer and queued under `DI-3.2.5`.
+
+**Tests.** The durability core's rules without I/O (`dioring/durability/tests.rs`). Against real
+files (`dioring/tests/seals.rs`): Durable after completed writes, with the four queries and
+`lineages()` agreeing; a seal with nothing written; a seal made while sixteen writes are in flight,
+reported after all of them; two seals reported in order; late writes refused as `Sealed` with buffer
+and context returned, owned and registered, while later epochs and reads are accepted;
+`AlreadySealed` answering `Durable`, and `Pending` for a seal a provider-routed write holds -- which
+also holds back a later seal with nothing in it; a failed write neither covered nor holding its seal
+(guarantee 1); and another instance's lineage refused. Through Model A: a seal made from inside the
+handler, its `Durable` delivered to that handler. **The oracle gained this step's rules**: no write
+accepted at or below its lineage's seal, `Durable` only for what was sealed, and only after the
+completion of every write it covers -- each tested in both directions.
+
+**Verification.** Thirteen new sabotages, each caught; the prefix-order and provider-hold ones by
+the I/O test as well as the unit tests. One was first caught only by a crash: a write accepted past
+the seal tripped the core's debug assertion after the ring held the push, and the unwind through an
+unsubmitted batch aborted the process. The same check now also runs in `issue` before anything
+reaches the ring, so it fails as an ordinary assertion in the test named for it. The relay's six
+existing sabotages were re-anchored after its rewrite. The test binary ran 30 times without a
+failure.
+
+The item as it stood at completion:
+
+- [x] **DI-3.2.3** -- **Seals and durability in one lineage, through the built-in default
+  provider.** `make_durable_through`, `durable_through`, `sealed_through` and `epoch_state`, in the
+  default lineage. Coverage as CONTRACT.md defines it: a write is named to the default provider
+  only after it is observed complete, and the default flushes each of its files through the
+  instance's ring. Guarantees 1, 2, 3, 5, 6 and 7: `Durable` as a prefix, after the completions it
+  covers, never retracted; a late write refused as `Sealed`; asking again answered by
+  `AlreadySealed` with the epoch's state.

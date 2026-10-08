@@ -13,8 +13,8 @@ use win_sync_sys::{Event, ResetMode};
 use crate::contract::{DurableRing, EntryOf, PushResult};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::types::{
-    AddFileError, Entry, Epoch, FileKey, FileOptions, LineageInfo, OpCompletion, OpKind, Outcome,
-    ReadOptions, WriteOptions,
+    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
+    OpCompletion, OpKind, Outcome, ReadOptions, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -142,5 +142,21 @@ impl DurableRing for Fake {
 
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
         Ok(self.queue.pop_front())
+    }
+
+    fn make_durable_through(&mut self, _through: Epoch<V>) -> io::Result<DurabilityRequest<V>> {
+        unimplemented!("the fake makes nothing durable")
+    }
+
+    fn durable_through(&self, _lineage: Lineage) -> Option<u64> {
+        None
+    }
+
+    fn sealed_through(&self, _lineage: Lineage) -> Option<u64> {
+        None
+    }
+
+    fn epoch_state(&self, _epoch: Epoch<V>) -> EpochState<V> {
+        EpochState::Open
     }
 }

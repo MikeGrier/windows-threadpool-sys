@@ -15,8 +15,8 @@ use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
-    AddFileError, Entry, Epoch, FileKey, FileOptions, LineageInfo, PushError, ReadOptions,
-    WriteOptions,
+    AddFileError, DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
+    PushError, ReadOptions, WriteOptions,
 };
 
 #[cfg(test)]
@@ -192,6 +192,30 @@ pub trait DurableRing {
     /// dioring's is a submission it retried and the kernel refused again: the operations stay
     /// queued, and the next push or pop retries.
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
+
+    /// Seal every epoch of `through`'s lineage at or below it, and ask for them to be made
+    /// durable (DI-D-9). A new seal is answered on the queue, by `Durable { through }` once every
+    /// write it covers is covered successfully; a request at or below the seal point is a no-op
+    /// answered here with the epoch's state (guarantee 7).
+    ///
+    /// # Errors
+    ///
+    /// For a lineage that is not one of the instance's.
+    fn make_durable_through(
+        &mut self,
+        through: Epoch<Self::Ids>,
+    ) -> io::Result<DurabilityRequest<Self::Ids>>;
+
+    /// The lineage's high-water mark: the highest epoch id through which every epoch is durable.
+    /// `None` until something is, and for a lineage that is not one of the instance's.
+    fn durable_through(&self, lineage: Lin<Self>) -> Option<EpochIdOf<Self>>;
+
+    /// The lineage's seal point. `None` until something is sealed, and for a lineage that is not
+    /// one of the instance's.
+    fn sealed_through(&self, lineage: Lin<Self>) -> Option<EpochIdOf<Self>>;
+
+    /// An epoch's state.
+    fn epoch_state(&self, epoch: Epoch<Self::Ids>) -> EpochState<Self::Ids>;
 }
 
 /// The registered-buffer extension (DI-D-24): operations on spans of buffers registered with the

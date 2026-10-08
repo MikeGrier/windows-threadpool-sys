@@ -18,29 +18,30 @@ use crate::dioring::{Dioring, FileSetup, Setup};
 use crate::ids::OpId;
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
-    Entry, Epoch, FileKey, FileOptions, OpCompletion, OpKind, Outcome, PushRefusal, WriteCaching,
-    WriteOptions,
+    DurabilityRequest, Entry, Epoch, FileKey, FileOptions, OpCompletion, OpKind, Outcome,
+    PushRefusal, WriteCaching, WriteOptions,
 };
 
 /// The instances here carry a `u32` context, so the oracle can compare them.
-type Ring = Dioring<Vec<u8>, u64, u32>;
-type Completed = OpCompletion<V, Vec<u8>, u32>;
+pub(super) type Ring = Dioring<Vec<u8>, u64, u32>;
+pub(super) type Completed = OpCompletion<V, Vec<u8>, u32>;
+pub(super) type RingEntry = Entry<V, Vec<u8>, u32>;
 
 /// How long a test waits for a completion before calling it lost.
-const BOUND: Duration = Duration::from_secs(5);
+pub(super) const BOUND: Duration = Duration::from_secs(5);
 /// Large enough for the most operations any test here has in flight at once.
 const QUEUE: u32 = 128;
 
-const ADDED: FileKey = FileKey(1);
-const GIVEN: FileKey = FileKey(2);
+pub(super) const ADDED: FileKey = FileKey(1);
+pub(super) const GIVEN: FileKey = FileKey(2);
 
-fn temp(content: &[u8]) -> TempFile {
+pub(super) fn temp(content: &[u8]) -> TempFile {
     let temp = TempFile::new("io");
     fs::write(&temp.0, content).expect("fill the temporary file");
     temp
 }
 
-fn read_only(temp: &TempFile) -> SharedHandle {
+pub(super) fn read_only(temp: &TempFile) -> SharedHandle {
     let file = fs::OpenOptions::new()
         .read(true)
         .open(&temp.0)
@@ -48,7 +49,7 @@ fn read_only(temp: &TempFile) -> SharedHandle {
     SharedHandle::new(OwnedHandle::from(file))
 }
 
-fn instance(files: Vec<FileSetup>, buffers: Vec<Vec<u8>>) -> Ring {
+pub(super) fn instance(files: Vec<FileSetup>, buffers: Vec<Vec<u8>>) -> Ring {
     Ring::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
@@ -57,7 +58,7 @@ fn instance(files: Vec<FileSetup>, buffers: Vec<Vec<u8>>) -> Ring {
     .expect("build an instance")
 }
 
-fn given(key: FileKey, temp: &TempFile) -> FileSetup {
+pub(super) fn given(key: FileKey, temp: &TempFile) -> FileSetup {
     FileSetup {
         key,
         file: temp.open(),
@@ -66,24 +67,24 @@ fn given(key: FileKey, temp: &TempFile) -> FileSetup {
 }
 
 /// An instance and the oracle watching its stream.
-struct Harness {
-    ring: Ring,
-    oracle: ConformanceOracle<V, u32>,
+pub(super) struct Harness {
+    pub(super) ring: Ring,
+    pub(super) oracle: ConformanceOracle<V, u32>,
 }
 
 impl Harness {
-    fn new(ring: Ring) -> Self {
+    pub(super) fn new(ring: Ring) -> Self {
         Self {
             ring,
             oracle: ConformanceOracle::new(),
         }
     }
 
-    fn epoch(&self, id: u64) -> Epoch<V> {
+    pub(super) fn epoch(&self, id: u64) -> Epoch<V> {
         Epoch::new(self.ring.default_lineage(), id)
     }
 
-    fn write(
+    pub(super) fn write(
         &mut self,
         file: FileKey,
         offset: u64,
@@ -100,7 +101,7 @@ impl Harness {
         id
     }
 
-    fn read(&mut self, file: FileKey, offset: u64, len: usize, context: u32) -> OpId {
+    pub(super) fn read(&mut self, file: FileKey, offset: u64, len: usize, context: u32) -> OpId {
         let id = self
             .ring
             .read(file, offset, vec![0; len], context)
@@ -109,45 +110,64 @@ impl Harness {
         id
     }
 
-    fn pushed(&mut self, id: OpId, kind: OpKind<V>, context: u32) {
+    pub(super) fn pushed(&mut self, id: OpId, kind: OpKind<V>, context: u32) {
         self.oracle
             .pushed(id, kind, context)
             .expect("the oracle accepts the push");
     }
 
-    /// The next completion, within the bound.
-    fn next(&mut self) -> Completed {
+    /// The next entry, within the bound, after the oracle has accepted it.
+    pub(super) fn next_entry(&mut self) -> RingEntry {
         let started = Instant::now();
         loop {
             if let Some(entry) = self.ring.pop().expect("pop") {
                 self.oracle
                     .observe(&entry)
                     .expect("the oracle accepts the entry");
-                let Entry::Op(completion) = entry else {
-                    panic!("only operations complete before seals exist");
-                };
-                return completion;
+                return entry;
             }
             assert!(
                 started.elapsed() < BOUND,
-                "no completion within {BOUND:?}; {} outstanding",
+                "no entry within {BOUND:?}; {} outstanding",
                 self.oracle.outstanding()
             );
             std::thread::sleep(Duration::from_millis(1));
         }
     }
 
+    /// The next entry, which must be a completion.
+    pub(super) fn next(&mut self) -> Completed {
+        match self.next_entry() {
+            Entry::Op(completion) => completion,
+            other => panic!("expected a completion, got {other:?}"),
+        }
+    }
+
     /// The next `n` completions, in the order they were popped.
-    fn next_n(&mut self, n: usize) -> Vec<Completed> {
+    pub(super) fn next_n(&mut self, n: usize) -> Vec<Completed> {
         (0..n).map(|_| self.next()).collect()
     }
 
-    fn finish(self) {
+    /// Ask for durability through `id` in the default lineage, reporting a new seal to the
+    /// oracle.
+    pub(super) fn seal(&mut self, id: u64) -> DurabilityRequest<V> {
+        let through = self.epoch(id);
+        let answer = self
+            .ring
+            .make_durable_through(through)
+            .expect("seal the default lineage");
+        if answer == DurabilityRequest::Submitted {
+            self.oracle.sealed(through);
+        }
+        answer
+    }
+
+    pub(super) fn finish(self) {
         self.oracle.finish().expect("every operation completed");
     }
 }
 
-fn transferred(completion: &Completed) -> u32 {
+pub(super) fn transferred(completion: &Completed) -> u32 {
     match completion.outcome {
         Outcome::Transferred(n) => n,
         ref other => panic!("expected a transfer, got {other:?}"),

@@ -17,14 +17,16 @@ use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBuffe
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::provider::DurabilityProvider;
 use crate::types::{
-    AddFileError, Epoch, FileKey, FileOptions, FlushDomain, LineageInfo, OpKind, ReadOptions,
-    WriteOptions,
+    AddFileError, DurabilityRequest, Epoch, EpochState, FileKey, FileOptions, FlushDomain,
+    LineageInfo, OpKind, ReadOptions, WriteOptions,
 };
 
+mod durability;
 mod push;
 mod relay;
 
-use relay::Relay;
+use durability::{Due, Routing, Sealing, State};
+use relay::{Delivery, FlushTarget, Relay};
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
 #[cfg(test)]
@@ -122,6 +124,16 @@ pub(crate) enum FileSlot {
     Shared(SharedHandle),
 }
 
+impl FileSlot {
+    /// What a flush of this file is pushed against.
+    fn flush_target(&self) -> FlushTarget {
+        match self {
+            FileSlot::Registered { index, .. } => FlushTarget::Registered(*index),
+            FileSlot::Shared(handle) => FlushTarget::Shared(handle.clone()),
+        }
+    }
+}
+
 /// A flush domain interned by this instance: a word-sized stand-in for its bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct DomainId(u32);
@@ -130,19 +142,30 @@ pub(crate) struct DomainId(u32);
 /// empty set means unknown, which intersects every file.
 pub(crate) struct FileRecord {
     pub(crate) target: FileSlot,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read when a seal names files to flush: DI-3.2.3")
-    )]
     pub(crate) domains: Box<[DomainId]>,
+    /// Who answers for its writes, from its domains and the provider's (DI-D-27).
+    pub(crate) routing: Routing,
+}
+
+/// Who answers for a file's writes (DI-D-27): the built-in default for a file with no declared
+/// domain or one the provider does not serve, and the provider for the domains it serves.
+fn routing(file: &[DomainId], served: Option<&ProviderSlot<impl EpochId>>) -> Routing {
+    let served: &[DomainId] = served.map_or(&[], |provider| &provider.domains);
+    if file.is_empty() {
+        return Routing {
+            default: true,
+            provider: false,
+        };
+    }
+    Routing {
+        default: file.iter().any(|domain| !served.contains(domain)),
+        provider: file.iter().any(|domain| served.contains(domain)),
+    }
 }
 
 /// The consumer's provider, with the domains it serves, interned and sorted.
-#[expect(
-    dead_code,
-    reason = "the provider is called once seals exist: DI-3.2.6"
-)]
 pub(crate) struct ProviderSlot<E: EpochId + 'static> {
+    #[expect(dead_code, reason = "the provider is called from DI-3.2.6")]
     pub(crate) provider: Box<dyn DurabilityProvider<DioringIds<E>>>,
     pub(crate) domains: Box<[DomainId]>,
 }
@@ -153,16 +176,13 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
     Consumer {
         id: OpId,
         kind: OpKind<DioringIds<E>>,
-        #[expect(
-            dead_code,
-            reason = "recorded so coverage can name a completed write's file: DI-3.2.3"
-        )]
+        #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         file: FileKey,
         #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         offset: u64,
         context: C,
     },
-    #[expect(dead_code, reason = "a seal's covering flush, pushed from DI-3.2.3")]
+    /// A seal's flush of one file (DI-D-22).
     Commit {
         through: Epoch<DioringIds<E>>,
         file: FileKey,
@@ -181,26 +201,16 @@ pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>>
     /// The ring, inside its delivery. Declared before `registered`: dropping it quiesces the
     /// delivery callbacks and then closes the ring, so both happen before the buffers the ring
     /// registered are released (DI-2.7 point 5, the ring crate's D-13 order).
-    pub(crate) delivery: EventDelivery<B, Sidecar<E, C>>,
+    pub(crate) delivery: Arc<Delivery<E, B, C>>,
     pub(crate) relay: Arc<Relay<E, B, C>>,
     pub(crate) files: HashMap<FileKey, FileRecord>,
     /// The interning table. An entry lives for the instance's life: the number of distinct
     /// domains is the number of devices and shares the consumer touches.
     pub(crate) domains: HashMap<FlushDomain, DomainId>,
     pub(crate) registered: Option<RegisteredBuffers<R>>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the provider is called once seals exist: DI-3.2.6"
-        )
-    )]
     pub(crate) provider: Option<ProviderSlot<E>>,
     /// The next operation's sequence number.
     pub(crate) next_op: u64,
-    /// A submission failed, so operations accepted by pushes may still sit in the submission
-    /// queue. The next push or pop submits again.
-    pub(crate) unsubmitted: bool,
 }
 
 impl<B, E, C, R> Dioring<B, E, C, R>
@@ -246,7 +256,8 @@ where
             });
         }
 
-        let relay = match Relay::new() {
+        let instance = InstanceId::next();
+        let relay = match Relay::new(Lineage { instance, seq: 0 }) {
             Ok(relay) => Arc::new(relay),
             Err(error) => {
                 return Err(SetupError {
@@ -302,7 +313,7 @@ where
             move |completion, held| recorder.record(completion, held),
             None,
         ) {
-            Ok(delivery) => delivery,
+            Ok(delivery) => Arc::new(delivery),
             Err(error) => {
                 return Err(SetupError {
                     reason: SetupRefusal::Ring(error),
@@ -312,6 +323,7 @@ where
                 });
             }
         };
+        relay.attach(&delivery);
 
         let mut domains = HashMap::new();
         let mut records = HashMap::with_capacity(files.len());
@@ -325,6 +337,10 @@ where
                 FileRecord {
                     target: FileSlot::Registered { index, file },
                     domains: interned,
+                    routing: Routing {
+                        default: true,
+                        provider: false,
+                    },
                 },
             );
         }
@@ -332,9 +348,12 @@ where
             provider,
             domains: intern_all(&mut domains, provider_domains),
         });
+        for record in records.values_mut() {
+            record.routing = routing(&record.domains, provider.as_ref());
+        }
 
         Ok(Self {
-            instance: InstanceId::next(),
+            instance,
             delivery,
             relay,
             files: records,
@@ -342,7 +361,6 @@ where
             registered,
             provider,
             next_op: 0,
-            unsubmitted: false,
         })
     }
 }
@@ -372,11 +390,13 @@ where
             return Err(AddFileError { key, file, options });
         }
         let domains = intern_all(&mut self.domains, options.domains);
+        let routing = routing(&domains, self.provider.as_ref());
         self.files.insert(
             key,
             FileRecord {
                 target: FileSlot::Shared(file),
                 domains,
+                routing,
             },
         );
         Ok(())
@@ -412,20 +432,61 @@ where
     }
 
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
-        // A failed submission is retried here as well as at the next push, so a consumer that
-        // stops pushing still gets its accepted operations issued. Its error is reported only
-        // when there is no entry to return instead: an entry is progress, and the retry runs
-        // again at the next pop.
-        let retried = if self.unsubmitted {
-            self.submit_queued().err()
-        } else {
-            None
-        };
-        match (self.relay.pop(), retried) {
+        // A failed submission, and a flush the ring refused, are retried here as well as at the
+        // next change, so a consumer that stops pushing still gets them issued. A failed retry is
+        // reported only when there is no entry to return instead: an entry is progress, and the
+        // retry runs again at the next pop.
+        let mut core = self.relay.lock();
+        let retried = self.relay.apply(&mut core, Due::default(), &self.delivery);
+        match (Relay::pop(&mut core), retried) {
             (Some(entry), _) => Ok(Some(entry)),
             (None, Some(error)) => Err(error),
             (None, None) => Ok(None),
         }
+    }
+
+    fn make_durable_through(
+        &mut self,
+        through: Epoch<Self::Ids>,
+    ) -> io::Result<DurabilityRequest<Self::Ids>> {
+        if !self.is_live(through.lineage) {
+            return Err(foreign_lineage());
+        }
+        let mut core = self.relay.lock();
+        match core.lineage.seal(through.id) {
+            Sealing::AlreadySealed(state) => {
+                Ok(DurabilityRequest::AlreadySealed(epoch_state(state)))
+            }
+            Sealing::Submitted(due) => {
+                self.relay.apply(&mut core, due, &self.delivery);
+                Ok(DurabilityRequest::Submitted)
+            }
+        }
+    }
+
+    fn durable_through(&self, lineage: Lineage) -> Option<E> {
+        self.is_live(lineage)
+            .then(|| self.relay.lock().lineage.durable_through())
+            .flatten()
+    }
+
+    fn sealed_through(&self, lineage: Lineage) -> Option<E> {
+        self.is_live(lineage)
+            .then(|| self.relay.lock().lineage.sealed_through())
+            .flatten()
+    }
+
+    /// # Panics
+    ///
+    /// If `epoch`'s lineage is not one of this instance's: the contract has no state to report for
+    /// it, and any answer would be false.
+    fn epoch_state(&self, epoch: Epoch<Self::Ids>) -> EpochState<Self::Ids> {
+        assert!(
+            self.is_live(epoch.lineage),
+            "{:?} is not a lineage of this instance",
+            epoch.lineage
+        );
+        epoch_state(self.relay.lock().lineage.state(epoch.id))
     }
 
     fn default_lineage(&self) -> Lineage {
@@ -436,12 +497,13 @@ where
     }
 
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
+        let core = self.relay.lock();
         vec![LineageInfo {
             lineage: self.default_lineage(),
             description: None,
             is_default: true,
-            durable_through: None,
-            sealed_through: None,
+            durable_through: core.lineage.durable_through(),
+            sealed_through: core.lineage.sealed_through(),
         }]
     }
 }
@@ -485,6 +547,32 @@ where
     ) -> PushResult<Self> {
         self.push_read_registered(file, offset, span, context, options)
     }
+}
+
+impl<B, E: EpochId + 'static, C, R: IoBufMut> Drop for Dioring<B, E, C, R> {
+    fn drop(&mut self) {
+        // Before the delivery is dropped, which the field drop that follows does: once the core is
+        // closed no callback holds the delivery, so it is dropped here, on this thread, and not
+        // inside one of its own callbacks.
+        self.relay.close();
+    }
+}
+
+/// The contract's spelling of a lineage's epoch state.
+fn epoch_state<E: EpochId + 'static>(state: State) -> EpochState<DioringIds<E>> {
+    match state {
+        State::Open => EpochState::Open,
+        State::Pending => EpochState::Pending,
+        State::Durable => EpochState::Durable,
+    }
+}
+
+/// A seal request naming a lineage this instance does not have.
+fn foreign_lineage() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "the epoch's lineage is not one of this instance's",
+    )
 }
 
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for

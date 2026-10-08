@@ -17,6 +17,8 @@ use crate::types::{FileKey, FileOptions, FlushDomain};
 
 // Pushes, completions and the readiness signal: DI-3.2.2.1.
 mod pushes;
+// Seals and durability in the default lineage: DI-3.2.3.
+mod seals;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

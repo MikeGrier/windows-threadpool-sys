@@ -195,14 +195,6 @@ where
         )
     }
 
-    /// Submit whatever is queued, after a submission failed. Clears the flag only on success.
-    pub(crate) fn submit_queued(&mut self) -> io::Result<()> {
-        let mut scope = self.delivery.scope();
-        scope.batch().submit()?;
-        self.unsubmitted = false;
-        Ok(())
-    }
-
     /// The registration, for the consumer's access to its bytes.
     pub(crate) fn registration(&mut self) -> io::Result<&mut RegisteredBuffers<R>> {
         self.registered.as_mut().ok_or_else(|| {
@@ -214,7 +206,11 @@ where
     }
 
     /// Why a push must be refused before anything is reserved, if it must: the file first, then
-    /// the epoch's lineage, then the registration a registered-span operation needs.
+    /// the epoch's lineage, then its seal (guarantee 6), then the registration a registered-span
+    /// operation needs.
+    ///
+    /// Checking the seal here and pushing after is sound because nothing seals concurrently: a
+    /// seal is the consumer's `&mut self` call, never a callback's.
     fn refusal(
         &self,
         file: FileKey,
@@ -229,6 +225,14 @@ where
         {
             return Some(PushRefusal::UnknownLineage(epoch.lineage));
         }
+        if let Some(epoch) = epoch
+            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id)
+        {
+            return Some(PushRefusal::Sealed {
+                epoch,
+                sealed_through,
+            });
+        }
         if needs_registration && self.registered.is_none() {
             return Some(PushRefusal::NoRegisteredBuffers);
         }
@@ -237,12 +241,13 @@ where
 
     /// Whether `lineage` is one of this instance's live lineages. Only the default exists until
     /// lineages can be minted (DI-3.2.5); a lineage of another instance never is.
-    fn is_live(&self, lineage: Lineage) -> bool {
+    pub(crate) fn is_live(&self, lineage: Lineage) -> bool {
         lineage.instance == self.instance && lineage.seq == 0
     }
 
     /// Mint the next operation's identity, record it in the sidecar with the consumer's context,
-    /// push it through `push`, and submit.
+    /// push it through `push`, record a write in its lineage, and submit -- all under dioring's
+    /// lock, so the write is recorded before its completion can be.
     ///
     /// A submission that fails does not undo the push: the kernel leaves the entry in the
     /// submission queue, and the next submission issues it (the ring crate's D-5). So the push
@@ -276,14 +281,24 @@ where
             offset,
             context,
         };
-        let slot = &self
-            .files
-            .get(&file)
-            .expect("refusal() checked the file")
-            .target;
+        let record = self.files.get(&file).expect("refusal() checked the file");
+        let mut core = self.relay.lock();
+        // Checked again here, before the ring holds anything: a panic once the push is in the
+        // batch would unwind through a batch with an entry not yet submitted.
+        if let OpKind::Write { epoch } = kind {
+            debug_assert!(
+                core.lineage.refuses(epoch.id).is_none(),
+                "refusal() checked the seal"
+            );
+        }
         let mut scope = self.delivery.scope();
         let mut batch = scope.batch();
-        if let Err(refused) = push(&mut batch, slot, self.registered.as_ref(), sidecar) {
+        if let Err(refused) = push(
+            &mut batch,
+            &record.target,
+            self.registered.as_ref(),
+            sidecar,
+        ) {
             let PushRefused {
                 error,
                 payload,
@@ -299,10 +314,19 @@ where
                 context,
             });
         }
+        if let OpKind::Write { epoch } = kind {
+            core.lineage.pushed(
+                id,
+                epoch.id,
+                file,
+                record.target.flush_target(),
+                record.routing,
+            );
+        }
+        core.unsubmitted = batch.submit().is_err();
         // Only an accepted push spends an identity, so the identities of accepted pushes are
         // consecutive.
         self.next_op += 1;
-        self.unsubmitted = batch.submit().is_err();
         Ok(id)
     }
 }

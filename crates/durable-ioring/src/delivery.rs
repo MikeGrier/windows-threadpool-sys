@@ -20,9 +20,10 @@ use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 
-use crate::contract::{DurableRing, EntryOf, Lin, PushResult, RegisteredBufferRing};
+use crate::contract::{DurableRing, EntryOf, EpochIdOf, Lin, PushResult, RegisteredBufferRing};
 use crate::types::{
-    AddFileError, Epoch, FileKey, FileOptions, LineageInfo, ReadOptions, WriteOptions,
+    AddFileError, DurabilityRequest, Epoch, EpochState, FileKey, FileOptions, LineageInfo,
+    ReadOptions, WriteOptions,
 };
 
 #[cfg(test)]
@@ -188,6 +189,33 @@ impl<D: DurableRing> DeliveryHandle<D> {
         D::Buffer: IoBufMut,
     {
         self.with(|ring| ring.read_with(file, offset, buffer, context, options))
+    }
+
+    /// [`DurableRing::make_durable_through`].
+    ///
+    /// # Errors
+    ///
+    /// As [`DurableRing::make_durable_through`].
+    pub fn make_durable_through(
+        &self,
+        through: Epoch<D::Ids>,
+    ) -> io::Result<DurabilityRequest<D::Ids>> {
+        self.with(|ring| ring.make_durable_through(through))
+    }
+
+    /// [`DurableRing::durable_through`].
+    pub fn durable_through(&self, lineage: Lin<D>) -> Option<EpochIdOf<D>> {
+        self.with(|ring| ring.durable_through(lineage))
+    }
+
+    /// [`DurableRing::sealed_through`].
+    pub fn sealed_through(&self, lineage: Lin<D>) -> Option<EpochIdOf<D>> {
+        self.with(|ring| ring.sealed_through(lineage))
+    }
+
+    /// [`DurableRing::epoch_state`].
+    pub fn epoch_state(&self, epoch: Epoch<D::Ids>) -> EpochState<D::Ids> {
+        self.with(|ring| ring.epoch_state(epoch))
     }
 }
 

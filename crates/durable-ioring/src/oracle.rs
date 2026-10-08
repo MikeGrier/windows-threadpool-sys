@@ -5,7 +5,8 @@
 //! copy of a rule in some other test is a check of the copy, not of the contract.
 //!
 //! The stream is what the consumer sees: each accepted push, reported to the oracle with
-//! [`ConformanceOracle::pushed`], and each popped entry, reported with
+//! [`ConformanceOracle::pushed`]; each seal the instance accepted as new, reported with
+//! [`ConformanceOracle::sealed`]; and each popped entry, reported with
 //! [`ConformanceOracle::observe`]. The oracle grows with the implementation (DI-3.2): each step
 //! adds the rules it implements, and every rule cites the contract's statement of it.
 //!
@@ -18,6 +19,12 @@
 //!   violation too, since completions could no longer be told apart.
 //! - **What was pushed comes back.** The completion carries the kind the operation was pushed
 //!   with -- a read, or a write with its epoch -- and the consumer's context, unchanged.
+//! - **No write is accepted at or below its lineage's seal** (guarantee 6): such a push is refused,
+//!   so an identity returned for one is a violation.
+//! - **`Durable` is reported only for what was sealed** (DI-D-9): `Durable { through: n }` needs a
+//!   seal of n's lineage at or above n.
+//! - **`Durable` follows the writes it covers** (guarantee 5): it arrives after the completion of
+//!   every write of n's lineage tagged at or below n.
 //!
 //! # Deliberately not checked
 //!
@@ -28,13 +35,20 @@
 //! - **Any outcome.** A transfer shorter than the buffer, including zero, and a failure are both
 //!   completions. What the contract promises is that the completion arrives, not that the I/O
 //!   succeeded.
-//! - **The entries later steps define** -- `Durable`, `Failed`, `Blocked`, `Abandoned` and
-//!   `LineageEnded` -- are accepted unexamined until the steps that produce them add their rules.
+//! - **Order between lineages**, which the contract leaves open (DI-D-18).
+//! - **A `Durable` repeated or below an earlier one** for the same lineage. It is never false --
+//!   the high-water mark did pass it -- and the contract promises an answer per request, not a
+//!   rising sequence.
+//! - **That every request is answered** (guarantee 4): a seal that stays pending is legal while a
+//!   provider has not answered, and a failure's answer is `DI-3.2.4`'s. Its rule lands with it.
+//! - **The entries later steps define** -- `Failed`, `Blocked`, `Abandoned` and `LineageEnded` --
+//!   are accepted unexamined until the steps that produce them add their rules.
 //!
 //! # What the stream cannot show
 //!
-//! Whether the bytes reached the file at the offset given, and whether the readiness signal was
-//! set when it should have been: the oracle sees entries, not wakes. The second is
+//! Whether the bytes reached the file at the offset given; whether a reported `Durable` is true,
+//! which only the device knows; and whether the readiness signal was set when it should have been:
+//! the oracle sees entries, not wakes. The second is
 //! [`check_readiness`]'s, which runs beside the oracle (DI-D-28).
 
 use std::collections::{HashMap, HashSet};
@@ -46,7 +60,7 @@ use std::time::Duration;
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
-use crate::types::{Entry, OpKind};
+use crate::types::{Entry, Epoch, OpKind};
 
 #[cfg(test)]
 mod tests;
@@ -94,6 +108,27 @@ pub enum Violation<V: Identities> {
         /// The operations still outstanding.
         ops: Vec<V::OpId>,
     },
+    /// A write was accepted at or below its lineage's seal (guarantee 6).
+    WriteAfterSeal {
+        /// The write.
+        op: V::OpId,
+        /// Its epoch.
+        epoch: Epoch<V>,
+        /// The seal point it is at or below.
+        sealed_through: V::EpochId,
+    },
+    /// `Durable` for an epoch no seal of its lineage covers.
+    DurableNotSealed {
+        /// What was reported.
+        through: Epoch<V>,
+    },
+    /// `Durable` before the completion of a write it covers (guarantee 5).
+    DurableBeforeCompletion {
+        /// What was reported.
+        through: Epoch<V>,
+        /// A covered write not yet completed.
+        op: V::OpId,
+    },
 }
 
 /// The contract's rules over one instance's event stream. `C` is the consumer's context type;
@@ -101,6 +136,8 @@ pub enum Violation<V: Identities> {
 pub struct ConformanceOracle<V: Identities, C> {
     outstanding: HashMap<V::OpId, Pushed<V, C>>,
     completed: HashSet<V::OpId>,
+    /// Each lineage's seal point.
+    sealed: HashMap<V::Lineage, V::EpochId>,
 }
 
 impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
@@ -109,6 +146,16 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         Self {
             outstanding: HashMap::new(),
             completed: HashSet::new(),
+            sealed: HashMap::new(),
+        }
+    }
+
+    /// Report a seal the instance accepted as new: `make_durable_through(through)` answered
+    /// `Submitted`. A request answered `AlreadySealed` changes nothing and need not be reported.
+    pub fn sealed(&mut self, through: Epoch<V>) {
+        let point = self.sealed.entry(through.lineage).or_insert(through.id);
+        if through.id > *point {
+            *point = through.id;
         }
     }
 
@@ -117,10 +164,21 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     ///
     /// # Errors
     ///
-    /// [`Violation::DuplicateIdentity`] if an earlier push returned `op`.
+    /// [`Violation::DuplicateIdentity`] if an earlier push returned `op`, and
+    /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal.
     pub fn pushed(&mut self, op: V::OpId, kind: OpKind<V>, context: C) -> Result<(), Violation<V>> {
         if self.completed.contains(&op) || self.outstanding.contains_key(&op) {
             return Err(Violation::DuplicateIdentity { op });
+        }
+        if let OpKind::Write { epoch } = kind
+            && let Some(&sealed_through) = self.sealed.get(&epoch.lineage)
+            && epoch.id <= sealed_through
+        {
+            return Err(Violation::WriteAfterSeal {
+                op,
+                epoch,
+                sealed_through,
+            });
         }
         self.outstanding.insert(op, Pushed { kind, context });
         Ok(())
@@ -132,8 +190,10 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     ///
     /// The first rule the entry breaks.
     pub fn observe<B>(&mut self, entry: &Entry<V, B, C>) -> Result<(), Violation<V>> {
-        let Entry::Op(completion) = entry else {
-            return Ok(());
+        let completion = match entry {
+            Entry::Op(completion) => completion,
+            Entry::Durable { through } => return self.durable(*through),
+            _ => return Ok(()),
         };
         let op = completion.id;
         let Some(pushed) = self.outstanding.remove(&op) else {
@@ -155,6 +215,31 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             return Err(Violation::ContextChanged { op });
         }
         Ok(())
+    }
+
+    fn durable(&self, through: Epoch<V>) -> Result<(), Violation<V>> {
+        if self
+            .sealed
+            .get(&through.lineage)
+            .is_none_or(|&sealed| through.id > sealed)
+        {
+            return Err(Violation::DurableNotSealed { through });
+        }
+        let uncompleted = self
+            .outstanding
+            .iter()
+            .find_map(|(op, pushed)| match pushed.kind {
+                OpKind::Write { epoch }
+                    if epoch.lineage == through.lineage && epoch.id <= through.id =>
+                {
+                    Some(*op)
+                }
+                _ => None,
+            });
+        match uncompleted {
+            Some(op) => Err(Violation::DurableBeforeCompletion { through, op }),
+            None => Ok(()),
+        }
     }
 
     /// How many pushed operations have not completed.

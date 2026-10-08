@@ -100,10 +100,11 @@ fn short_zero_and_failed_outcomes_are_completions() {
 fn entries_later_steps_define_are_accepted_unexamined() {
     let instance = InstanceId::next();
     let mut oracle = Oracle::new();
-    let durable: TestEntry = Entry::Durable {
-        through: Epoch::new(Lineage { instance, seq: 0 }, 3),
+    let ended: TestEntry = Entry::LineageEnded {
+        lineage: Lineage { instance, seq: 1 },
+        abandoned_through: Some(3),
     };
-    oracle.observe(&durable).expect("a Durable entry");
+    oracle.observe(&ended).expect("a LineageEnded entry");
     oracle.finish().expect("no operations");
 }
 
@@ -203,6 +204,105 @@ fn finish_names_every_operation_still_outstanding() {
     };
     ops.sort_by_key(|op| op.seq);
     assert_eq!(ops, [op(instance, 0), op(instance, 2)]);
+}
+
+fn epoch(instance: InstanceId, id: u64) -> Epoch<V> {
+    Epoch::new(Lineage { instance, seq: 0 }, id)
+}
+
+#[test]
+fn a_write_accepted_at_or_below_its_seal_is_a_violation_and_one_above_is_not() {
+    let instance = InstanceId::next();
+    let mut oracle = Oracle::new();
+    oracle.sealed(epoch(instance, 3));
+    for (seq, id) in [(0, 3), (1, 2)] {
+        assert!(matches!(
+            oracle.pushed(op(instance, seq), write_kind(instance, id), 0),
+            Err(Violation::WriteAfterSeal {
+                sealed_through: 3,
+                ..
+            })
+        ));
+    }
+    oracle
+        .pushed(op(instance, 2), write_kind(instance, 4), 0)
+        .expect("a write above the seal");
+    oracle
+        .pushed(op(instance, 3), OpKind::Read, 0)
+        .expect("a read is not sealed");
+    let other = InstanceId::next();
+    oracle
+        .pushed(op(other, 0), write_kind(other, 1), 0)
+        .expect("another lineage's epoch 1 is not sealed");
+}
+
+#[test]
+fn a_lower_seal_reported_later_does_not_lower_the_seal_point() {
+    let instance = InstanceId::next();
+    let mut oracle = Oracle::new();
+    oracle.sealed(epoch(instance, 5));
+    oracle.sealed(epoch(instance, 3));
+    assert!(matches!(
+        oracle.pushed(op(instance, 0), write_kind(instance, 4), 0),
+        Err(Violation::WriteAfterSeal {
+            sealed_through: 5,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn durable_is_a_violation_unless_a_seal_covers_it() {
+    let instance = InstanceId::next();
+    let mut oracle = Oracle::new();
+    let durable = |id| -> TestEntry {
+        Entry::Durable {
+            through: epoch(instance, id),
+        }
+    };
+    assert!(matches!(
+        oracle.observe(&durable(3)),
+        Err(Violation::DurableNotSealed { .. })
+    ));
+    oracle.sealed(epoch(instance, 2));
+    assert!(matches!(
+        oracle.observe(&durable(3)),
+        Err(Violation::DurableNotSealed { .. })
+    ));
+    oracle.sealed(epoch(instance, 3));
+    oracle.observe(&durable(3)).expect("sealed through 3");
+    oracle.observe(&durable(2)).expect("at or below a seal");
+}
+
+#[test]
+fn durable_before_a_covered_write_completes_is_a_violation_and_after_is_not() {
+    let instance = InstanceId::next();
+    let mut oracle = Oracle::new();
+    let covered = op(instance, 0);
+    oracle
+        .pushed(covered, write_kind(instance, 2), 0)
+        .expect("a write");
+    oracle
+        .pushed(op(instance, 1), write_kind(instance, 4), 0)
+        .expect("a write above the seal to come");
+    let other = InstanceId::next();
+    oracle
+        .pushed(op(other, 0), write_kind(other, 1), 0)
+        .expect("another lineage's write");
+    oracle.sealed(epoch(instance, 3));
+    let durable: TestEntry = Entry::Durable {
+        through: epoch(instance, 3),
+    };
+    assert!(matches!(
+        oracle.observe(&durable),
+        Err(Violation::DurableBeforeCompletion { op, .. }) if op == covered
+    ));
+    oracle
+        .observe(&done(covered, write_kind(instance, 2), 0))
+        .expect("its completion");
+    oracle
+        .observe(&durable)
+        .expect("a write above the seal, or of another lineage, does not hold it");
 }
 
 #[test]

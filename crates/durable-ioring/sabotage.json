@@ -1,7 +1,7 @@
 {
   "package": "durable-ioring",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); and the relay's two debug assertions, for a completion with no sidecar and for a covering flush before seals exist. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); and a flush that fails, whose completion the relay records as failed -- no test can make a flush fail before DI-3.2.4's fault seam, and the durability unit tests cover the rule without one. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -56,8 +56,8 @@
       "file": "src/dioring/relay.rs",
       "expect": "caught",
       "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
-      "find": ["            queue.push_back(entry);\n"],
-      "replace": ["            drop(entry);\n"]
+      "find": ["        core.queue.push_back(entry);\n"],
+      "replace": ["        drop(entry);\n"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is never set",
@@ -220,12 +220,116 @@
       "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(entry, &inner.handle));\n"]
     },
     {
+      "name": "DI-3.2.3: a seal does not wait for its writes in flight",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Guarantee 5: a seal made before its writes complete would name no flush for them and report Durable before their completions. The durability unit tests catch it deterministically; the I/O test's oracle catches it when the kernel has not finished the writes by the seal.",
+      "find": ["            if oldest_in_flight.is_some_and(|oldest| oldest <= through) {\n"],
+      "replace": ["            if oldest_in_flight.is_some_and(|_| false) {\n"]
+    },
+    {
+      "name": "DI-3.2.3: a seal names no flush for its writes",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Durable means on stable media (guarantee 1); a seal that flushes nothing reports durability the device was never asked for. No I/O test can see a flush that was not issued, which is why the rule lives in the I/O-free core and is tested there.",
+      "find": ["                    if write.routing.default && !files.contains(&write.file) {\n"],
+      "replace": ["                    if false && !files.contains(&write.file) {\n"]
+    },
+    {
+      "name": "DI-3.2.3: a failed flush is counted as done",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "A flush the device refused is not durability. Until DI-3.2.4 reports it as Failed, it must at least leave its seal pending. Only the unit tests reach it: no I/O test can make a flush fail.",
+      "find": ["        *failed |= !succeeded;\n"],
+      "replace": ["\n"]
+    },
+    {
+      "name": "DI-3.2.3: a later seal is reported past a pending one",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
+      "find": ["        }) = self.seals.front()", "        {", "            let through = *through;", "            self.seals.pop_front();"],
+      "replace": ["        }) = self.seals.back()", "        {", "            let through = *through;", "            self.seals.pop_back();"]
+    },
+    {
+      "name": "DI-3.2.3: a write a provider serves does not hold its seal",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-27: such a write is durable only when the provider says so, and no provider is asked before DI-3.2.6. Reporting it durable meanwhile would claim what nobody checked.",
+      "find": ["                provider_owed: false,\n            } = &seal.state\n"],
+      "replace": ["                ..\n            } = &seal.state\n"]
+    },
+    {
+      "name": "DI-3.2.3: an epoch below the high-water mark is not reported durable",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Guarantee 7: asking again about a sealed epoch reports its state, and a durable epoch reports Durable.",
+      "find": ["            (_, Some(durable)) if epoch <= durable => State::Durable,\n"],
+      "replace": ["            (_, Some(_)) if false => State::Durable,\n"]
+    },
+    {
+      "name": "DI-3.2.3: a write at or below the seal is not refused",
+      "file": "src/dioring/push.rs",
+      "expect": "caught",
+      "why": "Guarantee 6: a late write is refused before anything is reserved, with its buffer handed back. Absorbed, it would join an epoch already reported durable.",
+      "find": ["            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id)\n"],
+      "replace": ["            && let Some(sealed_through) = self.relay.lock().lineage.refuses(epoch.id).filter(|_| false)\n"]
+    },
+    {
+      "name": "DI-3.2.3: a seal naming another instance's lineage is accepted",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The epoch's id would be applied to the default lineage, sealing it on another instance's say-so.",
+      "find": ["        if !self.is_live(through.lineage) {\n            return Err(foreign_lineage());\n"],
+      "replace": ["        if false {\n            return Err(foreign_lineage());\n"]
+    },
+    {
+      "name": "DI-3.2.3: no Durable entry is appended",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "Guarantee 4: every request is answered. The high-water mark still rises, so only the queue shows it; every seal test waits for the entry and times out.",
+      "find": ["    ) -> Option<io::Error> {\n        self.append_durable(core, &due.durable);\n"],
+      "replace": ["    ) -> Option<io::Error> {\n"]
+    },
+    {
+      "name": "DI-3.2.3: the oracle accepts a write at or below the seal",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "The oracle is the one definition of guarantee 6 the I/O tests bind to; it must name an accepted late write.",
+      "find": ["            && epoch.id <= sealed_through\n"],
+      "replace": ["            && false\n"]
+    },
+    {
+      "name": "DI-3.2.3: the oracle lowers a seal point",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A seal point only rises; one lowered by a later, lower report would let a late write pass.",
+      "find": ["        if through.id > *point {\n"],
+      "replace": ["        if true {\n"]
+    },
+    {
+      "name": "DI-3.2.3: the oracle accepts Durable for what was never sealed",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "DI-D-9: durability is reported only for a seal. A Durable nothing asked for is a report the consumer cannot place.",
+      "find": ["            .is_none_or(|&sealed| through.id > sealed)\n"],
+      "replace": ["            .is_some_and(|_| false)\n"]
+    },
+    {
+      "name": "DI-3.2.3: the oracle accepts Durable before a covered completion",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "Guarantee 5 as the I/O tests check it: without this rule, the in-flight seal test checks only a count.",
+      "find": ["            Some(op) => Err(Violation::DurableBeforeCompletion { through, op }),\n"],
+      "replace": ["            Some(_) => Ok(()),\n"]
+    },
+    {
       "name": "CONTROL: the relay tests emptiness by length",
       "file": "src/dioring/relay.rs",
       "expect": "survives",
       "why": "The manifest checking itself, on code every test runs: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["            let was_empty = queue.is_empty();\n"],
-      "replace": ["            let was_empty = queue.len() == 0;\n"]
+      "find": ["        let was_empty = core.queue.is_empty();\n"],
+      "replace": ["        let was_empty = core.queue.len() == 0;\n"]
     },
     {
       "name": "CONTROL: the registration timeout's message is reworded",

@@ -16,7 +16,9 @@ use crate::dioring::{Dioring, FileSetup, Setup};
 use crate::fake::{Fake, Signals};
 use crate::ids::DioringIds;
 use crate::oracle::ConformanceOracle;
-use crate::types::{Entry, Epoch, FileKey, FileOptions, OpKind, PushRefusal};
+use crate::types::{
+    DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, OpKind, PushRefusal,
+};
 
 type Ring = Dioring<Vec<u8>, u64, u32>;
 type V = DioringIds<u64>;
@@ -64,7 +66,7 @@ fn forwarding(ring: Ring) -> (EntryDelivery<Ring>, mpsc::Receiver<RingEntry>) {
 fn context(entry: &RingEntry) -> u32 {
     match entry {
         Entry::Op(completion) => completion.context,
-        other => panic!("only operations complete before seals exist: {other:?}"),
+        other => panic!("expected a completion: {other:?}"),
     }
 }
 
@@ -143,6 +145,41 @@ fn every_operation_pushed_through_the_owner_is_delivered_once() {
             .expect("the oracle accepts the entry");
     }
     oracle.finish().expect("every write was delivered");
+}
+
+#[test]
+fn a_seal_made_through_the_handle_is_delivered_as_durable() {
+    let temp = temp();
+    let (tx, rx) = mpsc::channel();
+    let delivery = EntryDelivery::new(
+        instance(&temp, Vec::new()),
+        move |entry: RingEntry, handle| {
+            if let Entry::Op(completion) = &entry {
+                let through = Epoch::new(handle.default_lineage(), 1);
+                let answer = handle
+                    .make_durable_through(through)
+                    .expect("seal from inside the handler");
+                assert_eq!(answer, DurabilityRequest::Submitted, "{:?}", completion.id);
+            }
+            let _ = tx.send(entry);
+        },
+        None,
+    )
+    .expect("start delivery");
+    let lineage = delivery.default_lineage();
+    let epoch = Epoch::new(lineage, 1);
+    delivery
+        .write(FILE, 0, vec![1; 8], epoch, 0)
+        .expect("push a write");
+    let delivered: Vec<RingEntry> = (0..2).filter_map(|_| rx.recv_timeout(BOUND).ok()).collect();
+    let durable = matches!(delivered.as_slice(), [Entry::Op(_), Entry::Durable { through }] if *through == epoch);
+    if !durable {
+        // As below: a handler stuck on the instance's lock must fail the test, not hang its drop.
+        std::mem::forget(delivery);
+        panic!("expected the write's completion and then Durable through 1: {delivered:?}");
+    }
+    assert_eq!(delivery.durable_through(lineage), Some(1));
+    assert_eq!(delivery.epoch_state(epoch), EpochState::Durable);
 }
 
 #[test]

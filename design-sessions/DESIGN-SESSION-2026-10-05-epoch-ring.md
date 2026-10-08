@@ -2423,6 +2423,32 @@ out `pop` and `readiness`; and ending quiesces the delivery first, with `into_in
 instance so it can still be closed. The mirroring has a standing cost -- each later step must extend
 the handle -- which `DI-3.2`'s parent item now states.
 
+## DI-3.2.3: seals in one lineage (2026-10-07)
+
+The engineer asked for `DI-3.2.3` to be implemented. Its decisions were already made (DI-D-9's
+seal, DI-D-22's coverage by observation, DI-2.3 point 10's lock order); what was left was the
+mechanism, which I recorded as DI-D-33 for confirmation. The shape that fell out: one lineage's
+durability is a pure state machine under dioring's lock, and the delivery callback, already
+recording completions under that lock, also pushes the flushes a completion makes due. D-83 is what
+makes the second half legitimate -- the callback may open a scope and submit -- and was landed in
+the ring crate first for that reason.
+
+Two things came out of building it that were not in the plan:
+
+- **Dropping the instance from a callback would deadlock.** The callback needs the ring to push
+  flushes, but the ring's delivery owns the callback, so the relay can hold only a `Weak`. If a
+  pool thread held the last strong reference when the instance was dropped, `EventDelivery` would
+  be dropped inside its own callback and wait for itself. Upgrading only under dioring's lock, and
+  closing the core under it before the drop, rules that out structurally.
+- **A sabotage was caught by a crash rather than a test.** A write let past the seal tripped a debug
+  assertion after the ring already held the push, and the unwind through an unsubmitted batch
+  aborted. The check now also runs before anything reaches the ring. It is a reminder that an
+  assertion's position relative to the ring's batch decides whether a defect fails cleanly.
+
+One question has no answer in the contract: what `epoch_state` reports for an epoch of a lineage the
+instance does not have. Every `EpochState` value would be false, so dioring panics, documented on the
+method. It is queued for the engineer under `DI-3.2.5`, where a retired lineage raises it again.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

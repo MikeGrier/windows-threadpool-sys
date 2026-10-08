@@ -1,42 +1,101 @@
 // Copyright (c) 2026 Mike Grier
-//! What dioring shares with `EventDelivery`'s callback: the entry queue, under dioring's own lock,
-//! and the readiness event (DI-D-18, DI-D-28).
+//! dioring's core, under dioring's own lock, and the readiness event: what the consumer's calls and
+//! `EventDelivery`'s callback both reach (DI-D-18, DI-D-28).
 //!
 //! The callback runs on pool threads with the ring's lock released, and two invocations may
 //! overlap (`windows-ioring-sys`' D-83). It binds to exactly that: each completion is recorded
-//! into the queue under dioring's lock, so the queue's order is the order completions were
-//! recorded in, whichever thread recorded them. Nothing here assumes an order between two
-//! callbacks.
+//! under dioring's lock, so the queue's order is the order completions were recorded in, whichever
+//! thread recorded them, and the durability state changes in that same order. Nothing here assumes
+//! an order between two callbacks.
+//!
+//! **Lock order: dioring's, then the ring's** (DI-2.3 point 10). A consumer push holds the core
+//! while it pushes, so its write is recorded before its completion can be; a callback that makes a
+//! flush due pushes it while holding the core, the D-83 contract being what makes that safe.
+//!
+//! **Reaching the ring from the callback.** The callback holds the relay, and the relay holds only a
+//! `Weak` to the delivery: the delivery owns the callback, so a strong reference would be a cycle.
+//! The `Weak` is upgraded only while the core is locked, and released before it is unlocked, and an
+//! ending instance marks the core closed under that same lock. So once the instance has closed the
+//! core, no callback holds the delivery, and the delivery is dropped on the instance's own thread --
+//! never inside one of its callbacks, where dropping it would wait for itself.
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
+use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
-use windows_ioring_sys::Completion;
+use windows_ioring_sys::{Completion, EventDelivery, FlushCoverage, FlushMode, RegisteredFile};
 
 use super::Sidecar;
+use super::durability::{Due, Durability, Flush};
 use crate::contract::EpochId;
-use crate::ids::DioringIds;
-use crate::types::{Entry, OpCompletion, Outcome};
+use crate::ids::{DioringIds, Lineage};
+use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
 /// An entry of a dioring instance's queue.
 pub(crate) type DioringEntry<E, B, C> = Entry<DioringIds<E>, B, C>;
 
+/// The ring, inside its delivery.
+pub(crate) type Delivery<E, B, C> = EventDelivery<B, Sidecar<E, C>>;
+
+/// What a flush is pushed against: a file's registration, or its handle.
+#[derive(Clone, Debug)]
+pub(crate) enum FlushTarget {
+    Registered(RegisteredFile),
+    Shared(SharedHandle),
+}
+
+/// The state under dioring's lock.
+pub(crate) struct Core<E: EpochId + 'static, B, C> {
+    queue: VecDeque<DioringEntry<E, B, C>>,
+    /// The default lineage's durability; minted lineages are `DI-3.2.5`'s.
+    pub(crate) lineage: Durability<E, FlushTarget>,
+    /// The default lineage, for the epochs its `Durable` entries and flushes name.
+    default_lineage: Lineage,
+    /// Flushes due that the ring refused, pushed again at the next chance.
+    unpushed: Vec<Flush<E, FlushTarget>>,
+    /// A submission failed, so pushed operations may still sit in the submission queue; the next
+    /// submission issues them (the ring crate's D-5).
+    pub(crate) unsubmitted: bool,
+    /// The instance is ending: no callback may reach the ring again.
+    closed: bool,
+}
+
 /// The state dioring's delivery callback reaches.
 pub(crate) struct Relay<E: EpochId + 'static, B, C> {
-    queue: Mutex<VecDeque<DioringEntry<E, B, C>>>,
+    core: Mutex<Core<E, B, C>>,
     /// Auto-reset; the consumer's `readiness()` is a duplicate of it.
     readiness: Event,
+    ring: OnceLock<Weak<Delivery<E, B, C>>>,
 }
 
 impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
-    /// An empty queue and an unsignalled readiness event.
-    pub(crate) fn new() -> io::Result<Self> {
+    /// An empty queue, nothing sealed, and an unsignalled readiness event.
+    pub(crate) fn new(default_lineage: Lineage) -> io::Result<Self> {
         Ok(Self {
-            queue: Mutex::new(VecDeque::new()),
+            core: Mutex::new(Core {
+                queue: VecDeque::new(),
+                lineage: Durability::new(),
+                default_lineage,
+                unpushed: Vec::new(),
+                unsubmitted: false,
+                closed: false,
+            }),
             readiness: Event::new(ResetMode::Auto, false)?,
+            ring: OnceLock::new(),
         })
+    }
+
+    /// Let the callback reach the ring, once the delivery exists.
+    pub(crate) fn attach(&self, ring: &Arc<Delivery<E, B, C>>) {
+        let attached = self.ring.set(Arc::downgrade(ring));
+        debug_assert!(attached.is_ok(), "the ring is attached once");
+    }
+
+    /// No callback reaches the ring after this returns.
+    pub(crate) fn close(&self) {
+        self.lock().closed = true;
     }
 
     /// A duplicate of the readiness event.
@@ -44,19 +103,46 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
         self.readiness.try_clone()
     }
 
-    /// The next entry, if any.
-    pub(crate) fn pop(&self) -> Option<DioringEntry<E, B, C>> {
-        self.lock().pop_front()
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Core<E, B, C>> {
+        // A panic while the core was held leaves it consistent: each update is completed before
+        // anything that can panic runs.
+        self.core.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The next entry, if any.
+    pub(crate) fn pop(core: &mut Core<E, B, C>) -> Option<DioringEntry<E, B, C>> {
+        core.queue.pop_front()
+    }
+
+    /// Append an entry, and set the readiness event when the queue was empty: the entry is
+    /// poppable before the event is set, and every empty-to-non-empty transition sets it
+    /// (DI-D-28). A transition the consumer races -- popping the entry before the set lands --
+    /// leaves it a wake with nothing to pop, which the contract calls normal.
+    fn append(&self, core: &mut Core<E, B, C>, entry: DioringEntry<E, B, C>) {
+        let was_empty = core.queue.is_empty();
+        core.queue.push_back(entry);
+        if was_empty {
+            // Setting an event this instance created, with full access, does not fail.
+            let set = self.readiness.set();
+            debug_assert!(set.is_ok(), "setting the readiness event failed: {set:?}");
+        }
+    }
+}
+
+impl<E, B, C> Relay<E, B, C>
+where
+    E: EpochId + Send + Sync + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+{
     /// Record one ring completion. Called from `EventDelivery`'s callback, on a pool thread.
     ///
     /// Panicking here would abort the process, so nothing in this path panics on a value it
-    /// receives. A completion with no sidecar, or a covering flush's, cannot reach it yet --
-    /// dioring pushes nothing outside the inventory, and pushes no flush until seals exist
-    /// (DI-3.2.3) -- so both are dropped, with a debug assertion.
+    /// receives. A completion with no sidecar cannot reach it -- dioring pushes nothing outside the
+    /// inventory -- and is dropped, with a debug assertion.
     pub(crate) fn record(&self, completion: Completion, held: Option<(Option<B>, Sidecar<E, C>)>) {
-        match held {
+        let mut core = self.lock();
+        let due = match held {
             Some((
                 buffer,
                 Sidecar::Consumer {
@@ -70,42 +156,109 @@ impl<E: EpochId + 'static, B, C> Relay<E, B, C> {
                     }
                     Err(error) => Outcome::Failed(error),
                 };
-                self.append(Entry::Op(OpCompletion {
-                    id,
-                    kind,
-                    outcome,
-                    buffer,
-                    context,
-                }));
+                let succeeded = matches!(outcome, Outcome::Transferred(_));
+                // The completion goes on the queue before anything it makes due, so a `Durable` it
+                // leads to follows it (guarantee 5).
+                self.append(
+                    &mut core,
+                    Entry::Op(OpCompletion {
+                        id,
+                        kind,
+                        outcome,
+                        buffer,
+                        context,
+                    }),
+                );
+                match kind {
+                    OpKind::Write { .. } => core.lineage.completed(id, succeeded),
+                    OpKind::Read => Due::default(),
+                }
             }
-            Some((_, Sidecar::Commit { .. })) => {
-                debug_assert!(false, "a covering flush completed before seals exist");
+            Some((_, Sidecar::Commit { through, file })) => {
+                core.lineage
+                    .flushed(through.id, file, completion.result().is_ok())
             }
-            None => debug_assert!(false, "a completion for an operation dioring did not push"),
-        }
-    }
-
-    /// Append an entry, and set the readiness event when the queue was empty: the entry is
-    /// poppable before the event is set, and every empty-to-non-empty transition sets it
-    /// (DI-D-28). A transition the consumer races -- popping the entry before the set lands --
-    /// leaves it a wake with nothing to pop, which the contract calls normal.
-    fn append(&self, entry: DioringEntry<E, B, C>) {
-        let was_empty = {
-            let mut queue = self.lock();
-            let was_empty = queue.is_empty();
-            queue.push_back(entry);
-            was_empty
+            None => {
+                debug_assert!(false, "a completion for an operation dioring did not push");
+                Due::default()
+            }
         };
-        if was_empty {
-            // Setting an event this instance created, with full access, does not fail.
-            let set = self.readiness.set();
-            debug_assert!(set.is_ok(), "setting the readiness event failed: {set:?}");
+        if core.closed {
+            return;
         }
+        let ring = self.ring.get().and_then(Weak::upgrade);
+        match ring {
+            Some(ring) => {
+                // A failed submission stays flagged for the consumer's next push or pop to retry
+                // and report.
+                let _ = self.apply(&mut core, due, &ring);
+            }
+            None => self.apply_without_ring(&mut core, due),
+        }
+        // `ring` is dropped here, before the core is unlocked.
     }
 
-    fn lock(&self) -> MutexGuard<'_, VecDeque<DioringEntry<E, B, C>>> {
-        // A panic while the queue was held leaves it a valid queue: every update is one push or
-        // one pop.
-        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Act on what a change made due: append a `Durable` entry for each seal now durable, and push
+    /// every flush now due, with any the ring refused before, then submit -- which also retries a
+    /// submission that failed earlier. Returns the submission's error, if it failed: the
+    /// operations stay queued, and the next submission issues them.
+    pub(crate) fn apply(
+        &self,
+        core: &mut Core<E, B, C>,
+        due: Due<E, FlushTarget>,
+        ring: &Delivery<E, B, C>,
+    ) -> Option<io::Error> {
+        self.append_durable(core, &due.durable);
+        let mut flushes = std::mem::take(&mut core.unpushed);
+        flushes.extend(due.flushes);
+        if flushes.is_empty() && !core.unsubmitted {
+            return None;
+        }
+        let lineage = core.default_lineage;
+        let mut scope = ring.scope();
+        let mut batch = scope.batch();
+        for flush in flushes {
+            let sidecar = Sidecar::Commit {
+                through: Epoch::new(lineage, flush.through),
+                file: flush.file,
+            };
+            let pushed = match &flush.target {
+                FlushTarget::Registered(index) => {
+                    batch.flush_owned(index, sidecar, FlushCoverage::Unordered, FlushMode::Default)
+                }
+                FlushTarget::Shared(handle) => batch.flush_owned(
+                    handle,
+                    sidecar,
+                    FlushCoverage::Unordered,
+                    FlushMode::Default,
+                ),
+            };
+            if pushed.is_err() {
+                // No test reaches a refused flush: the submission queue has room for it, because
+                // every push is submitted at once. A refusal leaves the seal waiting for the retry.
+                core.unpushed.push(flush);
+            }
+        }
+        let submitted = batch.submit().err();
+        core.unsubmitted = submitted.is_some();
+        submitted
+    }
+
+    /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
+    fn apply_without_ring(&self, core: &mut Core<E, B, C>, due: Due<E, FlushTarget>) {
+        self.append_durable(core, &due.durable);
+        core.unpushed.extend(due.flushes);
+    }
+
+    fn append_durable(&self, core: &mut Core<E, B, C>, durable: &[E]) {
+        let lineage = core.default_lineage;
+        for &through in durable {
+            self.append(
+                core,
+                Entry::Durable {
+                    through: Epoch::new(lineage, through),
+                },
+            );
+        }
     }
 }
