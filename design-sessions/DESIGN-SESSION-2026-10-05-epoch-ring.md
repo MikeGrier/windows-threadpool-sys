@@ -2525,6 +2525,15 @@ nowhere to keep it. That makes the marking a carrier of the completion's data, n
 open: which clock the timestamp comes from, whether `Failed` itself is timestamped, and how one
 `io::Error` reaches both the completion and the marking.
 
+The engineer settled all three. The clock: "we need to have a uniform answer for time base; at this
+time we're using the interrupt time since it's extremely cheap to get and we don't have any
+apparent requirement for higher resolution" -- recorded as DI-D-37, which also closes `DI-3.6`'s
+time-base question. `Failed` timestamped: "yes definitely". The error: "the error code should be
+part of the CQE or general failure asynchronous or not. capture it. Use whatever is natural." One
+blocker surfaced: dioring forbids `unsafe`, and the only interrupt-time wrapper in the workspace is
+`windows-threadpool-sys`' crate-private one, so where a safe public read lives is a placement
+question for the engineer.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

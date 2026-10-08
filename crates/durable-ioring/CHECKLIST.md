@@ -58,13 +58,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   and the `Abandoned` entry, and as queue entries of their own; a marking for a short write, with its
   transferred count; a marking type open to further kinds, starting with a suspect write later
   covered by a successful flush; and a failure's final record surviving its resolution, including a
-  heal, which needs an entry of its own. The oracle gains the rules: a nullifier names a write in the
+  heal, which needs an entry of its own. A `Failed` entry carries its observation time too, and every
+  failure, synchronous or asynchronous, carries its error code -- a failed completion's and a failed
+  flush's alike -- in a representation chosen here, which also settles how a consumer reads the code
+  without `windows-ioring-sys`' `IoRingErrorExt` (DI-D-34's question). Timestamps are interrupt time
+  ([DI-D-37](DESIGN-NOTES.md#di-d-37)). The oracle gains the rules: a nullifier names a write in the
   set whose completion reported `Failed`, a short-write marking one whose completion was short, and
-  a covered marking one in a seal that later succeeded. **Open, for the engineer, before
-  building:** the timestamp's clock and representation; whether a `Failed` entry carries its own
-  observation time; and how the error reaches both the completion and the marking, since
-  `io::Error` is not `Clone` -- tied to DI-D-34's open question about the flush error's
-  representation.
+  a covered marking one in a seal that later succeeded. **Blocked on** a safe interrupt-time read
+  from a lower crate (DI-D-37); where it lives is with the engineer.
 
 - [ ] **DI-3.2.5** -- **Lineages, gates and flush domains.** `mint_lineage`, `lineages()` and
   `default_lineage()`, with every rule of the steps above holding per lineage
@@ -122,8 +123,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   DI-2.11 deliberately left to implementation:
   - **Identity per event** -- what each event names (instance, lineage, epoch id, domain, lock),
     "going to depend on the event" (the engineer), and how the generic epoch id is rendered.
-  - **The time base**, chosen from observed timelines: interrupt time,
-    `QueryInterruptTimePrecise`, or the performance counter.
+  - **The time base** is settled: interrupt time, dioring's one time base
+    ([DI-D-37](DESIGN-NOTES.md#di-d-37)), until a requirement for finer resolution appears.
   - **The provider's name and GUID**, and whether it stands alone or joins a workspace scheme.
   - **Installing the manifest**: how an application shipping dioring registers it, or documents
     that it must.
