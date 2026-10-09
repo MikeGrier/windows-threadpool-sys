@@ -3110,6 +3110,13 @@ code. Choices the assistant made in the restatement, for the engineer to see:
 - **Diagnostics:** waits are reported through the core's tracing hook, which the Windows driver
   publishes as ETW.
 
+The engineer's review: "No significant objections", with two changes. **"Domain" reverts to
+"flush domain"** ("let's call it a FlushDomain"), applied to CONTRACT.md and noted in DI-D-50. And
+on diagnostics: "I think that we need another level of indirection for the tracing on Windows or
+maybe is it just in general? At least even a windows only consumer may not want to use ETW and may
+want to just have their own stderr based or OutputDebug based printing." Taken up as its own
+proposal, since it changes DI-D-26.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

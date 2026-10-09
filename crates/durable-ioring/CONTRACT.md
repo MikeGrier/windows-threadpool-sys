@@ -19,7 +19,7 @@ part are in
 placeholders. The behaviour is what this document fixes; the spelling is not.
 
 **Vocabulary ahead of the code.** The crate's API, and the worked examples at the end, which
-compile against it, still call a target a file, a commit a flush and a domain a flush domain --
+compile against it, still call a target a file and a commit a flush --
 `FileKey`, `add_file`, `Cause::Flush`, `fail_next_flush` -- until `DI-3.10.3` restates the code,
 which removes this note.
 
@@ -47,13 +47,14 @@ Everything below either sharpens one word of that sentence or states a condition
   every target of an instance.
 - **Commit.** A target's own operation for making its completed writes durable. A write's
   **deciding commit** is the first commit of its target submitted after the write completed.
-- **Domain.** A unit whose failure everything behind it shares -- a disk, a controller cache, a
-  virtual disk, a share -- named by bytes the consumer chooses ([DI-D-21](DESIGN-NOTES.md#di-d-21)).
-  A target declares the domains its writes depend on, and a durability provider serves domains.
+- **Flush domain** (`FlushDomain`). A unit whose failure everything behind it shares -- a disk, a
+  controller cache, a virtual disk, a share -- named by bytes the consumer chooses
+  ([DI-D-21](DESIGN-NOTES.md#di-d-21)). A target declares the flush domains its writes depend on,
+  and a durability provider serves flush domains.
 - **Observation order.** The single sequence of events an instance itself performs or sees: each
-  operation it submits to its backend, and each completion it takes from it. "Before" and "after" in this
-  document always mean positions in this sequence -- never wall-clock time, device time, or anything
-  about when an event happened in the storage beneath.
+  operation it submits to its backend, and each completion it takes from it. "Before" and "after"
+  in this document always mean positions in this sequence -- never wall-clock time, device time, or
+  anything about when an event happened in the storage beneath.
 - **Lineage.** One independent durability sequence within an instance: its own epoch space, seal
   point, high-water mark and set of failures ([DI-D-19](DESIGN-NOTES.md#di-d-19)). An instance has
   a default lineage and may mint more at any time. Every rule in this document about epochs, seals
@@ -83,25 +84,27 @@ Everything below either sharpens one word of that sentence or states a condition
   `Durable { through: n }` event, which names its lineage.
 - **Durability provider.** What makes completed writes durable: dioring's built-in default, which
   commits each target through the backend, and at most one provider the consumer supplies, serving
-  the domains it states when the instance is built. A provider may make writes durable by any
-  means, and answers once for each domain it is asked about ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
+  the flush domains it states when the instance is built. A provider may make writes durable by
+  any means, and answers once for each flush domain it is asked about
+  ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
 - **Covered.** A write is *covered* once dioring has observed it complete and named it to the
-  durability providers responsible for its target's domains -- for the built-in default, by
+  durability providers responsible for its target's flush domains -- for the built-in default, by
   submitting its deciding commit. It is *covered successfully* once each of those has answered
   success for a request that named it -- for the default, once its deciding commit succeeded --
   and is then durable. A commit that merely happens to reach a write dioring did not name covers
   nothing.
 - **Flush regime.** The set of writes whose fate one commit failure can affect. It is at least
   everything in the same device's volatile cache, which includes other processes' writes to that
-  device; it may be larger. dioring cannot observe it, and knows of it only through the domains
-  targets declare.
+  device; it may be larger. dioring cannot observe it, and knows of it only through the flush
+  domains targets declare.
 - **Durability failure.** A commit that failed, a provider's domain that failed or went unanswered,
   or an external failure the consumer imported. Nothing else: a write that completes with a fault
   is an ordinary operation error ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 - **Suspect set.** The writes a durability failure puts at risk -- defined below.
 - **Resolve.** What the consumer does with a durability failure: **heal**, **abandon**, or **close**.
 - **Gated operation.** An operation the consumer submits for release only once a named epoch is
-  durable (release-after-durable). dioring holds it; the backend does not see it until it is released.
+  durable (release-after-durable). dioring holds it; the backend does not see it until it is
+  released.
 
 ## What this contract guarantees
 
@@ -200,10 +203,10 @@ dioring binds to these obligations, never to how a backing happens to meet them
   never warranted, and the target says nothing about what is in its range.
 - **Every failure it learns of is reported**, as a fault on an operation's completion, and is never
   treated as repaired by a later success.
-- **Its domains are declared.** A failed commit on a target may have lost any completed write not
-  yet decided by a successful commit, on it or on any target sharing a domain with it; acting on
-  that is dioring's (see "What a failure puts at risk"). A target with no domains declared shares
-  fate with every target.
+- **Its flush domains are declared.** A failed commit on a target may have lost any completed write
+  not yet decided by a successful commit, on it or on any target sharing a domain with it; acting
+  on that is dioring's (see "What a failure puts at risk"). A target with no domains declared
+  shares fate with every target.
 - **Its geometry and capabilities are stated**: the alignment its offsets, lengths and buffers
   need, and what it offers beyond these obligations, such as per-write write-through.
 - **A fault names its source**: the layer that reported it, and that layer's code where it gives one
@@ -254,11 +257,12 @@ failure reports by the key the consumer gave it, so a report stays usable after 
   there. dioring cannot check it; a false success is the second way, beside an incomplete
   declaration below, that the consumer can make this contract false. The provider returns promptly
   from each call, answers each domain once, and may answer from any thread at any time.
-- **Complete domain declarations, where it supplies them** ([DI-D-21](DESIGN-NOTES.md#di-d-21)).
-  A target's declared domains must include **every** domain its writes depend on: each disk a
-  striped or spanned volume covers, the lower targets' domains for a virtual disk, the share for a
-  network path. A backing that finds its own domains, as a raw volume can from its disks, makes
-  this its own obligation; where the consumer supplies them, dioring cannot check them.
+- **Complete flush-domain declarations, where it supplies them**
+  ([DI-D-21](DESIGN-NOTES.md#di-d-21)). A target's declared flush domains must include **every**
+  domain its writes depend on: each disk a striped or spanned volume covers, the lower targets'
+  domains for a virtual disk, the share for a network path. A backing that finds its own domains,
+  as a raw volume can from its disks, makes this its own obligation; where the consumer supplies
+  them, dioring cannot check them.
   - **What a missing domain costs.** A commit failure in an undeclared domain does not reach the
     target, so its uncovered writes are left out of the suspect set and can be reported durable
     when they are not. This is the one way a declaration can make this contract false.
@@ -284,13 +288,13 @@ failure reports by the key the consumer gave it, so a report stays usable after 
 
 Once `make_durable_through(n)` is called, dioring waits until every write of n's lineage at or below
 n has completed -- gated writes once released -- and then names them to the durability providers
-responsible for their targets' domains ([DI-D-22](DESIGN-NOTES.md#di-d-22),
+responsible for their targets' flush domains ([DI-D-22](DESIGN-NOTES.md#di-d-22),
 [DI-D-27](DESIGN-NOTES.md#di-d-27)). It never asks a provider about a write it has not seen
 complete.
 
 - The **built-in default** submits one commit for each target the seal's writes touched, through
   the backend; that commit is the deciding commit of each of those writes.
-- A **consumer provider** is given, for each domain it serves, the keys of the targets and the
+- A **consumer provider** is given, for each flush domain it serves, the keys of the targets and the
   identities of the writes named to it, and answers each domain once.
 - The seal's epochs are durable when every write in them is covered successfully: every domain of
   every target they wrote has answered success.
@@ -316,9 +320,9 @@ that has not been covered successfully. Three consequences:
   failures. The example at the end of this document shows both.
 
 **Which targets a failure reaches.** dioring cannot see which writes share a device's volatile
-cache, so it relies on the domains targets declare ([DI-D-21](DESIGN-NOTES.md#di-d-21)):
+cache, so it relies on the flush domains targets declare ([DI-D-21](DESIGN-NOTES.md#di-d-21)):
 
-- A target's domains -- the disks, caches, virtual disks or shares its writes depend on -- are
+- A target's flush domains -- the disks, caches, virtual disks or shares its writes depend on -- are
   declared when it is given to dioring, and fixed for its life in the instance.
 - A failed commit by the built-in default on target T reaches the uncovered writes to every target
   whose declared domains **intersect** T's.
@@ -326,7 +330,7 @@ cache, so it relies on the domains targets declare ([DI-D-21](DESIGN-NOTES.md#di
   never answered -- reaches the uncovered writes to every target whose declared domains
   **contain** D ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
 - A target declared with **no** domains is unknown and intersects every target. With nothing
-  declared, the scope is the whole instance -- one domain -- which is the default.
+  declared, the scope is the whole instance -- one flush domain -- which is the default.
 - An imported failure is scoped to the whole instance, one lineage, or a set of domains.
 
 The declarations must be complete; see what this contract requires of the consumer. Each suspect
