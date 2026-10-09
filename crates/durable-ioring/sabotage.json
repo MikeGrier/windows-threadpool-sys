@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The requested length push.rs records for a write is not checked through the ring: it matters only when a suspect write completes after its failure is observed, which needs the write in flight at that moment and no test can hold it there; the core's comparison against it is unit-tested, and so is the relay's mapping of a completion to how the write ended. The relay's inconsistency for a failed write completion carrying no error code (DI-D-47) is absent for the same reason: the kernel reports every failure with its code, so only a ring breaking its contract could reach it; relay.rs says so.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (relay.rs's op_outcome) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50).",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -81,17 +81,17 @@
       "name": "DI-3.2.2.1: a completion reports no bytes transferred",
       "file": "src/dioring/relay.rs",
       "expect": "caught",
-      "why": "The count is the kernel's, and a short transfer is the consumer's to handle; reporting zero hides what happened.",
-      "find": ["                        Outcome::Transferred(u32::try_from(transferred).unwrap_or(u32::MAX))\n"],
-      "replace": ["                        Outcome::Transferred(0)\n"]
+      "why": "The count is the ring's, and a read may come back short for the consumer to handle; reporting zero hides what happened.",
+      "find": ["                Outcome::Transferred(transferred)\n"],
+      "replace": ["                Outcome::Transferred(0)\n"]
     },
     {
       "name": "DI-3.2.2.1: a failed operation is reported as a transfer",
       "file": "src/dioring/relay.rs",
       "expect": "caught",
       "why": "A write the kernel refused, reported as written, is a lost write the consumer cannot see. Caught by the read-only-handle test and by the caching test.",
-      "find": ["                    Err(error) => Outcome::Failed(error),\n"],
-      "replace": ["                    Err(_) => Outcome::Transferred(0),\n"]
+      "find": ["        Err(error) => Outcome::Failed(windows_fault(error)),\n"],
+      "replace": ["        Err(_) => Outcome::Transferred(0),\n"]
     },
     {
       "name": "DI-3.2.2.1: a write is recorded as a read",
@@ -410,8 +410,8 @@
       "file": "src/dioring/relay.rs",
       "expect": "caught",
       "why": "The flush's answer is the whole basis of durability. Caught by every test that arms the seam, which also shows the seam reaches dioring's decision rather than only the ring's.",
-      "find": ["                let result = completion.result().map(|_| ());\n"],
-      "replace": ["                let result: io::Result<()> = Ok(());\n"]
+      "find": ["                let result = completion.result().map(|_| ()).map_err(windows_fault);\n"],
+      "replace": ["                let result: Result<(), crate::types::IoFault> = Ok(());\n"]
     },
     {
       "name": "DI-3.2.4: the oracle lets Durable pass an unresolved failure",
@@ -522,23 +522,7 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "The nullifier is the marking DI-D-36 exists for: without it a failure's record says nothing of a suspect write that did not happen, and reconciling the history after the fact is guesswork.",
-      "find": ["                self.mark(op, MarkingKind::Nullified { code }, &mut due);\n"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-3.2.4.2: a full completion is marked short",
-      "file": "src/dioring/durability.rs",
-      "expect": "caught",
-      "why": "Short means fewer bytes than the write asked for. Counting an exact completion as short would mark every suspect write that completed normally, burying the ones that matter.",
-      "find": ["                if transferred < len {\n"],
-      "replace": ["                if transferred <= len {\n"]
-    },
-    {
-      "name": "DI-3.2.4.2: a short completion is not marked",
-      "file": "src/dioring/durability.rs",
-      "expect": "caught",
-      "why": "A short write is durable only up to its count; a record that omits it overstates what reached the device.",
-      "find": ["                    self.mark(op, MarkingKind::Short { transferred }, &mut due);\n"],
+      "find": ["                self.mark(op, MarkingKind::Nullified { fault }, &mut due);\n"],
       "replace": [""]
     },
     {
@@ -607,19 +591,43 @@
     },
     {
       "name": "DI-3.9.2: a kernel failure's code is lost on the way to the core",
-      "file": "src/dioring/durability.rs",
+      "file": "src/error_code.rs",
       "expect": "caught",
-      "why": "The kernel reports every failed write with its code, and dioring is responsible for escorting that code into the nullifier (DI-D-47); dropping it records that a write failed but not how. The unit test of WriteEnd::of sees the missing code, and on the ring the relay would take the completion for an inconsistency.",
-      "find": ["            Outcome::Failed(error) => ErrorCode::of(error).map(Self::Failed),\n"],
-      "replace": ["            Outcome::Failed(_) => None,\n"]
+      "why": "The ring reports every failure with its code, and the Windows path relays it in each IoFault (DI-D-47, DI-D-50); dropping it records that an operation failed but not how. The relay's unit test and the ring test reading a failed commit's code both see it missing.",
+      "find": ["        code: ErrorCode::of(&error),\n"],
+      "replace": ["        code: None,\n"]
     },
     {
-      "name": "DI-3.2.4.2: the oracle accepts a nullifier with any code",
+      "name": "DI-3.10.3.2: the oracle accepts a nullifier with any fault",
       "file": "src/oracle.rs",
       "expect": "caught",
-      "why": "The oracle's check that a marking agrees with its write's completion is what binds the record to the stream; comparing kinds and not codes lets a wrong code through.",
-      "find": ["            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => Some(code) == *ended,\n"],
+      "why": "A nullifier relays the one report its write's completion carried (DI-D-50); an oracle comparing kinds and not faults lets a wrong code, or another report, through.",
+      "find": ["            (MarkingKind::Nullified { fault }, Some(Ended::Failed(ended))) => fault == ended,\n"],
       "replace": ["            (MarkingKind::Nullified { .. }, Some(Ended::Failed(_))) => true,\n"]
+    },
+    {
+      "name": "DI-3.10.3.2: a short write is reported as transferred",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "A target completes a write in full or with a fault (DI-D-50); passing a short count through as a transfer lets the core cover bytes that were never written.",
+      "find": ["            if write && transferred < requested {\n"],
+      "replace": ["            if write && transferred > requested {\n"]
+    },
+    {
+      "name": "DI-3.10.3.2: a full write is reported as a fault",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "The other direction of the same guard: a write that transferred every byte it asked for completed, and turning it into a fault would nullify every write.",
+      "find": ["            if write && transferred < requested {\n"],
+      "replace": ["            if write && transferred <= requested {\n"]
+    },
+    {
+      "name": "DI-3.10.3.2: a short read is reported as a fault",
+      "file": "src/dioring/relay.rs",
+      "expect": "caught",
+      "why": "The obligation is a write's: a read may come back short, and the consumer handles its count.",
+      "find": ["            if write && transferred < requested {\n"],
+      "replace": ["            if transferred < requested.max(1) {\n"]
     },
     {
       "name": "DI-3.2.5.1: the oracle holds Durable for a healed failure until its Healed entry",

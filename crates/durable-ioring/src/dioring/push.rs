@@ -174,11 +174,11 @@ where
                 kind,
                 file,
                 offset,
+                requested: len,
                 data,
                 caching,
                 context,
             },
-            len,
             gate,
         )
     }
@@ -238,9 +238,8 @@ where
         lineage.instance == self.instance && self.relay.lock().durability.is_live(lineage.seq)
     }
 
-    /// Under dioring's lock: decide a gate, then hold the operation, or push it, record a write --
-    /// asking to write `len` bytes -- in its lineage, and submit; so the write is recorded before
-    /// its completion can be.
+    /// Under dioring's lock: decide a gate, then hold the operation, or push it, record a write in
+    /// its lineage, and submit; so the write is recorded before its completion can be.
     ///
     /// A gate is decided here, not in `refusal`, because what it names can change on another
     /// thread: a completion can make it durable, and the release of a handle can end its lineage.
@@ -251,12 +250,7 @@ where
     /// has been accepted -- its completion will come -- and dioring submits again at the next push
     /// or pop. No test reaches a failed submission; `SubmitIoRing` fails only on a ring the
     /// kernel can no longer use.
-    fn issue(
-        &mut self,
-        op: OpPush<E, B, C>,
-        len: u32,
-        gate: Option<Epoch<V<E>>>,
-    ) -> PushResult<Self> {
+    fn issue(&mut self, op: OpPush<E, B, C>, gate: Option<Epoch<V<E>>>) -> PushResult<Self> {
         let record = self
             .files
             .get(&op.file)
@@ -320,7 +314,6 @@ where
             target: record.target.flush_target(),
             routing: record.routing,
             domains: Arc::clone(&record.domains),
-            len,
         });
         let id = op.id;
         if let (Some(gate), Some(named)) = (held, named) {
@@ -343,6 +336,7 @@ where
             kind,
             file,
             offset,
+            requested,
             data,
             caching,
             context,
@@ -353,6 +347,7 @@ where
             kind,
             file,
             offset,
+            requested,
             context,
         };
         let mut scope = self.delivery.scope();
@@ -404,6 +399,7 @@ where
                 kind,
                 file,
                 offset,
+                requested,
                 data,
                 caching,
                 context,
@@ -417,6 +413,7 @@ where
                 kind,
                 file,
                 offset,
+                requested,
                 context,
             };
             match self.push_now(
@@ -450,6 +447,7 @@ where
                         kind,
                         file,
                         offset,
+                        requested,
                         data,
                         caching,
                         context,

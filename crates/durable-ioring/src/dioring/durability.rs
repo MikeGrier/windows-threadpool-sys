@@ -37,7 +37,7 @@
 //! is found, in every build; see [`inconsistent`].
 //!
 //! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
-//! what happens to its writes afterwards: a suspect write that completes failed or short, and one
+//! what happens to its writes afterwards: a suspect write that completes with a fault, and one
 //! whose own file is then flushed successfully, each add a marking to every unresolved failure
 //! suspecting it, appended to the failure's record and reported as an entry of its own. They
 //! change nothing the mark, a hold or a resolution depends on. A failure abandoned or healed stops
@@ -54,7 +54,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::io;
 use std::ops::Bound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,10 +62,9 @@ use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
 
 use super::{DomainId, TimeBase};
 use crate::contract::EpochId;
-use crate::error_code::ErrorCode;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Epoch, Failed, FailureCause, FailureInfo, IoTargetKey, Marking, MarkingKind, Outcome,
+    Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,
     Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
@@ -175,25 +173,14 @@ pub(crate) enum Event<E: EpochId + 'static> {
     },
 }
 
-/// How a write ended, as the core needs it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How a write ended, as the core needs it. A target never completes a write short (DI-D-50), so a
+/// write either succeeded in full or failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WriteEnd {
-    /// Completed, with the byte count its completion reported.
-    Transferred(u32),
-    /// Completed as failed, with the code the kernel reported for it (DI-D-47).
-    Failed(ErrorCode),
-}
-
-impl WriteEnd {
-    /// How a completion's outcome ended the write; `None` for one never issued, which no write
-    /// the core records can be, and for a failure carrying no code, which the kernel never reports.
-    pub(crate) fn of<I: crate::contract::Identities>(outcome: &Outcome<I>) -> Option<Self> {
-        match outcome {
-            Outcome::Transferred(transferred) => Some(Self::Transferred(*transferred)),
-            Outcome::Failed(error) => ErrorCode::of(error).map(Self::Failed),
-            Outcome::NeverIssued { .. } => None,
-        }
-    }
+    /// Completed in full.
+    Succeeded,
+    /// Completed with a fault, as the backend reported it.
+    Failed(IoFault),
 }
 
 /// What a change made due.
@@ -296,8 +283,6 @@ pub(crate) struct Accepted<E, T> {
     pub(crate) target: T,
     pub(crate) routing: Routing,
     pub(crate) domains: Arc<[DomainId]>,
-    /// The byte count it asks to write.
-    pub(crate) len: u32,
 }
 
 /// A write not yet covered successfully, failed, or passed by its lineage's mark.
@@ -309,8 +294,6 @@ struct Write<E, T> {
     target: T,
     routing: Routing,
     domains: Arc<[DomainId]>,
-    /// The byte count it asked to write, against which a completion is short.
-    len: u32,
     stage: Stage,
 }
 
@@ -624,7 +607,6 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             target,
             routing,
             domains,
-            len,
         } = write;
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
             self.inconsistent(
@@ -649,7 +631,6 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 target,
                 routing,
                 domains,
-                len,
                 stage: Stage::InFlight,
             },
         );
@@ -657,9 +638,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// A write completed. One that failed is reported on its own completion and is neither named
     /// to a flush nor suspected by a later failure (guarantee 1); a failure observed while it was
-    /// in flight keeps it, because suspect sets are frozen, and marks it nullified. One that
-    /// completed short marks each failure suspecting it, and stays held. A write of an ended
-    /// lineage is let go either way.
+    /// in flight keeps it, because suspect sets are frozen, and marks it nullified. A write of an
+    /// ended lineage is let go either way.
     pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T> {
         let mut due = Due::default();
         let Some(write) = self.writes.get_mut(&op.seq) else {
@@ -681,21 +661,18 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             );
             return due;
         }
-        let (lineage, epoch, len) = (write.lineage, write.epoch, write.len);
+        let (lineage, epoch) = (write.lineage, write.epoch);
         let ended = self.lineages.get(&lineage).is_none_or(|state| state.ended);
         match end {
-            WriteEnd::Transferred(transferred) => {
+            WriteEnd::Succeeded => {
                 write.stage = Stage::Completed;
                 if ended {
                     self.writes.remove(&op.seq);
                 }
-                if transferred < len {
-                    self.mark(op, MarkingKind::Short { transferred }, &mut due);
-                }
             }
-            WriteEnd::Failed(code) => {
+            WriteEnd::Failed(fault) => {
                 self.writes.remove(&op.seq);
-                self.mark(op, MarkingKind::Nullified { code }, &mut due);
+                self.mark(op, MarkingKind::Nullified { fault }, &mut due);
             }
         }
         if let Some(state) = self.lineages.get_mut(&lineage)
@@ -752,7 +729,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         lineage: Key,
         through: E,
         file: IoTargetKey,
-        result: io::Result<()>,
+        result: Result<(), IoFault>,
     ) -> Due<E, T> {
         let mut due = Due::default();
         let answered = match self.lineages.get_mut(&lineage) {
@@ -773,10 +750,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         };
         match result {
             Ok(()) => self.cover(lineage, seq, &mut due),
-            Err(error) => {
+            Err(fault) => {
                 let cause = FailureCause::Commit {
                     target: file,
-                    error: Arc::new(error),
+                    fault,
                 };
                 self.observe(cause, &Reach::of_file(&domains), None, &mut due);
             }
@@ -972,7 +949,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             let marking = Marking {
                 write,
                 observed: *observed.get_or_insert_with(|| self.clock.now()),
-                kind,
+                kind: kind.clone(),
             };
             failure.markings.push(marking.clone());
             due.events.push(Event::Marked {

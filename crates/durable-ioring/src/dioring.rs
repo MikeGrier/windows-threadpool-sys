@@ -214,6 +214,9 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
         file: IoTargetKey,
         #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         offset: u64,
+        /// The bytes a write asks to write, against which the Windows path turns a short count
+        /// into a fault (DI-D-50); zero for a read.
+        requested: u32,
         context: C,
     },
     /// A seal's flush of one file (DI-D-22).

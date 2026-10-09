@@ -35,8 +35,8 @@ pub use provider::{
 pub use types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
     EpochState, Failed, FailureCause, FailureInfo, FileOptions, FlushDomain, HeldOperation,
-    ImportScope, Imported, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
-    MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
+    ImportScope, Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo,
+    Marking, MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
     RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
     WriteOptions,

@@ -224,21 +224,48 @@ impl FileOptions {
     }
 }
 
-/// Why a failure exists, citing where it came from (DI-D-47). A failed or short *write* is never a
+/// A fault, as the layer that observed it reported it (DI-D-50): what failed an operation or a
+/// commit, relayed with where it came from.
+///
+/// Two faults are equal when they name the same source and code and carry the same report -- the
+/// one shared `Arc`, as a marking and the completion it records share it -- since an `io::Error`
+/// has no equality of its own.
+#[derive(Clone, Debug)]
+pub struct IoFault {
+    /// The layer that reported it: `"windows-ioring"` for dioring over Windows.
+    pub source: &'static str,
+    /// The layer's code for it, where it gives one. Its meaning is the source's: an `HRESULT` from
+    /// the Windows backend, which always gives one.
+    pub code: Option<ErrorCode>,
+    /// The layer's own report.
+    pub error: Arc<io::Error>,
+}
+
+impl PartialEq for IoFault {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.code == other.code
+            && Arc::ptr_eq(&self.error, &other.error)
+    }
+}
+
+impl Eq for IoFault {}
+
+/// Why a failure exists, citing where it came from (DI-D-47, DI-D-50). A failed *write* is never a
 /// cause (DI-D-12 (a)). The lineages a failure belongs to are those of the writes in its suspect
 /// set.
 ///
-/// Only `Commit` is a failure the kernel reported, so only its error carries a code dioring
-/// captured. The rest are relayed: by the consumer, or by its provider, and say so.
+/// `Commit` is relayed from the target's backend, as an [`IoFault`] naming its source; the rest
+/// are relayed by the consumer or its provider, or observed by dioring, and say so.
 #[derive(Clone, Debug)]
 pub enum FailureCause<V: Identities> {
-    /// The built-in default provider's commit of `target` failed: the kernel reported it.
+    /// The built-in default provider's commit of `target` failed, as the target's backend
+    /// reported it.
     Commit {
         /// The target whose commit failed.
         target: IoTargetKey,
-        /// The flush's error as the kernel reported it, its code captured by dioring; read it with
-        /// [`ErrorCode::of`].
-        error: Arc<io::Error>,
+        /// The fault, as the backend reported it.
+        fault: IoFault,
     },
     /// The consumer imported a failure it learned of outside the instance: relayed by the consumer,
     /// with no code of dioring's.
@@ -293,20 +320,14 @@ pub struct Marking<V: Identities> {
 }
 
 /// What a [`Marking`] records. Open to further kinds, so match it with a wildcard arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarkingKind {
-    /// A nullifier: the write completed as failed, so it did not happen -- a failed write is an
+    /// A nullifier: the write completed with a fault, so it did not happen -- a failed write is an
     /// error on its own completion, and nothing durable covers it (DI-D-12 (a)).
     Nullified {
-        /// The code the kernel reported for the write's failed completion, carried through as
-        /// dioring captured it (DI-D-47).
-        code: ErrorCode,
-    },
-    /// The write completed short: durable, if at all, only up to `transferred` bytes.
-    Short {
-        /// The byte count its completion reported.
-        transferred: u32,
+        /// The fault its completion carried, as the backend reported it (DI-D-47, DI-D-50).
+        fault: IoFault,
     },
     /// The write was covered successfully: every part its file depends on answered success
     /// (DI-D-27), so its bytes are durable even though the failure still suspects it. The flags
@@ -335,10 +356,11 @@ pub enum OpKind<V: Identities> {
 /// How a consumer operation ended.
 #[derive(Debug)]
 pub enum Outcome<V: Identities> {
-    /// Completed; the count is what the completion reported, which may be short.
+    /// Completed, with the count its completion reported. A write never completes short: its
+    /// target completes it in full or with a fault (DI-D-50); a read may.
     Transferred(u32),
-    /// The operation reached the kernel and failed.
-    Failed(io::Error),
+    /// The operation reached its target and failed, as the backend reported it.
+    Failed(IoFault),
     /// A gated operation an abandoned epoch stopped before it was released: it never reached the
     /// kernel, so nothing was written. The epoch was its gate, or -- for a write -- its own,
     /// which no write may join once abandoned (DI-D-35, DI-D-43).

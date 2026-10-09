@@ -97,7 +97,7 @@ fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
     let (_, covered) = next_marked(&mut harness);
     assert_eq!(
-        (covered.write, covered.kind),
+        (covered.write, covered.kind.clone()),
         (
             later,
             MarkingKind::Covered {
@@ -134,9 +134,16 @@ fn a_failed_flushs_code_reads_without_the_ring_crate() {
     harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
     match next_failed(&mut harness).cause {
-        FailureCause::Commit { error, .. } => {
-            let code = ErrorCode::of(&error).expect("a flush the kernel answered carries a code");
+        FailureCause::Commit { fault, .. } => {
+            let code = fault
+                .code
+                .expect("a commit the ring answered carries a code");
             assert_eq!(code.win32(), Some(IO_DEVICE));
+            assert_eq!(
+                ErrorCode::of(&fault.error),
+                Some(code),
+                "read again from the report"
+            );
         }
         other => panic!("expected a flush failure, got {other:?}"),
     }

@@ -7,8 +7,8 @@ use std::io;
 use std::sync::Arc;
 
 use super::{
-    A, B, DEFAULT, FULL, LEN, Lineage, Ops, Seen, flush, flush_of, inconsistent, lineage, quiet,
-    seen, submitted, target, tokens,
+    A, B, DEFAULT, FULL, Lineage, Ops, Seen, flush, flush_of, inconsistent, lineage, quiet, seen,
+    submitted, target, tokens,
 };
 use crate::dioring::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
@@ -57,7 +57,6 @@ fn hold_write(lineage: &mut Lineage, ops: &mut Ops, own: Gate<u64>, gate: Gate<u
         target: target(A),
         routing: DEFAULT,
         domains: Arc::from([]),
-        len: LEN,
     };
     lineage.0.hold(op, Some(write), gate);
     op
@@ -602,8 +601,13 @@ fn a_flush_that_fails_leaves_a_released_writes_seal_answerable() {
     issue(&mut lineage, &due);
     lineage.completed(write, FULL);
     submitted(lineage.0.seal(minted, 1));
-    let due = lineage
-        .0
-        .flushed(minted, 1, A, Err(io::Error::from_raw_os_error(1117)));
+    let due = lineage.0.flushed(
+        minted,
+        1,
+        A,
+        Err(crate::error_code::windows_fault(
+            io::Error::from_raw_os_error(1117),
+        )),
+    );
     assert_eq!(seen(&due), [Seen::Failed(0, vec![write.seq])]);
 }

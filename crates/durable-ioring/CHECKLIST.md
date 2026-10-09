@@ -73,11 +73,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.1** -- DI-D-50's renames in place: `IoTargetKey`, `IoTargetBusy`, `IoTargetWrites`, `AddTargetError`, `RemoveTargetError`, `add_target`, `remove_target`, `TargetSetup`, `FailureCause::Commit`. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31031)
 
-- [ ] **DI-3.10.3.2** -- **`IoFault`, a portable `ErrorCode`, and no short writes.** `IoFault {
-  source, code: Option<ErrorCode>, error }` on `Outcome::Failed`, `FailureCause::Commit` and
-  `MarkingKind::Nullified { fault }`; `ErrorCode` a portable integer, its reading from an
-  `io::Error` Windows-only; `MarkingKind::Short` and the core's requested-length check removed,
-  the Windows path turning a short count into a fault (the `Fault` policy of DI-D-50).
+- [x] **DI-3.10.3.2** -- `IoFault` on `Outcome::Failed`, `FailureCause::Commit` and `Nullified`; `ErrorCode`'s meaning the source's; no short writes, the Windows path turning a short count into a fault. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31032)
 
 - [ ] **DI-3.10.3.3** -- **The diagnostic sink** (DI-D-51): `DiagnosticSink`, `NoDiagnostics`,
   `StderrDiagnostics`, `FanOutDiagnostics`, a sink given at construction, the inconsistency report
@@ -91,7 +87,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 - [ ] **DI-3.10.3.5** -- **Targets and the backend**: the `IoTarget` and backend traits (DI-D-50
   P10); the Windows backend over `windows-ioring-sys` and the Win32 file target; the driver
   running `DurableIoCore` over the backend; flush domains carried by the target, and
-  `FileOptions` removed.
+  `FileOptions` removed. The oracle's push hook gains each write's length, and a rule that a
+  write never completes short (DI-D-50), queued here from `DI-3.10.3.2` so the hook's signature
+  changes once.
 
 - [ ] **DI-3.10.3.6** -- **The split**: `win-durable-ioring` created and registered for release,
   holding the driver, the Windows backend and file target, `ErrorCode`'s reading from an
@@ -117,6 +115,16 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   failure observed with `Reach::Domains` of that one domain; and answers no request asked for
   recorded as inconsistencies. Placed after `DI-3.10`, which restates what a request names, so
   the review reads the shapes as they will stand.
+
+- [ ] **DI-3.9.6** -- **The assistant's choices in executing `DI-3.10.3`**, each step adding its
+  own as it lands. From `DI-3.10.3.1`: `SuspectWrite::file` and `IoTargetBusy::file` renamed
+  `target`, and `IoTargetBusy` displaying "target". From `DI-3.10.3.2`: two `IoFault`s are equal
+  when they name the same source and code and share the one report (`Arc` identity), so a
+  nullifier agrees with its write's completion only if it relays that very report; the Windows
+  path's fault for a short write carries no code and the message "the write completed short: n
+  of N bytes"; a write's requested length rides in its sidecar for that check and no longer in
+  the core; the inconsistency for a code-less failed write is gone, P8 having made the code
+  optional; and the oracle's no-short-write rule is queued to `DI-3.10.3.5`.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

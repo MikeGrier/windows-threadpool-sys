@@ -5,12 +5,12 @@
 //! each, and heals in each separately.
 
 use super::{
-    A, B, DEFAULT, FAILED, FULL, IO_DEVICE, Lineage, Ops, Seen, flush, flush_of, inconsistent,
-    lineage, quiet, seen, submitted, tokens,
+    A, B, DEFAULT, FULL, Lineage, Ops, Seen, failed, flush, flush_of, inconsistent, lineage,
+    nullified, quiet, seen, submitted, tokens,
 };
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
-use crate::types::{FailureCause, ImportScope, LineageBusy, MarkingKind, Resolution};
+use crate::types::{FailureCause, ImportScope, LineageBusy, Resolution};
 
 fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str> {
     let cause = FailureCause::Imported {
@@ -217,10 +217,9 @@ fn a_failure_observed_before_the_end_is_still_marked_by_its_write_in_flight() {
         [Seen::Failed(0, vec![write.seq])]
     );
     lineage.end(minted);
-    let nullified = MarkingKind::Nullified { code: IO_DEVICE };
     assert_eq!(
-        seen(&lineage.completed(write, FAILED)),
-        [Seen::Marked(0, write.seq, nullified)]
+        seen(&lineage.completed(write, failed())),
+        [Seen::Marked(0, write.seq, nullified())]
     );
 }
 

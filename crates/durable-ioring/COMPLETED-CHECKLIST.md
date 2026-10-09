@@ -1718,3 +1718,15 @@ Applied by a word-bounded script over `src/`, CONTRACT.md and `sabotage.json` (`
   `FileSetup` -> `TargetSetup`, `Cause` -> `FailureCause` and `Cause::Flush { file, .. }` ->
   `FailureCause::Commit { target, .. }`; tests, the oracle, the sabotage manifest's anchors and
   CONTRACT.md's examples follow. No behaviour changes.
+
+## Moved 2026-10-09 18:57:28 -04:00 -- DI-3.10.3.2: IoFault and no short writes
+
+### <a id="di-31032"></a>DI-3.10.3.2 -- `IoFault` on `Outcome::Failed`, `FailureCause::Commit` and `Nullified`; `ErrorCode`'s meaning the source's; no short writes, the Windows path turning a short count into a fault. *(completed 2026-10-09 18:57:28 -04:00)*
+
+`IoFault { source, code, error }` is public; the Windows path builds every one through `windows_fault`, naming `"windows-ioring"`. `MarkingKind` lost `Short` and `Copy`; `WriteEnd` is `Succeeded` or `Failed(IoFault)`; the core's write records lost their requested length, which now rides in the sidecar for `relay::op_outcome`, unit-tested in `relay/tests.rs`. The oracle compares a nullifier's fault with its write's completion's. The assistant's choices are queued for review as `DI-3.9.6`. The item as written:
+
+**`IoFault`, a portable `ErrorCode`, and no short writes.** `IoFault {
+  source, code: Option<ErrorCode>, error }` on `Outcome::Failed`, `FailureCause::Commit` and
+  `MarkingKind::Nullified { fault }`; `ErrorCode` a portable integer, its reading from an
+  `io::Error` Windows-only; `MarkingKind::Short` and the core's requested-length check removed,
+  the Windows path turning a short count into a fault (the `Fault` policy of DI-D-50).

@@ -5,8 +5,8 @@ use std::io;
 use std::sync::Arc;
 
 use super::{
-    A, B, C, DEFAULT, FAILED, FULL, Lineage, Ops, Seen, State, already, durable, flush, lineage,
-    quiet, seen, submitted, tokens,
+    A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, already, durable, flush, lineage, quiet,
+    seen, submitted, tokens,
 };
 use crate::dioring::DomainId;
 use crate::dioring::durability::Reach;
@@ -80,7 +80,7 @@ fn a_failed_flush_suspects_every_held_write_in_push_order() {
     let failed_write = ops.push(&mut lineage, 1, B, DEFAULT);
     let open = ops.push(&mut lineage, 3, C, DEFAULT);
     lineage.completed(sealed, FULL);
-    lineage.completed(failed_write, FAILED);
+    lineage.completed(failed_write, super::failed());
     lineage.completed(open, FULL);
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     let in_flight = ops.push(&mut lineage, 2, B, DEFAULT);

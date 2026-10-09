@@ -34,11 +34,44 @@ use super::durability::{
     DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, ProviderCall, WriteEnd,
 };
 use super::{Sidecar, TimeBase};
-use crate::contract::EpochId;
+use crate::contract::{EpochId, Identities};
+use crate::error_code::{WINDOWS_IORING, windows_fault};
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
 use crate::types::IoTargetKey;
-use crate::types::{Entry, Epoch, FailureCause, OpCompletion, OpKind, Outcome};
+use crate::types::{Entry, Epoch, FailureCause, IoFault, OpCompletion, OpKind, Outcome};
+
+#[cfg(test)]
+mod tests;
+
+/// How a consumer operation's completion ended it, on the Windows path. A target completes a
+/// write in full or with a fault (DI-D-50), and the I/O ring does not complete a file or volume
+/// write short, so a short count is a fault here -- the `Fault` policy -- with no code, since no
+/// layer gave one. A read may complete short.
+pub(crate) fn op_outcome<V: Identities>(
+    result: io::Result<usize>,
+    write: bool,
+    requested: u32,
+) -> Outcome<V> {
+    match result {
+        // A transfer is never longer than the `u32` length it was pushed with.
+        Ok(transferred) => {
+            let transferred = u32::try_from(transferred).unwrap_or(u32::MAX);
+            if write && transferred < requested {
+                Outcome::Failed(IoFault {
+                    source: WINDOWS_IORING,
+                    code: None,
+                    error: Arc::new(io::Error::other(format!(
+                        "the write completed short: {transferred} of {requested} bytes"
+                    ))),
+                })
+            } else {
+                Outcome::Transferred(transferred)
+            }
+        }
+        Err(error) => Outcome::Failed(windows_fault(error)),
+    }
+}
 
 /// An entry of a dioring instance's queue.
 pub(crate) type DioringEntry<E, B, C> = Entry<DioringIds<E>, B, C>;
@@ -98,6 +131,9 @@ pub(crate) struct OpPush<E: EpochId + 'static, B, C> {
     pub(crate) kind: OpKind<DioringIds<E>>,
     pub(crate) file: IoTargetKey,
     pub(crate) offset: u64,
+    /// The bytes a write asks to write, against which the Windows path turns a short count into a
+    /// fault (DI-D-50); zero for a read.
+    pub(crate) requested: u32,
     pub(crate) data: OpData<B, Sidecar<E, C>>,
     pub(crate) caching: RingCaching,
     pub(crate) context: C,
@@ -290,6 +326,7 @@ where
                     id,
                     kind,
                     file,
+                    requested,
                     context,
                     ..
                 },
@@ -304,14 +341,12 @@ where
                         format_args!("operation {id:?} on {file:?}"),
                     ),
                 }
-                let outcome = match completion.result() {
-                    // A transfer is never longer than the `u32` length it was pushed with.
-                    Ok(transferred) => {
-                        Outcome::Transferred(u32::try_from(transferred).unwrap_or(u32::MAX))
-                    }
-                    Err(error) => Outcome::Failed(error),
+                let write = matches!(kind, OpKind::Write { .. });
+                let outcome = op_outcome(completion.result(), write, requested);
+                let end = match &outcome {
+                    Outcome::Failed(fault) => WriteEnd::Failed(fault.clone()),
+                    _ => WriteEnd::Succeeded,
                 };
-                let end = WriteEnd::of(&outcome);
                 // The completion goes on the queue before anything it makes due, so a `Durable` it
                 // leads to follows it (guarantee 5).
                 self.append(
@@ -324,20 +359,10 @@ where
                         context,
                     }),
                 );
-                match kind {
-                    OpKind::Write { .. } => match end {
-                        Some(end) => core.durability.completed(id, end),
-                        // A kernel completion never reports a failure without its code (DI-D-47),
-                        // so no test reaches this: only a ring breaking its contract could.
-                        None => {
-                            core.durability.inconsistent(
-                                "a write's failed completion carried no error code",
-                                format_args!("operation {id:?} on {file:?}"),
-                            );
-                            Due::default()
-                        }
-                    },
-                    OpKind::Read => Due::default(),
+                if write {
+                    core.durability.completed(id, end)
+                } else {
+                    Due::default()
                 }
             }
             Some((_, Sidecar::Commit { through, file })) => {
@@ -350,7 +375,7 @@ where
                     }
                     None => completion,
                 };
-                let result = completion.result().map(|_| ());
+                let result = completion.result().map(|_| ()).map_err(windows_fault);
                 if through.lineage.instance == core.instance {
                     core.durability
                         .flushed(through.lineage.seq, through.id, file, result)

@@ -2,6 +2,7 @@
 //! The oracle's marking rules (DI-3.2.4.2), each refused when broken and accepted when kept.
 
 use std::io;
+use std::sync::{Arc, LazyLock};
 
 use win_time_sys::TimePoint;
 
@@ -11,12 +12,22 @@ use crate::error_code::ErrorCode;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
 use crate::types::{
-    Entry, Epoch, Failed, FailureCause, ImportScope, Marking, MarkingKind, Outcome, SuspectSet,
-    SuspectWrite,
+    Entry, Epoch, Failed, FailureCause, ImportScope, IoFault, Marking, MarkingKind, Outcome,
+    SuspectSet, SuspectWrite,
 };
 
-/// `ERROR_IO_DEVICE`, the code the failed write here reports.
-const IO_DEVICE: u32 = 1117;
+/// The fault the failed write here reports, `ERROR_IO_DEVICE`: one report, shared by its
+/// completion and the nullifier that agrees with it.
+static IO_DEVICE: LazyLock<IoFault> = LazyLock::new(|| fault(1117));
+
+/// A fault carrying `code`, with a report of its own.
+fn fault(code: u32) -> IoFault {
+    IoFault {
+        source: "windows-ioring",
+        code: Some(ErrorCode::from_win32(code)),
+        error: Arc::new(io::Error::from_raw_os_error(code.cast_signed())),
+    }
+}
 
 fn failure(instance: InstanceId, seq: u64) -> FailureId {
     FailureId { instance, seq }
@@ -65,12 +76,12 @@ fn marked(failure: FailureId, write: OpId, kind: MarkingKind) -> TestEntry {
 
 fn nullified() -> MarkingKind {
     MarkingKind::Nullified {
-        code: ErrorCode::from_win32(IO_DEVICE),
+        fault: IO_DEVICE.clone(),
     }
 }
 
 /// Writes 0, 1 and 2, tagged 1, pushed; failure 0, stamped at zero, suspecting all three; then
-/// write 0 completed failed, write 1 short by a byte, and write 2 in full.
+/// write 0 completed with the fault, and writes 1 and 2 in full.
 fn three_writes_one_failure(instance: InstanceId) -> Oracle {
     let mut oracle = Oracle::new();
     for seq in 0..3 {
@@ -82,8 +93,8 @@ fn three_writes_one_failure(instance: InstanceId) -> Oracle {
         .observe(&failed_at(instance, 0, &[0, 1, 2], 0))
         .expect("a failure suspecting all three");
     let outcomes = [
-        Outcome::Failed(io::Error::from_raw_os_error(IO_DEVICE.cast_signed())),
-        Outcome::Transferred(3),
+        Outcome::Failed(IO_DEVICE.clone()),
+        Outcome::Transferred(4),
         Outcome::Transferred(4),
     ];
     for (seq, outcome) in (0..).zip(outcomes) {
@@ -106,7 +117,6 @@ fn markings_that_agree_with_their_writes_completions_are_accepted() {
     let f = failure(instance, 0);
     for (seq, kind) in [
         (0, nullified()),
-        (1, MarkingKind::Short { transferred: 3 }),
         (
             1,
             MarkingKind::Covered {
@@ -123,7 +133,7 @@ fn markings_that_agree_with_their_writes_completions_are_accepted() {
         ),
     ] {
         oracle
-            .observe(&marked(f, op(instance, seq), kind))
+            .observe(&marked(f, op(instance, seq), kind.clone()))
             .unwrap_or_else(|v| panic!("write {seq} {kind:?}: {v:?}"));
     }
 }
@@ -133,14 +143,13 @@ fn a_marking_contradicting_its_writes_completion_is_refused() {
     let instance = InstanceId::next();
     let mut oracle = three_writes_one_failure(instance);
     let f = failure(instance, 0);
-    let wrong_code = MarkingKind::Nullified {
-        code: ErrorCode::from_win32(5),
-    };
+    let wrong_code = MarkingKind::Nullified { fault: fault(5) };
+    // The same code, but another report than the completion's: a nullifier relays the one report.
+    let another_report = MarkingKind::Nullified { fault: fault(1117) };
     for (seq, kind) in [
         (1, nullified()),
         (0, wrong_code),
-        (1, MarkingKind::Short { transferred: 4 }),
-        (0, MarkingKind::Short { transferred: 0 }),
+        (0, another_report),
         (
             0,
             MarkingKind::Covered {
@@ -151,7 +160,7 @@ fn a_marking_contradicting_its_writes_completion_is_refused() {
     ] {
         assert!(
             matches!(
-                oracle.observe(&marked(f, op(instance, seq), kind)),
+                oracle.observe(&marked(f, op(instance, seq), kind.clone())),
                 Err(Violation::MarkingContradicted { .. })
             ),
             "write {seq} {kind:?}"
@@ -293,7 +302,14 @@ fn a_final_record_carries_exactly_the_markings_reported() {
     let f = failure(instance, 0);
     let reported = vec![
         marking(op(instance, 0), nullified(), 0),
-        marking(op(instance, 1), MarkingKind::Short { transferred: 3 }, 0),
+        marking(
+            op(instance, 1),
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false,
+            },
+            0,
+        ),
     ];
     let setup = || {
         let mut oracle = three_writes_one_failure(instance);

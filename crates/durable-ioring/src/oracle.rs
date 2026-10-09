@@ -43,8 +43,8 @@
 //!   resolution is the system clock tick -- and so is any gap.
 //! - **A marking names what happened** (DI-D-36): `Marked` names a live failure and one of its
 //!   suspect writes, whose completion has been observed and agrees with the marking -- a
-//!   nullifier's write completed as failed, with the same code; a short marking's completed with
-//!   the byte count it carries; a covered marking's completed with a transfer.
+//!   nullifier's write completed with the same fault, the one report its completion carried; a
+//!   covered marking's completed with a transfer.
 //! - **A final record is the record** (DI-D-36): `Abandoned` and `Healed` name a live failure, with
 //!   the suspect set `Failed` reported and every marking `Marked` reported for it, in order; and
 //!   `Healed` only for a failure the consumer healed.
@@ -70,8 +70,9 @@
 //!
 //! - **Any order among completions.** Operations complete in whatever order the kernel finishes
 //!   them, and DI-D-18 records completions in the order they are observed, not pushed.
-//! - **Any outcome.** A transfer shorter than the buffer, including zero, and a failure are both
-//!   completions. What the contract promises is that the completion arrives, not that the I/O
+//! - **Any outcome.** A read shorter than its buffer, including zero, and a failure are both
+//!   completions. A write never completes short (DI-D-50); checking that needs each write's
+//!   length at its push, which `DI-3.10.3.5` gives the push hook. What the contract promises is that the completion arrives, not that the I/O
 //!   succeeded.
 //! - **Order between lineages**, which the contract leaves open (DI-D-18).
 //! - **A `Durable` repeated or below an earlier one** for the same lineage. It is never false --
@@ -116,8 +117,7 @@ use win_time_sys::{InterruptTime, TimePoint};
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
-use crate::error_code::ErrorCode;
-use crate::types::{Entry, Epoch, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};
+use crate::types::{Entry, Epoch, IoFault, Marking, MarkingKind, OpKind, Outcome, SuspectWrite};
 
 #[cfg(test)]
 mod tests;
@@ -350,8 +350,8 @@ struct Reported<V: Identities> {
 
 /// How a write's completion ended it, kept for the markings that may name it.
 enum Ended {
-    Transferred(u32),
-    Failed(Option<ErrorCode>),
+    Succeeded,
+    Failed(IoFault),
 }
 
 /// The contract's rules over one instance's event stream. `C` is the consumer's context type;
@@ -573,8 +573,8 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         if let OpKind::Write { .. } = completion.kind {
             let ended = match &completion.outcome {
-                Outcome::Transferred(transferred) => Some(Ended::Transferred(*transferred)),
-                Outcome::Failed(error) => Some(Ended::Failed(ErrorCode::of(error))),
+                Outcome::Transferred(_) => Some(Ended::Succeeded),
+                Outcome::Failed(fault) => Some(Ended::Failed(fault.clone())),
                 Outcome::NeverIssued { .. } => None,
             };
             if let Some(ended) = ended {
@@ -606,12 +606,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         self.stamped(failure, marking.observed)?;
         let write = marking.write;
-        let agrees = match (marking.kind, self.ended.get(&write)) {
-            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => Some(code) == *ended,
-            (MarkingKind::Short { transferred }, Some(Ended::Transferred(ended))) => {
-                transferred == *ended
-            }
-            (MarkingKind::Covered { .. }, Some(Ended::Transferred(_))) => true,
+        let agrees = match (&marking.kind, self.ended.get(&write)) {
+            (MarkingKind::Nullified { fault }, Some(Ended::Failed(ended))) => fault == ended,
+            (MarkingKind::Covered { .. }, Some(Ended::Succeeded)) => true,
             _ => false,
         };
         let reported = self

@@ -64,10 +64,12 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
     match &failed.cause {
         FailureCause::Commit {
             target: file,
-            error,
+            fault,
         } => {
             assert_eq!(*file, GIVEN);
-            let code = error
+            assert_eq!(fault.source, "windows-ioring", "relayed from the ring");
+            let code = fault
+                .error
                 .as_ioring_error()
                 .expect("the ring's error, passed through")
                 .code();

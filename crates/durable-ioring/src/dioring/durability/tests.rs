@@ -3,7 +3,7 @@
 
 use std::io;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use win_time_sys::InterruptClock;
 
@@ -12,9 +12,9 @@ use super::{
     WriteEnd,
 };
 use crate::dioring::{DomainId, TimeBase};
-use crate::error_code::ErrorCode;
+use crate::error_code::windows_fault;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
-use crate::types::{FailureCause, IoTargetKey, MarkingKind, SuspectWrite};
+use crate::types::{FailureCause, IoFault, IoTargetKey, MarkingKind, SuspectWrite};
 
 // Failures, their reach, and their resolution: DI-3.2.4.
 mod failures;
@@ -90,6 +90,7 @@ impl<K: TimeBase> One<K> {
         file: IoTargetKey,
         result: io::Result<()>,
     ) -> Due<u64, &'static str> {
+        let result = result.map_err(windows_fault);
         self.0.flushed(DEFAULT_LINEAGE, through, file, result)
     }
 
@@ -112,14 +113,24 @@ const DEFAULT: Routing = Routing {
     default: true,
     provider: false,
 };
-/// The byte count every write here asks to write.
-const LEN: u32 = 8;
-/// A write that transferred everything it asked to.
-const FULL: WriteEnd = WriteEnd::Transferred(LEN);
-/// `ERROR_IO_DEVICE`, the code a failed write here reports.
-const IO_DEVICE: ErrorCode = ErrorCode::from_win32(1117);
-/// A write that completed as failed.
-const FAILED: WriteEnd = WriteEnd::Failed(IO_DEVICE);
+/// A write that completed in full.
+const FULL: WriteEnd = WriteEnd::Succeeded;
+/// The fault a failed write here reports: `ERROR_IO_DEVICE`, as the Windows path relays it. One
+/// report, shared, so a nullifier made from it equals the expected one (`IoFault`'s equality).
+static IO_DEVICE: LazyLock<IoFault> =
+    LazyLock::new(|| windows_fault(io::Error::from_raw_os_error(1117)));
+
+/// A write that completed with the fault.
+fn failed() -> WriteEnd {
+    WriteEnd::Failed(IO_DEVICE.clone())
+}
+
+/// The nullifier a write that completed with the fault makes.
+fn nullified() -> MarkingKind {
+    MarkingKind::Nullified {
+        fault: IO_DEVICE.clone(),
+    }
+}
 /// A covered marking for a file only the built-in default answers for, as every file here is
 /// unless a test routes it otherwise: the flush was observed, and no provider was asked.
 const COVERED: MarkingKind = MarkingKind::Covered {
@@ -198,7 +209,6 @@ impl Ops {
             target: target(file),
             routing,
             domains,
-            len: LEN,
         });
         op
     }
@@ -279,7 +289,7 @@ fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
                 markings,
             } => Seen::Healed(failure.seq, ops(suspect.writes()), marks(markings)),
             Event::Marked { failure, marking } => {
-                Seen::Marked(failure.seq, marking.write.seq, marking.kind)
+                Seen::Marked(failure.seq, marking.write.seq, marking.kind.clone())
             }
             Event::NeverIssued { op, abandoned } => {
                 Seen::NeverIssued(op.seq, abandoned.lineage, abandoned.epoch)
@@ -290,7 +300,10 @@ fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
 
 /// Markings by their write's sequence number and kind.
 fn marks(markings: &[crate::types::Marking<DioringIds<u64>>]) -> Vec<(u64, MarkingKind)> {
-    markings.iter().map(|m| (m.write.seq, m.kind)).collect()
+    markings
+        .iter()
+        .map(|m| (m.write.seq, m.kind.clone()))
+        .collect()
 }
 
 fn durable(due: &Due<u64, &'static str>) -> Vec<u64> {
@@ -465,7 +478,7 @@ fn a_failed_write_is_named_to_no_flush() {
     let mut lineage = lineage();
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    lineage.completed(write, FAILED);
+    lineage.completed(write, failed());
     let due = submitted(lineage.seal(1));
     assert!(due.flushes.is_empty());
     assert_eq!(seen(&due), [Seen::Durable(1)]);

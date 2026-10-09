@@ -93,7 +93,9 @@ fn short_zero_and_failed_outcomes_are_completions() {
     let outcomes = [
         Outcome::Transferred(1),
         Outcome::Transferred(0),
-        Outcome::Failed(io::Error::from(io::ErrorKind::PermissionDenied)),
+        Outcome::Failed(crate::error_code::windows_fault(io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        ))),
     ];
     for (seq, outcome) in outcomes.into_iter().enumerate() {
         let id = op(instance, seq as u64);
