@@ -23,7 +23,7 @@ use super::relay::{Core, HeldPush, OpData, Shut};
 use super::{Dioring, FileSlot, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::DioringIds;
-use crate::types::{Epoch, FileBusy, FileKey, HeldOperation, RemoveFileError};
+use crate::types::{Epoch, HeldOperation, IoTargetBusy, IoTargetKey, RemoveTargetError};
 
 type V<E> = DioringIds<E>;
 
@@ -54,9 +54,12 @@ where
     K: TimeBase,
 {
     /// Remove `key`'s file, handing back the consumer's handle, unless something still holds it.
-    pub(crate) fn remove(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<V<E>>> {
+    pub(crate) fn remove(
+        &mut self,
+        key: IoTargetKey,
+    ) -> Result<SharedHandle, RemoveTargetError<V<E>>> {
         if !self.files.contains_key(&key) {
-            return Err(RemoveFileError::UnknownKey(key));
+            return Err(RemoveTargetError::UnknownKey(key));
         }
         let (in_flight, held_for_gate, lowest, holds) = {
             let core = self.relay.lock();
@@ -88,8 +91,8 @@ where
                 FileSlot::Shared(handle) => handle,
             });
         }
-        Err(RemoveFileError::Busy(FileBusy {
-            file: key,
+        Err(RemoveTargetError::Busy(IoTargetBusy {
+            target: key,
             in_flight,
             held_for_gate,
             lowest_gates: lowest.into_values().collect(),

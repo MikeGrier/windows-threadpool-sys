@@ -9,7 +9,7 @@ use win_shared_os_owned_handle::SharedHandle;
 
 use crate::contract::Identities;
 use crate::dioring::DomainId;
-use crate::types::{FileKey, FlushDomain};
+use crate::types::{FlushDomain, IoTargetKey};
 
 /// A consumer-supplied durability provider. It makes writes the instance has seen complete
 /// durable, by any means, and answers per flush domain. An instance holds at most one; several
@@ -43,7 +43,7 @@ pub struct DomainRequest<V: Identities> {
     /// The domain.
     pub domain: FlushDomain,
     /// Each file in the domain with writes named for it.
-    pub files: Vec<FileWrites<V>>,
+    pub files: Vec<IoTargetWrites<V>>,
     /// Answers this domain, once.
     pub completion: DomainCompletion,
 }
@@ -51,9 +51,9 @@ pub struct DomainRequest<V: Identities> {
 /// A file in one domain's part, and the writes to it named for that domain: identities, never
 /// extents. Every one has completed.
 #[derive(Debug)]
-pub struct FileWrites<V: Identities> {
+pub struct IoTargetWrites<V: Identities> {
     /// The consumer's key for the file.
-    pub key: FileKey,
+    pub key: IoTargetKey,
     /// The file, lent so the provider can flush it out of band.
     pub file: SharedHandle,
     /// The writes named.
@@ -62,7 +62,7 @@ pub struct FileWrites<V: Identities> {
 
 /// Answers one domain of one request, once, from any thread at any time -- inside `make_durable`
 /// included. Success warrants that every write named for the domain is durable (the contract).
-/// Dropped unanswered, it is a failure of the domain, `Cause::ProviderAbandoned`. Answering records
+/// Dropped unanswered, it is a failure of the domain, `FailureCause::ProviderAbandoned`. Answering records
 /// the outcome, and sets the readiness signal if that makes an entry poppable; it never runs
 /// delivery. Once the instance has ended, an answer does nothing; ending waits for every completion
 /// to be answered or dropped.
@@ -90,7 +90,7 @@ impl DomainCompletion {
         self.answer(DomainOutcome::Succeeded);
     }
 
-    /// The domain failed: `Cause::Provider`, with `error`.
+    /// The domain failed: `FailureCause::Provider`, with `error`.
     pub fn fail(mut self, error: io::Error) {
         self.answer(DomainOutcome::Failed(error));
     }

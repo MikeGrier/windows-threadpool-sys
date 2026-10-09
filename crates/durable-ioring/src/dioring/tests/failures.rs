@@ -11,8 +11,8 @@ use super::{empty, file, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
-    Cause, DurabilityRequest, Entry, EpochState, Failed, ImportScope, PushRefusal, Resolution,
-    ResolveRefusal, UnknownLineage,
+    DurabilityRequest, Entry, EpochState, Failed, FailureCause, ImportScope, PushRefusal,
+    Resolution, ResolveRefusal, UnknownLineage,
 };
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
@@ -62,7 +62,10 @@ fn a_failed_flush_is_reported_with_its_cause_and_holds_the_mark() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
     let failed = failed_seal(&mut harness);
     match &failed.cause {
-        Cause::Flush { file, error } => {
+        FailureCause::Commit {
+            target: file,
+            error,
+        } => {
             assert_eq!(*file, GIVEN);
             let code = error
                 .as_ioring_error()
@@ -238,7 +241,7 @@ fn an_import_suspects_what_its_scope_reaches() {
         assert_eq!(imported.unmatched, unmatched, "{scope:?}");
         let failed = next_failed(&mut harness);
         assert_eq!(failed.id, imported.failure);
-        assert!(matches!(failed.cause, Cause::Imported { scope: ref s } if *s == scope));
+        assert!(matches!(failed.cause, FailureCause::Imported { scope: ref s } if *s == scope));
         assert_eq!(suspects(&failed), expected, "{scope:?}");
     }
     assert_eq!(harness.ring.failures().len(), 4);
@@ -409,7 +412,7 @@ fn an_armed_failure_is_used_by_its_own_file_only() {
     harness.next();
     harness.seal(2);
     let failed = next_failed(&mut harness);
-    assert!(matches!(failed.cause, Cause::Flush { file, .. } if file == ADDED));
+    assert!(matches!(failed.cause, FailureCause::Commit { target, .. } if target == ADDED));
     drop(failed);
     harness.finish();
 }

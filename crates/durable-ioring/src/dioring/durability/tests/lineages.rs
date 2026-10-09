@@ -10,10 +10,10 @@ use super::{
 };
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
-use crate::types::{Cause, ImportScope, LineageBusy, MarkingKind, Resolution};
+use crate::types::{FailureCause, ImportScope, LineageBusy, MarkingKind, Resolution};
 
 fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str> {
-    let cause = Cause::Imported {
+    let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.0.import(cause, &Reach::All, only).1

@@ -15,10 +15,10 @@ use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
-    AddFileError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    FileKey, FileOptions, ImportScope, Imported, Leftovers, LineageInfo, PushError, ReadOptions,
-    RemoveFileError, Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage,
-    WriteOptions,
+    AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
+    FileOptions, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -89,27 +89,27 @@ pub trait DurableRing {
     /// The error from duplicating the event's handle.
     fn readiness(&mut self) -> io::Result<Event>;
 
-    /// `add_file_with` with default options: no declared flush domains.
+    /// `add_target_with` with default options: no declared flush domains.
     ///
     /// # Errors
     ///
-    /// As [`add_file_with`](Self::add_file_with).
-    fn add_file(&mut self, key: FileKey, file: SharedHandle) -> Result<(), AddFileError> {
-        self.add_file_with(key, file, FileOptions::new())
+    /// As [`add_target_with`](Self::add_target_with).
+    fn add_target(&mut self, key: IoTargetKey, file: SharedHandle) -> Result<(), AddTargetError> {
+        self.add_target_with(key, file, FileOptions::new())
     }
 
     /// Give the instance a file after construction, under a key unique within the instance.
     ///
     /// # Errors
     ///
-    /// An [`AddFileError`] handing back the file and its options, when a file is already present
+    /// An [`AddTargetError`] handing back the file and its options, when a file is already present
     /// under `key`.
-    fn add_file_with(
+    fn add_target_with(
         &mut self,
-        key: FileKey,
+        key: IoTargetKey,
         file: SharedHandle,
         options: FileOptions,
-    ) -> Result<(), AddFileError>;
+    ) -> Result<(), AddTargetError>;
 
     /// Take a file back, under the key it was given with: the consumer's handle is returned. A file
     /// given at construction stays open until the instance ends, because the ring's registration
@@ -117,15 +117,18 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// [`RemoveFileError::UnknownKey`] when no file is present under `key`, and
-    /// [`RemoveFileError::Busy`] while anything still holds it -- an operation in flight or held
+    /// [`RemoveTargetError::UnknownKey`] when no file is present under `key`, and
+    /// [`RemoveTargetError::Busy`] while anything still holds it -- an operation in flight or held
     /// for a gate, a write in any lineage not yet covered successfully, or an unresolved failure
-    /// suspecting a write to it -- with every hold reported at once in [`FileBusy`]. Once a file is
+    /// suspecting a write to it -- with every hold reported at once in [`IoTargetBusy`]. Once a file is
     /// gone it cannot be flushed, so an epoch with an uncovered write to it could never become
     /// durable.
     ///
-    /// [`FileBusy`]: crate::FileBusy
-    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<Self::Ids>>;
+    /// [`IoTargetBusy`]: crate::IoTargetBusy
+    fn remove_target(
+        &mut self,
+        key: IoTargetKey,
+    ) -> Result<SharedHandle, RemoveTargetError<Self::Ids>>;
 
     /// A handle to the lineage that always exists: a copy of the one construction returned. The
     /// instance holds a copy of its own, so the default lineage never ends while it lives.
@@ -168,7 +171,7 @@ pub trait DurableRing {
     /// As [`write_with`](Self::write_with).
     fn write(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: Self::Buffer,
         tag: Tag<'_, Self::Ids>,
@@ -192,7 +195,7 @@ pub trait DurableRing {
     /// abandoned, a gate that would close a cycle (DI-D-23), or a ring that refused the push.
     fn write_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: Self::Buffer,
         tag: Tag<'_, Self::Ids>,
@@ -209,7 +212,7 @@ pub trait DurableRing {
     /// As [`read_with`](Self::read_with).
     fn read(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: Self::Buffer,
         context: Self::Context,
@@ -232,7 +235,7 @@ pub trait DurableRing {
     /// refused the push.
     fn read_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: Self::Buffer,
         context: Self::Context,
@@ -376,7 +379,7 @@ pub trait RegisteredBufferRing: DurableRing {
     /// As [`write_registered_with`](Self::write_registered_with).
     fn write_registered(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -394,7 +397,7 @@ pub trait RegisteredBufferRing: DurableRing {
     /// instance built without registered buffers or a span the registration does not contain.
     fn write_registered_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -409,7 +412,7 @@ pub trait RegisteredBufferRing: DurableRing {
     /// As [`read_registered_with`](Self::read_registered_with).
     fn read_registered(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: Self::Context,
@@ -424,7 +427,7 @@ pub trait RegisteredBufferRing: DurableRing {
     /// As [`write_registered_with`](Self::write_registered_with), less the epoch.
     fn read_registered_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: Self::Context,

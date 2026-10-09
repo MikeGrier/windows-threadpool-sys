@@ -14,7 +14,7 @@ use crate::dioring::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
 };
 use crate::ids::OpId;
-use crate::types::{Cause, ImportScope, Resolution};
+use crate::types::{FailureCause, ImportScope, Resolution};
 
 fn at(lineage: Key, epoch: u64) -> Gate<u64> {
     Gate { lineage, epoch }
@@ -80,7 +80,7 @@ fn issue(lineage: &mut Lineage, due: &Due<u64, &'static str>) -> Vec<u64> {
 }
 
 fn import(lineage: &mut Lineage) -> Due<u64, &'static str> {
-    let cause = Cause::Imported {
+    let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.0.import(cause, &Reach::All, None).1

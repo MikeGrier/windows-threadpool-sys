@@ -19,9 +19,9 @@ part are in
 placeholders. The behaviour is what this document fixes; the spelling is not.
 
 **Vocabulary ahead of the code.** The crate's API, and the worked examples at the end, which
-compile against it, still call a target a file and a commit a flush --
-`FileKey`, `add_file`, `Cause::Flush`, `fail_next_flush` -- until `DI-3.10.3` restates the code,
-which removes this note.
+compile against it, still take a target as a Win32 file with its flush domains in
+`FileOptions`, and call a commit a flush in `fail_next_flush`, until `DI-3.10.3` restates the
+code, which removes this note.
 
 ## The guarantee, in one sentence
 
@@ -577,7 +577,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 # use std::time::{Duration, Instant};
 # use durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
-# const FILE: FileKey = FileKey(1);
+# const FILE: IoTargetKey = IoTargetKey(1);
 # fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
 #     let started = Instant::now();
 #     loop {
@@ -597,7 +597,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![FileSetup {
+#     files: vec![TargetSetup {
 #         key: FILE,
 #         file: SharedHandle::new(OwnedHandle::from(file)),
 #         options: FileOptions::new(),
@@ -617,11 +617,11 @@ ring.fail_next_flush(FILE, 1117); // ERROR_IO_DEVICE, for the flush the seal iss
 // -> make_durable_through(41)                 // seals everything <= 41
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(B) ; WriteDone(C)
-// <- Failed { failure: F1, cause: Flush, suspect: [A@41, B@41, C@41] }
+// <- Failed { failure: F1, cause: Commit, suspect: [A@41, B@41, C@41] }
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
-assert!(matches!(f1.cause, Cause::Flush { .. }));
+assert!(matches!(f1.cause, FailureCause::Commit { .. }));
 assert_eq!(f1.suspect.writes().len(), 3);
 assert_eq!(ring.durable_through(lineage.lineage()), Ok(None)); // nothing is durable yet
 // -> write(tag 41, A')                        // refused: 41 is sealed (guarantee 6)
@@ -658,7 +658,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # use std::time::{Duration, Instant};
 # use durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
-# const FILE: FileKey = FileKey(1);
+# const FILE: IoTargetKey = IoTargetKey(1);
 # fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
 #     let started = Instant::now();
 #     loop {
@@ -678,7 +678,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![FileSetup {
+#     files: vec![TargetSetup {
 #         key: FILE,
 #         file: SharedHandle::new(OwnedHandle::from(file)),
 #         options: FileOptions::new(),
@@ -698,7 +698,7 @@ ring.fail_next_flush(FILE, 1117);
 // -> make_durable_through(41)                 // seals 41
 ring.make_durable_through(tag(41)).expect("a seal");
 // <- WriteDone(A) ; WriteDone(P)
-// <- Failed { failure: F1, cause: Flush, suspect: [A@41, P@43] }
+// <- Failed { failure: F1, cause: Commit, suspect: [A@41, P@43] }
 let Entry::Failed(f1) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
 };
@@ -744,7 +744,7 @@ fails as never issued.
 # use std::time::{Duration, Instant};
 # use durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
-# const FILE: FileKey = FileKey(1);
+# const FILE: IoTargetKey = IoTargetKey(1);
 # fn pop_until(ring: &mut Ring, stop: impl Fn(&EntryOf<Ring>) -> bool) -> EntryOf<Ring> {
 #     let started = Instant::now();
 #     loop {
@@ -764,7 +764,7 @@ fails as never issued.
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![FileSetup {
+#     files: vec![TargetSetup {
 #         key: FILE,
 #         file: SharedHandle::new(OwnedHandle::from(file)),
 #         options: FileOptions::new(),

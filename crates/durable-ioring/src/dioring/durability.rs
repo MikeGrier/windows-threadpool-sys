@@ -66,8 +66,8 @@ use crate::contract::EpochId;
 use crate::error_code::ErrorCode;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Cause, Epoch, Failed, FailureInfo, FileKey, Marking, MarkingKind, Outcome, Resolution,
-    ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
+    Epoch, Failed, FailureCause, FailureInfo, IoTargetKey, Marking, MarkingKind, Outcome,
+    Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
 mod files;
@@ -132,7 +132,7 @@ impl Reach {
 pub(crate) struct Flush<E, T> {
     pub(crate) lineage: Key,
     pub(crate) through: E,
-    pub(crate) file: FileKey,
+    pub(crate) file: IoTargetKey,
     pub(crate) target: T,
 }
 
@@ -236,7 +236,7 @@ pub(crate) struct ProviderCall {
 pub(crate) struct DomainPart {
     pub(crate) domain: DomainId,
     /// Each file, with the writes named for this domain, in push order.
-    pub(crate) files: Vec<(FileKey, Vec<OpId>)>,
+    pub(crate) files: Vec<(IoTargetKey, Vec<OpId>)>,
 }
 
 /// An epoch's state as its lineage sees it.
@@ -291,7 +291,7 @@ pub(crate) struct Accepted<E, T> {
     pub(crate) op: OpId,
     pub(crate) lineage: Key,
     pub(crate) epoch: E,
-    pub(crate) file: FileKey,
+    pub(crate) file: IoTargetKey,
     /// What its seal's flush is pushed against.
     pub(crate) target: T,
     pub(crate) routing: Routing,
@@ -305,7 +305,7 @@ struct Write<E, T> {
     op: OpId,
     lineage: Key,
     epoch: E,
-    file: FileKey,
+    file: IoTargetKey,
     target: T,
     routing: Routing,
     domains: Arc<[DomainId]>,
@@ -316,7 +316,7 @@ struct Write<E, T> {
 
 /// One file a seal flushes.
 struct SealFile {
-    file: FileKey,
+    file: IoTargetKey,
     domains: Arc<[DomainId]>,
     answered: bool,
     /// Answered with success.
@@ -384,7 +384,7 @@ impl<E: Ord + Copy> Release<E> {
 
 struct Failure<E: EpochId + 'static> {
     id: FailureId,
-    cause: Cause<V<E>>,
+    cause: FailureCause<V<E>>,
     suspect: SuspectSet<V<E>>,
     observed: TimePoint<InterruptTime>,
     markings: Vec<Marking<V<E>>>,
@@ -452,7 +452,7 @@ impl<E: EpochId> LineageState<E> {
     fn answer(
         &mut self,
         through: E,
-        file: FileKey,
+        file: IoTargetKey,
         failed_now: bool,
     ) -> Result<(u64, Arc<[DomainId]>), &'static str> {
         let seal = self
@@ -751,7 +751,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         &mut self,
         lineage: Key,
         through: E,
-        file: FileKey,
+        file: IoTargetKey,
         result: io::Result<()>,
     ) -> Due<E, T> {
         let mut due = Due::default();
@@ -774,8 +774,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         match result {
             Ok(()) => self.cover(lineage, seq, &mut due),
             Err(error) => {
-                let cause = Cause::Flush {
-                    file,
+                let cause = FailureCause::Commit {
+                    target: file,
                     error: Arc::new(error),
                 };
                 self.observe(cause, &Reach::of_file(&domains), None, &mut due);
@@ -788,7 +788,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// `reach` covers -- of lineage `only`, if one is named.
     pub(crate) fn import(
         &mut self,
-        cause: Cause<V<E>>,
+        cause: FailureCause<V<E>>,
         reach: &Reach,
         only: Option<Key>,
     ) -> (FailureId, Due<E, T>) {
@@ -897,7 +897,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// transition every cause takes.
     fn observe(
         &mut self,
-        cause: Cause<V<E>>,
+        cause: FailureCause<V<E>>,
         reach: &Reach,
         only: Option<Key>,
         due: &mut Due<E, T>,
@@ -912,7 +912,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .filter(|write| reach.reaches(&write.domains))
             .map(|write| SuspectWrite {
                 op: write.op,
-                file: write.file,
+                target: write.file,
                 epoch: Epoch::new(
                     Lineage {
                         instance,

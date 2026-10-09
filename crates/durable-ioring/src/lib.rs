@@ -26,17 +26,20 @@ pub use contract::{
     PushResult, RegisteredBufferRing, TokenOf,
 };
 pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
-pub use dioring::{Dioring, FileSetup, Setup, SetupError, SetupRefusal, TimeBase};
+pub use dioring::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
-pub use provider::{DomainCompletion, DomainRequest, DurabilityProvider, FileWrites, FlushRequest};
+pub use provider::{
+    DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, IoTargetWrites,
+};
 pub use types::{
-    AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, Failed, FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation,
-    ImportScope, Imported, Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion,
-    OpKind, Outcome, PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution,
-    ResolveError, ResolveRefusal, RetireLineageError, RetireLineageRefusal, SealError, SuspectSet,
-    SuspectWrite, Tag, UnknownLineage, WriteCaching, WriteOptions,
+    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
+    EpochState, Failed, FailureCause, FailureInfo, FileOptions, FlushDomain, HeldOperation,
+    ImportScope, Imported, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
+    MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
+    RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,
+    RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
+    WriteOptions,
 };
 // The types the contract's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.

@@ -15,11 +15,11 @@ use windows_ioring_sys::RegisteredSpan;
 
 use super::{TempFile, V, empty, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
-use crate::dioring::{Dioring, FileSetup, Setup, TimeBase};
+use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::ids::{Lineage, LineageHandle, OpId};
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, OpCompletion, OpKind,
+    DurabilityRequest, Entry, Epoch, EpochState, FileOptions, IoTargetKey, OpCompletion, OpKind,
     Outcome, PushRefusal, WriteCaching, WriteOptions,
 };
 
@@ -34,8 +34,8 @@ pub(super) const BOUND: Duration = Duration::from_secs(5);
 /// Large enough for the most operations any test here has in flight at once.
 const QUEUE: u32 = 128;
 
-pub(super) const ADDED: FileKey = FileKey(1);
-pub(super) const GIVEN: FileKey = FileKey(2);
+pub(super) const ADDED: IoTargetKey = IoTargetKey(1);
+pub(super) const GIVEN: IoTargetKey = IoTargetKey(2);
 
 pub(super) fn temp(content: &[u8]) -> TempFile {
     let temp = TempFile::new("io");
@@ -51,13 +51,13 @@ pub(super) fn read_only(temp: &TempFile) -> SharedHandle {
     SharedHandle::new(OwnedHandle::from(file))
 }
 
-pub(super) fn instance(files: Vec<FileSetup>, buffers: Vec<Vec<u8>>) -> Ring {
+pub(super) fn instance(files: Vec<TargetSetup>, buffers: Vec<Vec<u8>>) -> Ring {
     instance_with_clock(files, buffers, InterruptClock)
 }
 
 /// An instance stamping failures with `clock`.
 pub(super) fn instance_with_clock<K: TimeBase>(
-    files: Vec<FileSetup>,
+    files: Vec<TargetSetup>,
     buffers: Vec<Vec<u8>>,
     clock: K,
 ) -> Ring<K> {
@@ -73,8 +73,8 @@ pub(super) fn instance_with_clock<K: TimeBase>(
     .0
 }
 
-pub(super) fn given(key: FileKey, temp: &TempFile) -> FileSetup {
-    FileSetup {
+pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
+    TargetSetup {
         key,
         file: temp.open(),
         options: FileOptions::new(),
@@ -124,7 +124,7 @@ impl<K: TimeBase> Harness<K> {
 
     pub(super) fn write(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         bytes: &[u8],
         epoch: u64,
@@ -138,7 +138,7 @@ impl<K: TimeBase> Harness<K> {
     pub(super) fn write_in(
         &mut self,
         lineage: &LineageHandle,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         bytes: &[u8],
         epoch: u64,
@@ -153,7 +153,13 @@ impl<K: TimeBase> Harness<K> {
         id
     }
 
-    pub(super) fn read(&mut self, file: FileKey, offset: u64, len: usize, context: u32) -> OpId {
+    pub(super) fn read(
+        &mut self,
+        file: IoTargetKey,
+        offset: u64,
+        len: usize,
+        context: u32,
+    ) -> OpId {
         let id = self
             .ring
             .read(file, offset, vec![0; len], context)
@@ -233,7 +239,7 @@ pub(super) fn transferred(completion: &Completed) -> u32 {
 }
 
 /// Write `bytes` and read them back through `file`, checking both completions.
-fn round_trip(harness: &mut Harness, file: FileKey) {
+fn round_trip(harness: &mut Harness, file: IoTargetKey) {
     let bytes = b"durable ioring round trip";
     let write = harness.write(file, 3, bytes, 1, 10);
     let written = harness.next();
@@ -264,7 +270,7 @@ fn a_write_and_a_read_round_trip_through_a_file_added_later() {
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     harness
         .ring
-        .add_file(ADDED, temp.open())
+        .add_target(ADDED, temp.open())
         .expect("add the file");
     round_trip(&mut harness, ADDED);
     harness.finish();
@@ -337,7 +343,7 @@ fn every_operation_completes_once_with_its_context() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &first)], Vec::new()));
     harness
         .ring
-        .add_file(ADDED, second.open())
+        .add_target(ADDED, second.open())
         .expect("add a file");
 
     for i in 0..32_u32 {
@@ -388,7 +394,7 @@ fn a_write_the_kernel_fails_completes_as_failed() {
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     harness
         .ring
-        .add_file(ADDED, read_only(&temp))
+        .add_target(ADDED, read_only(&temp))
         .expect("add a read-only file");
     harness.write(ADDED, 0, b"refused", 1, 5);
     let completion = harness.next();
@@ -468,7 +474,7 @@ fn pushes_naming_a_file_the_instance_was_not_given_are_refused_with_what_they_to
         offset: 0,
         len: 4,
     };
-    let unknown = FileKey(99);
+    let unknown = IoTargetKey(99);
 
     let error = ring
         .write(unknown, 0, vec![1, 2], epoch, 1)
@@ -602,7 +608,7 @@ fn a_refused_push_spends_no_identity() {
     let before = harness.read(GIVEN, 0, 4, 1);
     harness
         .ring
-        .read(FileKey(99), 0, vec![0; 4], 2)
+        .read(IoTargetKey(99), 0, vec![0; 4], 2)
         .expect_err("an unknown file");
     let after = harness.read(GIVEN, 0, 4, 3);
     assert_eq!(
@@ -618,13 +624,13 @@ fn a_refused_push_spends_no_identity() {
 fn a_file_added_under_a_key_in_use_is_refused_and_handed_back() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(vec![given(GIVEN, &temp)], Vec::new());
-    ring.add_file(ADDED, temp.open()).expect("a new key");
+    ring.add_target(ADDED, temp.open()).expect("a new key");
 
     for key in [GIVEN, ADDED] {
         let file = temp.open();
         let raw = file.as_raw_handle();
         let error = ring
-            .add_file_with(key, file, FileOptions::new().domains([super::domain("d")]))
+            .add_target_with(key, file, FileOptions::new().domains([super::domain("d")]))
             .expect_err("a key already in use");
         assert_eq!(error.key, key);
         assert_eq!(

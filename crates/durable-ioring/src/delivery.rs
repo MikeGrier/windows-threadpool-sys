@@ -25,9 +25,10 @@ use crate::contract::{
     TokenOf,
 };
 use crate::types::{
-    AddFileError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo, FileKey,
-    FileOptions, ImportScope, Imported, Leftovers, LineageInfo, ReadOptions, RemoveFileError,
-    Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    AddTargetError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
+    FileOptions, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
+    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -86,36 +87,39 @@ impl<D> DeliveryHandle<D> {
 }
 
 impl<D: DurableRing> DeliveryHandle<D> {
-    /// [`DurableRing::add_file`].
+    /// [`DurableRing::add_target`].
     ///
     /// # Errors
     ///
-    /// As [`DurableRing::add_file`].
-    pub fn add_file(&self, key: FileKey, file: SharedHandle) -> Result<(), AddFileError> {
-        self.with(|ring| ring.add_file(key, file))
+    /// As [`DurableRing::add_target`].
+    pub fn add_target(&self, key: IoTargetKey, file: SharedHandle) -> Result<(), AddTargetError> {
+        self.with(|ring| ring.add_target(key, file))
     }
 
-    /// [`DurableRing::add_file_with`].
+    /// [`DurableRing::add_target_with`].
     ///
     /// # Errors
     ///
-    /// As [`DurableRing::add_file_with`].
-    pub fn add_file_with(
+    /// As [`DurableRing::add_target_with`].
+    pub fn add_target_with(
         &self,
-        key: FileKey,
+        key: IoTargetKey,
         file: SharedHandle,
         options: FileOptions,
-    ) -> Result<(), AddFileError> {
-        self.with(|ring| ring.add_file_with(key, file, options))
+    ) -> Result<(), AddTargetError> {
+        self.with(|ring| ring.add_target_with(key, file, options))
     }
 
-    /// [`DurableRing::remove_file`].
+    /// [`DurableRing::remove_target`].
     ///
     /// # Errors
     ///
-    /// As [`DurableRing::remove_file`].
-    pub fn remove_file(&self, key: FileKey) -> Result<SharedHandle, RemoveFileError<D::Ids>> {
-        self.with(|ring| ring.remove_file(key))
+    /// As [`DurableRing::remove_target`].
+    pub fn remove_target(
+        &self,
+        key: IoTargetKey,
+    ) -> Result<SharedHandle, RemoveTargetError<D::Ids>> {
+        self.with(|ring| ring.remove_target(key))
     }
 
     /// [`DurableRing::default_lineage`].
@@ -158,7 +162,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// As [`DurableRing::write`].
     pub fn write(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: D::Buffer,
         tag: Tag<'_, D::Ids>,
@@ -177,7 +181,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// As [`DurableRing::write_with`].
     pub fn write_with(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: D::Buffer,
         tag: Tag<'_, D::Ids>,
@@ -197,7 +201,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// As [`DurableRing::read`].
     pub fn read(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: D::Buffer,
         context: D::Context,
@@ -215,7 +219,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// As [`DurableRing::read_with`].
     pub fn read_with(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: D::Buffer,
         context: D::Context,
@@ -340,7 +344,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// As [`RegisteredBufferRing::write_registered`].
     pub fn write_registered(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, D::Ids>,
@@ -356,7 +360,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// As [`RegisteredBufferRing::write_registered_with`].
     pub fn write_registered_with(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, D::Ids>,
@@ -373,7 +377,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// As [`RegisteredBufferRing::read_registered`].
     pub fn read_registered(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: D::Context,
@@ -388,7 +392,7 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// As [`RegisteredBufferRing::read_registered_with`].
     pub fn read_registered_with(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: D::Context,

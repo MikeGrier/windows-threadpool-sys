@@ -27,7 +27,8 @@ use super::{Dioring, Sidecar, TimeBase};
 use crate::contract::{EpochId, PushResult};
 use crate::ids::{DioringIds, Lineage, OpId};
 use crate::types::{
-    Epoch, FileKey, OpKind, PushError, PushRefusal, ReadOptions, Tag, WriteCaching, WriteOptions,
+    Epoch, IoTargetKey, OpKind, PushError, PushRefusal, ReadOptions, Tag, WriteCaching,
+    WriteOptions,
 };
 
 type V<E> = DioringIds<E>;
@@ -42,7 +43,7 @@ where
 {
     pub(crate) fn push_write(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: B,
         tag: Tag<'_, V<E>>,
@@ -68,7 +69,7 @@ where
 
     pub(crate) fn push_read(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: B,
         context: C,
@@ -91,7 +92,7 @@ where
 
     pub(crate) fn push_write_registered(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, V<E>>,
@@ -112,7 +113,7 @@ where
 
     pub(crate) fn push_read_registered(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: C,
@@ -147,7 +148,7 @@ where
     )]
     fn push_op(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         kind: OpKind<V<E>>,
         len: u32,
@@ -193,7 +194,7 @@ where
     /// one of its handles, so the last cannot be released until the push returns.
     fn refusal(
         &self,
-        file: FileKey,
+        file: IoTargetKey,
         epoch: Option<Epoch<V<E>>>,
         gate: Option<Epoch<V<E>>>,
         needs_registration: bool,

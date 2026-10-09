@@ -6,12 +6,12 @@ use std::io;
 use win_time_sys::TimePoint;
 
 use super::{Oracle, TestEntry, V, completion, op, write_kind};
-use crate::FileKey;
+use crate::IoTargetKey;
 use crate::error_code::ErrorCode;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
 use crate::types::{
-    Cause, Entry, Epoch, Failed, ImportScope, Marking, MarkingKind, Outcome, SuspectSet,
+    Entry, Epoch, Failed, FailureCause, ImportScope, Marking, MarkingKind, Outcome, SuspectSet,
     SuspectWrite,
 };
 
@@ -28,7 +28,7 @@ fn suspect(instance: InstanceId, writes: &[u64]) -> SuspectSet<V> {
             .iter()
             .map(|&seq| SuspectWrite {
                 op: op(instance, seq),
-                file: FileKey(1),
+                target: IoTargetKey(1),
                 epoch: Epoch::new(Lineage { instance, seq: 0 }, 1),
             })
             .collect(),
@@ -40,7 +40,7 @@ fn failed_at(instance: InstanceId, id: u64, writes: &[u64], ticks: u64) -> TestE
     Entry::Failed(Failed {
         id,
         token: FailureToken::mint(id).0,
-        cause: Cause::Imported {
+        cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
         suspect: suspect(instance, writes),

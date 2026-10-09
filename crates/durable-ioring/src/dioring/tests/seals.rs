@@ -224,7 +224,7 @@ fn a_failed_write_is_not_covered_and_does_not_hold_its_seal() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &good)], Vec::new()));
     harness
         .ring
-        .add_file(ADDED, read_only(&refused))
+        .add_target(ADDED, read_only(&refused))
         .expect("add a read-only file");
     let failing = harness.write(ADDED, 0, b"refused", 1, 1);
     harness.write(GIVEN, 0, b"kept", 1, 2);

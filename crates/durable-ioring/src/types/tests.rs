@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::types::{
-    Epoch, FileBusy, FileKey, FileOptions, FlushDomain, ReadOptions, SuspectSet, SuspectWrite,
-    WriteCaching, WriteOptions,
+    Epoch, FileOptions, FlushDomain, IoTargetBusy, IoTargetKey, ReadOptions, SuspectSet,
+    SuspectWrite, WriteCaching, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -126,12 +126,12 @@ fn a_suspect_set_is_shared_not_copied() {
     let writes: Arc<[SuspectWrite<V>]> = vec![
         SuspectWrite {
             op: OpId { instance, seq: 3 },
-            file: FileKey(1),
+            target: IoTargetKey(1),
             epoch: Epoch::new(l, 41),
         },
         SuspectWrite {
             op: OpId { instance, seq: 4 },
-            file: FileKey(2),
+            target: IoTargetKey(2),
             epoch: Epoch::new(l, 43),
         },
     ]
@@ -143,9 +143,9 @@ fn a_suspect_set_is_shared_not_copied() {
     assert!(std::ptr::eq(set.writes(), copy.writes()));
 }
 
-fn busy() -> FileBusy<V> {
-    FileBusy {
-        file: FileKey(9),
+fn busy() -> IoTargetBusy<V> {
+    IoTargetBusy {
+        target: IoTargetKey(9),
         in_flight: 0,
         held_for_gate: 0,
         lowest_gates: Vec::new(),
@@ -156,15 +156,15 @@ fn busy() -> FileBusy<V> {
 }
 
 #[test]
-fn file_busy_names_the_file_and_nothing_it_was_not_given() {
-    assert_eq!(busy().to_string(), "file FileKey(9) is still in use:");
+fn target_busy_names_the_target_and_nothing_it_was_not_given() {
+    assert_eq!(busy().to_string(), "target IoTargetKey(9) is still in use:");
 }
 
 #[test]
-fn file_busy_says_what_clears_each_hold_it_reports() {
+fn target_busy_says_what_clears_each_hold_it_reports() {
     let instance = InstanceId::next();
     let l = lineage(instance, 0);
-    let in_flight = FileBusy {
+    let in_flight = IoTargetBusy {
         in_flight: 2,
         ..busy()
     }
@@ -174,7 +174,7 @@ fn file_busy_says_what_clears_each_hold_it_reports() {
         "{in_flight}"
     );
 
-    let gated = FileBusy {
+    let gated = IoTargetBusy {
         held_for_gate: 3,
         lowest_gates: vec![Epoch::new(l, 5)],
         ..busy()
@@ -183,7 +183,7 @@ fn file_busy_says_what_clears_each_hold_it_reports() {
     assert!(gated.contains("3 held until each of"), "{gated}");
     assert!(gated.contains("is durable or abandoned"), "{gated}");
 
-    let uncovered = FileBusy {
+    let uncovered = IoTargetBusy {
         uncovered: 4,
         uncovered_through: vec![Epoch::new(l, 6)],
         ..busy()
@@ -194,7 +194,7 @@ fn file_busy_says_what_clears_each_hold_it_reports() {
         "{uncovered}"
     );
 
-    let failed = FileBusy {
+    let failed = IoTargetBusy {
         failures: vec![crate::ids::FailureId { instance, seq: 1 }],
         ..busy()
     }
@@ -206,7 +206,7 @@ fn file_busy_says_what_clears_each_hold_it_reports() {
 fn file_busy_reports_every_hold_at_once() {
     let instance = InstanceId::next();
     let l = lineage(instance, 0);
-    let all = FileBusy {
+    let all = IoTargetBusy {
         in_flight: 1,
         held_for_gate: 1,
         lowest_gates: vec![Epoch::new(l, 1)],

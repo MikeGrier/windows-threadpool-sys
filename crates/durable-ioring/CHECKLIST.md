@@ -71,13 +71,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   inconsistency report sent through the sink, and the `trace` feature removed. Done in the steps
   below, each compiling and passing the tests and the sabotage sweep on its own.
 
-- [ ] **DI-3.10.3.1** -- **The renames, in place.** DI-D-50's names for what keeps its shape:
-  `FileKey` -> `IoTargetKey`, `FileBusy` -> `IoTargetBusy`, `FileWrites` -> `IoTargetWrites`,
-  `AddFileError` / `RemoveFileError` -> `AddTargetError` / `RemoveTargetError`, `add_file` /
-  `add_file_with` / `remove_file` -> `add_target` / `add_target_with` / `remove_target`,
-  `FileSetup` -> `TargetSetup`, `Cause` -> `FailureCause` and `Cause::Flush { file, .. }` ->
-  `FailureCause::Commit { target, .. }`; tests, the oracle, the sabotage manifest's anchors and
-  CONTRACT.md's examples follow. No behaviour changes.
+- [x] **DI-3.10.3.1** -- DI-D-50's renames in place: `IoTargetKey`, `IoTargetBusy`, `IoTargetWrites`, `AddTargetError`, `RemoveTargetError`, `add_target`, `remove_target`, `TargetSetup`, `FailureCause::Commit`. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31031)
 
 - [ ] **DI-3.10.3.2** -- **`IoFault`, a portable `ErrorCode`, and no short writes.** `IoFault {
   source, code: Option<ErrorCode>, error }` on `Outcome::Failed`, `FailureCause::Commit` and

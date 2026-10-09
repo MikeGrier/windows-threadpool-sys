@@ -11,9 +11,9 @@ use super::{
 use crate::dioring::DomainId;
 use crate::dioring::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
-use crate::types::{Cause, FileKey, ImportScope, Resolution, ResolveRefusal};
+use crate::types::{FailureCause, ImportScope, IoTargetKey, Resolution, ResolveRefusal};
 
-const D: FileKey = FileKey(4);
+const D: IoTargetKey = IoTargetKey(4);
 
 fn failed() -> io::Result<()> {
     Err(io::Error::from_raw_os_error(1117))
@@ -29,7 +29,7 @@ fn domains(ids: &[u32]) -> Reach {
 
 fn import(lineage: &mut Lineage, reach: &Reach) -> (FailureId, super::Due<u64, &'static str>) {
     lineage.import(
-        Cause::Imported {
+        FailureCause::Imported {
             scope: ImportScope::All,
         },
         reach,
@@ -43,7 +43,7 @@ fn import_only(
     only: Option<u64>,
 ) -> (FailureId, super::Due<u64, &'static str>) {
     lineage.0.import(
-        Cause::Imported {
+        FailureCause::Imported {
             scope: ImportScope::All,
         },
         reach,
@@ -95,7 +95,10 @@ fn a_failed_flush_suspects_every_held_write_in_push_order() {
     assert_eq!(lineage.durable_through(), None);
     let inventory = lineage.failures();
     assert_eq!(inventory.len(), 1);
-    assert!(matches!(inventory[0].cause, Cause::Flush { file: A, .. }));
+    assert!(matches!(
+        inventory[0].cause,
+        FailureCause::Commit { target: A, .. }
+    ));
     assert!(inventory[0].token_live, "the token went out with Failed");
 }
 
@@ -224,7 +227,7 @@ fn an_import_reaches_its_scope_with_the_same_rule() {
         inventory
             .iter()
             .enumerate()
-            .all(|(i, f)| f.id.seq == i as u64 && matches!(f.cause, Cause::Imported { .. }))
+            .all(|(i, f)| f.id.seq == i as u64 && matches!(f.cause, FailureCause::Imported { .. }))
     );
 }
 

@@ -15,14 +15,14 @@ use super::{DomainPart, Due, Durability, Key, MarkingKind, Reach, SealStage, Sta
 use crate::contract::EpochId;
 use crate::dioring::{DomainId, TimeBase};
 use crate::ids::OpId;
-use crate::types::{Cause, FileKey};
+use crate::types::{FailureCause, IoTargetKey};
 
 /// Name `op`, a write to `file` declared with `domains`, in the request for each of those domains
 /// the provider serves.
 pub(super) fn name(
     parts: &mut Vec<DomainPart>,
     served: &[DomainId],
-    file: FileKey,
+    file: IoTargetKey,
     domains: &[DomainId],
     op: OpId,
 ) {
@@ -52,7 +52,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// The provider answered `domain` of `lineage`'s seal `seal`: `Ok` for success, or the cause of
-    /// its failure -- `Cause::Provider`, or `Cause::ProviderAbandoned` for a completion dropped
+    /// its failure -- `FailureCause::Provider`, or `FailureCause::ProviderAbandoned` for a completion dropped
     /// unanswered. Success covers what it completes; a failure is observed at once, and is the
     /// seal's answer. An answer for a lineage no longer live reports nothing, as a late flush does
     /// (DI-D-42); one no request asked for is an inconsistency (DI-D-44, DI-D-46).
@@ -61,7 +61,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         lineage: Key,
         seal: u64,
         domain: DomainId,
-        outcome: Result<(), Cause<V<E>>>,
+        outcome: Result<(), FailureCause<V<E>>>,
     ) -> Due<E, T> {
         let mut due = Due::default();
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {

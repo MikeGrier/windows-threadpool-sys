@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Mike Grier
-//! What the core holds of one file (DI-3.2.7): the part of `remove_file`'s refusal it answers.
+//! What the core holds of one file (DI-3.2.7): the part of `remove_target`'s refusal it answers.
 
 use std::io;
 
 use super::{A, B, DEFAULT, FULL, Lineage, Ops, lineage, submitted, tokens};
 use crate::dioring::durability::files::FileHolds;
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach};
-use crate::types::{Cause, Epoch, FileKey, ImportScope, Resolution};
+use crate::types::{Epoch, FailureCause, ImportScope, IoTargetKey, Resolution};
 
-fn holds(lineage: &Lineage, file: FileKey) -> FileHolds<u64> {
+fn holds(lineage: &Lineage, file: IoTargetKey) -> FileHolds<u64> {
     lineage.file_holds(file)
 }
 
@@ -124,7 +124,7 @@ fn a_failure_holds_a_file_whose_suspect_write_was_covered_until_it_is_resolved()
     let write = Ops::new().push(&mut lineage, 1, A, DEFAULT);
     lineage.completed(write, FULL);
     let (id, _) = lineage.import(
-        Cause::Imported {
+        FailureCause::Imported {
             scope: ImportScope::All,
         },
         &Reach::All,

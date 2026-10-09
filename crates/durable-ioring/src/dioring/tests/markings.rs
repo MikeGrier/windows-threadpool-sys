@@ -8,7 +8,7 @@ use crate::contract::DurableRing;
 use crate::error_code::ErrorCode;
 use crate::ids::FailureId;
 use crate::types::{
-    Cause, DurabilityRequest, Entry, Failed, ImportScope, Marking, MarkingKind, Resolution,
+    DurabilityRequest, Entry, Failed, FailureCause, ImportScope, Marking, MarkingKind, Resolution,
 };
 
 use super::pushes::{GIVEN, Harness, given, instance, temp};
@@ -134,7 +134,7 @@ fn a_failed_flushs_code_reads_without_the_ring_crate() {
     harness.ring.fail_next_flush(GIVEN, IO_DEVICE);
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
     match next_failed(&mut harness).cause {
-        Cause::Flush { error, .. } => {
+        FailureCause::Commit { error, .. } => {
             let code = ErrorCode::of(&error).expect("a flush the kernel answered carries a code");
             assert_eq!(code.win32(), Some(IO_DEVICE));
         }

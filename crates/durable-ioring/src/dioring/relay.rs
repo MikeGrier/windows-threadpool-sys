@@ -37,8 +37,8 @@ use super::{Sidecar, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
-use crate::types::FileKey;
-use crate::types::{Cause, Entry, Epoch, OpCompletion, OpKind, Outcome};
+use crate::types::IoTargetKey;
+use crate::types::{Entry, Epoch, FailureCause, OpCompletion, OpKind, Outcome};
 
 /// An entry of a dioring instance's queue.
 pub(crate) type DioringEntry<E, B, C> = Entry<DioringIds<E>, B, C>;
@@ -96,7 +96,7 @@ pub(crate) enum OpData<B, S> {
 pub(crate) struct OpPush<E: EpochId + 'static, B, C> {
     pub(crate) id: OpId,
     pub(crate) kind: OpKind<DioringIds<E>>,
-    pub(crate) file: FileKey,
+    pub(crate) file: IoTargetKey,
     pub(crate) offset: u64,
     pub(crate) data: OpData<B, Sidecar<E, C>>,
     pub(crate) caching: RingCaching,
@@ -143,8 +143,8 @@ pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     /// submission issues them (the ring crate's D-5).
     pub(crate) unsubmitted: bool,
     /// The consumer operations the ring holds, by file: counted from the push to the record of
-    /// its completion, as `remove_file` reports them (DI-D-45). A file with none has no entry.
-    pub(crate) in_flight: HashMap<FileKey, usize>,
+    /// its completion, as `remove_target` reports them (DI-D-45). A file with none has no entry.
+    pub(crate) in_flight: HashMap<IoTargetKey, usize>,
     /// Provider completions made and not yet answered, dropped ones included: ending waits for
     /// this to reach zero (DI-D-25).
     unanswered: usize,
@@ -154,7 +154,7 @@ pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     /// Failures armed by the fault seam: the next flush of the file to complete reports the Win32
     /// error instead of what the kernel did.
     #[cfg(feature = "fault-injection")]
-    pub(crate) injected: Vec<(FileKey, u32)>,
+    pub(crate) injected: Vec<(IoTargetKey, u32)>,
 }
 
 /// The state dioring's delivery callback reaches.
@@ -532,11 +532,11 @@ where
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
         let outcome = match outcome {
             DomainOutcome::Succeeded => Ok(()),
-            DomainOutcome::Failed(error) => Err(Cause::Provider {
+            DomainOutcome::Failed(error) => Err(FailureCause::Provider {
                 domain: call.name.clone(),
                 error: Arc::new(error),
             }),
-            DomainOutcome::Abandoned => Err(Cause::ProviderAbandoned {
+            DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
                 domain: call.name.clone(),
             }),
         };

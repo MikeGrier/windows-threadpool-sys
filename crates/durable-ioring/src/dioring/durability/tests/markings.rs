@@ -12,13 +12,13 @@ use super::{
 use crate::dioring::durability::{Reach, WriteEnd};
 use crate::dioring::tests::MockClock;
 use crate::ids::{InstanceId, Lineage as LineageId};
-use crate::types::{Cause, ImportScope, MarkingKind, Outcome, Resolution};
+use crate::types::{FailureCause, ImportScope, MarkingKind, Outcome, Resolution};
 
 const NULLIFIED: MarkingKind = MarkingKind::Nullified { code: IO_DEVICE };
 const SHORT: MarkingKind = MarkingKind::Short { transferred: 3 };
 
 fn import(lineage: &mut Lineage) -> Due<u64, &'static str> {
-    let cause = Cause::Imported {
+    let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.import(cause, &Reach::All).1
@@ -143,7 +143,7 @@ fn a_write_two_failures_suspect_marks_both_with_one_reading() {
     let mut lineage = One::with_clock(clock.clone());
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    let cause = || Cause::Imported {
+    let cause = || FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.import(cause(), &Reach::All);

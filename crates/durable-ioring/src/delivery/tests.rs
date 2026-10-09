@@ -12,12 +12,12 @@ use windows_ioring_sys::RegisteredSpan;
 use super::EntryDelivery;
 use crate::contract::DurableRing;
 use crate::dioring::tests::TempFile;
-use crate::dioring::{Dioring, FileSetup, Setup};
+use crate::dioring::{Dioring, Setup, TargetSetup};
 use crate::fake::{Fake, Signals};
 use crate::ids::DioringIds;
 use crate::oracle::ConformanceOracle;
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FileKey, FileOptions, OpKind, PushRefusal,
+    DurabilityRequest, Entry, Epoch, EpochState, FileOptions, IoTargetKey, OpKind, PushRefusal,
     Resolution,
 };
 
@@ -27,7 +27,7 @@ type RingEntry = Entry<V, Vec<u8>, u32>;
 
 /// How long a test waits for a delivery before calling it lost.
 const BOUND: Duration = Duration::from_secs(5);
-const FILE: FileKey = FileKey(1);
+const FILE: IoTargetKey = IoTargetKey(1);
 
 fn temp() -> TempFile {
     let temp = TempFile::new("delivery");
@@ -39,7 +39,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
     Ring::new(Setup {
         submission_queue_size: 128,
         completion_queue_size: 128,
-        files: vec![FileSetup {
+        files: vec![TargetSetup {
             key: FILE,
             file: temp.open(),
             options: FileOptions::new(),
@@ -357,15 +357,15 @@ fn a_refusal_through_the_handle_hands_back_what_it_took() {
     let temp = temp();
     let (delivery, rx) = forwarding(instance(&temp, Vec::new()));
     let error = delivery
-        .read(FileKey(99), 0, vec![7], 3)
+        .read(IoTargetKey(99), 0, vec![7], 3)
         .expect_err("an unknown file");
     assert!(matches!(
         error.reason,
-        PushRefusal::UnknownFile(FileKey(99))
+        PushRefusal::UnknownFile(IoTargetKey(99))
     ));
     assert_eq!((error.buffer, error.context), (Some(vec![7]), 3));
     let error = delivery
-        .add_file(FILE, temp.open())
+        .add_target(FILE, temp.open())
         .expect_err("a key in use");
     assert_eq!(error.key, FILE);
     assert!(
@@ -465,12 +465,12 @@ fn a_file_is_removed_through_the_handle() {
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
     let file = other.open();
     delivery
-        .add_file(FileKey(2), file.clone())
+        .add_target(IoTargetKey(2), file.clone())
         .expect("add a file");
-    let back = delivery.remove_file(FileKey(2)).expect("remove it");
+    let back = delivery.remove_target(IoTargetKey(2)).expect("remove it");
     assert!(back.same_handle(&file));
     assert!(matches!(
-        delivery.remove_file(FileKey(2)),
-        Err(crate::types::RemoveFileError::UnknownKey(FileKey(2)))
+        delivery.remove_target(IoTargetKey(2)),
+        Err(crate::types::RemoveTargetError::UnknownKey(IoTargetKey(2)))
     ));
 }

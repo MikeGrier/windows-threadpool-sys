@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! What the core holds of one file (DI-3.2.7): the part of `remove_file`'s refusal the core
+//! What the core holds of one file (DI-3.2.7): the part of `remove_target`'s refusal the core
 //! answers. Operations in flight and held for a gate are the relay's to count.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,7 +8,7 @@ use super::{Durability, Key, Stage, V};
 use crate::contract::EpochId;
 use crate::dioring::TimeBase;
 use crate::ids::FailureId;
-use crate::types::{Epoch, FileKey};
+use crate::types::{Epoch, IoTargetKey};
 
 /// The core's holds on a file.
 #[derive(Debug, PartialEq, Eq)]
@@ -32,12 +32,12 @@ impl<E: EpochId + 'static> FileHolds<E> {
 impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// What holds `file` here. A write in flight is the relay's to count, and a write of an ended
     /// lineage is no longer recorded once it has completed.
-    pub(crate) fn file_holds(&self, file: FileKey) -> FileHolds<E> {
+    pub(crate) fn file_holds(&self, file: IoTargetKey) -> FileHolds<E> {
         let mut suspect = BTreeSet::new();
         let mut failures = Vec::new();
         for failure in &self.failures {
             let mut names_file = false;
-            for write in failure.suspect.writes().iter().filter(|w| w.file == file) {
+            for write in failure.suspect.writes().iter().filter(|w| w.target == file) {
                 names_file = true;
                 suspect.insert(write.op.seq);
             }

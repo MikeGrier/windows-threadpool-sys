@@ -5,11 +5,11 @@
 use win_time_sys::TimePoint;
 
 use super::{Oracle, TestEntry, V, completion, done, op};
-use crate::FileKey;
+use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
 use crate::types::{
-    Cause, Entry, Epoch, Failed, ImportScope, OpKind, Outcome, SuspectSet, SuspectWrite,
+    Entry, Epoch, Failed, FailureCause, ImportScope, OpKind, Outcome, SuspectSet, SuspectWrite,
 };
 
 fn at(instance: InstanceId, lineage: u64, id: u64) -> Epoch<V> {
@@ -38,7 +38,7 @@ fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
     Entry::Failed(Failed {
         id,
         token: FailureToken::mint(id).0,
-        cause: Cause::Imported {
+        cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
         suspect: SuspectSet::new(
@@ -46,7 +46,7 @@ fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
                 .iter()
                 .map(|&(op, epoch)| SuspectWrite {
                     op,
-                    file: FileKey(1),
+                    target: IoTargetKey(1),
                     epoch,
                 })
                 .collect(),

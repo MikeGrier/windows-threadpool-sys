@@ -1704,3 +1704,17 @@ The decision is [DI-D-50](DESIGN-NOTES.md#di-d-50); the reasoning behind the obl
   each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
   unbuffered file, a cached file on a best-effort basis, a layered target such as a VHDX -- and
   amendment markers on every decision row the restatement changes.
+
+## Moved 2026-10-09 18:46:19 -04:00 -- DI-3.10.3.1: the renames
+
+### <a id="di-31031"></a>DI-3.10.3.1 -- DI-D-50's renames in place: `IoTargetKey`, `IoTargetBusy`, `IoTargetWrites`, `AddTargetError`, `RemoveTargetError`, `add_target`, `remove_target`, `TargetSetup`, `FailureCause::Commit`. *(completed 2026-10-09 18:46:19 -04:00)*
+
+Applied by a word-bounded script over `src/`, CONTRACT.md and `sabotage.json` (`fs::remove_file` excluded), then by hand for the variant's field and two public fields: `SuspectWrite::file` and `IoTargetBusy::file` became `target`, and `IoTargetBusy`'s display says "target". `TargetSetup`'s and `AddTargetError`'s `file: SharedHandle` stay, being the Win32 handle `DI-3.10.3.5` moves into the file target. API.md, DESIGN-NOTES.md and this archive keep the old names as history. The item as written:
+
+**The renames, in place.** DI-D-50's names for what keeps its shape:
+  `FileKey` -> `IoTargetKey`, `FileBusy` -> `IoTargetBusy`, `FileWrites` -> `IoTargetWrites`,
+  `AddFileError` / `RemoveFileError` -> `AddTargetError` / `RemoveTargetError`, `add_file` /
+  `add_file_with` / `remove_file` -> `add_target` / `add_target_with` / `remove_target`,
+  `FileSetup` -> `TargetSetup`, `Cause` -> `FailureCause` and `Cause::Flush { file, .. }` ->
+  `FailureCause::Commit { target, .. }`; tests, the oracle, the sabotage manifest's anchors and
+  CONTRACT.md's examples follow. No behaviour changes.

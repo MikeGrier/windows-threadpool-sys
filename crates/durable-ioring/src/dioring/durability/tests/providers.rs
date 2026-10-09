@@ -14,7 +14,7 @@ use crate::dioring::DomainId;
 use crate::dioring::durability::{
     DEFAULT_LINEAGE, DomainPart, Due, Key, ProviderCall, Reach, Routing, V,
 };
-use crate::types::{Cause, FlushDomain, ImportScope, MarkingKind};
+use crate::types::{FailureCause, FlushDomain, ImportScope, MarkingKind};
 
 /// A file only the provider answers for: every domain it declares is served.
 const PROVIDER: Routing = Routing {
@@ -52,8 +52,8 @@ fn succeeded(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static
     lineage.provided(DEFAULT_LINEAGE, seal, DomainId(domain), Ok(()))
 }
 
-fn provider_failure(domain: u32) -> Cause<V<u64>> {
-    Cause::Provider {
+fn provider_failure(domain: u32) -> FailureCause<V<u64>> {
+    FailureCause::Provider {
         domain: FlushDomain::new(domain.to_le_bytes()),
         error: Arc::new(io::Error::from_raw_os_error(1117)),
     }
@@ -71,7 +71,7 @@ fn failed(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static st
 /// A failure observed before the seal, so a write's coverage shows as a marking.
 fn import(lineage: &mut Lineage) {
     lineage.import(
-        Cause::Imported {
+        FailureCause::Imported {
             scope: ImportScope::All,
         },
         &Reach::All,
@@ -265,7 +265,7 @@ fn a_provider_failure_reaches_the_files_in_its_domain_and_every_unknown_file() {
     assert!(
         matches!(
             &inventory[0].cause,
-            Cause::Provider { domain, .. } if domain.bytes() == 1u32.to_le_bytes()
+            FailureCause::Provider { domain, .. } if domain.bytes() == 1u32.to_le_bytes()
         ),
         "{:?}",
         inventory[0].cause
@@ -288,14 +288,14 @@ fn a_completion_dropped_unanswered_is_a_failure_of_its_domain() {
     let write = ops.push_in(&mut lineage, 1, A, PROVIDER, &[1]);
     lineage.completed(write, FULL);
     let seal = call(&submitted(lineage.seal(1))).seal;
-    let abandoned = Cause::ProviderAbandoned {
+    let abandoned = FailureCause::ProviderAbandoned {
         domain: FlushDomain::new(*b"one"),
     };
     let due = lineage.provided(DEFAULT_LINEAGE, seal, DomainId(1), Err(abandoned));
     assert_eq!(seen(&due), [Seen::Failed(0, vec![write.seq])]);
     assert!(matches!(
         &lineage.failures()[0].cause,
-        Cause::ProviderAbandoned { domain } if domain.bytes() == b"one"
+        FailureCause::ProviderAbandoned { domain } if domain.bytes() == b"one"
     ));
     assert!(matches!(lineage.state(1), State::Blocked(by) if by.seq == 0));
 }

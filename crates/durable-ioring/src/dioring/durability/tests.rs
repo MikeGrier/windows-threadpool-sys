@@ -14,7 +14,7 @@ use super::{
 use crate::dioring::{DomainId, TimeBase};
 use crate::error_code::ErrorCode;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
-use crate::types::{Cause, FileKey, MarkingKind, SuspectWrite};
+use crate::types::{FailureCause, IoTargetKey, MarkingKind, SuspectWrite};
 
 // Failures, their reach, and their resolution: DI-3.2.4.
 mod failures;
@@ -28,7 +28,7 @@ mod lineages;
 mod gates;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
-// What holds a file, for `remove_file`: DI-3.2.7.
+// What holds a file, for `remove_target`: DI-3.2.7.
 mod files;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
@@ -87,7 +87,7 @@ impl<K: TimeBase> One<K> {
     fn flushed(
         &mut self,
         through: u64,
-        file: FileKey,
+        file: IoTargetKey,
         result: io::Result<()>,
     ) -> Due<u64, &'static str> {
         self.0.flushed(DEFAULT_LINEAGE, through, file, result)
@@ -96,7 +96,7 @@ impl<K: TimeBase> One<K> {
     /// An import confined to no lineage.
     fn import(
         &mut self,
-        cause: Cause<DioringIds<u64>>,
+        cause: FailureCause<DioringIds<u64>>,
         reach: &Reach,
     ) -> (FailureId, Due<u64, &'static str>) {
         self.0.import(cause, reach, None)
@@ -105,9 +105,9 @@ impl<K: TimeBase> One<K> {
 
 type Lineage = One;
 
-const A: FileKey = FileKey(1);
-const B: FileKey = FileKey(2);
-const C: FileKey = FileKey(3);
+const A: IoTargetKey = IoTargetKey(1);
+const B: IoTargetKey = IoTargetKey(2);
+const C: IoTargetKey = IoTargetKey(3);
 const DEFAULT: Routing = Routing {
     default: true,
     provider: false,
@@ -131,7 +131,7 @@ fn lineage() -> Lineage {
     One::with_clock(InterruptClock)
 }
 
-fn target(file: FileKey) -> &'static str {
+fn target(file: IoTargetKey) -> &'static str {
     match file {
         A => "a",
         B => "b",
@@ -156,7 +156,7 @@ impl Ops {
         &mut self,
         lineage: &mut One<K>,
         epoch: u64,
-        file: FileKey,
+        file: IoTargetKey,
         routing: Routing,
     ) -> OpId {
         self.push_in(lineage, epoch, file, routing, &[])
@@ -167,7 +167,7 @@ impl Ops {
         &mut self,
         lineage: &mut One<K>,
         epoch: u64,
-        file: FileKey,
+        file: IoTargetKey,
         routing: Routing,
         domains: &[u32],
     ) -> OpId {
@@ -180,7 +180,7 @@ impl Ops {
         lineage: &mut One<K>,
         key: Key,
         epoch: u64,
-        file: FileKey,
+        file: IoTargetKey,
         routing: Routing,
         domains: &[u32],
     ) -> OpId {
@@ -204,11 +204,11 @@ impl Ops {
     }
 }
 
-fn flush(through: u64, file: FileKey) -> Flush<u64, &'static str> {
+fn flush(through: u64, file: IoTargetKey) -> Flush<u64, &'static str> {
     flush_of(DEFAULT_LINEAGE, through, file)
 }
 
-fn flush_of(lineage: Key, through: u64, file: FileKey) -> Flush<u64, &'static str> {
+fn flush_of(lineage: Key, through: u64, file: IoTargetKey) -> Flush<u64, &'static str> {
     Flush {
         lineage,
         through,

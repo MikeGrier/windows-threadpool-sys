@@ -2,10 +2,10 @@
 //! The oracle's failure rules (DI-3.2.4), each refused when broken and accepted when kept.
 
 use super::{Oracle, TestEntry, V, done, epoch, op, write_kind};
-use crate::FileKey;
+use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, OpId};
 use crate::oracle::Violation;
-use crate::types::{Cause, Entry, Epoch, Failed, ImportScope, SuspectSet, SuspectWrite};
+use crate::types::{Entry, Epoch, Failed, FailureCause, ImportScope, SuspectSet, SuspectWrite};
 use win_time_sys::TimePoint;
 
 fn failure(instance: InstanceId, seq: u64) -> FailureId {
@@ -18,7 +18,7 @@ fn suspect(writes: &[(OpId, Epoch<V>)]) -> SuspectSet<V> {
             .iter()
             .map(|&(op, epoch)| SuspectWrite {
                 op,
-                file: FileKey(1),
+                target: IoTargetKey(1),
                 epoch,
             })
             .collect(),
@@ -34,7 +34,7 @@ fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> TestEntr
     Entry::Failed(Failed {
         id,
         token: FailureToken::mint(id).0,
-        cause: Cause::Imported {
+        cause: FailureCause::Imported {
             scope: ImportScope::All,
         },
         suspect: suspect(writes),

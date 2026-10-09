@@ -14,7 +14,7 @@ use super::pushes::{BOUND, GIVEN, Harness, Ring, temp};
 use super::{FlushDomain, FlushRequest, Kept, TempFile, V, domain, file, keeper, setup};
 use crate::contract::DurableRing;
 use crate::provider::DurabilityProvider;
-use crate::types::{Cause, DurabilityRequest, Entry, EpochState, Failed, FileKey};
+use crate::types::{DurabilityRequest, Entry, EpochState, Failed, FailureCause, IoTargetKey};
 
 /// `ERROR_IO_DEVICE`, the error a failing provider reports.
 const IO_DEVICE: i32 = 1117;
@@ -132,10 +132,10 @@ fn a_request_names_each_domain_its_files_their_handles_and_their_writes() {
         .expect("build")
         .0;
     let mut harness = Harness::new(ring);
-    let first = harness.write(FileKey(2), 0, b"one", 1, 1);
-    let other = harness.write(FileKey(3), 0, b"two", 1, 2);
-    let second = harness.write(FileKey(2), 8, b"three", 1, 3);
-    harness.write(FileKey(4), 0, b"four", 1, 4);
+    let first = harness.write(IoTargetKey(2), 0, b"one", 1, 1);
+    let other = harness.write(IoTargetKey(3), 0, b"two", 1, 2);
+    let second = harness.write(IoTargetKey(2), 8, b"three", 1, 3);
+    harness.write(IoTargetKey(4), 0, b"four", 1, 4);
     harness.next_n(4);
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
 
@@ -150,7 +150,10 @@ fn a_request_names_each_domain_its_files_their_handles_and_their_writes() {
         .collect();
     assert_eq!(
         named,
-        [(FileKey(2), vec![first, second]), (FileKey(3), vec![other])]
+        [
+            (IoTargetKey(2), vec![first, second]),
+            (IoTargetKey(3), vec![other])
+        ]
     );
     assert!(part.files[0].file.same_handle(&handles[0]));
     assert!(part.files[1].file.same_handle(&handles[1]));
@@ -243,7 +246,7 @@ fn a_provider_failure_is_reported_with_its_domain_and_error_and_holds_the_seal()
 
     let failed = next_failed(&mut harness);
     match &failed.cause {
-        Cause::Provider { domain, error } => {
+        FailureCause::Provider { domain, error } => {
             assert_eq!(domain.bytes(), b"log");
             assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
         }
@@ -268,7 +271,7 @@ fn a_completion_dropped_unanswered_is_reported_as_abandoned() {
 
     let failed = next_failed(&mut harness);
     assert!(
-        matches!(&failed.cause, Cause::ProviderAbandoned { domain } if domain.bytes() == b"log"),
+        matches!(&failed.cause, FailureCause::ProviderAbandoned { domain } if domain.bytes() == b"log"),
         "{:?}",
         failed.cause
     );
@@ -290,7 +293,7 @@ fn a_panic_in_the_provider_reaches_the_consumers_call_and_abandons_what_it_dropp
 
     let failed = next_failed(&mut harness);
     assert!(
-        matches!(&failed.cause, Cause::ProviderAbandoned { domain } if domain.bytes() == b"log"),
+        matches!(&failed.cause, FailureCause::ProviderAbandoned { domain } if domain.bytes() == b"log"),
         "{:?}",
         failed.cause
     );

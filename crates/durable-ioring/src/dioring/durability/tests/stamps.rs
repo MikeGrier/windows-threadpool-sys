@@ -11,7 +11,7 @@ use crate::dioring::TimeBase;
 use crate::dioring::durability::{Event, Reach};
 use crate::dioring::tests::MockClock;
 use crate::ids::FailureToken;
-use crate::types::{Cause, ImportScope, Resolution};
+use crate::types::{FailureCause, ImportScope, Resolution};
 
 type Mocked = One<MockClock>;
 
@@ -20,7 +20,7 @@ fn mocked(clock: &MockClock) -> Mocked {
 }
 
 fn import<K: TimeBase>(lineage: &mut One<K>) -> Due<u64, &'static str> {
-    let cause = Cause::Imported {
+    let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.import(cause, &Reach::All).1

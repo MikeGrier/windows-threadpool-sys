@@ -19,14 +19,14 @@ use crate::ids::{
     DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
 };
 use crate::provider::{
-    Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FileWrites,
-    FlushRequest,
+    Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest,
+    IoTargetWrites,
 };
 use crate::types::{
-    AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, Imported, Leftovers, LineageInfo,
-    OpKind, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
-    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
+    FailureCause, FailureInfo, FileOptions, FlushDomain, ImportScope, Imported, IoTargetKey,
+    Leftovers, LineageInfo, OpKind, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 mod durability;
@@ -63,7 +63,7 @@ pub struct Setup<E: EpochId + 'static, R> {
     pub completion_queue_size: u32,
     /// Registered with the ring, which holds them for its life. A file added later is not
     /// registered.
-    pub files: Vec<FileSetup>,
+    pub files: Vec<TargetSetup>,
     /// Already allocated and placed by the consumer; dioring neither allocates nor places them.
     /// Empty registers nothing.
     pub buffers: Vec<R>,
@@ -74,9 +74,9 @@ pub struct Setup<E: EpochId + 'static, R> {
 
 /// One file given at construction.
 #[derive(Debug)]
-pub struct FileSetup {
+pub struct TargetSetup {
     /// The consumer's key for it, unique within the instance.
-    pub key: FileKey,
+    pub key: IoTargetKey,
     /// The file.
     pub file: SharedHandle,
     /// Its flush domains.
@@ -87,7 +87,7 @@ pub struct FileSetup {
 #[derive(Debug)]
 pub enum SetupRefusal {
     /// Two files share a key.
-    DuplicateKey(FileKey),
+    DuplicateKey(IoTargetKey),
     /// The provider named a domain twice.
     DuplicateProviderDomain(FlushDomain),
     /// Creating the ring or making a registration failed.
@@ -107,7 +107,7 @@ pub struct SetupError<E: EpochId + 'static, R> {
     /// Why construction failed.
     pub reason: SetupRefusal,
     /// The files, in the order given.
-    pub files: Vec<FileSetup>,
+    pub files: Vec<TargetSetup>,
     /// The buffers, unless the kernel was given them; see above.
     pub buffers: Option<Vec<R>>,
     /// The provider, if one was given.
@@ -210,8 +210,8 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
     Consumer {
         id: OpId,
         kind: OpKind<DioringIds<E>>,
-        /// Counted in flight for `remove_file` until the completion is recorded.
-        file: FileKey,
+        /// Counted in flight for `remove_target` until the completion is recorded.
+        file: IoTargetKey,
         #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
         offset: u64,
         context: C,
@@ -219,7 +219,7 @@ pub(crate) enum Sidecar<E: EpochId + 'static, C> {
     /// A seal's flush of one file (DI-D-22).
     Commit {
         through: Epoch<DioringIds<E>>,
-        file: FileKey,
+        file: IoTargetKey,
     },
 }
 
@@ -239,7 +239,7 @@ pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>,
     /// registered are released (DI-2.7 point 5, the ring crate's D-13 order).
     pub(crate) delivery: Arc<Delivery<E, B, C>>,
     pub(crate) relay: Arc<Relay<E, B, C, K>>,
-    pub(crate) files: HashMap<FileKey, FileRecord>,
+    pub(crate) files: HashMap<IoTargetKey, FileRecord>,
     /// The interning table. An entry lives for the instance's life: the number of distinct
     /// domains is the number of devices and shares the consumer touches.
     pub(crate) domains: HashMap<FlushDomain, DomainId>,
@@ -390,7 +390,7 @@ where
 
         let mut domains = HashMap::new();
         let mut records = HashMap::with_capacity(files.len());
-        for (i, FileSetup { key, file, options }) in files.into_iter().enumerate() {
+        for (i, TargetSetup { key, file, options }) in files.into_iter().enumerate() {
             let index = registered_files
                 .and_then(|r| r.get(u32::try_from(i).ok()?))
                 .expect("every file given at construction was registered, in order");
@@ -488,14 +488,14 @@ where
         self.relay.readiness()
     }
 
-    fn add_file_with(
+    fn add_target_with(
         &mut self,
-        key: FileKey,
+        key: IoTargetKey,
         file: SharedHandle,
         options: FileOptions,
-    ) -> Result<(), AddFileError> {
+    ) -> Result<(), AddTargetError> {
         if self.files.contains_key(&key) {
-            return Err(AddFileError { key, file, options });
+            return Err(AddTargetError { key, file, options });
         }
         let domains = intern_all(&mut self.domains, options.domains);
         let routing = routing(&domains, self.provider.as_ref());
@@ -510,13 +510,16 @@ where
         Ok(())
     }
 
-    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<Self::Ids>> {
+    fn remove_target(
+        &mut self,
+        key: IoTargetKey,
+    ) -> Result<SharedHandle, RemoveTargetError<Self::Ids>> {
         self.remove(key)
     }
 
     fn write_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: B,
         tag: Tag<'_, Self::Ids>,
@@ -531,7 +534,7 @@ where
 
     fn read_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         buffer: B,
         context: C,
@@ -705,7 +708,7 @@ where
         let mut core = self.relay.lock();
         let (failure, due) = core
             .durability
-            .import(Cause::Imported { scope }, &reach, only);
+            .import(FailureCause::Imported { scope }, &reach, only);
         self.settle(&mut core, due);
         Ok(Imported { failure, unmatched })
     }
@@ -824,7 +827,7 @@ where
                 let files = part
                     .files
                     .into_iter()
-                    .map(|(key, writes)| FileWrites {
+                    .map(|(key, writes)| IoTargetWrites {
                         key,
                         file: self.files[&key].target.handle(),
                         writes,
@@ -883,7 +886,7 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Dioring<B, E, C, R, K> {
     /// Make the next flush of `file` to complete report the Win32 error `code` -- for example
     /// `1117`, `ERROR_IO_DEVICE` -- whatever the kernel answered. Armed failures for one file are
     /// used in the order they were armed. The flush may already be in flight.
-    pub fn fail_next_flush(&mut self, file: FileKey, code: u32) {
+    pub fn fail_next_flush(&mut self, file: IoTargetKey, code: u32) {
         self.relay.lock().injected.push((file, code));
     }
 }
@@ -908,7 +911,7 @@ where
 
     fn write_registered_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -920,7 +923,7 @@ where
 
     fn read_registered_with(
         &mut self,
-        file: FileKey,
+        file: IoTargetKey,
         offset: u64,
         span: RegisteredSpan,
         context: C,
@@ -962,7 +965,7 @@ fn epoch_state<E: EpochId + 'static>(state: State) -> EpochState<DioringIds<E>> 
 /// completion. Each ends construction as `SetupRefusal::Ring`.
 fn register_files<B, S>(
     ring: &mut IoRing<B, S>,
-    files: &[FileSetup],
+    files: &[TargetSetup],
 ) -> io::Result<Option<RegisteredFiles>> {
     if files.is_empty() {
         return Ok(None);

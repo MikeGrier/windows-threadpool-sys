@@ -13,10 +13,11 @@ use win_sync_sys::{Event, ResetMode};
 use crate::contract::{DurableRing, EntryOf, PushResult};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, LineageHandle, OpId};
 use crate::types::{
-    AddFileError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, ImportScope, Imported, Leftovers, LineageInfo, OpCompletion,
-    OpKind, Outcome, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
-    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
+    EpochState, FailureInfo, FileOptions, ImportScope, Imported, IoTargetKey, Leftovers,
+    LineageInfo, OpCompletion, OpKind, Outcome, ReadOptions, RemoveTargetError, Resolution,
+    ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage,
+    WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -103,17 +104,17 @@ impl DurableRing for Fake {
         self.signal.try_clone()
     }
 
-    fn add_file_with(
+    fn add_target_with(
         &mut self,
-        _key: FileKey,
+        _key: IoTargetKey,
         _file: SharedHandle,
         _options: FileOptions,
-    ) -> Result<(), AddFileError> {
+    ) -> Result<(), AddTargetError> {
         Ok(())
     }
 
-    fn remove_file(&mut self, key: FileKey) -> Result<SharedHandle, RemoveFileError<V>> {
-        Err(RemoveFileError::UnknownKey(key))
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<SharedHandle, RemoveTargetError<V>> {
+        Err(RemoveTargetError::UnknownKey(key))
     }
 
     fn default_lineage(&self) -> LineageHandle {
@@ -144,7 +145,7 @@ impl DurableRing for Fake {
 
     fn write_with(
         &mut self,
-        _file: FileKey,
+        _file: IoTargetKey,
         _offset: u64,
         _buffer: Vec<u8>,
         _tag: Tag<'_, V>,
@@ -156,7 +157,7 @@ impl DurableRing for Fake {
 
     fn read_with(
         &mut self,
-        _file: FileKey,
+        _file: IoTargetKey,
         _offset: u64,
         _buffer: Vec<u8>,
         _context: u32,

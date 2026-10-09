@@ -18,17 +18,17 @@ use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::dioring::DomainId;
 use crate::provider::{Answer, DomainCall, DomainOutcome, DurabilityProvider};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, Failed, FileBusy, FileKey, OpKind, PushRefusal,
-    RemoveFileError, Resolution, WriteOptions,
+    DurabilityRequest, Entry, Epoch, Failed, IoTargetBusy, IoTargetKey, OpKind, PushRefusal,
+    RemoveTargetError, Resolution, WriteOptions,
 };
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
 
 /// `key`'s refusal, which must be `Busy`.
-fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: FileKey) -> FileBusy<V> {
-    match ring.remove_file(key) {
-        Err(RemoveFileError::Busy(busy)) => busy,
+fn busy<K: crate::dioring::TimeBase>(ring: &mut Ring<K>, key: IoTargetKey) -> IoTargetBusy<V> {
+    match ring.remove_target(key) {
+        Err(RemoveTargetError::Busy(busy)) => busy,
         Err(other) => panic!("expected Busy, got {other:?}"),
         Ok(_) => panic!("expected Busy, and the file was removed"),
     }
@@ -54,8 +54,8 @@ fn message(payload: &(dyn std::any::Any + Send)) -> String {
 fn removing_a_file_never_given_is_refused_as_unknown() {
     let mut ring = instance(Vec::new(), Vec::new());
     assert!(matches!(
-        ring.remove_file(ADDED),
-        Err(RemoveFileError::UnknownKey(ADDED))
+        ring.remove_target(ADDED),
+        Err(RemoveTargetError::UnknownKey(ADDED))
     ));
 }
 
@@ -64,8 +64,8 @@ fn an_idle_file_added_later_comes_back_and_its_key_can_be_reused() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(Vec::new(), Vec::new());
     let handle = temp.open();
-    ring.add_file(ADDED, handle.clone()).expect("add a file");
-    let back = ring.remove_file(ADDED).expect("remove it");
+    ring.add_target(ADDED, handle.clone()).expect("add a file");
+    let back = ring.remove_target(ADDED).expect("remove it");
     assert!(back.same_handle(&handle), "the consumer's own handle");
 
     let refused = ring
@@ -73,10 +73,10 @@ fn an_idle_file_added_later_comes_back_and_its_key_can_be_reused() {
         .expect_err("the file is gone");
     assert!(matches!(refused.reason, PushRefusal::UnknownFile(ADDED)));
     assert!(matches!(
-        ring.remove_file(ADDED),
-        Err(RemoveFileError::UnknownKey(ADDED))
+        ring.remove_target(ADDED),
+        Err(RemoveTargetError::UnknownKey(ADDED))
     ));
-    ring.add_file(ADDED, back).expect("the key is free again");
+    ring.add_target(ADDED, back).expect("the key is free again");
 }
 
 #[test]
@@ -85,11 +85,11 @@ fn a_file_given_at_construction_comes_back_and_stays_open_until_the_instance_end
     let setup = given(GIVEN, &temp);
     let original = setup.file.clone();
     let mut ring = instance(vec![setup], Vec::new());
-    let back = ring.remove_file(GIVEN).expect("remove it");
+    let back = ring.remove_target(GIVEN).expect("remove it");
     assert!(back.same_handle(&original));
     drop((back, original));
     assert!(temp.is_held(), "the ring's registration still holds it");
-    ring.add_file(GIVEN, temp.open())
+    ring.add_target(GIVEN, temp.open())
         .expect("the key is free again");
     drop(ring);
     assert!(!temp.is_held(), "released with the instance");
@@ -104,7 +104,7 @@ fn an_uncovered_write_holds_its_file_until_it_is_sealed() {
     harness.next_n(2);
 
     let refused = busy(&mut harness.ring, GIVEN);
-    assert_eq!(refused.file, GIVEN);
+    assert_eq!(refused.target, GIVEN);
     assert_eq!(
         (refused.in_flight, refused.held_for_gate, refused.uncovered),
         (0, 0, 2)
@@ -117,7 +117,7 @@ fn an_uncovered_write_holds_its_file_until_it_is_sealed() {
     assert_eq!(harness.seal(3), DurabilityRequest::Submitted);
     let three = harness.epoch(3);
     expect_durable(&mut harness, three);
-    harness.ring.remove_file(GIVEN).expect("covered");
+    harness.ring.remove_target(GIVEN).expect("covered");
     harness.finish();
 }
 
@@ -130,7 +130,7 @@ fn another_files_holds_do_not_hold_this_one() {
     ));
     harness.write(GIVEN, 0, b"held", 1, 1);
     harness.next();
-    harness.ring.remove_file(ADDED).expect("nothing holds it");
+    harness.ring.remove_target(ADDED).expect("nothing holds it");
     assert_eq!(busy(&mut harness.ring, GIVEN).uncovered, 1);
     harness.seal(1);
     let one = harness.epoch(1);
@@ -186,7 +186,7 @@ fn a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved() {
         .resolve(vec![(failed.token, Resolution::Abandon)])
         .expect("abandon");
     assert!(matches!(harness.next_entry(), Entry::Abandoned { .. }));
-    harness.ring.remove_file(GIVEN).expect("resolved");
+    harness.ring.remove_target(GIVEN).expect("resolved");
     harness.finish();
 }
 
@@ -204,11 +204,11 @@ fn operations_in_flight_are_reported_and_cleared_by_their_completions() {
         harness.ring.relay.lock().in_flight.is_empty(),
         "every completion recorded clears its push"
     );
-    harness.ring.remove_file(GIVEN).expect("nothing holds it");
+    harness.ring.remove_target(GIVEN).expect("nothing holds it");
 
     harness
         .ring
-        .add_file(GIVEN, temp.open())
+        .add_target(GIVEN, temp.open())
         .expect("add again");
     harness.ring.relay.lock().in_flight.insert(GIVEN, 2);
     let refused = busy(&mut harness.ring, GIVEN);

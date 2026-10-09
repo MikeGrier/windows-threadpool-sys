@@ -19,7 +19,7 @@ mod tests;
 /// The consumer's identity for a file, supplied when the file is given to dioring and used in
 /// every report, so a report stays meaningful after the file's handle is gone (DI-D-11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FileKey(pub u64);
+pub struct IoTargetKey(pub u64);
 
 /// An epoch: an epoch id within a lineage, by the lineage's plain name. What the API reports, and
 /// what names or asks about an epoch -- a gate, a query -- takes; what acts on a lineage takes a
@@ -132,8 +132,8 @@ pub struct LineageInfo<V: Identities> {
 pub struct SuspectWrite<V: Identities> {
     /// The write's identity.
     pub op: V::OpId,
-    /// The file it wrote.
-    pub file: FileKey,
+    /// The target it wrote.
+    pub target: IoTargetKey,
     /// The epoch it was tagged with.
     pub epoch: Epoch<V>,
 }
@@ -201,7 +201,7 @@ impl FlushDomain {
     }
 }
 
-/// The advanced parameters of giving a file to dioring, taken by `FileSetup` at construction.
+/// The advanced parameters of giving a file to dioring, taken by `TargetSetup` at construction.
 /// Set once, when the file is given; to change them, remove the file and add it again
 /// (DI-2.10 point 3).
 #[derive(Clone, Debug, Default)]
@@ -228,14 +228,14 @@ impl FileOptions {
 /// cause (DI-D-12 (a)). The lineages a failure belongs to are those of the writes in its suspect
 /// set.
 ///
-/// Only `Flush` is a failure the kernel reported, so only its error carries a code dioring
+/// Only `Commit` is a failure the kernel reported, so only its error carries a code dioring
 /// captured. The rest are relayed: by the consumer, or by its provider, and say so.
 #[derive(Clone, Debug)]
-pub enum Cause<V: Identities> {
-    /// The built-in default provider's flush of `file` failed: the kernel reported it.
-    Flush {
-        /// The file whose flush failed.
-        file: FileKey,
+pub enum FailureCause<V: Identities> {
+    /// The built-in default provider's commit of `target` failed: the kernel reported it.
+    Commit {
+        /// The target whose commit failed.
+        target: IoTargetKey,
         /// The flush's error as the kernel reported it, its code captured by dioring; read it with
         /// [`ErrorCode::of`].
         error: Arc<io::Error>,
@@ -270,7 +270,7 @@ pub struct Failed<V: Identities> {
     /// The token that resolves it.
     pub token: V::FailureToken,
     /// Why it exists.
-    pub cause: Cause<V>,
+    pub cause: FailureCause<V>,
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
     /// When the instance observed it, on interrupt time, dioring's one time base (DI-D-37). Its
@@ -479,7 +479,7 @@ pub enum PushRefusal<V: Identities> {
         cycle: Vec<Epoch<V>>,
     },
     /// No file was given to the instance under this key.
-    UnknownFile(FileKey),
+    UnknownFile(IoTargetKey),
     /// A registered-span operation on an instance built without registered buffers.
     NoRegisteredBuffers,
     /// The underlying ring refused the push.
@@ -655,7 +655,7 @@ pub struct FailureInfo<V: Identities> {
     /// The failure's identity.
     pub id: V::FailureId,
     /// Why it exists.
-    pub cause: Cause<V>,
+    pub cause: FailureCause<V>,
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
@@ -693,25 +693,25 @@ pub struct Leftovers<V: Identities, B, C> {
     pub lineages: Vec<LineageInfo<V>>,
 }
 
-/// A refused `add_file`: a file is already present under `key`. The file and its options are
+/// A refused `add_target`: a file is already present under `key`. The file and its options are
 /// handed back.
 #[derive(Debug)]
-pub struct AddFileError {
+pub struct AddTargetError {
     /// The key already in use.
-    pub key: FileKey,
+    pub key: IoTargetKey,
     /// The consumer's file.
     pub file: SharedHandle,
     /// The options it was given with.
     pub options: FileOptions,
 }
 
-/// Everything still holding a file that `remove_file` refused, and what clears each hold. Every
+/// Everything still holding a file that `remove_target` refused, and what clears each hold. Every
 /// field is reported, not only the first that applies, so one refusal says all a consumer has
 /// to do.
 #[derive(Debug)]
-pub struct FileBusy<V: Identities> {
-    /// The file.
-    pub file: FileKey,
+pub struct IoTargetBusy<V: Identities> {
+    /// The target.
+    pub target: IoTargetKey,
     /// Operations the kernel has not completed. Cleared as their completions arrive, which may be
     /// before they are popped (DI-D-45).
     pub in_flight: usize,
@@ -732,9 +732,9 @@ pub struct FileBusy<V: Identities> {
     pub failures: Vec<V::FailureId>,
 }
 
-impl<V: Identities> fmt::Display for FileBusy<V> {
+impl<V: Identities> fmt::Display for IoTargetBusy<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file {:?} is still in use:", self.file)?;
+        write!(f, "target {:?} is still in use:", self.target)?;
         if self.in_flight > 0 {
             write!(
                 f,
@@ -767,13 +767,13 @@ impl<V: Identities> fmt::Display for FileBusy<V> {
     }
 }
 
-/// Why `remove_file` was refused.
+/// Why `remove_target` was refused.
 #[derive(Debug)]
-pub enum RemoveFileError<V: Identities> {
+pub enum RemoveTargetError<V: Identities> {
     /// No file is present under this key.
-    UnknownKey(FileKey),
-    /// The file is still held; see [`FileBusy`].
-    Busy(FileBusy<V>),
+    UnknownKey(IoTargetKey),
+    /// The file is still held; see [`IoTargetBusy`].
+    Busy(IoTargetBusy<V>),
 }
 
 /// Everything still holding a lineage that `retire_lineage` refused, and what clears each hold.

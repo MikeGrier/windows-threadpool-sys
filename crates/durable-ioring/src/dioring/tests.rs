@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
 
-use super::{Dioring, FileSetup, FileSlot, Setup, SetupError, SetupRefusal};
+use super::{Dioring, FileSlot, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::contract::DurableRing;
 use crate::ids::{DioringIds, LineageHandle};
 use crate::provider::{DurabilityProvider, FlushRequest};
-use crate::types::{FileKey, FileOptions, FlushDomain};
+use crate::types::{FileOptions, FlushDomain, IoTargetKey};
 
 // Pushes, completions and the readiness signal: DI-3.2.2.1.
 mod pushes;
@@ -43,7 +43,7 @@ type V = DioringIds<u64>;
 const QUEUE: u32 = 16;
 
 fn setup(
-    files: Vec<FileSetup>,
+    files: Vec<TargetSetup>,
     buffers: Vec<Vec<u8>>,
     provider: Option<Box<dyn DurabilityProvider<V>>>,
 ) -> Setup<u64, Vec<u8>> {
@@ -139,9 +139,9 @@ fn domain(name: &str) -> FlushDomain {
     FlushDomain::new(name.as_bytes().to_vec())
 }
 
-fn file(key: u64, temp: &TempFile, domains: &[&str]) -> FileSetup {
-    FileSetup {
-        key: FileKey(key),
+fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
+    TargetSetup {
+        key: IoTargetKey(key),
         file: temp.open(),
         options: FileOptions::new().domains(domains.iter().map(|d| domain(d))),
     }
@@ -255,7 +255,7 @@ fn files_given_at_construction_are_registered_in_order() {
         .collect();
     let ring = Ring::new(setup(files, Vec::new(), None)).expect("build").0;
     for i in 0..3_u32 {
-        match &ring.files[&FileKey(10 + u64::from(i))].target {
+        match &ring.files[&IoTargetKey(10 + u64::from(i))].target {
             FileSlot::Registered { index, .. } => assert_eq!(index.index(), i),
             FileSlot::Shared(_) => panic!("a construction file is registered"),
         }
@@ -281,7 +281,7 @@ fn a_duplicate_key_is_refused_before_anything_is_created_and_everything_comes_ba
     let error = refused(Ring::new(setup(given, vec![vec![1, 2, 3]], serves(&["P"]))));
     assert!(matches!(
         error.reason,
-        SetupRefusal::DuplicateKey(FileKey(5))
+        SetupRefusal::DuplicateKey(IoTargetKey(5))
     ));
     assert_eq!(error.files.len(), 2);
     for (back, original) in error.files.iter().zip(&originals) {
@@ -353,7 +353,7 @@ fn domains_are_interned_once_per_distinct_bytes() {
         .0;
     assert_eq!(ring.domains.len(), 4, "A, B, C and D, once each");
     let id = |name: &str| ring.domains[&domain(name)];
-    let of = |key: u64| ring.files[&FileKey(key)].domains.clone();
+    let of = |key: u64| ring.files[&IoTargetKey(key)].domains.clone();
 
     let mut one = vec![id("A"), id("B")];
     one.sort_unstable();
