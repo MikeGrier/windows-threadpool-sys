@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use super::{DomainPart, Due, Durability, Key, MarkingKind, Reach, SealStage, Stage, V, Write};
+use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::dioring::{DomainId, TimeBase};
+use crate::dioring::DomainId;
 use crate::ids::OpId;
 use crate::types::{FailureCause, IoTargetKey};
 
@@ -45,7 +46,9 @@ pub(super) fn name(
     }
 }
 
-impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
+impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
+    Durability<E, T, I, K>
+{
     /// The domains the consumer's provider serves, sorted, as interned when the instance was built.
     pub(crate) fn serve(&mut self, domains: Arc<[DomainId]>) {
         self.served = domains;
@@ -61,8 +64,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         lineage: Key,
         seal: u64,
         domain: DomainId,
-        outcome: Result<(), FailureCause<V<E>>>,
-    ) -> Due<E, T> {
+        outcome: Result<(), FailureCause<V<E, I>>>,
+    ) -> Due<E, T, I> {
         let mut due = Due::default();
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
             return due;
@@ -114,7 +117,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// Cover every write named to `lineage`'s seal `seal` whose parts have all answered success:
     /// its file's flush, if the default answers for it, and each of its file's domains the
     /// provider serves. Each is marked covered in every failure suspecting it (DI-D-36).
-    pub(super) fn cover(&mut self, lineage: Key, seal: u64, due: &mut Due<E, T>) {
+    pub(super) fn cover(&mut self, lineage: Key, seal: u64, due: &mut Due<E, T, I>) {
         let Some(found) = self
             .lineages
             .get(&lineage)

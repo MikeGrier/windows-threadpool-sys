@@ -27,8 +27,8 @@ use std::collections::BTreeSet;
 use std::ops::Bound;
 
 use super::{Accepted, Due, Durability, Event, Gate, HeldOp, Key, Standing, State};
+use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::dioring::TimeBase;
 use crate::ids::OpId;
 
 /// Where a gate stands when an operation names it.
@@ -78,7 +78,9 @@ fn raise<E: EpochId>(bounds: &mut Vec<(Key, E)>, lineage: Key, extent: E) -> Opt
     }
 }
 
-impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
+impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
+    Durability<E, T, I, K>
+{
     /// Where `gate` stands.
     pub(crate) fn gate_state(&self, gate: Gate<E>) -> GateState {
         match self.state(gate.lineage, gate.epoch) {
@@ -306,7 +308,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// Release every operation waiting for an epoch of `lineage` at or below `through`, which its
     /// mark has just reached, in push order. Abandoned epochs never reach this: abandoning one ends
     /// what waits for it at once.
-    pub(super) fn release_through(&mut self, lineage: Key, through: E, due: &mut Due<E, T>) {
+    pub(super) fn release_through(&mut self, lineage: Key, through: E, due: &mut Due<E, T, I>) {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };
@@ -343,7 +345,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     pub(super) fn abandon_held(
         &mut self,
         epochs: &BTreeMap<Key, BTreeSet<E>>,
-        due: &mut Due<E, T>,
+        due: &mut Due<E, T, I>,
     ) {
         let hit = |at: Gate<E>| {
             epochs
@@ -370,7 +372,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// End as never issued every held operation an ended lineage stopped (DI-D-30): a write of
     /// it, naming its own epoch, and an operation still waiting for one of its epochs, naming the
     /// gate.
-    pub(super) fn end_held(&mut self, lineage: Key, due: &mut Due<E, T>) {
+    pub(super) fn end_held(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         self.stop_held(
             |held| match &held.write {
                 Some(write) if write.lineage == lineage => Some(Gate {
@@ -402,7 +404,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     fn stop_held(
         &mut self,
         stopped: impl Fn(&HeldOp<E, T>) -> Option<Gate<E>>,
-        due: &mut Due<E, T>,
+        due: &mut Due<E, T, I>,
     ) {
         if self.held.is_empty() {
             return;

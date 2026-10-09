@@ -9,6 +9,7 @@ use super::{
     seen, submitted, tokens,
 };
 use crate::dioring::DomainId;
+use crate::dioring::WinInstant;
 use crate::dioring::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
 use crate::types::{FailureCause, ImportScope, IoTargetKey, Resolution, ResolveRefusal};
@@ -27,7 +28,10 @@ fn domains(ids: &[u32]) -> Reach {
     )
 }
 
-fn import(lineage: &mut Lineage, reach: &Reach) -> (FailureId, super::Due<u64, &'static str>) {
+fn import(
+    lineage: &mut Lineage,
+    reach: &Reach,
+) -> (FailureId, super::Due<u64, &'static str, WinInstant>) {
     lineage.import(
         FailureCause::Imported {
             scope: ImportScope::All,
@@ -41,7 +45,7 @@ fn import_only(
     lineage: &mut Lineage,
     reach: &Reach,
     only: Option<u64>,
-) -> (FailureId, super::Due<u64, &'static str>) {
+) -> (FailureId, super::Due<u64, &'static str, WinInstant>) {
     lineage.0.import(
         FailureCause::Imported {
             scope: ImportScope::All,

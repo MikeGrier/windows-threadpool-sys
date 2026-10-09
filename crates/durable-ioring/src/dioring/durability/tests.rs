@@ -13,6 +13,7 @@ use super::{
 };
 use crate::diagnostics::NoDiagnostics;
 use crate::diagnostics::tests::Recording;
+use crate::dioring::WinInstant;
 use crate::dioring::{DomainId, TimeBase};
 use crate::error_code::windows_fault;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
@@ -35,10 +36,10 @@ mod files;
 
 /// The core, answering for its default lineage: the one every test here exercises unless it mints
 /// another. Every other method is the core's own, through `Deref`.
-struct One<K = InterruptClock>(Durability<u64, &'static str, K>);
+struct One<K = InterruptClock>(Durability<u64, &'static str, WinInstant, K>);
 
 impl<K> Deref for One<K> {
-    type Target = Durability<u64, &'static str, K>;
+    type Target = Durability<u64, &'static str, WinInstant, K>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -86,7 +87,7 @@ impl<K: TimeBase> One<K> {
         self.0.is_abandoned(DEFAULT_LINEAGE, epoch)
     }
 
-    fn seal(&mut self, through: u64) -> Sealing<u64, &'static str> {
+    fn seal(&mut self, through: u64) -> Sealing<u64, &'static str, WinInstant> {
         self.0.seal(DEFAULT_LINEAGE, through)
     }
 
@@ -95,7 +96,7 @@ impl<K: TimeBase> One<K> {
         through: u64,
         file: IoTargetKey,
         result: io::Result<()>,
-    ) -> Due<u64, &'static str> {
+    ) -> Due<u64, &'static str, WinInstant> {
         let result = result.map_err(windows_fault);
         self.0.flushed(DEFAULT_LINEAGE, through, file, result)
     }
@@ -105,7 +106,7 @@ impl<K: TimeBase> One<K> {
         &mut self,
         cause: FailureCause<DioringIds<u64>>,
         reach: &Reach,
-    ) -> (FailureId, Due<u64, &'static str>) {
+    ) -> (FailureId, Due<u64, &'static str, WinInstant>) {
         self.0.import(cause, reach, None)
     }
 }
@@ -257,7 +258,7 @@ enum Seen {
     NeverIssued(u64, Key, u64),
 }
 
-fn seen(due: &Due<u64, &'static str>) -> Vec<Seen> {
+fn seen(due: &Due<u64, &'static str, WinInstant>) -> Vec<Seen> {
     let ops = |writes: &[SuspectWrite<DioringIds<u64>>]| -> Vec<u64> {
         writes.iter().map(|w| w.op.seq).collect()
     };
@@ -312,7 +313,7 @@ fn marks(markings: &[crate::types::Marking<DioringIds<u64>>]) -> Vec<(u64, Marki
         .collect()
 }
 
-fn durable(due: &Due<u64, &'static str>) -> Vec<u64> {
+fn durable(due: &Due<u64, &'static str, WinInstant>) -> Vec<u64> {
     seen(due)
         .into_iter()
         .filter_map(|s| match s {
@@ -323,7 +324,7 @@ fn durable(due: &Due<u64, &'static str>) -> Vec<u64> {
 }
 
 /// The tokens of every failure a change observed.
-fn tokens(due: Due<u64, &'static str>) -> Vec<FailureToken> {
+fn tokens(due: Due<u64, &'static str, WinInstant>) -> Vec<FailureToken> {
     due.events
         .into_iter()
         .filter_map(|event| match event {
@@ -355,7 +356,7 @@ fn inconsistent<R>(what: &str, change: impl FnOnce() -> R) {
 fn an_inconsistency_reaches_the_sink_before_the_panic() {
     let sink = Recording::wanting();
     let instance = InstanceId::next();
-    let mut core: Durability<u64, &'static str> =
+    let mut core: Durability<u64, &'static str, WinInstant, InterruptClock> =
         Durability::new(instance, InterruptClock, sink.clone());
     let never = OpId { instance, seq: 99 };
     inconsistent(
@@ -380,7 +381,7 @@ fn an_inconsistency_reaches_the_sink_before_the_panic() {
 fn an_inconsistency_is_not_given_to_a_sink_that_does_not_want_it() {
     let sink = std::sync::Arc::new(Recording::default());
     let instance = InstanceId::next();
-    let mut core: Durability<u64, &'static str> =
+    let mut core: Durability<u64, &'static str, WinInstant, InterruptClock> =
         Durability::new(instance, InterruptClock, sink.clone());
     let never = OpId { instance, seq: 99 };
     inconsistent(
@@ -390,11 +391,48 @@ fn an_inconsistency_is_not_given_to_a_sink_that_does_not_want_it() {
     assert!(sink.seen().is_empty());
 }
 
-fn quiet(due: &Due<u64, &'static str>) -> bool {
+/// The core stamps with whatever clock it is given: here a counter, whose readings are plain
+/// numbers and nothing of Windows' (DI-D-50).
+#[test]
+fn the_core_stamps_with_any_clock() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::clock::StampClock;
+    use crate::types::ImportScope;
+
+    #[derive(Default)]
+    struct Counter(AtomicU64);
+
+    impl StampClock for Counter {
+        type Instant = u64;
+
+        fn now(&self) -> u64 {
+            10 + self.0.fetch_add(1, Ordering::Relaxed)
+        }
+    }
+
+    let mut core: Durability<u64, &'static str, u64, Counter> = Durability::new(
+        InstanceId::next(),
+        Counter::default(),
+        Arc::new(NoDiagnostics),
+    );
+    for _ in 0..2 {
+        let cause = FailureCause::Imported {
+            scope: ImportScope::All,
+        };
+        core.import(cause, &Reach::All, None);
+    }
+    let stamps: Vec<u64> = core.failures().iter().map(|f| f.observed).collect();
+    assert_eq!(stamps, [10, 11]);
+}
+
+fn quiet(due: &Due<u64, &'static str, WinInstant>) -> bool {
     due.flushes.is_empty() && due.events.is_empty()
 }
 
-fn submitted(sealing: Sealing<u64, &'static str>) -> Due<u64, &'static str> {
+fn submitted(
+    sealing: Sealing<u64, &'static str, WinInstant>,
+) -> Due<u64, &'static str, WinInstant> {
     match sealing {
         Sealing::Submitted(due) => due,
         Sealing::AlreadySealed(state) => panic!("expected a new seal, got {state:?}"),
@@ -402,7 +440,7 @@ fn submitted(sealing: Sealing<u64, &'static str>) -> Due<u64, &'static str> {
     }
 }
 
-fn already(sealing: Sealing<u64, &'static str>) -> State {
+fn already(sealing: Sealing<u64, &'static str, WinInstant>) -> State {
     match sealing {
         Sealing::AlreadySealed(state) => state,
         Sealing::Submitted(due) => panic!("expected a request below the seal, got {due:?}"),

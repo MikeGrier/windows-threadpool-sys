@@ -9,11 +9,12 @@ use super::{
     A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, failed, flush, lineage, nullified, seen,
     submitted, tokens,
 };
+use crate::dioring::WinInstant;
 use crate::dioring::durability::Reach;
 use crate::dioring::tests::MockClock;
 use crate::types::{FailureCause, ImportScope, MarkingKind, Resolution};
 
-fn import(lineage: &mut Lineage) -> Due<u64, &'static str> {
+fn import(lineage: &mut Lineage) -> Due<u64, &'static str, WinInstant> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };

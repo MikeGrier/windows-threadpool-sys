@@ -1741,3 +1741,17 @@ Built per [DI-D-51](DESIGN-NOTES.md#di-d-51) in `src/diagnostics.rs`. The core h
   `StderrDiagnostics`, `FanOutDiagnostics`, a sink given at construction, the inconsistency report
   sent through it, and the `trace` feature removed. The Windows driver defaults to
   `NoDiagnostics` until `DI-3.6` builds `EtwDiagnostics` and makes it the default.
+
+## Moved 2026-10-09 19:26:34 -04:00 -- DI-3.10.3.4: the platform-free core
+
+### <a id="di-31034"></a>DI-3.10.3.4 -- The core made platform-free: `StampClock` and an `Instant` on `Identities`, `DioringIds<E, I>`, and no Windows type in `dioring/durability*` outside its tests. *(completed 2026-10-09 19:26:34 -04:00)*
+
+`src/clock.rs` holds `StampClock` and the `Instant` bound; the interrupt-time clocks implement `StampClock` in `dioring.rs`, whose `WinInstant` names the Windows time type. The core's `Event`, `Due`, `Sealing`, `Failure`, `FileHolds` and `Durability` take the time type as a parameter; `Failed`, `Marking`, `FailureInfo` and the oracle's stamp rule carry `V::Instant`. A new test runs the core on a counter clock. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**The core made platform-free**: a portable clock trait the core is
+  generic over, failure and marking stamps in its time type -- an `Instant` associated type of
+  `Identities`, which the shared types (`Failed`, `Marking`, `FailureInfo`) and the oracle carry
+  -- and nothing in `dioring/durability*` naming a Windows type. `DioringIds` gains the time type
+  as a parameter, defaulted to interrupt time until `DI-3.10.3.6` moves that default to the
+  Windows crate. The public `DurableIoCore` API moved to `DI-3.10.3.5`: it returns ring entries,
+  whose shape the backend defines.

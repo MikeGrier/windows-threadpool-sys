@@ -77,21 +77,15 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.3** -- The diagnostic sink: `DiagnosticSink` with `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, given in `Setup`, carrying the inconsistency report; the `trace` feature removed. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31033)
 
-- [ ] **DI-3.10.3.4** -- **The core made platform-free**: a portable clock trait the core is
-  generic over, failure and marking stamps in its time type -- an `Instant` associated type of
-  `Identities`, which the shared types (`Failed`, `Marking`, `FailureInfo`) and the oracle carry
-  -- and nothing in `dioring/durability*` naming a Windows type. `DioringIds` gains the time type
-  as a parameter, defaulted to interrupt time until `DI-3.10.3.6` moves that default to the
-  Windows crate. The public `DurableIoCore` API moved to `DI-3.10.3.5`: it returns ring entries,
-  whose shape the backend defines.
+- [x] **DI-3.10.3.4** -- The core made platform-free: `StampClock` and an `Instant` on `Identities`, `DioringIds<E, I>`, and no Windows type in `dioring/durability*` outside its tests. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31034)
 
 - [ ] **DI-3.10.3.5** -- **Targets, the backend, and the public core**: the `IoTarget` and backend
   traits (DI-D-50 P10); `DurableIoCore` public, its operations and `complete` returning
   `CoreActions` of backend entries; the Windows backend over `windows-ioring-sys` and the Win32
   file target; the driver running `DurableIoCore` over the backend; flush domains carried by the
-  target, and `FileOptions` removed. The oracle's push hook gains each write's length, and a rule that a
-  write never completes short (DI-D-50), queued here from `DI-3.10.3.2` so the hook's signature
-  changes once.
+  target, and `FileOptions` removed. The oracle's push hook gains each write's length, and a rule
+  that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2` so the hook's
+  signature changes once.
 
 - [ ] **DI-3.10.3.6** -- **The split**: `win-durable-ioring` created and registered for release,
   holding the driver, the Windows backend and file target, `ErrorCode`'s reading from an
@@ -99,7 +93,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `durable-ioring` left with no Windows dependency and added to CI's `portable` job.
   CONTRACT.md's worked examples drive the Windows driver, so they move to `win-durable-ioring`'s
   documentation, compiled there as doctests, and CONTRACT.md links them; its "Vocabulary ahead of
-  the code" note is removed.
+  the code" note is removed. The core's own tests read interrupt time and Windows faults today, so
+  they move to a portable mock clock and fault as they move, and `DioringIds`' default time type
+  moves with the Windows crate.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
   DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the
@@ -132,7 +128,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   so it must return promptly and never call back into the instance; `Setup.diagnostics` is an
   `Option<Arc<dyn DiagnosticSink>>`, `None` meaning the driver's default; `StderrDiagnostics`
   prefixes each line `dioring:`; and the Windows driver's default is `NoDiagnostics` until
-  `DI-3.6`.
+  `DI-3.6`. From `DI-3.10.3.4`: the clock trait is `StampClock`, its reading type bounded by a
+  public `Instant` trait (a name `std::time::Instant` shares); the time type is an associated
+  type of `Identities` and a second, defaulted parameter of `DioringIds`; and the core's types
+  take it as a parameter, the Windows code naming it through a `WinInstant` alias.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

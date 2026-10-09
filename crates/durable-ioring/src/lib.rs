@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod clock;
 mod contract;
 mod delivery;
 mod diagnostics;
@@ -22,6 +23,7 @@ pub mod oracle;
 mod provider;
 mod types;
 
+pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
     PushResult, RegisteredBufferRing, TokenOf,

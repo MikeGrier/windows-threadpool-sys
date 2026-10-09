@@ -8,6 +8,9 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Weak};
 
+use win_time_sys::{InterruptTime, TimePoint};
+
+use crate::clock::Instant;
 use crate::contract::{EpochId, Identities};
 use crate::types::Tag;
 
@@ -200,43 +203,45 @@ impl Drop for FailureToken {
     }
 }
 
-/// dioring's identities, with the consumer's epoch-id type `E`. Zero-sized; it exists only to
-/// name them, so its comparison and hashing traits hold for every `E`.
-pub struct DioringIds<E>(PhantomData<fn() -> E>);
+/// dioring's identities, with the consumer's epoch-id type `E` and the time type `I` its stamps
+/// are read in (DI-D-50) -- interrupt time unless the core was given another clock. Zero-sized; it
+/// exists only to name them, so its comparison and hashing traits hold for every `E` and `I`.
+pub struct DioringIds<E, I = TimePoint<InterruptTime>>(PhantomData<fn() -> (E, I)>);
 
-impl<E> Clone for DioringIds<E> {
+impl<E, I> Clone for DioringIds<E, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<E> Copy for DioringIds<E> {}
+impl<E, I> Copy for DioringIds<E, I> {}
 
-impl<E> Debug for DioringIds<E> {
+impl<E, I> Debug for DioringIds<E, I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DioringIds")
     }
 }
 
-impl<E> PartialEq for DioringIds<E> {
+impl<E, I> PartialEq for DioringIds<E, I> {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl<E> Eq for DioringIds<E> {}
+impl<E, I> Eq for DioringIds<E, I> {}
 
-impl<E> Hash for DioringIds<E> {
+impl<E, I> Hash for DioringIds<E, I> {
     fn hash<H: Hasher>(&self, _: &mut H) {}
 }
 
-impl<E: EpochId + 'static> Identities for DioringIds<E> {
+impl<E: EpochId + 'static, I: Instant> Identities for DioringIds<E, I> {
     type EpochId = E;
     type Lineage = Lineage;
     type OpId = OpId;
     type FailureId = FailureId;
     type FailureToken = FailureToken;
     type LineageHandle = LineageHandle;
+    type Instant = I;
 
     fn token_id(token: &FailureToken) -> FailureId {
         token.id()

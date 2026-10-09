@@ -43,10 +43,11 @@
 //! change nothing the mark, a hold or a resolution depends on. A failure abandoned or healed stops
 //! gaining them; its `Abandoned` or `Healed` entry carries the record as it ended.
 //!
-//! **Time** (DI-D-37, DI-D-38). A failure's observation time is read inside the transition that
-//! records it, from the clock the core holds -- `InterruptClock` unless the instance was given
-//! another, a mock in these tests -- so stamps are taken in observation order, and a `Steady` clock
-//! makes them never decrease in it.
+//! **Time** (DI-D-37, DI-D-38, DI-D-50). A failure's observation time is read inside the transition
+//! that records it, from the [`StampClock`] the core holds -- the driver's, interrupt time for the
+//! Windows driver, or a mock in these tests -- so stamps are taken in observation order, and a
+//! clock that never runs backwards makes them never decrease in it. The core names no time type of
+//! its own: its stamps are the clock's `Instant`.
 //!
 //! **The consumer's provider** (DI-D-27, DI-D-44) is asked through [`Due::calls`], and answers per
 //! domain through [`providers`]; a failed or abandoned domain is observed as a failed flush is, with
@@ -58,9 +59,8 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
-
-use super::{DomainId, TimeBase};
+use super::DomainId;
+use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
@@ -78,7 +78,7 @@ pub(crate) use gates::GateState;
 #[cfg(test)]
 mod tests;
 
-type V<E> = DioringIds<E>;
+type V<E, I> = DioringIds<E, I>;
 
 /// A lineage's key within its instance: the sequence number its `Lineage` carries.
 pub(crate) type Key = u64;
@@ -137,7 +137,7 @@ pub(crate) struct Flush<E, T> {
 
 /// An entry a change made due, in the core's terms.
 #[derive(Debug)]
-pub(crate) enum Event<E: EpochId + 'static> {
+pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
     Durable {
         lineage: Key,
         through: E,
@@ -147,20 +147,20 @@ pub(crate) enum Event<E: EpochId + 'static> {
         through: E,
         by: FailureId,
     },
-    Failed(Failed<V<E>>),
+    Failed(Failed<V<E, I>>),
     Abandoned {
         failure: FailureId,
-        suspect: SuspectSet<V<E>>,
-        markings: Vec<Marking<V<E>>>,
+        suspect: SuspectSet<V<E, I>>,
+        markings: Vec<Marking<V<E, I>>>,
     },
     Healed {
         failure: FailureId,
-        suspect: SuspectSet<V<E>>,
-        markings: Vec<Marking<V<E>>>,
+        suspect: SuspectSet<V<E, I>>,
+        markings: Vec<Marking<V<E, I>>>,
     },
     Marked {
         failure: FailureId,
-        marking: Marking<V<E>>,
+        marking: Marking<V<E, I>>,
     },
     LineageEnded {
         lineage: Key,
@@ -186,18 +186,18 @@ pub(crate) enum WriteEnd {
 
 /// What a change made due.
 #[derive(Debug)]
-pub(crate) struct Due<E: EpochId + 'static, T> {
+pub(crate) struct Due<E: EpochId + 'static, T, I: Instant> {
     /// Flushes to push.
     pub(crate) flushes: Vec<Flush<E, T>>,
     /// Entries to append, in the order they happened.
-    pub(crate) events: Vec<Event<E>>,
+    pub(crate) events: Vec<Event<E, I>>,
     /// Held operations whose gates are now durable, to push, in the order they were released.
     pub(crate) released: Vec<OpId>,
     /// Requests for the consumer's provider, one per seal that needs it, in the order made.
     pub(crate) calls: Vec<ProviderCall>,
 }
 
-impl<E: EpochId + 'static, T> Default for Due<E, T> {
+impl<E: EpochId + 'static, T, I: Instant> Default for Due<E, T, I> {
     fn default() -> Self {
         Self {
             flushes: Vec::new(),
@@ -239,9 +239,9 @@ pub(crate) enum State {
 
 /// The answer to a seal request.
 #[derive(Debug)]
-pub(crate) enum Sealing<E: EpochId + 'static, T> {
+pub(crate) enum Sealing<E: EpochId + 'static, T, I: Instant> {
     /// A new seal, and what it made due at once.
-    Submitted(Due<E, T>),
+    Submitted(Due<E, T, I>),
     /// At or below the seal point: the epoch's state, and nothing changes.
     AlreadySealed(State),
     /// Refused, and nothing changes: the seal would close this gate cycle (DI-D-43).
@@ -366,18 +366,18 @@ impl<E: Ord + Copy> Release<E> {
     }
 }
 
-struct Failure<E: EpochId + 'static> {
+struct Failure<E: EpochId + 'static, I: Instant> {
     id: FailureId,
-    cause: FailureCause<V<E>>,
-    suspect: SuspectSet<V<E>>,
-    observed: TimePoint<InterruptTime>,
-    markings: Vec<Marking<V<E>>>,
+    cause: FailureCause<V<E, I>>,
+    suspect: SuspectSet<V<E, I>>,
+    observed: I,
+    markings: Vec<Marking<V<E, I>>>,
     /// The epochs of its suspect writes, by lineage: the lineages it belongs to.
     epochs: BTreeMap<Key, BTreeSet<E>>,
     standing: Standing<E>,
 }
 
-impl<E: EpochId + 'static> Failure<E> {
+impl<E: EpochId + 'static, I: Instant> Failure<E, I> {
     /// The epochs of `lineage` this failure holds, if it holds the lineage at all.
     fn holds(&self, lineage: Key) -> Option<&BTreeSet<E>> {
         let epochs = self.epochs.get(&lineage)?;
@@ -463,7 +463,7 @@ impl<E: EpochId> LineageState<E> {
 }
 
 /// An instance's durability state, stamping failures with `K`'s readings.
-pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
+pub(crate) struct Durability<E: EpochId + 'static, T, I: Instant, K> {
     instance: InstanceId,
     /// Every lineage not yet retired, by key.
     lineages: BTreeMap<Key, LineageState<E>>,
@@ -471,7 +471,7 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     /// The writes not yet covered, keyed by push order.
     writes: BTreeMap<u64, Write<E, T>>,
     /// The unresolved failures, in observation order.
-    failures: Vec<Failure<E>>,
+    failures: Vec<Failure<E, I>>,
     next_failure: u64,
     /// The operations held for their gates, by push order.
     held: BTreeMap<u64, HeldOp<E, T>>,
@@ -482,7 +482,7 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     diagnostics: Arc<dyn DiagnosticSink>,
 }
 
-impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
+impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
     /// An instance's state, with its default lineage.
     pub(crate) fn new(
         instance: InstanceId,
@@ -543,7 +543,9 @@ pub(crate) fn inconsistent(
     }
 }
 
-impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
+impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
+    Durability<E, T, I, K>
+{
     /// A lineage's `Lineage` name.
     fn name(&self, lineage: Key) -> Lineage {
         Lineage {
@@ -659,7 +661,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// to a flush nor suspected by a later failure (guarantee 1); a failure observed while it was
     /// in flight keeps it, because suspect sets are frozen, and marks it nullified. A write of an
     /// ended lineage is let go either way.
-    pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T> {
+    pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T, I> {
         let mut due = Due::default();
         let Some(write) = self.writes.get_mut(&op.seq) else {
             self.inconsistent(
@@ -709,7 +711,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// Seal every epoch of `lineage` at or below `through` (DI-D-9). The lineage must be live.
-    pub(crate) fn seal(&mut self, lineage: Key, through: E) -> Sealing<E, T> {
+    pub(crate) fn seal(&mut self, lineage: Key, through: E) -> Sealing<E, T, I> {
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
             self.inconsistent(
                 "a seal of a lineage that is not live",
@@ -749,7 +751,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         through: E,
         file: IoTargetKey,
         result: Result<(), IoFault>,
-    ) -> Due<E, T> {
+    ) -> Due<E, T, I> {
         let mut due = Due::default();
         let answered = match self.lineages.get_mut(&lineage) {
             Some(state) if !state.ended => state.answer(through, file, result.is_err()),
@@ -784,10 +786,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// `reach` covers -- of lineage `only`, if one is named.
     pub(crate) fn import(
         &mut self,
-        cause: FailureCause<V<E>>,
+        cause: FailureCause<V<E, I>>,
         reach: &Reach,
         only: Option<Key>,
-    ) -> (FailureId, Due<E, T>) {
+    ) -> (FailureId, Due<E, T, I>) {
         let mut due = Due::default();
         let id = self.observe(cause, reach, only, &mut due);
         (id, self.advance(due))
@@ -798,7 +800,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     pub(crate) fn resolve(
         &mut self,
         items: Vec<(FailureToken, Resolution)>,
-    ) -> Result<Due<E, T>, ResolveError<V<E>>> {
+    ) -> Result<Due<E, T, I>, ResolveError<V<E, I>>> {
         if let Some(foreign) = items
             .iter()
             .map(|(token, _)| token.id)
@@ -871,7 +873,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// The unresolved failures, in observation order.
-    pub(crate) fn failures(&self) -> Vec<FailureInfo<V<E>>> {
+    pub(crate) fn failures(&self) -> Vec<FailureInfo<V<E, I>>> {
         self.failures
             .iter()
             .map(|failure| FailureInfo {
@@ -893,14 +895,14 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// transition every cause takes.
     fn observe(
         &mut self,
-        cause: FailureCause<V<E>>,
+        cause: FailureCause<V<E, I>>,
         reach: &Reach,
         only: Option<Key>,
-        due: &mut Due<E, T>,
+        due: &mut Due<E, T, I>,
     ) -> FailureId {
         let instance = self.instance;
         let lineages = &self.lineages;
-        let suspect: Vec<SuspectWrite<V<E>>> = self
+        let suspect: Vec<SuspectWrite<V<E, I>>> = self
             .writes
             .values()
             .filter(|write| only.is_none_or(|lineage| write.lineage == lineage))
@@ -954,7 +956,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// Mark every unresolved failure that suspects `write` (DI-D-36), with one reading of the
     /// clock, in observation order.
-    fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T>) {
+    fn mark(&mut self, write: OpId, kind: MarkingKind, due: &mut Due<E, T, I>) {
         let mut observed = None;
         for failure in &mut self.failures {
             let suspects = failure
@@ -980,7 +982,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// Resolve as healed every healing failure that holds no lineage any more, each reported by its
     /// `Healed` entry (DI-D-41).
-    fn release_healed(&mut self, due: &mut Due<E, T>) {
+    fn release_healed(&mut self, due: &mut Due<E, T, I>) {
         let mut at = 0;
         while at < self.failures.len() {
             if matches!(&self.failures[at].standing, Standing::Healing { pending } if pending.is_empty())
@@ -1021,7 +1023,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// For every live lineage: start every seal whose writes have all completed, and finish every
     /// seal whose flushes have all answered. Then report the heals that took effect, advance each
     /// lineage's high-water mark, and answer the seals a failure holds.
-    fn advance(&mut self, mut due: Due<E, T>) -> Due<E, T> {
+    fn advance(&mut self, mut due: Due<E, T, I>) -> Due<E, T, I> {
         let live: Vec<Key> = self
             .lineages
             .iter()
@@ -1041,7 +1043,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
 
     /// Advance `lineage`'s high-water mark over its finished seals, in order, and answer the seals
     /// a failure holds.
-    fn advance_mark(&mut self, lineage: Key, due: &mut Due<E, T>) {
+    fn advance_mark(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {
             if !matches!(seal.stage, SealStage::Done { .. })
                 || self.blocking(lineage, seal.through).is_some()
@@ -1078,7 +1080,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         }
     }
 
-    fn start_seals(&mut self, lineage: Key, due: &mut Due<E, T>) {
+    fn start_seals(&mut self, lineage: Key, due: &mut Due<E, T, I>) {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
         };

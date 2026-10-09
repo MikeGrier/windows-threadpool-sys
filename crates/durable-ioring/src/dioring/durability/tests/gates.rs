@@ -10,6 +10,7 @@ use super::{
     A, B, DEFAULT, FULL, Lineage, Ops, Seen, flush, flush_of, inconsistent, lineage, quiet, seen,
     submitted, target, tokens,
 };
+use crate::dioring::WinInstant;
 use crate::dioring::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
 };
@@ -71,21 +72,21 @@ fn hold_read(lineage: &mut Lineage, ops: &mut Ops, gate: Gate<u64>) -> OpId {
 }
 
 /// Push every operation `due` released, as the relay would, returning their sequence numbers.
-fn issue(lineage: &mut Lineage, due: &Due<u64, &'static str>) -> Vec<u64> {
+fn issue(lineage: &mut Lineage, due: &Due<u64, &'static str, WinInstant>) -> Vec<u64> {
     for &op in &due.released {
         lineage.issued(op);
     }
     due.released.iter().map(|op| op.seq).collect()
 }
 
-fn import(lineage: &mut Lineage) -> Due<u64, &'static str> {
+fn import(lineage: &mut Lineage) -> Due<u64, &'static str, WinInstant> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
     lineage.0.import(cause, &Reach::All, None).1
 }
 
-fn cycle(sealing: Sealing<u64, &'static str>) -> Vec<Gate<u64>> {
+fn cycle(sealing: Sealing<u64, &'static str, WinInstant>) -> Vec<Gate<u64>> {
     match sealing {
         Sealing::Cycle(cycle) => cycle,
         Sealing::Submitted(due) => panic!("expected a cycle, got a seal: {due:?}"),

@@ -56,6 +56,9 @@ pub trait Identities: Copy + Debug + Eq + Hash + 'static {
     /// A live lineage's handle (DI-D-40): what acts on the lineage. `Clone`; releasing the last
     /// copy ends the lineage.
     type LineageHandle: Clone + Debug;
+    /// When a failure or a marking was observed: a reading of the implementation's clock, which
+    /// never decreases (DI-D-37, DI-D-38, DI-D-50).
+    type Instant: crate::clock::Instant;
 
     /// The failure a token resolves.
     fn token_id(token: &Self::FailureToken) -> Self::FailureId;

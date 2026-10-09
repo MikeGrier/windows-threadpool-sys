@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::Event;
-use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady};
+use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady, TimePoint};
 use windows_ioring_sys::{
     Batch, Completion, EventDelivery, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers,
     RegisteredFile, RegisteredFiles, RegisteredSpan,
 };
 
+use crate::clock::StampClock;
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
 use crate::ids::{
@@ -49,6 +50,20 @@ pub(crate) mod tests;
 pub trait TimeBase: Clock<Timeline = InterruptTime> + Steady + Send + 'static {}
 
 impl<K: Clock<Timeline = InterruptTime> + Steady + Send + 'static> TimeBase for K {}
+
+/// The time type the Windows driver's stamps are read in: interrupt time, its one time base
+/// (DI-D-37).
+pub(crate) type WinInstant = TimePoint<InterruptTime>;
+
+/// An interrupt-time clock is the core's stamp clock on Windows (DI-D-50): its readings never
+/// decrease, which is `Steady`'s promise.
+impl<K: Clock<Timeline = InterruptTime> + Steady + Send + 'static> StampClock for K {
+    type Instant = WinInstant;
+
+    fn now(&self) -> WinInstant {
+        Clock::now(self)
+    }
+}
 
 /// How long construction waits for each registration's completion. A registration is a
 /// bookkeeping operation the kernel completes at once; the bound exists so a ring that never
@@ -788,7 +803,11 @@ where
     /// Act on what a consumer call made due, then push every held operation released so far: a
     /// consumer call is the one place a released operation can be pushed (see the `push` module).
     /// Returns the first submission error.
-    fn settle(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) -> Option<io::Error> {
+    fn settle(
+        &self,
+        core: &mut Core<E, B, C, K>,
+        due: Due<E, FlushTarget, WinInstant>,
+    ) -> Option<io::Error> {
         let applied = self.relay.apply(core, due, &self.delivery);
         let released = self.release_ready(core);
         applied.or(released)

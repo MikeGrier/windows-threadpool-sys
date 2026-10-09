@@ -8,11 +8,12 @@ use super::{
     A, B, DEFAULT, FULL, Lineage, Ops, Seen, failed, flush, flush_of, inconsistent, lineage,
     nullified, quiet, seen, submitted, tokens,
 };
+use crate::dioring::WinInstant;
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
 use crate::types::{FailureCause, ImportScope, LineageBusy, Resolution};
 
-fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str> {
+fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str, WinInstant> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };

@@ -113,7 +113,6 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use win_time_sys::{InterruptTime, TimePoint};
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use crate::contract::{DurableRing, EntryOf, Identities};
@@ -218,9 +217,9 @@ pub enum Violation<V: Identities> {
         /// The failure.
         failure: V::FailureId,
         /// Its stamp.
-        observed: TimePoint<InterruptTime>,
+        observed: V::Instant,
         /// The previous failure's stamp.
-        previous: TimePoint<InterruptTime>,
+        previous: V::Instant,
     },
     /// A suspect set not in push order.
     SuspectsOutOfOrder {
@@ -370,7 +369,7 @@ pub struct ConformanceOracle<V: Identities, C> {
     /// Every failure identity reported.
     failure_ids: HashSet<V::FailureId>,
     /// The latest stamped entry's stamp.
-    last_stamp: Option<TimePoint<InterruptTime>>,
+    last_stamp: Option<V::Instant>,
     /// How every completed write ended.
     ended: HashMap<V::OpId, Ended>,
     /// The epochs of every abandoned failure, by lineage.
@@ -585,11 +584,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     }
 
     /// The stamp rule (DI-D-38), over every stamped entry.
-    fn stamped(
-        &mut self,
-        failure: V::FailureId,
-        observed: TimePoint<InterruptTime>,
-    ) -> Result<(), Violation<V>> {
+    fn stamped(&mut self, failure: V::FailureId, observed: V::Instant) -> Result<(), Violation<V>> {
         match self.last_stamp.replace(observed) {
             Some(previous) if observed < previous => Err(Violation::StampWentBackwards {
                 failure,
@@ -688,7 +683,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         &mut self,
         failure: V::FailureId,
         suspect: &[SuspectWrite<V>],
-        observed: TimePoint<InterruptTime>,
+        observed: V::Instant,
     ) -> Result<(), Violation<V>> {
         if !self.failure_ids.insert(failure) {
             return Err(Violation::DuplicateFailure { failure });

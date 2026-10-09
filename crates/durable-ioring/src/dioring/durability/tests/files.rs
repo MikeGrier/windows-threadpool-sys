@@ -4,11 +4,12 @@
 use std::io;
 
 use super::{A, B, DEFAULT, FULL, Lineage, Ops, lineage, submitted, tokens};
+use crate::dioring::WinInstant;
 use crate::dioring::durability::files::FileHolds;
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach};
 use crate::types::{Epoch, FailureCause, ImportScope, IoTargetKey, Resolution};
 
-fn holds(lineage: &Lineage, file: IoTargetKey) -> FileHolds<u64> {
+fn holds(lineage: &Lineage, file: IoTargetKey) -> FileHolds<u64, WinInstant> {
     lineage.file_holds(file)
 }
 
@@ -17,7 +18,7 @@ fn at(lineage: &Lineage, key: Key, epoch: u64) -> Epoch<crate::ids::DioringIds<u
     Epoch::new(lineage.0.name(key), epoch)
 }
 
-fn none() -> FileHolds<u64> {
+fn none() -> FileHolds<u64, WinInstant> {
     FileHolds {
         uncovered: 0,
         uncovered_through: Vec::new(),

@@ -9,11 +9,13 @@
 use std::sync::Arc;
 
 use super::{DEFAULT_LINEAGE, Due, Durability, Event, Key, LineageState, Stage, Standing, V};
+use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::dioring::TimeBase;
 use crate::types::{LineageBusy, LineageInfo};
 
-impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
+impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
+    Durability<E, T, I, K>
+{
     /// Mint a lineage, described by `description`.
     pub(crate) fn mint(&mut self, description: Option<String>) -> Key {
         let key = self.next_lineage;
@@ -29,7 +31,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// The live lineages, in minting order.
-    pub(crate) fn lineages(&self) -> Vec<LineageInfo<V<E>>> {
+    pub(crate) fn lineages(&self) -> Vec<LineageInfo<V<E, I>>> {
         self.lineages
             .iter()
             .filter(|(_, state)| !state.ended)
@@ -48,7 +50,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// they complete, and the lineage is retired with the last. A heal waiting on it no longer
     /// does, and an operation held by a gate on one of its epochs, or a held write of its own, is
     /// never issued (DI-D-43). The lineage must be live and not the default.
-    pub(crate) fn end(&mut self, lineage: Key) -> Due<E, T> {
+    pub(crate) fn end(&mut self, lineage: Key) -> Due<E, T, I> {
         let mut due = Due::default();
         let Some(state) = self
             .lineages
@@ -94,7 +96,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// Retire `lineage`, if nothing holds it: no write of it in flight, uncovered or held for a
     /// gate, no operation held for a gate on one of its epochs, and no unresolved failure holding
     /// it. The lineage must be live and not the default.
-    pub(crate) fn retire(&mut self, lineage: Key) -> Result<(), LineageBusy<V<E>>> {
+    pub(crate) fn retire(&mut self, lineage: Key) -> Result<(), LineageBusy<V<E, I>>> {
         let Some(state) = self.live(lineage).filter(|_| lineage != DEFAULT_LINEAGE) else {
             self.inconsistent(
                 "a retire of a lineage that is not live, or of the default",

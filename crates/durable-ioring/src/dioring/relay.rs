@@ -33,7 +33,7 @@ use windows_ioring_sys::{
 use super::durability::{
     DEFAULT_LINEAGE, Due, Durability, Event as Synthesized, Flush, ProviderCall, WriteEnd,
 };
-use super::{Sidecar, TimeBase};
+use super::{Sidecar, TimeBase, WinInstant};
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
 use crate::error_code::{WINDOWS_IORING, windows_fault};
@@ -161,7 +161,7 @@ pub(crate) struct Shut<E: EpochId + 'static, B, C, S> {
 pub(crate) struct Core<E: EpochId + 'static, B, C, K> {
     queue: VecDeque<DioringEntry<E, B, C>>,
     /// The durability of every lineage.
-    pub(crate) durability: Durability<E, FlushTarget, K>,
+    pub(crate) durability: Durability<E, FlushTarget, WinInstant, K>,
     /// The instance, for the lineages its entries and flushes name.
     instance: InstanceId,
     /// Flushes due that the ring refused, pushed again at the next chance.
@@ -399,7 +399,7 @@ where
 
     /// Act on what a change made off the consumer's call path -- in a callback, or in a handle's
     /// release -- unless the instance is ending.
-    fn act(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
+    fn act(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget, WinInstant>) {
         if core.closed {
             return;
         }
@@ -422,7 +422,7 @@ where
     pub(crate) fn apply(
         &self,
         core: &mut Core<E, B, C, K>,
-        due: Due<E, FlushTarget>,
+        due: Due<E, FlushTarget, WinInstant>,
         ring: &Delivery<E, B, C>,
     ) -> Option<io::Error> {
         core.ready.extend(due.released);
@@ -470,14 +470,18 @@ where
     }
 
     /// As `apply`, before the ring is attached or once it is gone: flushes wait for a later chance.
-    fn apply_without_ring(&self, core: &mut Core<E, B, C, K>, due: Due<E, FlushTarget>) {
+    fn apply_without_ring(
+        &self,
+        core: &mut Core<E, B, C, K>,
+        due: Due<E, FlushTarget, WinInstant>,
+    ) {
         core.ready.extend(due.released);
         core.calls.extend(due.calls);
         self.append_events(core, due.events);
         core.unpushed.extend(due.flushes);
     }
 
-    fn append_events(&self, core: &mut Core<E, B, C, K>, events: Vec<Synthesized<E>>) {
+    fn append_events(&self, core: &mut Core<E, B, C, K>, events: Vec<Synthesized<E, WinInstant>>) {
         let instance = core.instance;
         let name = |seq| Lineage { instance, seq };
         for event in events {

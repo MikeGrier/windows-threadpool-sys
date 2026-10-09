@@ -8,7 +8,6 @@ use std::io;
 use std::sync::Arc;
 
 use win_shared_os_owned_handle::SharedHandle;
-use win_time_sys::{InterruptTime, TimePoint};
 
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
@@ -303,7 +302,7 @@ pub struct Failed<V: Identities> {
     /// When the instance observed it, on interrupt time, dioring's one time base (DI-D-37). Its
     /// resolution is the system clock tick, so failures observed within one tick carry equal
     /// stamps.
-    pub observed: TimePoint<InterruptTime>,
+    pub observed: V::Instant,
 }
 
 /// What happened to one of a failure's suspect writes after the failure was observed (DI-D-36):
@@ -314,7 +313,7 @@ pub struct Marking<V: Identities> {
     /// The suspect write it is about.
     pub write: V::OpId,
     /// When the instance observed it, on the failure stamps' time base (DI-D-38).
-    pub observed: TimePoint<InterruptTime>,
+    pub observed: V::Instant,
     /// What happened.
     pub kind: MarkingKind,
 }
@@ -681,7 +680,7 @@ pub struct FailureInfo<V: Identities> {
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
     /// When the instance observed it: the same stamp its `Failed` entry carried.
-    pub observed: TimePoint<InterruptTime>,
+    pub observed: V::Instant,
     /// Every marking it has gained, in the order observed.
     pub markings: Vec<Marking<V>>,
     /// Whether its token is held somewhere; if not, the inventory can hand one out.

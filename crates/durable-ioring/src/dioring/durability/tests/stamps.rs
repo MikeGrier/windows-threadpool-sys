@@ -8,6 +8,7 @@ use win_time_sys::{Clock, InterruptClock};
 
 use super::{A, DEFAULT, Due, FULL, One, Ops, lineage, submitted};
 use crate::dioring::TimeBase;
+use crate::dioring::WinInstant;
 use crate::dioring::durability::{Event, Reach};
 use crate::dioring::tests::MockClock;
 use crate::ids::FailureToken;
@@ -19,7 +20,7 @@ fn mocked(clock: &MockClock) -> Mocked {
     One::with_clock(clock.clone())
 }
 
-fn import<K: TimeBase>(lineage: &mut One<K>) -> Due<u64, &'static str> {
+fn import<K: TimeBase>(lineage: &mut One<K>) -> Due<u64, &'static str, WinInstant> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
@@ -27,7 +28,7 @@ fn import<K: TimeBase>(lineage: &mut One<K>) -> Due<u64, &'static str> {
 }
 
 /// The stamps of the failures a change observed, in tick counts.
-fn stamps(due: &Due<u64, &'static str>) -> Vec<u64> {
+fn stamps(due: &Due<u64, &'static str, WinInstant>) -> Vec<u64> {
     due.events
         .iter()
         .filter_map(|event| match event {
