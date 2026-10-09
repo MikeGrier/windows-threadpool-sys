@@ -3910,3 +3910,7 @@ backstop over the launcher itself. A harness test with a descendant whose parent
 has exited was run against the old harness first: the descendant survived the
 kill. How the kill works now is in
 [README-sabotage.md](tools/README-sabotage.md#how-a-hung-run-is-killed).
+
+## Moved 2026-10-09 02:01:55 +00:00 -- Dependabot's vulnerable npm dependency
+
+### <a id="m381"></a>M38.1 -- Update the vulnerable transitive Handlebars lockfile entry to the fixed release and verify release automation. *(completed 2026-10-09 02:01:55 UTC+00:00)*
