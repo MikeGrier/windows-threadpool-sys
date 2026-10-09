@@ -55,10 +55,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.1** -- The target design: `IoTarget` and its obligations, `DurableIoCore` and its backend, `FailureCause` and `IoFault`, and two crates (DI-D-50). -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-3101)
 
-- [ ] **DI-3.10.2** -- **Design: CONTRACT.md restated over target obligations**, including how far
-  each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
-  unbuffered file, a cached file on a best-effort basis, a layered target such as a VHDX -- and
-  amendment markers on every decision row the restatement changes.
+- [x] **DI-3.10.2** -- CONTRACT.md restated over targets: the obligations, warranty classes by backing, and markers on the decision rows it changes. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-3102)
 
 - [ ] **DI-3.10.3** -- **The portable core, the Windows backend and the driver, restated in place**
   as `DI-3.10.1` and `DI-3.10.2` settle them: the durability core as a public state machine naming
@@ -68,7 +65,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   portable, and `win-durable-ioring` for the driver, the Windows backend and its targets,
   registered for release. Today's tests and sabotages are the proof the Windows backend passes,
   and today's file path stands in as its target until `DI-3.10.4`. The portable crate joins CI's
-  `portable` job.
+  `portable` job. CONTRACT.md's worked examples are restated in the new API, and its "Vocabulary
+  ahead of the code" note is removed.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
   DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the

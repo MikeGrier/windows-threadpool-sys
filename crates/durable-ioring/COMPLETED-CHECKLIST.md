@@ -1693,3 +1693,14 @@ The decision is [DI-D-50](DESIGN-NOTES.md#di-d-50); the reasoning behind the obl
   completions are learned of, buffer ownership), a target that breaks its obligations, the core's
   public API, the crates and their names, and `DI-3.3`'s shape. Designed by the assistant as
   concrete proposals the engineer approves or rejects (DI-D-49).
+
+## Moved 2026-10-09 18:00:15 -04:00 -- DI-3.10.2: the contract restated over targets
+
+### <a id="di-3102"></a>DI-3.10.2 -- CONTRACT.md restated over targets: the obligations, warranty classes by backing, and markers on the decision rows it changes. *(completed 2026-10-09 18:00:15 -04:00)*
+
+[CONTRACT.md](CONTRACT.md) now states the guarantee as holding "as far as the targets it was written to honour their obligations", defines target, backend, commit, deciding commit and domain, replaces "What this contract requires of the handle" with "What this contract requires of a target" -- the obligations of [DI-D-50](DESIGN-NOTES.md#di-d-50) and a table of warranty classes by backing -- and restates seals, failure reach, markings, provenance, the readiness signal, ending and gates over targets and the backend. Overlapping writes in flight now leave the overlapping bytes unspecified rather than landing "in an unspecified order". The worked examples are unchanged, because they compile against the current API; a "Vocabulary ahead of the code" note says so, and `DI-3.10.3` removes it. Amendment markers were added to DI-D-4, 10, 12, 22, 26, 28 and 37; DI-D-11's citation changed vocabulary only. The item as written:
+
+**Design: CONTRACT.md restated over target obligations**, including how far
+  each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
+  unbuffered file, a cached file on a best-effort basis, a layered target such as a VHDX -- and
+  amendment markers on every decision row the restatement changes.

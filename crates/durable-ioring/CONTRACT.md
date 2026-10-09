@@ -7,28 +7,51 @@ later has to satisfy it rather than define it. Where a dependency ever behaves d
 is written here, the dependency is wrong and is constrained, wrapped, or replaced; this file does not
 change to match it.
 
-It is written in terms of durability, not in terms of how Windows' ring happens to behave
-([DI-D-3](DESIGN-NOTES.md#di-d-3)). The decisions behind each part are in
+It is written in terms of durability, not in terms of how any platform happens to behave
+([DI-D-3](DESIGN-NOTES.md#di-d-3), [DI-D-49](DESIGN-NOTES.md#di-d-49)), and over **targets** --
+placeholders defined only by their obligations -- rather than files
+([DI-D-48](DESIGN-NOTES.md#di-d-48), [DI-D-50](DESIGN-NOTES.md#di-d-50)). The decisions behind each
+part are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md), and the reasoning in
 [DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).
 
 **Names are illustrative.** The API's concrete shape is [API.md](API.md); names there are still
 placeholders. The behaviour is what this document fixes; the spelling is not.
 
+**Vocabulary ahead of the code.** The crate's API, and the worked examples at the end, which
+compile against it, still call a target a file, a commit a flush and a domain a flush domain --
+`FileKey`, `add_file`, `Cause::Flush`, `fail_next_flush` -- until `DI-3.10.3` restates the code,
+which removes this note.
+
 ## The guarantee, in one sentence
 
 **When dioring reports that a lineage is durable through epoch id n, every write in that lineage
 tagged at or below n that completed successfully is on stable media -- unless the consumer abandoned
-the epoch it belongs to -- for as long as the device keeps what it was told to keep.**
+the epoch it belongs to -- as far as the targets it was written to honour their obligations.**
 
 Everything below either sharpens one word of that sentence or states a condition it rests on.
 
 ## Terms
 
-- **Instance.** One dioring ring. It owns its Windows ring outright; the consumer reaches that ring
-  only through dioring ([DI-D-10](DESIGN-NOTES.md#di-d-10)).
+- **Instance.** One dioring: its core, `DurableIoCore`, and the backend beneath it that runs the
+  I/O of the targets the instance is given. The consumer reaches that backend only through dioring
+  ([DI-D-10](DESIGN-NOTES.md#di-d-10), [DI-D-49](DESIGN-NOTES.md#di-d-49)).
+- **Target.** What a write or a read addresses and a commit makes durable: an `IoTarget`, defined
+  only by the obligations under "What this contract requires of a target", and named by the
+  `IoTargetKey` the consumer gives it ([DI-D-48](DESIGN-NOTES.md#di-d-48),
+  [DI-D-50](DESIGN-NOTES.md#di-d-50)). A Win32 file, a raw volume, a window over part of another
+  target, and a virtual disk built on other targets are each one way to back a target; how is the
+  backing's concern, not this contract's.
+- **Backend.** What runs targets' I/O: a ring, with a submission queue, a doorbell that issues what
+  was queued, a completion queue, and a notification when completions arrive. One backend serves
+  every target of an instance.
+- **Commit.** A target's own operation for making its completed writes durable. A write's
+  **deciding commit** is the first commit of its target submitted after the write completed.
+- **Domain.** A unit whose failure everything behind it shares -- a disk, a controller cache, a
+  virtual disk, a share -- named by bytes the consumer chooses ([DI-D-21](DESIGN-NOTES.md#di-d-21)).
+  A target declares the domains its writes depend on, and a durability provider serves domains.
 - **Observation order.** The single sequence of events an instance itself performs or sees: each
-  operation it pushes to its ring, and each completion it pops from it. "Before" and "after" in this
+  operation it submits to its backend, and each completion it takes from it. "Before" and "after" in this
   document always mean positions in this sequence -- never wall-clock time, device time, or anything
   about when an event happened in the storage beneath.
 - **Lineage.** One independent durability sequence within an instance: its own epoch space, seal
@@ -59,30 +82,33 @@ Everything below either sharpens one word of that sentence or states a condition
   reports every epoch of that lineage at or below n durable or abandoned. Also announced by the
   `Durable { through: n }` event, which names its lineage.
 - **Durability provider.** What makes completed writes durable: dioring's built-in default, which
-  flushes each file through the instance's own ring, and at most one provider the consumer supplies,
-  serving the flush domains it states when the instance is built. A provider may flush by any
-  means, and answers once for each flush domain it is asked about
-  ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
+  commits each target through the backend, and at most one provider the consumer supplies, serving
+  the domains it states when the instance is built. A provider may make writes durable by any
+  means, and answers once for each domain it is asked about ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
 - **Covered.** A write is *covered* once dioring has observed it complete and named it to the
-  durability providers responsible for its file's flush domains. It is *covered successfully* once
-  each of those domains has answered success for a request that named it, and is then durable. A
-  flush that merely happens to reach a write dioring did not name covers nothing.
-- **Flush regime.** The set of writes whose fate one flush failure can affect. It is at least
+  durability providers responsible for its target's domains -- for the built-in default, by
+  submitting its deciding commit. It is *covered successfully* once each of those has answered
+  success for a request that named it -- for the default, once its deciding commit succeeded --
+  and is then durable. A commit that merely happens to reach a write dioring did not name covers
+  nothing.
+- **Flush regime.** The set of writes whose fate one commit failure can affect. It is at least
   everything in the same device's volatile cache, which includes other processes' writes to that
-  device; it may be larger. dioring cannot observe it.
-- **Durability failure.** A flush that failed, or an external failure the consumer imported. Nothing
-  else: a failed or short *write* is an ordinary operation error ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
+  device; it may be larger. dioring cannot observe it, and knows of it only through the domains
+  targets declare.
+- **Durability failure.** A commit that failed, a provider's domain that failed or went unanswered,
+  or an external failure the consumer imported. Nothing else: a write that completes with a fault
+  is an ordinary operation error ([DI-D-12](DESIGN-NOTES.md#di-d-12)).
 - **Suspect set.** The writes a durability failure puts at risk -- defined below.
 - **Resolve.** What the consumer does with a durability failure: **heal**, **abandon**, or **close**.
 - **Gated operation.** An operation the consumer submits for release only once a named epoch is
-  durable (release-after-durable). dioring holds it; the kernel does not see it until it is released.
+  durable (release-after-durable). dioring holds it; the backend does not see it until it is released.
 
 ## What this contract guarantees
 
 1. **Durable means on stable media, for what succeeded.** A durable epoch's writes that completed
-   successfully are on stable media, up to the byte count each completion reported. A write that
-   failed, or transferred fewer bytes than asked, is reported on its own completion and is not
-   covered by any durability report for the bytes it did not transfer.
+   successfully are on stable media. A write that completed with a fault is reported on its own
+   completion and is covered by no durability report. No write completes short: a target completes
+   it in full or with a fault (see what this contract requires of a target).
 2. **The prefix property.** Durability is reported only as a prefix of a lineage: "durable through
    n" covers every epoch of n's lineage at or below n, never n alone
    ([DI-D-9](DESIGN-NOTES.md#di-d-9)).
@@ -92,12 +118,14 @@ Everything below either sharpens one word of that sentence or states a condition
    `Failed`, or `Blocked` as soon as the writes it covers have completed and the durability
    providers it needs have answered ([DI-D-13](DESIGN-NOTES.md#di-d-13)). dioring itself never
    stalls a request silently; a request waiting on a provider that has not answered stays pending,
-   and that wait is reported through dioring's ETW events ([DI-D-26](DESIGN-NOTES.md#di-d-26)).
+   and that wait is reported through dioring's diagnostics -- the core's tracing hook, which the
+   Windows driver publishes as ETW events ([DI-D-26](DESIGN-NOTES.md#di-d-26),
+   [DI-D-50](DESIGN-NOTES.md#di-d-50)).
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
    order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).
 6. **A late write is refused, not absorbed.** Once n is sealed, a write tagged at or below n in n's
-   lineage is an API violation, refused before anything is reserved; nothing reaches the kernel and
+   lineage is an API violation, refused before anything is reserved; nothing reaches the backend and
    the buffer is returned. Likewise, once an epoch is abandoned, a write tagged with it is refused,
    open or sealed: its writes were declared lost, and none may join them
    ([DI-D-35](DESIGN-NOTES.md#di-d-35)).
@@ -119,10 +147,11 @@ Everything below either sharpens one word of that sentence or states a condition
 Stated as plainly as the guarantees, because a contract that lists only its promises gets read as
 promising everything.
 
-- **No per-write durability.** A write completing means the device accepted its bytes, not that they
+- **No per-write durability.** A write completing means its target accepted its bytes, not that they
   will survive. Durability is a property of a sealed epoch and nothing smaller.
 - **No ordering within an epoch, and none between overlapping writes.** Two writes whose ranges
-  overlap and are in flight together land in an unspecified order. Ordering them is the consumer's
+  overlap and are in flight together leave the bytes where they overlap unspecified: either may land
+  last, and a target may interleave them. Ordering them is the consumer's
   responsibility ([DI-D-6](DESIGN-NOTES.md#di-d-6)). A read that overlaps an in-flight write is
   likewise unordered.
 - **Nothing about writes outside the seal.** A write of an epoch above the seal point, or of another
@@ -131,12 +160,15 @@ promising everything.
   its epoch, and it may appear in a failure's suspect set.
 - **No bound on what a commit waits for.** A commit waits for its own lineage's writes and its
   providers' answers ([DI-D-22](DESIGN-NOTES.md#di-d-22)), and may also be delayed by unrelated work
-  sharing the instance -- submission-queue capacity, the deliverer, dioring's lock, or the ring's
-  barrier where dioring chooses to use it. That is a cost, not a semantic, and dioring reports it
+  sharing the instance -- submission-queue capacity, the deliverer, dioring's lock, or an ordering
+  barrier where the backend offers one and dioring uses it. That is a cost, not a semantic, and
+  dioring reports it
   ([DI-D-26](DESIGN-NOTES.md#di-d-26)).
-- **No detection of failures nobody reports.** A failure in the instance's flush regime that is not
-  reported to it -- another process's failed flush, the system's own failed write-back -- is invisible
-  to it. A `Durable` reported in that window may be false, and the import cannot retract it.
+- **No detection of failures nobody reports.** A failure in the instance's flush regime that no
+  target reports is invisible to it -- another writer's failed commit on a shared device, or, for a
+  target over a cached Win32 file, the system's own failed write-back. A `Durable` reported in that
+  window may be false, and the import cannot retract it. How far each target reports such failures
+  is its warranty class (see what this contract requires of a target).
 - **No timeout.** A failure the consumer never resolves stalls the high-water mark indefinitely; the bound is
   the consumer's ([D-67](../windows-ioring-sys/DESIGN-NOTES.md#d-67)). Likewise a durability
   provider that never answers leaves its seal pending; dioring sets no timeout on it
@@ -148,17 +180,52 @@ promising everything.
   is the consumer's own.
 - **No cancellation in v1** (DI-2.6, parked as DI-6+.4).
 
-## What this contract requires of the handle
+## What this contract requires of a target
 
-- **Positioned, overlapped I/O.** Every write names its own offset; the ring's operations are
-  asynchronous.
-- **That a completed flush has reached stable media.** A warranty the caller gives about the
-  device, on which the built-in default provider rests. Nothing in dioring can verify it.
+dioring binds to these obligations, never to how a backing happens to meet them
+([DI-D-50](DESIGN-NOTES.md#di-d-50)):
 
-dioring does not otherwise inspect or gate on how the handle was opened -- the `epoch_log` sample's
-contract records why a pre-flight check points the wrong way. Files are given to dioring in owning
-forms, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)), and named in failure reports by an
-identity the consumer supplies, so a report stays usable after its handle is gone
+- **Positioned, asynchronous operations.** Every write and read names its own offset, and every
+  operation completes later, through the backend.
+- **Every operation completes exactly once** -- every write, read and commit, whether or not it
+  succeeds.
+- **A write completes in full or with a fault, never short.** A backing whose platform can return a
+  short count deals with it before completing, under a policy the consumer chooses when it builds
+  the backend: fault at once by default, or reissue the remainder a bounded number of times. dioring
+  never sees a short write.
+- **The deciding commit decides.** For each write that completed successfully: if its deciding
+  commit succeeds, the write's bytes are on stable media and stay there; if it fails, the target
+  makes no further statement about that write, and a later commit's success does not warrant it --
+  only a new write of those bytes can be warranted again. A write that completed with a fault is
+  never warranted, and the target says nothing about what is in its range.
+- **Every failure it learns of is reported**, as a fault on an operation's completion, and is never
+  treated as repaired by a later success.
+- **Its domains are declared.** A failed commit on a target may have lost any completed write not
+  yet decided by a successful commit, on it or on any target sharing a domain with it; acting on
+  that is dioring's (see "What a failure puts at risk"). A target with no domains declared shares
+  fate with every target.
+- **Its geometry and capabilities are stated**: the alignment its offsets, lengths and buffers
+  need, and what it offers beyond these obligations, such as per-write write-through.
+- **A fault names its source**: the layer that reported it, and that layer's code where it gives one
+  (see "Where every report comes from").
+
+**How far a target honours them: its warranty class.** Every target reports one. It is
+information: dioring behaves identically for every class, does not label a `Durable` with it, and
+the guarantee holds for a target only as far as its class says.
+
+| Class | What it reports | Backings that can claim it |
+|---|---|---|
+| `Complete` | every failure affecting its writes | a device held exclusively, with nothing else on it; a layered target whose every lower target is `Complete` and which relays all they report |
+| `SharedDevice` | every failure of its own, but not a failure of another writer sharing its device's volatile cache | a Win32 file opened unbuffered; a raw volume whose disks also hold other volumes |
+| `BestEffort` | may report success for a commit over data already lost | a Win32 file opened for cached I/O, whose system write-back can fail without telling its writer |
+
+A layered target -- a window over part of another, or a virtual disk built on other targets -- can
+claim no more than the weakest target it rests on, and relays what they report, translated into its
+own terms, as its own faults.
+
+How a backing meets the obligations is its own concern. A Win32 file target takes its handle in an
+owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)). Every target is named in
+failure reports by the key the consumer gave it, so a report stays usable after the target is gone
 ([DI-D-11](DESIGN-NOTES.md#di-d-11)).
 
 ## What this contract requires of the consumer
@@ -173,56 +240,60 @@ identity the consumer supplies, so a report stays usable after its handle is gon
   space must have a single author. Independent counters use separate lineages, or share one
   allocator; splitting the ids between them (one even, one odd) does not work, since a seal cuts
   across any split. Lineages separate durability, not everything: the lineages of one instance
-  still share its ring, queues, delivery, lock and lifecycle. **A client that wants no interaction
+  still share its backend, queues, delivery, lock and lifecycle. **A client that wants no interaction
   at all uses a separate instance** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
 - **Ordering of overlapping writes**, as above.
 - **Resolving failures.** Heal, abandon, or close each one; the high-water mark waits until it does.
 - **Honest heals.** A heal is the consumer's assertion that it has re-issued, under higher tags,
   everything the failure put at risk that it needs. dioring cannot check it.
-- **Reporting outside failures it learns of**, through the import, when other writers share its flush
-  regime. Without that, guarantee 1 rests on an assumption that does not hold for it.
+- **Reporting outside failures it learns of**, through the import, for every target whose warranty
+  class is not `Complete`. Without that, guarantee 1 rests on an assumption that does not hold for
+  it.
 - **Truthful provider answers, if it supplies a provider** ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
   A domain's success means every write named for that domain is durable, however the provider got
   there. dioring cannot check it; a false success is the second way, beside an incomplete
   declaration below, that the consumer can make this contract false. The provider returns promptly
   from each call, answers each domain once, and may answer from any thread at any time.
-- **Complete flush-domain declarations, if it declares any** ([DI-D-21](DESIGN-NOTES.md#di-d-21)).
-  A file's declared flush domains must include **every** domain its writes depend on: each disk a
-  striped or spanned volume covers, the backing file's domains for a virtual disk, the share for
-  a network path. dioring cannot check this.
-  - **What a missing domain costs.** A flush failure in an undeclared domain does not reach the
-    file, so its uncovered writes are left out of the suspect set and can be reported durable when
-    they are not. This is the one way a declaration can make this contract false.
-  - **What is always safe.** Declaring nothing: the file is unknown and shares fate with every
-    file, which is the contract's default. Declaring *more* domains than a file depends on: an
-    extra domain only widens which files share a failure, so it costs precision, never
+- **Complete domain declarations, where it supplies them** ([DI-D-21](DESIGN-NOTES.md#di-d-21)).
+  A target's declared domains must include **every** domain its writes depend on: each disk a
+  striped or spanned volume covers, the lower targets' domains for a virtual disk, the share for a
+  network path. A backing that finds its own domains, as a raw volume can from its disks, makes
+  this its own obligation; where the consumer supplies them, dioring cannot check them.
+  - **What a missing domain costs.** A commit failure in an undeclared domain does not reach the
+    target, so its uncovered writes are left out of the suspect set and can be reported durable
+    when they are not. This is the one way a declaration can make this contract false.
+  - **What is always safe.** Declaring nothing: the target is unknown and shares fate with every
+    target, which is the contract's default. Declaring *more* domains than a target depends on: an
+    extra domain only widens which targets share a failure, so it costs precision, never
     correctness.
-  - **Example.** A file on a volume striped over disks A and B is declared `{A, B}`. A file on
-    disk B alone is declared `{B}`. A failed flush on either reaches the other, because the sets
+  - **Example.** A target on a volume striped over disks A and B is declared `{A, B}`. A target on
+    disk B alone is declared `{B}`. A failed commit on either reaches the other, because the sets
     intersect at B. Had the first been declared `{A}` only, a failure on B would never reach it.
 
 ## What this contract assumes
 
-- **The device honours the flush.** When the operating system asks it to commit its volatile cache,
-  it does. A device that loses cached data without failing a flush defeats this contract and every
-  other built on the same primitive.
-- **Every failure affecting the instance's flush regime is reported to it**, by its own ring or
-  through the import. "Durable" is truthful relative to what the instance was told, and no more.
+- **Every target honours its obligations, and beneath them the device honours its flush.** When a
+  device is asked to commit its volatile cache, it does. A device that loses cached data without
+  failing a flush defeats this contract and every other built on the same primitive.
+- **Every failure affecting the instance's flush regime is reported to it**, by its targets or
+  through the import. A target's warranty class says how far that holds for it; "Durable" is
+  truthful relative to what the instance was told, and no more.
 - **A durable write stays durable.** Media failure after the fact is out of scope.
 
 ## How a seal is made durable
 
 Once `make_durable_through(n)` is called, dioring waits until every write of n's lineage at or below
 n has completed -- gated writes once released -- and then names them to the durability providers
-responsible for their files' flush domains ([DI-D-22](DESIGN-NOTES.md#di-d-22),
+responsible for their targets' domains ([DI-D-22](DESIGN-NOTES.md#di-d-22),
 [DI-D-27](DESIGN-NOTES.md#di-d-27)). It never asks a provider about a write it has not seen
 complete.
 
-- The **built-in default** flushes each of its files through the instance's ring.
-- A **consumer provider** is given, for each flush domain it serves, the files and the identities
-  of the writes named to it, and answers each domain once.
+- The **built-in default** submits one commit for each target the seal's writes touched, through
+  the backend; that commit is the deciding commit of each of those writes.
+- A **consumer provider** is given, for each domain it serves, the keys of the targets and the
+  identities of the writes named to it, and answers each domain once.
 - The seal's epochs are durable when every write in them is covered successfully: every domain of
-  every file they wrote has answered success.
+  every target they wrote has answered success.
 
 A write whose gate could never be released, because releasing it already depends on the write's own
 epoch, is refused when it is pushed ([DI-D-23](DESIGN-NOTES.md#di-d-23)).
@@ -235,7 +306,7 @@ A failure's **suspect set** is every write the instance pushed **before the fail
 that has not been covered successfully. Three consequences:
 
 - It includes writes still in flight when the failure arrived, and writes pushed after the failing
-  flush itself, which the ring does not hold back. A bound based on *completion* order would be
+  commit itself, which the backend does not hold back. A bound based on *completion* order would be
   unsound: a write accepted before the failure can have its completion posted after it.
 - It is **frozen** when the failure is observed and never gains a write. A write pushed afterwards
   was accepted after the failure, and is covered successfully later in the ordinary way. What
@@ -244,23 +315,22 @@ that has not been covered successfully. Three consequences:
   can span a sealed epoch, a pending one and an open one, and one open epoch can sit in several
   failures. The example at the end of this document shows both.
 
-**Which files a failure reaches.** dioring cannot see which writes share a device's volatile cache,
-so it relies on what the consumer declares ([DI-D-21](DESIGN-NOTES.md#di-d-21)):
+**Which targets a failure reaches.** dioring cannot see which writes share a device's volatile
+cache, so it relies on the domains targets declare ([DI-D-21](DESIGN-NOTES.md#di-d-21)):
 
-- A file may be given a set of **flush domains** when it is given to dioring -- the disks, caches,
-  virtual disks or shares its writes depend on. The set is fixed for the file's life in the
-  instance.
-- A failed flush by the built-in default on file F reaches the uncovered writes to every file
-  whose declared domains **intersect** F's.
+- A target's domains -- the disks, caches, virtual disks or shares its writes depend on -- are
+  declared when it is given to dioring, and fixed for its life in the instance.
+- A failed commit by the built-in default on target T reaches the uncovered writes to every target
+  whose declared domains **intersect** T's.
 - A consumer provider answers per domain, so its failure of domain D -- including a domain it
-  never answered -- reaches the uncovered writes to every file whose declared domains **contain**
-  D ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
-- A file declared with **no** domains is unknown and intersects every file. With nothing
-  declared, the scope is the whole instance -- one flush domain -- which is the default.
+  never answered -- reaches the uncovered writes to every target whose declared domains
+  **contain** D ([DI-D-27](DESIGN-NOTES.md#di-d-27)).
+- A target declared with **no** domains is unknown and intersects every target. With nothing
+  declared, the scope is the whole instance -- one domain -- which is the default.
 - An imported failure is scoped to the whole instance, one lineage, or a set of domains.
 
 The declarations must be complete; see what this contract requires of the consumer. Each suspect
-write is reported with its identity, the consumer's file identity and its epoch -- not its extent,
+write is reported with its identity, its target's key and its epoch -- not its extent,
 which the consumer supplied and can track by the write's identity -- and a failure
 belongs to every lineage that has a write in its suspect set, and holds each until it is resolved
 there. A failure whose suspect set is empty belongs to no lineage.
@@ -275,30 +345,29 @@ inventory again. Another instance's identity or token is refused.
 
 ### When a failure was observed
 
-Each failure carries the time it was observed, on interrupt time, the one time base
-([DI-D-37](DESIGN-NOTES.md#di-d-37), [DI-D-38](DESIGN-NOTES.md#di-d-38)). Two facts about it are
-part of the contract:
+Each failure carries the time it was observed, read from the instance's clock: a type parameter of
+the core, which must never run backwards. The Windows driver's clock is interrupt time, its one
+time base ([DI-D-37](DESIGN-NOTES.md#di-d-37), [DI-D-38](DESIGN-NOTES.md#di-d-38),
+[DI-D-50](DESIGN-NOTES.md#di-d-50)). Two facts about it are part of the contract:
 
 - **Stamps never decrease in observation order**: each `Failed` entry carries a stamp at or after
   the one before it in the queue.
 - **The inventory reports the stamp the `Failed` entry carried**, not a reading taken when asked.
 
-Nothing else is promised. Equal stamps are normal, since interrupt time's resolution is the system
-clock tick, and a stamp is a report: nothing the implementation decides depends on one. dioring
-reads it with `InterruptClock`, or with the clock it was given by `Dioring::with_clock` -- a test's
-mock, for one -- which must promise never to run backwards (`win-time-sys`' `Steady`).
+Nothing else is promised. Equal stamps are normal -- interrupt time's resolution is the system
+clock tick -- and a stamp is a report: nothing the implementation decides depends on one. A test may
+give the core a mock clock, which must promise the same.
 
 ### What happens to a suspect write afterwards
 
 A failure's record gains a **marking** whenever one of its suspect writes does something after the
 failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES.md#di-d-39)):
 
-- **Nullified** -- the write completed as failed, so it did not happen. The marking carries the
-  completion's error code.
-- **Short** -- the write completed short, carrying the byte count its completion reported.
-- **Covered** -- the write was covered successfully: every part its file depends on answered
+- **Nullified** -- the write completed with a fault, so it did not happen. The marking carries the
+  fault.
+- **Covered** -- the write was covered successfully: every part its target depends on answered
   success, so its bytes are durable, even if the seal it belongs to failed elsewhere. The marking
-  cites who answered: the built-in default's flush, which dioring observed, and the consumer's
+  cites who answered: the built-in default's commit, which dioring observed, and the consumer's
   provider, whose answer is its own warranty ([DI-D-47](DESIGN-NOTES.md#di-d-47)).
 
 The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
@@ -308,14 +377,16 @@ high-water mark, not what a failure holds, and not what resolving it needs. A fa
 markings until it is abandoned or its heal takes effect, so its final record is the record as of
 that moment; a suspect write still in flight then is reported only by its own completion.
 
-**Error codes, and where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47)). A failure
-the **kernel** reports is dioring's to capture: its code is carried through and reported -- a failed
-completion's `Outcome::Failed` error and a failed flush's `Cause::Flush` error each hold it, read
-with `ErrorCode::of`, and a nullifier carries it as an `ErrorCode`. It is the `HRESULT` the I/O
-ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`. A failure **relayed** is
-reported as relayed, in place of a code: `Cause::Imported` came from the consumer;
-`Cause::Provider` from its provider, whose own error it passes through as the provider's; and
-`Cause::ProviderAbandoned` is dioring's observation that the provider never answered.
+**Where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47),
+[DI-D-50](DESIGN-NOTES.md#di-d-50)). dioring relays every failure, and says from where. A fault a
+target's backend reports is passed through as that backend's `IoFault`: its source names the layer
+that reported it, and its code is the one that layer gives, where it gives one. A failed write's
+completion and a failed commit's cause, `FailureCause::Commit`, each carry it, and a nullifier
+carries the write's. For the Windows backend the code is always present: the `HRESULT` the I/O ring
+reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`. The other causes say who relayed
+them: `FailureCause::Imported` came from the consumer; `FailureCause::Provider` from its provider,
+whose own error it passes through as the provider's; and `FailureCause::ProviderAbandoned` is
+dioring's own observation that the provider never answered.
 
 ### Resolving a failure
 
@@ -365,29 +436,30 @@ promptly the consumer learns.
 
 ## The completion queue
 
-The consumer pops **dioring's** completion queue, not the kernel ring's. It holds every completion
+The consumer pops **dioring's** completion queue, not the backend's. It holds every completion
 the consumer should observe -- reads and writes, passed through -- plus seven events dioring
 synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-30)):
 
 | Event | When |
 |---|---|
 | `Durable { through: n }` | the high-water mark has reached n |
-| `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a flush, or a provider's domain, failed; or an import) |
-| `Blocked { through: n, by: failure }` | a request's flushes succeeded, but an unresolved failure at or below n prevents reporting it |
-| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified, completed short, or covered |
+| `Failed { failure, token, cause, suspect, observed }` | a durability failure was observed (a target's commit, or a provider's domain, failed; or an import) |
+| `Blocked { through: n, by: failure }` | a request's commits succeeded, but an unresolved failure at or below n prevents reporting it |
+| `Marked { failure, marking }` | a suspect write of an unresolved failure was nullified or covered |
 | `Abandoned { failure, suspect, markings }` | the consumer abandoned a failure: its final record |
 | `Healed { failure, suspect, markings }` | a heal took effect: the failure's final record |
 | `LineageEnded { lineage, abandoned_through }` | a lineage ended -- its last handle was released, or given to `end_lineage` -- and every epoch of it not yet durable is abandoned |
 
 ## The readiness signal
 
-An instance has a **readiness signal**: an auto-reset event it owns, of which the consumer can take
-a duplicate, as a `win-sync-sys` `Event` ([DI-D-28](DESIGN-NOTES.md#di-d-28)). These rules bind
+An instance has a **readiness signal**, of a type its driver chooses; the Windows driver's is an
+auto-reset event it owns, of which the consumer can take a duplicate, as a `win-sync-sys` `Event`
+([DI-D-28](DESIGN-NOTES.md#di-d-28), [DI-D-50](DESIGN-NOTES.md#di-d-50)). These rules bind
 every implementation of this contract and whoever waits on the signal, and the conformance module's
 `check_readiness` checks the instance's half of them:
 
 - **The instance** sets the signal only after an entry has become poppable, and at least every time
-  its queue goes from empty to non-empty. It sets it for every source of entries alike: kernel
+  its queue goes from empty to non-empty. It sets it for every source of entries alike: backend
   completions, provider answers, and what dioring synthesizes.
 - **The waiter** pops until the queue is empty after every wake, before waiting again. A waiter that
   waits again with entries left can sleep forever.
@@ -400,19 +472,19 @@ every implementation of this contract and whoever waits on the signal, and the c
 An instance ends by `close()` or by being dropped. Both end it the same way; `close()` also hands
 back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
 
-- **No implicit durability.** Ending issues no final seal and no flush. A write not already
+- **No implicit durability.** Ending issues no final seal and no commit. A write not already
   reported durable gets no promise.
-- **Ending waits for what is outstanding.** It returns only once every operation the kernel holds
+- **Ending waits for what is outstanding.** It returns only once every operation the backend holds
   and every durability-provider call in flight has completed, because each may still be using
-  memory or state the instance owns. dioring adds no other waiting. If the ring cannot be shown to
-  have finished, its buffers are leaked rather than freed. A provider call that never completes
+  memory or state the instance owns. dioring adds no other waiting. If the backend cannot be shown
+  to have finished, its buffers are leaked rather than freed. A provider call that never completes
   means ending never completes; nothing asks the provider to stop early.
 - **The provider is let go first** ([DI-D-45](DESIGN-NOTES.md#di-d-45)). Ending drops the
   consumer's provider before it waits, so a completion the provider keeps in itself is answered
   as abandoned rather than holding the end up; one kept anywhere else is waited for. Every answer
   given once ending has begun, and every operation that completes after it, is discarded
   unreported.
-- **What is left.** Gated operations the kernel never saw, unresolved failures, and each lineage's
+- **What is left.** Gated operations the backend never saw, unresolved failures, and each lineage's
   final high-water mark are returned by `close()` and discarded by a drop. Nothing reported is
   undone: an epoch reported durable stays durable whether or not its event was popped.
 - **No callback after the end.** Under Model A (threadless dispatch), no delivery callback runs once
@@ -426,8 +498,8 @@ A holder that will not finish a lineage ends it ([DI-D-30](DESIGN-NOTES.md#di-d-
 its last handle or by giving that handle to `end_lineage`, which is refused -- and hands the handle
 back -- while another copy is held ([DI-D-40](DESIGN-NOTES.md#di-d-40)).
 
-- **Every epoch of it not yet durable is abandoned**, sealed ones whose flushes are still in flight
-  included; a flush that finishes afterwards reports nothing. Epochs already durable stay durable.
+- **Every epoch of it not yet durable is abandoned**, sealed ones whose commits are still in flight
+  included; a commit that finishes afterwards reports nothing. Epochs already durable stay durable.
 - **Its dependants end rather than wait.** A gated operation on one of its epochs, in any lineage,
   ends as never issued, and so does a held write of its own; a new gate on one of its epochs is
   refused, as for any lineage the instance cannot answer for (see "Gates").
@@ -452,7 +524,7 @@ entry: nothing about it changed.
 A gate holds an operation until an epoch is durable -- release-after-durable
 ([DI-D-23](DESIGN-NOTES.md#di-d-23), [DI-D-43](DESIGN-NOTES.md#di-d-43)).
 
-- **Held, then released.** A gated operation is accepted and held; nothing reaches the kernel.
+- **Held, then released.** A gated operation is accepted and held; nothing reaches the backend.
   It is released once its gate's lineage is durable through the gate, and pushed by the instance
   at the consumer's next call on it -- normally the `pop` that returns the `Durable` entry. A gate
   already durable holds nothing.
@@ -489,11 +561,10 @@ Each example is dioring running the trace in its comments, compiled and run as a
 that breaks one breaks the build. In the comments, `->` is a call the consumer makes and `<-` an
 entry it pops. Every write is in the default lineage, so the lineage is not shown; construction
 returns a handle to it, and `tag(n)` is its epoch n as a write or a seal takes it, `epoch(n)` as a
-query or an entry names it. A flush failure
-cannot be provoked on a healthy machine, so each example arms one with dioring's fault seam,
-`fail_next_flush`, which makes the next flush of a file report the error given whatever the device
-answered. Setting up the instance, and a `pop_until` that pops until an entry it is looking for, are
-hidden.
+query or an entry names it. A commit failure cannot be provoked on a healthy machine through a Win32
+file, so each example arms one with dioring's fault seam, `fail_next_flush`, which makes the next
+flush of a file report the error given whatever the device answered. Setting up the instance, and a
+`pop_until` that pops until an entry it is looking for, are hidden.
 
 ### Healing a failure
 
@@ -570,13 +641,13 @@ assert!(ring.failures().is_empty());
 # Ok::<(), std::io::Error>(())
 ```
 
-Without the heal, the last entry is `Blocked { through: 42, by: F1 }`: 42's own flush succeeded, but
+Without the heal, the last entry is `Blocked { through: 42, by: F1 }`: 42's own commit succeeded, but
 the high-water mark cannot pass the unresolved failure at 41.
 
 ### Failures and epochs are many-to-many
 
 `P` is pushed before the seal, rather than after it as a consumer might, so that it is certainly
-pushed before the failure is observed: the seal's flush is issued as soon as `A` completes.
+pushed before the failure is observed: the seal's commit is issued as soon as `A` completes.
 
 ```rust
 # use std::os::windows::io::OwnedHandle;

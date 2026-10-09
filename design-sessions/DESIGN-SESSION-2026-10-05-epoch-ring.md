@@ -3083,6 +3083,32 @@ The assistant brought thirteen proposals (P1-P13) for approval. Settled so far:
   an exception. Recorded as DI-D-50, with amendment markers on the rows it restates (DI-D-21,
   DI-D-27, DI-D-29 superseded, DI-D-36, DI-D-39, DI-D-44, DI-D-47); `DI-3.10.1` closed, and the fault
   seam's merge-or-delete queued as `DI-3.11`.
+- **The `win-` prefix.** Offered amending the workspace naming rule or recording an exception, the
+  engineer: "b record this as an exception". Recorded in the root naming decision.
+
+### DI-3.10.2: the contract restated over targets (2026-10-09)
+
+The engineer: "implement di-3.10.2". The assistant restated CONTRACT.md in place rather than drafting
+a second copy, since two statements of one contract are the drift the workspace's contract-integrity
+rule names. Its worked examples are the crate's doctests and compile against today's API, so they
+were left alone and a "Vocabulary ahead of the code" note says so until `DI-3.10.3` restates the
+code. Choices the assistant made in the restatement, for the engineer to see:
+
+- **Warranty classes by backing.** `Complete`: a device held exclusively with nothing else on it,
+  or a layered target over `Complete` targets that relays all they report. `SharedDevice`: a Win32
+  file opened unbuffered, or a raw volume whose disks also hold other volumes -- a partition is a
+  host-side construct, so a locked volume still shares its device's cache with its siblings.
+  `BestEffort`: a Win32 file opened for cached I/O. A layered target claims no more than the weakest
+  it rests on.
+- **Overlapping writes in flight** leave the overlapping bytes unspecified -- either may land last,
+  and a target may interleave them -- tightening "land in an unspecified order", as the short-write
+  discussion found it already meant together with "no atomicity beyond the device's".
+- **"Domain"** is the contract's word for what the code calls a flush domain, since a target
+  declares domains for failure sharing and a provider serves them.
+- **Reporting outside failures through the import** is required for every target whose class is
+  not `Complete`.
+- **Diagnostics:** waits are reported through the core's tracing hook, which the Windows driver
+  publishes as ETW.
 
 ## Open, not yet discussed
 
