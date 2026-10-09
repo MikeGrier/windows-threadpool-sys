@@ -19,7 +19,7 @@ section, it wins and this section is the bug.**
 | Edition | **2024** | root `Cargo.toml`, `[workspace.package] edition` |
 | MSRV | **1.98** | root `Cargo.toml`, `[workspace.package] rust-version` |
 | Pinned toolchain | **1.98.0** | `rust-toolchain.toml`, `[toolchain] channel` |
-| Target | Windows only; every item is behind `cfg(windows)` | -- |
+| Target | Primarily Windows; platform-specific items behind `cfg(windows)`, with portable cores verified off Windows by CI's `portable` job | [DEVELOPMENT.md](../../DEVELOPMENT.md) |
 
 Every crate inherits the first two with `edition.workspace = true` and
 `rust-version.workspace = true`, so a crate's own `Cargo.toml` shows a pointer
