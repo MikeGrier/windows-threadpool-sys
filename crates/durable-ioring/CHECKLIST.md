@@ -77,14 +77,19 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.3** -- The diagnostic sink: `DiagnosticSink` with `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, given in `Setup`, carrying the inconsistency report; the `trace` feature removed. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31033)
 
-- [ ] **DI-3.10.3.4** -- **The core made platform-free**: a portable `Clock` the core is generic
-  over, failure stamps in its time type, and nothing in the durability core naming a Windows
-  type; `DurableIoCore` public, its operations and `complete` returning `CoreActions`.
+- [ ] **DI-3.10.3.4** -- **The core made platform-free**: a portable clock trait the core is
+  generic over, failure and marking stamps in its time type -- an `Instant` associated type of
+  `Identities`, which the shared types (`Failed`, `Marking`, `FailureInfo`) and the oracle carry
+  -- and nothing in `dioring/durability*` naming a Windows type. `DioringIds` gains the time type
+  as a parameter, defaulted to interrupt time until `DI-3.10.3.6` moves that default to the
+  Windows crate. The public `DurableIoCore` API moved to `DI-3.10.3.5`: it returns ring entries,
+  whose shape the backend defines.
 
-- [ ] **DI-3.10.3.5** -- **Targets and the backend**: the `IoTarget` and backend traits (DI-D-50
-  P10); the Windows backend over `windows-ioring-sys` and the Win32 file target; the driver
-  running `DurableIoCore` over the backend; flush domains carried by the target, and
-  `FileOptions` removed. The oracle's push hook gains each write's length, and a rule that a
+- [ ] **DI-3.10.3.5** -- **Targets, the backend, and the public core**: the `IoTarget` and backend
+  traits (DI-D-50 P10); `DurableIoCore` public, its operations and `complete` returning
+  `CoreActions` of backend entries; the Windows backend over `windows-ioring-sys` and the Win32
+  file target; the driver running `DurableIoCore` over the backend; flush domains carried by the
+  target, and `FileOptions` removed. The oracle's push hook gains each write's length, and a rule that a
   write never completes short (DI-D-50), queued here from `DI-3.10.3.2` so the hook's signature
   changes once.
 
