@@ -2986,6 +2986,54 @@ win32 file object as a target can be a separate concern." Recorded as DI-D-48 an
 The assistant had first said `DI-3.9.4` was affected too; on re-reading, it uses none of that
 vocabulary, and stays ahead.
 
+### Any fault pattern, an algorithm at the core, and layers as targets (decided 2026-10-09; DI-D-49)
+
+The engineer: "Given this pivot, we can construct any fault pattern on a target that we wish." The
+assistant agreed and drew out what it changes: producing failures on demand stops being hard, so
+paths untested only because the kernel will not misbehave become reachable, case A among them; tests
+run the real core over a faulting target rather than a second implementation of the contract; and
+`DI-4.1` stops serving testing, mattering only for what the Win32 file backing can warrant. It
+named the choice this forces -- a faulting target under the real core needs the core to send I/O
+through targets, making IoRing the Win32 backing's mechanism -- and noted that the core is already
+half split that way: `durability.rs` and its children never touch the ring and already return what
+is due.
+
+- **Targets beneath the core.** The engineer: "That's what I think, let me know if you disagree."
+  The assistant agreed with two refinements. First, it is two interfaces: a **backend** that
+  submits and completes I/O -- one IoRing shared by every Win32 target, so a batch is one
+  submission -- and the **targets** it serves, which carry obligations; the engineer: "seems OK,
+  I'd like some idea of what the general shape of the i/o api is - as long as it's shaped like a
+  ring with a sq/cq and a doorbell and notification mechanism, I'm sure I'll be ok." The assistant
+  sketched it (push, submit as the doorbell, pop, a notification on every empty-to-non-empty
+  transition; write, read and commit entries; a fault carrying the reporting layer's code and
+  source) and observed that dioring turns a ring without durability into one with it -- possibly
+  the shape of the engineer's existing portable substrate. Second, **layers are targets**: a
+  partition is a window over another target and a VHDX driver a target whose commit succeeds once
+  its own writes are durable in its format's order. The engineer: "yes that seems like the right
+  refinement. I didn't see why a partition driver would provide an entire dioring."
+- **DI-3.3.** The engineer agreed it becomes a faulting target ("I think so, do you have an
+  alternative?"); the assistant proposed adding a faulting backend, since refusals, a full
+  submission queue and late or reordered completions are the backend's, and recording the
+  2026-10-05 "public second implementation" purpose as served by the target interface. Carried
+  into `DI-3.10.1`'s proposals.
+- **Portable.** The engineer: "the filesystems that I alluded to are portable, and the ioring-like
+  api that they use today works over both windows ioring and linux iouring. right now it has no
+  provisions at all to consider durability ... if our dioring solution can be algorithmic only
+  that's actually ideal." The assistant listed the core's remaining platform ties (interrupt time,
+  the `HRESULT` code, the trace macro, `SharedHandle`, `Event`, the buffer types) and named the
+  workspace's Windows-only rule as the blocker. The engineer: "the crate is 'durable-ioring', not
+  'win-durable-ioring', so perhaps it can be non-windows-only? I think the rule was meant to
+  simplify thinking. There is no hard requirement for disabling non-windows building." The
+  assistant found the precedent already in DEVELOPMENT.md -- `wtf-string`'s portable core, verified
+  by CI's `portable` job -- and that the instruction files overstated the rule.
+- **Settled together:** the state machine public "with the threaded driver on top, possibly as a
+  separate 'win-' crate since it *is* windows specific"; the instruction files aligned with
+  DEVELOPMENT.md ("yes"); restated in place; and `DI-3.10.1` handed to the assistant ("I am
+  suffering from 'design fatigue' at this moment and to make better progress you should make
+  concrete proposals that I approve or disapprove"). The assistant noted that the workspace's
+  naming decision gives `win-` only to crates raising a Windows API into safe Rust, so the driver's
+  name is among its proposals.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

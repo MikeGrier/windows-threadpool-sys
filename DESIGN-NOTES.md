@@ -377,8 +377,9 @@ safe": a crate whose job is to raise a Windows API into safe Rust, adding as lit
 wrapper it has become is debatable. **A crate that provides a completely new facility -- built on
 such layers rather than being one -- does not fit the mold and does not take the prefix**; it is
 named for the facility it provides. `durable-ioring` is the case that prompted the clarification:
-a durability layer over `IoRing` is new behaviour, not a Windows API made safe, even though it
-runs only on Windows ([DI-D-2](crates/durable-ioring/DESIGN-NOTES.md#di-d-2)). Whether a given
+a durability layer over `IoRing` is new behaviour, not a Windows API made safe
+([DI-D-2](crates/durable-ioring/DESIGN-NOTES.md#di-d-2)), and its core is decided to be portable
+([DI-D-49](crates/durable-ioring/DESIGN-NOTES.md#di-d-49)). Whether a given
 crate is a direct layer or a new facility is a judgement made when the crate is named, and the
 reasoning belongs in that crate's naming decision.
 

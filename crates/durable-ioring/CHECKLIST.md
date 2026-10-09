@@ -45,11 +45,13 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   each held write's epoch followed by its gate; and released operations pushed at the consumer's
   next call.
 
-- [ ] **DI-3.10** -- **The contract over targets** ([DI-D-48](DESIGN-NOTES.md#di-d-48)): the
-  unit of I/O and durability becomes a target, defined only by its obligations, and files leave
-  the contract's vocabulary. Checked when the last step below is. Placed before `DI-3.9.5` and
-  `DI-3.3`, which are written in the file vocabulary this restates; `DI-3.9.3` and `DI-3.9.4` do
-  not use it, and stay ahead.
+- [ ] **DI-3.10** -- **The contract over targets, and dioring as a portable algorithm**
+  ([DI-D-48](DESIGN-NOTES.md#di-d-48), [DI-D-49](DESIGN-NOTES.md#di-d-49)): the unit of I/O and
+  durability becomes a target, defined only by its obligations, files leave the contract's
+  vocabulary, and the core becomes a portable public state machine with targets and a backend
+  beneath it and a threaded driver above it. Checked when the last step below is. Placed before
+  `DI-3.9.5` and `DI-3.3`, which are written in the file vocabulary this restates; `DI-3.9.3` and
+  `DI-3.9.4` do not use it, and stay ahead.
 
 - [ ] **DI-3.10.1** -- **Design: the target and its obligations, and relayed causes.** Settle the
   obligations DI-D-48 drafts and the target's name; how a target is given to and taken from an
@@ -57,16 +59,23 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   between targets in place of per-file flush domains (DI-D-21); what a provider request names in
   place of a `SharedHandle` (DI-D-29); the built-in default provider as a target's own commit
   (DI-D-27); and causes that each name their source -- the layer below, the consumer, or the
-  provider -- restating DI-D-47's cause shapes. Driven by the engineer, as a design session.
+  provider -- restating DI-D-47's cause shapes. Also: the backend's ring shape (commit scope, how
+  completions are learned of, buffer ownership), a target that breaks its obligations, the core's
+  public API, the crates and their names, and `DI-3.3`'s shape. Designed by the assistant as
+  concrete proposals the engineer approves or rejects (DI-D-49).
 
 - [ ] **DI-3.10.2** -- **Design: CONTRACT.md restated over target obligations**, including how far
   each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
-  unbuffered file, a cached file on a best-effort basis, a target of a lower `DurableRing` -- and
+  unbuffered file, a cached file on a best-effort basis, a layered target such as a VHDX -- and
   amendment markers on every decision row the restatement changes.
 
-- [ ] **DI-3.10.3** -- **The trait, types, oracle, fake and dioring restated over targets**, as
-  `DI-3.10.1` and `DI-3.10.2` settle them. dioring over `windows-ioring-sys` keeps backing its
-  targets with handles, so today's file path stands in as its backing until `DI-3.10.4`.
+- [ ] **DI-3.10.3** -- **The portable core, the Windows backend and the driver, restated in place**
+  as `DI-3.10.1` and `DI-3.10.2` settle them: the durability core as a public state machine naming
+  no platform type; targets and a backend beneath it, with `windows-ioring-sys` inside the Windows
+  backend; the threaded driver above it implementing `DurableRing`; the trait, types, oracle and
+  fake restated over targets. Today's tests and sabotages are the proof the Windows backend
+  passes, and today's file path stands in as its target until `DI-3.10.4`. The core joins CI's
+  `portable` job.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
   DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the
@@ -89,8 +98,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   short writes and failed points on demand, deterministically. It answers the problem that flush
   failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
   crate's, in the spirit of
-  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1. It
-  implements the contract over targets (`DI-3.10`).
+  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1. Its
+  shape under targets -- a backend and targets whose faults are scripted, beneath the real core --
+  is settled under `DI-3.10.1`.
 
 - [ ] **DI-3.4** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
