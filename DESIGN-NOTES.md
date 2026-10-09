@@ -383,6 +383,14 @@ a durability layer over `IoRing` is new behaviour, not a Windows API made safe
 crate is a direct layer or a new facility is a judgement made when the crate is named, and the
 reasoning belongs in that crate's naming decision.
 
+**A recorded exception: `win-durable-ioring`.** The Windows-specific half of `durable-ioring` --
+its threaded driver, Windows backend, and file and volume targets -- is a new facility, not a
+Windows API made safe, and takes the `win-` prefix anyway. The engineer's decision, 2026-10-09:
+"possibly as a separate 'win-' crate since it *is* windows specific", then, offered amending this
+rule or recording an exception, "record this as an exception". The rule is not amended: a facility
+with no portable half still takes its own name. See
+[DI-D-50](crates/durable-ioring/DESIGN-NOTES.md#di-d-50).
+
 **The existing `windows-*` crates migrate eventually -- those that are direct layers, under the
 clarified scope -- and the cost is not uniform.** Eleven of them are
 published to crates.io, and a published name cannot be renamed -- a rename is a *new* crate plus a
