@@ -180,17 +180,17 @@ pub(crate) enum Event<E: EpochId + 'static> {
 pub(crate) enum WriteEnd {
     /// Completed, with the byte count its completion reported.
     Transferred(u32),
-    /// Completed as failed, with the completion's code.
-    Failed(Option<ErrorCode>),
+    /// Completed as failed, with the code the kernel reported for it (DI-D-47).
+    Failed(ErrorCode),
 }
 
 impl WriteEnd {
     /// How a completion's outcome ended the write; `None` for one never issued, which no write
-    /// the core records can be.
+    /// the core records can be, and for a failure carrying no code, which the kernel never reports.
     pub(crate) fn of<I: crate::contract::Identities>(outcome: &Outcome<I>) -> Option<Self> {
         match outcome {
             Outcome::Transferred(transferred) => Some(Self::Transferred(*transferred)),
-            Outcome::Failed(error) => Some(Self::Failed(ErrorCode::of(error))),
+            Outcome::Failed(error) => ErrorCode::of(error).map(Self::Failed),
             Outcome::NeverIssued { .. } => None,
         }
     }

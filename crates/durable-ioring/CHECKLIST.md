@@ -27,11 +27,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.9.1** -- The engineer confirmed DI-D-34 with three amendments: unmatched import domains reported, a heal released only by a seal reaching the re-issue, and inconsistencies panicked on where found. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-391)
 
-- [ ] **DI-3.9.2** -- **[DI-D-39](DESIGN-NOTES.md#di-d-39)**, from `DI-3.2.4.2`, less what
-  [DI-D-42](DESIGN-NOTES.md#di-d-42) amended: `Marking { write, observed, kind }` with a
-  non-exhaustive `MarkingKind`; when each marking is made, a covered one by the write's own file's
-  flush rather than by its seal; where markings are read; error codes, read with `ErrorCode::of`;
-  and the oracle's rules for markings.
+- [x] **DI-3.9.2** -- The engineer confirmed DI-D-39 with amendments: every report cites its provenance, a covered marking means covered successfully and cites who answered, and a nullifier's code is a plain `ErrorCode`. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-392)
 
 - [ ] **DI-3.9.3** -- **[DI-D-42](DESIGN-NOTES.md#di-d-42)**, from `DI-3.2.5.1`: `Tag` borrowing
   the handle, never the instance; construction returning the default lineage's handle beside the

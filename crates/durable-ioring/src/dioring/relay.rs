@@ -327,7 +327,15 @@ where
                 match kind {
                     OpKind::Write { .. } => match end {
                         Some(end) => core.durability.completed(id, end),
-                        None => Due::default(),
+                        // A kernel completion never reports a failure without its code (DI-D-47),
+                        // so no test reaches this: only a ring breaking its contract could.
+                        None => {
+                            core.durability.inconsistent(
+                                "a write's failed completion carried no error code",
+                                format_args!("operation {id:?} on {file:?}"),
+                            );
+                            Due::default()
+                        }
                     },
                     OpKind::Read => Due::default(),
                 }

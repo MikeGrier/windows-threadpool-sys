@@ -14,9 +14,7 @@ use crate::dioring::tests::MockClock;
 use crate::ids::{InstanceId, Lineage as LineageId};
 use crate::types::{Cause, ImportScope, MarkingKind, Outcome, Resolution};
 
-const NULLIFIED: MarkingKind = MarkingKind::Nullified {
-    code: Some(IO_DEVICE),
-};
+const NULLIFIED: MarkingKind = MarkingKind::Nullified { code: IO_DEVICE };
 const SHORT: MarkingKind = MarkingKind::Short { transferred: 3 };
 
 fn import(lineage: &mut Lineage) -> Due<u64, &'static str> {
@@ -111,15 +109,16 @@ fn a_suspect_write_whose_own_file_is_flushed_successfully_is_marked_covered() {
     assert_eq!(
         seen(&lineage.flushed(1, A, Ok(()))),
         [
-            Seen::Marked(0, write.seq, MarkingKind::Covered),
+            Seen::Marked(0, write.seq, super::COVERED),
             Seen::Blocked(1, 0)
         ],
         "covered, and still held by the failure: a marking changes nothing the mark depends on"
     );
 }
 
-/// A write is covered by its own file's flush, not by its seal: here the seal fails on another
-/// file, and the write's bytes are on the device all the same.
+/// A write is covered by its own file's parts, not by its seal (DI-D-47): here the file's only part
+/// is the default's flush, the seal fails on another file, and the write's bytes are on the device
+/// all the same.
 #[test]
 fn a_flush_failure_on_one_file_leaves_the_writes_another_file_flushed_covered() {
     let mut lineage = lineage();
@@ -133,9 +132,9 @@ fn a_flush_failure_on_one_file_leaves_the_writes_another_file_flushed_covered() 
     assert_eq!(seen(&failed), [Seen::Failed(0, vec![on_a.seq, on_b.seq])]);
     assert_eq!(
         seen(&lineage.flushed(1, B, Ok(()))),
-        [Seen::Marked(0, on_b.seq, MarkingKind::Covered)]
+        [Seen::Marked(0, on_b.seq, super::COVERED)]
     );
-    assert_eq!(inventory(&lineage), [(on_b.seq, MarkingKind::Covered)]);
+    assert_eq!(inventory(&lineage), [(on_b.seq, super::COVERED)]);
 }
 
 #[test]
@@ -210,11 +209,11 @@ fn a_heal_taking_effect_reports_healed_with_the_record_before_any_durable() {
     assert_eq!(
         seen(&lineage.flushed(2, A, Ok(()))),
         [
-            Seen::Marked(0, later.seq, MarkingKind::Covered),
+            Seen::Marked(0, later.seq, super::COVERED),
             Seen::Healed(
                 0,
                 vec![sealed.seq, later.seq],
-                vec![(later.seq, SHORT), (later.seq, MarkingKind::Covered)]
+                vec![(later.seq, SHORT), (later.seq, super::COVERED)]
             ),
             Seen::Durable(1),
             Seen::Durable(2),
@@ -249,11 +248,12 @@ fn a_completion_ends_a_write_as_its_outcome_says() {
     );
     assert_eq!(
         WriteEnd::of(&O::Failed(io::Error::from_raw_os_error(1117))),
-        Some(WriteEnd::Failed(Some(IO_DEVICE)))
+        Some(WriteEnd::Failed(IO_DEVICE))
     );
     assert_eq!(
         WriteEnd::of(&O::Failed(io::Error::other("no code"))),
-        Some(WriteEnd::Failed(None))
+        None,
+        "a failure carrying no code, which the kernel never reports (DI-D-47)"
     );
     let lineage = LineageId {
         instance: InstanceId::next(),

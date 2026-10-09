@@ -2754,6 +2754,34 @@ only one point of three, and then one question was garbled (C), which turned out
 answered by step 4. On the fault seam the engineer agreed it serves a different purpose from
 DI-3.3, so no merge-or-delete decision is queued.
 
+## DI-3.9.2: reviewing DI-D-39, and provenance (2026-10-08)
+
+The engineer asked the assistant to evaluate DI-D-39 against the current state and lay out what
+needed adjudicating. The evaluation found the row's account of a covered marking stale: it said
+"the write's own file's flush", written before DI-D-27's provider, while the code already marked a
+write covered only once every part its file depends on answered success. The rulings, recorded in
+DI-D-47:
+
+- **A. What covered means.** DI-D-27's meaning, confirmed ("yes that is correct"); the row,
+  CONTRACT.md and the `MarkingKind` doc were corrected to it.
+- **B. Codes.** The assistant's question was whether every failure carries a code. The engineer:
+  "when an actual failure occurs and is reported from the kernel, we are responsible for capturing
+  it and escorting that code through and reporting it. If the failure is relayed by the consumer,
+  that fact should itself be relayed *instead* of the error code." Asked how that applies to a
+  provider's own error, the engineer stated the principle the rest follows from: "The thing that
+  matters is that the information is accurately portrayed regarding its provenance. If information
+  is coming from a durability provider, it must be cited as such etc". So `Cause::Provider` keeps
+  the provider's `io::Error`, documented as the provider's report, and every cause says whether it
+  is the kernel's, the consumer's, the provider's, or dioring's own observation.
+- **C. The nullifier's code.** The engineer first asked whether this was "a resolution maybe not
+  an error?"; after the assistant's follow-up, accepted ("ok") that the code is a plain
+  `ErrorCode` and that a failed write completion carrying none is an internal inconsistency under
+  DI-D-46. No test reaches it: only a ring breaking its contract could.
+- **D. A final record is a snapshot** as of its resolution: accepted.
+- **E. A covered marking cites who answered**, `Covered { flushed, provider }`: "seems good".
+- **F. Provenance on `Durable` or `epoch_state`:** declined. The engineer: "I don't see the need
+  for it. When things are 'clean' there aren't really questions about how it was accomplished."
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

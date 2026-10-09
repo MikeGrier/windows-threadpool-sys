@@ -119,7 +119,13 @@ const FULL: WriteEnd = WriteEnd::Transferred(LEN);
 /// `ERROR_IO_DEVICE`, the code a failed write here reports.
 const IO_DEVICE: ErrorCode = ErrorCode::from_win32(1117);
 /// A write that completed as failed.
-const FAILED: WriteEnd = WriteEnd::Failed(Some(IO_DEVICE));
+const FAILED: WriteEnd = WriteEnd::Failed(IO_DEVICE);
+/// A covered marking for a file only the built-in default answers for, as every file here is
+/// unless a test routes it otherwise: the flush was observed, and no provider was asked.
+const COVERED: MarkingKind = MarkingKind::Covered {
+    flushed: true,
+    provider: false,
+};
 
 fn lineage() -> Lineage {
     One::with_clock(InterruptClock)

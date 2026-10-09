@@ -27,6 +27,17 @@ const BOTH: Routing = Routing {
     provider: true,
 };
 
+/// A covered marking citing the provider's warranty alone: no flush was made for the file.
+const BY_PROVIDER: MarkingKind = MarkingKind::Covered {
+    flushed: false,
+    provider: true,
+};
+/// A covered marking citing both the default's observed flush and the provider's warranty.
+const BY_BOTH: MarkingKind = MarkingKind::Covered {
+    flushed: true,
+    provider: true,
+};
+
 fn serve(lineage: &mut Lineage, ids: &[u32]) {
     lineage.serve(ids.iter().map(|&d| DomainId(d)).collect());
 }
@@ -200,11 +211,8 @@ fn a_file_both_answer_for_needs_its_flush_and_its_domain_in_either_order() {
         assert!(quiet(&first), "half covered is not covered ({flush_first})");
         assert_eq!(
             seen(&last),
-            [
-                Seen::Marked(0, write.seq, MarkingKind::Covered),
-                Seen::Blocked(1, 0)
-            ],
-            "covered, and held by the import ({flush_first})"
+            [Seen::Marked(0, write.seq, BY_BOTH), Seen::Blocked(1, 0)],
+            "covered, citing both, and held by the import ({flush_first})"
         );
     }
 }
@@ -222,13 +230,13 @@ fn a_provider_success_covers_the_writes_it_completes() {
     let seal = call(&submitted(lineage.seal(1))).seal;
     assert_eq!(
         seen(&succeeded(&mut lineage, seal, 2)),
-        [Seen::Marked(0, on_two.seq, MarkingKind::Covered)],
+        [Seen::Marked(0, on_two.seq, BY_PROVIDER)],
         "domain 2 completes B's write and not A's"
     );
     assert_eq!(
         seen(&succeeded(&mut lineage, seal, 1)),
         [
-            Seen::Marked(0, on_one.seq, MarkingKind::Covered),
+            Seen::Marked(0, on_one.seq, BY_PROVIDER),
             Seen::Blocked(1, 0)
         ]
     );
@@ -265,7 +273,7 @@ fn a_provider_failure_reaches_the_files_in_its_domain_and_every_unknown_file() {
     assert!(seen(&succeeded(&mut lineage, seal, 2)).is_empty());
     assert_eq!(
         seen(&lineage.flushed(1, C, Ok(()))),
-        [Seen::Marked(0, unknown.seq, MarkingKind::Covered)],
+        [Seen::Marked(0, unknown.seq, super::COVERED)],
         "the failure is the seal's answer; nothing more is reported for it"
     );
     assert_eq!(lineage.durable_through(), None);

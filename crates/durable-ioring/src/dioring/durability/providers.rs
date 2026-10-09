@@ -137,18 +137,26 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     .filter(|domain| served.contains(domain))
                     .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))
         };
-        let ops: Vec<OpId> = self
+        // Each marking cites who answered for its write (DI-D-47): the default's flush, observed,
+        // and the provider's warranty, exactly as the write's file is routed.
+        let ops: Vec<(OpId, MarkingKind)> = self
             .writes
             .values()
             .filter(|write| covered(write))
-            .map(|write| write.op)
+            .map(|write| {
+                let kind = MarkingKind::Covered {
+                    flushed: write.routing.default,
+                    provider: write.routing.provider,
+                };
+                (write.op, kind)
+            })
             .collect();
         if ops.is_empty() {
             return;
         }
         self.writes.retain(|_, write| !covered(write));
-        for op in ops {
-            self.mark(op, MarkingKind::Covered, due);
+        for (op, kind) in ops {
+            self.mark(op, kind, due);
         }
     }
 }

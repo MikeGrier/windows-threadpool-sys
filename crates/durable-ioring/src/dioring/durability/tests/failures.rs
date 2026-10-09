@@ -11,7 +11,7 @@ use super::{
 use crate::dioring::DomainId;
 use crate::dioring::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
-use crate::types::{Cause, FileKey, ImportScope, MarkingKind, Resolution, ResolveRefusal};
+use crate::types::{Cause, FileKey, ImportScope, Resolution, ResolveRefusal};
 
 const D: FileKey = FileKey(4);
 
@@ -319,12 +319,12 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     let mut token = tokens(lineage.flushed(41, A, failed()));
     assert_eq!(
         seen(&lineage.flushed(41, B, Ok(()))),
-        [Seen::Marked(0, 1, MarkingKind::Covered)],
+        [Seen::Marked(0, 1, super::COVERED)],
         "B's write is covered by B's flush, though 41 failed on A"
     );
     assert_eq!(
         seen(&lineage.flushed(41, C, Ok(()))),
-        [Seen::Marked(0, 2, MarkingKind::Covered)],
+        [Seen::Marked(0, 2, super::COVERED)],
         "41 was answered by its Failed, so only the marking is due"
     );
     assert_eq!(lineage.refuses(41), Some(41));
@@ -353,7 +353,7 @@ fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
             Seen::Healed(
                 0,
                 vec![0, 1, 2],
-                vec![(1, MarkingKind::Covered), (2, MarkingKind::Covered)]
+                vec![(1, super::COVERED), (2, super::COVERED)]
             ),
             Seen::Durable(41),
             Seen::Durable(42),

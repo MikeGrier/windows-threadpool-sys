@@ -159,7 +159,10 @@ fn no_failure_after_the_end_suspects_the_lineage_but_one_before_is_still_marked(
         marking: Marking {
             write: w_gone.0,
             observed: TimePoint::from_ticks(0),
-            kind: MarkingKind::Covered,
+            kind: MarkingKind::Covered {
+                flushed: true,
+                provider: false,
+            },
         },
     };
     oracle

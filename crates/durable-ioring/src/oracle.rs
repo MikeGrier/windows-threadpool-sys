@@ -607,11 +607,11 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         self.stamped(failure, marking.observed)?;
         let write = marking.write;
         let agrees = match (marking.kind, self.ended.get(&write)) {
-            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => code == *ended,
+            (MarkingKind::Nullified { code }, Some(Ended::Failed(ended))) => Some(code) == *ended,
             (MarkingKind::Short { transferred }, Some(Ended::Transferred(ended))) => {
                 transferred == *ended
             }
-            (MarkingKind::Covered, Some(Ended::Transferred(_))) => true,
+            (MarkingKind::Covered { .. }, Some(Ended::Transferred(_))) => true,
             _ => false,
         };
         let reported = self

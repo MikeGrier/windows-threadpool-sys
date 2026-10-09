@@ -224,30 +224,38 @@ impl FileOptions {
     }
 }
 
-/// Why a failure exists. A failed or short *write* is never a cause (DI-D-12 (a)). The lineages a
-/// failure belongs to are those of the writes in its suspect set.
+/// Why a failure exists, citing where it came from (DI-D-47). A failed or short *write* is never a
+/// cause (DI-D-12 (a)). The lineages a failure belongs to are those of the writes in its suspect
+/// set.
+///
+/// Only `Flush` is a failure the kernel reported, so only its error carries a code dioring
+/// captured. The rest are relayed: by the consumer, or by its provider, and say so.
 #[derive(Clone, Debug)]
 pub enum Cause<V: Identities> {
-    /// The built-in default provider's flush of `file` failed.
+    /// The built-in default provider's flush of `file` failed: the kernel reported it.
     Flush {
         /// The file whose flush failed.
         file: FileKey,
-        /// The flush's error.
+        /// The flush's error as the kernel reported it, its code captured by dioring; read it with
+        /// [`ErrorCode::of`].
         error: Arc<io::Error>,
     },
-    /// The consumer imported a failure it learned of outside the instance.
+    /// The consumer imported a failure it learned of outside the instance: relayed by the consumer,
+    /// with no code of dioring's.
     Imported {
         /// Where the consumer said it lands.
         scope: ImportScope<V>,
     },
-    /// The consumer's provider reported `domain` failed (DI-D-27).
+    /// The consumer's provider reported `domain` failed (DI-D-27): relayed by the provider.
     Provider {
         /// The domain the provider failed.
         domain: FlushDomain,
-        /// The provider's error.
+        /// The provider's own error, passed through as it gave it. Any code read from it is the
+        /// provider's, not one dioring captured.
         error: Arc<io::Error>,
     },
-    /// The consumer's provider dropped `domain`'s completion without answering (DI-D-27).
+    /// The consumer's provider dropped `domain`'s completion without answering (DI-D-27): dioring
+    /// observed the silence, so there is no error to report.
     ProviderAbandoned {
         /// The domain left unanswered.
         domain: FlushDomain,
@@ -291,17 +299,25 @@ pub enum MarkingKind {
     /// A nullifier: the write completed as failed, so it did not happen -- a failed write is an
     /// error on its own completion, and nothing durable covers it (DI-D-12 (a)).
     Nullified {
-        /// The completion's error code; see [`ErrorCode::of`].
-        code: Option<ErrorCode>,
+        /// The code the kernel reported for the write's failed completion, carried through as
+        /// dioring captured it (DI-D-47).
+        code: ErrorCode,
     },
     /// The write completed short: durable, if at all, only up to `transferred` bytes.
     Short {
         /// The byte count its completion reported.
         transferred: u32,
     },
-    /// The write's own file was flushed successfully: its bytes are on the device, even though
-    /// the failure still suspects it.
-    Covered,
+    /// The write was covered successfully: every part its file depends on answered success
+    /// (DI-D-27), so its bytes are durable even though the failure still suspects it. The flags
+    /// cite who answered (DI-D-47); a file both answer for has both.
+    Covered {
+        /// The built-in default flushed the write's file, and dioring observed the flush succeed.
+        flushed: bool,
+        /// The consumer's durability provider answered success for the file's domains it serves:
+        /// the provider's warranty, not something dioring observed.
+        provider: bool,
+    },
 }
 
 /// What a consumer operation was.
@@ -375,7 +391,8 @@ pub enum Entry<V: Identities, B, C> {
         failure: V::FailureId,
         /// Its suspect set, now declared lost.
         suspect: SuspectSet<V>,
-        /// Every marking it gained, in the order observed.
+        /// Every marking it gained up to this resolution, in the order observed. A suspect write
+        /// still in flight now is reported only by its own completion (DI-D-47).
         markings: Vec<Marking<V>>,
     },
     /// A heal took effect (DI-D-12 (c)): the failure is resolved as healed, and this is its final
@@ -385,7 +402,8 @@ pub enum Entry<V: Identities, B, C> {
         failure: V::FailureId,
         /// Its suspect set.
         suspect: SuspectSet<V>,
-        /// Every marking it gained, in the order observed.
+        /// Every marking it gained up to this resolution, in the order observed. A suspect write
+        /// still in flight now is reported only by its own completion (DI-D-47).
         markings: Vec<Marking<V>>,
     },
     /// A failure not yet resolved gained a marking.

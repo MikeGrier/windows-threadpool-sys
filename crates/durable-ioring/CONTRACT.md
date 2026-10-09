@@ -296,19 +296,26 @@ failure was observed ([DI-D-36](DESIGN-NOTES.md#di-d-36), [DI-D-39](DESIGN-NOTES
 - **Nullified** -- the write completed as failed, so it did not happen. The marking carries the
   completion's error code.
 - **Short** -- the write completed short, carrying the byte count its completion reported.
-- **Covered** -- the write's own file was flushed successfully, so its bytes are on the device, even
-  if the seal it belongs to failed on another file.
+- **Covered** -- the write was covered successfully: every part its file depends on answered
+  success, so its bytes are durable, even if the seal it belongs to failed elsewhere. The marking
+  cites who answered: the built-in default's flush, which dioring observed, and the consumer's
+  provider, whose answer is its own warranty ([DI-D-47](DESIGN-NOTES.md#di-d-47)).
 
 The kinds are open to more. A marking carries the write, its kind and when it was observed, and is
 reported by a `Marked` entry, kept in the inventory, and carried by the failure's final record. It
 exists so the history can be reconciled after the fact, and it **changes nothing**: not the
 high-water mark, not what a failure holds, and not what resolving it needs. A failure gains
-markings until it is abandoned or its heal takes effect.
+markings until it is abandoned or its heal takes effect, so its final record is the record as of
+that moment; a suspect write still in flight then is reported only by its own completion.
 
-**Error codes.** Every failure carries its error's code, whichever way it arrives: a failed
-completion's `Outcome::Failed` error and a failed flush's `Cause::Flush` error both hold one, read
+**Error codes, and where every report comes from** ([DI-D-47](DESIGN-NOTES.md#di-d-47)). A failure
+the **kernel** reports is dioring's to capture: its code is carried through and reported -- a failed
+completion's `Outcome::Failed` error and a failed flush's `Cause::Flush` error each hold it, read
 with `ErrorCode::of`, and a nullifier carries it as an `ErrorCode`. It is the `HRESULT` the I/O
-ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`.
+ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`. A failure **relayed** is
+reported as relayed, in place of a code: `Cause::Imported` came from the consumer;
+`Cause::Provider` from its provider, whose own error it passes through as the provider's; and
+`Cause::ProviderAbandoned` is dioring's observation that the provider never answered.
 
 ### Resolving a failure
 

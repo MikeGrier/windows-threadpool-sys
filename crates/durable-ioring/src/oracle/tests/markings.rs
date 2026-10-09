@@ -65,7 +65,7 @@ fn marked(failure: FailureId, write: OpId, kind: MarkingKind) -> TestEntry {
 
 fn nullified() -> MarkingKind {
     MarkingKind::Nullified {
-        code: Some(ErrorCode::from_win32(IO_DEVICE)),
+        code: ErrorCode::from_win32(IO_DEVICE),
     }
 }
 
@@ -107,8 +107,20 @@ fn markings_that_agree_with_their_writes_completions_are_accepted() {
     for (seq, kind) in [
         (0, nullified()),
         (1, MarkingKind::Short { transferred: 3 }),
-        (1, MarkingKind::Covered),
-        (2, MarkingKind::Covered),
+        (
+            1,
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false,
+            },
+        ),
+        (
+            2,
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false,
+            },
+        ),
     ] {
         oracle
             .observe(&marked(f, op(instance, seq), kind))
@@ -122,15 +134,20 @@ fn a_marking_contradicting_its_writes_completion_is_refused() {
     let mut oracle = three_writes_one_failure(instance);
     let f = failure(instance, 0);
     let wrong_code = MarkingKind::Nullified {
-        code: Some(ErrorCode::from_win32(5)),
+        code: ErrorCode::from_win32(5),
     };
     for (seq, kind) in [
         (1, nullified()),
         (0, wrong_code),
-        (0, MarkingKind::Nullified { code: None }),
         (1, MarkingKind::Short { transferred: 4 }),
         (0, MarkingKind::Short { transferred: 0 }),
-        (0, MarkingKind::Covered),
+        (
+            0,
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false,
+            },
+        ),
     ] {
         assert!(
             matches!(
@@ -156,7 +173,10 @@ fn a_marking_before_its_writes_completion_is_refused() {
         oracle.observe(&marked(
             failure(instance, 0),
             op(instance, 0),
-            MarkingKind::Covered
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false
+            }
         )),
         Err(Violation::MarkingContradicted { .. })
     ));
@@ -173,7 +193,10 @@ fn a_marking_naming_a_write_the_failure_does_not_suspect_is_refused() {
         oracle.observe(&marked(
             failure(instance, 1),
             op(instance, 2),
-            MarkingKind::Covered
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false
+            }
         )),
         Err(Violation::MarkingNotSuspect { .. })
     ));
@@ -190,7 +213,10 @@ fn a_marking_for_a_failure_not_live_is_refused() {
         oracle.observe(&marked(
             failure(instance, 7),
             op(instance, 2),
-            MarkingKind::Covered
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false
+            }
         )),
         Err(Violation::MarkedUnknown { .. })
     ));
@@ -204,7 +230,10 @@ fn a_marking_for_a_failure_not_live_is_refused() {
         oracle.observe(&marked(
             failure(instance, 0),
             op(instance, 2),
-            MarkingKind::Covered
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false
+            }
         )),
         Err(Violation::MarkedUnknown { .. })
     ));
@@ -231,7 +260,14 @@ fn markings_and_failures_share_one_stamp_order() {
     let covered = |ticks| -> TestEntry {
         Entry::Marked {
             failure: failure(instance, 0),
-            marking: marking(op(instance, 0), MarkingKind::Covered, ticks),
+            marking: marking(
+                op(instance, 0),
+                MarkingKind::Covered {
+                    flushed: true,
+                    provider: false,
+                },
+                ticks,
+            ),
         }
     };
     oracle
@@ -287,7 +323,14 @@ fn a_final_record_carries_exactly_the_markings_reported() {
     };
     let fewer = reported[..1].to_vec();
     let mut more = reported.clone();
-    more.push(marking(op(instance, 2), MarkingKind::Covered, 0));
+    more.push(marking(
+        op(instance, 2),
+        MarkingKind::Covered {
+            flushed: true,
+            provider: false,
+        },
+        0,
+    ));
     let mut reordered = reported.clone();
     reordered.reverse();
     for wrong in [fewer, more, reordered] {

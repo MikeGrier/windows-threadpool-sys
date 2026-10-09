@@ -14,7 +14,7 @@ use crate::dioring::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
 };
 use crate::ids::OpId;
-use crate::types::{Cause, ImportScope, MarkingKind, Resolution};
+use crate::types::{Cause, ImportScope, Resolution};
 
 fn at(lineage: Key, epoch: u64) -> Gate<u64> {
     Gate { lineage, epoch }
@@ -489,7 +489,7 @@ fn a_seal_a_pending_heal_waits_for_can_close_a_cycle() {
     assert_eq!(
         seen(&lineage.0.flushed(minted, 3, A, Ok(()))),
         [
-            Seen::Marked(0, write.seq, MarkingKind::Covered),
+            Seen::Marked(0, write.seq, super::COVERED),
             Seen::BlockedIn(minted, 3, 0)
         ]
     );

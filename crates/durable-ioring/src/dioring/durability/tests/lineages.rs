@@ -217,9 +217,7 @@ fn a_failure_observed_before_the_end_is_still_marked_by_its_write_in_flight() {
         [Seen::Failed(0, vec![write.seq])]
     );
     lineage.end(minted);
-    let nullified = MarkingKind::Nullified {
-        code: Some(IO_DEVICE),
-    };
+    let nullified = MarkingKind::Nullified { code: IO_DEVICE };
     assert_eq!(
         seen(&lineage.completed(write, FAILED)),
         [Seen::Marked(0, write.seq, nullified)]
@@ -281,7 +279,7 @@ fn retiring_is_refused_while_anything_holds_the_lineage() {
     assert_eq!(
         seen(&lineage.0.flushed(minted, 1, A, Ok(()))),
         [
-            Seen::Marked(0, write.seq, MarkingKind::Covered),
+            Seen::Marked(0, write.seq, super::COVERED),
             Seen::BlockedIn(minted, 1, 0)
         ]
     );
@@ -325,10 +323,7 @@ fn a_failure_spanning_two_lineages_holds_each_and_heals_in_each_separately() {
     assert_eq!(submitted(lineage.seal(1)).flushes, [flush(1, A)]);
     assert_eq!(
         seen(&lineage.flushed(1, A, Ok(()))),
-        [
-            Seen::Marked(0, own.seq, MarkingKind::Covered),
-            Seen::Durable(1)
-        ],
+        [Seen::Marked(0, own.seq, super::COVERED), Seen::Durable(1)],
         "the heal took effect in the default lineage, and the failure still holds the other"
     );
     assert_eq!(lineage.failures().len(), 1);
@@ -341,14 +336,11 @@ fn a_failure_spanning_two_lineages_holds_each_and_heals_in_each_separately() {
     assert_eq!(
         seen(&lineage.0.flushed(minted, 1, B, Ok(()))),
         [
-            Seen::Marked(0, theirs.seq, MarkingKind::Covered),
+            Seen::Marked(0, theirs.seq, super::COVERED),
             Seen::Healed(
                 0,
                 vec![own.seq, theirs.seq],
-                vec![
-                    (own.seq, MarkingKind::Covered),
-                    (theirs.seq, MarkingKind::Covered)
-                ]
+                vec![(own.seq, super::COVERED), (theirs.seq, super::COVERED)]
             ),
             Seen::DurableIn(minted, 1),
         ]
@@ -370,14 +362,14 @@ fn a_failure_spanning_two_lineages_is_blocked_in_each_until_its_heal_reaches_it(
     assert_eq!(
         seen(&lineage.flushed(1, A, Ok(()))),
         [
-            Seen::Marked(0, own.seq, MarkingKind::Covered),
+            Seen::Marked(0, own.seq, super::COVERED),
             Seen::Blocked(1, 0)
         ]
     );
     assert_eq!(
         seen(&lineage.0.flushed(minted, 1, B, Ok(()))),
         [
-            Seen::Marked(0, theirs.seq, MarkingKind::Covered),
+            Seen::Marked(0, theirs.seq, super::COVERED),
             Seen::BlockedIn(minted, 1, 0)
         ]
     );
@@ -416,7 +408,7 @@ fn ending_a_lineage_a_heal_waits_for_lets_the_heal_take_effect() {
             Seen::Healed(
                 0,
                 vec![own.seq, theirs.seq],
-                vec![(own.seq, MarkingKind::Covered)]
+                vec![(own.seq, super::COVERED)]
             ),
         ]
     );

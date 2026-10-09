@@ -78,7 +78,8 @@ impl ErrorCode {
     /// reports each as an `HRESULT`. An error carrying a Win32 code, as
     /// `io::Error::from_raw_os_error` makes, answers it wrapped as `HRESULT_FROM_WIN32` wraps it.
     /// An error with neither, such as one a consumer's provider made from a message, answers
-    /// `None`.
+    /// `None`. A code read from a `Cause::Provider` error is the provider's own, relayed, not one
+    /// dioring captured (DI-D-47).
     #[must_use]
     pub fn of(error: &io::Error) -> Option<Self> {
         if let Some(ring) = error.as_ioring_error() {

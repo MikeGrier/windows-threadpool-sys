@@ -48,7 +48,13 @@ fn a_suspect_write_flushed_after_an_import_is_marked_covered_and_abandoning_carr
     assert_eq!(harness.seal(2), DurabilityRequest::Submitted);
     let (failure, marking) = next_marked(&mut harness);
     assert_eq!((failure, marking.write), (failed.id, write));
-    assert_eq!(marking.kind, MarkingKind::Covered);
+    assert_eq!(
+        marking.kind,
+        MarkingKind::Covered {
+            flushed: true,
+            provider: false
+        }
+    );
     assert!(
         matches!(harness.next_entry(), Entry::Blocked { by, .. } if by == failed.id),
         "covered, and still held: a marking changes nothing the mark depends on"
@@ -92,7 +98,13 @@ fn a_heal_reports_its_record_with_the_markings_its_failure_gained() {
     let (_, covered) = next_marked(&mut harness);
     assert_eq!(
         (covered.write, covered.kind),
-        (later, MarkingKind::Covered),
+        (
+            later,
+            MarkingKind::Covered {
+                flushed: true,
+                provider: false
+            }
+        ),
         "a healing failure goes on gaining markings"
     );
     match harness.next_entry() {

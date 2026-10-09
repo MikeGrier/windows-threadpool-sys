@@ -1664,3 +1664,15 @@ The review, point by point, and the amendments it made are [DI-D-46](DESIGN-NOTE
   mark; what abandon, heal and `resolve` do and answer; an internal inconsistency recorded on a
   pool thread and asserted by the consumer's next `pop`; and the fault seam,
   `fail_next_flush`, behind the `fault-injection` feature that every test build enables.
+
+## Moved 2026-10-08 21:57:56 -04:00 -- DI-3.9.2: the review of DI-D-39
+
+### <a id="di-392"></a>DI-3.9.2 -- The engineer confirmed DI-D-39 with amendments: every report cites its provenance, a covered marking means covered successfully and cites who answered, and a nullifier's code is a plain `ErrorCode`. *(completed 2026-10-08 21:57:56 -04:00)*
+
+The review and the amendments it made are [DI-D-47](DESIGN-NOTES.md#di-d-47). The item as written:
+
+**[DI-D-39](DESIGN-NOTES.md#di-d-39)**, from `DI-3.2.4.2`, less what
+  [DI-D-42](DESIGN-NOTES.md#di-d-42) amended: `Marking { write, observed, kind }` with a
+  non-exhaustive `MarkingKind`; when each marking is made, a covered one by the write's own file's
+  flush rather than by its seal; where markings are read; error codes, read with `ErrorCode::of`;
+  and the oracle's rules for markings.
