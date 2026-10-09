@@ -25,6 +25,11 @@ impl InstanceId {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, AtomicOrdering::Relaxed))
     }
+
+    /// The number it was minted with, for a diagnostic to name it by.
+    pub(crate) const fn number(self) -> u64 {
+        self.0
+    }
 }
 
 /// dioring's lineage: minted at any time, never reused, including after retirement. Carries its

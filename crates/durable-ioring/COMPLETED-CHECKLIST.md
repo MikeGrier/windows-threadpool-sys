@@ -1730,3 +1730,14 @@ Applied by a word-bounded script over `src/`, CONTRACT.md and `sabotage.json` (`
   `MarkingKind::Nullified { fault }`; `ErrorCode` a portable integer, its reading from an
   `io::Error` Windows-only; `MarkingKind::Short` and the core's requested-length check removed,
   the Windows path turning a short count into a fault (the `Fault` policy of DI-D-50).
+
+## Moved 2026-10-09 19:04:17 -04:00 -- DI-3.10.3.3: the diagnostic sink
+
+### <a id="di-31033"></a>DI-3.10.3.3 -- The diagnostic sink: `DiagnosticSink` with `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, given in `Setup`, carrying the inconsistency report; the `trace` feature removed. *(completed 2026-10-09 19:04:17 -04:00)*
+
+Built per [DI-D-51](DESIGN-NOTES.md#di-d-51) in `src/diagnostics.rs`. The core holds the sink and asks `wants` before it builds an event; `inconsistent` reports through it and then panics as before. Tests cover each sink, the fan-out in both directions, and the core's report with a sink that wants it and one that does not; four sabotages were added and all were caught. The assistant's choices are queued in `DI-3.9.6`. The item as written:
+
+**The diagnostic sink** (DI-D-51): `DiagnosticSink`, `NoDiagnostics`,
+  `StderrDiagnostics`, `FanOutDiagnostics`, a sink given at construction, the inconsistency report
+  sent through it, and the `trace` feature removed. The Windows driver defaults to
+  `NoDiagnostics` until `DI-3.6` builds `EtwDiagnostics` and makes it the default.

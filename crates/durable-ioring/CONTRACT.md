@@ -493,7 +493,7 @@ back what is left ([DI-D-25](DESIGN-NOTES.md#di-d-25)).
   undone: an epoch reported durable stays durable whether or not its event was popped.
 - **No callback after the end.** Under Model A (threadless dispatch), no delivery callback runs once
   ending has returned.
-- **While unwinding,** ending reports problems by tracing rather than panicking.
+- **While unwinding,** ending reports problems to the diagnostic sink rather than panicking.
 - A failure token's drop is its `close()`.
 
 ## Ending a lineage
@@ -604,6 +604,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
+#     diagnostics: None,
 # })
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
@@ -685,6 +686,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
+#     diagnostics: None,
 # })
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
@@ -771,6 +773,7 @@ fails as never issued.
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
+#     diagnostics: None,
 # })
 # .expect("an instance");
 # let tag = |n: u64| lineage.at(n);

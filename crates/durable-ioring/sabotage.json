@@ -1316,6 +1316,38 @@
       "why": "DI-D-46 and the ring crate's D-79: a second panic while unwinding aborts the process and loses the first. The test binary aborts, which the harness counts as caught.",
       "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
       "replace": ["    if true {\n        panic!(\n"]
+    },
+    {
+      "name": "DI-3.10.3.3: an inconsistency is not reported to the sink",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-51 routes the inconsistency report through the consumer's sink; dropping it leaves a consumer who chose stderr, OutputDebugString or ETW with a panic and nothing in the place it watches.",
+      "find": ["        diagnostics.report(&Diagnostic::Inconsistency {\n            instance: instance.number(),\n            what,\n            detail,\n        });\n"],
+      "replace": ["        let _ = (instance, what, detail);\n"]
+    },
+    {
+      "name": "DI-3.10.3.3: the core reports to a sink without asking whether it wants the event",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "Asking first is what makes a sink that wants nothing cost a branch (DI-D-51 T2); not asking hands every event to every sink.",
+      "find": ["    if diagnostics.wants(DiagnosticKind::Inconsistency) {\n"],
+      "replace": ["    if true {\n"]
+    },
+    {
+      "name": "DI-3.10.3.3: a fan-out gives each event to every sink",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A fan-out hands an event only to the sinks that want its kind, so a sink's answer to wants means the same behind a fan-out as alone.",
+      "find": ["        for sink in self.sinks.iter().filter(|sink| sink.wants(kind)) {\n"],
+      "replace": ["        for sink in self.sinks.iter().filter(|_| kind == kind) {\n"]
+    },
+    {
+      "name": "DI-3.10.3.3: a fan-out wants an event only when every sink does",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A fan-out wants what any of its sinks wants; requiring all of them would silence a stderr sink beside a deaf one.",
+      "find": ["        self.sinks.iter().any(|sink| sink.wants(kind))\n"],
+      "replace": ["        !self.sinks.is_empty() && self.sinks.iter().all(|sink| sink.wants(kind))\n"]
     }
   ]
 }

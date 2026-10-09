@@ -11,6 +11,8 @@ use super::{
     Accepted, DEFAULT_LINEAGE, Due, Durability, Event, Flush, Key, Reach, Routing, Sealing, State,
     WriteEnd,
 };
+use crate::diagnostics::NoDiagnostics;
+use crate::diagnostics::tests::Recording;
 use crate::dioring::{DomainId, TimeBase};
 use crate::error_code::windows_fault;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
@@ -51,7 +53,11 @@ impl<K> DerefMut for One<K> {
 
 impl<K: TimeBase> One<K> {
     fn with_clock(clock: K) -> Self {
-        Self(Durability::new(InstanceId::next(), clock))
+        Self(Durability::new(
+            InstanceId::next(),
+            clock,
+            Arc::new(NoDiagnostics),
+        ))
     }
 
     fn sealed_through(&self) -> Option<u64> {
@@ -341,6 +347,47 @@ fn inconsistent<R>(what: &str, change: impl FnOnce() -> R) {
         text.contains(what) && text.contains("DI-D-46"),
         "expected {what:?}, got {text:?}"
     );
+}
+
+/// An inconsistency is reported to the instance's diagnostic sink before the panic, naming the
+/// instance, what was inconsistent and what was in hand (DI-D-51).
+#[test]
+fn an_inconsistency_reaches_the_sink_before_the_panic() {
+    let sink = Recording::wanting();
+    let instance = InstanceId::next();
+    let mut core: Durability<u64, &'static str> =
+        Durability::new(instance, InterruptClock, sink.clone());
+    let never = OpId { instance, seq: 99 };
+    inconsistent(
+        "a write completed that was never recorded as pushed",
+        || core.completed(never, WriteEnd::Succeeded),
+    );
+    let seen = sink.seen();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(
+        seen[0].starts_with(&format!(
+            "instance {} found its own state inconsistent: a write completed that was never \
+             recorded as pushed",
+            instance.number()
+        )),
+        "{seen:?}"
+    );
+}
+
+/// A sink that does not want inconsistencies is never given one: the core asks before it builds
+/// the event (DI-D-51). The panic is the same either way.
+#[test]
+fn an_inconsistency_is_not_given_to_a_sink_that_does_not_want_it() {
+    let sink = std::sync::Arc::new(Recording::default());
+    let instance = InstanceId::next();
+    let mut core: Durability<u64, &'static str> =
+        Durability::new(instance, InterruptClock, sink.clone());
+    let never = OpId { instance, seq: 99 };
+    inconsistent(
+        "a write completed that was never recorded as pushed",
+        || core.completed(never, WriteEnd::Succeeded),
+    );
+    assert!(sink.seen().is_empty());
 }
 
 fn quiet(due: &Due<u64, &'static str>) -> bool {

@@ -53,6 +53,7 @@ fn setup(
         files,
         buffers,
         provider,
+        diagnostics: None,
     }
 }
 
@@ -405,6 +406,7 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         files: Vec::new(),
         buffers: Vec::new(),
         provider: None,
+        diagnostics: None,
     })
     .expect("build")
     .0;

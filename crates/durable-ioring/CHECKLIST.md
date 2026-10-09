@@ -75,10 +75,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.2** -- `IoFault` on `Outcome::Failed`, `FailureCause::Commit` and `Nullified`; `ErrorCode`'s meaning the source's; no short writes, the Windows path turning a short count into a fault. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31032)
 
-- [ ] **DI-3.10.3.3** -- **The diagnostic sink** (DI-D-51): `DiagnosticSink`, `NoDiagnostics`,
-  `StderrDiagnostics`, `FanOutDiagnostics`, a sink given at construction, the inconsistency report
-  sent through it, and the `trace` feature removed. The Windows driver defaults to
-  `NoDiagnostics` until `DI-3.6` builds `EtwDiagnostics` and makes it the default.
+- [x] **DI-3.10.3.3** -- The diagnostic sink: `DiagnosticSink` with `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, given in `Setup`, carrying the inconsistency report; the `trace` feature removed. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31033)
 
 - [ ] **DI-3.10.3.4** -- **The core made platform-free**: a portable `Clock` the core is generic
   over, failure stamps in its time type, and nothing in the durability core naming a Windows
@@ -124,7 +121,13 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   path's fault for a short write carries no code and the message "the write completed short: n
   of N bytes"; a write's requested length rides in its sidecar for that check and no longer in
   the core; the inconsistency for a code-less failed write is gone, P8 having made the code
-  optional; and the oracle's no-short-write rule is queued to `DI-3.10.3.5`.
+  optional; and the oracle's no-short-write rule is queued to `DI-3.10.3.5`. From `DI-3.10.3.3`:
+  `DiagnosticKind` and `Diagnostic` are non-exhaustive enums, `Inconsistency` carrying the
+  instance's number, `what` and the formatted detail; a sink is called with dioring's lock held,
+  so it must return promptly and never call back into the instance; `Setup.diagnostics` is an
+  `Option<Arc<dyn DiagnosticSink>>`, `None` meaning the driver's default; `StderrDiagnostics`
+  prefixes each line `dioring:`; and the Windows driver's default is `NoDiagnostics` until
+  `DI-3.6`.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

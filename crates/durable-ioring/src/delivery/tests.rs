@@ -46,6 +46,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         }],
         buffers,
         provider: None,
+        diagnostics: None,
     })
     .expect("build an instance")
     .0

@@ -33,8 +33,8 @@
 //! that reaches the highest epoch L had been pushed then finishes with every part successful, and
 //! is healed once it holds none.
 //!
-//! **Inconsistencies** (DI-D-46). A state the core cannot be in is traced and panicked on where it
-//! is found, in every build; see [`inconsistent`].
+//! **Inconsistencies** (DI-D-46). A state the core cannot be in is reported to the diagnostic sink
+//! (DI-D-51) and panicked on where it is found, in every build; see [`inconsistent`].
 //!
 //! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
 //! what happens to its writes afterwards: a suspect write that completes with a fault, and one
@@ -62,6 +62,7 @@ use win_time_sys::{InterruptClock, InterruptTime, TimePoint};
 
 use super::{DomainId, TimeBase};
 use crate::contract::EpochId;
+use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
     Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,
@@ -477,11 +478,17 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
     clock: K,
+    /// Where an inconsistency is reported before the panic (DI-D-51).
+    diagnostics: Arc<dyn DiagnosticSink>,
 }
 
 impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
     /// An instance's state, with its default lineage.
-    pub(crate) fn new(instance: InstanceId, clock: K) -> Self {
+    pub(crate) fn new(
+        instance: InstanceId,
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+    ) -> Self {
         let mut lineages = BTreeMap::new();
         lineages.insert(DEFAULT_LINEAGE, LineageState::new(None));
         Self {
@@ -494,6 +501,7 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
             held: BTreeMap::new(),
             served: Arc::from([]),
             clock,
+            diagnostics,
         }
     }
 
@@ -501,21 +509,32 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
     #[cold]
     #[track_caller]
     pub(crate) fn inconsistent(&self, what: &'static str, detail: fmt::Arguments<'_>) {
-        inconsistent(self.instance, what, detail);
+        inconsistent(self.instance, self.diagnostics.as_ref(), what, detail);
     }
 }
 
 /// `instance` found its own state inconsistent -- in a state it cannot be in -- which is a defect in
-/// dioring, or the kernel breaking its contract, never the consumer's input (DI-D-46). Traced under
-/// target `dioring`, then panicked on where it was found, in every build, with `detail` naming
-/// what was in hand: the bookkeeping is wrong, and nothing reported afterwards could be trusted.
-/// On a pool thread the panic aborts the process. While the thread is already unwinding it is
-/// traced only, because a second panic would abort and lose the first; the caller then leaves the
-/// state as it found it.
+/// dioring, or the kernel breaking its contract, never the consumer's input (DI-D-46). Reported to
+/// `diagnostics` if it wants it (DI-D-51), then panicked on where it was found, in every build,
+/// with `detail` naming what was in hand: the bookkeeping is wrong, and nothing reported afterwards
+/// could be trusted. On a pool thread the panic aborts the process. While the thread is already
+/// unwinding it is reported only, because a second panic would abort and lose the first; the caller
+/// then leaves the state as it found it.
 #[cold]
 #[track_caller]
-pub(crate) fn inconsistent(instance: InstanceId, what: &'static str, detail: fmt::Arguments<'_>) {
-    windows_threadpool_sys::trace_record!("dioring", what);
+pub(crate) fn inconsistent(
+    instance: InstanceId,
+    diagnostics: &dyn DiagnosticSink,
+    what: &'static str,
+    detail: fmt::Arguments<'_>,
+) {
+    if diagnostics.wants(DiagnosticKind::Inconsistency) {
+        diagnostics.report(&Diagnostic::Inconsistency {
+            instance: instance.number(),
+            what,
+            detail,
+        });
+    }
     if !std::thread::panicking() {
         panic!(
             "dioring instance {instance:?} found its own state inconsistent: {what} ({detail}). \

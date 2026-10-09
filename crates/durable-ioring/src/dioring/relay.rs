@@ -35,6 +35,7 @@ use super::durability::{
 };
 use super::{Sidecar, TimeBase};
 use crate::contract::{EpochId, Identities};
+use crate::diagnostics::DiagnosticSink;
 use crate::error_code::{WINDOWS_IORING, windows_fault};
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
@@ -205,12 +206,16 @@ pub(crate) struct Relay<E: EpochId + 'static, B, C, K> {
 
 impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
     /// An empty queue, nothing sealed, and an unsignalled readiness event; failures are stamped
-    /// with `clock`.
-    pub(crate) fn new(instance: InstanceId, clock: K) -> io::Result<Self> {
+    /// with `clock`, and diagnostics go to `diagnostics`.
+    pub(crate) fn new(
+        instance: InstanceId,
+        clock: K,
+        diagnostics: Arc<dyn DiagnosticSink>,
+    ) -> io::Result<Self> {
         Ok(Self {
             core: Mutex::new(Core {
                 queue: VecDeque::new(),
-                durability: Durability::new(instance, clock),
+                durability: Durability::new(instance, clock, diagnostics),
                 instance,
                 unpushed: Vec::new(),
                 held: BTreeMap::new(),

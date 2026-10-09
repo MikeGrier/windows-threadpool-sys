@@ -12,6 +12,7 @@
 
 mod contract;
 mod delivery;
+mod diagnostics;
 mod dioring;
 mod error_code;
 #[cfg(test)]
@@ -26,6 +27,9 @@ pub use contract::{
     PushResult, RegisteredBufferRing, TokenOf,
 };
 pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
+pub use diagnostics::{
+    Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
+};
 pub use dioring::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};

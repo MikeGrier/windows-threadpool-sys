@@ -15,6 +15,7 @@ use windows_ioring_sys::{
 };
 
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
+use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
 use crate::ids::{
     DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
 };
@@ -70,6 +71,9 @@ pub struct Setup<E: EpochId + 'static, R> {
     /// The consumer's durability provider, if any. `None` leaves every domain to the built-in
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<DioringIds<E>>>>,
+    /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, which is
+    /// [`NoDiagnostics`] until `DI-3.6` makes it ETW.
+    pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
 }
 
 /// One file given at construction.
@@ -302,7 +306,9 @@ where
             files,
             buffers,
             provider,
+            diagnostics,
         } = setup;
+        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(NoDiagnostics));
 
         if let Some(key) = first_repeat(files.iter().map(|f| f.key)) {
             return Err(SetupError {
@@ -323,7 +329,7 @@ where
         }
 
         let instance = InstanceId::next();
-        let relay = match Relay::new(instance, clock) {
+        let relay = match Relay::new(instance, clock, diagnostics) {
             Ok(relay) => Arc::new(relay),
             Err(error) => {
                 return Err(SetupError {
