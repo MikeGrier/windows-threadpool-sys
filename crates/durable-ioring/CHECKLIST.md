@@ -68,7 +68,44 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `portable` job. CONTRACT.md's worked examples are restated in the new API, and its "Vocabulary
   ahead of the code" note is removed. Diagnostics per [DI-D-51](DESIGN-NOTES.md#di-d-51): the
   `DiagnosticSink` trait, `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, the
-  inconsistency report sent through the sink, and the `trace` feature removed.
+  inconsistency report sent through the sink, and the `trace` feature removed. Done in the steps
+  below, each compiling and passing the tests and the sabotage sweep on its own.
+
+- [ ] **DI-3.10.3.1** -- **The renames, in place.** DI-D-50's names for what keeps its shape:
+  `FileKey` -> `IoTargetKey`, `FileBusy` -> `IoTargetBusy`, `FileWrites` -> `IoTargetWrites`,
+  `AddFileError` / `RemoveFileError` -> `AddTargetError` / `RemoveTargetError`, `add_file` /
+  `add_file_with` / `remove_file` -> `add_target` / `add_target_with` / `remove_target`,
+  `FileSetup` -> `TargetSetup`, `Cause` -> `FailureCause` and `Cause::Flush { file, .. }` ->
+  `FailureCause::Commit { target, .. }`; tests, the oracle, the sabotage manifest's anchors and
+  CONTRACT.md's examples follow. No behaviour changes.
+
+- [ ] **DI-3.10.3.2** -- **`IoFault`, a portable `ErrorCode`, and no short writes.** `IoFault {
+  source, code: Option<ErrorCode>, error }` on `Outcome::Failed`, `FailureCause::Commit` and
+  `MarkingKind::Nullified { fault }`; `ErrorCode` a portable integer, its reading from an
+  `io::Error` Windows-only; `MarkingKind::Short` and the core's requested-length check removed,
+  the Windows path turning a short count into a fault (the `Fault` policy of DI-D-50).
+
+- [ ] **DI-3.10.3.3** -- **The diagnostic sink** (DI-D-51): `DiagnosticSink`, `NoDiagnostics`,
+  `StderrDiagnostics`, `FanOutDiagnostics`, a sink given at construction, the inconsistency report
+  sent through it, and the `trace` feature removed. The Windows driver defaults to
+  `NoDiagnostics` until `DI-3.6` builds `EtwDiagnostics` and makes it the default.
+
+- [ ] **DI-3.10.3.4** -- **The core made platform-free**: a portable `Clock` the core is generic
+  over, failure stamps in its time type, and nothing in the durability core naming a Windows
+  type; `DurableIoCore` public, its operations and `complete` returning `CoreActions`.
+
+- [ ] **DI-3.10.3.5** -- **Targets and the backend**: the `IoTarget` and backend traits (DI-D-50
+  P10); the Windows backend over `windows-ioring-sys` and the Win32 file target; the driver
+  running `DurableIoCore` over the backend; flush domains carried by the target, and
+  `FileOptions` removed.
+
+- [ ] **DI-3.10.3.6** -- **The split**: `win-durable-ioring` created and registered for release,
+  holding the driver, the Windows backend and file target, `ErrorCode`'s reading from an
+  `io::Error`, the readiness `Event`, the interrupt clock and the oracle's readiness check;
+  `durable-ioring` left with no Windows dependency and added to CI's `portable` job.
+  CONTRACT.md's worked examples drive the Windows driver, so they move to `win-durable-ioring`'s
+  documentation, compiled there as doctests, and CONTRACT.md links them; its "Vocabulary ahead of
+  the code" note is removed.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
   DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the
