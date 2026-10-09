@@ -121,9 +121,9 @@ Everything below either sharpens one word of that sentence or states a condition
    `Failed`, or `Blocked` as soon as the writes it covers have completed and the durability
    providers it needs have answered ([DI-D-13](DESIGN-NOTES.md#di-d-13)). dioring itself never
    stalls a request silently; a request waiting on a provider that has not answered stays pending,
-   and that wait is reported through dioring's diagnostics -- the core's tracing hook, which the
-   Windows driver publishes as ETW events ([DI-D-26](DESIGN-NOTES.md#di-d-26),
-   [DI-D-50](DESIGN-NOTES.md#di-d-50)).
+   and that wait is reported to the diagnostic sink the instance was given -- ETW, unless the
+   consumer chose another, for the Windows driver ([DI-D-26](DESIGN-NOTES.md#di-d-26),
+   [DI-D-51](DESIGN-NOTES.md#di-d-51)).
 5. **Durable follows the writes it covers.** `Durable { through: n }` is delivered after the
    completion of every write of n's lineage tagged at or below n. Nothing further is promised about
    order between lineages ([DI-D-18](DESIGN-NOTES.md#di-d-18)).

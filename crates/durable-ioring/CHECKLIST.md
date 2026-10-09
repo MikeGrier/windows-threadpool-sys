@@ -66,7 +66,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   registered for release. Today's tests and sabotages are the proof the Windows backend passes,
   and today's file path stands in as its target until `DI-3.10.4`. The portable crate joins CI's
   `portable` job. CONTRACT.md's worked examples are restated in the new API, and its "Vocabulary
-  ahead of the code" note is removed.
+  ahead of the code" note is removed. Diagnostics per [DI-D-51](DESIGN-NOTES.md#di-d-51): the
+  `DiagnosticSink` trait, `NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, the
+  inconsistency report sent through the sink, and the `trace` feature removed.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
   DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the
@@ -113,9 +115,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   win-time-sys' `WT-2.2.2` adds a fourth, `win-time-sys` (the failure timestamps' clock), at its
   first release.
 
-- [ ] **DI-3.6** -- **Emit the delay events** DI-2.11 designs, from a manifest-based ETW provider
-  that dioring owns. Gated on DI-3.2, which creates the code the events describe. Carries what
-  DI-2.11 deliberately left to implementation:
+- [ ] **DI-3.6** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to
+  its diagnostic sink, and **the Windows sinks** in `win-durable-ioring`: `EtwDiagnostics`, from a
+  manifest-based ETW provider that dioring owns and the Windows driver's default, and
+  `DebugOutputDiagnostics`, through `OutputDebugStringW` ([DI-D-51](DESIGN-NOTES.md#di-d-51)).
+  Gated on `DI-3.10.3`, which creates the sink. Carries what DI-2.11 deliberately left to
+  implementation:
   - **Identity per event** -- what each event names (instance, lineage, epoch id, domain, lock),
     "going to depend on the event" (the engineer), and how the generic epoch id is rendered.
   - **The time base** is settled: interrupt time, dioring's one time base
@@ -131,8 +136,8 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 - [ ] **DI-3.8** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
   dispatches each seal's work by flush domain to providers registered with it when it is built,
   refuses a domain routed twice at build time, and passes each domain's outcome back as it
-  arrives. It emits through dioring's own ETW provider ([DI-D-26](DESIGN-NOTES.md#di-d-26)), so
-  the diagnostic surface stays one. Tested alone against fake providers. Gated on the provider
+  arrives. It reports to the instance's diagnostic sink ([DI-D-51](DESIGN-NOTES.md#di-d-51)), so
+  its diagnostics go wherever the consumer sent the instance's. Tested alone against fake providers. Gated on the provider
   trait from DI-2.12.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)

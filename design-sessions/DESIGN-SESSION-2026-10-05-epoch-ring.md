@@ -3117,6 +3117,15 @@ maybe is it just in general? At least even a windows only consumer may not want 
 want to just have their own stderr based or OutputDebug based printing." Taken up as its own
 proposal, since it changes DI-D-26.
 
+The assistant answered "in general": the core is portable, so the indirection belongs there, and
+proposed T1-T5 -- a `DiagnosticSink` trait receiving typed events, so an ETW manifest maps each
+one-to-one and a text sink formats them; a sink stating which kinds it wants, checked before an
+event is built, keeping DI-D-26's "costs nothing when no session listens"; `NoDiagnostics`,
+`StderrDiagnostics` and `FanOutDiagnostics` portable, `EtwDiagnostics` and
+`DebugOutputDiagnostics` in `win-durable-ioring`; ETW the Windows driver's default, any sink
+passable when it is built; and the `trace` feature removed, its one trace point -- the
+inconsistency report -- going through the sink. The engineer: "approved". Recorded as DI-D-51.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
