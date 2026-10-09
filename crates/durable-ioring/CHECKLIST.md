@@ -105,6 +105,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   this handle's unflushed `NO_BUFFERING` writes. Windows documents none of this; the contract is
   justified on the permitted response space and does not wait for the answer. Producing the failure
   on demand is the hard part (a detachable VHD or an error-injecting filter are the candidates).
+  What the published record does say -- Windows' own "the data has been lost" write-behind codes,
+  Microsoft assigning the handling to the application, and nothing on retention after a failed
+  flush -- was gathered on 2026-10-09 and is in
+  [the design session](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md#what-the-published-record-says-research-2026-10-09).
 
 ## DI-M5+ -- The retention layer (parked behind DI-M3)
 

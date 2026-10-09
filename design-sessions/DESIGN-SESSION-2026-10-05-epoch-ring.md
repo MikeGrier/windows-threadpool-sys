@@ -2782,6 +2782,89 @@ DI-D-47:
 - **F. Provenance on `Durable` or `epoch_state`:** declined. The engineer: "I don't see the need
   for it. When things are 'clean' there aren't really questions about how it was accomplished."
 
+## DI-3.9.3 begins: a late failure, and what Windows promises after a failed flush (2026-10-08/09)
+
+At the engineer's request the assistant evaluated DI-D-42 against the code and brought only the
+points needing a ruling. The one that led here, case A: a flush of a lineage that ends while the
+flush is in the kernel -- issued while the lineage was live; ending neither waits nor cancels
+(DI-D-30) -- completes afterwards, and if it failed, `flushed` returns before observing anything,
+as `provided` does for the provider's answers. DI-D-21 says a failed flush on F makes suspect the
+uncovered writes of every lineage on any file whose domains intersect F's, so the failure concerns
+live lineages too, and dropping it also contradicts DI-D-47's ruling that a kernel-reported failure
+is captured and escorted. The default-flush half is DI-D-30's ("a flush that finishes afterwards
+reports nothing", closed by the engineer); the provider half is DI-D-42's.
+
+The engineer asked why an ended lineage would receive a flush at all (it receives none new: only
+those in flight when it ended), and then named the question underneath this and earlier rounds:
+"what the Windows Kernel contract is around data retention when a flush call fails. Evidently there
+was a problem with Linux's contract. I am not quite convinced that Windows follows the same
+contract. I think this issue deserves some research."
+
+### What the published record says (research, 2026-10-09)
+
+Windows documents nothing about what happens to cached data after a failed flush, and nothing
+published measures it.
+
+- **PostgreSQL's cross-OS survey of exactly this question lists Windows as "unknown"**
+  ([Fsync Errors](https://wiki.postgresql.org/wiki/Fsync_Errors), "Closed source kernels").
+- **Windows does define a path on which a failed write-back loses cached data.** The SDK's
+  `ntstatus.h` and `winerror.h` (10.0.26100.0) define `STATUS_LOST_WRITEBEHIND_DATA` (0xC0000222) /
+  `ERROR_LOST_WRITEBEHIND_DATA` (596) and three variants, `..._NETWORK_DISCONNECTED`,
+  `..._NETWORK_SERVER_ERROR` and `..._LOCAL_DISK_ERROR` (0xC000A080-0xC000A082), all with the text
+  "{Delayed Write Failed} Windows was unable to save all the data for the file %hs; the data has
+  been lost." The local-disk variant names a removed device or write-protected media, so the path is
+  not specific to network shares.
+- **Microsoft assigns the handling to the application.** Its article for event ID 50
+  ([KB 2021074](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/delayed-write-failed-error-data-lost))
+  says the pending cached write "cannot be written to the target file", "the target file may now
+  be corrupt", and "It is the responsibility of the application to handle this error."
+- **The interfaces are silent on retention.**
+  [`FlushFileBuffers`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers)
+  says only that it fails;
+  [`CcFlushCache`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccflushcache)
+  and
+  [`CcUnpinRepinnedBcb`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccunpinrepinnedbcb)
+  report a status and how many bytes were flushed. Microsoft's open-source FAT sample
+  (`microsoft/Windows-driver-samples`, `filesys/fastfat/flush.c`) passes the cache manager's status
+  up and re-dirties nothing on failure; what becomes of the pages is decided inside the cache and
+  memory managers, which are not published.
+- **Microsoft's own database does not rely on the cache for durability.** SQL Server opens every
+  log and data file with `FILE_FLAG_WRITE_THROUGH` and requires "guaranteed delivery to stable
+  media"
+  ([Logging and data storage algorithms](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/database-file-operations/logging-data-storage-algorithms)).
+  Suggestive, not evidence of the kernel's behaviour.
+- **A handle's buffering mode can be read back.** `NtQueryInformationFile` with
+  [`FileModeInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_mode_information)
+  reports `FILE_NO_INTERMEDIATE_BUFFERING` and `FILE_WRITE_THROUGH` for an open handle.
+
+**Unknown, and what `DI-4.1` exists to measure:** whether a failed `FlushFileBuffers` leaves the
+pages dirty for a later flush or drops them; whether a background write-back failure is reported to
+a later flush on any handle (Linux has done so per open file description since 4.13; Windows
+documents no equivalent); and whether a later flush can then succeed over lost data. With
+`FILE_FLAG_NO_BUFFERING` the system cache holds nothing, so the first two do not arise; what remains
+is the device's volatile cache across a failed device flush, which is the device's behaviour, not
+Windows'.
+
+**Discarded:** two web-search summaries asserted that Windows "likely" marks pages clean as Linux
+does. The only source either cited is a
+[2019 Stack Overflow question](https://stackoverflow.com/questions/54660780) asking exactly this,
+which has no answer. The best-known study,
+[Can Applications Recover from fsync Failures?](https://www.usenix.org/conference/atc20/presentation/rebello)
+(USENIX ATC 2020), covers Linux file systems only.
+
+**What it does to case A:** the answer changes how much case A costs, not whether it is a defect.
+If Windows keeps the pages dirty and retries them, a live lineage's own next flush rewrites its
+data and the dropped failure hides a failure without losing data; if it drops them, a live
+lineage's later flush can succeed over data that is gone. DI-D-21 was written on the response space
+Windows permits, which includes the second, and case A contradicts it either way.
+
+### The engineer's position on unbuffered handles (2026-10-09)
+
+The engineer: "I think that our position has to largely be that we cannot provide much consistency
+without NO_BUFFERING." Recorded as stated. What it implies for the contract, for dioring's
+behaviour, and for case A was raised with the engineer in the same exchange and is not yet settled;
+nothing binds to it until it is.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
