@@ -3034,6 +3034,49 @@ is due.
   naming decision gives `win-` only to crates raising a Windows API into safe Rust, so the driver's
   name is among its proposals.
 
+### DI-3.10.1 proposals: names and the obligations (2026-10-09)
+
+The assistant brought thirteen proposals (P1-P13) for approval. Settled so far:
+
+- **Names** (the engineer: "I think maybe it's IoTarget, and it's DurableIoCore"; then, worried
+  about "overly short names", asked whether the cause enum should be `FaultCause` or `ErrCause`).
+  The assistant proposed `FailureCause` -- it is the cause of a *failure*, beside `FailureId`,
+  `FailureToken` and `FailureInfo`; `FaultCause` would read as the cause of an `IoFault`, and
+  `ErrCause` abbreviates -- and lengthened the rest to match. Approved: `IoTarget`, `IoTargetKey`,
+  `IoTargetBusy`, `IoTargetWrites`, `DurableIoCore`, `CoreActions`, `FailureCause`, `IoFault`;
+  `add_target`, `remove_target` and `ErrorCode` unchanged.
+- **P2, the obligations.** The engineer caught that the first draft said a failed commit "warrants
+  nothing for writes not yet covered": covered is dioring's notion, not a target's. Restated in
+  target terms: for each write that completed successfully, the first commit submitted after its
+  completion decides it -- success puts its bytes on stable media; failure ends every statement
+  about it, and a later commit's success does not warrant it. A write that completes with a fault
+  is never warranted. A target's failure domains declare that a failed commit may have lost any
+  completed write not yet decided by a successful commit, on it or on a target sharing a domain;
+  acting on that is dioring's. Covered then means a write's deciding commit succeeded, and suspect
+  that it failed or a sharing target's commit failed first -- dioring's behaviour unchanged. The
+  "first commit decides" rule is what makes Linux's 2018 behaviour a target *breach*.
+- **Short writes.** The engineer: "Reads can come up short but I've never heard of a valid reason
+  for a write to be short." The assistant found Windows documents exactly one case, a non-blocking
+  byte-mode pipe (`WriteFile`), never a target; Linux's `write(2)` names running out of space, the
+  `RLIMIT_FSIZE` limit, and a signal. The engineer preferred that a write complete in full or with
+  a fault, and asked whether there is enough information to reissue the remainder: there is,
+  because the backend owns the write until its final completion, and the core cannot commit
+  between the parts. Then: "is that the right thing to do under Linux though? do we need to ensure
+  that we don't enter into an indefinite loop?" A progress rule bounds it, but a retry after a short
+  write caused by `RLIMIT_FSIZE` raises `SIGXFSZ`, whose default action terminates the process
+  (`setrlimit(2)`). The engineer: "this is only if `setrlimit(2)` was called"; the assistant: a
+  finite limit is needed, but it is inherited, settable by a parent shell, a service manager or
+  PAM, and the kernel default is unlimited. The engineer: "can the limit be changed after a write
+  has been issued?" Yes -- `prlimit(2)` changes another process's limits, and the limit applies when
+  the write executes -- so checking `getrlimit` before reissuing is a race. The engineer: "Can we
+  just ask the client for how to proceed?" Asking per event would report the short completion after
+  a seal may already be committing its epoch; asking once, at construction, lets the backend act
+  before the completion is reported. The engineer: "yeah go with (i)". **Settled:** a target's
+  write completes in full or with a fault; on Linux the backend handles a short count under a
+  policy the client chooses when building it -- `Fault` by default, `Reissue { max_attempts }` for
+  a client that handles `SIGXFSZ`; the Windows backend never sees one. The core never sees a short
+  write, so DI-D-36's short-write allowance is withdrawn.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
