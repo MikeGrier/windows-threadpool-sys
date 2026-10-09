@@ -3076,6 +3076,13 @@ The assistant brought thirteen proposals (P1-P13) for approval. Settled so far:
   policy the client chooses when building it -- `Fault` by default, `Reissue { max_attempts }` for
   a client that handles `SIGXFSZ`; the Windows backend never sees one. The core never sees a short
   write, so DI-D-36's short-write allowance is withdrawn.
+- **P3-P13.** Approved together: "otherwise yes good. In-memory is a good basis for unit testing
+  and driving", except P12's second crate, which the engineer named `win-durable-ioring`. The
+  assistant noted that the workspace's naming decision gives `win-` only to crates raising a
+  Windows API into safe Rust, and left to the engineer whether that decision is amended or this is
+  an exception. Recorded as DI-D-50, with amendment markers on the rows it restates (DI-D-21,
+  DI-D-27, DI-D-29 superseded, DI-D-36, DI-D-39, DI-D-44, DI-D-47); `DI-3.10.1` closed, and the fault
+  seam's merge-or-delete queued as `DI-3.11`.
 
 ## Open, not yet discussed
 

@@ -1676,3 +1676,20 @@ The review and the amendments it made are [DI-D-47](DESIGN-NOTES.md#di-d-47). Th
   non-exhaustive `MarkingKind`; when each marking is made, a covered one by the write's own file's
   flush rather than by its seal; where markings are read; error codes, read with `ErrorCode::of`;
   and the oracle's rules for markings.
+
+## Moved 2026-10-09 17:36:42 -04:00 -- DI-3.10.1: the target design
+
+### <a id="di-3101"></a>DI-3.10.1 -- The target design: `IoTarget` and its obligations, `DurableIoCore` and its backend, `FailureCause` and `IoFault`, and two crates (DI-D-50). *(completed 2026-10-09 17:36:42 -04:00)*
+
+The decision is [DI-D-50](DESIGN-NOTES.md#di-d-50); the reasoning behind the obligations and short writes is in [the design session](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md#di-3101-proposals-names-and-the-obligations-2026-10-09). The item as it stood at completion:
+
+**Design: the target and its obligations, and relayed causes.** Settle the
+  obligations DI-D-48 drafts and the target's name; how a target is given to and taken from an
+  instance, replacing `add_file`, `remove_file`, `FileBusy` and `FileOptions`; failure sharing
+  between targets in place of per-file flush domains (DI-D-21); what a provider request names in
+  place of a `SharedHandle` (DI-D-29); the built-in default provider as a target's own commit
+  (DI-D-27); and causes that each name their source -- the layer below, the consumer, or the
+  provider -- restating DI-D-47's cause shapes. Also: the backend's ring shape (commit scope, how
+  completions are learned of, buffer ownership), a target that breaks its obligations, the core's
+  public API, the crates and their names, and `DI-3.3`'s shape. Designed by the assistant as
+  concrete proposals the engineer approves or rejects (DI-D-49).

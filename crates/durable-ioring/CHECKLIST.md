@@ -53,16 +53,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `DI-3.9.5` and `DI-3.3`, which are written in the file vocabulary this restates; `DI-3.9.3` and
   `DI-3.9.4` do not use it, and stay ahead.
 
-- [ ] **DI-3.10.1** -- **Design: the target and its obligations, and relayed causes.** Settle the
-  obligations DI-D-48 drafts and the target's name; how a target is given to and taken from an
-  instance, replacing `add_file`, `remove_file`, `FileBusy` and `FileOptions`; failure sharing
-  between targets in place of per-file flush domains (DI-D-21); what a provider request names in
-  place of a `SharedHandle` (DI-D-29); the built-in default provider as a target's own commit
-  (DI-D-27); and causes that each name their source -- the layer below, the consumer, or the
-  provider -- restating DI-D-47's cause shapes. Also: the backend's ring shape (commit scope, how
-  completions are learned of, buffer ownership), a target that breaks its obligations, the core's
-  public API, the crates and their names, and `DI-3.3`'s shape. Designed by the assistant as
-  concrete proposals the engineer approves or rejects (DI-D-49).
+- [x] **DI-3.10.1** -- The target design: `IoTarget` and its obligations, `DurableIoCore` and its backend, `FailureCause` and `IoFault`, and two crates (DI-D-50). -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-3101)
 
 - [ ] **DI-3.10.2** -- **Design: CONTRACT.md restated over target obligations**, including how far
   each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
@@ -73,8 +64,10 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   as `DI-3.10.1` and `DI-3.10.2` settle them: the durability core as a public state machine naming
   no platform type; targets and a backend beneath it, with `windows-ioring-sys` inside the Windows
   backend; the threaded driver above it implementing `DurableRing`; the trait, types, oracle and
-  fake restated over targets. Today's tests and sabotages are the proof the Windows backend
-  passes, and today's file path stands in as its target until `DI-3.10.4`. The core joins CI's
+  fake restated over targets. Split as [DI-D-50](DESIGN-NOTES.md#di-d-50) names: `durable-ioring`,
+  portable, and `win-durable-ioring` for the driver, the Windows backend and its targets,
+  registered for release. Today's tests and sabotages are the proof the Windows backend passes,
+  and today's file path stands in as its target until `DI-3.10.4`. The portable crate joins CI's
   `portable` job.
 
 - [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
@@ -94,13 +87,18 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   recorded as inconsistencies. Placed after `DI-3.10`, which restates what a request names, so
   the review reads the shapes as they will stand.
 
-- [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
-  short writes and failed points on demand, deterministically. It answers the problem that flush
-  failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
-  crate's, in the spirit of
-  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1. Its
-  shape under targets -- a backend and targets whose faults are scripted, beneath the real core --
-  is settled under `DI-3.10.1`.
+- [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an
+  operation failed, held, or completed late or out of order; a submission refused; a full queue;
+  a short count, to test a backend's short-write policy. It answers the problem that flush failure
+  cannot be produced on a healthy machine, for consumers' failure paths and not only this crate's,
+  in the spirit of [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md), and is the
+  basis for unit testing and driving the core (the engineer: "In-memory is a good basis for unit
+  testing and driving"). It does not replace DI-4.1.
+
+- [ ] **DI-3.11** -- **The fault seam's merge-or-delete decision**, once `DI-3.3` is proven: the
+  `fault-injection` feature's `fail_next_flush` duplicates what the in-memory backend scripts
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), and stays until then under the duplicate-then-decide rule.
 
 - [ ] **DI-3.4** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
