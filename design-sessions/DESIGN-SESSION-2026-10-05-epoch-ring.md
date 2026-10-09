@@ -2865,6 +2865,98 @@ without NO_BUFFERING." Recorded as stated. What it implies for the contract, for
 behaviour, and for case A was raised with the engineer in the same exchange and is not yet settled;
 nothing binds to it until it is.
 
+### What can fail without telling anyone, by substrate (2026-10-09)
+
+The engineer, to establish "the truths of the matter": "if the user does not use no_buffering, then
+at any time, the filesystem could have had a failed eviction without notifying any party, including
+us, is that correct?" The assistant: yes as far as anything published says, refined three ways. The
+system's background write-back of a dirty page can fail between a write's completion and its
+covering flush, and Windows' own text calls that data lost, with no documented report to the writer;
+Windows does log it system-wide (event ID 50 per KB 2021074, for shares; the local-disk surface is
+unverified), so "no party" is too strong -- "no party that wrote it, through any I/O interface" is
+the claim. What happens next -- dropped or retained, and whether a later flush reports it -- is
+`DI-4.1`'s. And it is a failed write-back, not a failed eviction: a clean page is evicted without
+loss, and data already made durable is not exposed.
+
+| Substrate | Layers between a write and the media that can fail without telling the writer |
+|---|---|
+| Cached file | system-cache write-back of data; file-system metadata write-back; the device's volatile cache |
+| Unbuffered file | file-system metadata write-back, unless write-through or into allocated space; the device's volatile cache |
+| Raw partition | the device's volatile cache only |
+
+Asked how a ring over a raw partition would change what dioring consumes and what it can offer, the
+assistant set out, from `CreateFile`'s "Physical Disks and Volumes" remarks and `FSCTL_LOCK_VOLUME`'s
+documentation: every data-path failure then arrives as a completion of something dioring issued, so
+CONTRACT.md's assumption that every failure is reported becomes a property of the stack, except for
+co-tenants of the device's cache and the device itself; most of what `DI-4.1` would measure stops
+mattering, and rewrite-then-seal heals soundly without any knowledge of Windows' retention; a
+partition is a host-side construct, so the device's cache is shared with every other partition on
+it; opening a volume requires `FILE_SHARE_WRITE`, so exclusivity comes from `FSCTL_LOCK_VOLUME`
+("can be accessed only through" the locking handle; refused for the system volume, a page-file
+volume, or a volume with open files), which reaches the volume and not the device; a volume's disks
+are discoverable through `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, so its flush domain could be
+observed rather than declared; the "file" vocabulary collapses to one handle with regions in it and
+one flush per volume; access needs administrative privileges and `OPEN_EXISTING`, volume handles are
+to be treated as noncached with alignment enforced, direct writes to a volume with a mounted file
+system are restricted, and the last sectors need `FSCTL_ALLOW_EXTENDED_DASD_IO`. Unverified, and a
+spike's ([D-44](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-44)): whether IoRing reads, writes
+and flushes a volume handle, and whether a physical disk can be held exclusively. The shape that
+follows is a contract per substrate class -- raw and exclusive; unbuffered, with or without
+write-through and allocated space; cached -- each stated truthfully, with dioring able to tell the
+buffering class of a handle itself (`FileModeInformation`).
+
+### The principal goals (the engineer, 2026-10-09)
+
+> I have two primary plans on dioring consumers. one is a filesystem layer which is currently
+> layered over a substrate much like our ioring, but it has no durability mechanisms. We should
+> assume that its I/O is based on either direct partition access, or the driver stack has a
+> partition driver that consumes the ioring-equivalent over a vhdx and exposes partitions.
+>
+> I want to modify the vhdx driver to consume and produce the right kind of interface to give the
+> right durability contracts needed for the filesystems.
+>
+> The second overall plan is to provide for products like databases that are aware of the platform
+> requirements and will use file handles that are opened with the correct attributes for dioring
+> optimal performance.
+
+Asked to confirm, the engineer: "These are the principal goals." Two questions open since the
+2026-10-05 section "The stack" are now answered: the VHDX driver is user-mode Rust that would
+consume dioring directly ("yes"), and the VHDX is **dynamic** -- "We can control this, it's why I'm
+bringing it up now."
+
+**Why the step back** (the engineer): "trying to shore up the buffered I/O strategy can only be done
+on a 'best effort' basis. At some point, it's not guaranteeable, so continuing to try to refine it
+will become an exercise in frustration."
+
+The assistant's reading of what the goals imply (directional; none of it decided):
+
+- **The VHDX driver produces `DurableRing`.** The filesystem then cannot tell dioring over a
+  partition from the VHDX driver over dioring, and the trait gains the second real implementation
+  the "Open source for everyone" section said the public crate needs. The driver can pass up no
+  more than dioring gives it over the host file, plus its own discipline of reporting failures
+  upward and never letting a later success mask one.
+- **The two bottoms give different classes.** A raw partition can be locked, leaving other
+  partitions on the device and the device itself. A `.vhdx` is best opened unbuffered and
+  write-through, but its host volume is shared with everything the system writes there and cannot
+  be locked, so a filesystem over it gets "truthful relative to what was reported", the unreported
+  part being the host's other writers on the device's cache.
+- **Dynamic means the host file grows**, and growth is host-file-system metadata. How the driver
+  grows it -- per write or in large preallocated steps -- is the driver's to choose, and decides how
+  often a write lands outside allocated space; a growth step is itself something the BAT update
+  pointing into it must wait on (the release-after-durable ordering the "The stack" section already
+  named inside VHDX).
+- **`Cause` assumes dioring's own world.** Its variants -- `Flush { file, error }`, kernel-reported;
+  `Imported`; `Provider`; `ProviderAbandoned` -- fit none of a VHDX driver's failures, which are
+  relayed from the dioring beneath it and translated from host-file offsets into virtual-disk
+  terms. Under DI-D-47 it must not report them as `Flush`, so the trait likely needs a cause for
+  "relayed from the layer below", carrying that layer's own report.
+- **Databases are the unbuffered class**, which dioring can confirm per handle rather than take on
+  declaration -- the stronger provenance -- and the class where `WriteCaching::WriteThrough` works
+  at all and DI-6+.6's one-device-sync-per-domain aims.
+- **Cached handles stay supported**, with the weaker contract stated rather than refined: neither
+  goal depends on them, and the engineer's reason for the step back is that refining them further
+  cannot reach a guarantee.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
