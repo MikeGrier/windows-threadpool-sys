@@ -45,17 +45,52 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   each held write's epoch followed by its gate; and released operations pushed at the consumer's
   next call.
 
+- [ ] **DI-3.10** -- **The contract over targets** ([DI-D-48](DESIGN-NOTES.md#di-d-48)): the
+  unit of I/O and durability becomes a target, defined only by its obligations, and files leave
+  the contract's vocabulary. Checked when the last step below is. Placed before `DI-3.9.5` and
+  `DI-3.3`, which are written in the file vocabulary this restates; `DI-3.9.3` and `DI-3.9.4` do
+  not use it, and stay ahead.
+
+- [ ] **DI-3.10.1** -- **Design: the target and its obligations, and relayed causes.** Settle the
+  obligations DI-D-48 drafts and the target's name; how a target is given to and taken from an
+  instance, replacing `add_file`, `remove_file`, `FileBusy` and `FileOptions`; failure sharing
+  between targets in place of per-file flush domains (DI-D-21); what a provider request names in
+  place of a `SharedHandle` (DI-D-29); the built-in default provider as a target's own commit
+  (DI-D-27); and causes that each name their source -- the layer below, the consumer, or the
+  provider -- restating DI-D-47's cause shapes. Driven by the engineer, as a design session.
+
+- [ ] **DI-3.10.2** -- **Design: CONTRACT.md restated over target obligations**, including how far
+  each kind of backing can warrant the reporting obligation -- a raw volume held exclusively, an
+  unbuffered file, a cached file on a best-effort basis, a target of a lower `DurableRing` -- and
+  amendment markers on every decision row the restatement changes.
+
+- [ ] **DI-3.10.3** -- **The trait, types, oracle, fake and dioring restated over targets**, as
+  `DI-3.10.1` and `DI-3.10.2` settle them. dioring over `windows-ioring-sys` keeps backing its
+  targets with handles, so today's file path stands in as its backing until `DI-3.10.4`.
+
+- [ ] **DI-3.10.4** -- **The Win32 file object as a target backing** -- the separate concern
+  DI-D-48 names: what such a target warrants by buffering class, and whether dioring reads the
+  class from the handle (`FileModeInformation`) rather than taking it on declaration.
+
+- [ ] **DI-3.10.5** -- **A raw partition as a target backing** (the engineer, 2026-10-09: "ok"):
+  one volume handle with regions in it, one commit per volume, failure sharing found from the
+  volume's disks (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), and optionally the volume lock
+  (`FSCTL_LOCK_VOLUME`); implemented to the interface. How
+  [D-44](../windows-ioring-sys/DESIGN-NOTES.md#d-44) applies is open under DI-D-48.
+
 - [ ] **DI-3.9.5** -- **[DI-D-44](DESIGN-NOTES.md#di-d-44)**, from `DI-3.2.6`: the provider
   called from the consumer's next call with dioring's lock released; every request built before
   any is made; what a request names, and in what order; when a write is covered; a domain's
   failure observed with `Reach::Domains` of that one domain; and answers no request asked for
-  recorded as inconsistencies.
+  recorded as inconsistencies. Placed after `DI-3.10`, which restates what a request names, so
+  the review reads the shapes as they will stand.
 
 - [ ] **DI-3.3** -- **A fault-injecting implementation for consumers' tests**: failed flushes,
   short writes and failed points on demand, deterministically. It answers the problem that flush
   failure cannot be produced on a healthy machine, for consumers' failure paths and not only this
   crate's, in the spirit of
-  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1.
+  [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md). It does not replace DI-4.1. It
+  implements the contract over targets (`DI-3.10`).
 
 - [ ] **DI-3.4** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).

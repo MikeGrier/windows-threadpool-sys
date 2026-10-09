@@ -2957,6 +2957,35 @@ The assistant's reading of what the goals imply (directional; none of it decided
   goal depends on them, and the engineer's reason for the step back is that refining them further
   cannot reach a guarantee.
 
+### Targets, not files (decided 2026-10-09; DI-D-48)
+
+The assistant proposed four checklist items: a raw-partition spike, a relayed cause, the contract per
+substrate class, and raw-partition support. The engineer's answers reshaped three of them:
+
+- On the spike: "I don't like this 'we have to run against the kernel' point of view. Let's
+  describe an interface and implement to it." The assistant flagged that this runs against
+  [D-44](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-44)'s spike-before-wrapping rule, and
+  proposed reconciling them by designing against the interface and treating whether a Windows
+  backing meets it as part of implementing that backing, not as a gate on the design. Not yet ruled
+  on.
+- On the relayed cause: "this seems reasonable, and it's true of all cases, we're always just
+  relaying." So dioring over Windows relays the kernel exactly as the VHDX driver relays the dioring
+  beneath it; the kernel is one "layer below" among others.
+- On the per-substrate contract: "I wonder if we should perhaps abstract away from 'files' entirely
+  and instead have a placeholder object with only its contractual obligations called out." The
+  assistant observed that this and the interface of the first answer are one thing, drafted the
+  obligations (now in DI-D-48), and noted that the substrate classes then become how far each
+  backing warrants the reporting obligation, with dioring's guarantee "durable to the extent its
+  targets honour theirs". It treated the "I wonder" as a working position and asked whether to
+  queue it.
+- On raw-partition support: "ok".
+
+The engineer: "Let's switch to this. I think it's a much stronger position. Then focusing on the
+win32 file object as a target can be a separate concern." Recorded as DI-D-48 and queued as
+`DI-3.10`, ahead of `DI-3.9.5` and `DI-3.3`, the two pending items written in the file vocabulary.
+The assistant had first said `DI-3.9.4` was affected too; on re-reading, it uses none of that
+vocabulary, and stays ahead.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
