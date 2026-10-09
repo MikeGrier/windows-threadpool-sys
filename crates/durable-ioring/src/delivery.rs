@@ -26,8 +26,8 @@ use crate::contract::{
 };
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo, FileKey,
-    FileOptions, ImportScope, Leftovers, LineageInfo, ReadOptions, RemoveFileError, Resolution,
-    ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
+    FileOptions, ImportScope, Imported, Leftovers, LineageInfo, ReadOptions, RemoveFileError,
+    Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -295,7 +295,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     pub fn import_failure(
         &self,
         scope: ImportScope<D::Ids>,
-    ) -> Result<FailureIdOf<D>, UnknownLineage<D::Ids>> {
+    ) -> Result<Imported<D::Ids>, UnknownLineage<D::Ids>> {
         self.with(|ring| ring.import_failure(scope))
     }
 

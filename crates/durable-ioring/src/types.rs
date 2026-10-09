@@ -168,6 +168,19 @@ pub enum ImportScope<V: Identities> {
     Domains(Vec<FlushDomain>),
 }
 
+/// What `import_failure` recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Imported<V: Identities> {
+    /// The failure, whose token arrives with its `Failed` entry.
+    pub failure: V::FailureId,
+    /// The domains an [`ImportScope::Domains`] named that the instance has never been given -- by
+    /// any file or by its provider -- in the order named. Each reaches only the files declared with
+    /// none, which is the right answer when declarations are complete; a name here that the
+    /// consumer expected to match is a misspelling, or a file not yet given. Empty for every other
+    /// scope.
+    pub unmatched: Vec<FlushDomain>,
+}
+
 /// A flush domain: a unit whose volatile cache a flush commits and whose failure everything
 /// behind it shares -- a disk, a controller cache, a virtual disk, a remote share (DI-D-21).
 /// Named by the consumer's exact identifier bytes, so two instances or processes name one
@@ -595,7 +608,8 @@ impl<V: Identities> std::error::Error for SealError<V> {}
 /// How a failure is resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resolution {
-    /// The consumer has re-issued what it needs; takes effect at the first seal after it.
+    /// The consumer has re-issued what it needs; takes effect, in each lineage, at the first seal
+    /// after it that reaches everything pushed there by then (DI-D-46).
     Heal,
     /// The consumer declares the suspect writes lost; takes effect at once.
     Abandon,

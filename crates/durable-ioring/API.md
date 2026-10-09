@@ -115,8 +115,8 @@ retention layer gets the order it needs for newest-wins replay at no extra cost.
 `FailureToken` is `#[must_use]`; `heal`, `abandon` and `close` consume it, and dropping it closes it
 ([DI-D-12](DESIGN-NOTES.md#di-d-12)). `resolve(Vec<(FailureToken, Resolution)>)` resolves one or many;
 a refused call returns the tokens. `import_failure(scope)` returns an identity (section 12: the
-scope is one lineage or all of them), and the token arrives with
-the `Failed` entry. `failures()` returns owned `FailureInfo`; `take_token(id)` hands out a token when
+scope is one lineage or all of them), with any domain the scope named that the instance has never
+been given ([DI-D-46](DESIGN-NOTES.md#di-d-46)), and the token arrives with the `Failed` entry. `failures()` returns owned `FailureInfo`; `take_token(id)` hands out a token when
 none is live.
 
 The only borrow returned is `SuspectSet::writes()`, into frozen shared data that nothing can change.

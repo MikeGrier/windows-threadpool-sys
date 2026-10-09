@@ -7,8 +7,8 @@ use std::io;
 use std::sync::Arc;
 
 use super::{
-    A, B, DEFAULT, FULL, LEN, Lineage, Ops, Seen, flush, flush_of, lineage, quiet, seen, submitted,
-    target, tokens,
+    A, B, DEFAULT, FULL, LEN, Lineage, Ops, Seen, flush, flush_of, inconsistent, lineage, quiet,
+    seen, submitted, target, tokens,
 };
 use crate::dioring::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
@@ -134,7 +134,6 @@ fn a_held_operation_is_released_when_its_gates_lineage_reaches_it_and_only_then(
     let due = submitted(lineage.seal(2));
     assert_eq!(seen(&due), [Seen::Durable(2)]);
     assert_eq!(issue(&mut lineage, &due), [write.seq, read.seq]);
-    assert_eq!(lineage.inconsistency(), None);
 
     // The write is in flight now, in its own lineage, and its seal flushes it once it completes.
     assert!(quiet(&submitted(lineage.0.seal(minted, 1))), "in flight");
@@ -300,7 +299,6 @@ fn ending_a_lineage_ends_its_held_writes_and_what_waits_for_it() {
         [Seen::Durable(1)],
         "the never-issued write no longer holds the default's seal"
     );
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -315,7 +313,6 @@ fn an_operation_released_before_its_gates_lineage_ends_is_still_issued() {
         [Seen::LineageEnded(minted, None)]
     );
     lineage.issued(read);
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -341,30 +338,27 @@ fn retiring_is_refused_while_an_operation_is_held_in_or_on_the_lineage() {
 }
 
 #[test]
-fn issuing_what_was_never_held_or_not_yet_released_is_recorded_as_inconsistent() {
+fn issuing_what_was_never_held_or_not_yet_released_is_inconsistent() {
     let mut lineage = lineage();
     let mut ops = Ops::new();
     let held = hold_read(&mut lineage, &mut ops, at(D, 1));
-    lineage.issued(held);
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("an operation was issued before its gate was durable")
+    inconsistent(
+        "an operation was issued before its gate was durable",
+        || lineage.issued(held),
     );
 
     let mut lineage = super::lineage();
-    lineage.issued(ops.mint());
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("an operation was issued that was never held")
-    );
+    let never = ops.mint();
+    inconsistent("an operation was issued that was never held", || {
+        lineage.issued(never)
+    });
 
     let (mut lineage, minted) = two();
     lineage.end(minted);
     let op = ops.mint();
-    lineage.0.hold(op, None, at(minted, 1));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("an operation was held on a lineage that is not live")
+    inconsistent(
+        "an operation was held on a lineage that is not live",
+        || lineage.0.hold(op, None, at(minted, 1)),
     );
 }
 
@@ -514,6 +508,74 @@ fn a_seal_a_pending_heal_waits_for_can_close_a_cycle() {
     assert_eq!(lineage.failures().len(), 0, "the heal took effect at 4");
 }
 
+/// A held write is part of the re-issue a heal waits for (DI-D-46): the releasing seal must reach
+/// it, and so waits for it to be released and complete.
+#[test]
+fn a_held_write_is_part_of_the_re_issue_a_heal_waits_for() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let lost = ops.push(&mut lineage, 3, A, DEFAULT);
+    lineage.completed(lost, FULL);
+    submitted(lineage.seal(3));
+    let token = tokens(lineage.flushed(3, A, Err(io::Error::from_raw_os_error(1117)))).remove(0);
+    let held = hold_write(&mut lineage, &mut ops, at(D, 8), at(minted, 1));
+    lineage
+        .resolve(vec![(token, Resolution::Heal)])
+        .expect("heal");
+
+    assert_eq!(seen(&submitted(lineage.seal(5))), [Seen::Blocked(5, 0)]);
+    assert_eq!(
+        lineage.failures().len(),
+        1,
+        "5 stops short of the held write at 8"
+    );
+    assert!(
+        quiet(&submitted(lineage.seal(8))),
+        "8 waits for the held write"
+    );
+
+    let due = submitted(lineage.0.seal(minted, 1));
+    assert_eq!(issue(&mut lineage, &due), [held.seq]);
+    lineage.completed(held, FULL);
+    assert_eq!(
+        seen(&lineage.flushed(8, A, Ok(()))),
+        [
+            Seen::Healed(0, vec![lost.seq], vec![]),
+            Seen::Durable(3),
+            Seen::Durable(5),
+            Seen::Durable(8),
+        ]
+    );
+}
+
+/// The cycle search follows the heal to the seal that releases it, not merely the first one made
+/// after it (DI-D-46). Here a seal through 5 was made after the heal; under "the first seal after
+/// it" reaching 3 would need only that, and pushing the write at `minted:1` would be accepted --
+/// a deadlock, since the seal through 10 that does release the heal waits for the held write at 8,
+/// which waits for `minted:1`.
+#[test]
+fn a_push_is_refused_when_the_seal_releasing_a_heal_closes_a_cycle() {
+    let (mut lineage, minted) = two();
+    let mut ops = Ops::new();
+    let lost = ops.push(&mut lineage, 3, A, DEFAULT);
+    lineage.completed(lost, FULL);
+    submitted(lineage.seal(3));
+    let token = tokens(lineage.flushed(3, A, Err(io::Error::from_raw_os_error(1117)))).remove(0);
+    let reissued = ops.push(&mut lineage, 10, A, DEFAULT);
+    lineage.completed(reissued, FULL);
+    lineage
+        .resolve(vec![(token, Resolution::Heal)])
+        .expect("heal");
+    submitted(lineage.seal(5));
+    hold_write(&mut lineage, &mut ops, at(D, 8), at(minted, 1));
+    submitted(lineage.seal(10));
+
+    assert_eq!(
+        lineage.write_cycle(at(minted, 1), at(D, 3)),
+        Some(vec![at(minted, 1), at(D, 3), at(D, 8), at(minted, 1)])
+    );
+}
+
 #[test]
 fn a_seal_the_quick_test_suspects_but_that_closes_no_cycle_is_accepted() {
     let (mut lineage, keys) = minted(2);
@@ -529,7 +591,6 @@ fn a_seal_the_quick_test_suspects_but_that_closes_no_cycle_is_accepted() {
     // the write at 7 needs m only through 3.
     assert!(quiet(&submitted(lineage.0.seal(m, 8))));
     lineage.completed(in_flight, FULL);
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]

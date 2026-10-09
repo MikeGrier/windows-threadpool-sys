@@ -25,12 +25,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   implementation implements. Each step reviews only what its decision row marks as the
   assistant's: where the engineer had already decided part of a row, that part is not reopened.
 
-- [ ] **DI-3.9.1** -- **[DI-D-34](DESIGN-NOTES.md#di-d-34)**, from `DI-3.2.4`: a failed flush and
-  an import as one transition; reach by declared flush domains, a domain no file declared reaching
-  only the undeclared files; what the core records of each write, and when an epoch passes the
-  mark; what abandon, heal and `resolve` do and answer; an internal inconsistency recorded on a
-  pool thread and asserted by the consumer's next `pop`; and the fault seam,
-  `fail_next_flush`, behind the `fault-injection` feature that every test build enables.
+- [x] **DI-3.9.1** -- The engineer confirmed DI-D-34 with three amendments: unmatched import domains reported, a heal released only by a seal reaching the re-issue, and inconsistencies panicked on where found. -> [completed 2026-10-08](COMPLETED-CHECKLIST.md#di-391)
 
 - [ ] **DI-3.9.2** -- **[DI-D-39](DESIGN-NOTES.md#di-d-39)**, from `DI-3.2.4.2`, less what
   [DI-D-42](DESIGN-NOTES.md#di-d-42) amended: `Marking { write, observed, kind }` with a

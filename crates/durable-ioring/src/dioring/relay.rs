@@ -118,8 +118,6 @@ pub(crate) struct Shut<E: EpochId + 'static, B, C, S> {
     pub(crate) held: Vec<HeldPush<E, B, C>>,
     /// What the caller read under the same lock.
     pub(crate) snapshot: S,
-    /// The core's first internal inconsistency, if any.
-    pub(crate) inconsistency: Option<&'static str>,
 }
 
 /// The state under dioring's lock.
@@ -219,11 +217,7 @@ impl<E: EpochId + 'static, B, C, K> Relay<E, B, C, K> {
         core.ready.clear();
         core.calls.clear();
         core.unpushed.clear();
-        Some(Shut {
-            held,
-            snapshot,
-            inconsistency: core.durability.inconsistency(),
-        })
+        Some(Shut { held, snapshot })
     }
 
     /// Wait, with the core's lock released, until every provider completion made has been
@@ -305,9 +299,10 @@ where
                         core.in_flight.remove(&file);
                     }
                     Some(count) => *count -= 1,
-                    None => core
-                        .durability
-                        .inconsistent("a completion for a file with nothing in flight"),
+                    None => core.durability.inconsistent(
+                        "a completion for a file with nothing in flight",
+                        format_args!("operation {id:?} on {file:?}"),
+                    ),
                 }
                 let outcome = match completion.result() {
                     // A transfer is never longer than the `u32` length it was pushed with.
@@ -541,9 +536,13 @@ where
         // Counted down even once the instance has ended, which is what ending waits for.
         match core.unanswered.checked_sub(1) {
             Some(left) => core.unanswered = left,
-            None => core
-                .durability
-                .inconsistent("a provider answered a completion never made"),
+            None => core.durability.inconsistent(
+                "a provider answered a completion never made",
+                format_args!(
+                    "lineage {}, seal {}, domain {:?}",
+                    call.lineage, call.seal, call.name
+                ),
+            ),
         }
         if core.unanswered == 0 {
             self.answered.notify_all();

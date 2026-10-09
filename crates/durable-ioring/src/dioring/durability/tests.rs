@@ -308,6 +308,22 @@ fn tokens(due: Due<u64, &'static str>) -> Vec<FailureToken> {
         .collect()
 }
 
+/// Run `change`, which must find the core's state inconsistent: it panics where it finds it, in
+/// every build, naming `what` (DI-D-46).
+fn inconsistent<R>(what: &str, change: impl FnOnce() -> R) {
+    let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(change)) else {
+        panic!("expected a panic naming {what:?}");
+    };
+    let text = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        text.contains(what) && text.contains("DI-D-46"),
+        "expected {what:?}, got {text:?}"
+    );
+}
+
 fn quiet(due: &Due<u64, &'static str>) -> bool {
     due.flushes.is_empty() && due.events.is_empty()
 }
@@ -338,20 +354,45 @@ fn a_new_lineage_has_sealed_nothing_and_every_epoch_is_open() {
 }
 
 #[test]
-fn an_inconsistency_is_recorded_for_the_consumer_to_assert_on_not_panicked_on() {
+fn an_inconsistency_panics_where_it_is_found_naming_what_was_in_hand() {
     let mut lineage = lineage();
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
-    assert!(quiet(&lineage.completed(write, FULL)));
-    assert_eq!(lineage.inconsistency(), None, "an ordinary completion");
-    assert!(quiet(&lineage.completed(write, FULL)));
-    assert_eq!(lineage.inconsistency(), Some("a write completed twice"));
+    assert!(
+        quiet(&lineage.completed(write, FULL)),
+        "an ordinary completion"
+    );
+    inconsistent("a write completed twice", || lineage.completed(write, FULL));
+    inconsistent(&format!("write {write:?} to {A:?}"), || {
+        lineage.completed(write, FULL)
+    });
 
     let mut lineage = self::lineage();
-    assert!(quiet(&lineage.flushed(1, A, Ok(()))));
+    inconsistent("a flush completed for a seal that does not exist", || {
+        lineage.flushed(1, A, Ok(()))
+    });
+}
+
+#[test]
+fn an_inconsistency_found_while_unwinding_does_not_panic_again() {
+    struct Completes<'a>(&'a mut Lineage, crate::ids::OpId);
+    impl Drop for Completes<'_> {
+        fn drop(&mut self) {
+            self.0.completed(self.1, FULL);
+        }
+    }
+    let mut lineage = lineage();
+    let write = Ops::new().push(&mut lineage, 1, A, DEFAULT);
+    lineage.completed(write, FULL);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _second = Completes(&mut lineage, write);
+        panic!("the test's own panic");
+    }));
+    let payload = unwound.expect_err("the test panicked");
     assert_eq!(
-        lineage.inconsistency(),
-        Some("a flush completed for a seal that does not exist")
+        payload.downcast_ref::<&str>().copied(),
+        Some("the test's own panic"),
+        "the panic in flight is the one reported, and the process did not abort"
     );
 }
 

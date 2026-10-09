@@ -55,7 +55,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// its failure -- `Cause::Provider`, or `Cause::ProviderAbandoned` for a completion dropped
     /// unanswered. Success covers what it completes; a failure is observed at once, and is the
     /// seal's answer. An answer for a lineage no longer live reports nothing, as a late flush does
-    /// (DI-D-42); one no request asked for is an inconsistency and changes nothing (DI-D-44).
+    /// (DI-D-42); one no request asked for is an inconsistency (DI-D-44, DI-D-46).
     pub(crate) fn provided(
         &mut self,
         lineage: Key,
@@ -95,7 +95,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 Ok(())
             });
         if let Err(what) = answered {
-            self.inconsistent(what);
+            self.inconsistent(
+                what,
+                format_args!("lineage {lineage}, seal {seal}, domain {domain:?}, {outcome:?}"),
+            );
             return due;
         }
         match outcome {

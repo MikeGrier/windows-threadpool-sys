@@ -16,7 +16,7 @@ use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    FileKey, FileOptions, ImportScope, Leftovers, LineageInfo, PushError, ReadOptions,
+    FileKey, FileOptions, ImportScope, Imported, Leftovers, LineageInfo, PushError, ReadOptions,
     RemoveFileError, Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage,
     WriteOptions,
 };
@@ -301,8 +301,9 @@ pub trait DurableRing {
     ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>>;
 
     /// Resolve one or more failures, each by its token: `Heal`, effective in each lineage the
-    /// failure holds when that lineage's first seal made after this call finishes successfully
-    /// (DI-D-41), or `Abandon`, effective at once (DI-D-12 (c)). The
+    /// failure holds when that lineage's first seal made after this call that reaches the highest
+    /// epoch the lineage had been pushed by then finishes successfully (DI-D-41, DI-D-46), or
+    /// `Abandon`, effective at once (DI-D-12 (c)). The
     /// call is validated whole and applied at one point in observation order.
     ///
     /// # Errors
@@ -315,6 +316,8 @@ pub trait DurableRing {
 
     /// Record a failure learned of outside the instance (DI-D-12 (h)). Its suspect set is built by
     /// the same rule as any other's, within `scope`, and its token arrives with its `Failed` entry.
+    /// The answer names the failure, and any domain the scope named that the instance has never
+    /// been given (DI-D-46).
     ///
     /// # Errors
     ///
@@ -323,7 +326,7 @@ pub trait DurableRing {
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<FailureIdOf<Self>, UnknownLineage<Self::Ids>>;
+    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>>;
 
     /// The unresolved failures, in the order they were observed.
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>>;

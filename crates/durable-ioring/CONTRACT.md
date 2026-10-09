@@ -314,12 +314,14 @@ ring reports, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`.
 
 - **Heal.** The consumer asserts it has re-issued what it needs, under tags above everything already
   sealed (guarantee 6 forces that). The heal takes effect **in each lineage the failure holds
-  separately**, when the commit of that lineage's **first seal made after the heal** completes
-  successfully -- so whatever was re-issued there before the heal is covered successfully later
-  ([DI-D-41](DESIGN-NOTES.md#di-d-41)). From then the failure no longer holds that lineage, whose
-  high-water mark may pass it. Once it holds none -- at once, for a failure that belongs to no
-  lineage -- it is resolved as healed, and a `Healed` entry reports it, before any `Durable` that
-  the last lineage's seal lets through. A lineage that ends no longer holds a heal back.
+  separately**, when that lineage's **first seal made after the heal that reaches the highest epoch
+  the lineage had been pushed by then** finishes with every part successful. That seal waits for
+  everything re-issued there before the heal, and commits it ([DI-D-41](DESIGN-NOTES.md#di-d-41),
+  [DI-D-46](DESIGN-NOTES.md#di-d-46)); a seal made after the heal that stops short of it releases
+  nothing. From then the failure no longer holds that lineage, whose high-water mark may pass it.
+  Once it holds none -- at once, for a failure that belongs to no lineage -- it is resolved as
+  healed, and a `Healed` entry reports it, before any `Durable` that the last lineage's seal lets
+  through. A lineage that ends no longer holds a heal back.
 - **Abandon.** The consumer declares the suspect writes lost. Takes effect immediately.
 - **Close.** The consumer sets the failure aside, unresolved; it stays in the inventory.
 
@@ -549,7 +551,7 @@ for offset in [0, 8, 16] {
 }
 // -> heal(F1)                                 // "I have re-issued what I need"
 ring.resolve(vec![(f1.token, Resolution::Heal)]).expect("heal");
-// -> make_durable_through(42)                 // the first seal after the heal
+// -> make_durable_through(42)                 // the first after the heal reaching the re-issue
 ring.make_durable_through(tag(42)).expect("a seal");
 // <- WriteDone(A') ; WriteDone(B') ; WriteDone(C')
 // <- Durable { through: 42 }                  // F1 healed; 41 and 42 durable
@@ -624,7 +626,7 @@ let r = ring.write(FILE, 16, vec![1; 8], tag(43), ()).expect("a write");
 // <- WriteDone(R)
 pop_until(&mut ring, |e| matches!(e, Entry::Op(done) if done.id == r));
 // -> import_failure()                         // the consumer learned of an outside failure
-let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance");
+let f2_id = ring.import_failure(ImportScope::All).expect("the whole instance").failure;
 // <- Failed { failure: F2, cause: Imported, suspect: [A@41, P@43, R@43] }
 let Entry::Failed(f2) = pop_until(&mut ring, |e| matches!(e, Entry::Failed(_))) else {
     unreachable!()
@@ -652,7 +654,8 @@ assert_eq!(ring.epoch_state(epoch(43)), Ok(EpochState::Durable));
 The second ending: **heal F1, abandon F2.** Epochs 41 and 43 both sit in F2, so both become
 **abandoned** -- one abandonment is enough -- even though F1 was healed. The high-water mark moves
 past them once every failure containing them is resolved: F2 at once, and F1 when its heal takes
-effect, at the first seal made after it. Any operation gated on 41 or 43 fails as never issued.
+effect, at the first seal made after it that reaches the re-issue. Any operation gated on 41 or 43
+fails as never issued.
 
 ```rust
 # use std::os::windows::io::OwnedHandle;

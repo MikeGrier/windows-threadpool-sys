@@ -8,7 +8,8 @@
 //! until it does. So "`L` reaching `y`" needs every held write of `L` up to the **extent** of `y`:
 //! the furthest epoch whose writes `L` must complete before its mark passes `y`. That is `y` itself,
 //! raised to the first seal at or above `y`, and -- while a healing failure holds an epoch of `L` at
-//! or below `y` -- to the seal its heal waits for (DI-D-41). A seal not yet made is no dependency:
+//! or below `y` -- to the seal its heal waits for: the first made after the heal that reaches the
+//! highest epoch `L` had been pushed then (DI-D-41, DI-D-46). A seal not yet made is no dependency:
 //! the seal that will cover `y` is checked when it is made, which is why a seal can be refused.
 //!
 //! **The search, flattened** (the engineer's direction, 2026-10-08: the success case fast, the
@@ -153,7 +154,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             let Standing::Healing { pending } = &failure.standing else {
                 continue;
             };
-            let Some(&after) = pending.get(&target.lineage) else {
+            let Some(release) = pending.get(&target.lineage) else {
                 continue;
             };
             let holds = failure.epochs.get(&target.lineage).is_some_and(|epochs| {
@@ -162,7 +163,11 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                     .next()
                     .is_some()
             });
-            if holds && let Some((_, through)) = seals.clone().find(|&(seq, _)| seq >= after) {
+            if holds
+                && let Some((_, through)) = seals
+                    .clone()
+                    .find(|&(seq, through)| release.by(seq, through))
+            {
                 extent = extent.max(through);
             }
         }
@@ -246,13 +251,18 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .as_ref()
             .is_none_or(|write| self.live(write.lineage).is_some());
         if !lineage_live || self.live(gate.lineage).is_none() {
-            self.inconsistent("an operation was held on a lineage that is not live");
+            let lineage = write.as_ref().map(|write| (write.lineage, write.epoch));
+            self.inconsistent(
+                "an operation was held on a lineage that is not live",
+                format_args!("operation {op:?}, written at {lineage:?}, gated on {gate:?}"),
+            );
             return;
         }
         if let Some(write) = &write {
             let state = self.lineages.get_mut(&write.lineage).expect("live");
             state.gated.insert((write.epoch, op.seq), gate);
             *state.held_by_epoch.entry(write.epoch).or_insert(0) += 1;
+            state.pushed_through = state.pushed_through.max(Some(write.epoch));
         }
         let state = self.lineages.get_mut(&gate.lineage).expect("live");
         state.waiting.insert((gate.epoch, op.seq));
@@ -279,10 +289,17 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 }
             }
             Some(held) => {
+                let gate = held.gate;
                 self.held.insert(op.seq, held);
-                self.inconsistent("an operation was issued before its gate was durable");
+                self.inconsistent(
+                    "an operation was issued before its gate was durable",
+                    format_args!("operation {op:?}, gated on {gate:?}"),
+                );
             }
-            None => self.inconsistent("an operation was issued that was never held"),
+            None => self.inconsistent(
+                "an operation was issued that was never held",
+                format_args!("operation {op:?}"),
+            ),
         }
     }
 

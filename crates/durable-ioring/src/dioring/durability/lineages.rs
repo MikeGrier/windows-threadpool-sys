@@ -55,7 +55,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             .get_mut(&lineage)
             .filter(|state| !state.ended && lineage != DEFAULT_LINEAGE)
         else {
-            self.inconsistent("an end of a lineage that is not live, or of the default");
+            self.inconsistent(
+                "an end of a lineage that is not live, or of the default",
+                format_args!("lineage {lineage}"),
+            );
             return due;
         };
         let durable = state.durable_through;
@@ -93,7 +96,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// it. The lineage must be live and not the default.
     pub(crate) fn retire(&mut self, lineage: Key) -> Result<(), LineageBusy<V<E>>> {
         let Some(state) = self.live(lineage).filter(|_| lineage != DEFAULT_LINEAGE) else {
-            self.inconsistent("a retire of a lineage that is not live, or of the default");
+            self.inconsistent(
+                "a retire of a lineage that is not live, or of the default",
+                format_args!("lineage {lineage}"),
+            );
             return Ok(());
         };
         let in_flight = state.in_flight_by_epoch.values().sum();

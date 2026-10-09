@@ -33,10 +33,10 @@ pub use provider::{DomainCompletion, DomainRequest, DurabilityProvider, FileWrit
 pub use types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
     EpochState, Failed, FailureInfo, FileBusy, FileKey, FileOptions, FlushDomain, HeldOperation,
-    ImportScope, Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion, OpKind,
-    Outcome, PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution, ResolveError,
-    ResolveRefusal, RetireLineageError, RetireLineageRefusal, SealError, SuspectSet, SuspectWrite,
-    Tag, UnknownLineage, WriteCaching, WriteOptions,
+    ImportScope, Imported, Leftovers, LineageBusy, LineageInfo, Marking, MarkingKind, OpCompletion,
+    OpKind, Outcome, PushError, PushRefusal, ReadOptions, RemoveFileError, Resolution,
+    ResolveError, ResolveRefusal, RetireLineageError, RetireLineageRefusal, SealError, SuspectSet,
+    SuspectWrite, Tag, UnknownLineage, WriteCaching, WriteOptions,
 };
 // The types the contract's signatures name from the crates it is built on, so a consumer needs no
 // direct dependency on them to call it.

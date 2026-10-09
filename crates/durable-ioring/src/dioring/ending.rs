@@ -11,9 +11,8 @@
 //! reaches the ring again; drops the consumer's provider, so a completion it keeps in itself is
 //! answered as abandoned rather than holding up the wait; waits, with the lock released, until
 //! every provider completion has been answered or dropped; and leaves the ring to the field drops
-//! that follow, whose rundown waits for every kernel operation. An internal inconsistency is
-//! traced under target `dioring`, and asserted only when the thread is not already unwinding
-//! (the ring crate's D-79).
+//! that follow, whose rundown waits for every kernel operation. An internal inconsistency is not
+//! looked for here: it is panicked on where it is found (DI-D-46).
 
 use std::collections::BTreeMap;
 
@@ -42,16 +41,6 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Dioring<B, E, C, R, K> {
         // the provider's drop, which would otherwise wait for the wait it holds up.
         self.provider = None;
         self.relay.wait_for_answers();
-        if let Some(what) = shut.inconsistency {
-            // No test reads this record back: the trace is enabled only by the environment, read
-            // once per process. The tests pin what surrounds it -- an assertion, except while
-            // unwinding.
-            windows_threadpool_sys::trace_record!("dioring", what);
-            debug_assert!(
-                std::thread::panicking(),
-                "dioring's durability state is inconsistent at its end: {what}"
-            );
-        }
         Some(shut)
     }
 }

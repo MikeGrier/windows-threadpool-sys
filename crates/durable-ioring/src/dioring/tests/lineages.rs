@@ -289,7 +289,8 @@ fn ending_a_lineage_a_heal_waits_for_reports_the_heal() {
     let id = harness
         .ring
         .import_failure(ImportScope::All)
-        .expect("import");
+        .expect("import")
+        .failure;
     let token = match harness.next_entry() {
         Entry::Failed(failed) => failed.token,
         other => panic!("expected Failed, got {other:?}"),

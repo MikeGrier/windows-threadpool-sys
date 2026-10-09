@@ -2720,6 +2720,40 @@ completion, and hung -- and those tests were the ones to change. Recorded in DI-
 confirmation, which the engineer gave as written: "di-3.2.8: confirmed!" With it DI-3.2 -- dioring
 over the ring crate, construction through ending -- is complete.
 
+## The assistant's decisions become review items (2026-10-08)
+
+The engineer answered the proposal: "yes please put them into the checklist". DI-3.9 queues one
+review per decision the assistant made while building DI-3.2 -- DI-D-34, -39, -42, -43 and -44 --
+placed before DI-3.3, and win-time-sys' WT-M3 the two of its own, WT-D-7 and WT-D-8.
+
+## DI-3.9.1: reviewing DI-D-34, point by point (2026-10-08)
+
+At the engineer's request ("explain di-3.9.1 in more details, and let's work through it step by
+step"), the assistant walked DI-D-34 in nine steps against the code as it stood, noting first that
+the row had gone stale without saying so: DI-D-41 and DI-D-42 had changed its heal and its
+lineage-scoped import, and it carried neither marker. Most steps were confirmed as built. Three
+were amended, and each is recorded in DI-D-46:
+
+- **Reach.** An imported domain no file declared is dropped, which is right under complete
+  declarations but makes a misspelling silent. The engineer: "I would prefer for it to report the
+  names but not if it's difficult" -- it was not, so `import_failure` now returns the names it
+  could not match.
+- **Heal.** Checking the rule against DI-D-41's own rationale found a gap: "the first seal made
+  after the heal" need not reach the re-issued writes, so a seal through 5 could release a heal
+  whose data went to 10, and a seal naming no write released one with no I/O at all. The engineer
+  chose option (b): the releasing seal must reach the highest epoch pushed when the heal was made.
+  The gate cycle search follows the same seal, and a test shows a cycle the old rule missed.
+- **Inconsistencies.** The assistant offered tracing, a query, or fail-stop for release builds,
+  and then deferring the panic to the consumer's next call. The engineer rejected the debug and
+  release split and the deferral alike: "panic where it's detected. Don't let the situation
+  persist", and, on a panic the process catches, "we still will panic again if the situation is
+  again detected" -- so there is no sticky state, and nothing is recorded at all.
+
+Two answers were incomplete, and the assistant said so rather than assume: the engineer had answered
+only one point of three, and then one question was garbled (C), which turned out to have been
+answered by step 4. On the fault seam the engineer agreed it serves a different purpose from
+DI-3.3, so no merge-or-delete decision is queued.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

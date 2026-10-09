@@ -24,8 +24,8 @@ use crate::provider::{
 };
 use crate::types::{
     AddFileError, Cause, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, Leftovers, LineageInfo, OpKind,
-    ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
+    FailureInfo, FileKey, FileOptions, FlushDomain, ImportScope, Imported, Leftovers, LineageInfo,
+    OpKind, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
@@ -456,6 +456,10 @@ where
     }
 }
 
+/// What an import reaches: the files, the one lineage it is confined to if any, and the domains it
+/// named that the instance has never been given.
+type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
+
 /// Where an instance's lineage handles report their release.
 fn home<T: Home + 'static>(relay: &Arc<T>) -> Weak<dyn Home> {
     let home: Weak<T> = Arc::downgrade(relay);
@@ -546,13 +550,6 @@ where
         // retry runs again at the next pop.
         let popped = {
             let mut core = self.relay.lock();
-            // Recorded on whichever thread observed it, usually a pool thread; asserted here, where
-            // a panic fails the consumer's call rather than aborting the process.
-            debug_assert!(
-                core.durability.inconsistency().is_none(),
-                "dioring's durability state is inconsistent: {:?}",
-                core.durability.inconsistency()
-            );
             let retried = self.settle(&mut core, Due::default());
             match (Relay::pop(&mut core), retried) {
                 (Some(entry), _) => Ok(Some(entry)),
@@ -703,14 +700,14 @@ where
     fn import_failure(
         &mut self,
         scope: ImportScope<Self::Ids>,
-    ) -> Result<FailureId, UnknownLineage<Self::Ids>> {
-        let (reach, only) = self.reach(&scope)?;
+    ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>> {
+        let (reach, only, unmatched) = self.reach(&scope)?;
         let mut core = self.relay.lock();
-        let (id, due) = core
+        let (failure, due) = core
             .durability
             .import(Cause::Imported { scope }, &reach, only);
         self.settle(&mut core, due);
-        Ok(id)
+        Ok(Imported { failure, unmatched })
     }
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
@@ -748,28 +745,31 @@ where
     R: IoBufMut,
     K: TimeBase,
 {
-    /// The files an imported failure reaches (DI-D-21), and the one lineage it is confined to, if
-    /// the scope names one. A domain no file was declared with reaches only the files declared
+    /// The files an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
+    /// scope names one, and the domains it names that the instance has never been given, in the
+    /// order named (DI-D-46). A domain no file was declared with reaches only the files declared
     /// with none.
     fn reach(
         &self,
         scope: &ImportScope<DioringIds<E>>,
-    ) -> Result<(Reach, Option<u64>), UnknownLineage<DioringIds<E>>> {
+    ) -> Result<ImportReach, UnknownLineage<DioringIds<E>>> {
         Ok(match scope {
-            ImportScope::All => (Reach::All, None),
+            ImportScope::All => (Reach::All, None, Vec::new()),
             ImportScope::Lineage(lineage) if self.is_live(*lineage) => {
-                (Reach::All, Some(lineage.seq))
+                (Reach::All, Some(lineage.seq), Vec::new())
             }
             ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
-            ImportScope::Domains(domains) => (
-                Reach::Domains(
-                    domains
-                        .iter()
-                        .filter_map(|domain| self.domains.get(domain).copied())
-                        .collect(),
-                ),
-                None,
-            ),
+            ImportScope::Domains(domains) => {
+                let mut known = Vec::with_capacity(domains.len());
+                let mut unmatched = Vec::new();
+                for domain in domains {
+                    match self.domains.get(domain) {
+                        Some(&id) => known.push(id),
+                        None => unmatched.push(domain.clone()),
+                    }
+                }
+                (Reach::Domains(known.into()), None, unmatched)
+            }
         })
     }
 

@@ -7,8 +7,8 @@ use std::io;
 use std::sync::Arc;
 
 use super::{
-    A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, lineage, quiet, seen,
-    submitted,
+    A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, inconsistent, lineage,
+    quiet, seen, submitted,
 };
 use crate::dioring::DomainId;
 use crate::dioring::durability::{
@@ -163,7 +163,6 @@ fn a_provider_success_makes_a_seal_it_alone_answers_for_durable() {
     assert_eq!(lineage.state(1), State::Pending);
     assert_eq!(seen(&succeeded(&mut lineage, seal, 1)), [Seen::Durable(1)]);
     assert_eq!(lineage.durable_through(), Some(1));
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -271,7 +270,6 @@ fn a_provider_failure_reaches_the_files_in_its_domain_and_every_unknown_file() {
     );
     assert_eq!(lineage.durable_through(), None);
     assert!(matches!(lineage.state(1), State::Blocked(by) if by.seq == 0));
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -304,14 +302,9 @@ fn a_minted_lineages_seal_asks_with_its_own_key() {
     lineage.completed(write, FULL);
     let asked = call(&submitted(lineage.0.seal(minted, 1))).clone();
     assert_eq!(asked.lineage, minted);
-    assert!(
-        quiet(&lineage.provided(DEFAULT_LINEAGE, asked.seal, DomainId(1), Ok(()))),
-        "the default lineage has no such seal"
-    );
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered for a seal that does not exist")
-    );
+    inconsistent("a provider answered for a seal that does not exist", || {
+        lineage.provided(DEFAULT_LINEAGE, asked.seal, DomainId(1), Ok(()))
+    });
     assert_eq!(
         seen(&lineage.provided(minted, asked.seal, DomainId(1), Ok(()))),
         [Seen::DurableIn(minted, 1)]
@@ -335,17 +328,12 @@ fn an_answer_for_a_lineage_that_has_ended_reports_nothing() {
     assert!(quiet(&lineage.provided(minted, seal, DomainId(1), failure)));
     assert!(
         lineage.failures().is_empty(),
-        "an ended lineage's answer is not observed"
-    );
-    assert_eq!(
-        lineage.inconsistency(),
-        None,
-        "it is late, not inconsistent"
+        "an ended lineage's answer is not observed: it is late, not inconsistent"
     );
 }
 
 #[test]
-fn an_answer_no_request_asked_for_is_recorded_as_an_inconsistency() {
+fn an_answer_no_request_asked_for_is_inconsistent() {
     let setup = || {
         let mut lineage = lineage();
         let mut ops = Ops::new();
@@ -357,17 +345,14 @@ fn an_answer_no_request_asked_for_is_recorded_as_an_inconsistency() {
     };
 
     let (mut lineage, seal, _) = setup();
-    assert!(quiet(&succeeded(&mut lineage, seal + 7, 1)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered for a seal that does not exist")
-    );
+    inconsistent("a provider answered for a seal that does not exist", || {
+        succeeded(&mut lineage, seal + 7, 1)
+    });
 
     let (mut lineage, seal, _) = setup();
-    assert!(quiet(&succeeded(&mut lineage, seal, 3)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered a domain the seal did not ask about")
+    inconsistent(
+        "a provider answered a domain the seal did not ask about",
+        || succeeded(&mut lineage, seal, 3),
     );
     assert_eq!(
         lineage.state(1),
@@ -377,12 +362,9 @@ fn an_answer_no_request_asked_for_is_recorded_as_an_inconsistency() {
 
     let (mut lineage, seal, _) = setup();
     assert!(quiet(&succeeded(&mut lineage, seal, 1)));
-    assert_eq!(lineage.inconsistency(), None);
-    assert!(quiet(&failed(&mut lineage, seal, 1)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered a domain twice")
-    );
+    inconsistent("a provider answered a domain twice", || {
+        failed(&mut lineage, seal, 1)
+    });
     assert!(
         lineage.failures().is_empty(),
         "the second answer is not observed"
@@ -395,18 +377,14 @@ fn an_answer_no_request_asked_for_is_recorded_as_an_inconsistency() {
     lineage.completed(later, FULL);
     let second = call(&submitted(lineage.seal(2))).seal;
     assert!(quiet(&succeeded(&mut lineage, second, 1)));
-    assert!(quiet(&succeeded(&mut lineage, second, 1)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered for a seal not flushing")
-    );
+    inconsistent("a provider answered for a seal not flushing", || {
+        succeeded(&mut lineage, second, 1)
+    });
 
     let (mut lineage, seal, _) = setup();
     succeeded(&mut lineage, seal, 1);
     assert_eq!(durable(&succeeded(&mut lineage, seal, 2)), [1]);
-    assert!(quiet(&succeeded(&mut lineage, seal, 2)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a provider answered for a seal that does not exist")
-    );
+    inconsistent("a provider answered for a seal that does not exist", || {
+        succeeded(&mut lineage, seal, 2)
+    });
 }

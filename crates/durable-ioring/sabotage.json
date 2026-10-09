@@ -354,8 +354,8 @@
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (c): only a seal made after the heal covers what was re-issued before it. Caught by the unit test whose seal predates the heal.",
-      "find": ["                        && pending.get(&lineage).is_some_and(|&after| after <= seq)\n"],
-      "replace": ["                        && pending.contains_key(&lineage)\n"]
+      "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
+      "replace": ["        self.through.is_none_or(|reach| through >= reach)\n"]
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
@@ -698,8 +698,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
-      "find": ["                (Reach::All, Some(lineage.seq))\n"],
-      "replace": ["                (Reach::All, None)\n"]
+      "find": ["                (Reach::All, Some(lineage.seq), Vec::new())\n"],
+      "replace": ["                (Reach::All, None, Vec::new())\n"]
     },
     {
       "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
@@ -881,9 +881,9 @@
       "name": "DI-3.2.5.2: a pending heal does not widen what reaching an epoch needs",
       "file": "src/dioring/durability/gates.rs",
       "expect": "caught",
-      "why": "DI-D-23 and DI-D-41: a healing failure holds its epochs until the first seal made after the heal finishes, so reaching them waits for that seal however far it reaches. Caught by the core test of the seal a pending heal waits for.",
-      "find": ["            if holds && let Some((_, through)) = seals.clone().find(|&(seq, _)| seq >= after) {\n"],
-      "replace": ["            if false && holds && let Some((_, through)) = seals.clone().find(|&(seq, _)| seq >= after) {\n"]
+      "why": "DI-D-23, DI-D-41 and DI-D-46: a healing failure holds its epochs until the seal that releases it finishes, so reaching them waits for that seal however far it reaches. Caught by the core tests of the seal a pending heal waits for.",
+      "find": ["            if holds\n                && let Some((_, through)) = seals\n"],
+      "replace": ["            if false\n                && holds\n                && let Some((_, through)) = seals\n"]
     },
     {
       "name": "DI-3.2.5.2: the seal being considered is left out",
@@ -1238,20 +1238,52 @@
       "replace": [""]
     },
     {
-      "name": "DI-3.2.7: an inconsistency at the end is never asserted",
-      "file": "src/dioring/ending.rs",
+      "name": "DI-3.9.1: a heal is released by a seal that stops short of the re-issue",
+      "file": "src/dioring/durability.rs",
       "expect": "caught",
-      "why": "DI-D-25 traces rather than panics only while unwinding; otherwise an inconsistency found at the end is a defect a debug build reports, as pop does.",
-      "find": ["                std::thread::panicking(),\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"],
-      "replace": ["                true,\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"]
+      "why": "DI-D-46: the releasing seal must reach the highest epoch pushed when the heal was made, or the mark passes the failed epoch while the re-issued writes are not committed.",
+      "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
+      "replace": ["        seq >= self.after\n"]
     },
     {
-      "name": "DI-3.2.7: an inconsistency at the end panics while unwinding",
-      "file": "src/dioring/ending.rs",
+      "name": "DI-3.9.1: a write in flight is not part of the re-issue",
+      "file": "src/dioring/durability.rs",
       "expect": "caught",
-      "why": "DI-D-25 and the ring crate's D-79: a second panic while unwinding aborts the process, losing the panic already in flight. The test binary aborts, which the harness counts as caught.",
-      "find": ["                std::thread::panicking(),\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"],
-      "replace": ["                false,\n                \"dioring's durability state is inconsistent at its end: {what}\"\n"]
+      "why": "DI-D-46: the re-issue is every write pushed before the heal. Without the pushed one, a seal short of it releases the heal.",
+      "find": ["        state.pushed_through = state.pushed_through.max(Some(epoch));\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.9.1: a held write is not part of the re-issue",
+      "file": "src/dioring/durability/gates.rs",
+      "expect": "caught",
+      "why": "DI-D-46: a held write counts as pushed, so the releasing seal waits for it to be released and complete.",
+      "find": ["            state.pushed_through = state.pushed_through.max(Some(write.epoch));\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.9.1: an unmatched import domain is not reported",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
+      "find": ["                        None => unmatched.push(domain.clone()),\n"],
+      "replace": ["                        None => {}\n"]
+    },
+    {
+      "name": "DI-3.9.1: an inconsistency is not panicked on",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-46: an inconsistency is panicked on where it is found, in every build; carrying on would report from bookkeeping known to be wrong.",
+      "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
+      "replace": ["    if false {\n        panic!(\n"]
+    },
+    {
+      "name": "DI-3.9.1: an inconsistency panics while unwinding",
+      "file": "src/dioring/durability.rs",
+      "expect": "caught",
+      "why": "DI-D-46 and the ring crate's D-79: a second panic while unwinding aborts the process and loses the first. The test binary aborts, which the harness counts as caught.",
+      "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
+      "replace": ["    if true {\n        panic!(\n"]
     }
   ]
 }

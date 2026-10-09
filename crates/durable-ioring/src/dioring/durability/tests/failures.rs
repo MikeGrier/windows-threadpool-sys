@@ -267,9 +267,48 @@ fn a_failure_observed_after_a_later_seal_finished_answers_it_blocked() {
     );
 }
 
+/// The seal releasing a heal must reach the highest epoch pushed when the heal was made, where the
+/// re-issued writes are (DI-D-46): one made after the heal that stops short -- here, one naming no
+/// write at all -- answers `Blocked` and releases nothing.
+#[test]
+fn a_heal_waits_for_a_seal_that_reaches_the_re_issue() {
+    let mut lineage = lineage();
+    let mut ops = Ops::new();
+    let lost = ops.push(&mut lineage, 3, A, DEFAULT);
+    lineage.completed(lost, FULL);
+    submitted(lineage.seal(3));
+    let token = tokens(lineage.flushed(3, A, failed())).remove(0);
+    let reissued = ops.push(&mut lineage, 10, A, DEFAULT);
+    lineage.completed(reissued, FULL);
+    lineage
+        .resolve(vec![(token, Resolution::Heal)])
+        .expect("heal");
+
+    let short = submitted(lineage.seal(5));
+    assert!(short.flushes.is_empty(), "nothing at or below 5 to flush");
+    assert_eq!(
+        seen(&short),
+        [Seen::Blocked(5, 0)],
+        "5 stops short of the re-issue at 10, so the heal still holds 3"
+    );
+    assert_eq!(lineage.failures().len(), 1);
+
+    assert_eq!(submitted(lineage.seal(10)).flushes, [flush(10, A)]);
+    assert_eq!(
+        seen(&lineage.flushed(10, A, Ok(()))),
+        [
+            Seen::Healed(0, vec![lost.seq], vec![]),
+            Seen::Durable(3),
+            Seen::Durable(5),
+            Seen::Durable(10),
+        ],
+        "10 commits the re-issue, and releases the heal"
+    );
+}
+
 /// CONTRACT.md's "Healing a failure", without I/O.
 #[test]
-fn a_heal_takes_effect_at_the_first_seal_after_it() {
+fn a_heal_takes_effect_at_the_first_seal_after_it_that_reaches_the_re_issue() {
     let mut lineage = lineage();
     let mut ops = Ops::new();
     for file in [A, B, C] {

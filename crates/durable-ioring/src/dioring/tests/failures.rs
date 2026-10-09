@@ -218,23 +218,75 @@ fn an_import_suspects_what_its_scope_reaches() {
         Err(UnknownLineage(foreign)),
         "a lineage the instance cannot answer for is refused, and nothing is recorded"
     );
+    let disk_2 = super::domain("disk-2");
     let cases = [
-        (ImportScope::All, vec![0, 1]),
-        (ImportScope::Lineage(lineage), vec![0, 1]),
-        (ImportScope::Domains(vec![super::domain("disk-2")]), vec![1]),
+        (ImportScope::All, vec![0, 1], vec![]),
+        (ImportScope::Lineage(lineage), vec![0, 1], vec![]),
+        (
+            ImportScope::Domains(vec![disk_2.clone()]),
+            vec![1],
+            vec![disk_2],
+        ),
         (
             ImportScope::Domains(vec![super::domain("disk-1")]),
             vec![0, 1],
+            vec![],
         ),
     ];
-    for (scope, expected) in cases {
-        let id = harness.ring.import_failure(scope.clone()).expect("import");
+    for (scope, expected, unmatched) in cases {
+        let imported = harness.ring.import_failure(scope.clone()).expect("import");
+        assert_eq!(imported.unmatched, unmatched, "{scope:?}");
         let failed = next_failed(&mut harness);
-        assert_eq!(failed.id, id);
+        assert_eq!(failed.id, imported.failure);
         assert!(matches!(failed.cause, Cause::Imported { scope: ref s } if *s == scope));
         assert_eq!(suspects(&failed), expected, "{scope:?}");
     }
     assert_eq!(harness.ring.failures().len(), 4);
+    harness.finish();
+}
+
+/// A name the instance has never been given reaches only the files declared with none -- right
+/// when declarations are complete -- and is reported, so a misspelling is not silent (DI-D-46).
+#[test]
+fn an_imported_domain_the_instance_was_never_given_is_reported_and_reaches_the_unknown_files() {
+    let (log, data) = (temp(&[0; 16]), temp(&[0; 16]));
+    let ring = Ring::new(setup(
+        vec![file(GIVEN.0, &log, &["disk-1"]), file(ADDED.0, &data, &[])],
+        Vec::new(),
+        None,
+    ))
+    .expect("an instance with a declared and an unknown file")
+    .0;
+    let mut harness = Harness::new(ring);
+    harness.write(GIVEN, 0, b"log", 1, 1);
+    harness.write(ADDED, 0, b"data", 1, 2);
+    harness.next_n(2);
+    let named = vec![
+        super::domain("disk-l"),
+        super::domain("disk-1"),
+        super::domain("disk-9"),
+    ];
+    let imported = harness
+        .ring
+        .import_failure(ImportScope::Domains(named))
+        .expect("import");
+    assert_eq!(
+        imported.unmatched,
+        [super::domain("disk-l"), super::domain("disk-9")],
+        "in the order named; disk-1 matched"
+    );
+    assert_eq!(suspects(&next_failed(&mut harness)), [0, 1]);
+
+    let only_unknown = harness
+        .ring
+        .import_failure(ImportScope::Domains(vec![super::domain("disk-l")]))
+        .expect("import");
+    assert_eq!(only_unknown.unmatched, [super::domain("disk-l")]);
+    assert_eq!(
+        suspects(&next_failed(&mut harness)),
+        [1],
+        "only the file declared with none"
+    );
     harness.finish();
 }
 

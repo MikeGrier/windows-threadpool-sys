@@ -1651,3 +1651,16 @@ Each step is archived above under its own anchor. The item as written:
   `&self` form to `EntryDelivery`'s `DeliveryHandle`** ([DI-D-32](DESIGN-NOTES.md#di-d-32)): the
   handle mirrors those operations rather than lending the instance, so nothing adds them for it.
   `pop` and `readiness` stay off it.
+
+## Moved 2026-10-08 20:42:29 -04:00 -- DI-3.9.1: the review of DI-D-34
+
+### <a id="di-391"></a>DI-3.9.1 -- The engineer confirmed DI-D-34 with three amendments: unmatched import domains reported, a heal released only by a seal reaching the re-issue, and inconsistencies panicked on where found. *(completed 2026-10-08 20:42:29 -04:00)*
+
+The review, point by point, and the amendments it made are [DI-D-46](DESIGN-NOTES.md#di-d-46). The item as written:
+
+**[DI-D-34](DESIGN-NOTES.md#di-d-34)**, from `DI-3.2.4`: a failed flush and
+  an import as one transition; reach by declared flush domains, a domain no file declared reaching
+  only the undeclared files; what the core records of each write, and when an epoch passes the
+  mark; what abandon, heal and `resolve` do and answer; an internal inconsistency recorded on a
+  pool thread and asserted by the consumer's next `pop`; and the fault seam,
+  `fail_next_flush`, behind the `fault-injection` feature that every test build enables.

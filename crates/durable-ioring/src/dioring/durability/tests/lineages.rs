@@ -5,8 +5,8 @@
 //! each, and heals in each separately.
 
 use super::{
-    A, B, DEFAULT, FAILED, FULL, IO_DEVICE, Lineage, Ops, Seen, flush, flush_of, lineage, quiet,
-    seen, submitted, tokens,
+    A, B, DEFAULT, FAILED, FULL, IO_DEVICE, Lineage, Ops, Seen, flush, flush_of, inconsistent,
+    lineage, quiet, seen, submitted, tokens,
 };
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
@@ -152,7 +152,6 @@ fn ending_abandons_everything_not_yet_durable_and_absorbs_its_flushes() {
         quiet(&lineage.0.flushed(minted, 2, A, Ok(()))),
         "the seal's flush answers nothing"
     );
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -176,7 +175,6 @@ fn a_flush_answering_while_an_ended_lineage_drains_reports_nothing() {
         quiet(&lineage.0.flushed(minted, 2, B, Ok(()))),
         "nor does one the seal never issued"
     );
-    assert_eq!(lineage.inconsistency(), None);
     assert!(quiet(&lineage.completed(in_flight, FULL)));
     assert!(!recorded(&lineage, minted));
 }
@@ -207,7 +205,6 @@ fn a_write_in_flight_at_the_end_is_let_go_and_the_lineage_retires_with_it() {
     assert!(!lineage.is_live(minted), "and not live while it drains");
     assert!(quiet(&lineage.completed(write, FULL)));
     assert!(!recorded(&lineage, minted), "retired with its last write");
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -299,7 +296,6 @@ fn retiring_is_refused_while_anything_holds_the_lineage() {
     assert!(!lineage.is_live(minted));
     assert!(!recorded(&lineage, minted));
     assert_eq!(lineage.lineages().len(), 1);
-    assert_eq!(lineage.inconsistency(), None);
 }
 
 #[test]
@@ -460,37 +456,31 @@ fn abandoning_a_failure_spanning_two_lineages_abandons_its_epochs_in_each() {
 }
 
 #[test]
-fn a_change_to_a_lineage_that_is_not_live_is_recorded_as_an_inconsistency() {
+fn a_change_to_a_lineage_that_is_not_live_is_inconsistent() {
     let (mut lineage, minted) = two();
     lineage.end(minted);
     let mut ops = Ops::new();
-    ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[]);
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a write was pushed to a lineage that is not live")
-    );
+    inconsistent("a write was pushed to a lineage that is not live", || {
+        ops.push_to(&mut lineage, minted, 1, A, DEFAULT, &[])
+    });
 
     let (mut lineage, _) = two();
-    assert!(quiet(&lineage.end(DEFAULT_LINEAGE)));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("an end of a lineage that is not live, or of the default")
+    inconsistent(
+        "an end of a lineage that is not live, or of the default",
+        || lineage.end(DEFAULT_LINEAGE),
     );
     assert!(lineage.is_live(DEFAULT_LINEAGE), "the default does not end");
 
     let (mut lineage, _) = two();
-    assert!(lineage.retire(DEFAULT_LINEAGE).is_ok());
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a retire of a lineage that is not live, or of the default")
+    inconsistent(
+        "a retire of a lineage that is not live, or of the default",
+        || lineage.retire(DEFAULT_LINEAGE),
     );
     assert!(lineage.is_live(DEFAULT_LINEAGE));
 
     let (mut lineage, minted) = two();
     lineage.end(minted);
-    assert!(quiet(&submitted(lineage.0.seal(minted, 1))));
-    assert_eq!(
-        lineage.inconsistency(),
-        Some("a seal of a lineage that is not live")
-    );
+    inconsistent("a seal of a lineage that is not live", || {
+        lineage.0.seal(minted, 1)
+    });
 }

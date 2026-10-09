@@ -14,8 +14,8 @@ use crate::contract::{DurableRing, EntryOf, PushResult};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, LineageHandle, OpId};
 use crate::types::{
     AddFileError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch, EpochState,
-    FailureInfo, FileKey, FileOptions, ImportScope, Leftovers, LineageInfo, OpCompletion, OpKind,
-    Outcome, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
+    FailureInfo, FileKey, FileOptions, ImportScope, Imported, Leftovers, LineageInfo, OpCompletion,
+    OpKind, Outcome, ReadOptions, RemoveFileError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
@@ -192,7 +192,7 @@ impl DurableRing for Fake {
         unimplemented!("the fake observes no failures")
     }
 
-    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<FailureId, UnknownLineage<V>> {
+    fn import_failure(&mut self, _scope: ImportScope<V>) -> Result<Imported<V>, UnknownLineage<V>> {
         unimplemented!("the fake observes no failures")
     }
 

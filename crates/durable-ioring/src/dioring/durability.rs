@@ -29,8 +29,12 @@
 //! one transition with the cause as data (DI-1.2 Q4). A failure belongs to every lineage it
 //! suspects a write of, and holds each: an epoch passes its lineage's mark only when no failure
 //! holds it. Abandoning makes its epochs abandoned at once. A heal takes effect per lineage
-//! (DI-D-41): the failure stops holding lineage L once L's first seal made after the heal finishes
-//! with every flush successful, and is healed once it holds none.
+//! (DI-D-41, DI-D-46): the failure stops holding lineage L once L's first seal made after the heal
+//! that reaches the highest epoch L had been pushed then finishes with every part successful, and
+//! is healed once it holds none.
+//!
+//! **Inconsistencies** (DI-D-46). A state the core cannot be in is traced and panicked on where it
+//! is found, in every build; see [`inconsistent`].
 //!
 //! **Markings** (DI-D-36, DI-D-39). A suspect set never gains a write, but its failure records
 //! what happens to its writes afterwards: a suspect write that completes failed or short, and one
@@ -49,6 +53,7 @@
 //! its own reach: the files whose declared domains contain it, and every file declared with none.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 use std::io;
 use std::ops::Bound;
 use std::sync::Arc;
@@ -350,13 +355,31 @@ struct Seal<E> {
 }
 
 /// Where an unresolved failure stands.
-enum Standing {
+enum Standing<E> {
     /// Open to resolution; the flag is its token's, set while the token is live.
     Open(Arc<AtomicBool>),
-    /// Healed, and still holding the lineages named here, each until its seal with this sequence
-    /// number or later finishes successfully (DI-D-41). Healed once it names none. The heal holds
-    /// the token, so the inventory does not hand out another.
-    Healing { pending: BTreeMap<Key, u64> },
+    /// Healed, and still holding the lineages named here, each until its [`Release`] (DI-D-41,
+    /// DI-D-46). Healed once it names none. The heal holds the token, so the inventory does not
+    /// hand out another.
+    Healing { pending: BTreeMap<Key, Release<E>> },
+}
+
+/// What releases a healing failure from one lineage (DI-D-41, DI-D-46): the lineage's first seal
+/// made after the heal -- numbered `after` or later -- that reaches `through`, the highest epoch
+/// the lineage had been pushed when it was healed, finishing with every part successful. The
+/// consumer re-issues before it heals (DI-D-12 (c)), so every re-issued write is at or below
+/// `through`, and that seal waits for and commits them. `None` when nothing had been pushed.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Release<E> {
+    after: u64,
+    through: Option<E>,
+}
+
+impl<E: Ord + Copy> Release<E> {
+    /// Whether seal `seq` through `through`, finished successfully, releases the heal.
+    pub(super) fn by(&self, seq: u64, through: E) -> bool {
+        seq >= self.after && self.through.is_none_or(|reach| through >= reach)
+    }
 }
 
 struct Failure<E: EpochId + 'static> {
@@ -367,7 +390,7 @@ struct Failure<E: EpochId + 'static> {
     markings: Vec<Marking<V<E>>>,
     /// The epochs of its suspect writes, by lineage: the lineages it belongs to.
     epochs: BTreeMap<Key, BTreeSet<E>>,
-    standing: Standing,
+    standing: Standing<E>,
 }
 
 impl<E: EpochId + 'static> Failure<E> {
@@ -401,6 +424,9 @@ struct LineageState<E> {
     /// This lineage's held writes, ready or not, by epoch: a seal waits for them as it does for
     /// writes in flight (guarantee 5).
     held_by_epoch: BTreeMap<E, usize>,
+    /// The highest epoch of any write pushed in this lineage, held or not: where a heal's
+    /// [`Release`] must reach.
+    pushed_through: Option<E>,
 }
 
 impl<E: EpochId> LineageState<E> {
@@ -417,6 +443,7 @@ impl<E: EpochId> LineageState<E> {
             gated: BTreeMap::new(),
             waiting: BTreeSet::new(),
             held_by_epoch: BTreeMap::new(),
+            pushed_through: None,
         }
     }
 
@@ -466,10 +493,6 @@ pub(crate) struct Durability<E: EpochId + 'static, T, K = InterruptClock> {
     held: BTreeMap<u64, HeldOp<E, T>>,
     /// The domains the consumer's provider serves, sorted; empty without one.
     served: Arc<[DomainId]>,
-    /// The first internal inconsistency observed. Recorded rather than asserted, because most
-    /// changes arrive on a pool thread, where a panic aborts the process and names no test; the
-    /// consumer's next `pop` asserts on it instead, on the consumer's own thread.
-    inconsistency: Option<&'static str>,
     clock: K,
 }
 
@@ -487,21 +510,34 @@ impl<E: EpochId + 'static, T, K> Durability<E, T, K> {
             next_failure: 0,
             held: BTreeMap::new(),
             served: Arc::from([]),
-            inconsistency: None,
             clock,
         }
     }
 
-    /// The first internal inconsistency observed, if any. Readable without a clock, so an ending
-    /// instance can report it from `Drop`.
-    pub(crate) fn inconsistency(&self) -> Option<&'static str> {
-        self.inconsistency
+    /// This instance's state is inconsistent: see [`inconsistent`].
+    #[cold]
+    #[track_caller]
+    pub(crate) fn inconsistent(&self, what: &'static str, detail: fmt::Arguments<'_>) {
+        inconsistent(self.instance, what, detail);
     }
+}
 
-    /// Record `what` as an internal inconsistency, unless one is already recorded. The relay records
-    /// its own here too, so the consumer's next `pop` asserts on every kind.
-    pub(crate) fn inconsistent(&mut self, what: &'static str) {
-        self.inconsistency.get_or_insert(what);
+/// `instance` found its own state inconsistent -- in a state it cannot be in -- which is a defect in
+/// dioring, or the kernel breaking its contract, never the consumer's input (DI-D-46). Traced under
+/// target `dioring`, then panicked on where it was found, in every build, with `detail` naming
+/// what was in hand: the bookkeeping is wrong, and nothing reported afterwards could be trusted.
+/// On a pool thread the panic aborts the process. While the thread is already unwinding it is
+/// traced only, because a second panic would abort and lose the first; the caller then leaves the
+/// state as it found it.
+#[cold]
+#[track_caller]
+pub(crate) fn inconsistent(instance: InstanceId, what: &'static str, detail: fmt::Arguments<'_>) {
+    windows_threadpool_sys::trace_record!("dioring", what);
+    if !std::thread::panicking() {
+        panic!(
+            "dioring instance {instance:?} found its own state inconsistent: {what} ({detail}). \
+             This is a defect in dioring, or the kernel broke its contract (DI-D-46)."
+        );
     }
 }
 
@@ -591,7 +627,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             len,
         } = write;
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
-            self.inconsistent("a write was pushed to a lineage that is not live");
+            self.inconsistent(
+                "a write was pushed to a lineage that is not live",
+                format_args!("write {op:?} to {file:?}, lineage {lineage}, epoch {epoch:?}"),
+            );
             return;
         };
         debug_assert!(
@@ -599,6 +638,7 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
             "a write at or below the seal"
         );
         *state.in_flight_by_epoch.entry(epoch).or_insert(0) += 1;
+        state.pushed_through = state.pushed_through.max(Some(epoch));
         self.writes.insert(
             op.seq,
             Write {
@@ -623,11 +663,22 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     pub(crate) fn completed(&mut self, op: OpId, end: WriteEnd) -> Due<E, T> {
         let mut due = Due::default();
         let Some(write) = self.writes.get_mut(&op.seq) else {
-            self.inconsistent("a write completed that was never recorded as pushed");
+            self.inconsistent(
+                "a write completed that was never recorded as pushed",
+                format_args!("write {op:?}, ending {end:?}"),
+            );
             return due;
         };
         if write.stage != Stage::InFlight {
-            self.inconsistent("a write completed twice");
+            let (file, lineage, epoch, stage) =
+                (write.file, write.lineage, write.epoch, write.stage);
+            self.inconsistent(
+                "a write completed twice",
+                format_args!(
+                    "write {op:?} to {file:?}, lineage {lineage}, epoch {epoch:?}, already \
+                     {stage:?}, ending {end:?}"
+                ),
+            );
             return due;
         }
         let (lineage, epoch, len) = (write.lineage, write.epoch, write.len);
@@ -664,7 +715,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     /// Seal every epoch of `lineage` at or below `through` (DI-D-9). The lineage must be live.
     pub(crate) fn seal(&mut self, lineage: Key, through: E) -> Sealing<E, T> {
         let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {
-            self.inconsistent("a seal of a lineage that is not live");
+            self.inconsistent(
+                "a seal of a lineage that is not live",
+                format_args!("lineage {lineage}, through {through:?}"),
+            );
             return Sealing::Submitted(Due::default());
         };
         if state.sealed_through.is_some_and(|sealed| through <= sealed) {
@@ -708,7 +762,12 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         let (seq, domains) = match answered {
             Ok(answered) => answered,
             Err(what) => {
-                self.inconsistent(what);
+                self.inconsistent(
+                    what,
+                    format_args!(
+                        "lineage {lineage}, seal through {through:?}, file {file:?}, {result:?}"
+                    ),
+                );
                 return due;
             }
         };
@@ -758,7 +817,10 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
         for (token, resolution) in items {
             // A live token's failure is unresolved: resolving it consumed its only other token.
             let Some(index) = self.failures.iter().position(|f| f.id == token.id) else {
-                self.inconsistent("a live token for a failure not in the inventory");
+                self.inconsistent(
+                    "a live token for a failure not in the inventory",
+                    format_args!("failure {:?}, {resolution:?}", token.id),
+                );
                 continue;
             };
             match resolution {
@@ -782,10 +844,13 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                         .epochs
                         .keys()
                         .filter_map(|key| {
-                            lineages
-                                .get(key)
-                                .filter(|state| !state.ended)
-                                .map(|state| (*key, state.next_seal))
+                            lineages.get(key).filter(|state| !state.ended).map(|state| {
+                                let release = Release {
+                                    after: state.next_seal,
+                                    through: state.pushed_through,
+                                };
+                                (*key, release)
+                            })
                         })
                         .collect();
                     self.failures[index].standing = Standing::Healing { pending };
@@ -1097,8 +1162,8 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
     }
 
     /// Mark every seal of `lineage` whose flushes have all answered as done. One whose flushes all
-    /// succeeded makes every heal made before it effective in this lineage (DI-D-41); a failure is
-    /// healed once that has happened in every lineage it held.
+    /// succeeded releases, in this lineage, every heal it is the [`Release`] of (DI-D-41, DI-D-46);
+    /// a failure is healed once that has happened in every lineage it held.
     fn finish_seals(&mut self, lineage: Key) {
         let Some(state) = self.lineages.get_mut(&lineage) else {
             return;
@@ -1116,12 +1181,14 @@ impl<E: EpochId + 'static, T: Clone, K: TimeBase> Durability<E, T, K> {
                 continue;
             }
             let succeeded = !*failed;
-            let seq = seal.seq;
+            let (seq, through) = (seal.seq, seal.through);
             seal.stage = SealStage::Done { succeeded };
             if succeeded {
                 for failure in &mut self.failures {
                     if let Standing::Healing { pending } = &mut failure.standing
-                        && pending.get(&lineage).is_some_and(|&after| after <= seq)
+                        && pending
+                            .get(&lineage)
+                            .is_some_and(|release| release.by(seq, through))
                     {
                         pending.remove(&lineage);
                     }

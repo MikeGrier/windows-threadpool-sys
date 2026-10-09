@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Mike Grier
 //! Ending (DI-3.2.7, DI-D-25, DI-D-45), against real files: removing a file, refused with every
-//! hold reported at once; and ending an instance, `close()` handing back what is left, both it and
-//! drop waiting for the consumer's provider, and an inconsistency found at the end asserted only
-//! when the thread is not already unwinding.
+//! hold reported at once; and ending an instance, `close()` handing back what is left, and both it
+//! and drop waiting for the consumer's provider. Also an inconsistency the relay finds, which it
+//! panics on where it finds it (DI-D-46).
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +15,8 @@ use super::gates::{expect_durable, read_gated, two, write_gated};
 use super::pushes::{ADDED, BOUND, GIVEN, Harness, Ring, given, instance, temp};
 use super::{FlushDomain, FlushRequest, V, domain, empty, file, keeper, setup};
 use crate::contract::{DurableRing, RegisteredBufferRing};
-use crate::provider::DurabilityProvider;
+use crate::dioring::DomainId;
+use crate::provider::{Answer, DomainCall, DomainOutcome, DurabilityProvider};
 use crate::types::{
     DurabilityRequest, Entry, Epoch, Failed, FileBusy, FileKey, OpKind, PushRefusal,
     RemoveFileError, Resolution, WriteOptions,
@@ -407,34 +408,28 @@ fn ending_does_not_wait_for_completions_the_provider_keeps_in_itself() {
     );
 }
 
-#[cfg(debug_assertions)]
 #[test]
-fn an_inconsistency_found_at_the_end_is_asserted_when_not_unwinding() {
+fn an_answer_for_a_completion_never_made_panics_naming_it() {
     let ring = empty();
-    ring.relay
-        .lock()
-        .durability
-        .inconsistent("injected by the test");
-    let ended = panic::catch_unwind(AssertUnwindSafe(|| drop(ring)));
-    let payload = ended.expect_err("the end asserts");
-    let text = message(payload.as_ref());
-    assert!(text.contains("injected by the test"), "{text}");
-}
-
-#[test]
-fn an_inconsistency_found_at_the_end_does_not_panic_again_while_unwinding() {
-    let unwound = panic::catch_unwind(|| {
-        let ring = empty();
-        ring.relay
-            .lock()
-            .durability
-            .inconsistent("injected by the test");
-        panic!("the test's own panic");
-    });
-    let payload = unwound.expect_err("the test panicked");
-    assert_eq!(
-        message(payload.as_ref()),
-        "the test's own panic",
-        "the panic in flight is the one reported, and the process did not abort"
+    let call = DomainCall {
+        lineage: 0,
+        seal: 7,
+        domain: DomainId(3),
+        name: domain("log"),
+    };
+    let found = panic::catch_unwind(AssertUnwindSafe(|| {
+        Answer::answer(&*ring.relay, &call, DomainOutcome::Succeeded);
+    }));
+    let text = message(
+        found
+            .expect_err("the relay panics where it finds it")
+            .as_ref(),
     );
+    assert!(
+        text.contains("a provider answered a completion never made")
+            && text.contains("seal 7")
+            && text.contains("DI-D-46"),
+        "{text}"
+    );
+    drop(ring);
 }
