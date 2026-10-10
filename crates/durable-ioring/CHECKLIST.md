@@ -87,14 +87,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.1** -- The target and backend traits: `IoTarget` and its description, `IoBackend` with the core's submission and completion shapes and the typed `RefusalCause`, and a minimal in-memory backend and target. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310351)
 
-- [ ] **DI-3.10.3.5.2** -- **`DurableIoCore`: targets, operations and completions**: public;
-  `add_target` and `remove_target` taking a target's description; writes and reads checked,
-  recorded and emitted as submissions in `CoreActions`; `complete` turning a completion into
-  entries; `refused` undoing a consumer operation with its cause, and keeping a commit to emit
-  again; the entry queue and the in-flight counts; and `make_durable_through`, the commits it
-  emits, and `durable_through`, `sealed_through` and `epoch_state`, since without a seal no
-  commit exists and the commit path -- completed, failed and refused -- could not be reached by a
-  test. Tested on the in-memory backend.
+- [x] **DI-3.10.3.5.2** -- `DurableIoCore`, public: targets, writes and reads, completions, the seal and its commits, refusals, the entry queue and in-flight counts, over the in-memory backend. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310352)
 
 - [ ] **DI-3.10.3.5.3** -- **`DurableIoCore`: gates, seals, providers, lineages and failures**: the
   rest of today's `Dioring` and `Core` state moved over the core -- held operations and their
@@ -192,6 +185,23 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   queue, checking the target, then the submission's shape, then capacity; its notification is a
   count with `wait_past`; its faults name the source `"memory"` with no code; its queue sizes are
   `NonZeroU32`; a commit copies the bytes to `durable_contents`; and it ignores `WriteCaching`.
+  From `DI-3.10.3.5.2`: a consumer operation takes the caller's push as a closure and is recorded
+  only once the push accepts it, which is how a refused one is undone with nothing to roll back,
+  while the core's own submissions -- commits -- come out in `CoreActions` and go back through
+  `refused`, re-emitted with the next actions or by `retry`; `CoreActions` is `submit` and a
+  `deliver` flag raised on the queue's transition from empty, and is `#[must_use]`; a seal returns
+  its answer and its actions as a pair; the core's write takes an `Epoch`, not a `Tag`, handles
+  staying the driver's, and a `WriteCaching` rather than `WriteOptions` until gates arrive in
+  `DI-3.10.3.5.3`; geometry and registration are the backend's to check, their refusals reaching
+  the consumer as a new `PushRefusal::Backend(RefusalCause)`, beside `Ring` until
+  `DI-3.10.3.5.6`; a duplicate target hands back its description in a `DuplicateTarget`, and
+  removing one returns it; `new` takes a clock and an `Arc<dyn DiagnosticSink>`, with no default;
+  a completion with no record, a second completion, and a consumer operation handed back as
+  refused are each an inconsistency (DI-D-46); until `DI-3.10.3.5.3`, every target routes to the
+  built-in default, `IoTargetBusy::held_for_gate` is zero, and a gate release, a provider request
+  or a never-issued operation reaching the core is an inconsistency; the module is `io_core`, as
+  `core` would shadow the `core` crate; and the event-to-entry conversion is one method,
+  `Event::into_entry`, which the relay now uses too.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

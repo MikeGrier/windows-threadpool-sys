@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use win_shared_os_owned_handle::SharedHandle;
 
+use crate::backend::RefusalCause;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
 
@@ -505,6 +506,8 @@ pub enum PushRefusal<V: Identities> {
     NoRegisteredBuffers,
     /// The underlying ring refused the push.
     Ring(io::Error),
+    /// The backend refused the push, naming why, so the caller can act on it (DI-D-52).
+    Backend(RefusalCause),
 }
 
 /// A refused push hands back what it was given: the buffer (`None` for a registered-span

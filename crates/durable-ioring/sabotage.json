@@ -1460,6 +1460,102 @@
       "why": "DI-D-50 P4: the core decides failure sharing from the domains a target declares; a description without them makes every target share fate with every other.",
       "find": ["            flush_domains: self.flush_domains().to_vec(),\n"],
       "replace": ["            flush_domains: Vec::new(),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a refused write spends an operation id",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Only an accepted push spends an id, so accepted pushes' ids are consecutive; a refused one is undone whole (DI-D-52).",
+      "find": ["            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        let record"],
+      "replace": ["            self.next_op += 1;\n            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        let record"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a refused commit is dropped",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a commit the backend refuses is kept and emitted again; dropping it leaves its seal waiting forever.",
+      "find": ["            self.unpushed.push(refused.submission);\n"],
+      "replace": ["            drop(refused.submission);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a refused commit is not emitted with the next actions",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a kept commit rides on the next actions, so a driver that only acts on actions still issues it.",
+      "find": ["        let mut submit = std::mem::take(&mut self.unpushed);\n"],
+      "replace": ["        let mut submit = Vec::new();\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: deliver is set whenever the queue holds entries",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Readiness is raised on the queue's transition from empty, as DI-D-28 sets the readiness event; raising it on every change wakes the consumer for nothing.",
+      "find": ["            deliver: was_empty && !self.queue.is_empty(),\n"],
+      "replace": ["            deliver: !self.queue.is_empty(),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a write is not recorded with the durability core",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A seal waits for, and commits, the writes recorded with it; one never recorded is neither waited for nor covered.",
+      "find": ["        self.durability.pushed(Accepted {\n"],
+      "replace": ["        let _ = (Accepted {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: an operation in flight is not counted against its target",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-45: removing a target is refused while operations on it are in flight.",
+      "find": ["        *self.per_target.entry(target).or_insert(0) += 1;\n"],
+      "replace": ["        let _ = target;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a write's completion is not told to the durability core",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A seal commits only writes that completed; the core learns of completion here.",
+      "find": ["                    self.durability.completed(id, end)\n"],
+      "replace": ["                    {\n                        let _ = end;\n                        Due::default()\n                    }\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a failed operation is reported as a transfer",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "A fault is reported on the operation's completion (the contract's obligations), never hidden as a zero-byte transfer.",
+      "find": ["                    Err(fault) => Outcome::Failed(fault),\n"],
+      "replace": ["                    Err(_) => Outcome::Transferred(0),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: another core's lineage is taken for this one's",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-40: a lineage carries its instance, so another core's is refused rather than read as this one's of the same number.",
+      "find": ["        lineage.instance == self.instance && self.durability.is_live(lineage.seq)\n"],
+      "replace": ["        self.durability.is_live(lineage.seq)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: a target with an operation in flight is removed",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-45: every hold refuses removal, operations in flight among them.",
+      "find": ["        if in_flight == 0 && holds.is_empty() {\n"],
+      "replace": ["        if holds.is_empty() {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.2: an accepted read is not recorded",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "An accepted read is in flight until its completion, which the core must recognise; one never recorded makes its own completion a breach.",
+      "find": ["        self.issued(token, id, OpKind::Read, target, context);\n"],
+      "replace": ["        let _ = (token, id, target, context);\n"]
+    },
+    {
+      "name": "CONTROL: the core's actions test emptiness by length",
+      "file": "src/io_core.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the core: an empty vector has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["        self.submit.is_empty() && !self.deliver\n"],
+      "replace": ["        self.submit.len() == 0 && !self.deliver\n"]
     }
   ]
 }

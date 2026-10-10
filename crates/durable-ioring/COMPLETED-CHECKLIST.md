@@ -1766,3 +1766,18 @@ Built per [DI-D-51](DESIGN-NOTES.md#di-d-51) in `src/diagnostics.rs`. The core h
   core's submission and completion shapes, and the typed refusal cause (DI-D-52); with a minimal
   in-memory backend and target that fault on nothing, so the traits are exercised before anything
   is built on them. `DI-3.3` adds the fault script to that backend.
+
+## Moved 2026-10-10 05:54:59 -04:00 -- DI-3.10.3.5.2: the public core
+
+### <a id="di-310352"></a>DI-3.10.3.5.2 -- `DurableIoCore`, public: targets, writes and reads, completions, the seal and its commits, refusals, the entry queue and in-flight counts, over the in-memory backend. *(completed 2026-10-10 05:54:59 -04:00)*
+
+`src/io_core.rs` holds `DurableIoCore` and `CoreActions`, over the durability core the Windows driver also uses; its tests drive it over `MemoryBackend`. The seal moved into this step from `DI-3.10.3.5.3` (commit `5e240c78`), since without it no commit exists to test. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**`DurableIoCore`: targets, operations and completions**: public;
+  `add_target` and `remove_target` taking a target's description; writes and reads checked,
+  recorded and emitted as submissions in `CoreActions`; `complete` turning a completion into
+  entries; `refused` undoing a consumer operation with its cause, and keeping a commit to emit
+  again; the entry queue and the in-flight counts; and `make_durable_through`, the commits it
+  emits, and `durable_through`, `sealed_through` and `epoch_state`, since without a seal no
+  commit exists and the commit path -- completed, failed and refused -- could not be reached by a
+  test. Tested on the in-memory backend.

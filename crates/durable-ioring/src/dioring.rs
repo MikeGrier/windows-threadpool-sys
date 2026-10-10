@@ -14,7 +14,7 @@ use windows_ioring_sys::{
     RegisteredFile, RegisteredFiles, RegisteredSpan,
 };
 
-use crate::clock::StampClock;
+use crate::clock::{Instant, StampClock};
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
 use crate::ids::{
@@ -31,7 +31,7 @@ use crate::types::{
     RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
-mod durability;
+pub(crate) mod durability;
 mod ending;
 mod push;
 mod relay;
@@ -201,8 +201,7 @@ pub(crate) struct FileRecord {
 
 /// Who answers for a file's writes (DI-D-27): the built-in default for a file with no declared
 /// domain or one the provider does not serve, and the provider for the domains it serves.
-fn routing(file: &[DomainId], served: Option<&ProviderSlot<impl EpochId>>) -> Routing {
-    let served: &[DomainId] = served.map_or(&[], |provider| &provider.domains);
+pub(crate) fn routing(file: &[DomainId], served: &[DomainId]) -> Routing {
     if file.is_empty() {
         return Routing {
             default: true,
@@ -213,6 +212,11 @@ fn routing(file: &[DomainId], served: Option<&ProviderSlot<impl EpochId>>) -> Ro
         default: file.iter().any(|domain| !served.contains(domain)),
         provider: file.iter().any(|domain| served.contains(domain)),
     }
+}
+
+/// The domains `provider` serves; none without one.
+fn served<E: EpochId + 'static>(provider: Option<&ProviderSlot<E>>) -> &[DomainId] {
+    provider.map_or(&[], |provider| &provider.domains)
 }
 
 /// The consumer's provider, with the domains it serves, interned and sorted.
@@ -449,7 +453,7 @@ where
             }
         });
         for record in records.values_mut() {
-            record.routing = routing(&record.domains, provider.as_ref());
+            record.routing = routing(&record.domains, served(provider.as_ref()));
         }
         if let Some(provider) = &provider {
             (relay.lock().durability).serve(Arc::clone(&provider.domains));
@@ -522,7 +526,7 @@ where
             return Err(AddTargetError { key, file, options });
         }
         let domains = intern_all(&mut self.domains, options.domains);
-        let routing = routing(&domains, self.provider.as_ref());
+        let routing = routing(&domains, served(self.provider.as_ref()));
         self.files.insert(
             key,
             FileRecord {
@@ -973,7 +977,9 @@ impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Drop for Dioring<B, E, C, R, K>
 }
 
 /// The contract's spelling of a lineage's epoch state.
-fn epoch_state<E: EpochId + 'static>(state: State) -> EpochState<DioringIds<E>> {
+pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
+    state: State,
+) -> EpochState<DioringIds<E, I>> {
     match state {
         State::Open => EpochState::Open,
         State::Pending => EpochState::Pending,
@@ -1067,7 +1073,7 @@ fn first_repeat<T: Eq + std::hash::Hash + Clone>(values: impl IntoIterator<Item 
 }
 
 /// Intern `domains`, returning their ids sorted and without repeats.
-fn intern_all(
+pub(crate) fn intern_all(
     table: &mut HashMap<FlushDomain, DomainId>,
     domains: impl IntoIterator<Item = FlushDomain>,
 ) -> Arc<[DomainId]> {

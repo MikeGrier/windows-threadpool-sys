@@ -485,46 +485,9 @@ where
         let instance = core.instance;
         let name = |seq| Lineage { instance, seq };
         for event in events {
-            let entry = match event {
-                Synthesized::Durable { lineage, through } => Entry::Durable {
-                    through: Epoch::new(name(lineage), through),
-                },
-                Synthesized::Blocked {
-                    lineage,
-                    through,
-                    by,
-                } => Entry::Blocked {
-                    through: Epoch::new(name(lineage), through),
-                    by,
-                },
-                Synthesized::Failed(failed) => Entry::Failed(failed),
-                Synthesized::Abandoned {
-                    failure,
-                    suspect,
-                    markings,
-                } => Entry::Abandoned {
-                    failure,
-                    suspect,
-                    markings,
-                },
-                Synthesized::Healed {
-                    failure,
-                    suspect,
-                    markings,
-                } => Entry::Healed {
-                    failure,
-                    suspect,
-                    markings,
-                },
-                Synthesized::Marked { failure, marking } => Entry::Marked { failure, marking },
-                Synthesized::LineageEnded {
-                    lineage,
-                    abandoned_through,
-                } => Entry::LineageEnded {
-                    lineage: name(lineage),
-                    abandoned_through,
-                },
-                Synthesized::NeverIssued { op, abandoned } => {
+            let entry = match event.into_entry(instance) {
+                Ok(entry) => entry,
+                Err((op, abandoned)) => {
                     let Some(held) = core.held.remove(&op.seq) else {
                         debug_assert!(false, "a held operation with nothing held for it");
                         continue;

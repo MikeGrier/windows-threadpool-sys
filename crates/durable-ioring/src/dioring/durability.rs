@@ -65,7 +65,7 @@ use crate::contract::EpochId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
-    Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,
+    Entry, Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,
     Resolution, ResolveError, ResolveRefusal, SuspectSet, SuspectWrite,
 };
 
@@ -172,6 +172,62 @@ pub(crate) enum Event<E: EpochId + 'static, I: Instant> {
         op: OpId,
         abandoned: Gate<E>,
     },
+}
+
+/// An operation never issued, with the abandoned epoch that stopped it.
+pub(crate) type NeverIssued<E> = (OpId, Gate<E>);
+
+impl<E: EpochId + 'static, I: Instant> Event<E, I> {
+    /// The entry this event is, for `instance`'s queue -- or, for an operation never issued, the
+    /// operation and the abandoned epoch, which only the holder of the operation can make an entry
+    /// of.
+    pub(crate) fn into_entry<B, C>(
+        self,
+        instance: InstanceId,
+    ) -> Result<Entry<V<E, I>, B, C>, NeverIssued<E>> {
+        let name = |seq| Lineage { instance, seq };
+        Ok(match self {
+            Event::Durable { lineage, through } => Entry::Durable {
+                through: Epoch::new(name(lineage), through),
+            },
+            Event::Blocked {
+                lineage,
+                through,
+                by,
+            } => Entry::Blocked {
+                through: Epoch::new(name(lineage), through),
+                by,
+            },
+            Event::Failed(failed) => Entry::Failed(failed),
+            Event::Abandoned {
+                failure,
+                suspect,
+                markings,
+            } => Entry::Abandoned {
+                failure,
+                suspect,
+                markings,
+            },
+            Event::Healed {
+                failure,
+                suspect,
+                markings,
+            } => Entry::Healed {
+                failure,
+                suspect,
+                markings,
+            },
+            Event::Marked { failure, marking } => Entry::Marked { failure, marking },
+            Event::LineageEnded {
+                lineage,
+                abandoned_through,
+            } => Entry::LineageEnded {
+                lineage: name(lineage),
+                abandoned_through,
+            },
+            Event::NeverIssued { op, abandoned } => return Err((op, abandoned)),
+        })
+    }
 }
 
 /// How a write ended, as the core needs it. A target never completes a write short (DI-D-50), so a
