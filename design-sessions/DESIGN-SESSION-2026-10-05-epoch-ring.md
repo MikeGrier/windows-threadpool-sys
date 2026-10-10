@@ -3126,6 +3126,47 @@ event is built, keeping DI-D-26's "costs nothing when no session listens"; `NoDi
 passable when it is built; and the `trace` feature removed, its one trace point -- the
 inconsistency report -- going through the sink. The engineer: "approved". Recorded as DI-D-51.
 
+## DI-3.10.3.5's shape (2026-10-10)
+
+After DI-3.10.3.4 landed, the assistant put six questions before starting DI-3.10.3.5: Q1, a split
+into four steps building the new path beside the old; Q2, the core defining the submission shape
+rather than the backend, correcting its own step-4 wording ("entries whose shape the backend
+defines"), since a backend-defined shape would make the core build entries through a trait it has
+no other use for; Q3, the trait shapes; Q4, a refused push undone and a refused commit kept; Q5,
+Windows threading unchanged, `EventDelivery`'s callback waiting and draining; Q6, readiness an
+associated type ahead of the split.
+
+The engineer: Q1, "split into as many steps as you see fit to make this achievable with high
+quality and predictability"; Q2, "Yes. I feel confident we had already approved this"; Q3, "in
+principle sounds good", with feedback to come once there is source; Q4, "ok. I assume there is no
+real alternative, correct? Block waiting for the ring to be processed?"; Q5, "Yes but factored out
+hopefully? But the threadless vs. numa domain bound aspect seems like it should be retained"; Q6,
+"yes".
+
+On Q4 the assistant answered that there is an alternative for consumer operations. The ring refuses
+for two recoverable reasons -- a full submission queue, which a submit clears, and a too-full
+completion queue, which draining clears -- and on Windows the pool callback drains without the
+consumer, so a push could submit, wait on the notification and retry. It cannot be the core's,
+which does no I/O and never blocks; it cannot happen inside a completion or provider callback,
+which would wait for itself, so a commit the core emits there can only be kept and retried; and on
+a threadless backend it deadlocks unless the driver pumps while it waits. It proposed keeping
+refusal, and a blocking push later as an optional driver policy.
+
+On Q5 it corrected the premise: as built, dioring drains only on the default pool
+(`EventDelivery::new(ring, ..., None)`), so neither a NUMA-bound pool nor a domain thread is
+retained today -- DI-D-18 names both of the ring crate's models, and dioring built Model A only.
+It proposed a threadless backend with delivery as a separate layer in the driver: pool delivery
+with an optional callback environment, and pumped delivery, in which the consumer's own thread
+waits and drains.
+
+The engineer: Q3, "do not block on me reviewing the source, I will see it and offer commentary as we
+go along. I cannot be the blocking factor"; Q4, "I agree with the refusal, ensure that the cause of
+the refusal is clear so that the caller can take the correct action (submit, drain) without having
+to probe for why the refusal occurred. At least, if the cause of the refusal is known, pass it
+through, so perhaps there are many states (submit needed, drain needed, both needed, unknown,
+others...)"; Q5, "good". The blocking push was not ruled on, and is queued as a proposal. Recorded
+as DI-D-52, with the steps as DI-3.10.3.5.1 to DI-3.10.3.5.8.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

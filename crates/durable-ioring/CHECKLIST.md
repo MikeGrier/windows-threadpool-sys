@@ -79,13 +79,54 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.4** -- The core made platform-free: `StampClock` and an `Instant` on `Identities`, `DioringIds<E, I>`, and no Windows type in `dioring/durability*` outside its tests. -> [completed 2026-10-09](COMPLETED-CHECKLIST.md#di-31034)
 
-- [ ] **DI-3.10.3.5** -- **Targets, the backend, and the public core**: the `IoTarget` and backend
-  traits (DI-D-50 P10); `DurableIoCore` public, its operations and `complete` returning
-  `CoreActions` of backend entries; the Windows backend over `windows-ioring-sys` and the Win32
-  file target; the driver running `DurableIoCore` over the backend; flush domains carried by the
-  target, and `FileOptions` removed. The oracle's push hook gains each write's length, and a rule
-  that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2` so the hook's
-  signature changes once.
+- [ ] **DI-3.10.3.5** -- **Targets, the backend, and the public core**, per
+  [DI-D-50](DESIGN-NOTES.md#di-d-50) P10-P11 and [DI-D-52](DESIGN-NOTES.md#di-d-52): built as a
+  new path beside today's driver (`DI-3.10.3.5.1` to `DI-3.10.3.5.5`), which the driver then moves
+  onto, deleting the old path (`DI-3.10.3.5.6`) -- the merge-or-delete decision for the
+  duplication, taken when the new path is proven. Done in the steps below.
+
+- [ ] **DI-3.10.3.5.1** -- **The target and backend traits**: `IoTarget`, the backend trait, the
+  core's submission and completion shapes, and the typed refusal cause (DI-D-52); with a minimal
+  in-memory backend and target that fault on nothing, so the traits are exercised before anything
+  is built on them. `DI-3.3` adds the fault script to that backend.
+
+- [ ] **DI-3.10.3.5.2** -- **`DurableIoCore`: targets, operations and completions**: public;
+  `add_target` and `remove_target` taking a target's description; writes and reads checked,
+  recorded and emitted as submissions in `CoreActions`; `complete` turning a completion into
+  entries; `refused` undoing a consumer operation with its cause, and keeping a commit to emit
+  again; the entry queue and the in-flight counts. Tested on the in-memory backend.
+
+- [ ] **DI-3.10.3.5.3** -- **`DurableIoCore`: gates, seals, providers, lineages and failures**: the
+  rest of today's `Dioring` and `Core` state moved over the core -- held operations and their
+  release, `make_durable_through` and the commits it emits, provider requests and answers,
+  lineages minted, ended and retired, `resolve` and `import_failure` -- so the core alone carries
+  the whole `DurableRing` surface. Tested on the in-memory backend.
+
+- [ ] **DI-3.10.3.5.4** -- **The oracle beside the core**: the push hook gains each write's length,
+  and the rule that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2`; the
+  oracle run beside the core's tests on the in-memory backend.
+
+- [ ] **DI-3.10.3.5.5** -- **The Windows backend and the Win32 file target**: the backend over
+  `windows-ioring-sys`' `IoRing`, threadless -- push, submit, pop, and the ring's completion event
+  as its notification -- its refusal causes mapped from `RingCondition`, with a test for each
+  mapping a developer machine can reach; and the Win32 file target over a `SharedHandle`, carrying
+  its flush domains and warranty class.
+
+- [ ] **DI-3.10.3.5.6** -- **The driver moved onto the core, under pool delivery**: `Dioring` runs
+  `DurableIoCore` over the Windows backend, with `EventDelivery` as its delivery (DI-D-52's
+  Model A) and an optional callback environment in `Setup` binding its pool; the ring trait's
+  readiness an associated type (DI-D-52 Q6); `PushRefusal::Ring` replaced by the backend's
+  refusal cause; `FileOptions`, `Core`, and the ring code of `push.rs` and `relay.rs` deleted.
+  Today's tests and sabotages are the proof, the sabotages re-anchored where the code moved.
+
+- [ ] **DI-3.10.3.5.7** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the
+  consumer's own thread waits on the notification and drains through a `pump` call, over the
+  Windows backend and the in-memory one.
+
+- [ ] **DI-3.10.3.5.8** -- **A blocking push -- proposed, awaiting the engineer's ruling**
+  (DI-D-52 Q4): a driver policy above refusal that submits, waits on the notification and
+  retries; never from inside a callback, and pumping for itself under pumped delivery. Removed if
+  the engineer declines it.
 
 - [ ] **DI-3.10.3.6** -- **The split**: `win-durable-ioring` created and registered for release,
   holding the driver, the Windows backend and file target, `ErrorCode`'s reading from an
