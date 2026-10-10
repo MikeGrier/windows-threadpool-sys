@@ -91,11 +91,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `add_target` and `remove_target` taking a target's description; writes and reads checked,
   recorded and emitted as submissions in `CoreActions`; `complete` turning a completion into
   entries; `refused` undoing a consumer operation with its cause, and keeping a commit to emit
-  again; the entry queue and the in-flight counts. Tested on the in-memory backend.
+  again; the entry queue and the in-flight counts; and `make_durable_through`, the commits it
+  emits, and `durable_through`, `sealed_through` and `epoch_state`, since without a seal no
+  commit exists and the commit path -- completed, failed and refused -- could not be reached by a
+  test. Tested on the in-memory backend.
 
 - [ ] **DI-3.10.3.5.3** -- **`DurableIoCore`: gates, seals, providers, lineages and failures**: the
   rest of today's `Dioring` and `Core` state moved over the core -- held operations and their
-  release, `make_durable_through` and the commits it emits, provider requests and answers,
+  release, provider requests and answers,
   lineages minted, ended and retired, `resolve` and `import_failure` -- so the core alone carries
   the whole `DurableRing` surface. Tested on the in-memory backend.
 
