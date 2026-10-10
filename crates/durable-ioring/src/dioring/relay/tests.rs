@@ -44,11 +44,12 @@ fn a_write_that_transferred_nothing_is_a_fault() {
     ));
 }
 
-/// A read may complete short: the obligation is a write's.
+/// A read may complete short: the obligation is a write's. The read is given a requested length
+/// here, though the driver passes zero for one, so that the count alone would make it short.
 #[test]
 fn a_short_read_is_transferred() {
     assert!(matches!(
-        op_outcome::<DioringIds<u64>>(Ok(3), false, 0),
+        op_outcome::<DioringIds<u64>>(Ok(3), false, 8),
         O::Transferred(3)
     ));
 }

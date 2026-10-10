@@ -486,12 +486,12 @@
       "replace": ["                \"no registration completion arrived within {}s\","]
     },
     {
-      "name": "WT-2.2.2: every failure is stamped with a fixed point, not the clock",
+      "name": "WT-2.2.2: every failure is stamped with the first failure's reading, not the clock",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
       "why": "The stamp is the one thing the clock is held for. A core that never reads it reports a time that says nothing about when the failure was observed.",
       "find": ["        let observed = self.clock.now();\n"],
-      "replace": ["        let observed = win_time_sys::TimePoint::from_ticks(0);\n"]
+      "replace": ["        let observed = self.failures.first().map_or_else(|| self.clock.now(), |first| first.observed);\n"]
     },
     {
       "name": "WT-2.2.2: the inventory reports a reading taken when asked",
@@ -627,7 +627,7 @@
       "expect": "caught",
       "why": "The obligation is a write's: a read may come back short, and the consumer handles its count.",
       "find": ["            if write && transferred < requested {\n"],
-      "replace": ["            if transferred < requested.max(1) {\n"]
+      "replace": ["            if transferred < requested {\n"]
     },
     {
       "name": "DI-3.2.5.1: the oracle holds Durable for a healed failure until its Healed entry",
@@ -1099,7 +1099,7 @@
       "expect": "caught",
       "why": "DI-D-27: an answer records the outcome. Dropping it leaves every provider-served seal pending.",
       "find": ["        let due = core\n            .durability\n            .provided(call.lineage, call.seal, call.domain, outcome);\n"],
-      "replace": ["        let _: Result<(), FailureCause<DioringIds<E>>> = outcome;\n        let due: Due<E, FlushTarget> = Due::default();\n"]
+      "replace": ["        let _: Result<(), FailureCause<DioringIds<E>>> = outcome;\n        let due: Due<E, FlushTarget, WinInstant> = Due::default();\n"]
     },
     {
       "name": "DI-3.2.6: the provider is never called",
