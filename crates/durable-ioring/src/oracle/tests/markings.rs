@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use win_time_sys::TimePoint;
 
-use super::{Oracle, TestEntry, V, completion, op, write_kind};
+use super::{LEN, Oracle, TestEntry, V, completion, op, write_kind};
 use crate::IoTargetKey;
 use crate::error_code::ErrorCode;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
@@ -86,7 +86,7 @@ fn three_writes_one_failure(instance: InstanceId) -> Oracle {
     let mut oracle = Oracle::new();
     for seq in 0..3 {
         oracle
-            .pushed(op(instance, seq), write_kind(instance, 1), 0)
+            .pushed(op(instance, seq), write_kind(instance, 1), LEN, 0)
             .expect("a write");
     }
     oracle
@@ -94,8 +94,8 @@ fn three_writes_one_failure(instance: InstanceId) -> Oracle {
         .expect("a failure suspecting all three");
     let outcomes = [
         Outcome::Failed(IO_DEVICE.clone()),
-        Outcome::Transferred(4),
-        Outcome::Transferred(4),
+        Outcome::Transferred(LEN),
+        Outcome::Transferred(LEN),
     ];
     for (seq, outcome) in (0..).zip(outcomes) {
         oracle
@@ -173,7 +173,7 @@ fn a_marking_before_its_writes_completion_is_refused() {
     let instance = InstanceId::next();
     let mut oracle = Oracle::new();
     oracle
-        .pushed(op(instance, 0), write_kind(instance, 1), 0)
+        .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
         .expect("a write");
     oracle
         .observe(&failed_at(instance, 0, &[0], 0))
@@ -253,7 +253,7 @@ fn markings_and_failures_share_one_stamp_order() {
     let instance = InstanceId::next();
     let mut oracle = Oracle::new();
     oracle
-        .pushed(op(instance, 0), write_kind(instance, 1), 0)
+        .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
         .expect("a write");
     oracle
         .observe(&failed_at(instance, 0, &[0], 100))
@@ -262,7 +262,7 @@ fn markings_and_failures_share_one_stamp_order() {
         .observe(&completion(
             op(instance, 0),
             write_kind(instance, 1),
-            Outcome::Transferred(4),
+            Outcome::Transferred(LEN),
             0,
         ))
         .expect("its completion");

@@ -1793,3 +1793,13 @@ The core now carries the whole `DurableRing` surface without a ring: `src/io_cor
   release, provider requests and answers,
   lineages minted, ended and retired, `resolve` and `import_failure` -- so the core alone carries
   the whole `DurableRing` surface. Tested on the in-memory backend.
+
+## Moved 2026-10-10 09:44:08 -04:00 -- DI-3.10.3.5.4: the oracle beside the core
+
+### <a id="di-310354"></a>DI-3.10.3.5.4 -- The oracle beside the core: the push hook takes each operation's length, a write completing other than in full is `WriteNotInFull`, and the core's tests run under the oracle. *(completed 2026-10-10 09:44:08 -04:00)*
+
+`src/oracle.rs` gains the length and the rule; its own tests assert both directions. Every push hook caller -- the oracle's tests, the driver's harness, the delivery test -- passes the real length. The core's test rig in `src/io_core/tests.rs` reports to a `ConformanceOracle`, and a sabotage that drops its seal reports is caught by the oracle alone, which shows the binding is live. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**The oracle beside the core**: the push hook gains each write's length,
+  and the rule that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2`; the
+  oracle run beside the core's tests on the in-memory backend.

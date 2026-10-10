@@ -4,8 +4,9 @@
 //! own, the fault-injecting implementation's, and those of layers above. A hand-written second
 //! copy of a rule in some other test is a check of the copy, not of the contract.
 //!
-//! The stream is what the consumer sees: each accepted push, reported to the oracle with
-//! [`ConformanceOracle::pushed`], or [`ConformanceOracle::pushed_gated`] with its gate; each seal the instance accepted as new, reported with
+//! The stream is what the consumer sees: each accepted push, with the length it asked to transfer,
+//! reported to the oracle with [`ConformanceOracle::pushed`], or [`ConformanceOracle::pushed_gated`]
+//! with its gate; each seal the instance accepted as new, reported with
 //! [`ConformanceOracle::sealed`]; each failure the consumer healed, reported with
 //! [`ConformanceOracle::healed`]; and each popped entry, reported with
 //! [`ConformanceOracle::observe`]. The oracle grows with the implementation (DI-3.2): each step
@@ -20,6 +21,8 @@
 //!   violation too, since completions could no longer be told apart.
 //! - **What was pushed comes back.** The completion carries the kind the operation was pushed
 //!   with -- a read, or a write with its epoch -- and the consumer's context, unchanged.
+//! - **No write completes short** (DI-D-50): a write that completes with a transfer transferred
+//!   exactly the length it was pushed with. A target completes a write in full or with a fault.
 //! - **No write is accepted at or below its lineage's seal** (guarantee 6): such a push is refused,
 //!   so an identity returned for one is a violation.
 //! - **No write is accepted into an abandoned epoch** (DI-D-35), once its `Abandoned` entry has
@@ -70,10 +73,9 @@
 //!
 //! - **Any order among completions.** Operations complete in whatever order the kernel finishes
 //!   them, and DI-D-18 records completions in the order they are observed, not pushed.
-//! - **Any outcome.** A read shorter than its buffer, including zero, and a failure are both
-//!   completions. A write never completes short (DI-D-50); checking that needs each write's
-//!   length at its push, which `DI-3.10.3.5` gives the push hook. What the contract promises is that the completion arrives, not that the I/O
-//!   succeeded.
+//! - **Any outcome but a short write.** A read shorter than its length, including zero, and a
+//!   failure are both completions; a read's count is not checked against its length. What the
+//!   contract promises is that the completion arrives, not that the I/O succeeded.
 //! - **Order between lineages**, which the contract leaves open (DI-D-18).
 //! - **A `Durable` repeated or below an earlier one** for the same lineage. It is never false --
 //!   the high-water mark did pass it -- and the contract promises an answer per request, not a
@@ -124,6 +126,8 @@ mod tests;
 /// What a push gave the instance, kept until its completion.
 struct Pushed<V: Identities, C> {
     kind: OpKind<V>,
+    /// The bytes it asked to transfer: a write's whole length, a read's most.
+    length: u32,
     context: C,
     gate: Option<Epoch<V>>,
 }
@@ -159,6 +163,15 @@ pub enum Violation<V: Identities> {
     ContextChanged {
         /// The operation.
         op: V::OpId,
+    },
+    /// A write completed with a transfer other than its whole length (DI-D-50).
+    WriteNotInFull {
+        /// The write.
+        op: V::OpId,
+        /// The length it was pushed with.
+        length: u32,
+        /// The count its completion reported.
+        transferred: u32,
     },
     /// Operations pushed and not completed when the stream was declared finished.
     Outstanding {
@@ -416,8 +429,9 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
     }
 
-    /// Report an accepted push: the identity it returned, what it was, and the context it was
-    /// given (a copy; the instance has the original).
+    /// Report an accepted push: the identity it returned, what it was, the bytes it asked to
+    /// transfer -- a write's whole length, a read's buffer -- and the context it was given (a copy;
+    /// the instance has the original).
     ///
     /// # Errors
     ///
@@ -425,8 +439,14 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
     /// [`Violation::WriteToEndedLineage`] for a write into a lineage reported ended,
     /// [`Violation::WriteAfterSeal`] for a write at or below its lineage's seal, and
     /// [`Violation::WriteToAbandoned`] for a write into an epoch reported abandoned.
-    pub fn pushed(&mut self, op: V::OpId, kind: OpKind<V>, context: C) -> Result<(), Violation<V>> {
-        self.push(op, kind, context, None)
+    pub fn pushed(
+        &mut self,
+        op: V::OpId,
+        kind: OpKind<V>,
+        length: u32,
+        context: C,
+    ) -> Result<(), Violation<V>> {
+        self.push(op, kind, length, context, None)
     }
 
     /// Report an accepted push gated on `gate`, as [`Self::pushed`] reports one without.
@@ -438,16 +458,18 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         &mut self,
         op: V::OpId,
         kind: OpKind<V>,
+        length: u32,
         context: C,
         gate: Epoch<V>,
     ) -> Result<(), Violation<V>> {
-        self.push(op, kind, context, Some(gate))
+        self.push(op, kind, length, context, Some(gate))
     }
 
     fn push(
         &mut self,
         op: V::OpId,
         kind: OpKind<V>,
+        length: u32,
         context: C,
         gate: Option<Epoch<V>>,
     ) -> Result<(), Violation<V>> {
@@ -486,6 +508,7 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
             op,
             Pushed {
                 kind,
+                length,
                 context,
                 gate,
             },
@@ -547,6 +570,16 @@ impl<V: Identities, C: PartialEq> ConformanceOracle<V, C> {
         }
         if pushed.context != completion.context {
             return Err(Violation::ContextChanged { op });
+        }
+        if let (OpKind::Write { .. }, Outcome::Transferred(transferred)) =
+            (completion.kind, &completion.outcome)
+            && *transferred != pushed.length
+        {
+            return Err(Violation::WriteNotInFull {
+                op,
+                length: pushed.length,
+                transferred: *transferred,
+            });
         }
         match (&completion.outcome, pushed.gate) {
             (Outcome::NeverIssued { .. }, None) => {

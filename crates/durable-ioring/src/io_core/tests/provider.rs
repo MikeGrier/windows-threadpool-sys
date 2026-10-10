@@ -58,10 +58,7 @@ fn a_seal_asks_the_provider_for_a_served_domain_and_commits_nothing_for_it() {
     rig.write(1, 0, b"a").expect("accepted");
     rig.write(1, 1, b"b").expect("accepted");
     rig.run();
-    let (_, actions) = rig
-        .core
-        .make_durable_through(rig.epoch(1))
-        .expect("the default lineage");
+    let (_, actions) = rig.sealed(rig.epoch(1));
     assert!(actions.submit.is_empty(), "no commit: the provider answers");
     let [request] = actions.requests.as_slice() else {
         panic!("one request: {:?}", actions.requests);
@@ -103,10 +100,7 @@ fn a_target_with_a_served_and_an_unserved_domain_needs_both() {
     rig.write(1, 0, b"x").expect("accepted");
     rig.run();
     rig.entries();
-    let (_, actions) = rig
-        .core
-        .make_durable_through(rig.epoch(1))
-        .expect("the default lineage");
+    let (_, actions) = rig.sealed(rig.epoch(1));
     assert_eq!(actions.requests.len(), 1);
     assert_eq!(actions.submit.len(), 1);
     assert!(matches!(actions.submit[0].op, SubmissionOp::Commit));

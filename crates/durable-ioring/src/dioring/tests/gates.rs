@@ -41,7 +41,7 @@ pub(super) fn write_gated(
     };
     harness
         .oracle
-        .pushed_gated(id, kind, context, gate)
+        .pushed_gated(id, kind, 8, context, gate)
         .expect("the oracle accepts the push");
     id
 }
@@ -53,7 +53,7 @@ pub(super) fn read_gated(harness: &mut Harness, context: u32, gate: Epoch<V>) ->
         .expect("push a gated read");
     harness
         .oracle
-        .pushed_gated(id, OpKind::Read, context, gate)
+        .pushed_gated(id, OpKind::Read, 8, context, gate)
         .expect("the oracle accepts the push");
     id
 }
@@ -184,7 +184,7 @@ fn gated_span_operations_are_released_too() {
     };
     harness
         .oracle
-        .pushed_gated(write, kind, 1, gate)
+        .pushed_gated(write, kind, span.len, 1, gate)
         .expect("ok");
     let read = harness
         .ring
@@ -192,7 +192,7 @@ fn gated_span_operations_are_released_too() {
         .expect("a gated span read");
     harness
         .oracle
-        .pushed_gated(read, OpKind::Read, 2, gate)
+        .pushed_gated(read, OpKind::Read, span.len, 2, gate)
         .expect("ok");
     assert!(harness.ring.pop().expect("pop").is_none());
     harness.seal(1);

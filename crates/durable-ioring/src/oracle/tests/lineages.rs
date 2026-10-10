@@ -4,7 +4,7 @@
 
 use win_time_sys::TimePoint;
 
-use super::{Oracle, TestEntry, V, done, op};
+use super::{LEN, Oracle, TestEntry, V, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage};
 use crate::oracle::Violation;
@@ -105,15 +105,15 @@ fn no_write_into_an_ended_lineage_is_accepted_and_one_in_flight_still_completes(
     let (gone, kept) = (lineage(instance, 1), lineage(instance, 2));
     let mut oracle = Oracle::new();
     oracle
-        .pushed(op(instance, 0), write(gone, 5), 0)
+        .pushed(op(instance, 0), write(gone, 5), LEN, 0)
         .expect("before the end");
     oracle.observe(&ended(gone)).expect("ends");
     assert!(matches!(
-        oracle.pushed(op(instance, 1), write(gone, 9), 1),
+        oracle.pushed(op(instance, 1), write(gone, 9), LEN, 1),
         Err(Violation::WriteToEndedLineage { .. })
     ));
     oracle
-        .pushed(op(instance, 2), write(kept, 9), 2)
+        .pushed(op(instance, 2), write(kept, 9), LEN, 2)
         .expect("a lineage that did not end");
     oracle
         .observe(&done(op(instance, 0), write(gone, 5), 0))
@@ -132,10 +132,10 @@ fn no_failure_after_the_end_suspects_the_lineage_but_one_before_is_still_marked(
     let w_kept = (op(instance, 1), Epoch::new(kept, 5));
     let mut oracle = Oracle::new();
     oracle
-        .pushed(w_gone.0, write(gone, 5), 0)
+        .pushed(w_gone.0, write(gone, 5), LEN, 0)
         .expect("a write of the lineage");
     oracle
-        .pushed(w_kept.0, write(kept, 5), 1)
+        .pushed(w_kept.0, write(kept, 5), LEN, 1)
         .expect("a write of its neighbour");
     let before = FailureId { instance, seq: 0 };
     oracle

@@ -17,6 +17,7 @@ use crate::diagnostics::NoDiagnostics;
 use crate::ids::{DioringIds, Lineage, OpId};
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
+use crate::oracle::ConformanceOracle;
 use crate::provider::ProviderRequest;
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, IoTargetKey, OpKind,
@@ -57,6 +58,8 @@ struct Rig {
     backend: MemoryBackend,
     /// Every provider request the core has made, in order.
     requests: Vec<ProviderRequest<V>>,
+    /// The contract's rules, over every push, seal, heal and entry the rig sees (DI-D-24).
+    oracle: ConformanceOracle<V, &'static str>,
 }
 
 impl Rig {
@@ -77,6 +80,7 @@ impl Rig {
             core,
             backend: MemoryBackend::new(nz(8), nz(16)),
             requests: Vec::new(),
+            oracle: ConformanceOracle::new(),
         }
     }
 
@@ -106,7 +110,7 @@ impl Rig {
         options: WriteOptions<V>,
     ) -> Pushed {
         let backend = &mut self.backend;
-        self.core.write(
+        let pushed = self.core.write(
             key,
             offset,
             SubmissionData::Owned(bytes.to_vec()),
@@ -114,30 +118,70 @@ impl Rig {
             "write",
             options,
             |submission| backend.push(submission),
-        )
+        );
+        self.report(
+            &pushed,
+            OpKind::Write { epoch },
+            bytes.len(),
+            "write",
+            options.gate,
+        );
+        pushed
+    }
+
+    /// Tell the oracle of an accepted push.
+    fn report(
+        &mut self,
+        pushed: &Pushed,
+        kind: OpKind<V>,
+        length: usize,
+        context: &'static str,
+        gate: Option<Epoch<V>>,
+    ) {
+        let Ok(id) = pushed else {
+            return;
+        };
+        let length = u32::try_from(length).expect("a test buffer's length fits a u32");
+        let accepted = match gate {
+            None => self.oracle.pushed(*id, kind, length, context),
+            Some(gate) => self.oracle.pushed_gated(*id, kind, length, context, gate),
+        };
+        accepted.expect("the oracle accepts the push");
     }
 
     /// A read of `length` bytes from `KEY`, with `options`.
     fn read_with(&mut self, offset: u64, length: usize, options: ReadOptions<V>) -> Pushed {
         let backend = &mut self.backend;
-        self.core.read(
+        let pushed = self.core.read(
             KEY,
             offset,
             SubmissionData::Owned(vec![0; length]),
             "read",
             options,
             |submission| backend.push(submission),
-        )
+        );
+        self.report(&pushed, OpKind::Read, length, "read", options.gate);
+        pushed
     }
 
     /// Seal `lineage` through `through`, acting on what that made due.
     fn seal_in(&mut self, lineage: Lineage, through: u64) -> DurabilityRequest<V> {
-        let (answer, actions) = self
-            .core
-            .make_durable_through(Epoch::new(lineage, through))
-            .expect("a live lineage of this core");
+        let (answer, actions) = self.sealed(Epoch::new(lineage, through));
         self.act(actions);
         answer
+    }
+
+    /// Seal through `through`, telling the oracle of a new seal: the answer, and what it made due,
+    /// not yet acted on.
+    fn sealed(&mut self, through: Epoch<V>) -> (DurabilityRequest<V>, CoreActions<V, Vec<u8>>) {
+        let (answer, actions) = self
+            .core
+            .make_durable_through(through)
+            .expect("a live lineage of this core");
+        if answer == DurabilityRequest::Submitted {
+            self.oracle.sealed(through);
+        }
+        (answer, actions)
     }
 
     fn write(&mut self, epoch: u64, offset: u64, bytes: &[u8]) -> Pushed {
@@ -183,7 +227,13 @@ impl Rig {
     }
 
     fn entries(&mut self) -> Vec<Entry<V, Vec<u8>, &'static str>> {
-        std::iter::from_fn(|| self.core.pop()).collect()
+        let entries: Vec<_> = std::iter::from_fn(|| self.core.pop()).collect();
+        for entry in &entries {
+            self.oracle
+                .observe(entry)
+                .expect("the oracle accepts the entry");
+        }
+        entries
     }
 
     fn target(&self) -> &MemoryTarget {
@@ -378,10 +428,7 @@ fn a_seal_commits_after_its_writes_complete_and_then_reports_durable() {
 fn a_seal_with_no_writes_is_durable_at_once() {
     let mut rig = Rig::new();
     let lineage = rig.core.default_lineage();
-    let (answer, actions) = rig
-        .core
-        .make_durable_through(rig.epoch(3))
-        .expect("the default lineage");
+    let (answer, actions) = rig.sealed(rig.epoch(3));
     assert_eq!(answer, DurabilityRequest::Submitted);
     assert!(actions.submit.is_empty(), "nothing to commit");
     assert!(actions.deliver);
@@ -433,10 +480,7 @@ fn a_seal_commits_each_target_its_writes_reached_once() {
         rig.act(actions);
     }
     assert!(commits.is_empty(), "nothing was sealed yet");
-    let (_, actions) = rig
-        .core
-        .make_durable_through(rig.epoch(1))
-        .expect("the default lineage");
+    let (_, actions) = rig.sealed(rig.epoch(1));
     let mut targets: Vec<IoTargetKey> = actions.submit.iter().map(|s| s.target).collect();
     targets.sort_by_key(|key| key.0);
     assert_eq!(targets, [KEY, OTHER]);
@@ -557,10 +601,7 @@ fn deliver_marks_only_the_queue_becoming_non_empty() {
     let again = rig.core.complete(second);
     assert!(!again.deliver, "it was not empty");
     rig.entries();
-    let (_, sealed) = rig
-        .core
-        .make_durable_through(rig.epoch(1))
-        .expect("the default lineage");
+    let (_, sealed) = rig.sealed(rig.epoch(1));
     assert!(!sealed.deliver, "a seal waiting on its commit adds nothing");
     rig.act(sealed);
     rig.backend.submit().expect("submit");
@@ -598,17 +639,17 @@ fn a_registered_region_completes_without_a_buffer() {
         offset: 0,
         length: 5,
     };
-    rig.core
-        .write(
-            KEY,
-            0,
-            SubmissionData::Registered(region),
-            epoch,
-            "span",
-            WriteOptions::new(),
-            |submission| backend.push(submission),
-        )
-        .expect("accepted");
+    let pushed = rig.core.write(
+        KEY,
+        0,
+        SubmissionData::Registered(region),
+        epoch,
+        "span",
+        WriteOptions::new(),
+        |submission| backend.push(submission),
+    );
+    rig.report(&pushed, OpKind::Write { epoch }, 5, "span", None);
+    pushed.expect("accepted");
     rig.run();
     let entries = rig.entries();
     let [Entry::Op(op)] = entries.as_slice() else {
@@ -784,9 +825,6 @@ fn each_core_has_its_own_lineages() {
 fn nothing_to_do_is_empty() {
     let mut rig = Rig::new();
     assert!(rig.core.retry().is_empty());
-    let (_, actions) = rig
-        .core
-        .make_durable_through(rig.epoch(1))
-        .expect("the default lineage");
+    let (_, actions) = rig.sealed(rig.epoch(1));
     assert!(!actions.is_empty(), "it delivered");
 }

@@ -14,6 +14,11 @@ use win_time_sys::InterruptClock;
 use windows_ioring_sys::RegisteredSpan;
 
 use super::{TempFile, V, empty, setup};
+
+/// A test buffer's length, as the oracle's push hook takes it.
+fn length(len: usize) -> u32 {
+    u32::try_from(len).expect("a test buffer's length fits a u32")
+}
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::ids::{Lineage, LineageHandle, OpId};
@@ -149,7 +154,7 @@ impl<K: TimeBase> Harness<K> {
             .write(file, offset, bytes.to_vec(), lineage.at(epoch), context)
             .expect("push a write");
         let epoch = Epoch::new(lineage.lineage(), epoch);
-        self.pushed(id, OpKind::Write { epoch }, context);
+        self.pushed(id, OpKind::Write { epoch }, length(bytes.len()), context);
         id
     }
 
@@ -164,13 +169,13 @@ impl<K: TimeBase> Harness<K> {
             .ring
             .read(file, offset, vec![0; len], context)
             .expect("push a read");
-        self.pushed(id, OpKind::Read, context);
+        self.pushed(id, OpKind::Read, length(len), context);
         id
     }
 
-    pub(super) fn pushed(&mut self, id: OpId, kind: OpKind<V>, context: u32) {
+    pub(super) fn pushed(&mut self, id: OpId, kind: OpKind<V>, length: u32, context: u32) {
         self.oracle
-            .pushed(id, kind, context)
+            .pushed(id, kind, length, context)
             .expect("the oracle accepts the push");
     }
 
@@ -304,7 +309,7 @@ fn spans_of_the_registered_buffers_round_trip() {
         .ring
         .write_registered(GIVEN, 8, span, harness.default.at(1), 1)
         .expect("push a registered write");
-    harness.pushed(write, OpKind::Write { epoch }, 1);
+    harness.pushed(write, OpKind::Write { epoch }, span.len, 1);
     let written = harness.next();
     assert_eq!(transferred(&written), 16);
     assert!(
@@ -321,7 +326,7 @@ fn spans_of_the_registered_buffers_round_trip() {
         .ring
         .read_registered(GIVEN, 8, into, 2)
         .expect("push a registered read");
-    harness.pushed(read, OpKind::Read, 2);
+    harness.pushed(read, OpKind::Read, into.len, 2);
     let back = harness.next();
     assert_eq!(transferred(&back), 16);
     assert!(back.buffer.is_none());
@@ -450,7 +455,7 @@ fn the_caching_choice_reaches_the_kernel() {
                 WriteOptions::new().caching(caching),
             )
             .expect("push a write");
-        harness.pushed(id, OpKind::Write { epoch }, context);
+        harness.pushed(id, OpKind::Write { epoch }, 7, context);
     }
     let mut completions = harness.next_n(2);
     completions.sort_by_key(|c| c.context);
@@ -670,7 +675,7 @@ fn the_readiness_signal_is_set_on_every_empty_to_non_empty_transition() {
     )
     .expect("dioring keeps DI-D-28's rule");
     for (id, context) in pushed {
-        harness.pushed(id, OpKind::Read, context);
+        harness.pushed(id, OpKind::Read, 4, context);
     }
     assert_eq!(entries.len(), 2);
     for entry in &entries {

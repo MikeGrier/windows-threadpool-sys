@@ -91,9 +91,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.3** -- `DurableIoCore` completed: gates and held operations, the provider's requests and answers, lineages, failures, and `close`, over the in-memory backend. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310353)
 
-- [ ] **DI-3.10.3.5.4** -- **The oracle beside the core**: the push hook gains each write's length,
-  and the rule that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2`; the
-  oracle run beside the core's tests on the in-memory backend.
+- [x] **DI-3.10.3.5.4** -- The oracle beside the core: the push hook takes each operation's length, a write completing other than in full is `WriteNotInFull`, and the core's tests run under the oracle. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310354)
 
 - [ ] **DI-3.10.3.5.5** -- **The Windows backend and the Win32 file target**: the backend over
   `windows-ioring-sys`' `IoRing`, threadless -- push, submit, pop, and the ring's completion event
@@ -211,7 +209,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   its `file` on both paths (DI-D-50 P6), the driver's test no longer checking a lent handle;
   an import's reach is one function, `import_reach`, both paths share; `close` hands back the
   held operations, the failures and the lineages, leaving what is in flight to the backend; and
-  `io_core` is a facade with `lineages`, `failures` and `provider` parts.
+  `io_core` is a facade with `lineages`, `failures` and `provider` parts. From `DI-3.10.3.5.4`:
+  `pushed` and `pushed_gated` take a `length` after the kind, for every operation -- a read's is
+  its buffer and is not checked, since a read may complete short; the rule is exact, so a write
+  transferring more than its length is `WriteNotInFull` as a shorter one is; and the core's test
+  rig reports each accepted push, each seal answered `Submitted` and each heal, and observes every
+  entry it pops.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

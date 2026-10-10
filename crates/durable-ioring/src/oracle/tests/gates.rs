@@ -4,7 +4,7 @@
 
 use win_time_sys::TimePoint;
 
-use super::{Oracle, TestEntry, V, completion, done, op};
+use super::{LEN, Oracle, TestEntry, V, completion, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::oracle::Violation;
@@ -73,7 +73,7 @@ fn a_gated_operation_completes_only_once_its_gate_is_reported_durable() {
     let kind = write(at(instance, 0, 2));
     let mut oracle = Oracle::new();
     oracle
-        .pushed_gated(op(instance, 0), kind, 0, gate)
+        .pushed_gated(op(instance, 0), kind, LEN, 0, gate)
         .expect("a gated write");
     assert!(matches!(
         oracle.observe(&done(op(instance, 0), kind, 0)),
@@ -82,7 +82,7 @@ fn a_gated_operation_completes_only_once_its_gate_is_reported_durable() {
 
     let mut oracle = Oracle::new();
     oracle
-        .pushed_gated(op(instance, 0), OpKind::Read, 0, gate)
+        .pushed_gated(op(instance, 0), OpKind::Read, LEN, 0, gate)
         .expect("a gated read");
     oracle.sealed(at(instance, 1, 3));
     oracle.observe(&durable(at(instance, 1, 3))).expect("3");
@@ -96,7 +96,7 @@ fn a_gated_operation_completes_only_once_its_gate_is_reported_durable() {
 
     let mut oracle = Oracle::new();
     oracle
-        .pushed_gated(op(instance, 0), kind, 0, gate)
+        .pushed_gated(op(instance, 0), kind, LEN, 0, gate)
         .expect("a gated write");
     oracle.sealed(at(instance, 1, 5));
     oracle.observe(&durable(at(instance, 1, 5))).expect("5");
@@ -111,7 +111,7 @@ fn never_issued_comes_only_for_a_gated_operation() {
     let instance = InstanceId::next();
     let mut oracle = Oracle::new();
     oracle
-        .pushed(op(instance, 0), OpKind::Read, 0)
+        .pushed(op(instance, 0), OpKind::Read, LEN, 0)
         .expect("an ungated read");
     assert!(matches!(
         oracle.observe(&never_issued(
@@ -135,9 +135,11 @@ fn never_issued_names_its_gate_or_own_epoch_once_reported_abandoned() {
     let setup = |epoch: Epoch<V>| {
         let mut oracle = Oracle::new();
         oracle
-            .pushed_gated(op(instance, 0), write(own), 0, gate)
+            .pushed_gated(op(instance, 0), write(own), LEN, 0, gate)
             .expect("a gated write");
-        oracle.pushed(suspect, write(epoch), 9).expect("a write");
+        oracle
+            .pushed(suspect, write(epoch), LEN, 9)
+            .expect("a write");
         oracle
             .observe(&failed(failure, &[(suspect, epoch)]))
             .expect("observed");
@@ -183,10 +185,10 @@ fn never_issued_may_name_a_gate_its_lineage_ended_before_reaching() {
     let ended = Lineage { instance, seq: 1 };
     let mut oracle = Oracle::new();
     oracle
-        .pushed_gated(op(instance, 0), OpKind::Read, 0, at(instance, 1, 4))
+        .pushed_gated(op(instance, 0), OpKind::Read, LEN, 0, at(instance, 1, 4))
         .expect("a gated read");
     oracle
-        .pushed_gated(op(instance, 1), OpKind::Read, 1, at(instance, 1, 2))
+        .pushed_gated(op(instance, 1), OpKind::Read, LEN, 1, at(instance, 1, 2))
         .expect("another");
     oracle.sealed(at(instance, 1, 2));
     oracle.observe(&durable(at(instance, 1, 2))).expect("2");
@@ -225,7 +227,7 @@ fn no_failure_suspects_a_gated_write_before_its_gate_is_reported_durable() {
     let held = op(instance, 0);
     let mut oracle = Oracle::new();
     oracle
-        .pushed_gated(held, write(own), 0, gate)
+        .pushed_gated(held, write(own), LEN, 0, gate)
         .expect("a gated write");
     assert!(matches!(
         oracle.observe(&failed(FailureId { instance, seq: 0 }, &[(held, own)])),

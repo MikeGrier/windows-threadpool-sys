@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The oracle's failure rules (DI-3.2.4), each refused when broken and accepted when kept.
 
-use super::{Oracle, TestEntry, V, done, epoch, op, write_kind};
+use super::{LEN, Oracle, TestEntry, V, done, epoch, op, write_kind};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, OpId};
 use crate::oracle::Violation;
@@ -62,10 +62,10 @@ fn healed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
 fn two_writes(instance: InstanceId) -> Oracle {
     let mut oracle = Oracle::new();
     oracle
-        .pushed(op(instance, 0), write_kind(instance, 1), 0)
+        .pushed(op(instance, 0), write_kind(instance, 1), LEN, 0)
         .expect("a write");
     oracle
-        .pushed(op(instance, 1), write_kind(instance, 3), 1)
+        .pushed(op(instance, 1), write_kind(instance, 3), LEN, 1)
         .expect("a write");
     oracle
         .observe(&done(op(instance, 0), write_kind(instance, 1), 0))
@@ -246,21 +246,21 @@ fn a_write_into_an_abandoned_epoch_is_a_violation_and_one_into_another_epoch_is_
         .observe(&failed(failure(instance, 0), &[w0, w1]))
         .expect("a failure");
     oracle
-        .pushed(op(instance, 2), write_kind(instance, 3), 2)
+        .pushed(op(instance, 2), write_kind(instance, 3), LEN, 2)
         .expect("3 is not abandoned until the entry says so");
     oracle
         .observe(&abandoned(failure(instance, 0), &[w0, w1]))
         .expect("abandoned");
     assert!(matches!(
-        oracle.pushed(op(instance, 3), write_kind(instance, 3), 3),
+        oracle.pushed(op(instance, 3), write_kind(instance, 3), LEN, 3),
         Err(Violation::WriteToAbandoned { .. })
     ));
     oracle
-        .pushed(op(instance, 4), write_kind(instance, 4), 4)
+        .pushed(op(instance, 4), write_kind(instance, 4), LEN, 4)
         .expect("4 was not abandoned");
     let other = InstanceId::next();
     oracle
-        .pushed(op(other, 0), write_kind(other, 3), 0)
+        .pushed(op(other, 0), write_kind(other, 3), LEN, 0)
         .expect("another lineage's epoch 3");
 }
 

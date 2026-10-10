@@ -139,7 +139,7 @@ fn every_operation_pushed_through_the_owner_is_delivered_once() {
             .write(FILE, u64::from(i) * 16, vec![i as u8; 16], default.at(1), i)
             .expect("push a write");
         oracle
-            .pushed(id, OpKind::Write { epoch }, i)
+            .pushed(id, OpKind::Write { epoch }, 16, i)
             .expect("the oracle accepts the push");
     }
     for _ in 0..16 {

@@ -154,10 +154,12 @@ fn a_heal_takes_effect_with_the_next_successful_seal() {
             .any(|line| line.starts_with("blocked 1")),
         "{shown_before:?}"
     );
+    let healed = rig.core.failures()[0].id;
     let actions = rig
         .core
         .resolve(vec![(token, Resolution::Heal)])
         .expect("our token");
+    rig.oracle.healed(healed);
     rig.act(actions);
     rig.write(2, 0, b"again").expect("accepted");
     rig.seal(2);

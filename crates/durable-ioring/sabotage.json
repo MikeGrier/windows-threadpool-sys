@@ -1668,6 +1668,38 @@
       "why": "DI-D-27: the durability core asks the provider only for the domains it serves; without them a served target's seal waits for an answer never requested.",
       "find": ["        core.durability.serve(Arc::clone(&served));\n"],
       "replace": [""]
+    },
+    {
+      "name": "DI-3.10.3.5.4: the oracle accepts a short write",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "DI-D-50: a write completes in full or with a fault; a short count is a target breaking its obligation.",
+      "find": ["            && *transferred != pushed.length\n"],
+      "replace": ["            && *transferred > pushed.length\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.4: the oracle accepts a write longer than it asked",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A write transferring more than its length did not do what was pushed; in full means exactly.",
+      "find": ["            && *transferred != pushed.length\n"],
+      "replace": ["            && *transferred < pushed.length\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.4: the oracle holds a read to its length",
+      "file": "src/oracle.rs",
+      "expect": "caught",
+      "why": "A read may complete short (the contract); refusing one encodes a rule the contract does not make.",
+      "find": ["        if let (OpKind::Write { .. }, Outcome::Transferred(transferred)) =\n"],
+      "replace": ["        if let (_, Outcome::Transferred(transferred)) =\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.4: the core's tests do not report their seals to the oracle",
+      "file": "src/io_core/tests.rs",
+      "expect": "caught",
+      "why": "The oracle runs beside the core's tests (DI-D-24); a Durable for a seal it was never told of is DurableNotSealed, which only the oracle sees -- so this proves the binding is live.",
+      "find": ["            self.oracle.sealed(through);\n"],
+      "replace": [""]
     }
   ]
 }
