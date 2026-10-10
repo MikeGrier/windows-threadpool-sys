@@ -1099,7 +1099,7 @@
       "expect": "caught",
       "why": "DI-D-27: an answer records the outcome. Dropping it leaves every provider-served seal pending.",
       "find": ["        let due = core\n            .durability\n            .provided(call.lineage, call.seal, call.domain, outcome);\n"],
-      "replace": ["        let _: Result<(), FailureCause<DioringIds<E>>> = outcome;\n        let due: Due<E, FlushTarget, WinInstant> = Due::default();\n"]
+      "replace": ["        let _: Result<(), crate::types::FailureCause<DioringIds<E>>> = outcome;\n        let due: Due<E, FlushTarget, WinInstant> = Due::default();\n"]
     },
     {
       "name": "DI-3.2.6: the provider is never called",
