@@ -365,7 +365,8 @@ where
                 });
             }
         };
-        let registered_files = match register_files(&mut ring, &files) {
+        let handles = files.iter().map(|f| f.file.clone()).collect();
+        let registered_files = match register_files(&mut ring, handles) {
             Ok(registered) => registered,
             Err(error) => {
                 return Err(SetupError {
@@ -995,15 +996,14 @@ pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
 /// successfully. What would reach them is a ring without the registration op (an older Windows),
 /// more than `u32::MAX` files, a completion that never arrives, or the kernel failing the
 /// completion. Each ends construction as `SetupRefusal::Ring`.
-fn register_files<B, S>(
+pub(crate) fn register_files<B, S>(
     ring: &mut IoRing<B, S>,
-    files: &[TargetSetup],
+    handles: Vec<SharedHandle>,
 ) -> io::Result<Option<RegisteredFiles>> {
-    if files.is_empty() {
+    if handles.is_empty() {
         return Ok(None);
     }
-    // Clones: the ring keeps its own for its life, and dioring keeps the consumer's.
-    let handles = files.iter().map(|f| f.file.clone()).collect();
+    // The caller's clones: the ring keeps them for its life, and the caller keeps its own.
     let mut batch = Batch::new(ring);
     let pending = batch
         .register_shared_files(handles)
@@ -1022,12 +1022,13 @@ fn register_files<B, S>(
 
 /// A buffer registration's outcome: the registration, or `None` for no buffers; or the error with
 /// the buffers, while the kernel has not been given them, and `None` once it has.
-type BufferRegistration<R> = Result<Option<RegisteredBuffers<R>>, (io::Error, Option<Vec<R>>)>;
+pub(crate) type BufferRegistration<R> =
+    Result<Option<RegisteredBuffers<R>>, (io::Error, Option<Vec<R>>)>;
 
 /// Register `buffers` with `ring`, and wait for the registration to complete. Its error paths are
 /// unreached by tests, as [`register_files`]' are; a buffer longer than `u32::MAX` also reaches
 /// one, refused before submission with the buffers handed back.
-fn register_buffers<B, S, R: IoBufMut>(
+pub(crate) fn register_buffers<B, S, R: IoBufMut>(
     ring: &mut IoRing<B, S>,
     buffers: Vec<R>,
 ) -> BufferRegistration<R> {

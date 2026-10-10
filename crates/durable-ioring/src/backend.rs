@@ -3,7 +3,8 @@
 //!
 //! A backend is a ring: [`IoBackend::push`] queues a [`Submission`], [`IoBackend::submit`] is the
 //! doorbell, [`IoBackend::pop`] takes a [`Completion`], and the backend's notification is raised
-//! on every transition of its completions from none to some. It has no threads of its own: who
+//! on every transition of its completions from none to some. A backend may issue a submission
+//! before the doorbell -- the Windows backend's ring submits at every push -- but never later. It has no threads of its own: who
 //! waits on the notification and drains is the driver's delivery (DI-D-52).
 //!
 //! The submission is the core's shape, not the backend's: a write, a read or a commit naming a
@@ -184,7 +185,7 @@ pub struct DuplicateTarget<T> {
 ///
 /// Every submission pushed and then submitted completes exactly once, through [`pop`](Self::pop);
 /// one refused by [`push`](Self::push) never does. A failed [`submit`](Self::submit) leaves what
-/// was queued queued, for the next one.
+/// was queued queued, for the next one, and names its cause as a refused push does.
 pub trait IoBackend {
     /// What it runs I/O for.
     type Target: IoTarget;
@@ -211,7 +212,7 @@ pub trait IoBackend {
     /// How many registered buffers it has; a [`RegisteredRegion`] names one by its position.
     fn registered_buffers(&self) -> u32;
 
-    /// Queue `submission`, to be issued at the next [`submit`](Self::submit).
+    /// Queue `submission`, to be issued no later than the next [`submit`](Self::submit).
     ///
     /// # Errors
     ///
@@ -222,8 +223,9 @@ pub trait IoBackend {
     ///
     /// # Errors
     ///
-    /// The fault the backend reported; what was queued stays queued.
-    fn submit(&mut self) -> Result<(), IoFault>;
+    /// The [`RefusalCause`] of the failure -- drain completions, retry once another submission
+    /// returns, or the backend's report -- and what was queued stays queued.
+    fn submit(&mut self) -> Result<(), RefusalCause>;
 
     /// Take the oldest completion, if there is one.
     ///

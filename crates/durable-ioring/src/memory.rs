@@ -407,7 +407,7 @@ impl IoBackend for MemoryBackend {
         Ok(())
     }
 
-    fn submit(&mut self) -> Result<(), IoFault> {
+    fn submit(&mut self) -> Result<(), RefusalCause> {
         let was_empty = self.completed.is_empty();
         while let Some(submission) = self.queued.pop_front() {
             let completion = self.execute(submission);

@@ -93,11 +93,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.4** -- The oracle beside the core: the push hook takes each operation's length, a write completing other than in full is `WriteNotInFull`, and the core's tests run under the oracle. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310354)
 
-- [ ] **DI-3.10.3.5.5** -- **The Windows backend and the Win32 file target**: the backend over
-  `windows-ioring-sys`' `IoRing`, threadless -- push, submit, pop, and the ring's completion event
-  as its notification -- its refusal causes mapped from `RingCondition`, with a test for each
-  mapping a developer machine can reach; and the Win32 file target over a `SharedHandle`, carrying
-  its flush domains and warranty class.
+- [x] **DI-3.10.3.5.5** -- The Windows backend and the Win32 file target: `WindowsBackend` over `IoRing`, threadless, with its refusal causes mapped from the ring's reports, and `Win32FileTarget` over a `SharedHandle`. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310355)
 
 - [ ] **DI-3.10.3.5.6** -- **The driver moved onto the core, under pool delivery**: `Dioring` runs
   `DurableIoCore` over the Windows backend, with `EventDelivery` as its delivery (DI-D-52's
@@ -214,7 +210,26 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   its buffer and is not checked, since a read may complete short; the rule is exact, so a write
   transferring more than its length is `WriteNotInFull` as a shorter one is; and the core's test
   rig reports each accepted push, each seal answered `Submitted` and each heal, and observes every
-  entry it pops.
+  entry it pops. From `DI-3.10.3.5.5`: the Windows backend issues each push at once, its ring
+  submitting a batch as it ends (the ring crate's D-5), and `submit` reissues what a failed
+  submission left queued -- so the backend trait now says a push is issued no later than the next
+  `submit`, and `submit` reports a `RefusalCause` where it reported an `IoFault`; a full
+  submission queue maps to `SubmitNeeded`, a full completion queue to `DrainNeeded`, a submission
+  running to `Busy`, a corrupt ring to `Unusable`, any other ring condition to `Unknown` with the
+  report, and the ring's own `Unsupported` and `InvalidInput` rejections to `Unsupported` and
+  `Invalid`; a target's geometry is checked before the ring is asked -- offset, length, and an
+  owned buffer's address, a registered region's address being the registration's; targets given
+  at construction are registered and addressed by index, those attached later by their
+  `SharedHandle`, and registered buffers are given at construction only, through a
+  `WindowsBackendSetup` whose refusal hands everything back as today's `Setup` does; the
+  notification is the ring's completion event, duplicated as an `OwnedHandle` and attached at
+  construction; a `Win32FileTarget` defaults to `BestEffort`, unaligned and no capabilities, its
+  class taken on declaration until `DI-3.10.4`; a commit is an unordered flush in the default
+  mode, as today; the fault seam gains `fail_next_commit` on the backend, queued with
+  `fail_next_flush` under `DI-3.11`; the short-write rule moved into the backend as `transfer`,
+  which the relay's `op_outcome` now calls; `register_files` takes handles rather than
+  `TargetSetup`s; and the backend lives in a public `windows_backend` module, `Win32FileTarget`
+  with it rather than at the crate root.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an
@@ -226,8 +241,9 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   testing and driving"). It does not replace DI-4.1.
 
 - [ ] **DI-3.11** -- **The fault seam's merge-or-delete decision**, once `DI-3.3` is proven: the
-  `fault-injection` feature's `fail_next_flush` duplicates what the in-memory backend scripts
-  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), and stays until then under the duplicate-then-decide rule.
+  `fault-injection` feature's `fail_next_flush`, and the Windows backend's `fail_next_commit`
+  added beside it in `DI-3.10.3.5.5`, duplicate what the in-memory backend scripts
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), and stay until then under the duplicate-then-decide rule.
 
 - [ ] **DI-3.4** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).

@@ -26,6 +26,7 @@ pub mod memory;
 pub mod oracle;
 mod provider;
 mod types;
+pub mod windows_backend;
 
 pub use clock::{Instant, StampClock};
 pub use contract::{

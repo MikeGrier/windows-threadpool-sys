@@ -1803,3 +1803,15 @@ The core now carries the whole `DurableRing` surface without a ring: `src/io_cor
 **The oracle beside the core**: the push hook gains each write's length,
   and the rule that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2`; the
   oracle run beside the core's tests on the in-memory backend.
+
+## Moved 2026-10-10 12:59:25 -07:00 -- DI-3.10.3.5.5: the Windows backend and the Win32 file target
+
+### <a id="di-310355"></a>DI-3.10.3.5.5 -- The Windows backend and the Win32 file target: `WindowsBackend` over `IoRing`, threadless, with its refusal causes mapped from the ring's reports, and `Win32FileTarget` over a `SharedHandle`. *(completed 2026-10-10 12:59:25 -07:00)*
+
+`src/windows_backend.rs` holds `WindowsBackend` and its setup; `src/windows_backend/file_target.rs` holds `Win32FileTarget`; `src/windows_backend/tests.rs` drives a real ring, maps every `RingCondition` through a real completion's injected failure, and runs `DurableIoCore` over the backend under the oracle. Nothing in `Dioring` uses the backend yet: that is `DI-3.10.3.5.6`. Paths no test can reach are named in the sabotage manifest's `notCoveredHere`. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**The Windows backend and the Win32 file target**: the backend over
+  `windows-ioring-sys`' `IoRing`, threadless -- push, submit, pop, and the ring's completion event
+  as its notification -- its refusal causes mapped from `RingCondition`, with a test for each
+  mapping a developer machine can reach; and the Win32 file target over a `SharedHandle`, carrying
+  its flush domains and warranty class.

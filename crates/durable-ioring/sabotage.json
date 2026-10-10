@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (relay.rs's op_outcome) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50).",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a submission that fails, and submit's reissue of it; a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; an owned buffer the ring refuses, which needs one longer than a u32; and attaching the completion event at construction.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -26,8 +26,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A file given at construction must be held by the ring for its life (D-81); without the registration nothing holds it once the consumer's clone is gone.",
-      "find": ["    if files.is_empty() {"],
-      "replace": ["    if files.is_empty() || !files.is_empty() {"]
+      "find": ["    if handles.is_empty() {"],
+      "replace": ["    if handles.is_empty() || !handles.is_empty() {"]
     },
     {
       "name": "DI-3.2.1: a domain repeated within one file counts twice",
@@ -79,19 +79,19 @@
     },
     {
       "name": "DI-3.2.2.1: a completion reports no bytes transferred",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "The count is the ring's, and a read may come back short for the consumer to handle; reporting zero hides what happened.",
-      "find": ["                Outcome::Transferred(transferred)\n"],
-      "replace": ["                Outcome::Transferred(0)\n"]
+      "find": ["                Ok(transferred)\n"],
+      "replace": ["                Ok(0)\n"]
     },
     {
       "name": "DI-3.2.2.1: a failed operation is reported as a transfer",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "A write the kernel refused, reported as written, is a lost write the consumer cannot see. Caught by the read-only-handle test and by the caching test.",
-      "find": ["        Err(error) => Outcome::Failed(windows_fault(error)),\n"],
-      "replace": ["        Err(_) => Outcome::Transferred(0),\n"]
+      "find": ["        Err(error) => Err(windows_fault(error)),\n"],
+      "replace": ["        Err(_) => Ok(0),\n"]
     },
     {
       "name": "DI-3.2.2.1: a write is recorded as a read",
@@ -607,7 +607,7 @@
     },
     {
       "name": "DI-3.10.3.2: a short write is reported as transferred",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "A target completes a write in full or with a fault (DI-D-50); passing a short count through as a transfer lets the core cover bytes that were never written.",
       "find": ["            if write && transferred < requested {\n"],
@@ -615,7 +615,7 @@
     },
     {
       "name": "DI-3.10.3.2: a full write is reported as a fault",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "The other direction of the same guard: a write that transferred every byte it asked for completed, and turning it into a fault would nullify every write.",
       "find": ["            if write && transferred < requested {\n"],
@@ -623,7 +623,7 @@
     },
     {
       "name": "DI-3.10.3.2: a short read is reported as a fault",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "The obligation is a write's: a read may come back short, and the consumer handles its count.",
       "find": ["            if write && transferred < requested {\n"],
@@ -1700,6 +1700,78 @@
       "why": "The oracle runs beside the core's tests (DI-D-24); a Durable for a seal it was never told of is DurableNotSealed, which only the oracle sees -- so this proves the binding is live.",
       "find": ["            self.oracle.sealed(through);\n"],
       "replace": [""]
+    },
+    {
+      "name": "DI-3.10.3.5.5: a full submission queue is reported as needing a drain",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: the cause is what lets the caller act without probing; a full submission queue is cleared by a submit.",
+      "find": ["        Some(RingCondition::SubmissionQueueFull) => RefusalCause::SubmitNeeded,\n"],
+      "replace": ["        Some(RingCondition::SubmissionQueueFull) => RefusalCause::DrainNeeded,\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: a full completion queue is reported as needing a submit",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a full completion queue is cleared by draining completions, not by submitting more.",
+      "find": ["        Some(RingCondition::CompletionQueueTooFull) => RefusalCause::DrainNeeded,\n"],
+      "replace": ["        Some(RingCondition::CompletionQueueTooFull) => RefusalCause::SubmitNeeded,\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: a corrupt ring is reported as of unknown cause",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a corrupt ring takes no more submissions, ever; saying so stops a caller retrying.",
+      "find": ["        Some(RingCondition::Corrupt) => RefusalCause::Unusable(windows_fault(error)),\n"],
+      "replace": ["        Some(RingCondition::Corrupt) => RefusalCause::Unknown(windows_fault(error)),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: a malformed submission is reported as of unknown cause",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a malformed submission is Invalid, which retrying never clears; Unknown hides that.",
+      "find": ["            io::ErrorKind::InvalidInput => RefusalCause::Invalid,\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.10.3.5.5: a target's geometry is not enforced",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A target states the alignment its operations need (DI-D-50 P2); the backend refuses what it does not admit rather than let the kernel fail it.",
+      "find": ["        (!admitted).then_some(RefusalCause::Invalid)\n"],
+      "replace": ["        admitted.then_some(RefusalCause::Invalid).and(None)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: an armed commit failure lands on another target",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "The fault seam fails the named target's next commit and nothing else.",
+      "find": ["                .position(|(target, _)| *target == sidecar.target)\n"],
+      "replace": ["                .position(|(target, _)| *target != sidecar.target)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: detach does not hand the target back",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A detached target goes back to its owner, as a refused attach hands it back.",
+      "find": ["        self.targets.remove(&key).map(|slot| slot.target)\n"],
+      "replace": ["        self.targets.remove(&key).and(None)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.5: the backend reports no registered buffers",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A registered region names a buffer by position; the count is how a caller knows which positions exist.",
+      "find": ["        self.registered.as_ref().map_or(0, RegisteredBuffers::len)\n"],
+      "replace": ["        0\n"]
+    },
+    {
+      "name": "CONTROL: the Windows backend tests its submit flag by comparison",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the backend: negating a bool and comparing it with false are the same test. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["        if !self.unsubmitted {\n"],
+      "replace": ["        if self.unsubmitted == false {\n"]
     }
   ]
 }

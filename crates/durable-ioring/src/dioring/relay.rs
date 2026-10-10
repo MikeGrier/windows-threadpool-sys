@@ -36,41 +36,26 @@ use super::durability::{
 use super::{Sidecar, TimeBase, WinInstant};
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
-use crate::error_code::{WINDOWS_IORING, windows_fault};
+use crate::error_code::windows_fault;
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
 use crate::types::IoTargetKey;
-use crate::types::{Entry, Epoch, IoFault, OpCompletion, OpKind, Outcome};
+use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
+use crate::windows_backend::transfer;
 
 #[cfg(test)]
 mod tests;
 
-/// How a consumer operation's completion ended it, on the Windows path. A target completes a
-/// write in full or with a fault (DI-D-50), and the I/O ring does not complete a file or volume
-/// write short, so a short count is a fault here -- the `Fault` policy -- with no code, since no
-/// layer gave one. A read may complete short.
+/// How a consumer operation's completion ended it, on the Windows path: the backend's
+/// [`transfer`] rule, as an outcome.
 pub(crate) fn op_outcome<V: Identities>(
     result: io::Result<usize>,
     write: bool,
     requested: u32,
 ) -> Outcome<V> {
-    match result {
-        // A transfer is never longer than the `u32` length it was pushed with.
-        Ok(transferred) => {
-            let transferred = u32::try_from(transferred).unwrap_or(u32::MAX);
-            if write && transferred < requested {
-                Outcome::Failed(IoFault {
-                    source: WINDOWS_IORING,
-                    code: None,
-                    error: Arc::new(io::Error::other(format!(
-                        "the write completed short: {transferred} of {requested} bytes"
-                    ))),
-                })
-            } else {
-                Outcome::Transferred(transferred)
-            }
-        }
-        Err(error) => Outcome::Failed(windows_fault(error)),
+    match transfer(result, write, requested) {
+        Ok(transferred) => Outcome::Transferred(transferred),
+        Err(fault) => Outcome::Failed(fault),
     }
 }
 
