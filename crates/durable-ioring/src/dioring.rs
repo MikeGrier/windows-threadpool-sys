@@ -168,14 +168,6 @@ impl FileSlot {
         }
     }
 
-    /// The consumer's handle to the file, lent to its provider.
-    fn handle(&self) -> SharedHandle {
-        match self {
-            FileSlot::Registered { file, .. } => file.clone(),
-            FileSlot::Shared(handle) => handle.clone(),
-        }
-    }
-
     /// What a flush of this file is pushed against.
     fn flush_target(&self) -> FlushTarget {
         match self {
@@ -486,7 +478,37 @@ where
 
 /// What an import reaches: the files, the one lineage it is confined to if any, and the domains it
 /// named that the instance has never been given.
-type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
+pub(crate) type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
+
+/// The targets an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
+/// scope names one, and the domains it names that the instance has never been given, in the order
+/// named (DI-D-46). A domain no target was declared with reaches only the targets declared with
+/// none. `live` says whether a lineage is the instance's own and live; `domains` is every domain
+/// the instance has interned.
+pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
+    scope: &ImportScope<DioringIds<E, I>>,
+    domains: &HashMap<FlushDomain, DomainId>,
+    live: impl Fn(Lineage) -> bool,
+) -> Result<ImportReach, UnknownLineage<DioringIds<E, I>>> {
+    Ok(match scope {
+        ImportScope::All => (Reach::All, None, Vec::new()),
+        ImportScope::Lineage(lineage) if live(*lineage) => {
+            (Reach::All, Some(lineage.seq), Vec::new())
+        }
+        ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
+        ImportScope::Domains(names) => {
+            let mut known = Vec::with_capacity(names.len());
+            let mut unmatched = Vec::new();
+            for domain in names {
+                match domains.get(domain) {
+                    Some(&id) => known.push(id),
+                    None => unmatched.push(domain.clone()),
+                }
+            }
+            (Reach::Domains(known.into()), None, unmatched)
+        }
+    })
+}
 
 /// Where an instance's lineage handles report their release.
 fn home<T: Home + 'static>(relay: &Arc<T>) -> Weak<dyn Home> {
@@ -776,32 +798,12 @@ where
     R: IoBufMut,
     K: TimeBase,
 {
-    /// The files an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
-    /// scope names one, and the domains it names that the instance has never been given, in the
-    /// order named (DI-D-46). A domain no file was declared with reaches only the files declared
-    /// with none.
+    /// What an imported failure reaches: see [`import_reach`].
     fn reach(
         &self,
         scope: &ImportScope<DioringIds<E>>,
     ) -> Result<ImportReach, UnknownLineage<DioringIds<E>>> {
-        Ok(match scope {
-            ImportScope::All => (Reach::All, None, Vec::new()),
-            ImportScope::Lineage(lineage) if self.is_live(*lineage) => {
-                (Reach::All, Some(lineage.seq), Vec::new())
-            }
-            ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
-            ImportScope::Domains(domains) => {
-                let mut known = Vec::with_capacity(domains.len());
-                let mut unmatched = Vec::new();
-                for domain in domains {
-                    match self.domains.get(domain) {
-                        Some(&id) => known.push(id),
-                        None => unmatched.push(domain.clone()),
-                    }
-                }
-                (Reach::Domains(known.into()), None, unmatched)
-            }
-        })
+        import_reach(scope, &self.domains, |lineage| self.is_live(lineage))
     }
 
     /// Act on what a consumer call made due, then push every held operation released so far: a
@@ -859,11 +861,7 @@ where
                 let files = part
                     .files
                     .into_iter()
-                    .map(|(key, writes)| IoTargetWrites {
-                        key,
-                        file: self.files[&key].target.handle(),
-                        writes,
-                    })
+                    .map(|(key, writes)| IoTargetWrites { key, writes })
                     .collect();
                 let completion = DomainCompletion::new(
                     Weak::clone(&home),
@@ -1067,7 +1065,9 @@ fn registration_completion<B, S>(ring: &mut IoRing<B, S>) -> io::Result<Completi
 }
 
 /// The first value `values` yields twice.
-fn first_repeat<T: Eq + std::hash::Hash + Clone>(values: impl IntoIterator<Item = T>) -> Option<T> {
+pub(crate) fn first_repeat<T: Eq + std::hash::Hash + Clone>(
+    values: impl IntoIterator<Item = T>,
+) -> Option<T> {
     let mut seen = HashSet::new();
     values.into_iter().find(|value| !seen.insert(value.clone()))
 }

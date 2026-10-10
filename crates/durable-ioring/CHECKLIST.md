@@ -89,11 +89,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.2** -- `DurableIoCore`, public: targets, writes and reads, completions, the seal and its commits, refusals, the entry queue and in-flight counts, over the in-memory backend. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310352)
 
-- [ ] **DI-3.10.3.5.3** -- **`DurableIoCore`: gates, seals, providers, lineages and failures**: the
-  rest of today's `Dioring` and `Core` state moved over the core -- held operations and their
-  release, provider requests and answers,
-  lineages minted, ended and retired, `resolve` and `import_failure` -- so the core alone carries
-  the whole `DurableRing` surface. Tested on the in-memory backend.
+- [x] **DI-3.10.3.5.3** -- `DurableIoCore` completed: gates and held operations, the provider's requests and answers, lineages, failures, and `close`, over the in-memory backend. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310353)
 
 - [ ] **DI-3.10.3.5.4** -- **The oracle beside the core**: the push hook gains each write's length,
   and the rule that a write never completes short (DI-D-50), queued here from `DI-3.10.3.2`; the
@@ -201,7 +197,21 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   built-in default, `IoTargetBusy::held_for_gate` is zero, and a gate release, a provider request
   or a never-issued operation reaching the core is an inconsistency; the module is `io_core`, as
   `core` would shadow the `core` crate; and the event-to-entry conversion is one method,
-  `Event::into_entry`, which the relay now uses too.
+  `Event::into_entry`, which the relay now uses too. From `DI-3.10.3.5.3`: a held operation
+  spends its id when held, and once released is emitted in the actions of the change that
+  released it, recorded as issued at emission, and kept and emitted again if refused, as a commit
+  is; `write` and `read` take `WriteOptions` and `ReadOptions`, replacing the plain `WriteCaching`;
+  lineage calls take a plain `Lineage`, an ended or retired one refused as `Foreign`, whose doc on
+  both refusal enums now says so, rather than a new variant; the core holds no provider --
+  `with_provider` takes the served domains and refuses a repeat as `DuplicateDomain`, a seal's
+  request comes out as a `ProviderRequest` of `ProviderPart`s in `CoreActions::requests`, which
+  makes `CoreActions` generic over the identities, and each answer goes back through `provided`
+  with a now-public `DomainOutcome`, whose one conversion to a cause the relay uses too; an answer
+  naming another core's lineage or an unserved domain is an inconsistency; `IoTargetWrites` loses
+  its `file` on both paths (DI-D-50 P6), the driver's test no longer checking a lent handle;
+  an import's reach is one function, `import_reach`, both paths share; `close` hands back the
+  held operations, the failures and the lineages, leaving what is in flight to the backend; and
+  `io_core` is a facade with `lineages`, `failures` and `provider` parts.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

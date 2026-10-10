@@ -1781,3 +1781,15 @@ Built per [DI-D-51](DESIGN-NOTES.md#di-d-51) in `src/diagnostics.rs`. The core h
   emits, and `durable_through`, `sealed_through` and `epoch_state`, since without a seal no
   commit exists and the commit path -- completed, failed and refused -- could not be reached by a
   test. Tested on the in-memory backend.
+
+## Moved 2026-10-10 09:25:41 -04:00 -- DI-3.10.3.5.3: the core completed
+
+### <a id="di-310353"></a>DI-3.10.3.5.3 -- `DurableIoCore` completed: gates and held operations, the provider's requests and answers, lineages, failures, and `close`, over the in-memory backend. *(completed 2026-10-10 09:25:41 -04:00)*
+
+The core now carries the whole `DurableRing` surface without a ring: `src/io_core.rs` with gates, and its `lineages`, `failures` and `provider` parts, tested in `src/io_core/tests/`. `IoTargetWrites` lost its lent handle on both paths (DI-D-50 P6). The stale "interrupt time, dioring's one time base" on `Failed::observed` and in the oracle's stamp rule, left by `DI-3.10.3.4`, was corrected in the same sweep. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**`DurableIoCore`: gates, seals, providers, lineages and failures**: the
+  rest of today's `Dioring` and `Core` state moved over the core -- held operations and their
+  release, provider requests and answers,
+  lineages minted, ended and retired, `resolve` and `import_failure` -- so the core alone carries
+  the whole `DurableRing` surface. Tested on the in-memory backend.

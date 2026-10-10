@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The core driven over the in-memory backend: operations, completions, seals and commits,
-//! refusals, the queue, and removing a target.
+//! refusals, the queue, and removing a target; gates, lineages, failures and the provider in the
+//! modules below.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -13,13 +14,19 @@ use crate::backend::{
 };
 use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
-use crate::ids::{DioringIds, OpId};
+use crate::ids::{DioringIds, Lineage, OpId};
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
+use crate::provider::ProviderRequest;
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, IoTargetKey, OpKind,
-    Outcome, PushError, PushRefusal, RemoveTargetError, SealError, WriteCaching,
+    Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
 };
+
+mod failures;
+mod gates;
+mod lineages;
+mod provider;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);
@@ -48,6 +55,8 @@ fn nz(n: u32) -> NonZeroU32 {
 struct Rig {
     core: Core,
     backend: MemoryBackend,
+    /// Every provider request the core has made, in order.
+    requests: Vec<ProviderRequest<V>>,
 }
 
 impl Rig {
@@ -56,12 +65,19 @@ impl Rig {
     }
 
     fn with_queues(submissions: u32, completions: u32) -> Self {
-        let mut rig = Self {
-            core: Core::new(Ticks::default(), Arc::new(NoDiagnostics)),
-            backend: MemoryBackend::new(nz(submissions), nz(completions)),
-        };
+        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        rig.backend = MemoryBackend::new(nz(submissions), nz(completions));
         rig.attach(KEY, MemoryTarget::new());
         rig
+    }
+
+    /// `core`, with no target, over a backend with room to spare.
+    fn over(core: Core) -> Self {
+        Self {
+            core,
+            backend: MemoryBackend::new(nz(8), nz(16)),
+            requests: Vec::new(),
+        }
     }
 
     fn attach(&mut self, key: IoTargetKey, target: MemoryTarget) {
@@ -77,6 +93,18 @@ impl Rig {
 
     fn write_to(&mut self, key: IoTargetKey, epoch: u64, offset: u64, bytes: &[u8]) -> Pushed {
         let epoch = self.epoch(epoch);
+        self.write_with(key, epoch, offset, bytes, WriteOptions::new())
+    }
+
+    /// A write of `bytes`, tagged `epoch` in any lineage, with `options`.
+    fn write_with(
+        &mut self,
+        key: IoTargetKey,
+        epoch: Epoch<V>,
+        offset: u64,
+        bytes: &[u8],
+        options: WriteOptions<V>,
+    ) -> Pushed {
         let backend = &mut self.backend;
         self.core.write(
             key,
@@ -84,9 +112,32 @@ impl Rig {
             SubmissionData::Owned(bytes.to_vec()),
             epoch,
             "write",
-            WriteCaching::Cached,
+            options,
             |submission| backend.push(submission),
         )
+    }
+
+    /// A read of `length` bytes from `KEY`, with `options`.
+    fn read_with(&mut self, offset: u64, length: usize, options: ReadOptions<V>) -> Pushed {
+        let backend = &mut self.backend;
+        self.core.read(
+            KEY,
+            offset,
+            SubmissionData::Owned(vec![0; length]),
+            "read",
+            options,
+            |submission| backend.push(submission),
+        )
+    }
+
+    /// Seal `lineage` through `through`, acting on what that made due.
+    fn seal_in(&mut self, lineage: Lineage, through: u64) -> DurabilityRequest<V> {
+        let (answer, actions) = self
+            .core
+            .make_durable_through(Epoch::new(lineage, through))
+            .expect("a live lineage of this core");
+        self.act(actions);
+        answer
     }
 
     fn write(&mut self, epoch: u64, offset: u64, bytes: &[u8]) -> Pushed {
@@ -94,32 +145,22 @@ impl Rig {
     }
 
     fn read(&mut self, offset: u64, length: usize) -> Pushed {
-        let backend = &mut self.backend;
-        self.core.read(
-            KEY,
-            offset,
-            SubmissionData::Owned(vec![0; length]),
-            "read",
-            |submission| backend.push(submission),
-        )
+        self.read_with(offset, length, ReadOptions::new())
     }
 
     fn seal(&mut self, through: u64) -> DurabilityRequest<V> {
-        let (answer, actions) = self
-            .core
-            .make_durable_through(self.epoch(through))
-            .expect("the default lineage");
-        self.act(actions);
-        answer
+        let lineage = self.core.default_lineage();
+        self.seal_in(lineage, through)
     }
 
-    /// Push what the core asks for, handing refusals back.
-    fn act(&mut self, actions: CoreActions<Vec<u8>>) -> bool {
+    /// Push what the core asks for, handing refusals back, and keep its provider requests.
+    fn act(&mut self, actions: CoreActions<V, Vec<u8>>) -> bool {
         for submission in actions.submit {
             if let Err(refused) = self.backend.push(submission) {
                 self.core.refused(refused);
             }
         }
+        self.requests.extend(actions.requests);
         actions.deliver
     }
 
@@ -300,7 +341,7 @@ fn another_cores_lineage_is_refused() {
             SubmissionData::Owned(vec![1]),
             foreign,
             "foreign",
-            WriteCaching::Cached,
+            WriteOptions::new(),
             |submission| backend.push(submission),
         )
         .expect_err("foreign");
@@ -564,7 +605,7 @@ fn a_registered_region_completes_without_a_buffer() {
             SubmissionData::Registered(region),
             epoch,
             "span",
-            WriteCaching::Cached,
+            WriteOptions::new(),
             |submission| backend.push(submission),
         )
         .expect("accepted");
@@ -595,7 +636,7 @@ fn a_refused_registered_region_hands_back_no_buffer() {
             SubmissionData::Registered(region),
             epoch,
             "span",
-            WriteCaching::Cached,
+            WriteOptions::new(),
             |submission| backend.push(submission),
         )
         .expect_err("no registration");
@@ -713,7 +754,7 @@ fn a_consumer_operation_handed_back_as_refused_is_panicked_on() {
             SubmissionData::Owned(vec![1]),
             epoch,
             "write",
-            WriteCaching::Cached,
+            WriteOptions::new(),
             |submission: Submission<Vec<u8>>| {
                 taken = Some(submission.token);
                 Ok(())

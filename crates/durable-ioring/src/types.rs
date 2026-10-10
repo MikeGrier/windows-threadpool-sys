@@ -300,9 +300,9 @@ pub struct Failed<V: Identities> {
     pub cause: FailureCause<V>,
     /// The writes it put at risk.
     pub suspect: SuspectSet<V>,
-    /// When the instance observed it, on interrupt time, dioring's one time base (DI-D-37). Its
-    /// resolution is the system clock tick, so failures observed within one tick carry equal
-    /// stamps.
+    /// When the instance observed it, read from the clock the instance stamps with (DI-D-37,
+    /// DI-D-50): interrupt time for the Windows driver, whose resolution is the system clock tick,
+    /// so failures observed within one tick carry equal stamps.
     pub observed: V::Instant,
 }
 
@@ -820,7 +820,8 @@ pub struct LineageBusy<V: Identities> {
 /// Why `end_lineage` was refused.
 #[derive(Debug)]
 pub enum EndLineageRefusal<V: Identities> {
-    /// Another instance's lineage.
+    /// Another instance's lineage -- or, from `DurableIoCore`, which takes a lineage by its name,
+    /// one already ended or retired.
     Foreign(V::Lineage),
     /// The default lineage cannot be ended; end the instance instead.
     Default,
@@ -840,7 +841,8 @@ pub struct EndLineageError<V: Identities> {
 /// Why `retire_lineage` was refused.
 #[derive(Debug)]
 pub enum RetireLineageRefusal<V: Identities> {
-    /// Another instance's lineage.
+    /// Another instance's lineage -- or, from `DurableIoCore`, which takes a lineage by its name,
+    /// one already ended or retired.
     Foreign(V::Lineage),
     /// The default lineage always exists.
     Default,

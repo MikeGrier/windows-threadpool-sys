@@ -39,12 +39,13 @@ pub use diagnostics::{
 pub use dioring::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
-pub use io_core::{CoreActions, DurableIoCore};
+pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
 pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
 pub use provider::{
-    DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, IoTargetWrites,
+    DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
+    IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,

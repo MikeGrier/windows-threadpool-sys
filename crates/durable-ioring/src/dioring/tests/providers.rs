@@ -119,14 +119,13 @@ fn a_provider_answering_inside_make_durable_makes_the_seal_durable() {
 }
 
 #[test]
-fn a_request_names_each_domain_its_files_their_handles_and_their_writes() {
+fn a_request_names_each_domain_its_files_and_their_writes() {
     let temps = [temp(&[0; 16]), temp(&[0; 16]), temp(&[0; 16])];
     let files = vec![
         file(2, &temps[0], &["log"]),
         file(3, &temps[1], &["log"]),
         file(4, &temps[2], &["disk"]),
     ];
-    let handles: Vec<_> = files.iter().map(|f| f.file.clone()).collect();
     let (provider, kept) = keeper(&["log"]);
     let ring = Ring::new(setup(files, Vec::new(), provider))
         .expect("build")
@@ -155,8 +154,6 @@ fn a_request_names_each_domain_its_files_their_handles_and_their_writes() {
             (IoTargetKey(3), vec![other])
         ]
     );
-    assert!(part.files[0].file.same_handle(&handles[0]));
-    assert!(part.files[1].file.same_handle(&handles[1]));
     assert_eq!(harness.state(1), EpochState::Pending);
 
     succeed(request);

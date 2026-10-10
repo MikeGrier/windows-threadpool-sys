@@ -40,7 +40,7 @@ use crate::error_code::{WINDOWS_IORING, windows_fault};
 use crate::ids::{DioringIds, Home, InstanceId, Lineage, OpId};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
 use crate::types::IoTargetKey;
-use crate::types::{Entry, Epoch, FailureCause, IoFault, OpCompletion, OpKind, Outcome};
+use crate::types::{Entry, Epoch, IoFault, OpCompletion, OpKind, Outcome};
 
 #[cfg(test)]
 mod tests;
@@ -527,16 +527,7 @@ where
     }
 
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
-        let outcome = match outcome {
-            DomainOutcome::Succeeded => Ok(()),
-            DomainOutcome::Failed(error) => Err(FailureCause::Provider {
-                domain: call.name.clone(),
-                error: Arc::new(error),
-            }),
-            DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
-                domain: call.name.clone(),
-            }),
-        };
+        let outcome = outcome.into_result(&call.name);
         let mut core = self.lock();
         // Counted down even once the instance has ended, which is what ending waits for.
         match core.unanswered.checked_sub(1) {

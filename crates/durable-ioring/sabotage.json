@@ -730,8 +730,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
-      "find": ["                (Reach::All, Some(lineage.seq), Vec::new())\n"],
-      "replace": ["                (Reach::All, None, Vec::new())\n"]
+      "find": ["            (Reach::All, Some(lineage.seq), Vec::new())\n"],
+      "replace": ["            (Reach::All, None, Vec::new())\n"]
     },
     {
       "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
@@ -1298,8 +1298,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
-      "find": ["                        None => unmatched.push(domain.clone()),\n"],
-      "replace": ["                        None => {}\n"]
+      "find": ["                    None => unmatched.push(domain.clone()),\n"],
+      "replace": ["                    None => {}\n"]
     },
     {
       "name": "DI-3.9.1: an inconsistency is not panicked on",
@@ -1466,8 +1466,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Only an accepted push spends an id, so accepted pushes' ids are consecutive; a refused one is undone whole (DI-D-52).",
-      "find": ["            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        let record"],
-      "replace": ["            self.next_op += 1;\n            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        let record"]
+      "find": ["            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        if let Some(epoch) = epoch {\n"],
+      "replace": ["            self.next_op += 1;\n            return Err(handed_back(refused, context));\n        }\n        let id = self.op_id();\n        if let Some(epoch) = epoch {\n"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused commit is dropped",
@@ -1498,8 +1498,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "A seal waits for, and commits, the writes recorded with it; one never recorded is neither waited for nor covered.",
-      "find": ["        self.durability.pushed(Accepted {\n"],
-      "replace": ["        let _ = (Accepted {\n"]
+      "find": ["            self.durability.pushed(accepted);\n"],
+      "replace": ["            let _ = accepted;\n"]
     },
     {
       "name": "DI-3.10.3.5.2: an operation in flight is not counted against its target",
@@ -1538,24 +1538,136 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-45: every hold refuses removal, operations in flight among them.",
-      "find": ["        if in_flight == 0 && holds.is_empty() {\n"],
-      "replace": ["        if holds.is_empty() {\n"]
+      "find": ["        if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {\n"],
+      "replace": ["        if held_for_gate == 0 && holds.is_empty() {\n"]
     },
     {
-      "name": "DI-3.10.3.5.2: an accepted read is not recorded",
+      "name": "DI-3.10.3.5.2: an accepted operation is not recorded",
       "file": "src/io_core.rs",
       "expect": "caught",
-      "why": "An accepted read is in flight until its completion, which the core must recognise; one never recorded makes its own completion a breach.",
-      "find": ["        self.issued(token, id, OpKind::Read, target, context);\n"],
-      "replace": ["        let _ = (token, id, target, context);\n"]
+      "why": "An accepted operation is in flight until its completion, which the core must recognise; one never recorded makes its own completion a breach.",
+      "find": ["        self.issued(token, id, kind, target, context, false);\n"],
+      "replace": ["        let _ = (token, id, kind, target, context);\n"]
     },
     {
       "name": "CONTROL: the core's actions test emptiness by length",
       "file": "src/io_core.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the core: an empty vector has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["        self.submit.is_empty() && !self.deliver\n"],
-      "replace": ["        self.submit.len() == 0 && !self.deliver\n"]
+      "find": ["        self.submit.is_empty() && self.requests.is_empty() && !self.deliver\n"],
+      "replace": ["        self.submit.len() == 0 && self.requests.is_empty() && !self.deliver\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a released operation is not recorded as issued",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-23: a held write is recorded in flight once its gate releases it; one never recorded is never waited for by a seal.",
+      "find": ["        self.durability.issued(id);\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a released operation the backend refuses is not kept",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-52: an operation the core emitted after its gate is the core's to keep and emit again, as a commit is.",
+      "find": ["            Some(InFlight::Commit { .. } | InFlight::Op { released: true, .. })\n"],
+      "replace": ["            Some(InFlight::Commit { .. })\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: an operation never issued is reported as transferred",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "Guarantee 9: a held operation an abandoned epoch stopped ends as NeverIssued, naming the epoch, so the consumer knows nothing was written.",
+      "find": ["            outcome: Outcome::NeverIssued { abandoned },\n"],
+      "replace": ["            outcome: Outcome::Transferred(0),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a gate on an abandoned epoch is not refused",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-43: an operation gated on an abandoned epoch could never be released, so it is refused at once.",
+      "find": ["            GateState::Abandoned => Err(PushRefusal::GateAbandoned { gate }),\n"],
+      "replace": ["            GateState::Abandoned => Ok(None),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a write closing a gate cycle is not refused",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-43: a write whose gate needs, transitively, the write itself would wait forever.",
+      "find": ["                match write.and_then(|write| self.durability.write_cycle(write, at)) {\n"],
+      "replace": ["                match write.and(None::<Vec<Gate<E>>>) {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a gate in another core is taken for this one's",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-40: an epoch carries its lineage's instance, so a gate on another core's is refused rather than read as this core's of the same number.",
+      "find": ["        if gate.lineage.instance != self.instance {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: an operation held for a gate does not hold its target",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-45: every hold refuses removal, operations held for a gate among them.",
+      "find": ["            held_for_gate += 1;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-3.10.3.5.3: the default lineage can be ended",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "The default lineage never ends while the core lives.",
+      "find": ["        if lineage.seq == DEFAULT_LINEAGE {\n            return Err(EndLineageRefusal::Default);\n"],
+      "replace": ["        if false {\n            return Err(EndLineageRefusal::Default);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: a busy lineage is reported retired",
+      "file": "src/io_core/lineages.rs",
+      "expect": "caught",
+      "why": "DI-D-40: a lineage is retired only once nothing holds it, and a refusal says what does.",
+      "find": ["            .map_err(RetireLineageRefusal::Busy)\n"],
+      "replace": ["            .or(Ok(()))\n"]
+    },
+    {
+      "name": "CONTROL: the core states a minted lineage's key type",
+      "file": "src/io_core/lineages.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the lineage code: a lineage key is a u64, so naming the type changes nothing. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["        let seq = self.durability.mint(description);\n"],
+      "replace": ["        let seq: u64 = self.durability.mint(description);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: the core makes no requests of the provider",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-27: a seal touching a served domain is answered by the provider; without its request the seal never finishes.",
+      "find": ["        let requests = calls.into_iter().map(|call| self.request(call)).collect();\n"],
+      "replace": ["        let requests = {\n            let _ = calls;\n            Vec::new()\n        };\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: every provider answer is taken as success",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "DI-D-27: a provider's failure is a failure of its domain; taking it as success reports durable what was lost.",
+      "find": ["            .provided(lineage.seq, seal, id, outcome.into_result(domain));\n"],
+      "replace": ["            .provided(lineage.seq, seal, id, DomainOutcome::Succeeded.into_result(domain));\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: an answer for a domain the provider does not serve is accepted",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "An answer the core never asked for is a protocol breach (DI-D-44); the core names it, rather than reading it as the seal's.",
+      "find": ["            .filter(|id| self.served.binary_search(id).is_ok());\n"],
+      "replace": ["            ;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.3: the durability core is not told what the provider serves",
+      "file": "src/io_core/provider.rs",
+      "expect": "caught",
+      "why": "DI-D-27: the durability core asks the provider only for the domains it serves; without them a served target's seal waits for an answer never requested.",
+      "find": ["        core.durability.serve(Arc::clone(&served));\n"],
+      "replace": [""]
     }
   ]
 }

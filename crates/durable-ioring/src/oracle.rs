@@ -39,8 +39,8 @@
 //! - **Finality** (guarantee 3): no suspect write is of an epoch its lineage was already reported
 //!   durable through.
 //! - **Stamps never decrease** (DI-D-38): each `Failed` and each `Marked` was observed at or after
-//!   the stamped entry before it in the stream. Equal stamps are legal -- interrupt time's
-//!   resolution is the system clock tick -- and so is any gap.
+//!   the stamped entry before it in the stream. Equal stamps are legal -- a clock's resolution
+//!   may be coarse, interrupt time's being the system clock tick -- and so is any gap.
 //! - **A marking names what happened** (DI-D-36): `Marked` names a live failure and one of its
 //!   suspect writes, whose completion has been observed and agrees with the marking -- a
 //!   nullifier's write completed with the same fault, the one report its completion carried; a

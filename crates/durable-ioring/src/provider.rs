@@ -3,13 +3,11 @@
 
 use std::fmt::{self, Debug};
 use std::io;
-use std::sync::Weak;
-
-use win_shared_os_owned_handle::SharedHandle;
+use std::sync::{Arc, Weak};
 
 use crate::contract::Identities;
 use crate::dioring::DomainId;
-use crate::types::{FlushDomain, IoTargetKey};
+use crate::types::{FailureCause, FlushDomain, IoTargetKey};
 
 /// A consumer-supplied durability provider. It makes writes the instance has seen complete
 /// durable, by any means, and answers per flush domain. An instance holds at most one; several
@@ -48,16 +46,38 @@ pub struct DomainRequest<V: Identities> {
     pub completion: DomainCompletion,
 }
 
-/// A file in one domain's part, and the writes to it named for that domain: identities, never
-/// extents. Every one has completed.
+/// A target in one domain's part, and the writes to it named for that domain: identities, never
+/// extents. Every one has completed. The provider reaches what backs the target by its own means;
+/// the request lends it nothing (DI-D-50 P6).
 #[derive(Debug)]
 pub struct IoTargetWrites<V: Identities> {
-    /// The consumer's key for the file.
+    /// The consumer's key for the target.
     pub key: IoTargetKey,
-    /// The file, lent so the provider can flush it out of band.
-    pub file: SharedHandle,
     /// The writes named.
     pub writes: Vec<V::OpId>,
+}
+
+/// One seal's request for the consumer's provider, as [`DurableIoCore`](crate::DurableIoCore)
+/// makes it: the driver hands it to the provider and returns each domain's answer to the core
+/// with [`DurableIoCore::provided`](crate::DurableIoCore::provided), naming this lineage and seal.
+#[derive(Debug)]
+pub struct ProviderRequest<V: Identities> {
+    /// The seal's lineage.
+    pub lineage: V::Lineage,
+    /// The seal's sequence number within its lineage, which each answer names.
+    pub seal: u64,
+    /// One part per flush domain the provider serves that the seal touched, in the order the
+    /// domains were interned.
+    pub domains: Vec<ProviderPart<V>>,
+}
+
+/// One flush domain's part of a [`ProviderRequest`].
+#[derive(Debug)]
+pub struct ProviderPart<V: Identities> {
+    /// The domain.
+    pub domain: FlushDomain,
+    /// Each target in the domain with writes named for it, in the order first written.
+    pub targets: Vec<IoTargetWrites<V>>,
 }
 
 /// Answers one domain of one request, once, from any thread at any time -- inside `make_durable`
@@ -132,12 +152,34 @@ pub(crate) struct DomainCall {
     pub(crate) name: FlushDomain,
 }
 
-/// How a domain was answered.
-pub(crate) enum DomainOutcome {
+/// How a provider answered one domain of one request.
+#[derive(Debug)]
+pub enum DomainOutcome {
+    /// Every write named for the domain is durable.
     Succeeded,
+    /// The domain failed: `FailureCause::Provider`, with the error.
     Failed(io::Error),
-    /// Dropped unanswered.
+    /// The provider gave no answer and never will: `FailureCause::ProviderAbandoned`.
     Abandoned,
+}
+
+impl DomainOutcome {
+    /// The outcome as the durability core records it: success, or the cause of `domain`'s failure.
+    pub(crate) fn into_result<V: Identities>(
+        self,
+        domain: &FlushDomain,
+    ) -> Result<(), FailureCause<V>> {
+        match self {
+            DomainOutcome::Succeeded => Ok(()),
+            DomainOutcome::Failed(error) => Err(FailureCause::Provider {
+                domain: domain.clone(),
+                error: Arc::new(error),
+            }),
+            DomainOutcome::Abandoned => Err(FailureCause::ProviderAbandoned {
+                domain: domain.clone(),
+            }),
+        }
+    }
 }
 
 /// Where a completion's answer goes: the instance that made the request.
