@@ -1348,6 +1348,118 @@
       "why": "A fan-out wants what any of its sinks wants; requiring all of them would silence a stderr sink beside a deaf one.",
       "find": ["        self.sinks.iter().any(|sink| sink.wants(kind))\n"],
       "replace": ["        !self.sinks.is_empty() && self.sinks.iter().all(|sink| sink.wants(kind))\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a full submission queue is not refused",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a refusal names its cause. A backend that queues past its submission queue never tells the caller to submit.",
+      "find": ["        let submit = self.queued.len() >= self.submission_queue_size;\n"],
+      "replace": ["        let submit = false;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a full completion queue is not refused",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a refusal names its cause. A backend that admits more than its completion queue holds never tells the caller to drain.",
+      "find": ["        let drain = self.queued.len() + self.completed.len() >= self.completion_queue_size;\n"],
+      "replace": ["        let drain = self.queued.len() >= self.completion_queue_size;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a full submission queue is reported as needing a drain",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "DI-D-52: the cause is what lets the caller act without probing; the wrong cause sends it to the wrong remedy.",
+      "find": ["            (true, false) => Some(RefusalCause::SubmitNeeded),\n"],
+      "replace": ["            (true, false) => Some(RefusalCause::DrainNeeded),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a memory commit makes nothing durable",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A commit is what makes a memory target's bytes durable; without it a test cannot read what a commit warranted.",
+      "find": ["                target.durable.clone_from(&target.contents);\n"],
+      "replace": ["                let _ = &target.durable;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: the notification is raised on every submit that leaves completions",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "DI-D-50 P10: the notification is raised on the transition from no completions to some, not on every submission.",
+      "find": ["        if was_empty && !self.completed.is_empty() {\n"],
+      "replace": ["        if !self.completed.is_empty() {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a read past the end reports its whole buffer",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A read may complete short, and the count is the consumer's to handle; reporting the buffer's length claims bytes that were not read.",
+      "find": ["        count\n"],
+      "replace": ["        into.len()\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a buffer's address is not checked",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A target's geometry covers its buffers' addresses as well as its offsets and lengths; unbuffered I/O needs all three.",
+      "find": ["            if !fits || !geometry.admits(offset, length as u64) || !geometry.admits_buffer(address)\n"],
+      "replace": ["            if !fits || !geometry.admits(offset, length as u64)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a submission for a detached target loses its buffer",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Buffers go in owned and come back (DI-D-50 P10), on a fault as on a success.",
+      "find": ["                } => Some(buffer),\n"],
+      "replace": ["                } => {\n                    drop(buffer);\n                    None\n                }\n"]
+    },
+    {
+      "name": "CONTROL: the memory backend tests emptiness by length",
+      "file": "src/memory.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new code: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["        let was_empty = self.completed.is_empty();\n"],
+      "replace": ["        let was_empty = self.completed.len() == 0;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: needing both is not reported as needing a drain",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a caller told both must drain as well as submit; dropping the drain leaves it retrying into a full completion queue.",
+      "find": ["        matches!(self, Self::DrainNeeded | Self::SubmitAndDrainNeeded)\n"],
+      "replace": ["        matches!(self, Self::DrainNeeded)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: an unknown refusal is called retryable",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "DI-D-52: an unknown cause may never clear; calling it retryable invites a caller to loop on it.",
+      "find": ["        self.needs_submit() || self.needs_drain() || matches!(self, Self::Busy)\n"],
+      "replace": ["        self.needs_submit() || self.needs_drain() || matches!(self, Self::Busy | Self::Unknown(_))\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a length is checked against the offset's alignment",
+      "file": "src/io_target.rs",
+      "expect": "caught",
+      "why": "A target's offsets and lengths may need different alignments; checking one against the other admits operations the target cannot take.",
+      "find": ["        offset.is_multiple_of(self.offset as u64) && length.is_multiple_of(self.length as u64)\n"],
+      "replace": ["        offset.is_multiple_of(self.offset as u64) && length.is_multiple_of(self.offset as u64)\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: zero is accepted as an alignment",
+      "file": "src/io_target.rs",
+      "expect": "caught",
+      "why": "A Geometry always holds powers of two; zero would make every alignment check divide by zero.",
+      "find": ["    if alignment.is_power_of_two() {\n"],
+      "replace": ["    if alignment == 0 || alignment.is_power_of_two() {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.1: a description drops the target's flush domains",
+      "file": "src/io_target.rs",
+      "expect": "caught",
+      "why": "DI-D-50 P4: the core decides failure sharing from the domains a target declares; a description without them makes every target share fate with every other.",
+      "find": ["            flush_domains: self.flush_domains().to_vec(),\n"],
+      "replace": ["            flush_domains: Vec::new(),\n"]
     }
   ]
 }

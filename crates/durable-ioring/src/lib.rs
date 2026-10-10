@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod backend;
 mod clock;
 mod contract;
 mod delivery;
@@ -19,6 +20,8 @@ mod error_code;
 #[cfg(test)]
 mod fake;
 mod ids;
+mod io_target;
+pub mod memory;
 pub mod oracle;
 mod provider;
 mod types;
@@ -35,6 +38,9 @@ pub use diagnostics::{
 pub use dioring::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
+pub use io_target::{
+    Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
+};
 pub use provider::{
     DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest, IoTargetWrites,
 };

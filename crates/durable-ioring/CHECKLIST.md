@@ -85,10 +85,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   onto, deleting the old path (`DI-3.10.3.5.6`) -- the merge-or-delete decision for the
   duplication, taken when the new path is proven. Done in the steps below.
 
-- [ ] **DI-3.10.3.5.1** -- **The target and backend traits**: `IoTarget`, the backend trait, the
-  core's submission and completion shapes, and the typed refusal cause (DI-D-52); with a minimal
-  in-memory backend and target that fault on nothing, so the traits are exercised before anything
-  is built on them. `DI-3.3` adds the fault script to that backend.
+- [x] **DI-3.10.3.5.1** -- The target and backend traits: `IoTarget` and its description, `IoBackend` with the core's submission and completion shapes and the typed `RefusalCause`, and a minimal in-memory backend and target. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310351)
 
 - [ ] **DI-3.10.3.5.2** -- **`DurableIoCore`: targets, operations and completions**: public;
   `add_target` and `remove_target` taking a target's description; writes and reads checked,
@@ -172,7 +169,26 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `DI-3.6`. From `DI-3.10.3.4`: the clock trait is `StampClock`, its reading type bounded by a
   public `Instant` trait (a name `std::time::Instant` shares); the time type is an associated
   type of `Identities` and a second, defaulted parameter of `DioringIds`; and the core's types
-  take it as a parameter, the Windows code naming it through a `WinInstant` alias.
+  take it as a parameter, the Windows code naming it through a `WinInstant` alias. From
+  `DI-3.10.3.5.1`: the backend trait is `IoBackend`; its types live in a public `backend` module
+  and the in-memory backend in a public `memory` module, while `IoTarget`, `IoTargetDescription`,
+  `WarrantyClass`, `Geometry`, `GeometryError` and `Capabilities` are at the crate root; the
+  target module is `io_target`, since the root `.gitignore`'s `target` ignores any directory so
+  named; a `Geometry` holds three alignments -- offset, length, buffer address -- each a power of
+  two its constructors enforce, with `admits` and `admits_buffer` the one statement of the rule;
+  `Capabilities` names write-through only, its fields private; `IoTarget` requires `Send`, and
+  `describe` is a provided method; `SubmissionToken` is a public `u64`, a `RegisteredRegion`
+  three `u32`s, a completion's result a `u32` count or an `IoFault`, and a commit transfers zero;
+  the refusal causes are `SubmitNeeded`, `DrainNeeded`, `SubmitAndDrainNeeded`, `Busy`,
+  `UnknownTarget`, `Unsupported`, `Invalid`, `Unusable(IoFault)` and `Unknown(IoFault)`,
+  non-exhaustive, with `needs_submit`, `needs_drain` and `is_retryable`, an unknown cause not
+  retryable; `submit`, `pop` and `notification` report an `IoFault`; a submission for a target
+  detached before it ran completes with a fault; registration is a backend's construction
+  concern, `registered_buffers` counting it. The in-memory backend's buffers are `Vec<u8>`; it
+  executes at submit; it refuses a drain when queued and unpopped submissions fill the completion
+  queue, checking the target, then the submission's shape, then capacity; its notification is a
+  count with `wait_past`; its faults name the source `"memory"` with no code; its queue sizes are
+  `NonZeroU32`; a commit copies the bytes to `durable_contents`; and it ignores `WriteCaching`.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

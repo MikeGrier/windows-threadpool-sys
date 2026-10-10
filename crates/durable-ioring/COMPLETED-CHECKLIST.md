@@ -1755,3 +1755,14 @@ Built per [DI-D-51](DESIGN-NOTES.md#di-d-51) in `src/diagnostics.rs`. The core h
   as a parameter, defaulted to interrupt time until `DI-3.10.3.6` moves that default to the
   Windows crate. The public `DurableIoCore` API moved to `DI-3.10.3.5`: it returns ring entries,
   whose shape the backend defines.
+
+## Moved 2026-10-10 00:35:35 -04:00 -- DI-3.10.3.5.1: the target and backend traits
+
+### <a id="di-310351"></a>DI-3.10.3.5.1 -- The target and backend traits: `IoTarget` and its description, `IoBackend` with the core's submission and completion shapes and the typed `RefusalCause`, and a minimal in-memory backend and target. *(completed 2026-10-10 00:35:35 -04:00)*
+
+`src/io_target.rs` holds `IoTarget`, `IoTargetDescription`, `WarrantyClass`, `Geometry` and `Capabilities`; `src/backend.rs` holds `IoBackend`, `Submission`, `Completion` and `RefusalCause` (DI-D-52); `src/memory.rs` holds `MemoryBackend`, `MemoryTarget` and `MemoryNotification`. Nothing in the driver uses them yet: the core takes them in `DI-3.10.3.5.2`. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**The target and backend traits**: `IoTarget`, the backend trait, the
+  core's submission and completion shapes, and the typed refusal cause (DI-D-52); with a minimal
+  in-memory backend and target that fault on nothing, so the traits are exercised before anything
+  is built on them. `DI-3.3` adds the fault script to that backend.
