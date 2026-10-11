@@ -122,11 +122,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2.3** -- Targets as the implementation's own type: the ring trait's `Target`, today's driver's a `Win32FileTarget`, which `TargetSetup` takes too; `FileOptions` removed. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035623)
 
-- [ ] **DI-3.10.3.5.6.2.4** -- **Owned writes keep write-only buffer types on the Windows backend**
-  ([DI-D-17](DESIGN-NOTES.md#di-d-17), [API.md](API.md) section 8): `WindowsBackend<B: IoBuf>`;
-  an owned read is pushed through a push captured where `B: IoBufMut` holds, as today's driver
-  does, and refused as `Unsupported` without one; a test writing an `Arc<[u8]>` through the backend,
-  and through the core over it, pins the bound that was missing.
+- [x] **DI-3.10.3.5.6.2.4** -- Owned writes keep write-only buffer types on the Windows backend (DI-D-17): `WindowsBackend<B: IoBuf>`, an owned read pushed through a push made where `B: IoBufMut` holds. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035624)
 
 - [ ] **DI-3.10.3.5.6.2.5** -- **Registered buffers reached through a closure**: the registered-buffer
   ring's accessors become `with_registered_buffer` and `with_registered_buffer_mut`, run under the
@@ -302,7 +298,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   backend module's `DuplicateTarget`; the test fake's target is `MemoryTarget`; `TargetSetup`
   carries the `Win32FileTarget` whole; and until the swap, today's driver reads only a target's
   file and flush domains, so a declared geometry is not enforced on its path -- the backend's
-  `check` and `push` enforce it once `DI-3.10.3.5.6.2.4` lands.
+  `check` and `push` enforce it once the swap (`DI-3.10.3.5.6.2.6`) lands. From
+  `DI-3.10.3.5.6.2.4`: two constructors where there was one -- `new` for a buffer type that is
+  `IoBufMut`, reading into owned buffers, and `without_owned_reads` for one that may be only
+  `IoBuf` -- rather than one constructor and a separate switch, so a direct user of the backend
+  cannot forget to enable reads; a crate-private `enable_owned_reads`, for the driver to call where
+  its read's `IoBufMut` bound holds; the owned read's push a function pointer, as today's driver
+  carries one, with the registered and shared forms of a target behind a `Via`; and an owned read
+  without that push refused as `Unsupported` at `check` and at `push` alike.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

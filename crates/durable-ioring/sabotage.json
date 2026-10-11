@@ -1908,6 +1908,31 @@
       "why": "The manifest checking itself on the reworked act: an equivalent spelling of the same fold must survive; caught would mean a test is matching incidental code.",
       "find": ["            deliver |= ready;\n"],
       "replace": ["            deliver = deliver || ready;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.4: the backend's trait impl demands IoBufMut",
+      "file": "src/windows_backend.rs",
+      "expect": "refused-by-build",
+      "buildError": "the trait bound `B: IoBufMut` is not satisfied",
+      "why": "DI-D-17: owned writes keep write-only buffer types. The library itself refuses the narrower bound: pool delivery is declared over B: IoBuf and drains the backend as an IoBackend, so the build fails there, before the tests' Arc<[u8]> backend -- which pins the same bound from the consumer's side -- is compiled.",
+      "find": ["impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {\n"],
+      "replace": ["impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.4: an owned read without a read push is not refused",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A backend built without owned reads must refuse one as Unsupported, at check and at push, rather than reach a push it does not have.",
+      "find": ["        if self.owned_read.is_none()\n"],
+      "replace": ["        if false && self.owned_read.is_none()\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.4: new makes no owned-read push",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "new is the constructor for a buffer type that is IoBufMut; without the push it makes, every owned read is refused.",
+      "find": ["        backend.enable_owned_reads();\n"],
+      "replace": ["        let _ = &mut backend;\n"]
     }
   ]
 }

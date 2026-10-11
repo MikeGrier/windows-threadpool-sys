@@ -21,7 +21,7 @@
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use windows_ioring_sys::{CompletionWake, IoBufMut};
+use windows_ioring_sys::{CompletionWake, IoBuf, IoBufMut};
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 
 use super::WindowsBackend;
@@ -46,7 +46,7 @@ pub(crate) type PoolSetup<E, B, C, K, R> =
 pub(crate) struct PoolDelivery<E, B, C, K, R>
 where
     E: EpochId + 'static,
-    B: IoBufMut,
+    B: IoBuf,
     R: IoBufMut,
     K: StampClock,
 {
@@ -59,7 +59,7 @@ where
 impl<E, B, C, K, R> PoolDelivery<E, B, C, K, R>
 where
     E: EpochId + Send + Sync + 'static,
-    B: IoBufMut + Send + 'static,
+    B: IoBuf + Send + 'static,
     C: Send + 'static,
     K: StampClock,
     K::Instant: Send + Sync,

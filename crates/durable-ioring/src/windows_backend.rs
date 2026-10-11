@@ -24,8 +24,9 @@ use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
 
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBufMut, IoRing, IoRingErrorExt, OperationId, PushOptions,
-    PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId,
+    PushOptions, PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
+    SharedHandle,
 };
 
 use crate::backend::{
@@ -163,12 +164,19 @@ impl<R> std::fmt::Debug for WindowsBackendError<R> {
 
 /// The Windows backend: an `IoRing` and the targets it runs I/O for. `B` is the owned buffer type
 /// and `R` the registered buffers'.
-pub struct WindowsBackend<B: IoBufMut, R: IoBufMut = Vec<u8>> {
+///
+/// **Write-only buffer types** (DI-D-17): an owned write needs only `B: IoBuf`, so a type such as `Arc<[u8]>` can be written. An owned read
+/// needs `B: IoBufMut`, and is pushed through a push made where that bound holds: [`new`](Self::new)
+/// makes it, [`without_owned_reads`](Self::without_owned_reads) does not, and an owned read on a
+/// backend without it is refused as [`RefusalCause::Unsupported`].
+pub struct WindowsBackend<B: IoBuf, R: IoBufMut = Vec<u8>> {
     /// Declared before `registered`: dropping the ring runs down every operation, so it ends before
     /// the buffers the kernel may still be using.
     ring: IoRing<B, Sidecar>,
     registered: Option<RegisteredBuffers<R>>,
     targets: HashMap<IoTargetKey, Slot>,
+    /// How an owned read is pushed, made where `B: IoBufMut` holds; `None` refuses owned reads.
+    owned_read: Option<OwnedRead<B>>,
     /// The ring's completion event, duplicated for each notification handed out.
     event: OwnedHandle,
     /// A submission failed, so what it would have issued is still queued.
@@ -181,12 +189,34 @@ pub struct WindowsBackend<B: IoBufMut, R: IoBufMut = Vec<u8>> {
 
 impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
     /// A ring with `setup`'s queue sizes, its targets and buffers registered, and its completion
-    /// event attached.
+    /// event attached, which reads into owned buffers as well as writing from them.
     ///
     /// # Errors
     ///
     /// [`WindowsBackendError`], handing back the targets and, where it can, the buffers.
     pub fn new(setup: WindowsBackendSetup<R>) -> Result<Self, WindowsBackendError<R>> {
+        let mut backend = Self::without_owned_reads(setup)?;
+        backend.enable_owned_reads();
+        Ok(backend)
+    }
+
+    /// Read into owned buffers from now on, through a push made here, where `B: IoBufMut` holds.
+    pub(crate) fn enable_owned_reads(&mut self) {
+        self.owned_read = Some(push_owned_read::<B>);
+    }
+}
+
+impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
+    /// As [`new`](WindowsBackend::new), for a buffer type that may be only `IoBuf`: it writes from
+    /// owned buffers and reads into registered ones, and refuses an owned read as
+    /// [`RefusalCause::Unsupported`] (DI-D-17).
+    ///
+    /// # Errors
+    ///
+    /// [`WindowsBackendError`], handing back the targets and, where it can, the buffers.
+    pub fn without_owned_reads(
+        setup: WindowsBackendSetup<R>,
+    ) -> Result<Self, WindowsBackendError<R>> {
         let WindowsBackendSetup {
             submission_queue_size,
             completion_queue_size,
@@ -246,6 +276,7 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
             ring,
             registered,
             targets: slots,
+            owned_read: None,
             event,
             unsubmitted: false,
             #[cfg(feature = "fault-injection")]
@@ -311,15 +342,26 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
         })
     }
 
-    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, a
-    /// registered region without a registration, or an operation its target's geometry does not
-    /// admit. A registered region is checked for offset and length only; its buffer's address is
+    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, an owned
+    /// read on a backend without owned reads (DI-D-17), a registered region without a registration,
+    /// or an operation its target's geometry does not admit. A registered region is checked for offset and length only; its buffer's address is
     /// the registration's, and whether it lies within the registration is the ring's own check at
     /// push, which [`IoBackend::check`] asks without pushing.
     fn admits(&self, target: IoTargetKey, op: &SubmissionOp<B>) -> Result<(), RefusalCause> {
         let Some(slot) = self.targets.get(&target) else {
             return Err(RefusalCause::UnknownTarget);
         };
+        if self.owned_read.is_none()
+            && matches!(
+                op,
+                SubmissionOp::Read {
+                    data: SubmissionData::Owned(_),
+                    ..
+                }
+            )
+        {
+            return Err(RefusalCause::Unsupported);
+        }
         let (offset, data) = match op {
             SubmissionOp::Write { offset, data, .. } | SubmissionOp::Read { offset, data } => {
                 (*offset, data)
@@ -348,9 +390,10 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
     }
 }
 
-/// Push one operation against `file`, a registered index or a shared handle.
+/// Push one operation against `file`, a registered index or a shared handle, which `via` also
+/// names for an owned read's push.
 macro_rules! push_to {
-    ($batch:expr, $file:expr, $registered:expr, $op:expr, $sidecar:expr) => {{
+    ($batch:expr, $file:expr, $via:expr, $read:expr, $registered:expr, $op:expr, $sidecar:expr) => {{
         let options = PushOptions::new();
         match $op {
             Op::Write {
@@ -374,7 +417,13 @@ macro_rules! push_to {
             Op::Read {
                 offset,
                 data: SubmissionData::Owned(buffer),
-            } => $batch.read_owned($file, buffer, $sidecar, offset, options),
+            } => $read.expect("admits() checked for an owned read")(
+                &mut $batch,
+                $via,
+                buffer,
+                $sidecar,
+                offset,
+            ),
             Op::Read {
                 offset,
                 data: SubmissionData::Registered(region),
@@ -394,6 +443,38 @@ macro_rules! push_to {
             ),
         }
     }};
+}
+
+/// What a push is made against, borrowed from a target's slot.
+#[derive(Clone, Copy)]
+enum Via<'a> {
+    Registered(&'a RegisteredFile),
+    Shared(&'a SharedHandle),
+}
+
+/// An owned read's push, made where `B: IoBufMut` holds and carried by a backend whose `B` may be
+/// only `IoBuf` (DI-D-17).
+type OwnedRead<B> = for<'r, 'v> fn(
+    &mut Batch<'r, B, Sidecar>,
+    Via<'v>,
+    B,
+    Sidecar,
+    u64,
+) -> Result<OperationId, PushRefused<B, Sidecar>>;
+
+/// Push an owned read: the push [`WindowsBackend::new`] makes.
+fn push_owned_read<B: IoBufMut>(
+    batch: &mut Batch<'_, B, Sidecar>,
+    via: Via<'_>,
+    buffer: B,
+    sidecar: Sidecar,
+    offset: u64,
+) -> Result<OperationId, PushRefused<B, Sidecar>> {
+    let options = PushOptions::new();
+    match via {
+        Via::Registered(index) => batch.read_owned(index, buffer, sidecar, offset, options),
+        Via::Shared(handle) => batch.read_owned(handle, buffer, sidecar, offset, options),
+    }
 }
 
 /// An operation in the ring crate's caching terms.
@@ -499,7 +580,7 @@ impl Shape {
 }
 
 /// What an operation's completion is read as.
-fn kind<B: IoBufMut>(op: &SubmissionOp<B>) -> Kind {
+fn kind<B: IoBuf>(op: &SubmissionOp<B>) -> Kind {
     match op {
         SubmissionOp::Write { data, .. } => Kind::Write(match data {
             SubmissionData::Owned(buffer) => u32::try_from(buffer.bytes_len()).unwrap_or(u32::MAX),
@@ -510,7 +591,7 @@ fn kind<B: IoBufMut>(op: &SubmissionOp<B>) -> Kind {
     }
 }
 
-impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
+impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
     type Target = Win32FileTarget;
     type Buffer = B;
     type Notification = OwnedHandle;
@@ -588,10 +669,18 @@ impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
         };
         let slot = &self.targets[&target];
         let registered = self.registered.as_ref();
+        let read = self.owned_read;
         let mut batch = Batch::new(&mut self.ring);
         let pushed: Result<OperationId, PushRefused<B, Sidecar>> = match &slot.registered {
-            Some(index) => push_to!(batch, index, registered, op, sidecar),
-            None => push_to!(batch, slot.target.handle(), registered, op, sidecar),
+            Some(index) => {
+                let via = Via::Registered(index);
+                push_to!(batch, index, via, read, registered, op, sidecar)
+            }
+            None => {
+                let handle = slot.target.handle();
+                let via = Via::Shared(handle);
+                push_to!(batch, handle, via, read, registered, op, sidecar)
+            }
         };
         match pushed {
             Ok(_) => {
@@ -674,7 +763,7 @@ impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
 /// commit's real completion through `windows-ioring-sys`' own seam, so the commit still reaches the
 /// kernel and only the answer changes.
 #[cfg(feature = "fault-injection")]
-impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
+impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
     /// Make the next commit of `target` to complete report the Win32 error `code`, whatever the
     /// kernel answered. Armed failures for one target are used in the order armed.
     pub fn fail_next_commit(&mut self, target: IoTargetKey, code: u32) {

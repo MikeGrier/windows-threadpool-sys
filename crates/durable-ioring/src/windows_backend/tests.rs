@@ -5,7 +5,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use windows_ioring_sys::{Batch, InjectedFailure, IoRing, PushOptions, RingCondition};
+use windows_ioring_sys::{Batch, InjectedFailure, IoBuf, IoRing, PushOptions, RingCondition};
 
 use super::{
     Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
@@ -83,7 +83,7 @@ fn commit(token: u64, target: IoTargetKey) -> Submission<Vec<u8>> {
 }
 
 /// The next completion, within the bound.
-fn next(backend: &mut Backend) -> Completion<Vec<u8>> {
+fn next<B: IoBuf>(backend: &mut WindowsBackend<B>) -> Completion<B> {
     let started = Instant::now();
     loop {
         if let Some(completion) = backend.pop().expect("pop") {
@@ -95,7 +95,10 @@ fn next(backend: &mut Backend) -> Completion<Vec<u8>> {
 }
 
 /// Push `submission`, submit, and wait for its completion.
-fn run(backend: &mut Backend, submission: Submission<Vec<u8>>) -> Completion<Vec<u8>> {
+fn run<B: IoBuf + std::fmt::Debug>(
+    backend: &mut WindowsBackend<B>,
+    submission: Submission<B>,
+) -> Completion<B> {
     let token = submission.token;
     backend.push(submission).expect("accepted");
     backend.submit().expect("submitted");
@@ -618,6 +621,168 @@ fn a_short_write_is_a_fault_and_a_short_read_is_not() {
     assert!(fault.error.to_string().contains("3 of 8"));
     assert_eq!(transfer(Ok(3), false, 0), Ok(3));
     assert!(transfer(Err(io::Error::from_raw_os_error(1117)), false, 0).is_err());
+}
+
+#[test]
+fn a_write_only_buffer_type_is_written_and_an_owned_read_is_refused_without_a_read_push() {
+    // DI-D-17: an owned write needs only `IoBuf`, so `Arc<[u8]>` -- which is not `IoBufMut` -- is a
+    // backend's buffer type. Built without owned reads, an owned read is refused as Unsupported by
+    // `check` and `push` alike; a registered read needs nothing of the owned type, and still runs.
+    use std::sync::Arc;
+
+    let given = TempFile::new("wb-write-only");
+    let mut backend: WindowsBackend<Arc<[u8]>> = WindowsBackend::without_owned_reads(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        vec![vec![0; 6]],
+    ))
+    .expect("build");
+    let shared: Arc<[u8]> = Arc::from(b"shared".as_slice());
+    let write = Submission {
+        token: SubmissionToken(1),
+        target: GIVEN,
+        op: SubmissionOp::Write {
+            offset: 0,
+            data: SubmissionData::Owned(Arc::clone(&shared)),
+            caching: WriteCaching::Cached,
+        },
+    };
+    let written = run(&mut backend, write);
+    assert_eq!(written.result, Ok(6));
+    assert!(
+        written
+            .buffer
+            .is_some_and(|back| Arc::ptr_eq(&back, &shared)),
+        "the consumer's own buffer comes back"
+    );
+
+    let owned_read = Submission {
+        token: SubmissionToken(2),
+        target: GIVEN,
+        op: SubmissionOp::Read {
+            offset: 0,
+            data: SubmissionData::Owned(Arc::clone(&shared)),
+        },
+    };
+    assert_eq!(
+        backend.check(owned_read.target, &owned_read.op),
+        Err(RefusalCause::Unsupported)
+    );
+    let refused = backend.push(owned_read).expect_err("no owned reads");
+    assert_eq!(refused.cause, RefusalCause::Unsupported);
+    assert!(
+        matches!(
+            refused.submission.op,
+            SubmissionOp::Read { data: SubmissionData::Owned(back), .. } if Arc::ptr_eq(&back, &shared)
+        ),
+        "handed back"
+    );
+
+    let into = RegisteredRegion {
+        index: 0,
+        offset: 0,
+        length: 6,
+    };
+    let back = run(
+        &mut backend,
+        Submission {
+            token: SubmissionToken(3),
+            target: GIVEN,
+            op: SubmissionOp::Read {
+                offset: 0,
+                data: SubmissionData::Registered(into),
+            },
+        },
+    );
+    assert_eq!(back.result, Ok(6));
+    assert_eq!(backend.registered_buffer(0).expect("registered"), b"shared");
+
+    // The other direction: it is the constructor, not the type, that decides. A buffer type that is
+    // `IoBufMut` reads through `new`, and is refused through `without_owned_reads`.
+    let mut readable = Backend::new(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        Vec::new(),
+    ))
+    .expect("build");
+    assert_eq!(run(&mut readable, read(4, GIVEN, 0, 6)).result, Ok(6));
+    let mut unreadable = Backend::without_owned_reads(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        Vec::new(),
+    ))
+    .expect("build");
+    assert_eq!(
+        unreadable
+            .push(read(5, GIVEN, 0, 6))
+            .expect_err("no owned reads")
+            .cause,
+        RefusalCause::Unsupported
+    );
+}
+
+#[test]
+fn the_core_writes_a_write_only_buffer_type_over_the_windows_backend() {
+    // DI-D-17 through the core and the engine: one `Arc<[u8]>` written to two targets, sealed, and
+    // reported durable, with no `IoBufMut` anywhere on the path.
+    use std::sync::Arc;
+
+    use win_time_sys::InterruptClock;
+
+    use crate::diagnostics::NoDiagnostics;
+    use crate::engine::Engine;
+    use crate::io_core::DurableIoCore;
+    use crate::types::{Entry, Epoch, WriteOptions};
+
+    let (given, added) = (TempFile::new("wb-wo-given"), TempFile::new("wb-wo-added"));
+    let mut backend: WindowsBackend<Arc<[u8]>> = WindowsBackend::without_owned_reads(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        Vec::new(),
+    ))
+    .expect("build");
+    backend
+        .attach(ADDED, Win32FileTarget::new(added.open()))
+        .expect("a new key");
+    let core: DurableIoCore<u64, Arc<[u8]>, u32, InterruptClock> =
+        DurableIoCore::new(InterruptClock, Arc::new(NoDiagnostics));
+    let mut engine = Engine::new(core, backend);
+    for key in [GIVEN, ADDED] {
+        let description = engine.backend.target(key).expect("attached").describe();
+        engine.core.add_target(key, description).expect("a new key");
+    }
+    let lineage = engine.core.default_lineage();
+    let block: Arc<[u8]> = Arc::from(b"replicated".as_slice());
+    for (context, key) in [(1, GIVEN), (2, ADDED)] {
+        engine
+            .write(
+                key,
+                0,
+                SubmissionData::Owned(Arc::clone(&block)),
+                Epoch::new(lineage, 1),
+                context,
+                WriteOptions::new(),
+            )
+            .expect("a write-only buffer is accepted");
+    }
+    engine
+        .make_durable_through(Epoch::new(lineage, 1))
+        .expect("the default lineage");
+    let started = Instant::now();
+    let mut entries = Vec::new();
+    while !entries
+        .iter()
+        .any(|entry| matches!(entry, Entry::Durable { .. }))
+    {
+        engine.drain();
+        entries.extend(std::iter::from_fn(|| engine.core.pop()));
+        assert!(started.elapsed() < BOUND, "stalled with {entries:?}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(engine.core.durable_through(lineage), Ok(Some(1)));
+    for path in [&given.0, &added.0] {
+        assert_eq!(
+            std::fs::read(path).expect("read back"),
+            b"replicated",
+            "{path:?}"
+        );
+    }
 }
 
 #[test]
