@@ -62,3 +62,49 @@ fn a_cause_carrying_a_fault_shows_what_the_backend_said() {
     );
     assert!(RefusalCause::Unknown(fault()).to_string().ends_with("told"));
 }
+
+#[test]
+fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
+    use super::{REFUSED, refusal_fault};
+    use crate::error_code::ErrorCode;
+    use std::error::Error;
+
+    let coded = || IoFault {
+        source: "test",
+        code: Some(ErrorCode::from_win32(1117)),
+        error: Arc::new(io::Error::other("told")),
+    };
+    let cases = [
+        (RefusalCause::UnknownTarget, io::ErrorKind::NotFound, None),
+        (RefusalCause::Unsupported, io::ErrorKind::Unsupported, None),
+        (RefusalCause::Invalid, io::ErrorKind::InvalidInput, None),
+        (RefusalCause::Busy, io::ErrorKind::Other, None),
+        (
+            RefusalCause::Unusable(coded()),
+            io::ErrorKind::Other,
+            Some(ErrorCode::from_win32(1117)),
+        ),
+        (
+            RefusalCause::Unknown(coded()),
+            io::ErrorKind::Other,
+            Some(ErrorCode::from_win32(1117)),
+        ),
+    ];
+    for (cause, kind, code) in cases {
+        let fault = refusal_fault(cause.clone());
+        assert_eq!(fault.source, REFUSED);
+        assert_eq!(fault.code, code, "{cause:?}");
+        assert_eq!(fault.error.kind(), kind, "{cause:?}");
+        let carried = fault
+            .error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<RefusalCause>())
+            .expect("the cause is the error");
+        assert_eq!(*carried, cause);
+        // The backend's own report is the cause's source, where it gave one.
+        let told = carried.source().map(ToString::to_string);
+        let expected = matches!(cause, RefusalCause::Unusable(_) | RefusalCause::Unknown(_))
+            .then(|| "told".to_owned());
+        assert_eq!(told, expected, "{cause:?}");
+    }
+}

@@ -4,8 +4,9 @@
 //! through.
 //!
 //! The engine is the one place that turns the core's [`CoreActions`] into backend pushes: a
-//! submission the backend refuses goes back to the core, which keeps it and emits it again, and a
-//! provider request is kept for the driver to make with the lock released (DI-D-44). Draining pops
+//! submission the backend refuses goes back to the core, which keeps it to emit again or, for a
+//! cause that cannot clear, ends it (DI-D-54); and a provider request is kept for the driver to
+//! make with the lock released (DI-D-44). Draining pops
 //! the backend to empty, as an edge-triggered notification requires
 //! (`windows-ioring-sys`' D-19), so it is the same for every delivery: woken by a thread pool, or
 //! pumped by the consumer's own thread.
@@ -20,7 +21,9 @@
     )
 )]
 
-use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
+use std::collections::VecDeque;
+
+use crate::backend::{IoBackend, SubmissionData};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, OpId};
@@ -63,19 +66,27 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     }
 
     /// Act on what the core asked for: push each submission, handing a refused one back to the
-    /// core, which keeps it; and keep each provider request. Whether entries became poppable.
+    /// core, which keeps it or ends it (DI-D-54) and says what that made due, acted on in turn;
+    /// and keep each provider request, in the order made. Whether entries became poppable.
+    ///
+    /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
     pub(crate) fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
-        let CoreActions {
+        let mut deliver = false;
+        let mut pending = VecDeque::from([actions]);
+        while let Some(CoreActions {
             submit,
             requests,
-            deliver,
-        } = actions;
-        for submission in submit {
-            if let Err(refused) = self.backend.push(submission) {
-                self.core.refused(refused);
+            deliver: ready,
+        }) = pending.pop_front()
+        {
+            deliver |= ready;
+            self.requests.extend(requests);
+            for submission in submit {
+                if let Err(refused) = self.backend.push(submission) {
+                    pending.push_back(self.core.refused(refused));
+                }
             }
         }
-        self.requests.extend(requests);
         deliver
     }
 
@@ -119,11 +130,15 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         context: C,
         options: WriteOptions<V<E, K>>,
     ) -> Pushed<E, Bk, C, K> {
-        let backend = &mut self.backend;
-        self.core
-            .write(target, offset, data, epoch, context, options, |s| {
-                push(backend, s)
-            })
+        self.core.write(
+            target,
+            offset,
+            data,
+            epoch,
+            context,
+            options,
+            &mut self.backend,
+        )
     }
 
     /// Read from `target` at `offset` into `data`, through the backend.
@@ -139,9 +154,8 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         context: C,
         options: ReadOptions<V<E, K>>,
     ) -> Pushed<E, Bk, C, K> {
-        let backend = &mut self.backend;
         self.core
-            .read(target, offset, data, context, options, |s| push(backend, s))
+            .read(target, offset, data, context, options, &mut self.backend)
     }
 
     /// Seal through `through`, acting on what it made due: the answer, and whether entries became
@@ -159,12 +173,4 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     pub(crate) fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
         std::mem::take(&mut self.requests)
     }
-}
-
-/// Push one submission to `backend`.
-fn push<Bk: IoBackend>(
-    backend: &mut Bk,
-    submission: Submission<Bk::Buffer>,
-) -> Result<(), Refused<Bk::Buffer>> {
-    backend.push(submission)
 }

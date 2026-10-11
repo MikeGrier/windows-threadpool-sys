@@ -353,6 +353,101 @@ fn the_targets_geometry_is_enforced_before_the_ring_is_asked() {
 }
 
 #[test]
+fn check_answers_what_push_does() {
+    // Both directions over a real ring, case by case: every submission `check` admits a push
+    // accepts, and every one it refuses a push refuses for the same cause -- the registration's
+    // bounds included, which a push leaves to the ring and `check` asks of it (DI-D-54).
+    let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
+    let aligned = IoTargetKey(3);
+    let mut backend = Backend::new(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        vec![vec![0; 8]],
+    ))
+    .expect("build");
+    let geometry = Geometry::new(512, 512, 1).expect("powers of two");
+    backend
+        .attach(ADDED, Win32FileTarget::new(added.open()))
+        .expect("a new key");
+    backend
+        .attach(
+            aligned,
+            Win32FileTarget::new(added.open()).with_geometry(geometry),
+        )
+        .expect("a new key");
+    let region = |token, target, index, offset, length| Submission {
+        token: SubmissionToken(token),
+        target,
+        op: SubmissionOp::Write {
+            offset: 0,
+            data: SubmissionData::Registered(RegisteredRegion {
+                index,
+                offset,
+                length,
+            }),
+            caching: WriteCaching::Cached,
+        },
+    };
+    let cases: Vec<(Submission<Vec<u8>>, Option<RefusalCause>)> = vec![
+        (write(1, GIVEN, 0, b"abc"), None),
+        (read(2, ADDED, 0, 4), None),
+        (commit(3, GIVEN), None),
+        (region(4, GIVEN, 0, 0, 8), None),
+        (region(5, ADDED, 0, 4, 4), None),
+        (write(6, aligned, 512, &[0; 512]), None),
+        (
+            write(7, IoTargetKey(99), 0, b"x"),
+            Some(RefusalCause::UnknownTarget),
+        ),
+        (
+            commit(8, IoTargetKey(99)),
+            Some(RefusalCause::UnknownTarget),
+        ),
+        (region(9, GIVEN, 1, 0, 1), Some(RefusalCause::Invalid)),
+        (region(10, GIVEN, 0, 4, 5), Some(RefusalCause::Invalid)),
+        (
+            region(11, ADDED, 0, u32::MAX, 2),
+            Some(RefusalCause::Invalid),
+        ),
+        (
+            write(12, aligned, 3, &[0; 512]),
+            Some(RefusalCause::Invalid),
+        ),
+    ];
+    for (submission, cause) in cases {
+        let checked = backend.check(submission.target, &submission.op).err();
+        assert_eq!(checked, cause, "check: {submission:?}");
+        match backend.push(submission) {
+            Ok(()) => {
+                assert!(cause.is_none());
+                backend.submit().expect("submitted");
+                next(&mut backend);
+            }
+            Err(refused) => assert_eq!(Some(refused.cause), cause, "push"),
+        }
+    }
+
+    // Without a registration, a region is one the backend cannot perform, checked or pushed.
+    let mut bare = backend_without_buffers(&given);
+    let submission = region(13, GIVEN, 0, 0, 1);
+    assert_eq!(
+        bare.check(submission.target, &submission.op),
+        Err(RefusalCause::Unsupported)
+    );
+    assert_eq!(
+        bare.push(submission).expect_err("no registration").cause,
+        RefusalCause::Unsupported
+    );
+}
+
+fn backend_without_buffers(given: &TempFile) -> Backend {
+    Backend::new(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        Vec::new(),
+    ))
+    .expect("build")
+}
+
+#[test]
 fn a_duplicate_key_at_construction_hands_everything_back() {
     let (one, two) = (TempFile::new("wb-one"), TempFile::new("wb-two"));
     let refused: WindowsBackendError<Vec<u8>> = Backend::new(setup(
@@ -549,7 +644,7 @@ fn the_core_runs_over_the_windows_backend_under_the_oracle() {
                 epoch,
                 context,
                 WriteOptions::new(),
-                |submission| backend.push(submission),
+                &mut backend,
             )
             .expect("accepted");
         oracle

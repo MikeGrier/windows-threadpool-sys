@@ -111,14 +111,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   reaches that"), so this is a fix to both, made in the core. Second, two of the step's API changes
   stand alone on today's driver, which keeps the switch-over itself to the swap and its deletions.
 
-- [ ] **DI-3.10.3.5.6.2.1** -- **What the backend refuses for good, the core ends**: the backend is
-  asked, before the core holds an operation for its gate, whether it would admit it
-  (`IoBackend::check`), so a gated operation is refused at push for the causes an ungated one is,
-  after every check of the core's own; and a submission of the core's own -- an operation its gate
-  released, or a commit -- that the backend refuses for a cause that is not retryable ends instead of
-  being re-emitted: the operation completes as `Failed` with a fault carrying the cause, a write
-  failing its epoch, and the commit fails its seal's flush of that target. Over the in-memory
-  backend, with the Windows backend's `check` its existing pre-ring refusal.
+- [x] **DI-3.10.3.5.6.2.1** -- What the backend refuses for good, the core ends: a gated operation is put to the backend's `check` before it is held, and a submission of the core's own refused for a cause that is not retryable completes with a `REFUSED` fault. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035621)
 
 - [ ] **DI-3.10.3.5.6.2.2** -- **Readiness an associated type** of the ring trait (DI-D-52 Q6), so an
   implementation names its own; today's driver's is the `Event` it hands out now.
@@ -274,7 +267,17 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   and `wake` carry `expect(dead_code)` outside tests until the driver moves onto them, so the
   build fails when they are used and the expectations go; and that the callback environment is
   honoured is a declared blind spot, no behaviour test being able to tell which pool ran a
-  drain.
+  drain. From `DI-3.10.3.5.6.2.1`: [DI-D-54](DESIGN-NOTES.md#di-d-54) itself -- `check` asked only
+  for an operation the core will hold, and after the core's own checks; `Unknown` treated as
+  permanent; and the ended submission completed as the backend would have with a fault rather than
+  through a new outcome; `check` a required trait method, with no default, so a backend cannot
+  forget it; the core's `write` and `read` take the backend, `&mut impl IoBackend`, where they took
+  a push closure; `refused` returns actions, and the engine works through them first in, first
+  out; the fault's source `REFUSED` (`"refused"`), its error the `RefusalCause` boxed so it is
+  recovered by downcasting, its kind `NotFound`, `Unsupported` or `InvalidInput` where the cause
+  has one; `RefusalCause` implementing `std::error::Error`, its source the backend's report; the
+  ring crate gaining a public `check_span` (its M34.1) rather than dioring repeating the bounds;
+  and the Windows push still leaving spans to the ring, so only `check` asks first.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

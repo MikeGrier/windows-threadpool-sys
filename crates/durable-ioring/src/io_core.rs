@@ -2,20 +2,25 @@
 //! [`DurableIoCore`]: dioring as a portable state machine (DI-D-49, DI-D-50 P11, DI-D-52).
 //!
 //! The core holds no backend and does no I/O. It decides, and says what to do: a consumer
-//! operation is checked, then either held for its gate or handed to the caller's push as a
-//! [`Submission`], and recorded only once the push accepts it; everything else returns
+//! operation is checked, then either held for its gate or pushed, as a [`Submission`], to the
+//! backend the caller lends it, and recorded only once the push accepts it; everything else returns
 //! [`CoreActions`] -- submissions the core originated, requests for the consumer's provider, and
 //! whether entries became poppable. The caller -- the driver -- pushes those submissions to its
 //! backend, submits, hands the requests to its provider, and feeds every completion and every
 //! provider answer back. Entries are popped from the core's own queue, in the order they happened.
 //!
-//! **Refusals** (DI-D-52). A consumer operation the backend refuses is undone: the caller's push
+//! **Refusals** (DI-D-52, DI-D-54). A consumer operation the backend refuses is undone: the push
 //! hands the submission back, nothing was recorded, no operation id was spent, and the buffer and
-//! context go back to the consumer with the backend's [`RefusalCause`](crate::backend::RefusalCause).
-//! A submission the core originated -- a commit, or an operation released by its gate -- is
-//! recorded when emitted and kept when refused: the driver hands it back through
-//! [`DurableIoCore::refused`], and it is emitted again with the next actions, or at once by
-//! [`DurableIoCore::retry`].
+//! context go back to the consumer with the backend's
+//! [`RefusalCause`](crate::backend::RefusalCause). One the core will hold for its gate is put to
+//! the backend's [`check`](IoBackend::check) first, after every check of the core's own, so it is
+//! refused for what an ungated one would be. A submission the core originated -- a commit, or an
+//! operation released by its gate -- is recorded when emitted, and the driver hands it back
+//! through [`DurableIoCore::refused`] if the backend refuses it: kept, and emitted again with the
+//! next actions or at once by [`DurableIoCore::retry`], when the cause is retryable; otherwise
+//! ended, as a completion with a [`REFUSED`](crate::backend::REFUSED) fault -- an operation
+//! completing as `Failed`, a write nullified as one its target failed is, and a commit failing its
+//! seal's flush of its target.
 //!
 //! **Gates** (DI-D-23, DI-D-43). An operation gated on an epoch not yet durable is held, spending
 //! an operation id, and is emitted in the actions of the change that makes the gate durable; one
@@ -34,7 +39,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::backend::{
-    Completion, DuplicateTarget, Refused, Submission, SubmissionData, SubmissionOp, SubmissionToken,
+    Completion, DuplicateTarget, IoBackend, Refused, Submission, SubmissionData, SubmissionOp,
+    SubmissionToken, refusal_fault,
 };
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
@@ -80,7 +86,8 @@ type StateAnswer<E, K> = Result<EpochState<V<E, K>>, UnknownLineage<V<E, K>>>;
 pub struct CoreActions<V: Identities, B> {
     /// Submissions the core originated -- commits, operations their gates released, and any
     /// refused before -- to push to the backend in order, then submit. One the backend refuses
-    /// goes back through [`DurableIoCore::refused`]; the rest may still be pushed.
+    /// goes back through [`DurableIoCore::refused`], whose own actions are acted on in turn; the
+    /// rest may still be pushed.
     pub submit: Vec<Submission<B>>,
     /// Requests for the consumer's provider, in the order made; each domain's answer goes back
     /// through [`DurableIoCore::provided`].
@@ -94,6 +101,15 @@ impl<V: Identities, B> CoreActions<V, B> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.submit.is_empty() && self.requests.is_empty() && !self.deliver
+    }
+
+    /// Actions with nothing to do.
+    fn none() -> Self {
+        Self {
+            submit: Vec::new(),
+            requests: Vec::new(),
+            deliver: false,
+        }
     }
 }
 
@@ -158,8 +174,8 @@ pub struct DurableIoCore<E: EpochId + 'static, B, C, K: StampClock> {
     /// none has no entry.
     per_target: HashMap<IoTargetKey, usize>,
     queue: VecDeque<Entry<V<E, K>, B, C>>,
-    /// Submissions the core originated that the backend refused, emitted again with the next
-    /// actions.
+    /// Submissions the core originated that the backend refused for a retryable cause, emitted
+    /// again with the next actions.
     unpushed: Vec<Submission<B>>,
     next_op: u64,
     next_token: u64,
@@ -276,7 +292,8 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     }
 
     /// Write `data` to `target` at `offset`, tagged `epoch`: checked, then held for its gate, or
-    /// handed to `push` as a submission and recorded once `push` accepts it. The caller submits.
+    /// pushed to `backend` as a submission and recorded once the push accepts it. The caller
+    /// submits.
     ///
     /// # Errors
     ///
@@ -284,12 +301,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
     /// for an unknown target; an epoch whose lineage is not this core's live one, at or below its
     /// seal point, or abandoned; a gate in another core, of a lineage not live, abandoned, or
     /// closing a cycle (DI-D-43) -- checked in that order -- or `PushRefusal::Backend` with the
-    /// cause `push` reported.
+    /// cause the backend gave: its `check`'s for a write the core would hold, its `push`'s for one
+    /// pushed now.
     #[expect(
         clippy::too_many_arguments,
-        reason = "one write's whole description, and the push that issues it"
+        reason = "one write's whole description, and the backend that issues it"
     )]
-    pub fn write(
+    pub fn write<Bk: IoBackend<Buffer = B>>(
         &mut self,
         target: IoTargetKey,
         offset: u64,
@@ -297,7 +315,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         epoch: Epoch<V<E, K>>,
         context: C,
         options: WriteOptions<V<E, K>>,
-        push: impl FnOnce(Submission<B>) -> Result<(), Refused<B>>,
+        backend: &mut Bk,
     ) -> Result<OpId, PushError<V<E, K>, B, C>> {
         let op = SubmissionOp::Write {
             offset,
@@ -305,28 +323,28 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             caching: options.caching,
         };
         let kind = OpKind::Write { epoch };
-        self.issue(target, kind, op, context, options.gate, push)
+        self.issue(target, kind, op, context, options.gate, backend)
     }
 
-    /// Read from `target` at `offset` into `data`: checked, then held for its gate, or handed to
-    /// `push` and recorded once `push` accepts it. The caller submits.
+    /// Read from `target` at `offset` into `data`: checked, then held for its gate, or pushed to
+    /// `backend` and recorded once the push accepts it. The caller submits.
     ///
     /// # Errors
     ///
     /// [`PushError`], handing back the buffer and `context`: for an unknown target; a gate in
     /// another core, of a lineage not live, or abandoned; or `PushRefusal::Backend` with the cause
-    /// `push` reported.
-    pub fn read(
+    /// the backend gave, as for [`write`](Self::write).
+    pub fn read<Bk: IoBackend<Buffer = B>>(
         &mut self,
         target: IoTargetKey,
         offset: u64,
         data: SubmissionData<B>,
         context: C,
         options: ReadOptions<V<E, K>>,
-        push: impl FnOnce(Submission<B>) -> Result<(), Refused<B>>,
+        backend: &mut Bk,
     ) -> Result<OpId, PushError<V<E, K>, B, C>> {
         let op = SubmissionOp::Read { offset, data };
-        self.issue(target, OpKind::Read, op, context, options.gate, push)
+        self.issue(target, OpKind::Read, op, context, options.gate, backend)
     }
 
     /// Seal every epoch of `through`'s lineage at or below it (DI-D-9): the answer, and what it
@@ -414,26 +432,40 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         self.act(due, was_empty)
     }
 
-    /// Take back a submission the core originated that the backend refused: it is emitted again
-    /// with the next actions, or by [`retry`](Self::retry).
+    /// Take back a submission the core originated that the backend refused (DI-D-54). For a
+    /// [retryable](crate::backend::RefusalCause::is_retryable) cause it is kept, and emitted again
+    /// with the next actions or by [`retry`](Self::retry); nothing is due. For any other it can
+    /// never be issued, so it ends here, as a completion with a [`REFUSED`](crate::backend::REFUSED)
+    /// fault would end it: an operation completes as `Failed`, a write nullified as one its target
+    /// failed is, and a commit fails its seal's flush of its target. What that makes due is
+    /// returned.
     ///
     /// A consumer operation the consumer's push issued never comes back this way -- its push is
     /// refused to the consumer -- so one that does, or a submission never handed out, is panicked
     /// on (DI-D-46).
-    pub fn refused(&mut self, refused: Refused<B>) {
-        let token = refused.submission.token;
+    pub fn refused(&mut self, refused: Refused<B>) -> Actions<E, B, K> {
+        let Refused { cause, submission } = refused;
+        let token = submission.token;
         let ours = matches!(
             self.in_flight.get(&token),
             Some(InFlight::Commit { .. } | InFlight::Op { released: true, .. })
         );
-        if ours {
-            self.unpushed.push(refused.submission);
-        } else {
+        if !ours {
             self.durability.inconsistent(
                 "a refusal handed back that is not one of the core's own submissions",
-                format_args!("token {token:?}, cause {}", refused.cause),
+                format_args!("token {token:?}, cause {cause}"),
             );
+            return CoreActions::none();
         }
+        if cause.is_retryable() {
+            self.unpushed.push(submission);
+            return CoreActions::none();
+        }
+        self.complete(Completion {
+            token,
+            result: Err(refusal_fault(cause)),
+            buffer: owned_op(submission.op),
+        })
     }
 
     /// The submissions refused before, to push again -- once the driver has submitted or drained,
@@ -542,15 +574,17 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
         lineage.instance == self.instance && self.durability.is_live(lineage.seq)
     }
 
-    /// Refuse, hold, or push one operation: the path writes and reads share.
-    fn issue(
+    /// Refuse, hold, or push one operation: the path writes and reads share. One that will be held
+    /// is put to the backend's `check` once the core's own checks pass, so it is refused for what a
+    /// push now would be refused for whatever the queues hold (DI-D-54).
+    fn issue<Bk: IoBackend<Buffer = B>>(
         &mut self,
         target: IoTargetKey,
         kind: OpKind<V<E, K>>,
         op: SubmissionOp<B>,
         context: C,
         gate: Option<Epoch<V<E, K>>>,
-        push: impl FnOnce(Submission<B>) -> Result<(), Refused<B>>,
+        backend: &mut Bk,
     ) -> Result<OpId, PushError<V<E, K>, B, C>> {
         let epoch = match kind {
             OpKind::Write { epoch } => Some(epoch),
@@ -567,6 +601,13 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             }
         };
         if let (Some(at), Some(named)) = (waiting, gate) {
+            if let Err(cause) = backend.check(target, &op) {
+                return Err(PushError {
+                    reason: PushRefusal::Backend(cause),
+                    buffer: owned_op(op),
+                    context,
+                });
+            }
             let id = self.op_id();
             let accepted = epoch.map(|epoch| self.accepted(id, target, epoch));
             self.durability.hold(id, accepted, at);
@@ -584,7 +625,7 @@ impl<E: EpochId + 'static, B, C, K: StampClock> DurableIoCore<E, B, C, K> {
             return Ok(id);
         }
         let token = self.token();
-        if let Err(refused) = push(Submission { token, target, op }) {
+        if let Err(refused) = backend.push(Submission { token, target, op }) {
             return Err(handed_back(refused, context));
         }
         let id = self.op_id();

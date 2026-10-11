@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-//! The engine over the in-memory backend: acting, refusals kept and re-emitted, provider requests
-//! kept, and draining to empty.
+//! The engine over the in-memory backend: acting, refusals kept and re-emitted or ended, provider
+//! requests kept, and draining to empty.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -171,6 +171,31 @@ fn a_commit_the_backend_refuses_is_kept_and_issued_by_a_later_drain() {
             "{key:?} committed"
         );
     }
+    oracle.finish().expect("every operation completed");
+}
+
+#[test]
+fn a_commit_the_backend_refuses_for_good_is_ended_and_what_that_makes_due_is_acted_on() {
+    // DI-D-54: the refusal's own actions are acted on in turn, so the failure it makes due is
+    // delivered by the call that met the refusal.
+    let mut engine = plain(8, 16);
+    let mut oracle = ConformanceOracle::new();
+    write(&mut engine, &mut oracle, ONE, b"one");
+    engine.drain();
+    entries(&mut engine, &mut oracle);
+    engine.backend.detach(ONE).expect("attached");
+    let (_, deliver) = engine
+        .make_durable_through(at(&engine, 1))
+        .expect("the default lineage");
+    oracle.sealed(at(&engine, 1));
+    assert!(deliver, "the ended commit's failure became poppable");
+    assert_eq!(engine.backend.queued(), 0, "nothing was pushed");
+    assert!(engine.core.retry().is_empty(), "nothing was kept");
+    let entries = entries(&mut engine, &mut oracle);
+    assert!(
+        matches!(entries.as_slice(), [Entry::Failed(_)]),
+        "{entries:?}"
+    );
     oracle.finish().expect("every operation completed");
 }
 

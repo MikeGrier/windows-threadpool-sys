@@ -273,7 +273,10 @@ fn a_released_operation_the_backend_refuses_is_kept_and_emitted_again() {
         .push(actions.submit.into_iter().next().expect("one"))
         .expect_err("full");
     assert_eq!(refused.cause, RefusalCause::SubmitNeeded);
-    rig.core.refused(refused);
+    assert!(
+        rig.core.refused(refused).is_empty(),
+        "kept, so nothing is due"
+    );
     rig.backend.submit().expect("submit");
     let again = rig.core.retry();
     assert_eq!(again.submit.len(), 1, "kept");

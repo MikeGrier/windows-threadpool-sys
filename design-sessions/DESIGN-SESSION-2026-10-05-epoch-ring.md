@@ -3242,6 +3242,38 @@ be sure to save this and then go ahead." Recorded as DI-D-53, with the ring crat
 and DI-3.10.3.5.6 split into DI-3.10.3.5.6.1 and DI-3.10.3.5.6.2. The waker's API was not shaped by
 the engineer; the assistant's choices for it are queued for review in the ring crate's M33.1.
 
+## DI-3.10.3.5.6.2 re-planned, and what the backend refuses for good (2026-10-11)
+
+Not a discussion with the engineer: the assistant's own finding while starting the switch-over,
+recorded here because it changed the plan and produced a decision (DI-D-54) queued for review.
+
+Mapping today's driver onto the core showed that the core held a gated operation without asking
+the backend whether it could ever issue it, and kept every refused submission of its own for
+re-emission. A cause that cannot clear therefore looped forever. The concrete case: a gated
+registered-span write on an instance with no registered buffers. Today's driver refuses that at
+push (`NoRegisteredBuffers`); the core would accept it, hold it, and on release meet
+`Unsupported` at every re-emission, so the write never completes and its seal never resolves.
+Today's driver has the same flaw for any released operation the ring refuses after its own checks
+-- its comment says "no test reaches that".
+
+The switch-over was re-planned from one step into four: the fix first (`DI-3.10.3.5.6.2.1`), then
+readiness as an associated type and targets as the implementation's own type, which stand alone on
+today's driver, then the swap itself.
+
+The fix has two halves. Before holding, the core asks `IoBackend::check`, after its own checks,
+so the backend's word comes last. After release, a submission of the core's own refused for a cause
+that is not retryable completes as the backend would have with a fault, under a new `REFUSED`
+source whose error is the `RefusalCause` itself. `Unknown` counts as permanent: retrying it blind is
+the hang. For the Windows backend, `check` needs the registration's span check without a push; the
+ring crate kept that private, so it gained `RegisteredBuffers::check_span` (its M34.1) rather than
+dioring re-implementing the bounds, which would be a second copy of the rule. The push still leaves
+spans to the ring, which keeps the ring-refusal path the backend rebuilds a submission on
+reachable by a test.
+
+One wording error was caught before commit: the first draft said an ended write "fails its epoch".
+It does not -- a failed write is nullified (a `Nullified` marking) and its epoch can still become
+durable without it, as `a_failed_write_completes_as_failed_and_is_never_committed` already showed.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

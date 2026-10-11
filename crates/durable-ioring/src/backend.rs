@@ -17,6 +17,8 @@
 //! [`RefusalCause::Unknown`], carrying what it was told.
 
 use std::fmt;
+use std::io;
+use std::sync::Arc;
 
 use crate::io_target::IoTarget;
 use crate::types::{IoFault, IoTargetKey, WriteCaching};
@@ -163,6 +165,42 @@ impl fmt::Display for RefusalCause {
     }
 }
 
+/// The cause is the error: [`Unusable`](RefusalCause::Unusable) and [`Unknown`](RefusalCause::Unknown)
+/// name what the backend reported as their source.
+impl std::error::Error for RefusalCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unusable(fault) | Self::Unknown(fault) => Some(fault.error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+/// The source of the fault that ends a submission of the core's own -- an operation its gate
+/// released, or a commit -- when the backend refuses it for a cause that is not retryable
+/// (DI-D-54). Its code is the backend's, where the cause carries one, and its error is the
+/// [`RefusalCause`] itself, recovered by downcasting.
+pub const REFUSED: &str = "refused";
+
+/// The fault a submission refused for `cause` ends with: see [`REFUSED`].
+pub(crate) fn refusal_fault(cause: RefusalCause) -> IoFault {
+    let code = match &cause {
+        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => fault.code,
+        _ => None,
+    };
+    let kind = match cause {
+        RefusalCause::Unsupported => io::ErrorKind::Unsupported,
+        RefusalCause::Invalid => io::ErrorKind::InvalidInput,
+        RefusalCause::UnknownTarget => io::ErrorKind::NotFound,
+        _ => io::ErrorKind::Other,
+    };
+    IoFault {
+        source: REFUSED,
+        code,
+        error: Arc::new(io::Error::new(kind, cause)),
+    }
+}
+
 /// A refused submission: why, and the submission handed back, buffer and all.
 #[derive(Debug)]
 pub struct Refused<B> {
@@ -211,6 +249,21 @@ pub trait IoBackend {
 
     /// How many registered buffers it has; a [`RegisteredRegion`] names one by its position.
     fn registered_buffers(&self) -> u32;
+
+    /// Whether [`push`](Self::push) would refuse `op` on `target` for a cause that does not depend
+    /// on its queues: no target under the key, an operation it cannot perform, or one malformed for
+    /// its target. The core asks before it holds an operation for its gate, so a gated operation is
+    /// refused at the consumer's push for what an ungated one would be (DI-D-54). A push this
+    /// accepts may still be refused for a full queue, or by a backend that has become unusable.
+    ///
+    /// # Errors
+    ///
+    /// The [`RefusalCause`] `push` would give.
+    fn check(
+        &self,
+        target: IoTargetKey,
+        op: &SubmissionOp<Self::Buffer>,
+    ) -> Result<(), RefusalCause>;
 
     /// Queue `submission`, to be issued no later than the next [`submit`](Self::submit).
     ///

@@ -1474,8 +1474,8 @@
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-52: a commit the backend refuses is kept and emitted again; dropping it leaves its seal waiting forever.",
-      "find": ["            self.unpushed.push(refused.submission);\n"],
-      "replace": ["            drop(refused.submission);\n"]
+      "find": ["            self.unpushed.push(submission);\n"],
+      "replace": ["            drop(submission);\n"]
     },
     {
       "name": "DI-3.10.3.5.2: a refused commit is not emitted with the next actions",
@@ -1738,8 +1738,8 @@
       "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "A target states the alignment its operations need (DI-D-50 P2); the backend refuses what it does not admit rather than let the kernel fail it.",
-      "find": ["        (!admitted).then_some(RefusalCause::Invalid)\n"],
-      "replace": ["        admitted.then_some(RefusalCause::Invalid).and(None)\n"]
+      "find": ["        if admitted {\n            Ok(())\n"],
+      "replace": ["        if true || admitted {\n            Ok(())\n"]
     },
     {
       "name": "DI-3.10.3.5.5: an armed commit failure lands on another target",
@@ -1778,8 +1778,8 @@
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "DI-D-52: a refused submission the core originated goes back to it, which keeps it and emits it again; dropped, its seal waits forever.",
-      "find": ["                self.core.refused(refused);\n"],
-      "replace": ["                drop(refused);\n"]
+      "find": ["                    pending.push_back(self.core.refused(refused));\n"],
+      "replace": ["                    drop(refused);\n"]
     },
     {
       "name": "DI-3.10.3.5.6.1: the engine keeps no provider requests",
@@ -1828,6 +1828,86 @@
       "why": "The manifest checking itself on the engine: negating a bool and comparing it with false are the same test. If it comes back caught, something is reacting to more than behaviour.",
       "find": ["            if !popped {\n"],
       "replace": ["            if popped == false {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: an operation is held without asking the backend",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-54: a gated operation is put to the backend's check before it is held, so it is refused at push for what an ungated one would be. Unasked, a gated span on a backend with no registration is accepted, and fails only once released.",
+      "find": ["            if let Err(cause) = backend.check(target, &op) {\n"],
+      "replace": ["            if let Err(cause) = Ok::<(), crate::backend::RefusalCause>(()) {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: every refusal of the core's own is kept",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "DI-D-54: a submission refused for a cause that is not retryable can never be issued; kept, it is re-emitted forever and its operation never completes.",
+      "find": ["        if cause.is_retryable() {\n"],
+      "replace": ["        if true || cause.is_retryable() {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: every refusal of the core's own ends it",
+      "file": "src/io_core.rs",
+      "expect": "caught",
+      "why": "The other direction: a full queue clears once the driver submits or drains, so a submission refused for it is kept, not failed.",
+      "find": ["        if cause.is_retryable() {\n"],
+      "replace": ["        if false && cause.is_retryable() {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: a refusal fault does not carry its cause",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The REFUSED fault's error is the RefusalCause itself, so a consumer can recover it by downcasting rather than parsing a message.",
+      "find": ["        error: Arc::new(io::Error::new(kind, cause)),\n"],
+      "replace": ["        error: Arc::new(io::Error::new(kind, cause.to_string())),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: a refusal fault drops the backend's code",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "A cause carrying the backend's report keeps its code on the fault, as every fault the backend reports itself does.",
+      "find": ["        RefusalCause::Unusable(fault) | RefusalCause::Unknown(fault) => fault.code,\n"],
+      "replace": ["        RefusalCause::Unusable(_) | RefusalCause::Unknown(_) => None,\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: the engine does not act on what a refusal makes due",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A refusal that ends a submission makes its completion due -- a failure, an entry -- and the engine acts on it in the same call, so the readiness it raises is not lost.",
+      "find": ["                    pending.push_back(self.core.refused(refused));\n"],
+      "replace": ["                    let _ = self.core.refused(refused);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: the memory backend's check admits everything",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "check answers what push would refuse whatever the queues hold; one that admits everything lets the core hold what it can never issue.",
+      "find": ["        self.admits(target, op)\n    }\n"],
+      "replace": ["        let _ = (target, op);\n        Ok(())\n    }\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: the Windows backend's check does not ask the registration",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A push leaves a region's bounds to the ring; check must ask the ring's own span check, or a gated region outside the registration is held and fails only once released.",
+      "find": ["            Some(registered) => registered.check_span(span(region)).map_err(refusal_cause),\n"],
+      "replace": ["            Some(_) => Ok(()),\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.1: the Windows backend's check skips its pre-ring refusals",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "check is the push's refusals before the ring is asked, then the ring's span check; skipping the first admits an unknown target or a misaligned operation.",
+      "find": ["        self.admits(target, op)?;\n"],
+      "replace": ["        let _ = self.admits(target, op);\n"]
+    },
+    {
+      "name": "CONTROL: the engine folds readiness by a longer spelling",
+      "file": "src/engine.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the reworked act: an equivalent spelling of the same fold must survive; caught would mean a test is matching incidental code.",
+      "find": ["            deliver |= ready;\n"],
+      "replace": ["            deliver = deliver || ready;\n"]
     }
   ]
 }

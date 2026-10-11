@@ -422,6 +422,114 @@ fn a_buffers_address_is_checked_against_the_geometry() {
 }
 
 #[test]
+fn check_answers_what_push_does_whatever_the_queues_hold() {
+    // Both directions, case by case: every submission `check` admits a push with room accepts, and
+    // every one it refuses a push refuses for the same cause -- with the queues full as well, which
+    // `check` does not look at but a push names after the cause `check` gives.
+    let geometry = Geometry::new(512, 512, 1).expect("powers of two");
+    let other = IoTargetKey(8);
+    let region = |index, offset, length| RegisteredRegion {
+        index,
+        offset,
+        length,
+    };
+    let at = |target, submission: Submission<Vec<u8>>| Submission {
+        target,
+        ..submission
+    };
+    let cases: Vec<(Submission<Vec<u8>>, Option<RefusalCause>)> = vec![
+        (write(1, 0, b"abc"), None),
+        (read(2, 0, 4), None),
+        (commit(3), None),
+        (registered(4, true, region(0, 0, 8)), None),
+        (registered(5, false, region(0, 4, 4)), None),
+        (at(other, write(6, 512, &[0; 512])), None),
+        (
+            at(IoTargetKey(99), write(7, 0, b"x")),
+            Some(RefusalCause::UnknownTarget),
+        ),
+        (
+            at(IoTargetKey(99), commit(8)),
+            Some(RefusalCause::UnknownTarget),
+        ),
+        (
+            registered(9, true, region(1, 0, 1)),
+            Some(RefusalCause::Invalid),
+        ),
+        (
+            registered(10, false, region(0, 4, 5)),
+            Some(RefusalCause::Invalid),
+        ),
+        (
+            at(other, write(11, 3, &[0; 512])),
+            Some(RefusalCause::Invalid),
+        ),
+        (at(other, read(12, 512, 3)), Some(RefusalCause::Invalid)),
+    ];
+    for full in [false, true] {
+        let mut backend = queues(1, 16).with_registered(vec![vec![0; 8]]);
+        backend.attach(KEY, MemoryTarget::new()).expect("a new key");
+        backend
+            .attach(other, MemoryTarget::new().with_geometry(geometry))
+            .expect("a new key");
+        for (submission, cause) in &cases {
+            assert_eq!(
+                backend.check(submission.target, &submission.op).err(),
+                *cause,
+                "{submission:?}"
+            );
+        }
+        if full {
+            backend.push(commit(0)).expect("fills the one-entry queue");
+        }
+        for (submission, cause) in cases.iter().map(|(s, c)| (clone(s), c.clone())) {
+            let pushed = backend.push(submission).err().map(|refused| refused.cause);
+            let expected = match (cause, full) {
+                (Some(cause), _) => Some(cause),
+                (None, true) => Some(RefusalCause::SubmitNeeded),
+                (None, false) => None,
+            };
+            assert_eq!(pushed, expected, "full: {full}");
+            if pushed.is_none() {
+                backend.submit().expect("never fails");
+                drain(&mut backend);
+            }
+        }
+    }
+}
+
+/// A copy of a submission, owned buffer included.
+fn clone(submission: &Submission<Vec<u8>>) -> Submission<Vec<u8>> {
+    let data = |data: &SubmissionData<Vec<u8>>| match data {
+        SubmissionData::Owned(buffer) => SubmissionData::Owned(buffer.clone()),
+        SubmissionData::Registered(region) => SubmissionData::Registered(*region),
+    };
+    Submission {
+        token: submission.token,
+        target: submission.target,
+        op: match &submission.op {
+            SubmissionOp::Write {
+                offset,
+                data: bytes,
+                caching,
+            } => SubmissionOp::Write {
+                offset: *offset,
+                data: data(bytes),
+                caching: *caching,
+            },
+            SubmissionOp::Read {
+                offset,
+                data: bytes,
+            } => SubmissionOp::Read {
+                offset: *offset,
+                data: data(bytes),
+            },
+            SubmissionOp::Commit => SubmissionOp::Commit,
+        },
+    }
+}
+
+#[test]
 fn a_duplicate_key_hands_the_target_back() {
     let mut backend = backend();
     let target = MemoryTarget::new().with_geometry(Geometry::uniform(8).expect("a power of two"));

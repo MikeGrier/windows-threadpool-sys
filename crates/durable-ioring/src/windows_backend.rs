@@ -311,19 +311,20 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
         })
     }
 
-    /// Why `submission` cannot be pushed, before the ring is asked: an unknown target, a
+    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, a
     /// registered region without a registration, or an operation its target's geometry does not
     /// admit. A registered region is checked for offset and length only; its buffer's address is
-    /// the registration's.
-    fn refusal(&self, submission: &Submission<B>) -> Option<RefusalCause> {
-        let Some(slot) = self.targets.get(&submission.target) else {
-            return Some(RefusalCause::UnknownTarget);
+    /// the registration's, and whether it lies within the registration is the ring's own check at
+    /// push, which [`IoBackend::check`] asks without pushing.
+    fn admits(&self, target: IoTargetKey, op: &SubmissionOp<B>) -> Result<(), RefusalCause> {
+        let Some(slot) = self.targets.get(&target) else {
+            return Err(RefusalCause::UnknownTarget);
         };
-        let (offset, data) = match &submission.op {
+        let (offset, data) = match op {
             SubmissionOp::Write { offset, data, .. } | SubmissionOp::Read { offset, data } => {
                 (*offset, data)
             }
-            SubmissionOp::Commit => return None,
+            SubmissionOp::Commit => return Ok(()),
         };
         let geometry = slot.target.geometry();
         let admitted = match data {
@@ -334,12 +335,16 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
             }
             SubmissionData::Registered(region) => {
                 if self.registered.is_none() {
-                    return Some(RefusalCause::Unsupported);
+                    return Err(RefusalCause::Unsupported);
                 }
                 geometry.admits(offset, u64::from(region.length))
             }
         };
-        (!admitted).then_some(RefusalCause::Invalid)
+        if admitted {
+            Ok(())
+        } else {
+            Err(RefusalCause::Invalid)
+        }
     }
 }
 
@@ -536,8 +541,29 @@ impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
         self.registered.as_ref().map_or(0, RegisteredBuffers::len)
     }
 
+    fn check(&self, target: IoTargetKey, op: &SubmissionOp<B>) -> Result<(), RefusalCause> {
+        self.admits(target, op)?;
+        // The span check the ring makes at push, asked without pushing (its M34.1), and read as a
+        // push's refusal is.
+        let region = match op {
+            SubmissionOp::Write {
+                data: SubmissionData::Registered(region),
+                ..
+            }
+            | SubmissionOp::Read {
+                data: SubmissionData::Registered(region),
+                ..
+            } => *region,
+            _ => return Ok(()),
+        };
+        match &self.registered {
+            Some(registered) => registered.check_span(span(region)).map_err(refusal_cause),
+            None => Err(RefusalCause::Unsupported),
+        }
+    }
+
     fn push(&mut self, submission: Submission<B>) -> Result<(), Refused<B>> {
-        if let Some(cause) = self.refusal(&submission) {
+        if let Err(cause) = self.admits(submission.target, &submission.op) {
             return Err(Refused { cause, submission });
         }
         let Submission { token, target, op } = submission;

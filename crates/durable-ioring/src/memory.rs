@@ -245,12 +245,28 @@ impl MemoryBackend {
         self.completed.len()
     }
 
-    /// Why `submission` cannot be queued, if it cannot.
+    /// Why `submission` cannot be queued, if it cannot: what [`IoBackend::check`] answers, then the
+    /// queues.
     fn refusal(&self, submission: &Submission<Vec<u8>>) -> Option<RefusalCause> {
-        let Some(target) = self.targets.get(&submission.target) else {
-            return Some(RefusalCause::UnknownTarget);
+        if let Err(cause) = self.admits(submission.target, &submission.op) {
+            return Some(cause);
+        }
+        let submit = self.queued.len() >= self.submission_queue_size;
+        let drain = self.queued.len() + self.completed.len() >= self.completion_queue_size;
+        match (submit, drain) {
+            (true, true) => Some(RefusalCause::SubmitAndDrainNeeded),
+            (true, false) => Some(RefusalCause::SubmitNeeded),
+            (false, true) => Some(RefusalCause::DrainNeeded),
+            (false, false) => None,
+        }
+    }
+
+    /// Why `op` on `target` cannot be queued whatever the queues hold, if it cannot.
+    fn admits(&self, target: IoTargetKey, op: &SubmissionOp<Vec<u8>>) -> Result<(), RefusalCause> {
+        let Some(target) = self.targets.get(&target) else {
+            return Err(RefusalCause::UnknownTarget);
         };
-        let shape = match &submission.op {
+        let shape = match op {
             SubmissionOp::Write { offset, data, .. } | SubmissionOp::Read { offset, data } => {
                 Some((*offset, data))
             }
@@ -261,11 +277,11 @@ impl MemoryBackend {
                 SubmissionData::Owned(buffer) => (buffer.as_ptr() as usize, buffer.len()),
                 SubmissionData::Registered(region) => {
                     if self.registered.is_empty() {
-                        return Some(RefusalCause::Unsupported);
+                        return Err(RefusalCause::Unsupported);
                     }
                     match self.region(*region) {
                         Some(bytes) => (bytes.as_ptr() as usize, bytes.len()),
-                        None => return Some(RefusalCause::Invalid),
+                        None => return Err(RefusalCause::Invalid),
                     }
                 }
             };
@@ -274,17 +290,10 @@ impl MemoryBackend {
                 && usize::try_from(offset).is_ok_and(|start| start.checked_add(length).is_some());
             if !fits || !geometry.admits(offset, length as u64) || !geometry.admits_buffer(address)
             {
-                return Some(RefusalCause::Invalid);
+                return Err(RefusalCause::Invalid);
             }
         }
-        let submit = self.queued.len() >= self.submission_queue_size;
-        let drain = self.queued.len() + self.completed.len() >= self.completion_queue_size;
-        match (submit, drain) {
-            (true, true) => Some(RefusalCause::SubmitAndDrainNeeded),
-            (true, false) => Some(RefusalCause::SubmitNeeded),
-            (false, true) => Some(RefusalCause::DrainNeeded),
-            (false, false) => None,
-        }
+        Ok(())
     }
 
     /// The bytes `region` names, if it lies within a registered buffer.
@@ -397,6 +406,10 @@ impl IoBackend for MemoryBackend {
 
     fn registered_buffers(&self) -> u32 {
         u32::try_from(self.registered.len()).unwrap_or(u32::MAX)
+    }
+
+    fn check(&self, target: IoTargetKey, op: &SubmissionOp<Vec<u8>>) -> Result<(), RefusalCause> {
+        self.admits(target, op)
     }
 
     fn push(&mut self, submission: Submission<Vec<u8>>) -> Result<(), Refused<Vec<u8>>> {

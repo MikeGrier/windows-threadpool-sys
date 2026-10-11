@@ -28,6 +28,7 @@ mod failures;
 mod gates;
 mod lineages;
 mod provider;
+mod refusals;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);
@@ -109,7 +110,6 @@ impl Rig {
         bytes: &[u8],
         options: WriteOptions<V>,
     ) -> Pushed {
-        let backend = &mut self.backend;
         let pushed = self.core.write(
             key,
             offset,
@@ -117,7 +117,7 @@ impl Rig {
             epoch,
             "write",
             options,
-            |submission| backend.push(submission),
+            &mut self.backend,
         );
         self.report(
             &pushed,
@@ -151,14 +151,13 @@ impl Rig {
 
     /// A read of `length` bytes from `KEY`, with `options`.
     fn read_with(&mut self, offset: u64, length: usize, options: ReadOptions<V>) -> Pushed {
-        let backend = &mut self.backend;
         let pushed = self.core.read(
             KEY,
             offset,
             SubmissionData::Owned(vec![0; length]),
             "read",
             options,
-            |submission| backend.push(submission),
+            &mut self.backend,
         );
         self.report(&pushed, OpKind::Read, length, "read", options.gate);
         pushed
@@ -197,15 +196,21 @@ impl Rig {
         self.seal_in(lineage, through)
     }
 
-    /// Push what the core asks for, handing refusals back, and keep its provider requests.
+    /// Push what the core asks for, handing refusals back and acting on what they make due, and
+    /// keep its provider requests: the engine's `act`, played here.
     fn act(&mut self, actions: CoreActions<V, Vec<u8>>) -> bool {
-        for submission in actions.submit {
-            if let Err(refused) = self.backend.push(submission) {
-                self.core.refused(refused);
+        let mut deliver = false;
+        let mut pending = std::collections::VecDeque::from([actions]);
+        while let Some(actions) = pending.pop_front() {
+            deliver |= actions.deliver;
+            self.requests.extend(actions.requests);
+            for submission in actions.submit {
+                if let Err(refused) = self.backend.push(submission) {
+                    pending.push_back(self.core.refused(refused));
+                }
             }
         }
-        self.requests.extend(actions.requests);
-        actions.deliver
+        deliver
     }
 
     /// Submit and feed completions back until nothing more is queued or completed.
@@ -382,7 +387,6 @@ fn another_cores_lineage_is_refused() {
     let mut rig = Rig::new();
     let other = Core::new(Ticks::default(), Arc::new(NoDiagnostics));
     let foreign = Epoch::new(other.default_lineage(), 1);
-    let backend = &mut rig.backend;
     let refused = rig
         .core
         .write(
@@ -392,7 +396,7 @@ fn another_cores_lineage_is_refused() {
             foreign,
             "foreign",
             WriteOptions::new(),
-            |submission| backend.push(submission),
+            &mut rig.backend,
         )
         .expect_err("foreign");
     assert!(matches!(refused.reason, PushRefusal::UnknownLineage(_)));
@@ -633,7 +637,6 @@ fn a_registered_region_completes_without_a_buffer() {
         .attach(KEY, MemoryTarget::new())
         .expect("a new key");
     let epoch = rig.epoch(1);
-    let backend = &mut rig.backend;
     let region = RegisteredRegion {
         index: 0,
         offset: 0,
@@ -646,7 +649,7 @@ fn a_registered_region_completes_without_a_buffer() {
         epoch,
         "span",
         WriteOptions::new(),
-        |submission| backend.push(submission),
+        &mut rig.backend,
     );
     rig.report(&pushed, OpKind::Write { epoch }, 5, "span", None);
     pushed.expect("accepted");
@@ -663,7 +666,6 @@ fn a_registered_region_completes_without_a_buffer() {
 fn a_refused_registered_region_hands_back_no_buffer() {
     let mut rig = Rig::new();
     let epoch = rig.epoch(1);
-    let backend = &mut rig.backend;
     let region = RegisteredRegion {
         index: 0,
         offset: 0,
@@ -678,7 +680,7 @@ fn a_refused_registered_region_hands_back_no_buffer() {
             epoch,
             "span",
             WriteOptions::new(),
-            |submission| backend.push(submission),
+            &mut rig.backend,
         )
         .expect_err("no registration");
     assert!(matches!(
@@ -786,26 +788,19 @@ fn a_completion_twice_is_panicked_on() {
 #[should_panic(expected = "a refusal handed back that is not one of the core's own submissions")]
 fn a_consumer_operation_handed_back_as_refused_is_panicked_on() {
     let mut rig = Rig::new();
-    let mut taken = None;
-    let epoch = rig.epoch(1);
-    rig.core
-        .write(
-            KEY,
-            0,
-            SubmissionData::Owned(vec![1]),
-            epoch,
-            "write",
-            WriteOptions::new(),
-            |submission: Submission<Vec<u8>>| {
-                taken = Some(submission.token);
-                Ok(())
-            },
-        )
-        .expect("accepted");
-    rig.core.refused(crate::backend::Refused {
+    rig.write(1, 0, b"x").expect("accepted");
+    rig.backend.submit().expect("submit");
+    // The write's token, read off its completion, which the core is never shown.
+    let token = rig
+        .backend
+        .pop()
+        .expect("never fails")
+        .expect("the write")
+        .token;
+    let _ = rig.core.refused(crate::backend::Refused {
         cause: RefusalCause::SubmitNeeded,
         submission: Submission {
-            token: taken.expect("pushed"),
+            token,
             target: KEY,
             op: SubmissionOp::Commit,
         },
