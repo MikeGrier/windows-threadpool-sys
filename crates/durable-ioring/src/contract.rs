@@ -354,21 +354,29 @@ pub trait RegisteredBufferRing: DurableRing {
     /// The registered-buffer type.
     type Registered: IoBufMut;
 
-    /// The bytes of registered buffer `i`.
+    /// Run `f` on the bytes of registered buffer `i`, and return what it returns. The instance
+    /// holds the registration (DI-D-17) and lends the bytes for the call alone, under its own lock:
+    /// an implementation whose registration is shared with its delivery can lend them no longer.
+    /// While `f` runs, that lock is held, and nothing the lock guards -- completions included --
+    /// makes progress.
     ///
     /// # Errors
     ///
     /// Refused while an operation is reading into it, for an index out of range, or on an
-    /// instance built without registered buffers.
-    fn registered_buffer(&mut self, i: u32) -> io::Result<&[u8]>;
+    /// instance built without registered buffers; `f` is not called.
+    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T>;
 
-    /// The bytes of registered buffer `i`, mutably.
+    /// As [`with_registered_buffer`](Self::with_registered_buffer), with the bytes lent mutably.
     ///
     /// # Errors
     ///
     /// Refused while any operation uses it, for an index out of range, or on an instance built
-    /// without registered buffers.
-    fn registered_buffer_mut(&mut self, i: u32) -> io::Result<&mut [u8]>;
+    /// without registered buffers; `f` is not called.
+    fn with_registered_buffer_mut<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&mut [u8]) -> T,
+    ) -> io::Result<T>;
 
     /// `write_registered_with` with default options.
     ///

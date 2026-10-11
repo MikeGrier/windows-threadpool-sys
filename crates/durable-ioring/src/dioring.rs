@@ -940,12 +940,16 @@ where
 {
     type Registered = R;
 
-    fn registered_buffer(&mut self, i: u32) -> io::Result<&[u8]> {
-        self.registration()?.get(i)
+    fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T> {
+        self.registration()?.get(i).map(f)
     }
 
-    fn registered_buffer_mut(&mut self, i: u32) -> io::Result<&mut [u8]> {
-        self.registration()?.get_mut(i)
+    fn with_registered_buffer_mut<T>(
+        &mut self,
+        i: u32,
+        f: impl FnOnce(&mut [u8]) -> T,
+    ) -> io::Result<T> {
+        self.registration()?.get_mut(i).map(f)
     }
 
     fn write_registered_with(

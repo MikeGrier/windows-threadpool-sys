@@ -305,22 +305,22 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     ///
     /// # Errors
     ///
-    /// As [`RegisteredBufferRing::registered_buffer`]; `f` is not called.
+    /// As [`RegisteredBufferRing::with_registered_buffer`].
     pub fn with_registered_buffer<R>(&self, i: u32, f: impl FnOnce(&[u8]) -> R) -> io::Result<R> {
-        self.with(|ring| ring.registered_buffer(i).map(f))
+        self.with(|ring| ring.with_registered_buffer(i, f))
     }
 
     /// Run `f` on the bytes of registered buffer `i`, mutably, under the front end's lock.
     ///
     /// # Errors
     ///
-    /// As [`RegisteredBufferRing::registered_buffer_mut`]; `f` is not called.
+    /// As [`RegisteredBufferRing::with_registered_buffer_mut`].
     pub fn with_registered_buffer_mut<R>(
         &self,
         i: u32,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> io::Result<R> {
-        self.with(|ring| ring.registered_buffer_mut(i).map(f))
+        self.with(|ring| ring.with_registered_buffer_mut(i, f))
     }
 
     /// [`RegisteredBufferRing::write_registered`].

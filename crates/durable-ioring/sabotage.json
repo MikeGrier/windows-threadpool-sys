@@ -1933,6 +1933,22 @@
       "why": "new is the constructor for a buffer type that is IoBufMut; without the push it makes, every owned read is refused.",
       "find": ["        backend.enable_owned_reads();\n"],
       "replace": ["        let _ = &mut backend;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.5: a registered buffer is lent without asking the registration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The accessor lends the registration's own bytes, and only when the registration admits it: refused, f is not called.",
+      "find": ["        self.registration()?.get(i).map(f)\n"],
+      "replace": ["        Ok(f(&[]))\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.5: a registered buffer is lent mutably without asking the registration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "As for the shared accessor: refused while in use, out of range, or with no registration, f is not called.",
+      "find": ["        self.registration()?.get_mut(i).map(f)\n"],
+      "replace": ["        Ok(f(&mut []))\n"]
     }
   ]
 }

@@ -296,9 +296,10 @@ fn spans_of_the_registered_buffers_round_trip() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], vec![vec![0; 32]; 2]));
     harness
         .ring
-        .registered_buffer_mut(0)
-        .expect("fill buffer 0")[..16]
-        .copy_from_slice(b"registered bytes");
+        .with_registered_buffer_mut(0, |bytes| {
+            bytes[..16].copy_from_slice(b"registered bytes");
+        })
+        .expect("fill buffer 0");
 
     let epoch = harness.epoch(1);
     let span = RegisteredSpan {
@@ -332,7 +333,10 @@ fn spans_of_the_registered_buffers_round_trip() {
     assert_eq!(transferred(&back), 16);
     assert!(back.buffer.is_none());
     assert_eq!(
-        &harness.ring.registered_buffer(1).expect("read buffer 1")[4..20],
+        harness
+            .ring
+            .with_registered_buffer(1, |bytes| bytes[4..20].to_vec())
+            .expect("read buffer 1"),
         b"registered bytes"
     );
     assert_eq!(
@@ -560,11 +564,11 @@ fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
     assert_eq!((error.buffer, error.context), (None, 2));
 
     let refused = ring
-        .registered_buffer(0)
+        .with_registered_buffer(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to read");
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
     let refused = ring
-        .registered_buffer_mut(0)
+        .with_registered_buffer_mut(0, |_| unreachable!("nothing is lent"))
         .expect_err("no registration to fill");
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
 }
@@ -598,7 +602,9 @@ fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     assert_eq!((error.buffer, error.context), (None, 8));
 
     assert_eq!(
-        ring.registered_buffer(1).expect_err("out of range").kind(),
+        ring.with_registered_buffer(1, |_| unreachable!("nothing is lent"))
+            .expect_err("out of range")
+            .kind(),
         std::io::ErrorKind::InvalidInput
     );
     assert!(

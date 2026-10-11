@@ -124,11 +124,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2.4** -- Owned writes keep write-only buffer types on the Windows backend (DI-D-17): `WindowsBackend<B: IoBuf>`, an owned read pushed through a push made where `B: IoBufMut` holds. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035624)
 
-- [ ] **DI-3.10.3.5.6.2.5** -- **Registered buffers reached through a closure**: the registered-buffer
-  ring's accessors become `with_registered_buffer` and `with_registered_buffer_mut`, run under the
-  instance's lock -- DI-D-17's guarded accessors, in the shape `DeliveryHandle` already has --
-  because once the swap puts the registration behind the engine's lock, no borrow of it can outlive
-  that lock; today's driver implements them.
+- [x] **DI-3.10.3.5.6.2.5** -- Registered buffers reached through a closure: `with_registered_buffer` and `with_registered_buffer_mut`, run under the instance's lock (DI-D-17's guarded accessors). -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035625)
 
 - [ ] **DI-3.10.3.5.6.2.6** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
   under pool delivery, with the callback environment in `Setup`; `PushRefusal::Ring` and
@@ -305,7 +301,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   cannot forget to enable reads; a crate-private `enable_owned_reads`, for the driver to call where
   its read's `IoBufMut` bound holds; the owned read's push a function pointer, as today's driver
   carries one, with the registered and shared forms of a target behind a `Via`; and an owned read
-  without that push refused as `Unsupported` at `check` and at `push` alike.
+  without that push refused as `Unsupported` at `check` and at `push` alike. From
+  `DI-3.10.3.5.6.2.5`: the accessors renamed `with_registered_buffer` and
+  `with_registered_buffer_mut`, the names `DeliveryHandle` already used, and generic over the
+  closure's return, so the trait is not object-safe -- it was not before either, being "generic
+  only" (DI-D-24); kept on `&mut self`, as the borrow forms were; and the Windows backend's own
+  borrow-returning accessors left as they are, since whoever owns a backend holds it `&mut`.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an
