@@ -1146,12 +1146,12 @@
       ]
     },
     {
-      "name": "M26.12: EventDelivery stops raising the setup signal after arming",
-      "file": "src/event_delivery.rs",
+      "name": "M26.12: the delivery protocol stops raising the setup signal after arming",
+      "file": "src/completion_wake.rs",
       "expect": "caught",
-      "why": "The backlog guarantee in EventDelivery::new rustdoc is bought entirely by this one signal: the ring's event is edge-triggered (D-19), so a queue that is already non-empty at handover signals nothing and never will. Dropping the call strands every handed-over backlog, which is M11.3's defect and M26.12's together.",
+      "why": "The backlog guarantee in EventDelivery::new rustdoc, and CompletionWake's reach of a backlog, are bought entirely by this one signal: the ring's event is edge-triggered (D-19), so a queue that is already non-empty at handover signals nothing and never will. Dropping the call strands every handed-over backlog, which is M11.3's defect and M26.12's together. Since M33.1 the protocol lives in CompletionWake, which EventDelivery is built on, so this one site serves both.",
       "find": [
-        "        ring.lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)\n            .raise_setup_signal()?;"
+        "        ring.raise_setup_signal()?;"
       ],
       "replace": [
         "        let _ = &ring;"
@@ -1347,6 +1347,42 @@
       ],
       "replace": [
         "        let mut held = ring\n            .lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner);\n        let popped = held.try_pop();\n"
+      ]
+    },
+    {
+      "name": "M33.1: the wake is never armed",
+      "file": "src/completion_wake.rs",
+      "expect": "caught",
+      "why": "D-84: the wait is armed before the setup signal, so the owner is called at all. Unarmed, no call ever comes, and every owner's completions sit undrained.",
+      "find": [
+        "        wait.arm(None);"
+      ],
+      "replace": [
+        "        let _ = &wait;"
+      ]
+    },
+    {
+      "name": "EQUIVALENT: a dropped wake leaves the drain to ThreadpoolWait's own Drop",
+      "file": "src/completion_wake.rs",
+      "expect": "survives",
+      "why": "An equivalent mutant, recorded so a reader does not go looking for the missing test. D-84 promises that a dropped wake calls no one afterwards, and that holds either way: ThreadpoolWait's own Drop disarms and drains before it closes the wait. The explicit stop_and_drain only discharges the drain obligation windows-threadpool-sys reports, and panics on under its fail-fast feature, which this crate's tests do not enable. completion_wake/tests.rs's nothing_is_called_once_the_wake_is_dropped pins the promise itself. Measured: survived when first swept as expect caught.",
+      "find": [
+        "        self.wait.stop_and_drain();"
+      ],
+      "replace": [
+        "        let _ = &self.wait;"
+      ]
+    },
+    {
+      "name": "CONTROL: the wake's trace label is reworded",
+      "file": "src/completion_wake.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: nothing asserts on a trace label, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": [
+        "                windows_threadpool_sys::trace_record!(\"delivery\", \"callback-left\");"
+      ],
+      "replace": [
+        "                windows_threadpool_sys::trace_record!(\"delivery\", \"wake-left\");"
       ]
     }
   ]

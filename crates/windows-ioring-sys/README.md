@@ -100,7 +100,10 @@ ring's completion event to a `ThreadpoolWait` from `windows-threadpool-sys`, so
 no thread of yours ever blocks on I/O. Start here; see
 [examples/model_a_delivery.rs](examples/model_a_delivery.rs) for a full worked
 example that submits without waiting and receives every completion on a pool
-thread.
+thread. A caller that keeps its ring behind its own lock takes `CompletionWake`
+instead: the pool only tells it when to drain, and it drains its own ring to
+empty. `EventDelivery` is built on it, so the two share one delivery protocol
+([D-84](DESIGN-NOTES.md#d-84)).
 
 **Model B, dedicated domain thread -- shared-nothing execution domains.** One
 pinned thread per domain,
@@ -195,9 +198,9 @@ pattern, not supported API surface** -- see the caveat under
 
 | Feature | Default | What it adds |
 |---|---|---|
-| `threadpool` | on | `EventDelivery` (Model A), and with it the dependency on `windows-threadpool-sys`. |
+| `threadpool` | on | `EventDelivery` and `CompletionWake` (Model A), and with them the dependency on `windows-threadpool-sys`. |
 
-`EventDelivery` is the only item in this crate that needs a thread pool, so a
+`EventDelivery` and `CompletionWake` are the only items in this crate that need a thread pool, so a
 Model B consumer -- one pinned thread per domain, parked in
 `Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency it
 never calls. Turning the feature off drops that dependency entirely:

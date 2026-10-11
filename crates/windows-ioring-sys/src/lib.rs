@@ -44,8 +44,10 @@
 //! work is handed to whichever thread the system picks next. This is
 //! `EventDelivery`: the ring's completion event wired to a thread-pool wait,
 //! so no thread of yours ever blocks on I/O. Load balancing is automatic and
-//! locality is incidental -- start here. It lives behind the default-on
-//! `threadpool` feature, so a Model B consumer can drop the thread-pool
+//! locality is incidental -- start here. A caller that keeps its ring behind
+//! its own lock takes `CompletionWake` instead, which only tells it when to
+//! drain; `EventDelivery` is built on it (D-84). Both live behind the
+//! default-on `threadpool` feature, so a Model B consumer can drop the thread-pool
 //! dependency entirely with `default-features = false` (D-22); it is named
 //! here rather than linked because a link would dangle in that
 //! configuration. See `examples/model_a_delivery.rs` for a full worked
@@ -172,6 +174,8 @@ mod batch;
 mod buf;
 #[cfg(windows)]
 mod capability;
+#[cfg(all(windows, feature = "threadpool"))]
+mod completion_wake;
 /// This crate's conservation rules, made executable (M16.1).
 ///
 /// A `pub mod` rather than a re-export, because the module documentation *is*
@@ -212,6 +216,8 @@ pub use batch::{
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
+#[cfg(all(windows, feature = "threadpool"))]
+pub use completion_wake::CompletionWake;
 #[cfg(windows)]
 pub use error::{IoRingError, IoRingErrorExt, PushRefused, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]

@@ -6320,3 +6320,21 @@ The item as it stood at completion:
   observed.
 - **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
   re-entrancy test fails.
+
+## Moved 2026-10-11 10:30:59 -04:00 -- M33.1: a wake-only delivery
+
+### <a id="m331"></a>M33.1 -- `CompletionWake`: the thread pool wakes an owner, who drains its own ring; `EventDelivery` re-expressed on it, so the delivery protocol is written once. *(completed 2026-10-11 10:30:59 -04:00)*
+
+The decision is [D-84](DESIGN-NOTES.md#d-84), raised by durable-ioring's [DI-D-53](../durable-ioring/DESIGN-NOTES.md#di-d-53). `src/completion_wake.rs` holds the wake and the protocol moved out of `EventDelivery`; `src/completion_wake/tests.rs` pins delivery after the wake is built, the setup signal's call with nothing queued and its reach of a backlog, submitting from inside a call, and silence after the drop. `EventDelivery`'s own tests, and its two contract sabotages, are the proof the re-expression keeps its contract. The assistant's choices are queued for review as `M33.2`. The item as it stood at completion:
+
+**`CompletionWake`: the thread pool wakes an owner, and the owner drains its own
+  ring** ([D-84](DESIGN-NOTES.md#d-84)). A wake built over `&mut IoRing`, calling the owner's
+  closure on a pool thread, holding no reference to the ring and no lock while it does, with an
+  optional callback environment; the protocol -- attach unsignalled, arm, raise the setup signal;
+  call, re-arm, call -- moved out of `EventDelivery` into it, and `EventDelivery` re-expressed on
+  it, so the protocol is written once. Its contract stated in rustdoc: drain to empty on every call
+  (D-19), a call with nothing to pop is normal, calls may overlap (D-83), one waiter per ring
+  (D-21), and never dropped from inside a call. Tested: a completion after the wake is delivered, a
+  backlog before it is delivered by the setup signal, the owner may submit from inside a call, and
+  nothing is called after the wake is dropped; `EventDelivery`'s own tests are the proof the
+  re-expression keeps its contract, and the sabotages anchored in its moved code re-anchored.
