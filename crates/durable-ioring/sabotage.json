@@ -1890,7 +1890,7 @@
       "name": "DECLARED BLIND SPOT: a pop hides a failed submit",
       "file": "src/dioring.rs",
       "expect": "survives",
-      "why": "The report of a failed submission is untested: the ring cannot be made to fail a submission on demand, so no test reaches it. Declared so that a test reaching it -- through a fault seam on the ring's submit, DI-3.10.3.5.6.3 -- shows up here as this entry being caught, and the entry is turned around.",
+      "why": "The report of a failed submission is untested. The ring crate's kernel responder can fail a submit, but only on the thread that installed it, and this instance's ring is submitted to from pool threads too, so a drain's real submit could undo the injected failure and a test pass for the wrong reason. Declared so that the test DI-3.10.3.5.6.3 adds, through a responder registered for the ring (the ring crate's M35.1, D-85), shows up here as this entry being caught, and the entry is turned around.",
       "find": ["                (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
       "replace": ["                (None, Err(_)) => Ok(None),\n"]
     }

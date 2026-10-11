@@ -103,15 +103,22 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2** -- The switch-over: the driver onto the core, in six steps, ending in the swap that runs `Dioring` on `DurableIoCore` over the Windows backend under pool delivery and deletes the old path. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-3103562)
 
-- [ ] **DI-3.10.3.5.6.3** -- **A failed submission reachable by a test -- proposed, awaiting the
-  engineer's ruling.** `pop` reports a failed submission when it has no entry to return instead,
-  and no test reaches that: nothing can make the ring fail a submission on demand, so the edge is
-  a declared blind spot in [sabotage.json](sabotage.json) ("a pop hides a failed submit"). A
-  `fault-injection` seam in the ring crate that fails the next submission would reach it, and the
-  Windows backend's failed-submit path with it; that entry is then turned to `caught`. Removed if
-  the engineer declines the seam.
+- [ ] **DI-3.10.3.5.6.3** -- **Failed submissions reached by tests, through a responder on the
+  instance's ring.** `pop` reports a failed submission when it has no entry to return instead, and
+  no test reaches that today, so it is a declared blind spot in [sabotage.json](sabotage.json)
+  ("a pop hides a failed submit"). The ring crate's `kernel-seam` responder can fail a submission,
+  but a thread-local one is unsound here: the instance's ring is submitted to from pool threads
+  too, so a drain's real submit could undo the injected failure and the test pass for the wrong
+  reason (ring crate [D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85)). So the tests register
+  a responder for the instance's ring, enabling `kernel-seam` as a dev-dependency feature, and
+  reach the ring's identity through a test-only accessor on the backend. Tests: a push whose
+  submit fails and a pop whose submit fails, reported with its cause, then the work issued once
+  submits succeed; a drain whose submit fails on a pool thread, leaving the work queued for the
+  next submit; and the Windows backend's own failed submit after an accepted push, and its
+  reissue. The blind-spot entry is turned to `caught`, sabotages are added for the backend's
+  reissue, and the paths now reached are removed from the manifest's `notCoveredHere`.
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M35` -> `M35.1` (a failed submission on demand) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M35` -> `M35.1` (a responder registered for one ring) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
 - [ ] **DI-3.10.3.5.7** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the
   consumer's own thread waits on the notification and drains through a `pump` call, over the

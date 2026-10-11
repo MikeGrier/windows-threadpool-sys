@@ -545,8 +545,9 @@ where
         // cleared by a submit or a drain, and either way completions are still to come, whose
         // actions the pool drain re-emits it with.
         //
-        // No test reaches the failed-submit report: the ring cannot be made to fail a submission
-        // on demand. A fault seam on the ring's submit would (DI-3.10.3.5.6.3).
+        // No test reaches the failed-submit report yet. The ring crate's kernel responder can fail
+        // a submit, but only on the thread that installed it, and this ring is submitted to from
+        // pool threads too; a responder for one ring will reach it (DI-3.10.3.5.6.3).
         let popped = {
             let mut engine = self.engine();
             let submitted = engine.backend.submit();

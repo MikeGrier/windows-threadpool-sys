@@ -3290,15 +3290,45 @@ them, and one that the old path carried in two places.
 - `pop` making the provider's requests was untested: every provider test let its writes complete
   before sealing, so each request was made inside the seal's own call. A test now seals with the
   write still in flight, so the request is made in the drain and only a pop can make it.
-- `pop`'s report of a failed submission cannot be reached: nothing makes the ring fail a submission
-  on demand. It is a declared blind spot, and a seam in the ring crate that would reach it is
-  proposed (`DI-3.10.3.5.6.3`, the ring crate's `M35.1`), awaiting the engineer.
+- `pop`'s report of a failed submission is not reached by any test. It is a declared blind spot.
+  The assistant first said nothing could make the ring fail a submission on demand, and proposed a
+  new ring-crate seam. That was wrong, and the next section records the correction.
 - Of the old sabotages, nine had the same predicate as an existing core or backend entry, now at
   one site. They were retired rather than kept as duplicates of the same patch.
 - The full sweep found a guard the swap had dropped. When a handle consumed by `end_lineage` is
   not disarmed, its release ends the lineage first. The old core reported the second end as an
   inconsistency. The new driver ignored the core's refusal there, so that sabotage survived. The
   refusal is now reported as an inconsistency through the hub.
+
+## A failed submit on demand: the seam exists, but follows threads, not rings (2026-10-11)
+
+The engineer asked whether the failed-submit report is structural -- a path that can never run --
+or only not yet tested. It is neither. `SubmitIoRing` is documented to fail with the entries left
+queued (the ring crate's `RS-P-7`), so the path is real. And the ring crate already had a way to
+make it fail: the `kernel-seam` feature's responder (its `D-60`, `M26.2`), whose `submit` a test
+can override. The assistant had looked for a `fault-injection`-style seam and missed it, so the
+earlier claim and the `M35.1` proposal built on it were both wrong.
+
+The engineer then asked: "It seems fragile if the seam depends on thread affinity, doesn't it?"
+It does, for this crate. `D-60` makes the responder thread-local so tests running as threads of
+one process cannot answer each other's calls, with the thread standing in for a test's rings. Under
+pool delivery one ring is submitted to from the consumer's thread and from pool threads, and the
+proxy fails both ways:
+
+- A drain's real submit on a pool thread can undo an injected failure, so a test passes for the
+  wrong reason. Each drain pass begins with a submit.
+- A failure on a pool thread cannot be injected at all.
+
+The assistant's workaround -- keeping nothing in flight so no drain runs -- depended on when the
+wake happens to fire, which is the incidental behaviour the PLATFORM INTEGRITY rule forbids
+binding to.
+
+The assistant proposed registering a responder for one ring, keyed by its process-unique `RingId`,
+answering on whatever thread makes the call, beside the thread-local form rather than replacing
+it. The engineer: "This is a more solid plan please make it and replan/reshape the plans to make
+it happen." Recorded as the ring crate's
+[D-85](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-85), built in its `M35.1`, and used by
+durable-ioring's `DI-3.10.3.5.6.3`.
 
 ## Open, not yet discussed
 
