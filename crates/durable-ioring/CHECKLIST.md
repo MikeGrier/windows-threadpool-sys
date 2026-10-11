@@ -101,13 +101,39 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.1** -- Pool delivery over the threadless backend: the portable `Engine` that drains a backend through the core, and `PoolDelivery` that drains it on the ring crate's `CompletionWake`, with an optional callback environment. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-3103561)
 
-- [ ] **DI-3.10.3.5.6.2** -- **The switch-over**: `Dioring` runs `DurableIoCore` over the Windows
-  backend under that delivery, with the callback environment in `Setup`; `TargetSetup` and
-  `add_target` take a `Win32FileTarget`, and `FileOptions` goes; the ring trait's readiness an
-  associated type (DI-D-52 Q6); `PushRefusal::Ring` replaced by the backend's refusal cause;
-  `Core`, and the ring code of `push.rs` and `relay.rs`, deleted -- the merge-or-delete decision for
-  the duplicated path; `EntryDelivery`, CONTRACT.md's examples, the tests and the sabotages moved
-  over. Today's tests and sabotages are the proof, the sabotages re-anchored where the code moved.
+- [ ] **DI-3.10.3.5.6.2** -- **The switch-over**: the driver onto the core, in the steps below.
+  Re-planned from one step into four once mapping the old driver onto the new path showed two
+  things. First, the new core has a defect the switch-over would expose: it holds a gated operation
+  without asking the backend whether it would admit it, and re-emits forever a submission of its own
+  that the backend refuses for a cause that cannot clear -- so a gated registered-span write on an
+  instance with no registration, which today's driver refuses at push, would be accepted and then
+  never complete, and its seal never resolve. Today's driver shares the second half ("no test
+  reaches that"), so this is a fix to both, made in the core. Second, two of the step's API changes
+  stand alone on today's driver, which keeps the switch-over itself to the swap and its deletions.
+
+- [ ] **DI-3.10.3.5.6.2.1** -- **What the backend refuses for good, the core ends**: the backend is
+  asked, before the core holds an operation for its gate, whether it would admit it
+  (`IoBackend::check`), so a gated operation is refused at push for the causes an ungated one is,
+  after every check of the core's own; and a submission of the core's own -- an operation its gate
+  released, or a commit -- that the backend refuses for a cause that is not retryable ends instead of
+  being re-emitted: the operation completes as `Failed` with a fault carrying the cause, a write
+  failing its epoch, and the commit fails its seal's flush of that target. Over the in-memory
+  backend, with the Windows backend's `check` its existing pre-ring refusal.
+
+- [ ] **DI-3.10.3.5.6.2.2** -- **Readiness an associated type** of the ring trait (DI-D-52 Q6), so an
+  implementation names its own; today's driver's is the `Event` it hands out now.
+
+- [ ] **DI-3.10.3.5.6.2.3** -- **Targets as the implementation's own type**: the ring trait's
+  `Target`, given to `add_target` and handed back by `remove_target` and `AddTargetError`; today's
+  driver's is `Win32FileTarget`, which `TargetSetup` takes too, its flush domains now the target's;
+  `FileOptions` removed. CONTRACT.md's examples, `EntryDelivery`, the fake and the tests follow.
+
+- [ ] **DI-3.10.3.5.6.2.4** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
+  under pool delivery, with the callback environment in `Setup`; `PushRefusal::Ring` and
+  `PushRefusal::NoRegisteredBuffers` replaced by the backend's refusal cause; `Core`, and the ring
+  code of `push.rs` and `relay.rs`, deleted -- the merge-or-delete decision for the duplicated path;
+  the tests and sabotages moved over. Today's tests and sabotages are the proof, the sabotages
+  re-anchored where the code moved.
 
 - [ ] **DI-3.10.3.5.7** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the
   consumer's own thread waits on the notification and drains through a `pump` call, over the
