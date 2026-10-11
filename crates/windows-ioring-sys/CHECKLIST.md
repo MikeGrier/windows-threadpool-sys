@@ -168,6 +168,17 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
+## M35 -- A failed submission on demand (proposed)
+
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.3`: its driver reports a failed submission,
+and no test reaches that report, because nothing can make a ring fail a submission on demand.
+
+- [ ] **M35.1** -- **Proposed, awaiting the engineer's ruling:** a `fault-injection` seam that
+  fails a ring's next submission with a given failure, as `Completion::with_injected_failure`
+  fails a completion. Removed if the engineer declines it.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6` -> `DI-3.10.3.5.6.3` (a test reaching the driver's failed-submit report). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.
