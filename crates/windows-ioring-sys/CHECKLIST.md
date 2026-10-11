@@ -158,6 +158,16 @@ needs the thread pool only to be told when to drain.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5` -> `DI-3.10.3.5.6.1` (pool delivery over the threadless backend, built on this wake). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
+## M34 -- A registration's span check, asked without pushing
+
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.2.1`, whose core accepts a gated operation
+now and pushes it once its gate is durable, and so must refuse at acceptance a span the push would
+refuse.
+
+- [x] **M34.1** -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m341)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.

@@ -1319,6 +1319,104 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
 }
 
 #[test]
+fn check_span_answers_what_a_push_against_the_span_does() {
+    // M34.1: `check_span` is the push's own span check, asked without pushing.
+    // Bound both ways against the push itself, span by span: every span it
+    // accepts a push accepts, and every span it refuses a push refuses with
+    // the same kind -- so neither can drift from the other unnoticed.
+    const LEN: u32 = 512;
+
+    let mut ring = IoRing::new(32, 32).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; LEN as usize], vec![0_u8; LEN as usize / 2]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let (completion, _held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
+    let buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    let span = |buffer_index, offset, len| RegisteredSpan {
+        buffer_index,
+        offset,
+        len,
+    };
+    let cases = [
+        (span(0, 0, LEN), true),
+        (span(1, 0, LEN / 2), true),
+        (span(0, LEN - 1, 1), true),
+        (span(0, LEN, 0), true),
+        (span(1, 8, 16), true),
+        (span(0, 0, LEN + 1), false),
+        (span(1, 0, LEN / 2 + 1), false),
+        (span(0, LEN, 1), false),
+        (span(0, u32::MAX, 1), false),
+        (span(2, 0, 1), false),
+        (span(u32::MAX, 0, 0), false),
+    ];
+
+    // Bound before the handle it protects, as in the test above.
+    let span_path = temp_file("check-span");
+    let span_file = SharedHandle::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&span_path)
+            .expect("open")
+            .into(),
+    );
+    let mut batch = Batch::new(&mut ring);
+    let mut accepted = 0_u32;
+    for (span, fits) in cases {
+        let checked = buffers.check_span(span);
+        let pushed = batch.write_registered_owned(
+            &span_file,
+            &buffers,
+            span,
+            (),
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        );
+        assert_eq!(checked.is_ok(), fits, "check_span on {span:?}: {checked:?}");
+        match (checked, pushed) {
+            (Ok(()), Ok(_)) => accepted += 1,
+            (Err(checked), Err(refused)) => {
+                assert_eq!(checked.kind(), std::io::ErrorKind::InvalidInput);
+                assert_eq!(refused.error.kind(), checked.kind(), "on {span:?}");
+            }
+            (checked, pushed) => panic!(
+                "check_span and the push disagree on {span:?}: {checked:?} against {:?}",
+                pushed.map_err(|refused| refused.error)
+            ),
+        }
+    }
+    batch
+        .submit_and_wait(accepted, 5_000)
+        .expect("submit the accepted writes");
+    for _ in 0..accepted {
+        let (completion, _held) = ring
+            .pop_within(POP_BOUND)
+            .expect("pop a write")
+            .expect("each accepted write completes within the bound");
+        completion.result().expect("an accepted write succeeds");
+    }
+    for index in 0..buffers.len() {
+        assert_eq!(buffers.outstanding(index), Some(0), "every write returned");
+    }
+
+    // Closes the handle; `span_path` then removes the file as it drops below.
+    drop(span_file);
+}
+
+#[test]
 fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading() {
     // `get` handing out bytes with no check was a data race with the kernel
     // reachable from entirely safe code: `read_registered` takes

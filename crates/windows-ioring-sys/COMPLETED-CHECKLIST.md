@@ -6338,3 +6338,9 @@ The decision is [D-84](DESIGN-NOTES.md#d-84), raised by durable-ioring's [DI-D-5
   backlog before it is delivered by the setup signal, the owner may submit from inside a call, and
   nothing is called after the wake is dropped; `EventDelivery`'s own tests are the proof the
   re-expression keeps its contract, and the sabotages anchored in its moved code re-anchored.
+
+## Moved 2026-10-11 11:50:59 -04:00 -- M34.1: a registration's span check
+
+### <a id="m341"></a>M34.1 -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. *(completed 2026-10-11 11:50:59 -04:00)*
+
+Raised by durable-ioring's `DI-3.10.3.5.6.2.1`: its core holds a gated operation until the gate is durable and pushes it then, so a span the registration does not contain has to be refused when the operation is accepted, not at a push nobody is waiting on. `check_span` is `checked_span`, the private check every span push already makes, made public; it adds no rule of its own. `check_span_answers_what_a_push_against_the_span_does` in `tests/registration.rs` binds it to the push both ways, span by span -- every span it accepts a push accepts, and every span it refuses a push refuses, with the same kind -- and the two `M34.1` sabotages, one accepting every span and one refusing every span, are each caught.

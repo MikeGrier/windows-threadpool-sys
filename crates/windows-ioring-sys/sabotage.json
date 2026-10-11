@@ -1384,6 +1384,32 @@
       "replace": [
         "                windows_threadpool_sys::trace_record!(\"delivery\", \"wake-left\");"
       ]
+    },
+    {
+      "name": "M34.1: check_span accepts every span",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "check_span is the push's own span check, asked without pushing; a check that accepts what the push refuses lets a caller accept an operation it can never issue.",
+      "find": [
+        "        self.checked_span(span).map(|_| ())"
+      ],
+      "replace": [
+        "        let _ = span;",
+        "        Ok(())"
+      ]
+    },
+    {
+      "name": "M34.1: check_span refuses every span",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "The other direction: a check that refuses what the push accepts turns away operations that would have run.",
+      "find": [
+        "        self.checked_span(span).map(|_| ())"
+      ],
+      "replace": [
+        "        let _ = span;",
+        "        self.checked_index(u32::MAX).map(|_| ())"
+      ]
     }
   ]
 }

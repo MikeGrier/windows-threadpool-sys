@@ -977,6 +977,24 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
             .map(|state| state.outstanding.load(Ordering::SeqCst))
     }
 
+    /// Whether `span` lies within this registration -- its buffer index in
+    /// range, and `span.offset .. span.offset + span.len` within that buffer's
+    /// registered length -- asked without pushing anything. It is the check
+    /// every push against a span makes before the kernel sees it, so the
+    /// answer is the push's (M34.1).
+    ///
+    /// For a caller that accepts an operation now and pushes it later, so it
+    /// can refuse a span the push would refuse at the moment it accepts it,
+    /// rather than at a push nobody is waiting on.
+    ///
+    /// # Errors
+    ///
+    /// The [`io::ErrorKind::InvalidInput`] error a push would refuse `span`
+    /// with.
+    pub fn check_span(&self, span: RegisteredSpan) -> io::Result<()> {
+        self.checked_span(span).map(|_| ())
+    }
+
     /// Record that one more operation is outstanding against `span`'s buffer,
     /// and produce the marker whose drop records it finished.
     ///
