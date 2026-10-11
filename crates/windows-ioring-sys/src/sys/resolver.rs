@@ -50,21 +50,23 @@
 //! bound on how long a resolver may defer is a mechanism for satisfying a
 //! constraint rather than a claim about how often Windows pends.
 //!
-//! # Two ordering requirements, and what it costs to install one
+//! # Registering one, and the one ordering requirement left
 //!
-//! **Install before the ring exists, and drop the guard after the ring.** The
-//! resolver answers for operations the kernel never saw. If the guard drops
-//! first, the ring's own rundown asks a real ring to wait for completions it
-//! has no pending operation for, which `SubmitIoRing` answers `E_INVALIDARG`.
-//! [`Resolver::scoped`] arranges both by construction and is the shape to
-//! reach for.
+//! [`Resolver::register`] registers a resolver for one ring
+//! ([D-85](../../DESIGN-NOTES.md#d-85)). It answers that ring's calls on
+//! whatever thread makes them, which is why it is `Send`, until the ring
+//! drops.
 //!
-//! **Installed for a thread, a resolver answers that thread's calls only**, as
-//! the seam's `installed` module explains. Moving such a ring to a thread with nothing
-//! installed hands its operations straight to a kernel that never received
-//! them. **Registered for a ring** ([`super::register`], D-85), it answers
-//! that ring's calls on whatever thread makes them, which is why it is
-//! `Send`.
+//! **Register before the ring's first operation.** The resolver answers for
+//! operations the kernel never saw, so it must see every one: an operation
+//! the kernel built before it was registered is one it would be asked to
+//! complete without having been told of. Registering straight after creating
+//! the ring is the shape to reach for.
+//!
+//! The other requirement this module used to state -- that the resolver
+//! outlive the ring's rundown, which it answers -- is no longer the caller's:
+//! a registration ends at its ring's drop, after the rundown, and nothing
+//! the caller drops can end it sooner.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -77,7 +79,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Threading::SetEvent;
 use windows_sys::core::HRESULT;
 
-use super::installed::{Installed, Responses};
+use super::Responses;
+use crate::IoRing;
 
 /// Environment override for the resolver seed (decimal, or `0x` hex).
 ///
@@ -212,7 +215,7 @@ impl ResolverConfig {
     }
 }
 
-/// What a resolution actually did, readable while the resolver is installed.
+/// What a resolution actually did, readable while the resolver is registered.
 ///
 /// A test that narrows the config to isolate one freedom needs to know the
 /// freedom was *exercised*; otherwise a green run means only that the seed
@@ -298,8 +301,8 @@ struct Op {
 
 /// A resolver over [RESPONSE-SPACE.md](../../RESPONSE-SPACE.md).
 ///
-/// See the module documentation for what drives resolution and for the two
-/// ordering requirements installing one imposes.
+/// See the module documentation for what drives resolution and for the
+/// ordering requirement registering one imposes.
 pub struct Resolver {
     seed: u64,
     state: u64,
@@ -406,7 +409,7 @@ impl Resolver {
 
     /// The command that replays this resolver's choices.
     ///
-    /// Print it from any test that installs one. It names **only this axis**:
+    /// Print it from any test that registers one. It names **only this axis**:
     /// a test that also draws on another seeded source announces that source
     /// too, because a partial replay is the failure `SEED_VAR` documents.
     #[must_use]
@@ -414,22 +417,21 @@ impl Resolver {
         format!("$env:{SEED_VAR}='0x{:016X}'", self.seed)
     }
 
-    /// Install this resolver, run `body`, then uninstall it.
+    /// Register this resolver for `ring`, returning a live view of what it
+    /// does. It answers the ring's calls on whatever thread makes them until
+    /// the ring drops, after the ring's rundown (D-85).
     ///
-    /// This is the shape to reach for, because it makes the module's first
-    /// ordering requirement structural: a ring created inside `body` is also
-    /// dropped inside it, so its rundown is still answered by the resolver
-    /// that owns its operations.
+    /// Register straight after creating the ring, before its first
+    /// operation; see the module documentation.
     ///
     /// # Panics
     ///
-    /// If a responder is already installed on this thread.
-    pub fn scoped<R>(self, body: impl FnOnce(&ResolverWatch) -> R) -> R {
+    /// If `ring` already has a responder registered.
+    pub fn register<T, X>(self, ring: &IoRing<T, X>) -> ResolverWatch {
         let watch = self.watch();
-        let guard: Installed = super::install(Box::new(self));
-        let outcome = body(&watch);
-        drop(guard);
-        outcome
+        // `Registration` ends nothing when dropped; the ring's drop ends it.
+        let _ = super::register(ring, Box::new(self));
+        watch
     }
 
     /// SplitMix64, matching the generator this crate already uses
@@ -569,8 +571,8 @@ impl Resolver {
         if !self.event.0.is_null() && (was_empty || !self.config.edge_triggered_signal) {
             self.record(|s| s.signals += 1);
             // SAFETY: `event` was handed to `set_completion_event` by the ring
-            // that owns it, and this resolver is required to be uninstalled
-            // only after that ring is gone.
+            // that owns it, and this resolver's registration ends only as that
+            // ring drops (D-85), so the ring is not gone yet.
             unsafe { SetEvent(self.event.0) };
         }
         true

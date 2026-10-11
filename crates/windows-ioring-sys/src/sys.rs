@@ -6,8 +6,8 @@
 //! feature off -- which is the published configuration and the default -- each
 //! wrapper is an `#[inline(always)]` forward to the same call the crate made
 //! before, and nothing in this module exists at all. With the feature on, a
-//! test may register a `Responses` implementation for one ring, or install one
-//! for its thread, and it answers instead
+//! test may register a `Responses` implementation for one ring, and it answers
+//! that ring's calls instead, on whatever thread makes them
 //! ([D-85](../DESIGN-NOTES.md#d-85)).
 //!
 //! # Why a module of wrappers rather than a generic `IoRing<K>`
@@ -68,13 +68,11 @@ use windows_sys::core::HRESULT;
 use crate::accounting::RingId;
 
 #[cfg(feature = "kernel-seam")]
-mod installed;
-#[cfg(feature = "kernel-seam")]
 mod registered;
 #[cfg(feature = "kernel-seam")]
 mod resolver;
 #[cfg(feature = "kernel-seam")]
-pub use installed::{Installed, Responses, install};
+mod responses;
 #[cfg(feature = "kernel-seam")]
 pub(crate) use registered::ring_dropped;
 #[cfg(feature = "kernel-seam")]
@@ -83,14 +81,15 @@ pub use registered::{Registration, register};
 pub use resolver::{
     Resolver, ResolverConfig, ResolverStats, ResolverWatch, SEED_VAR as RESOLVER_SEED_VAR,
 };
+#[cfg(feature = "kernel-seam")]
+pub use responses::Responses;
 
-/// Dispatch to the ring's registered `Responses`, then to the thread's
-/// installed one, or fall through to the real call (D-85: the ring's is the
-/// more specific, so it answers first).
+/// Dispatch to the ring's registered `Responses`, or fall through to the real
+/// call (D-85).
 ///
 /// The feature-off arm expands to the real call and nothing else, so a
-/// published build has no branch, no registry or thread-local access, and no
-/// trait object -- the wrapper is the call, and the ring's identity is unused.
+/// published build has no branch, no registry access, and no trait object --
+/// the wrapper is the call, and the ring's identity is unused.
 ///
 /// Every wrapper takes `ring_id` beside `ring`, and the two must name the same
 /// ring: the identity is what a registered responder is found by, and a
@@ -101,10 +100,6 @@ macro_rules! through_seam {
         {
             if let Some(answer) =
                 $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })
-            {
-                return answer;
-            }
-            if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })
             {
                 return answer;
             }

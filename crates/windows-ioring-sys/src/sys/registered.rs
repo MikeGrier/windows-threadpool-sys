@@ -6,10 +6,10 @@
 //! A responder registered here answers the seam calls of the one ring it was
 //! registered for, on whatever thread makes them. That is what a ring used
 //! from more than one thread needs -- a pool thread draining it, a consumer
-//! submitting to it -- and what the thread-local form in `installed` cannot
-//! give: a call from a thread with nothing installed reaches the kernel
-//! silently, so an injected failure can be undone by a real call on another
-//! thread and a test pass for the wrong reason.
+//! submitting to it -- and what the thread-local form it replaced (`M35.2`)
+//! could not give: there, a call from a thread with nothing installed reached
+//! the kernel silently, so an injected failure could be undone by a real call
+//! on another thread and a test pass for the wrong reason.
 //!
 //! Tests still cannot answer each other's calls, which is what made the
 //! thread-local form thread-local: two tests do not share a ring. The key is
@@ -28,14 +28,11 @@
 //! the ring's rundown ran -- the very ordering hazard this form exists to
 //! remove.
 //!
-//! # Precedence, re-entrancy, and concurrency
+//! # Re-entrancy and concurrency
 //!
-//! - A ring's responder is consulted before a thread's: it is the more
-//!   specific of the two, and the one D-85 keeps.
 //! - A responder is not consulted re-entrantly for its own ring. A call it
 //!   makes into the seam for that ring finds it already answering on this
-//!   thread and falls through to the next layer, as the thread-local form
-//!   does.
+//!   thread and falls through to the kernel.
 //! - Calls on one ring from two threads are serialized on the responder's
 //!   lock. A ring is not `Sync`, so they do not overlap in practice; a call
 //!   that did would wait rather than fall through to the kernel, which would
@@ -104,8 +101,8 @@ impl Drop for Answering {
 }
 
 /// Run `f` against `ring`'s responder, if it has one and this thread is not
-/// already answering for it. `None` is the seam's signal to try the next
-/// layer.
+/// already answering for it. `None` is the seam's signal to make the real
+/// call.
 pub(crate) fn with<R>(ring: RingId, f: impl FnOnce(&mut dyn Responses) -> R) -> Option<R> {
     let slot = {
         let registry = lock(&REGISTRY);
@@ -123,7 +120,7 @@ pub(crate) fn with<R>(ring: RingId, f: impl FnOnce(&mut dyn Responses) -> R) -> 
 /// # Panics
 ///
 /// If that ring already has one: which of two answered a call would depend on
-/// registration order, as nesting would for the thread-local form.
+/// registration order.
 pub(crate) fn register_id(ring: RingId, responder: Box<dyn Responses + Send>) -> Registration {
     let mut registry = lock(&REGISTRY);
     assert!(
@@ -179,8 +176,7 @@ pub struct Registration {
 
 impl Registration {
     /// End the registration now, before its ring drops, handing the responder
-    /// back. Once it returns, the ring's calls reach whatever answers next --
-    /// a thread's responder, or the kernel.
+    /// back. Once it returns, the ring's calls reach the kernel.
     ///
     /// `None` if the registration had already ended because its ring dropped.
     pub fn end(self) -> Option<Box<dyn Responses + Send>> {

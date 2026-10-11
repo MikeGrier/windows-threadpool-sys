@@ -5,16 +5,15 @@
 //!
 //! The dispatch, each property in both directions: a registration answers its
 //! own ring and no other, on any thread; it ends when it is ended or its ring
-//! drops, and not when its handle drops; a ring's responder answers before a
-//! thread's; and a responder is not consulted re-entrantly for its own ring,
-//! nor wedged by its own panic.
+//! drops, and not when its handle drops; and a responder is not consulted
+//! re-entrantly for its own ring, nor wedged by its own panic.
 //!
 //! # What they deliberately do not do
 //!
-//! **Open a ring**, as the thread-local seam's tests do not: every ring here is
-//! a bare `RingId`, and every call through the seam reaches a responder that
-//! answers without forwarding, so nothing reaches Win32. That keeps them out of
-//! the population `tools/check-ring-tests.ps1` tracks (D-49). That a real
+//! **Open a ring**: every ring here is a bare `RingId`, and every call through
+//! the seam reaches a responder that answers without forwarding, so nothing
+//! reaches Win32. That keeps them out of the population
+//! `tools/check-ring-tests.ps1` tracks (D-49). That a real
 //! ring's calls -- its submits on another thread, its rundown as it drops --
 //! reach its registration is `tests/responder_per_ring.rs`'s.
 
@@ -28,10 +27,10 @@ use windows_sys::core::HRESULT;
 
 use super::{Responses, register_id, ring_dropped, with};
 use crate::accounting::RingId;
-use crate::sys::{Resolver, ResolverWatch, install};
+use crate::sys::{Resolver, ResolverWatch};
 
-/// What a ring's responder answers `submit` with: distinct from the `S_OK` the
-/// thread-local responders here answer with.
+/// What a ring's responder answers `submit` with: distinct from `S_OK`, which
+/// the re-entrancy test's responder answers with.
 const RING_ANSWER: HRESULT = 0x8007_045D_u32 as HRESULT;
 
 /// Answers `submit` with a fixed code and counts its calls, forwarding
@@ -68,8 +67,8 @@ fn reporting(answer: HRESULT) -> (Box<Reporting>, Arc<AtomicUsize>) {
 ///
 /// # Safety
 ///
-/// Only sound while `ring`, or this thread, has a responder that answers
-/// `submit` **without forwarding**; with none, a null handle reaches
+/// Only sound while `ring` has a responder that answers `submit` **without
+/// forwarding**; with none, a null handle reaches
 /// `SubmitIoRing`.
 unsafe fn submit(ring: RingId) -> HRESULT {
     let mut submitted = 0_u32;
@@ -179,30 +178,6 @@ fn registering_twice_for_one_ring_is_refused() {
 }
 
 #[test]
-fn a_rings_responder_answers_before_the_threads() {
-    let (ours, other) = (RingId::next(), RingId::next());
-    let (thread_responder, thread_seen) = reporting(S_OK);
-    let _installed = install(thread_responder);
-    let (ring_responder, ring_seen) = reporting(RING_ANSWER);
-    let registration = register_id(ours, ring_responder);
-
-    // SAFETY: `ours` has a non-forwarding responder, and so does this thread.
-    assert_eq!(unsafe { submit(ours) }, RING_ANSWER, "the ring's answers");
-    assert_eq!(thread_seen.load(Ordering::Relaxed), 0, "not the thread's");
-
-    // SAFETY: as above, for the thread's.
-    assert_eq!(unsafe { submit(other) }, S_OK, "an unregistered ring");
-    assert_eq!(
-        thread_seen.load(Ordering::Relaxed),
-        1,
-        "falls to the thread's"
-    );
-    assert_eq!(ring_seen.load(Ordering::Relaxed), 1);
-
-    assert!(registration.end().is_some());
-}
-
-#[test]
 fn a_responder_is_not_consulted_re_entrantly_for_its_own_ring() {
     /// From inside its own `submit`, asks the seam for its own ring and for
     /// another.
@@ -223,7 +198,7 @@ fn a_responder_is_not_consulted_re_entrantly_for_its_own_ring() {
             // Without the guard this would block forever on its own slot.
             assert!(
                 !registered(self.own),
-                "a nested call for its own ring must reach the next layer"
+                "a nested call for its own ring must reach the kernel"
             );
             assert!(
                 registered(self.other),

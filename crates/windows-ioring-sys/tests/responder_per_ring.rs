@@ -107,7 +107,8 @@ fn a_registration_answers_its_ring_on_a_thread_other_than_the_one_that_registere
     let (responder, seen) = failing();
     let registration = register(&ring, responder);
 
-    // The case D-85 exists for: the ring is used where nothing is installed.
+    // The case D-85 exists for: the ring is used on a thread other than the
+    // one that registered its responder.
     let (mut ring, outcome) = std::thread::spawn(move || {
         let outcome = submit_nothing(&mut ring);
         (ring, outcome)

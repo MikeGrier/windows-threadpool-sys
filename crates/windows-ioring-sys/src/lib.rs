@@ -199,10 +199,9 @@ mod ring;
 /// Private without the `kernel-seam` feature, where it is nothing but
 /// `#[inline(always)]` forwards to the same `windows-sys` calls this crate
 /// made before. With the feature on it additionally publishes
-/// `sys::Responses`, `sys::register` -- a responder for one ring, on any
-/// thread ([D-85](../DESIGN-NOTES.md#d-85)) -- and `sys::install`, a
-/// responder for one thread, so a test can answer the calls that carry an
-/// operation instead of the kernel.
+/// `sys::Responses` and `sys::register` -- a responder for one ring, on any
+/// thread ([D-85](../DESIGN-NOTES.md#d-85)) -- so a test can answer the calls
+/// that carry an operation instead of the kernel.
 #[cfg(windows)]
 pub mod sys;
 #[cfg(windows)]

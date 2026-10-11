@@ -318,7 +318,7 @@
       "name": "M26.2: the seam consults the responder but ignores its answer",
       "file": "src/sys.rs",
       "expect": "caught",
-      "why": "The seam's whole purpose is that an installed responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
+      "why": "The seam's whole purpose is that a registered responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
       "testArgs": [
         "test",
         "-p",
@@ -327,13 +327,14 @@
         "--all-features"
       ],
       "find": [
-        "            if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })",
+        "            if let Some(answer) =",
+        "                $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
         "            {",
         "                return answer;",
         "            }"
       ],
       "replace": [
-        "            let _ = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) });"
+        "            let _ = $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) });"
       ]
     },
     {
@@ -433,10 +434,10 @@
         "--all-features"
       ],
       "find": [
-        "        if !self.event.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
+        "        if !self.event.0.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
       ],
       "replace": [
-        "        if !self.event.is_null() {"
+        "        if !self.event.0.is_null() {"
       ]
     },
     {
@@ -473,7 +474,7 @@
         "--all-features"
       ],
       "find": [
-        "        self.event = event;",
+        "        self.event = CompletionEvent(event);",
         "        S_OK"
       ],
       "replace": [
@@ -1459,23 +1460,6 @@
         "        #[cfg(feature = \"kernel-seam\")]",
         "        crate::sys::ring_dropped(self.accounting.ring_id());",
         "        let quiesced = match self.run_down() {"
-      ]
-    },
-    {
-      "name": "M35.1: a thread's responder answers before a ring's",
-      "file": "src/sys.rs",
-      "expect": "caught",
-      "why": "D-85: while both forms exist, a ring's responder, the more specific, answers first. Caught by the precedence test, which installs both.",
-      "find": [
-        "            if let Some(answer) =",
-        "                $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
-        "            {"
-      ],
-      "replace": [
-        "            if $crate::sys::installed::with(|_| ()).is_none()",
-        "                && let Some(answer) =",
-        "                    $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
-        "            {"
       ]
     },
     {

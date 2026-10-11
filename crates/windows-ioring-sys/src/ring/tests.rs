@@ -1224,10 +1224,13 @@ impl crate::sys::Responses for ForgedCompletion {
 #[test]
 #[should_panic(expected = "which is not in flight on this ring")]
 fn a_completion_this_ring_never_minted_panics() {
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(0xDEAD),
-    }));
     let mut ring = IoRing::refused_by_the_kernel();
+    let _kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(0xDEAD),
+        }),
+    );
     let _ = ring.try_pop();
 }
 
@@ -1239,9 +1242,12 @@ fn a_duplicate_of_a_retired_completion_panics() {
     let op = ring.reserve_user_data().expect("mint one identity");
     assert!(ring.record_completion(op), "its one real completion");
 
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(op),
-    }));
+    let _kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(op),
+        }),
+    );
     let _ = ring.try_pop();
 }
 
@@ -1252,9 +1258,12 @@ fn a_duplicate_of_a_retired_completion_panics() {
 fn a_completion_this_ring_minted_does_not_panic() {
     let mut ring = IoRing::refused_by_the_kernel();
     let op = ring.reserve_user_data().expect("mint one identity");
-    let kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(op),
-    }));
+    let kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(op),
+        }),
+    );
 
     // `pop_within` rather than `try_pop`: the forged kernel answers on the
     // first pop, but the crate's contract for "wait for this completion" is
@@ -1267,7 +1276,8 @@ fn a_completion_this_ring_minted_does_not_panic() {
     assert!(held.is_none(), "nothing was stowed for it");
     assert_eq!(ring.outstanding(), 0, "it retired the identity it carried");
 
-    drop(kernel);
+    // Ended by hand: a forgotten ring never runs the drop that would end it.
+    assert!(kernel.end().is_some());
     std::mem::forget(ring);
 }
 
@@ -1304,14 +1314,15 @@ fn an_unminted_completion_during_an_unwind_does_not_panic_again() {
     }
 
     let seen = Seen::default();
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(0xBEEF),
-    }));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _pops = PopsWhileUnwinding {
-            ring: IoRing::refused_by_the_kernel(),
-            seen: &seen,
-        };
+        let ring = IoRing::refused_by_the_kernel();
+        let _kernel = crate::sys::register(
+            &ring,
+            Box::new(ForgedCompletion {
+                user_data: Some(0xBEEF),
+            }),
+        );
+        let _pops = PopsWhileUnwinding { ring, seen: &seen };
         panic!("the original failure");
     }));
 

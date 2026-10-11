@@ -6377,3 +6377,33 @@ is for. Tests, each direction asserted: a ring's responder answers its calls fro
 than the one that registered it; it does not answer another ring's; left alone, a registration ends
 at the ring's drop, after answering the rundown; its guard dropped first ends it then; and after it
 ends the ring reaches the kernel. Sabotages for each, in [sabotage.json](sabotage.json).
+
+## Moved 2026-10-11 18:30:44 -04:00 -- M35.2, completing M35: the kernel responder registered for one ring only
+
+### <a id="m352"></a>M35.2 -- The thread-local responder removed: every user moved to the per-ring form, `sys::install` and `Installed` deleted. *(completed 2026-10-11 18:30:44 -04:00)*
+
+Per [D-85](DESIGN-NOTES.md#d-85), completing M35. `Resolver::scoped` is replaced by
+`Resolver::register(&ring) -> ResolverWatch`, called straight after the ring is created; the one
+ordering requirement the resolver still states is to be registered before the ring's first
+operation, the other -- outliving the rundown -- being the registration's own now. The ten `scoped`
+sites in `calibration.rs`, `properties_under_every_resolution.rs` and `resolver_over_a_real_ring.rs`
+became blocks that register after creating the ring; `Stalled`, and the four forged-completion
+tests, register on their ring, and those that `mem::forget` their ring end the registration by hand
+first. The transparency test now asks whether a resolver registered for one ring leaks onto another.
+`sys/installed.rs` became `sys/responses.rs` (`git mv`), keeping the `Responses` trait and losing
+the thread-local install; its tests went, each property they held being one `sys/registered`'s tests
+hold for a ring, and M35.1's precedence test went with the precedence. Sabotages: `M26.2`'s
+re-anchored on the ring dispatch; M35.1's precedence entry retired; and two `M26.3` entries
+re-anchored that M35.1 had broken, by rewriting the resolver lines they patch without checking the
+manifest. A breaking change to the `kernel-seam` surface shipped in 0.7.0. The item as it stood at
+completion:
+
+**The thread-local responder removed** ([D-85](DESIGN-NOTES.md#d-85)): every user moved to the
+per-ring form -- `Resolver::scoped`, which installs before its ring exists and so registers once the
+ring is made; the property test `Stalled`; the forged-completion tests in
+[ring/tests.rs](src/ring/tests.rs); and the seam's own tests in `sys/installed` -- then
+`sys::install` and `Installed` deleted, a breaking change to the `kernel-seam` surface shipped in
+0.7.0, committed as `feat(ioring)!`. The sabotages that pinned the thread-local form are retired or
+re-anchored with it.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

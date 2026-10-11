@@ -168,26 +168,6 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## M35 -- The kernel responder installed for one ring, not one thread
-
-Opened 2026-10-11 from durable-ioring's `DI-7.1` (then numbered `DI-3.10.3.5.6.3`), and reshaped
-the same day by [D-85](DESIGN-NOTES.md#d-85): the `kernel-seam` feature's responder
-([D-60](DESIGN-NOTES.md#d-60)) answers only the thread that installed it, and durable-ioring's one
-ring is used from the consumer's thread and from pool threads alike. The per-ring form is built
-beside the thread-local one, then replaces it.
-
-- [x] **M35.1** -- A responder registered for one ring, answering its calls on any thread, ending at the ring's drop after its rundown or at `Registration::end`. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m351)
-
-- [ ] **M35.2** -- **The thread-local responder removed** ([D-85](DESIGN-NOTES.md#d-85)): every
-  user moved to the per-ring form -- `Resolver::scoped`, which installs before its ring exists and
-  so registers once the ring is made; the property test `Stalled`; the forged-completion tests in
-  [ring/tests.rs](src/ring/tests.rs); and the seam's own tests in `sys/installed` -- then
-  `sys::install` and `Installed` deleted, a breaking change to the `kernel-seam` surface shipped in
-  0.7.0, committed as `feat(ioring)!`. The sabotages that pinned the thread-local form are retired
-  or re-anchored with it.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
 ## M36 -- `CompletionWake`'s ring-opening tests moved to `tests/`
 
 Opened 2026-10-11 while landing `M35.1`, from the entry recorded in

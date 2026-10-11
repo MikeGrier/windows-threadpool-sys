@@ -65,11 +65,12 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
     let resolver = Resolver::with_config(0x5EED, ResolverConfig::narrowest());
     let replay = resolver.replay_hint();
 
-    let (path, outcome) = resolver.scoped(|watch| {
-        // Created *inside* the scope, so the ring's rundown is answered by the
-        // resolver that owns its operations. Outside it, rundown would ask a
-        // real ring to wait for completions the kernel has no record of.
+    let (path, outcome) = {
+        // Registered before the ring's first operation, so the resolver sees
+        // every one; its registration lasts until the ring drops, so the
+        // ring's rundown is answered by the resolver that owns its operations.
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        let watch = resolver.register(&ring);
         let (path, file) = scratch("reachable");
 
         {
@@ -102,7 +103,7 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
 
         ring.run_down().expect("a ring under a resolver runs down");
         (path, watch.stats())
-    });
+    };
     let _ = std::fs::remove_file(path);
 
     // The assertion that makes this a reachability test rather than a ring
@@ -157,8 +158,9 @@ fn a_ring_runs_down_under_the_widest_resolution() {
             },
         );
         let replay = resolver.replay_hint();
-        let path = resolver.scoped(|watch| {
+        let path = {
             let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+            let watch = resolver.register(&ring);
             let (path, file) = scratch("rundown");
 
             let mut batch = Batch::new(&mut ring);
@@ -187,7 +189,7 @@ fn a_ring_runs_down_under_the_widest_resolution() {
                 "{replay}: RS-C-1 -- every submitted operation completes exactly once"
             );
             path
-        });
+        };
         let _ = std::fs::remove_file(path);
     }
 }
@@ -210,8 +212,9 @@ fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
     // because the point is reproducing one observation exactly.
     let resolver = Resolver::new(0x1A);
     let replay = resolver.replay_hint();
-    let (path, refusals, finished) = resolver.scoped(|_| {
+    let (path, refusals, finished) = {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        resolver.register(&ring);
         let (path, file) = scratch("declined");
 
         let mut batch = Batch::new(&mut ring);
@@ -238,7 +241,7 @@ fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
             }
         }
         (path, refusals, finished)
-    });
+    };
     let _ = std::fs::remove_file(path);
 
     assert!(
@@ -279,8 +282,9 @@ fn an_expired_wait_is_a_successful_submit() {
             },
         );
         let replay = resolver.replay_hint();
-        let path = resolver.scoped(|watch| {
+        let path = {
             let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+            let watch = resolver.register(&ring);
             let (path, file) = scratch("expired-submit");
 
             let outcome = {
@@ -308,7 +312,7 @@ fn an_expired_wait_is_a_successful_submit() {
             // run down normally rather than needing recovery.
             ring.run_down().expect("rundown");
             path
-        });
+        };
         let _ = std::fs::remove_file(path);
     }
 
@@ -334,8 +338,9 @@ fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
         },
     );
     let replay = resolver.replay_hint();
-    let path = resolver.scoped(|_| {
+    let path = {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        resolver.register(&ring);
         let (path, file) = scratch("bounded-rundown");
         {
             let mut batch = Batch::new(&mut ring);
@@ -377,7 +382,7 @@ fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
             "{replay}: a caller who keeps calling reaches quiescence"
         );
         path
-    });
+    };
     let _ = std::fs::remove_file(path);
 }
 
@@ -408,8 +413,9 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
     );
     let replay = resolver.replay_hint();
 
-    let path = resolver.scoped(|_| {
+    let path = {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
+        resolver.register(&ring);
         let (path, file) = scratch("pending");
 
         {
@@ -447,26 +453,26 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
 
         ring.run_down().expect("rundown");
         path
-    });
+    };
     let _ = std::fs::remove_file(path);
 }
 
 #[test]
-fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
+fn a_ring_with_no_resolver_still_talks_to_the_kernel() {
     // The seam's transparency, asserted from the far side. This is the same
     // property `M26.2` verified by running its suite both ways, restated here
     // because a resolver is the thing most likely to break it: a responder
-    // that leaked past its guard would divert every ring in the process, and
-    // the failure would look like a flaky kernel rather than like a harness
-    // defect.
-    let (path, file) = scratch("uninstalled");
+    // that leaked past its own ring would divert every ring in the process,
+    // and the failure would look like a flaky kernel rather than like a
+    // harness defect.
+    let (path, file) = scratch("unregistered");
     let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
 
     {
-        let resolver = Resolver::with_config(1, ResolverConfig::narrowest());
-        let watch = resolver.scoped(|watch| watch.clone());
-        // The guard has dropped. Nothing installed on this thread now.
-        assert_eq!(watch.stats().built, 0, "the scope did nothing of its own");
+        // Registered for another ring, which stays live throughout.
+        let other = ResolverRing::with_inventory(64, 128).expect("another ring");
+        let watch = Resolver::with_config(1, ResolverConfig::narrowest()).register(&other);
+        assert_eq!(watch.stats().built, 0, "registering did nothing of its own");
 
         let mut batch = Batch::new(&mut ring);
         batch
@@ -481,8 +487,9 @@ fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
         assert_eq!(
             watch.stats().built,
             0,
-            "an uninstalled resolver must not have seen the call -- the seam leaked"
+            "a resolver registered for another ring must not have seen the call -- the seam leaked"
         );
+        drop(other);
     }
 
     ring.run_down().expect("rundown");

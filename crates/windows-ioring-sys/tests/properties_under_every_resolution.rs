@@ -554,11 +554,13 @@ fn the_properties_hold_under_every_resolution() {
         let this_resolver = resolver_rng.next();
         let resolver = Resolver::new(this_resolver);
 
-        let outcome = resolver.scoped(|watch| {
-            let mut run = Run::new(&path, watch.clone()).expect("a ring and a scratch file");
+        let outcome = {
+            let mut run = Run::new(&path, resolver.watch()).expect("a ring and a scratch file");
+            // Before the ring's first operation, which `Run::new` makes none of.
+            resolver.register(&run.ring);
             let outcome = run_plan(&plan, &mut plan_rng, &mut run);
-            // Whatever happened, take the ring down inside the scope -- its
-            // rundown is answered by the resolver that owns its operations.
+            // Whatever happened, take the ring down here -- its rundown is
+            // answered by the resolver that owns its operations.
             // Its result is not checked: `quiesce` has already driven
             // everything to completion, so this is a no-op on the passing
             // path, and on the failing path a rundown error would only
@@ -568,7 +570,7 @@ fn the_properties_hold_under_every_resolution() {
                 Ok(()) => Ok(run.coverage),
                 Err(failure) => Err((failure, run.declined, run.trace)),
             }
-        });
+        };
 
         match outcome {
             Ok(plan_coverage) => coverage.fold(&plan_coverage),
@@ -696,8 +698,8 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
     // ordinary resolution a completion is usually waiting almost at once, so
     // "it did not exceed the bound" says little; here nothing arrives at all
     // and the deadline is the only thing that can end the call.
-    let guard = windows_ioring_sys::sys::install(Box::new(Stalled));
     let mut ring = PropertyRing::with_inventory(64, 128).expect("a ring");
+    let stalled = windows_ioring_sys::sys::register(&ring, Box::new(Stalled));
     let path = common::TempPath::new("m26-4", "stalled");
     let file = SharedHandle::new(
         std::fs::OpenOptions::new()
@@ -749,8 +751,9 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
     // working as described rather than a defect to route around. Forgetting
     // the ring is also what keeps its inventory alive, which is the same
     // reason the token beside this line used to be forgotten.
+    // Ended by hand: a forgotten ring never runs the drop that would end it.
+    assert!(stalled.end().is_some());
     std::mem::forget(ring);
-    drop(guard);
     drop(file);
     let _ = std::fs::remove_file(&path);
 }
