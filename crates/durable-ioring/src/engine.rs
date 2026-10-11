@@ -11,16 +11,6 @@
 //! (`windows-ioring-sys`' D-19), so it is the same for every delivery: woken by a thread pool, or
 //! pumped by the consumer's own thread.
 
-// Until the driver moves onto the engine in `DI-3.10.3.5.6.2`, only tests reach it. An expectation
-// rather than an allowance, so the build fails once the driver uses it and this goes.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the driver moves onto the engine in DI-3.10.3.5.6.2"
-    )
-)]
-
 use std::collections::VecDeque;
 
 use crate::backend::{IoBackend, SubmissionData};

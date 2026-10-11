@@ -691,6 +691,55 @@ fn a_refused_registered_region_hands_back_no_buffer() {
 }
 
 #[test]
+fn domains_are_interned_once_per_distinct_bytes() {
+    // Moved from the driver's tests with the interning itself (`DI-3.10.3.5.6.2.6`).
+    let core = Core::with_provider(
+        Ticks::default(),
+        Arc::new(NoDiagnostics),
+        vec![domain("C"), domain("D")],
+    )
+    .expect("no repeats");
+    let mut rig = Rig::over(core);
+    rig.attach(
+        KEY,
+        MemoryTarget::new().with_domains([domain("A"), domain("B")]),
+    );
+    rig.attach(
+        OTHER,
+        MemoryTarget::new().with_domains([domain("B"), domain("C"), domain("B")]),
+    );
+    rig.attach(IoTargetKey(3), MemoryTarget::new());
+    let core = &rig.core;
+    assert_eq!(core.domains.len(), 4, "A, B, C and D, once each");
+    let id = |name: &str| core.domains[&domain(name)];
+    let of = |key: IoTargetKey| Arc::clone(&core.targets[&key].domains);
+
+    let mut one = vec![id("A"), id("B")];
+    one.sort_unstable();
+    assert_eq!(&*of(KEY), one.as_slice());
+    let mut two = vec![id("B"), id("C")];
+    two.sort_unstable();
+    assert_eq!(&*of(OTHER), two.as_slice(), "a repeated domain counts once");
+    assert!(
+        of(IoTargetKey(3)).is_empty(),
+        "a target declared with none stays unknown"
+    );
+
+    let mut provider = vec![id("C"), id("D")];
+    provider.sort_unstable();
+    assert_eq!(
+        &*core.served,
+        provider.as_slice(),
+        "a provider's domain shares its id with a target's"
+    );
+}
+
+/// A flush domain named `name`.
+fn domain(name: &str) -> FlushDomain {
+    FlushDomain::new(name.as_bytes().to_vec())
+}
+
+#[test]
 fn a_duplicate_target_hands_its_description_back() {
     let mut rig = Rig::new();
     let description = MemoryTarget::new()

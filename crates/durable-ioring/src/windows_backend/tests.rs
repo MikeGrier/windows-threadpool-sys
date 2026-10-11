@@ -623,6 +623,56 @@ fn a_short_write_is_a_fault_and_a_short_read_is_not() {
     assert!(transfer(Err(io::Error::from_raw_os_error(1117)), false, 0).is_err());
 }
 
+// The cases below were the relay's, on its `op_outcome` over `transfer`; the relay went in
+// `DI-3.10.3.5.6.2.6`, and they are pinned on `transfer` itself.
+
+/// A write that transferred fewer bytes than it asked for is a fault under the `Fault` policy: a
+/// target never completes a write short, and no layer gave a code for it.
+#[test]
+fn a_short_write_is_the_rings_fault_with_no_code() {
+    let fault = transfer(Ok(3), true, 8).expect_err("short");
+    assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
+    assert_eq!(fault.code, None);
+}
+
+/// A write that transferred nothing is short too.
+#[test]
+fn a_write_that_transferred_nothing_is_a_fault() {
+    assert!(transfer(Ok(0), true, 8).is_err());
+}
+
+/// A read may complete short: the obligation is a write's. The read is given a requested length
+/// here, though the backend passes zero for one, so that the count alone would make it short.
+#[test]
+fn a_short_read_is_transferred_whatever_was_requested() {
+    assert_eq!(transfer(Ok(3), false, 8), Ok(3));
+}
+
+/// A failed completion is the ring's fault, with the code it carries.
+#[test]
+fn a_failed_completion_is_the_rings_fault_with_its_code() {
+    let fault = transfer(Err(io::Error::from_raw_os_error(1117)), true, 8).expect_err("failed");
+    assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
+    assert_eq!(
+        fault.code,
+        Some(crate::error_code::ErrorCode::from_win32(1117))
+    );
+}
+
+/// A failed completion with no code relays the error with none: the code is optional (DI-D-50).
+#[test]
+fn a_failure_with_no_code_is_relayed_without_one() {
+    let fault = transfer(Err(io::Error::other("no code")), true, 8).expect_err("failed");
+    assert_eq!(fault.code, None);
+}
+
+/// A transfer longer than a `u32` is counted as `u32::MAX` rather than wrapping.
+#[test]
+fn a_transfer_beyond_u32_saturates() {
+    let huge = usize::try_from(u64::from(u32::MAX) + 1).expect("a 64-bit target");
+    assert_eq!(transfer(Ok(huge), false, 0), Ok(u32::MAX));
+}
+
 #[test]
 fn a_write_only_buffer_type_is_written_and_an_owned_read_is_refused_without_a_read_push() {
     // DI-D-17: an owned write needs only `IoBuf`, so `Arc<[u8]>` -- which is not `IoBufMut` -- is a

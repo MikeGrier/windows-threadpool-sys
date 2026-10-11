@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 //! What the core holds of one file (DI-3.2.7): the part of `remove_target`'s refusal the core
-//! answers. Operations in flight and held for a gate are the relay's to count.
+//! answers. Operations in flight and held for a gate are the I/O core's to count.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,7 +32,7 @@ impl<E: EpochId + 'static, I: Instant> FileHolds<E, I> {
 impl<E: EpochId + 'static, T: Clone, I: Instant, K: StampClock<Instant = I>>
     Durability<E, T, I, K>
 {
-    /// What holds `file` here. A write in flight is the relay's to count, and a write of an ended
+    /// What holds `file` here. A write in flight is the I/O core's to count, and a write of an ended
     /// lineage is no longer recorded once it has completed.
     pub(crate) fn file_holds(&self, file: IoTargetKey) -> FileHolds<E, I> {
         let mut suspect = BTreeSet::new();

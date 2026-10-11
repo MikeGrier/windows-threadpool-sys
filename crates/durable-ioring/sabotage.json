@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: wiring the ring's delivery and creating the readiness event at construction; a submission that fails after a push was accepted, and pop's retry of it (push.rs); the relay's debug assertion for a completion with no sidecar, and durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); a flush the ring refuses, which the relay keeps to push again (relay.rs); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a submission that fails, and submit's reissue of it; a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; an owned buffer the ring refuses, which needs one longer than a u32; and attaching the completion event at construction.",
+  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: creating the readiness event and pool delivery at construction; a submission that fails after a push was accepted, and pop's report of it (dioring.rs, declared below as a blind spot); durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a submission that fails, and submit's reissue of it; a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; an owned buffer the ring refuses, which needs one longer than a u32; and attaching the completion event at construction.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -54,28 +54,28 @@
       "replace": ["        Some(self.id.cmp(&other.id))"]
     },
     {
-      "name": "DI-3.2.2.1: the relay drops every completion",
-      "file": "src/dioring/relay.rs",
+      "name": "DI-3.2.2.1: the core drops every completion",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "One completion per operation (DI-D-24): nothing pushed would ever be reported. Every test that waits for a completion times out at its bound.",
-      "find": ["        core.queue.push_back(entry);\n"],
-      "replace": ["        drop(entry);\n"]
+      "find": ["                self.queue.push_back(Entry::Op(OpCompletion {\n                    id,\n                    kind,\n                    outcome,\n                    buffer,\n                    context,\n                }));\n"],
+      "replace": ["                drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {\n                    id,\n                    kind,\n                    outcome,\n                    buffer,\n                    context,\n                }));\n"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is never set",
-      "file": "src/dioring/relay.rs",
+      "file": "src/dioring/hub.rs",
       "expect": "caught",
       "why": "DI-D-28: a waiter would sleep through every entry. Only the readiness check sees it -- the other tests poll -- which is why that check exists beside the oracle.",
-      "find": ["            let set = self.readiness.set();\n"],
-      "replace": ["            let set: io::Result<()> = Ok(());\n"]
+      "find": ["        let set = self.readiness.set();\n"],
+      "replace": ["        let set: io::Result<()> = Ok(());\n"]
     },
     {
       "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
-      "file": "src/dioring/relay.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "The empty-to-non-empty transition is the one DI-D-28 requires: a single waiter that has popped to None sleeps until it. Caught by the readiness check's first push.",
-      "find": ["        if was_empty {\n"],
-      "replace": ["        if !was_empty {\n"]
+      "find": ["            deliver: was_empty && !self.queue.is_empty(),\n"],
+      "replace": ["            deliver: !was_empty && !self.queue.is_empty(),\n"]
     },
     {
       "name": "DI-3.2.2.1: a completion reports no bytes transferred",
@@ -95,58 +95,50 @@
     },
     {
       "name": "DI-3.2.2.1: a write is recorded as a read",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "The write's tag is what durability will be computed from (DI-3.2.3). The oracle's kind rule catches it in every test that writes.",
-      "find": ["            OpKind::Write { epoch: tag.epoch() },\n            len,\n            context,\n            OpData::Owned(buffer, push_owned_write::<B, Sidecar<E, C>>),\n"],
-      "replace": ["            OpKind::Read,\n            len,\n            context,\n            OpData::Owned(buffer, push_owned_write::<B, Sidecar<E, C>>),\n"]
+      "find": ["        let kind = OpKind::Write { epoch };\n"],
+      "replace": ["        let kind = {\n            let _ = epoch;\n            OpKind::Read\n        };\n"]
     },
     {
       "name": "DI-3.2.2.1: operation identities are not advanced",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Two operations under one identity cannot be told apart. The oracle's duplicate-identity rule, and the push-order test.",
-      "find": ["        core.unsubmitted = batch.submit().is_err();\n        self.next_op += 1;\n"],
-      "replace": ["        core.unsubmitted = batch.submit().is_err();\n"]
+      "find": ["        self.next_op += 1;\n        id\n"],
+      "replace": ["        id\n"]
     },
     {
       "name": "DI-3.2.2.1: a push naming an unknown file is not refused",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "The refusal must hand back the buffer and the context; without it the push reaches a lookup that cannot succeed.",
-      "find": ["        if !self.files.contains_key(&file) {\n"],
-      "replace": ["        if false {\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: another instance's lineage is accepted",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "A write tagged with a lineage this instance does not have names an epoch nothing here could ever seal.",
-      "find": ["            && !self.is_live(epoch.lineage)\n"],
-      "replace": ["            && false\n"]
+      "find": ["        if !self.targets.contains_key(&target) {\n            return Err(PushRefusal::UnknownFile(target));\n"],
+      "replace": ["        if false {\n            return Err(PushRefusal::UnknownFile(target));\n"]
     },
     {
       "name": "DI-3.2.2.1: a span operation without a registration is not refused",
-      "file": "src/dioring/push.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
-      "why": "NoRegisteredBuffers is the refusal that hands the context back; without it the push reaches a registration that does not exist.",
-      "find": ["        if needs_registration && self.registered.is_none() {\n"],
-      "replace": ["        if false {\n"]
+      "why": "A span operation with no registration is refused by the backend as Unsupported before it reaches the ring, handing the context back; without it the push reaches a registration that does not exist.",
+      "find": ["                if self.registered.is_none() {\n                    return Err(RefusalCause::Unsupported);\n"],
+      "replace": ["                if false {\n                    return Err(RefusalCause::Unsupported);\n"]
     },
     {
       "name": "DI-3.2.2.1: the write-through choice is dropped",
-      "file": "src/dioring/push.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "DI-2.6: dioring hides no knob the platform offers. Caught because the platform answers differently: a write-through write fails on a cached handle, so a dropped flag turns that failure into a success.",
-      "find": ["        WriteCaching::WriteThrough => RingCaching::WriteThrough,\n"],
-      "replace": ["        WriteCaching::WriteThrough => RingCaching::Cached,\n"]
+      "find": ["        WriteCaching::WriteThrough => windows_ioring_sys::WriteCaching::WriteThrough,\n"],
+      "replace": ["        WriteCaching::WriteThrough => windows_ioring_sys::WriteCaching::Cached,\n"]
     },
     {
       "name": "DI-3.2.2.1: add_target accepts a key already in use",
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "Two files under one key would make every report naming it ambiguous; the refusal hands the file back.",
-      "find": ["        if self.files.contains_key(&key) {\n"],
+      "find": ["        if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {\n"],
       "replace": ["        if false {\n"]
     },
     {
@@ -271,27 +263,19 @@
     },
     {
       "name": "DI-3.2.3: a write at or below the seal is not refused",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Guarantee 6: a late write is refused before anything is reserved, with its buffer handed back. Absorbed, it would join an epoch already reported durable.",
-      "find": ["                (self.relay.lock().durability).refuses(epoch.lineage.seq, epoch.id)\n"],
-      "replace": ["                (self.relay.lock().durability).refuses(epoch.lineage.seq, epoch.id).filter(|_| false)\n"]
-    },
-    {
-      "name": "DI-3.2.3: a seal naming another instance's lineage is accepted",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The epoch's id would be applied to the default lineage, sealing it on another instance's say-so.",
-      "find": ["        if !self.is_live(through.lineage) {\n            return Err(SealError::UnknownLineage(through.lineage));\n"],
-      "replace": ["        if false {\n            return Err(SealError::UnknownLineage(through.lineage));\n"]
+      "find": ["            if let Some(sealed_through) = self.durability.refuses(epoch.lineage.seq, epoch.id) {\n"],
+      "replace": ["            if let Some(sealed_through) = self\n                .durability\n                .refuses(epoch.lineage.seq, epoch.id)\n                .filter(|_| false)\n            {\n"]
     },
     {
       "name": "DI-3.2.3: no synthesized entry is appended",
-      "file": "src/dioring/relay.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Guarantee 4: every request is answered. The state still changes, so only the queue shows it; every seal and failure test waits for its entry and times out.",
-      "find": ["        core.ready.extend(due.released);\n        core.calls.extend(due.calls);\n        self.append_events(core, due.events);\n        let mut flushes"],
-      "replace": ["        core.ready.extend(due.released);\n        core.calls.extend(due.calls);\n        drop(due.events);\n        let mut flushes"]
+      "find": ["                Ok(entry) => self.queue.push_back(entry),\n"],
+      "replace": ["                Ok(entry) => drop::<Entry<V<E, K>, B, C>>(entry),\n"]
     },
     {
       "name": "DI-3.2.3: the oracle accepts a write at or below the seal",
@@ -398,20 +382,12 @@
       "replace": ["            Standing::Open(_) => {\n"]
     },
     {
-      "name": "DI-3.2.4: the fault seam fails any file's flush",
-      "file": "src/dioring/relay.rs",
-      "expect": "caught",
-      "why": "An armed failure belongs to its file; consumed by another's flush, it would fail the wrong seal. Caught by the I/O test arming one file of two.",
-      "find": ["                let completion = match core.injected.iter().position(|(f, _)| *f == file) {\n"],
-      "replace": ["                let completion = match core.injected.iter().position(|_| true) {\n"]
-    },
-    {
       "name": "DI-3.2.4: a failed flush is reported as a success",
-      "file": "src/dioring/relay.rs",
+      "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "The flush's answer is the whole basis of durability. Caught by every test that arms the seam, which also shows the seam reaches dioring's decision rather than only the ring's.",
-      "find": ["                let result = completion.result().map(|_| ()).map_err(windows_fault);\n"],
-      "replace": ["                let result: Result<(), crate::types::IoFault> = Ok(());\n"]
+      "find": ["            Kind::Commit => completion.result().map(|_| 0).map_err(windows_fault),\n"],
+      "replace": ["            Kind::Commit => Ok(0),\n"]
     },
     {
       "name": "DI-3.2.4: the oracle lets Durable pass an unresolved failure",
@@ -455,11 +431,11 @@
     },
     {
       "name": "DI-3.2.4.1: a write into an abandoned epoch is not refused",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-35: an abandoned epoch's writes were declared lost, so a write joining it would be reported with an epoch that can never be durable. Caught by the I/O test that writes into an abandoned open epoch.",
-      "find": ["            && (self.relay.lock().durability).is_abandoned(epoch.lineage.seq, epoch.id)\n"],
-      "replace": ["            && false\n"]
+      "find": ["            if self.durability.is_abandoned(epoch.lineage.seq, epoch.id) {\n"],
+      "replace": ["            if false {\n"]
     },
     {
       "name": "DI-3.2.4.1: the oracle accepts a write into an abandoned epoch",
@@ -468,14 +444,6 @@
       "why": "The oracle's statement of DI-D-35, which the I/O tests bind to.",
       "find": ["                .is_some_and(|ids| ids.contains(&epoch.id))\n"],
       "replace": ["                .is_some_and(|_| false)\n"]
-    },
-    {
-      "name": "CONTROL: the relay tests emptiness by length",
-      "file": "src/dioring/relay.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself, on code every test runs: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["        let was_empty = core.queue.is_empty();\n"],
-      "replace": ["        let was_empty = core.queue.len() == 0;\n"]
     },
     {
       "name": "CONTROL: the registration timeout's message is reworded",
@@ -593,7 +561,7 @@
       "name": "DI-3.9.2: a kernel failure's code is lost on the way to the core",
       "file": "src/error_code.rs",
       "expect": "caught",
-      "why": "The ring reports every failure with its code, and the Windows path relays it in each IoFault (DI-D-47, DI-D-50); dropping it records that an operation failed but not how. The relay's unit test and the ring test reading a failed commit's code both see it missing.",
+      "why": "The ring reports every failure with its code, and the Windows path relays it in each IoFault (DI-D-47, DI-D-50); dropping it records that an operation failed but not how. The Windows backend's unit tests and the ring test reading a failed commit's code both see it missing.",
       "find": ["        code: ErrorCode::of(&error),\n"],
       "replace": ["        code: None,\n"]
     },
@@ -671,11 +639,11 @@
     },
     {
       "name": "DI-3.2.5.1: releasing a lineage's last handle does not end it",
-      "file": "src/dioring/relay.rs",
+      "file": "src/dioring/hub.rs",
       "expect": "caught",
       "why": "DI-D-40: the last handle's release is how a holder that will not finish a lineage ends it. Ignored, the lineage would live on with nothing able to seal it, its epochs neither durable nor abandoned. Caught by the ring test that drops the last copy and waits for LineageEnded.",
-      "find": ["        let due = core.durability.end(lineage.seq);\n        self.act(&mut core, due);\n"],
-      "replace": ["        let due = Due::default();\n        self.act(&mut core, due);\n"]
+      "find": ["        self.reach(|engine| match engine.core.end_lineage(lineage) {\n"],
+      "replace": ["        self.reach(|engine| match Some(lineage)\n            .filter(|_| false)\n            .map_or(Err(()), |lineage| engine.core.end_lineage(lineage).map_err(|_| ()))\n        {\n"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
@@ -770,7 +738,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-40: the default lineage cannot be ended, and the refusal says why. Without the check the instance's own copy makes the handle shared, so the refusal names the wrong reason. Caught by the ring test of end_lineage's refusals.",
-      "find": ["        } else if lineage.seq == DEFAULT_LINEAGE {\n            EndLineageRefusal::Default\n"],
+      "find": ["        } else if lineage == self.default.lineage() {\n            EndLineageRefusal::Default\n"],
       "replace": ["        } else if false {\n            EndLineageRefusal::Default\n"]
     },
     {
@@ -785,7 +753,7 @@
       "name": "DI-3.2.5.1: a handle consumed by end_lineage stays armed",
       "file": "src/ids.rs",
       "expect": "caught",
-      "why": "Disarming is what stops the last handle, consumed by end_lineage or retire_lineage, from ending the lineage again as it is released: end_lineage would end it twice, recording an inconsistency the next pop asserts on. First recorded as an equivalent CONTROL, on the argument that a release finds the lineage no longer live; running it hung, because retire_lineage then consumed the handle under the core's lock, which a release takes. It now releases the lock first. Caught by the ring tests of end_lineage.",
+      "why": "Disarming is what stops the last handle, consumed by end_lineage or retire_lineage, from ending the lineage again as it is released: the release ends it first, and end_lineage then finds it already ended, an inconsistency reported and panicked on (DI-D-46). Silently ignored, as the swap first had it, the double end is invisible and this entry survives -- which is how that was found. First recorded as an equivalent CONTROL, on the argument that a release finds the lineage no longer live; running it hung, because retire_lineage then consumed the handle under the core's lock, which a release takes. It now releases the lock first. Caught by the ring tests of end_lineage.",
       "find": ["                held.armed = false;\n"],
       "replace": [""]
     },
@@ -870,14 +838,6 @@
       "replace": ["                    let _ = write;\n"]
     },
     {
-      "name": "DI-3.2.5.2: a push cycle is not looked for",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "DI-D-23: a gated write that closes a cycle is refused, or two writes wait on each other forever. Caught by the ring test that pushes the cycle.",
-      "find": ["                            core.durability.write_cycle(write, at)\n"],
-      "replace": ["                            {\n                                let _ = (write, at);\n                                None\n                            }\n"]
-    },
-    {
       "name": "DI-3.2.5.2: a seal cycle is not looked for",
       "file": "src/dioring/durability.rs",
       "expect": "caught",
@@ -950,36 +910,20 @@
       "replace": ["        let held_for_gate = 0;\n"]
     },
     {
-      "name": "DI-3.2.5.2: a gate already abandoned is held",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "DI-D-23: a gate on an abandoned epoch can never be released, so it is refused. Caught by the ring test that gates on one.",
-      "find": ["                    GateState::Abandoned => Some(Err(PushRefusal::GateAbandoned { gate })),\n"],
-      "replace": ["                    GateState::Abandoned => Some(Ok(at)),\n"]
-    },
-    {
       "name": "DI-3.2.5.2: a gate on a lineage the instance cannot answer for is held",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-43: an ended lineage will never be durable, so a gate on it is refused. Caught by the ring test that gates on an ended lineage.",
-      "find": ["                    GateState::Unknown => Some(Err(PushRefusal::UnknownLineage(gate.lineage))),\n"],
-      "replace": ["                    GateState::Unknown => Some(Ok(at)),\n"]
-    },
-    {
-      "name": "DI-3.2.5.2: a gate on another instance is not refused",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "DI-D-40: another instance's lineage is one this one cannot answer for. Unchecked, its sequence number is read as a lineage of this instance. Caught by the ring test that gates on one.",
-      "find": ["            && gate.lineage.instance != self.instance\n"],
-      "replace": ["            && false\n"]
+      "find": ["            GateState::Unknown => Err(PushRefusal::UnknownLineage(gate.lineage)),\n"],
+      "replace": ["            GateState::Unknown => Ok(Some(at)),\n"]
     },
     {
       "name": "DI-3.2.5.2: released operations are never pushed",
-      "file": "src/dioring.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
-      "why": "DI-D-43: a released operation is pushed at the consumer's next call. Never pushed, it never completes. Caught by every ring test that waits for a gated operation.",
-      "find": ["        let released = self.release_ready(core);\n"],
-      "replace": ["        let released = None;\n"]
+      "why": "DI-D-43: a released operation is emitted with the actions of the change that released it. Never emitted, it never completes. Caught by every test that waits for a gated operation.",
+      "find": ["        for id in released {\n            self.release(id, &mut submit);\n        }\n"],
+      "replace": ["        drop(released);\n"]
     },
     {
       "name": "DI-3.2.5.2: the oracle lets a gated operation complete before its gate",
@@ -1007,11 +951,11 @@
     },
     {
       "name": "DI-3.2.5.2: a held push spends no identity",
-      "file": "src/dioring/push.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "Every accepted push gets its own identity, a held one included, or two operations share one: the second held operation would replace the first, and its completion could not be told apart. Caught by the ring tests that hold two operations, through the oracle's duplicate-identity rule.",
-      "find": ["            self.next_op += 1;\n            return Ok(id);\n"],
-      "replace": ["            return Ok(id);\n"]
+      "find": ["            let id = self.op_id();\n            let accepted = epoch.map("],
+      "replace": ["            let id = OpId {\n                instance: self.instance,\n                seq: self.next_op,\n            };\n            let accepted = epoch.map("]
     },
     {
       "name": "DI-3.2.6: a provider's success covers nothing",
@@ -1095,39 +1039,31 @@
     },
     {
       "name": "DI-3.2.6: the provider's answer is never recorded",
-      "file": "src/dioring/relay.rs",
+      "file": "src/dioring/hub.rs",
       "expect": "caught",
       "why": "DI-D-27: an answer records the outcome. Dropping it leaves every provider-served seal pending.",
-      "find": ["        let due = core\n            .durability\n            .provided(call.lineage, call.seal, call.domain, outcome);\n"],
-      "replace": ["        let _: Result<(), crate::types::FailureCause<DioringIds<E>>> = outcome;\n        let due: Due<E, FlushTarget, WinInstant> = Due::default();\n"]
+      "find": ["        self.reach(|engine| {\n            let actions = engine\n                .core\n                .provided(call.lineage, call.seal, &call.name, outcome);\n            engine.act(actions)\n        });\n"],
+      "replace": ["        let _ = outcome;\n"]
     },
     {
       "name": "DI-3.2.6: the provider is never called",
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-27: one request per seal. A request queued and never made leaves its seal pending with no answer ever coming.",
-      "find": ["            slot.provider.make_durable(request);\n"],
+      "find": ["            provider.make_durable(request);\n"],
       "replace": ["            std::mem::forget(request);\n"]
     },
     {
       "name": "DI-3.2.6: the provider is called with the lock held",
       "file": "src/dioring.rs",
       "expect": "caught",
-      "why": "DI-D-44: the provider may answer inside its call, and the answer takes the lock. Calling it with the lock held deadlocks the synchronous answer test, which a timeout counts as caught.",
-      "find": ["        let calls = std::mem::take(&mut self.relay.lock().calls);\n"],
-      "replace": ["        let mut held = self.relay.lock();\n        let calls = std::mem::take(&mut held.calls);\n"]
-    },
-    {
-      "name": "DI-3.2.7: a file with operations in flight is removed",
-      "file": "src/dioring/ending.rs",
-      "expect": "caught",
-      "why": "API.md section 8: remove_target is refused while the file has an operation in flight.",
-      "find": ["        if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {\n"],
-      "replace": ["        if held_for_gate == 0 && holds.is_empty() {\n"]
+      "why": "DI-D-44: the provider may answer inside its call, and the answer takes the engine's lock. Calling it with the lock held -- reached through the slot pool delivery shares, the one path the borrow checker does not refuse -- deadlocks the synchronous answer test, which a timeout counts as caught.",
+      "find": ["        for request in requests {\n            provider.make_durable(request);\n"],
+      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = crate::windows_backend::pool::lock(&shared);\n        for request in requests {\n            provider.make_durable(request);\n"]
     },
     {
       "name": "DI-3.2.7: a file with operations held for a gate is removed",
-      "file": "src/dioring/ending.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "API.md section 8: a held operation is pushed to its file later, so removing the file strands it.",
       "find": ["        if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {\n"],
@@ -1135,19 +1071,19 @@
     },
     {
       "name": "DI-3.2.7: the lowest gate kept is the highest",
-      "file": "src/dioring/ending.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "IoTargetBusy.lowest_gates names the lowest gate in each lineage: the first a consumer must make durable.",
-      "find": ["                        if held.gate.id < low.id {\n"],
-      "replace": ["                        if held.gate.id > low.id {\n"]
+      "find": ["                    if held.gate.id < low.id {\n"],
+      "replace": ["                    if held.gate.id > low.id {\n"]
     },
     {
       "name": "CONTROL: an equal gate replaces the lowest",
-      "file": "src/dioring/ending.rs",
+      "file": "src/io_core.rs",
       "expect": "survives",
       "why": "The manifest checking itself. Two gates with the same id in one lineage are the same epoch, so replacing one with the other changes no report.",
-      "find": ["                        if held.gate.id < low.id {\n"],
-      "replace": ["                        if held.gate.id <= low.id {\n"]
+      "find": ["                    if held.gate.id < low.id {\n"],
+      "replace": ["                    if held.gate.id <= low.id {\n"]
     },
     {
       "name": "DI-3.2.7: a failure does not hold its file",
@@ -1169,7 +1105,7 @@
       "name": "DI-3.2.7: a write in flight is also counted as uncovered",
       "file": "src/dioring/durability/files.rs",
       "expect": "caught",
-      "why": "A write in flight is the relay's to count; counting it here too reports it twice.",
+      "why": "A write in flight is the I/O core's to count; counting it here too reports it twice.",
       "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
       "replace": ["            write.file == file && !suspect.contains(&write.op.seq)\n"]
     },
@@ -1191,55 +1127,39 @@
     },
     {
       "name": "DI-3.2.7: a completion never clears its file's last operation",
-      "file": "src/dioring/relay.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-45: in_flight clears as completions arrive. A count left at one refuses the file forever.",
-      "find": ["                    Some(1) => {\n                        core.in_flight.remove(&file);\n                    }\n"],
-      "replace": ["                    Some(1) => {}\n"]
-    },
-    {
-      "name": "DI-3.2.7: a push is not counted in flight",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "DI-D-45: a push is counted until its completion is recorded. Uncounted, the file can be removed under it, and its completion is recorded as an inconsistency the next pop asserts on.",
-      "find": ["        *core.in_flight.entry(file).or_insert(0) += 1;\n        core.unsubmitted"],
-      "replace": ["        core.unsubmitted"]
-    },
-    {
-      "name": "DI-3.2.7: a released operation is not counted in flight",
-      "file": "src/dioring/push.rs",
-      "expect": "caught",
-      "why": "As for a push made at once: the released operation's completion would be an inconsistency.",
-      "find": ["                    core.durability.issued(id);\n                    *core.in_flight.entry(file).or_insert(0) += 1;\n"],
-      "replace": ["                    core.durability.issued(id);\n"]
+      "find": ["            Some(1) => {\n                self.per_target.remove(&target);\n            }\n"],
+      "replace": ["            Some(1) => {}\n"]
     },
     {
       "name": "DI-3.2.7: close hands back no held operation",
-      "file": "src/dioring/relay.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-25: close() returns the gated operations the kernel never saw, with their buffers and contexts; dropping them loses the consumer's buffers.",
-      "find": ["        let held = std::mem::take(&mut core.held).into_values().collect();\n"],
-      "replace": ["        let held = Vec::new();\n"]
+      "find": ["        Leftovers {\n            held,\n"],
+      "replace": ["        Leftovers {\n            held: {\n                drop::<Vec<HeldOperation<V<E, K>, B, C>>>(held);\n                Vec::new()\n            },\n"]
     },
     {
       "name": "DI-3.2.7: close hands back no failure",
-      "file": "src/dioring.rs",
+      "file": "src/io_core.rs",
       "expect": "caught",
       "why": "DI-D-25: close() returns the unresolved failures.",
-      "find": ["self.end(|core| (core.durability.failures(), core.durability.lineages()))\n"],
-      "replace": ["self.end(|core| (Vec::new(), core.durability.lineages()))\n"]
+      "find": ["        let failures = self.durability.failures();\n        let lineages"],
+      "replace": ["        let failures = Vec::new();\n        let lineages"]
     },
     {
       "name": "DI-3.2.7: ending does not wait for the provider",
-      "file": "src/dioring/ending.rs",
+      "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-25: ending waits for every provider call in flight, which may still be using what the instance owns.",
-      "find": ["        self.relay.wait_for_answers();\n"],
+      "find": ["        self.hub.wait_for_answers();\n"],
       "replace": [""]
     },
     {
       "name": "DI-3.2.7: ending keeps the provider while it waits",
-      "file": "src/dioring/ending.rs",
+      "file": "src/dioring.rs",
       "expect": "caught",
       "why": "DI-D-45: a provider that keeps completions in itself answers them only when dropped, so a wait before the drop never ends. The test closes on another thread and calls a missed bound a hang.",
       "find": ["        self.provider = None;\n"],
@@ -1255,18 +1175,18 @@
     },
     {
       "name": "DI-3.2.7: an answer does not count its completion down",
-      "file": "src/dioring/relay.rs",
+      "file": "src/dioring/hub.rs",
       "expect": "caught",
       "why": "DI-D-45: every answer counts down, after the end included. Without it ending waits forever.",
-      "find": ["            Some(left) => core.unanswered = left,\n"],
-      "replace": ["            Some(_) => {}\n"]
+      "find": ["            *unanswered = left;\n"],
+      "replace": [""]
     },
     {
       "name": "DI-3.2.7: the last answer wakes no one",
-      "file": "src/dioring/relay.rs",
+      "file": "src/dioring/hub.rs",
       "expect": "caught",
       "why": "The wait sleeps until notified; an answer that reaches zero without notifying leaves ending asleep.",
-      "find": ["            self.answered.notify_all();\n"],
+      "find": ["                self.answered.notify_all();\n"],
       "replace": [""]
     },
     {
@@ -1939,7 +1859,7 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The accessor lends the registration's own bytes, and only when the registration admits it: refused, f is not called.",
-      "find": ["        self.registration()?.get(i).map(f)\n"],
+      "find": ["        self.engine().backend.registered_buffer(i).map(f)\n"],
       "replace": ["        Ok(f(&[]))\n"]
     },
     {
@@ -1947,8 +1867,32 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "As for the shared accessor: refused while in use, out of range, or with no registration, f is not called.",
-      "find": ["        self.registration()?.get_mut(i).map(f)\n"],
+      "find": ["        self.engine().backend.registered_buffer_mut(i).map(f)\n"],
       "replace": ["        Ok(f(&mut []))\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.6: an answer to a completion never made is counted down",
+      "file": "src/dioring/hub.rs",
+      "expect": "caught",
+      "why": "DI-D-45: every completion made is counted, and an answer beyond them is the provider breaking its contract, reported as an inconsistency. Counted down instead, it vanishes, and a later ending can stop waiting while a real completion is still unanswered.",
+      "find": ["            let Some(left) = unanswered.checked_sub(1) else {\n"],
+      "replace": ["            let Some(left) = Some(unanswered.saturating_sub(1)) else {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.2.6: a pop makes no provider request",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "DI-D-44: a request a drain makes -- a seal's, once the writes it waited for complete -- waits for the consumer's next call. A consumer waiting on Durable only pops, so a pop that does not make it leaves the seal pending forever.",
+      "find": ["        self.call_provider();\n        popped\n"],
+      "replace": ["        popped\n"]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: a pop hides a failed submit",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "The report of a failed submission is untested: the ring cannot be made to fail a submission on demand, so no test reaches it. Declared so that a test reaching it -- through a fault seam on the ring's submit, DI-3.10.3.5.6.3 -- shows up here as this entry being caught, and the entry is turned around.",
+      "find": ["                (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
+      "replace": ["                (None, Err(_)) => Ok(None),\n"]
     }
   ]
 }

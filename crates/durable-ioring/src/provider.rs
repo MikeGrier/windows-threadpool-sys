@@ -6,7 +6,7 @@ use std::io;
 use std::sync::{Arc, Weak};
 
 use crate::contract::Identities;
-use crate::dioring::DomainId;
+use crate::ids::Lineage;
 use crate::types::{FailureCause, FlushDomain, IoTargetKey};
 
 /// A consumer-supplied durability provider. It makes writes the instance has seen complete
@@ -139,16 +139,14 @@ impl Debug for DomainCompletion {
     }
 }
 
-/// Which part of which seal a completion answers.
+/// Which part of which seal a completion answers, as the core's `provided` names it.
 #[derive(Clone, Debug)]
 pub(crate) struct DomainCall {
-    /// The seal's lineage, by its key within the instance.
-    pub(crate) lineage: u64,
-    /// The seal's sequence number.
+    /// The seal's lineage.
+    pub(crate) lineage: Lineage,
+    /// The seal's sequence number within its lineage.
     pub(crate) seal: u64,
-    /// The domain, as the instance interned it.
-    pub(crate) domain: DomainId,
-    /// The domain's bytes, for the cause of its failure.
+    /// The domain.
     pub(crate) name: FlushDomain,
 }
 

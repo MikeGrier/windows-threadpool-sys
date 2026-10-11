@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! Ending (DI-3.2.7, DI-D-25, DI-D-45), against real files: removing a file, refused with every
 //! hold reported at once; and ending an instance, `close()` handing back what is left, and both it
-//! and drop waiting for the consumer's provider. Also an inconsistency the relay finds, which it
+//! and drop waiting for the consumer's provider. Also an inconsistency the hub finds, which it
 //! panics on where it finds it (DI-D-46).
 
 use std::panic::{self, AssertUnwindSafe};
@@ -14,12 +14,12 @@ use windows_ioring_sys::RegisteredSpan;
 use super::gates::{expect_durable, read_gated, two, write_gated};
 use super::pushes::{ADDED, BOUND, GIVEN, Harness, Ring, given, instance, temp};
 use super::{FlushDomain, FlushRequest, V, domain, empty, file, keeper, setup};
+use crate::backend::SubmissionData;
 use crate::contract::{DurableRing, RegisteredBufferRing};
-use crate::dioring::DomainId;
 use crate::provider::{Answer, DomainCall, DomainOutcome, DurabilityProvider};
 use crate::types::{
     DurabilityRequest, Entry, Epoch, Failed, IoTargetBusy, IoTargetKey, OpKind, PushRefusal,
-    RemoveTargetError, Resolution, WriteOptions,
+    ReadOptions, RemoveTargetError, Resolution, WriteOptions,
 };
 use crate::windows_backend::Win32FileTarget;
 
@@ -195,8 +195,8 @@ fn a_failure_suspecting_a_write_holds_its_file_until_it_is_resolved() {
     harness.finish();
 }
 
-/// No test can keep a kernel operation in flight on demand, so the report is checked against a
-/// count set by hand, and the count itself by the completions that clear it.
+/// An operation is held in flight on demand by holding the engine's lock: no pool drain can record
+/// its completion until the lock is released.
 #[test]
 fn operations_in_flight_are_reported_and_cleared_by_their_completions() {
     let temp = temp(&[0; 64]);
@@ -205,24 +205,48 @@ fn operations_in_flight_are_reported_and_cleared_by_their_completions() {
         harness.read(GIVEN, 0, 4, i);
     }
     harness.next_n(8);
-    assert!(
-        harness.ring.relay.lock().in_flight.is_empty(),
-        "every completion recorded clears its push"
-    );
-    harness.ring.remove_target(GIVEN).expect("nothing holds it");
+    harness
+        .ring
+        .remove_target(GIVEN)
+        .expect("every completion recorded clears its push, so nothing holds it");
 
     harness
         .ring
         .add_target(GIVEN, Win32FileTarget::new(temp.open()))
         .expect("add again");
-    harness.ring.relay.lock().in_flight.insert(GIVEN, 2);
-    let refused = busy(&mut harness.ring, GIVEN);
-    assert_eq!(refused.in_flight, 2);
-    assert!(
-        refused.to_string().contains("2 operation(s) in flight"),
-        "{refused}"
-    );
-    harness.ring.relay.lock().in_flight.clear();
+    let held = {
+        let mut engine = harness.ring.engine();
+        let mut held = Vec::new();
+        for context in [8, 9] {
+            let id = engine
+                .read(
+                    GIVEN,
+                    0,
+                    SubmissionData::Owned(vec![0; 4]),
+                    context,
+                    ReadOptions::new(),
+                )
+                .expect("accepted");
+            held.push((id, context));
+        }
+        let Err(RemoveTargetError::Busy(refused)) = engine.core.remove_target(GIVEN) else {
+            panic!("two reads are in flight");
+        };
+        assert_eq!(refused.in_flight, 2);
+        assert!(
+            refused.to_string().contains("2 operation(s) in flight"),
+            "{refused}"
+        );
+        held
+    };
+    for (id, context) in held {
+        harness
+            .oracle
+            .pushed(id, OpKind::Read, 4, context)
+            .expect("the oracle accepts the push");
+    }
+    harness.next_n(2);
+    harness.ring.remove_target(GIVEN).expect("cleared again");
     harness.finish();
 }
 
@@ -417,17 +441,16 @@ fn ending_does_not_wait_for_completions_the_provider_keeps_in_itself() {
 fn an_answer_for_a_completion_never_made_panics_naming_it() {
     let ring = empty();
     let call = DomainCall {
-        lineage: 0,
+        lineage: ring.default_lineage().lineage(),
         seal: 7,
-        domain: DomainId(3),
         name: domain("log"),
     };
     let found = panic::catch_unwind(AssertUnwindSafe(|| {
-        Answer::answer(&*ring.relay, &call, DomainOutcome::Succeeded);
+        Answer::answer(&*ring.hub, &call, DomainOutcome::Succeeded);
     }));
     let text = message(
         found
-            .expect_err("the relay panics where it finds it")
+            .expect_err("the hub panics where it finds it")
             .as_ref(),
     );
     assert!(

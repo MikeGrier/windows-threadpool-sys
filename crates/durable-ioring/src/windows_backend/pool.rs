@@ -7,18 +7,13 @@
 //! poppable -- so they are poppable before it is told (DI-D-28), and the driver's own code never
 //! runs under the engine's lock. Two wakes may overlap (the ring crate's D-83); the engine's lock
 //! serializes them.
-
-// Until the driver moves onto pool delivery in `DI-3.10.3.5.6.2`, only tests reach it. An
-// expectation rather than an allowance, so the build fails once the driver uses it and this goes.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the driver moves onto pool delivery in DI-3.10.3.5.6.2"
-    )
-)]
+//!
+//! The engine sits in a slot the driver may share -- [`PoolDelivery::shared`] -- so a provider's
+//! answer or a lineage handle's release, on any thread, can reach it under the same lock. Stopping
+//! delivery takes the engine out of the slot, so anything reaching it afterwards finds it empty.
 
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use windows_ioring_sys::{CompletionWake, IoBuf, IoBufMut};
@@ -33,10 +28,11 @@ use crate::engine::Engine;
 mod tests;
 
 /// The engine a pool delivery drains.
-type PoolEngine<E, B, C, K, R> = Engine<E, WindowsBackend<B, R>, C, K>;
+pub(crate) type PoolEngine<E, B, C, K, R> = Engine<E, WindowsBackend<B, R>, C, K>;
 
-/// The engine, shared between the delivery and its wake.
-type Shared<E, B, C, K, R> = Arc<Mutex<PoolEngine<E, B, C, K, R>>>;
+/// The slot the engine sits in, shared between the delivery, its wake, and whatever else of the
+/// driver's reaches it; empty once delivery has stopped.
+pub(crate) type Shared<E, B, C, K, R> = Arc<Mutex<Option<PoolEngine<E, B, C, K, R>>>>;
 
 /// A failed construction: why, and the engine it was given.
 pub(crate) type PoolSetup<E, B, C, K, R> =
@@ -77,51 +73,82 @@ where
         on_ready: impl Fn() + Send + Sync + 'static,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> PoolSetup<E, B, C, K, R> {
-        let engine = Arc::new(Mutex::new(engine));
+        let engine = Arc::new(Mutex::new(Some(engine)));
         let drained = Arc::clone(&engine);
         let on_wake = move || {
-            let deliver = lock(&drained).drain();
+            let deliver = lock(&drained).as_mut().is_some_and(Engine::drain);
             if deliver {
                 on_ready();
             }
         };
         // Under the engine's lock, which lends the backend's ring to the wake; a drain the setup
         // signal starts waits for the lock until this returns.
-        let woken = lock(&engine).backend.wake(on_wake, env);
+        let woken = present(lock(&engine)).backend.wake(on_wake, env);
         match woken {
             Ok(wake) => Ok(Self { wake, engine }),
             Err(error) => {
-                // The wake was never built, so its closure -- the only other reference -- is gone.
-                let engine = Arc::try_unwrap(engine)
-                    .ok()
-                    .expect("a wake that was never built holds no reference to the engine")
-                    .into_inner()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let engine = lock(&engine).take().expect("put there above");
                 Err((error, Box::new(engine)))
             }
         }
     }
+}
 
+impl<E, B, C, K, R> PoolDelivery<E, B, C, K, R>
+where
+    E: EpochId + 'static,
+    B: IoBuf,
+    R: IoBufMut,
+    K: StampClock,
+{
     /// The engine, locked: what a consumer call acts through.
-    pub(crate) fn engine(&self) -> MutexGuard<'_, PoolEngine<E, B, C, K, R>> {
-        lock(&self.engine)
+    pub(crate) fn engine(&self) -> EngineGuard<'_, PoolEngine<E, B, C, K, R>> {
+        present(lock(&self.engine))
+    }
+
+    /// The engine's slot, for a path of the driver's own that reaches it on another thread.
+    pub(crate) fn shared(&self) -> Shared<E, B, C, K, R> {
+        Arc::clone(&self.engine)
     }
 
     /// Stop delivering, handing the engine back: the wake is stopped and any running drain waited
-    /// for first, so nothing else holds the engine.
+    /// for first, then the engine is taken out of its slot, so a shared path finds it empty.
     pub(crate) fn into_engine(self) -> PoolEngine<E, B, C, K, R> {
         let Self { wake, engine } = self;
         drop(wake);
-        Arc::try_unwrap(engine)
-            .ok()
-            .expect("a stopped wake holds no reference to the engine")
-            .into_inner()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock(&engine)
+            .take()
+            .expect("only stopping delivery takes the engine")
     }
 }
 
-/// Lock the engine. A panic while it was held is an inconsistency the core already reported and
-/// panicked on (DI-D-46); the state is left as that panic found it.
-fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
+/// Lock the engine's slot. A panic while it was held is an inconsistency the core already reported
+/// and panicked on (DI-D-46); the state is left as that panic found it.
+pub(crate) fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
     engine.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The engine, locked, while delivery runs: its slot is full until delivery stops.
+pub(crate) struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
+
+fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
+    assert!(
+        guard.is_some(),
+        "the engine is taken only as delivery stops"
+    );
+    EngineGuard(guard)
+}
+
+impl<T> Deref for EngineGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.0.as_ref().expect("checked when locked")
+    }
+}
+
+impl<T> DerefMut for EngineGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.0.as_mut().expect("checked when locked")
+    }
 }

@@ -4,7 +4,8 @@
 //!
 //! Every change returns what it makes due -- flushes to push, and entries to append, in the order
 //! they happened -- and the caller does the I/O and appends the entries. So this module decides and
-//! the relay acts, as DI-D-18's I/O-free core intends, and these rules are tested without a ring.
+//! its caller, the I/O core `DurableIoCore`, acts, as DI-D-18's I/O-free core intends, and these
+//! rules are tested without a ring.
 //!
 //! **Lineages** (DI-D-19). Each lineage has its own seal point, seals, high-water mark and
 //! abandoned epochs, keyed by the sequence number its `Lineage` carries; the default lineage's is

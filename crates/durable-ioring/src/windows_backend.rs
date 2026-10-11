@@ -39,7 +39,7 @@ use crate::io_target::IoTarget;
 use crate::types::{IoFault, IoTargetKey, WriteCaching};
 
 mod file_target;
-mod pool;
+pub(crate) mod pool;
 
 pub use file_target::Win32FileTarget;
 
@@ -294,13 +294,6 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
     ///
     /// As `CompletionWake::new`: the system does not support a ring completion event, or the
     /// wait could not be made or armed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the driver moves onto pool delivery in DI-3.10.3.5.6.2"
-        )
-    )]
     pub(crate) fn wake(
         &mut self,
         on_wake: impl Fn() + Send + Sync + 'static,
@@ -313,6 +306,16 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
     #[must_use]
     pub fn target(&self, key: IoTargetKey) -> Option<&Win32FileTarget> {
         self.targets.get(&key).map(|slot| &slot.target)
+    }
+
+    /// The position of `key`'s target in the ring's file registration, for a target given at
+    /// construction; `None` for one attached later, or no target.
+    #[cfg(test)]
+    pub(crate) fn registration_index(&self, key: IoTargetKey) -> Option<u32> {
+        self.targets
+            .get(&key)
+            .and_then(|slot| slot.registered)
+            .map(RegisteredFile::index)
     }
 
     /// Registered buffer `index`'s bytes.

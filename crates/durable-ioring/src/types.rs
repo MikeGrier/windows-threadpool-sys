@@ -475,19 +475,18 @@ pub enum PushRefusal<V: Identities> {
         /// its gate.
         cycle: Vec<Epoch<V>>,
     },
-    /// No file was given to the instance under this key.
+    /// No target was given to the instance under this key.
     UnknownFile(IoTargetKey),
-    /// A registered-span operation on an instance built without registered buffers.
-    NoRegisteredBuffers,
-    /// The underlying ring refused the push.
-    Ring(io::Error),
-    /// The backend refused the push, naming why, so the caller can act on it (DI-D-52).
+    /// The backend refused the push, naming why, so the caller can act on it (DI-D-52): among
+    /// others, a registered-span operation on an instance built without registered buffers
+    /// ([`RefusalCause::Unsupported`]), or a span the registration does not contain
+    /// ([`RefusalCause::Invalid`]).
     Backend(RefusalCause),
 }
 
 /// A refused push hands back what it was given: the buffer (`None` for a registered-span
-/// operation, which has none) and the consumer's context. `windows-ioring-sys` hands both back
-/// on its own refusals (its D-80), so this holds for a `Ring` refusal too.
+/// operation, which has none) and the consumer's context -- a backend's refusal included, which
+/// hands its submission back whole (DI-D-52).
 #[derive(Debug)]
 pub struct PushError<V: Identities, B, C> {
     /// Why it was refused.

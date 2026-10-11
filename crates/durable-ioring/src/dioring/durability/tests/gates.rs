@@ -71,7 +71,7 @@ fn hold_read(lineage: &mut Lineage, ops: &mut Ops, gate: Gate<u64>) -> OpId {
     op
 }
 
-/// Push every operation `due` released, as the relay would, returning their sequence numbers.
+/// Push every operation `due` released, as the I/O core would, returning their sequence numbers.
 fn issue(lineage: &mut Lineage, due: &Due<u64, &'static str, WinInstant>) -> Vec<u64> {
     for &op in &due.released {
         lineage.issued(op);

@@ -19,14 +19,15 @@ use super::{TempFile, V, empty, setup};
 fn length(len: usize) -> u32 {
     u32::try_from(len).expect("a test buffer's length fits a u32")
 }
+use crate::backend::RefusalCause;
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::ids::{Lineage, LineageHandle, OpId};
 use crate::io_target::IoTarget;
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, IoTargetKey, OpCompletion, OpKind, Outcome,
-    PushRefusal, WriteCaching, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, ImportScope, IoTargetKey, OpCompletion, OpKind,
+    Outcome, PushRefusal, WriteCaching, WriteOptions,
 };
 use crate::windows_backend::Win32FileTarget;
 
@@ -88,7 +89,7 @@ pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
 }
 
 /// An instance and the oracle watching its stream.
-pub(super) struct Harness<K = InterruptClock> {
+pub(super) struct Harness<K: TimeBase = InterruptClock> {
     pub(super) ring: Ring<K>,
     pub(super) oracle: ConformanceOracle<V, u32>,
     /// A handle to the instance's default lineage, which every write here is tagged in.
@@ -554,14 +555,37 @@ fn span_operations_on_an_instance_without_registered_buffers_are_refused() {
     let error = ring
         .write_registered(GIVEN, 0, span, epoch, 1)
         .expect_err("a registered write");
-    assert!(matches!(error.reason, PushRefusal::NoRegisteredBuffers));
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Unsupported)
+    ));
     assert_eq!((error.buffer, error.context), (None, 1));
 
     let error = ring
         .read_registered(GIVEN, 0, span, 2)
         .expect_err("a registered read");
-    assert!(matches!(error.reason, PushRefusal::NoRegisteredBuffers));
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Unsupported)
+    ));
     assert_eq!((error.buffer, error.context), (None, 2));
+
+    // Gated, it would be held rather than pushed; it is refused at push all the same (DI-D-54).
+    let error = ring
+        .write_registered_with(
+            GIVEN,
+            0,
+            span,
+            default.at(2),
+            3,
+            WriteOptions::new().gate(epoch.epoch()),
+        )
+        .expect_err("a gated registered write");
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Unsupported)
+    ));
+    assert_eq!((error.buffer, error.context), (None, 3));
 
     let refused = ring
         .with_registered_buffer(0, |_| unreachable!("nothing is lent"))
@@ -587,8 +611,28 @@ fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     let error = ring
         .write_registered(GIVEN, 0, outside, epoch, 7)
         .expect_err("a span past the buffer's end");
-    assert!(matches!(error.reason, PushRefusal::Ring(_)));
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Invalid)
+    ));
     assert_eq!((error.buffer, error.context), (None, 7));
+
+    // Gated, it is refused at push too, the registration's own check asked first (DI-D-54).
+    let error = ring
+        .write_registered_with(
+            GIVEN,
+            0,
+            outside,
+            default.at(2),
+            9,
+            WriteOptions::new().gate(epoch.epoch()),
+        )
+        .expect_err("a gated span past the buffer's end");
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Invalid)
+    ));
+    assert_eq!((error.buffer, error.context), (None, 9));
 
     let missing = RegisteredSpan {
         buffer_index: 1,
@@ -598,7 +642,10 @@ fn a_span_the_registration_does_not_contain_is_refused_by_the_ring() {
     let error = ring
         .read_registered(GIVEN, 0, missing, 8)
         .expect_err("a buffer the registration does not have");
-    assert!(matches!(error.reason, PushRefusal::Ring(_)));
+    assert!(matches!(
+        error.reason,
+        PushRefusal::Backend(RefusalCause::Invalid)
+    ));
     assert_eq!((error.buffer, error.context), (None, 8));
 
     assert_eq!(
@@ -653,9 +700,13 @@ fn a_file_added_under_a_key_in_use_is_refused_and_handed_back() {
         );
         assert_eq!(error.target.flush_domains(), [super::domain("d")]);
     }
-    assert!(
-        !ring.domains.contains_key(&super::domain("d")),
-        "a refused file's domains are not interned"
+    let imported = ring
+        .import_failure(ImportScope::Domains(vec![super::domain("d")]))
+        .expect("an import by domain");
+    assert_eq!(
+        imported.unmatched,
+        [super::domain("d")],
+        "a refused target's domains were never given to the instance"
     );
 }
 

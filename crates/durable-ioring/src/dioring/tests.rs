@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
 
-use super::{Dioring, FileSlot, Setup, SetupError, SetupRefusal, TargetSetup};
+use super::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
+use crate::backend::IoBackend;
 use crate::contract::DurableRing;
 use crate::ids::{DioringIds, LineageHandle};
 use crate::provider::{DurabilityProvider, FlushRequest};
@@ -47,7 +48,7 @@ fn setup(
     files: Vec<TargetSetup>,
     buffers: Vec<Vec<u8>>,
     provider: Option<Box<dyn DurabilityProvider<V>>>,
-) -> Setup<u64, Vec<u8>> {
+) -> Setup<'static, 'static, u64, Vec<u8>> {
     Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
@@ -55,6 +56,7 @@ fn setup(
         buffers,
         provider,
         diagnostics: None,
+        environment: None,
     }
 }
 
@@ -219,10 +221,11 @@ fn refused(
 #[test]
 fn an_instance_given_nothing_builds_empty() {
     let ring = empty();
-    assert!(ring.files.is_empty());
-    assert!(ring.domains.is_empty());
-    assert!(ring.registered.is_none());
     assert!(ring.provider.is_none());
+    let engine = ring.engine();
+    assert_eq!(engine.backend.registered_buffers(), 0);
+    assert!(engine.core.target(IoTargetKey(0)).is_none());
+    assert!(engine.backend.target(IoTargetKey(0)).is_none());
 }
 
 #[test]
@@ -260,11 +263,11 @@ fn files_given_at_construction_are_registered_in_order() {
         .map(|(i, t)| file(10 + i as u64, t, &[]))
         .collect();
     let ring = Ring::new(setup(files, Vec::new(), None)).expect("build").0;
+    let engine = ring.engine();
     for i in 0..3_u32 {
-        match &ring.files[&IoTargetKey(10 + u64::from(i))].target {
-            FileSlot::Registered { index, .. } => assert_eq!(index.index(), i),
-            FileSlot::Shared(_) => panic!("a construction file is registered"),
-        }
+        let key = IoTargetKey(10 + u64::from(i));
+        assert_eq!(engine.backend.registration_index(key), Some(i));
+        assert!(engine.core.target(key).is_some(), "the core decides for it");
     }
 }
 
@@ -345,49 +348,11 @@ fn a_ring_that_cannot_be_created_refuses_construction_and_everything_comes_back(
 }
 
 #[test]
-fn domains_are_interned_once_per_distinct_bytes() {
-    let temps: Vec<TempFile> = (0..3)
-        .map(|i| TempFile::new(&format!("intern{i}")))
-        .collect();
-    let files = vec![
-        file(1, &temps[0], &["A", "B"]),
-        file(2, &temps[1], &["B", "C", "B"]),
-        file(3, &temps[2], &[]),
-    ];
-    let ring = Ring::new(setup(files, Vec::new(), serves(&["C", "D"])))
-        .expect("build")
-        .0;
-    assert_eq!(ring.domains.len(), 4, "A, B, C and D, once each");
-    let id = |name: &str| ring.domains[&domain(name)];
-    let of = |key: u64| ring.files[&IoTargetKey(key)].domains.clone();
-
-    let mut one = vec![id("A"), id("B")];
-    one.sort_unstable();
-    assert_eq!(&*of(1), one.as_slice());
-    let mut two = vec![id("B"), id("C")];
-    two.sort_unstable();
-    assert_eq!(&*of(2), two.as_slice(), "a repeated domain counts once");
-    assert!(of(3).is_empty(), "a file declared with none stays unknown");
-
-    let mut provider = vec![id("C"), id("D")];
-    provider.sort_unstable();
-    assert_eq!(
-        &*ring
-            .provider
-            .as_ref()
-            .expect("the provider is kept")
-            .domains,
-        provider.as_slice(),
-        "a provider's domain shares its id with a file's"
-    );
-}
-
-#[test]
 fn buffers_given_at_construction_are_registered() {
     let ring = Ring::new(setup(Vec::new(), vec![vec![0; 64], vec![0; 128]], None))
         .expect("build")
         .0;
-    assert_eq!(ring.registered.as_ref().expect("registered").len(), 2);
+    assert_eq!(ring.engine().backend.registered_buffers(), 2);
 }
 
 #[test]
@@ -396,8 +361,8 @@ fn files_and_buffers_are_registered_together() {
     let ring = Ring::new(setup(vec![file(1, &temp, &["A"])], vec![vec![0; 32]], None))
         .expect("build")
         .0;
-    assert_eq!(ring.files.len(), 1);
-    assert_eq!(ring.registered.as_ref().expect("registered").len(), 1);
+    assert!(ring.engine().core.target(IoTargetKey(1)).is_some());
+    assert_eq!(ring.engine().backend.registered_buffers(), 1);
     assert!(temp.is_held());
 }
 
@@ -412,10 +377,45 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         buffers: Vec::new(),
         provider: None,
         diagnostics: None,
+        environment: None,
     })
     .expect("build")
     .0;
     assert_eq!(ring.lineages().len(), 1);
+}
+
+#[test]
+fn an_instance_delivers_on_the_pool_its_environment_names() {
+    // That the pool named is the one a drain runs on is the declared blind spot of pool delivery's
+    // own tests; this pins that an instance built with an environment delivers at all.
+    use windows_threadpool_sys::callback_env::CallbackEnviron;
+    use windows_threadpool_sys::pool::ThreadpoolPool;
+
+    use crate::types::{DurabilityRequest, Entry};
+    use pushes::{GIVEN, Harness, given, temp};
+
+    let threads = ThreadpoolPool::new().expect("create a pool");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&threads);
+    let file = temp(&[0; 16]);
+    let ring = pushes::Ring::new(Setup {
+        submission_queue_size: QUEUE,
+        completion_queue_size: QUEUE,
+        files: vec![given(GIVEN, &file)],
+        buffers: Vec::new(),
+        provider: None,
+        diagnostics: None,
+        environment: Some(&mut env),
+    })
+    .expect("build")
+    .0;
+    let mut harness = Harness::new(ring);
+    harness.write(GIVEN, 0, b"pooled", 1, 1);
+    harness.next();
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+    assert!(matches!(harness.next_entry(), Entry::Durable { .. }));
+    // The instance ends first, then `env`, then the pool it names -- the reverse of declaration.
+    harness.finish();
 }
 
 /// The refusals hand back their error rather than panicking or hiding it.

@@ -1,5 +1,25 @@
 // Copyright (c) 2026 Mike Grier
-//! dioring: the contract's implementation over `windows-ioring-sys`.
+//! dioring: the contract's implementation over `windows-ioring-sys` (DI-D-49, DI-D-53).
+//!
+//! An instance is a [`DurableIoCore`] over a [`WindowsBackend`], joined by an [`Engine`] that pool
+//! delivery drains whenever the ring's completion event says to: the core decides, the backend runs
+//! the I/O, and the driver here joins them to the consumer's calls. Every path -- a consumer's call,
+//! a pool drain, a provider's answer, a lineage handle's release -- takes the engine's one lock, so
+//! the queue's order is the order completions were recorded in, whichever thread recorded them.
+//!
+//! **The readiness event** is set whenever a path made entries poppable where there were none, after
+//! it releases the lock, so they are poppable before it is set (DI-D-28).
+//!
+//! **The consumer's provider** is called at the end of the consumer's own calls, with the lock
+//! released, so it may answer inside its call (DI-D-44). A request a pool drain, an answer or a
+//! release makes waits in the engine for the consumer's next call, normally the `pop` that follows.
+//!
+//! **Ending** -- `close()` or drop -- stops delivery and takes the engine out of its slot, so an
+//! answer or a release that comes later finds nothing; drops the provider, so a completion it keeps
+//! is answered as abandoned; waits until every completion made has been answered or dropped
+//! (DI-D-25); then closes the core and drops the backend, whose ring runs down every operation still
+//! in flight. An internal inconsistency is not looked for here: it is panicked on where it is found
+//! (DI-D-46).
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -7,39 +27,43 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use win_shared_os_owned_handle::SharedHandle;
-use win_sync_sys::Event;
+use win_sync_sys::{Event, ResetMode};
 use win_time_sys::{Clock, InterruptClock, InterruptTime, Steady, TimePoint};
 use windows_ioring_sys::{
-    Batch, Completion, EventDelivery, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers,
-    RegisteredFile, RegisteredFiles, RegisteredSpan,
+    Batch, Completion, IoBuf, IoBufMut, IoRing, PushRefused, RegisteredBuffers, RegisteredFiles,
+    RegisteredSpan,
 };
+use windows_threadpool_sys::callback_env::CallbackEnviron;
 
+use crate::backend::{IoBackend, RegisteredRegion, SubmissionData};
 use crate::clock::{Instant, StampClock};
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
-use crate::ids::{
-    DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
-};
+use crate::engine::Engine;
+use crate::ids::{DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle};
+use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
 use crate::provider::{
     Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest,
-    IoTargetWrites,
+    ProviderPart, ProviderRequest,
 };
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureCause, FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers,
-    LineageInfo, OpKind, ReadOptions, RemoveTargetError, Resolution, ResolveError,
-    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
+    FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
+    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
+    RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
-use crate::windows_backend::Win32FileTarget;
+use crate::windows_backend::pool::{EngineGuard, PoolDelivery, PoolEngine};
+use crate::windows_backend::{
+    Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
+    WindowsBackendSetup,
+};
 
 pub(crate) mod durability;
-mod ending;
-mod push;
-mod relay;
+mod hub;
 
-use durability::{DEFAULT_LINEAGE, Due, Gate, ProviderCall, Reach, Routing, Sealing, State};
-use relay::{Core, Delivery, FlushTarget, Relay, Via};
+use durability::{Reach, Routing, State};
+use hub::Hub;
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
 #[cfg(test)]
@@ -74,12 +98,12 @@ const REGISTRATION_BOUND: Duration = Duration::from_secs(30);
 
 /// What a dioring instance is built with. Both registrations are the ring's only ones (one of
 /// each per ring), so they are made here or never.
-pub struct Setup<E: EpochId + 'static, R> {
+pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// The ring's submission queue size, as `windows-ioring-sys` takes it.
     pub submission_queue_size: u32,
     /// The ring's completion queue size, as `windows-ioring-sys` takes it.
     pub completion_queue_size: u32,
-    /// Registered with the ring, which holds them for its life. A file added later is not
+    /// Registered with the ring, which holds their files for its life. A target added later is not
     /// registered.
     pub files: Vec<TargetSetup>,
     /// Already allocated and placed by the consumer; dioring neither allocates nor places them.
@@ -91,6 +115,10 @@ pub struct Setup<E: EpochId + 'static, R> {
     /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, which is
     /// [`NoDiagnostics`] until `DI-3.6` makes it ETW.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
+    /// The thread pool, and the priority within it, that the instance's delivery runs on
+    /// (DI-D-52) -- a NUMA node's own pool, for one. `None` is the process's default pool. Read
+    /// once, as the instance is built.
+    pub environment: Option<&'env mut CallbackEnviron<'pool>>,
 }
 
 /// One target given at construction.
@@ -105,11 +133,11 @@ pub struct TargetSetup {
 /// Why construction failed.
 #[derive(Debug)]
 pub enum SetupRefusal {
-    /// Two files share a key.
+    /// Two targets share a key.
     DuplicateKey(IoTargetKey),
     /// The provider named a domain twice.
     DuplicateProviderDomain(FlushDomain),
-    /// Creating the ring or making a registration failed.
+    /// Creating the ring, making a registration, or wiring the ring's delivery failed.
     Ring(io::Error),
 }
 
@@ -120,12 +148,12 @@ pub enum SetupRefusal {
 /// when the registration succeeded and wiring the ring's delivery then failed (the registration
 /// holds them, and has no way to give them back).
 ///
-/// That last failure is not reached by this crate's tests: `EventDelivery::new` fails where the
-/// system does not support a ring completion event, or the thread pool cannot create a wait.
+/// That last failure is not reached by this crate's tests: wiring delivery fails where the system
+/// does not support a ring completion event, or the thread pool cannot create a wait.
 pub struct SetupError<E: EpochId + 'static, R> {
     /// Why construction failed.
     pub reason: SetupRefusal,
-    /// The files, in the order given.
+    /// The targets, in the order given.
     pub files: Vec<TargetSetup>,
     /// The buffers, unless the kernel was given them; see above.
     pub buffers: Option<Vec<R>>,
@@ -146,57 +174,9 @@ impl<E: EpochId + 'static, R> std::fmt::Debug for SetupError<E, R> {
     }
 }
 
-/// How dioring addresses one of the consumer's targets.
-pub(crate) enum FileSlot {
-    /// Given at construction: the ring holds its file for its life (`windows-ioring-sys` D-81).
-    Registered {
-        index: RegisteredFile,
-        target: Win32FileTarget,
-    },
-    /// Added later: pushed through its file's handle, guarded per operation. The consumer's own
-    /// `SharedHandle` -- the ring takes that type directly (`windows-ioring-sys` D-82), so a file
-    /// reaches the ring with no duplicate and no conversion.
-    Shared(Win32FileTarget),
-}
-
-impl FileSlot {
-    /// What a push to this target is made against, borrowed.
-    fn via(&self) -> Via<'_> {
-        match self {
-            FileSlot::Registered { index, .. } => Via::Registered(index),
-            FileSlot::Shared(target) => Via::Shared(target.handle()),
-        }
-    }
-
-    /// What a flush of this target is pushed against.
-    fn flush_target(&self) -> FlushTarget {
-        match self {
-            FileSlot::Registered { index, .. } => FlushTarget::Registered(*index),
-            FileSlot::Shared(target) => FlushTarget::Shared(target.handle().clone()),
-        }
-    }
-
-    /// The consumer's target, handed back.
-    fn into_target(self) -> Win32FileTarget {
-        match self {
-            FileSlot::Registered { target, .. } | FileSlot::Shared(target) => target,
-        }
-    }
-}
-
 /// A flush domain interned by this instance: a word-sized stand-in for its bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct DomainId(u32);
-
-/// One of the consumer's files, with its declared flush domains, sorted and without repeats. An
-/// empty set means unknown, which intersects every file.
-pub(crate) struct FileRecord {
-    pub(crate) target: FileSlot,
-    /// Shared with the record of each write to the file, which a failure's reach is judged by.
-    pub(crate) domains: Arc<[DomainId]>,
-    /// Who answers for its writes, from its domains and the provider's (DI-D-27).
-    pub(crate) routing: Routing,
-}
 
 /// Who answers for a file's writes (DI-D-27): the built-in default for a file with no declared
 /// domain or one the provider does not serve, and the provider for the domains it serves.
@@ -213,65 +193,26 @@ pub(crate) fn routing(file: &[DomainId], served: &[DomainId]) -> Routing {
     }
 }
 
-/// The domains `provider` serves; none without one.
-fn served<E: EpochId + 'static>(provider: Option<&ProviderSlot<E>>) -> &[DomainId] {
-    provider.map_or(&[], |provider| &provider.domains)
-}
-
-/// The consumer's provider, with the domains it serves, interned and sorted.
-pub(crate) struct ProviderSlot<E: EpochId + 'static> {
-    pub(crate) provider: Box<dyn DurabilityProvider<DioringIds<E>>>,
-    pub(crate) domains: Arc<[DomainId]>,
-    /// Each served domain's bytes, at its id's position in `domains`, for the requests.
-    pub(crate) names: Vec<FlushDomain>,
-}
-
-/// dioring's record of each operation, carried as the ring crate's sidecar. The consumer's
-/// context rides inside it, so routing a completion needs no side table.
-pub(crate) enum Sidecar<E: EpochId + 'static, C> {
-    Consumer {
-        id: OpId,
-        kind: OpKind<DioringIds<E>>,
-        /// Counted in flight for `remove_target` until the completion is recorded.
-        file: IoTargetKey,
-        #[expect(dead_code, reason = "carried for the delay events: DI-3.6")]
-        offset: u64,
-        /// The bytes a write asks to write, against which the Windows path turns a short count
-        /// into a fault (DI-D-50); zero for a read.
-        requested: u32,
-        context: C,
-    },
-    /// A seal's flush of one file (DI-D-22).
-    Commit {
-        through: Epoch<DioringIds<E>>,
-        file: IoTargetKey,
-    },
-}
-
 /// dioring: `B` is the owned buffer type, `E` the epoch-id type, `C` the consumer's
 /// per-operation context, `R` the registered-buffer type, and `K` the clock it stamps failures with
 /// (a [`TimeBase`]; [`InterruptClock`] unless built with [`Dioring::with_clock`]).
 ///
-/// The ring is handed to `EventDelivery`, whose callbacks move each completion into dioring's own
-/// queue and set the readiness event, and the consumer pops that queue (DI-D-18, DI-D-28). So
-/// the buffer, epoch-id and context types cross to pool threads and must be `Send`; the epoch-id
-/// type must also be `Sync`, because a failure's suspect set is shared.
-pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>, K = InterruptClock>
-{
-    pub(crate) instance: InstanceId,
-    /// The ring, inside its delivery. Declared before `registered`: dropping it quiesces the
-    /// delivery callbacks and then closes the ring, so both happen before the buffers the ring
-    /// registered are released (DI-2.7 point 5, the ring crate's D-13 order).
-    pub(crate) delivery: Arc<Delivery<E, B, C>>,
-    pub(crate) relay: Arc<Relay<E, B, C, K>>,
-    pub(crate) files: HashMap<IoTargetKey, FileRecord>,
-    /// The interning table. An entry lives for the instance's life: the number of distinct
-    /// domains is the number of devices and shares the consumer touches.
-    pub(crate) domains: HashMap<FlushDomain, DomainId>,
-    pub(crate) registered: Option<RegisteredBuffers<R>>,
-    pub(crate) provider: Option<ProviderSlot<E>>,
-    /// The next operation's sequence number.
-    pub(crate) next_op: u64,
+/// The instance's core and its Windows backend are drained on the thread pool (DI-D-53), so the
+/// buffer, epoch-id, context and registered-buffer types cross to pool threads and must be `Send`;
+/// the epoch-id type must also be `Sync`, because a failure's suspect set is shared. An owned write
+/// needs only `B: IoBuf`, so a write-only type serves; an owned read needs `B: IoBufMut`
+/// (DI-D-17).
+pub struct Dioring<
+    B: IoBuf,
+    E: EpochId + 'static = u64,
+    C = (),
+    R: IoBufMut = Vec<u8>,
+    K: StampClock = InterruptClock,
+> {
+    /// The core and its backend, drained on the thread pool; `None` once the instance has ended.
+    pub(crate) delivery: Option<PoolDelivery<E, B, C, K, R>>,
+    pub(crate) hub: Arc<Hub<E, B, C, K, R>>,
+    pub(crate) provider: Option<Box<dyn DurabilityProvider<DioringIds<E>>>>,
     /// A copy of the default lineage's handle, so the default lineage lives as long as the
     /// instance does (DI-D-40).
     pub(crate) default: LineageHandle,
@@ -279,10 +220,10 @@ pub struct Dioring<B, E: EpochId + 'static = u64, C = (), R: IoBufMut = Vec<u8>,
 
 impl<B, E, C, R> Dioring<B, E, C, R>
 where
-    B: Send + 'static,
+    B: IoBuf + Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
-    R: IoBufMut,
+    R: IoBufMut + Send + 'static,
 {
     /// Build an instance, make the ring's registrations, and wire its delivery. Blocks until both
     /// registrations have completed. Returns the instance with a handle to its default lineage
@@ -291,21 +232,21 @@ where
     ///
     /// # Errors
     ///
-    /// A [`SetupError`] handing back what it was given, for a duplicate file key, a provider
+    /// A [`SetupError`] handing back what it was given, for a duplicate target key, a provider
     /// domain named twice, or a ring that could not be created, make a registration, or be wired
     /// to deliver its completions. The checks that need no ring run first, so a refusal for
     /// either of the first two creates nothing.
-    pub fn new(setup: Setup<E, R>) -> Result<(Self, LineageHandle), SetupError<E, R>> {
+    pub fn new(setup: Setup<'_, '_, E, R>) -> Result<(Self, LineageHandle), SetupError<E, R>> {
         Self::with_clock(setup, InterruptClock)
     }
 }
 
 impl<B, E, C, R, K> Dioring<B, E, C, R, K>
 where
-    B: Send + 'static,
+    B: IoBuf + Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
-    R: IoBufMut,
+    R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
     /// [`Dioring::new`], stamping failures with `clock` (DI-D-38): a test's mock, for one, which
@@ -315,7 +256,7 @@ where
     ///
     /// As [`Dioring::new`].
     pub fn with_clock(
-        setup: Setup<E, R>,
+        setup: Setup<'_, '_, E, R>,
         clock: K,
     ) -> Result<(Self, LineageHandle), SetupError<E, R>> {
         let Setup {
@@ -325,6 +266,7 @@ where
             buffers,
             provider,
             diagnostics,
+            environment,
         } = setup;
         let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(NoDiagnostics));
 
@@ -346,9 +288,10 @@ where
             });
         }
 
-        let instance = InstanceId::next();
-        let relay = match Relay::new(instance, clock, diagnostics) {
-            Ok(relay) => Arc::new(relay),
+        let signals = Event::new(ResetMode::Auto, false)
+            .and_then(|readiness| Ok((readiness.try_clone()?, readiness)));
+        let (ready, readiness) = match signals {
+            Ok(signals) => signals,
             Err(error) => {
                 return Err(SetupError {
                     reason: SetupRefusal::Ring(error),
@@ -358,54 +301,64 @@ where
                 });
             }
         };
-        let mut ring = match IoRing::<B, Sidecar<E, C>>::with_inventory(
+        let mut core = if provider.is_some() {
+            DurableIoCore::with_provider(clock, Arc::clone(&diagnostics), provider_domains)
+                .expect("a domain named twice was refused above")
+        } else {
+            DurableIoCore::new(clock, Arc::clone(&diagnostics))
+        };
+        let keys: Vec<IoTargetKey> = files.iter().map(|f| f.key).collect();
+        for file in &files {
+            core.add_target(file.key, file.target.describe())
+                .expect("the keys were checked unique above");
+        }
+        let targets = files
+            .into_iter()
+            .map(|TargetSetup { key, target }| (key, target))
+            .collect();
+        let backend = match WindowsBackend::without_owned_reads(WindowsBackendSetup {
             submission_queue_size,
             completion_queue_size,
-        ) {
-            Ok(ring) => ring,
-            Err(error) => {
+            targets,
+            buffers,
+        }) {
+            Ok(backend) => backend,
+            Err(WindowsBackendError {
+                reason,
+                targets,
+                buffers,
+            }) => {
+                let reason = match reason {
+                    WindowsBackendRefusal::DuplicateKey(key) => SetupRefusal::DuplicateKey(key),
+                    WindowsBackendRefusal::Ring(error) => SetupRefusal::Ring(error),
+                };
                 return Err(SetupError {
-                    reason: SetupRefusal::Ring(error),
-                    files,
-                    buffers: Some(buffers),
-                    provider,
-                });
-            }
-        };
-        let handles = files.iter().map(|f| f.target.handle().clone()).collect();
-        let registered_files = match register_files(&mut ring, handles) {
-            Ok(registered) => registered,
-            Err(error) => {
-                return Err(SetupError {
-                    reason: SetupRefusal::Ring(error),
-                    files,
-                    buffers: Some(buffers),
-                    provider,
-                });
-            }
-        };
-        let registered = match register_buffers(&mut ring, buffers) {
-            Ok(registered) => registered,
-            Err((error, buffers)) => {
-                return Err(SetupError {
-                    reason: SetupRefusal::Ring(error),
-                    files,
+                    reason,
+                    files: setups(targets),
                     buffers,
                     provider,
                 });
             }
         };
 
-        // After the registrations, which claim their completions from the ring directly: once
-        // the ring is handed over, only the delivery callback pops it.
-        let recorder = Arc::clone(&relay);
-        let delivery = match EventDelivery::new(
-            ring,
-            move |completion, held| recorder.record(completion, held),
-            None,
-        ) {
-            Ok(delivery) => Arc::new(delivery),
-            Err(error) => {
+        let default_lineage = core.default_lineage();
+        let on_ready = move || {
+            // Setting an event this instance created, with full access, does not fail.
+            let set = ready.set();
+            debug_assert!(set.is_ok(), "setting the readiness event failed: {set:?}");
+        };
+        let delivery = match PoolDelivery::new(Engine::new(core, backend), on_ready, environment) {
+            Ok(delivery) => delivery,
+            Err((error, engine)) => {
+                let mut backend = engine.backend;
+                let files = keys
+                    .into_iter()
+                    .filter_map(|key| {
+                        backend
+                            .detach(key)
+                            .map(|target| TargetSetup { key, target })
+                    })
+                    .collect();
                 return Err(SetupError {
                     reason: SetupRefusal::Ring(error),
                     files,
@@ -414,69 +367,19 @@ where
                 });
             }
         };
-        relay.attach(&delivery);
-
-        let mut domains = HashMap::new();
-        let mut records = HashMap::with_capacity(files.len());
-        for (i, TargetSetup { key, target }) in files.into_iter().enumerate() {
-            let index = registered_files
-                .and_then(|r| r.get(u32::try_from(i).ok()?))
-                .expect("every file given at construction was registered, in order");
-            let interned = intern_all(&mut domains, target.flush_domains().iter().cloned());
-            records.insert(
-                key,
-                FileRecord {
-                    target: FileSlot::Registered { index, target },
-                    domains: interned,
-                    routing: Routing {
-                        default: true,
-                        provider: false,
-                    },
-                },
-            );
-        }
-        let provider = provider.map(|provider| {
-            let served = intern_all(&mut domains, provider_domains);
-            let names = served
-                .iter()
-                .map(|id| {
-                    domains
-                        .iter()
-                        .find_map(|(name, interned)| (interned == id).then(|| name.clone()))
-                        .expect("a served domain was interned")
-                })
-                .collect();
-            ProviderSlot {
-                provider,
-                domains: served,
-                names,
-            }
-        });
-        for record in records.values_mut() {
-            record.routing = routing(&record.domains, served(provider.as_ref()));
-        }
-        if let Some(provider) = &provider {
-            (relay.lock().durability).serve(Arc::clone(&provider.domains));
-        }
-
-        let default = LineageHandle::mint(
-            Lineage {
-                instance,
-                seq: DEFAULT_LINEAGE,
-            },
-            home(&relay),
-        );
+        let hub = Arc::new(Hub::new(
+            delivery.shared(),
+            readiness,
+            default_lineage.instance,
+            diagnostics,
+        ));
+        let default = LineageHandle::mint(default_lineage, home(&hub));
         let handle = default.clone();
         Ok((
             Self {
-                instance,
-                delivery,
-                relay,
-                files: records,
-                domains,
-                registered,
+                delivery: Some(delivery),
+                hub,
                 provider,
-                next_op: 0,
                 default,
             },
             handle,
@@ -484,6 +387,13 @@ where
     }
 }
 
+/// Targets handed back as they were given.
+fn setups(targets: Vec<(IoTargetKey, Win32FileTarget)>) -> Vec<TargetSetup> {
+    targets
+        .into_iter()
+        .map(|(key, target)| TargetSetup { key, target })
+        .collect()
+}
 /// What an import reaches: the files, the one lineage it is confined to if any, and the domains it
 /// named that the instance has never been given.
 pub(crate) type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
@@ -519,23 +429,23 @@ pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
 }
 
 /// Where an instance's lineage handles report their release.
-fn home<T: Home + 'static>(relay: &Arc<T>) -> Weak<dyn Home> {
-    let home: Weak<T> = Arc::downgrade(relay);
+fn home<T: Home + 'static>(hub: &Arc<T>) -> Weak<dyn Home> {
+    let home: Weak<T> = Arc::downgrade(hub);
     home
 }
 
 /// Where an instance's provider completions answer.
-fn answers<T: Answer + 'static>(relay: &Arc<T>) -> Weak<dyn Answer> {
-    let answers: Weak<T> = Arc::downgrade(relay);
+fn answers<T: Answer + 'static>(hub: &Arc<T>) -> Weak<dyn Answer> {
+    let answers: Weak<T> = Arc::downgrade(hub);
     answers
 }
 
 impl<B, E, C, R, K> DurableRing for Dioring<B, E, C, R, K>
 where
-    B: Send + 'static,
+    B: IoBuf + Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
-    R: IoBufMut,
+    R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
     type Ids = DioringIds<E>;
@@ -545,7 +455,7 @@ where
     type Target = Win32FileTarget;
 
     fn readiness(&mut self) -> io::Result<Event> {
-        self.relay.readiness()
+        self.hub.readiness()
     }
 
     fn add_target(
@@ -553,19 +463,18 @@ where
         key: IoTargetKey,
         target: Win32FileTarget,
     ) -> Result<(), AddTargetError<Win32FileTarget>> {
-        if self.files.contains_key(&key) {
+        let mut engine = self.engine();
+        if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {
             return Err(AddTargetError { key, target });
         }
-        let domains = intern_all(&mut self.domains, target.flush_domains().iter().cloned());
-        let routing = routing(&domains, served(self.provider.as_ref()));
-        self.files.insert(
-            key,
-            FileRecord {
-                target: FileSlot::Shared(target),
-                domains,
-                routing,
-            },
-        );
+        engine
+            .core
+            .add_target(key, target.describe())
+            .expect("the key is free, checked above");
+        engine
+            .backend
+            .attach(key, target)
+            .expect("the key is free, checked above");
         Ok(())
     }
 
@@ -573,7 +482,12 @@ where
         &mut self,
         key: IoTargetKey,
     ) -> Result<Win32FileTarget, RemoveTargetError<Self::Ids>> {
-        self.remove(key)
+        let mut engine = self.engine();
+        engine.core.remove_target(key)?;
+        Ok(engine
+            .backend
+            .detach(key)
+            .expect("a target the core decided for is attached"))
     }
 
     fn write_with(
@@ -588,7 +502,14 @@ where
     where
         B: IoBuf,
     {
-        self.push_write(file, offset, buffer, tag, context, options)
+        self.engine().write(
+            file,
+            offset,
+            SubmissionData::Owned(buffer),
+            tag.epoch(),
+            context,
+            options,
+        )
     }
 
     fn read_with(
@@ -602,23 +523,40 @@ where
     where
         B: IoBufMut,
     {
-        self.push_read(file, offset, buffer, context, options)
+        let mut engine = self.engine();
+        // Here, where `B: IoBufMut` holds, the backend is given the push an owned read needs
+        // (DI-D-17).
+        engine.backend.enable_owned_reads();
+        engine.read(
+            file,
+            offset,
+            SubmissionData::Owned(buffer),
+            context,
+            options,
+        )
     }
 
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
-        // A failed submission, and a flush the ring refused, are retried here as well as at the
-        // next change, so a consumer that stops pushing still gets them issued. A failed retry is
-        // reported only when there is no entry to return instead: an entry is progress, and the
-        // retry runs again at the next pop.
+        // A push submits as it goes, so what is left to submit here is what a failed submission
+        // left queued. It is reported only when there is no entry to return instead: an entry is
+        // progress, and the submission is tried again at the next pop.
+        //
+        // A submission of the core's own the backend refused needs nothing here: its cause is
+        // cleared by a submit or a drain, and either way completions are still to come, whose
+        // actions the pool drain re-emits it with.
+        //
+        // No test reaches the failed-submit report: the ring cannot be made to fail a submission
+        // on demand. A fault seam on the ring's submit would (DI-3.10.3.5.6.3).
         let popped = {
-            let mut core = self.relay.lock();
-            let retried = self.settle(&mut core, Due::default());
-            match (Relay::pop(&mut core), retried) {
+            let mut engine = self.engine();
+            let submitted = engine.backend.submit();
+            match (engine.core.pop(), submitted) {
                 (Some(entry), _) => Ok(Some(entry)),
-                (None, Some(error)) => Err(error),
-                (None, None) => Ok(None),
+                (None, Err(cause)) => Err(io::Error::other(cause)),
+                (None, Ok(())) => Ok(None),
             }
         };
+        // What a drain asked of the provider waits for a consumer call, and a pop is one (DI-D-44).
         self.call_provider();
         popped
     }
@@ -627,51 +565,25 @@ where
         &mut self,
         through: Tag<'_, Self::Ids>,
     ) -> Result<DurabilityRequest<Self::Ids>, SealError<Self::Ids>> {
-        let through = through.epoch();
-        if !self.is_live(through.lineage) {
-            return Err(SealError::UnknownLineage(through.lineage));
-        }
-        let mut core = self.relay.lock();
-        let answer = match core.durability.seal(through.lineage.seq, through.id) {
-            Sealing::AlreadySealed(state) => {
-                Ok(DurabilityRequest::AlreadySealed(epoch_state(state)))
-            }
-            Sealing::Submitted(due) => {
-                self.settle(&mut core, due);
-                Ok(DurabilityRequest::Submitted)
-            }
-            Sealing::Cycle(cycle) => Err(SealError::GateCycle {
-                cycle: self.epochs(cycle),
-            }),
-        };
-        drop(core);
-        self.call_provider();
-        answer
+        let sealed = self.engine().make_durable_through(through.epoch());
+        let (answer, deliver) = sealed?;
+        self.settled(deliver);
+        Ok(answer)
     }
 
     fn durable_through(&self, lineage: Lineage) -> Result<Option<E>, UnknownLineage<Self::Ids>> {
-        self.ours(lineage)?;
-        (self.relay.lock().durability)
-            .durable_through(lineage.seq)
-            .ok_or(UnknownLineage(lineage))
+        self.engine().core.durable_through(lineage)
     }
 
     fn sealed_through(&self, lineage: Lineage) -> Result<Option<E>, UnknownLineage<Self::Ids>> {
-        self.ours(lineage)?;
-        (self.relay.lock().durability)
-            .sealed_through(lineage.seq)
-            .ok_or(UnknownLineage(lineage))
+        self.engine().core.sealed_through(lineage)
     }
 
     fn epoch_state(
         &self,
         epoch: Epoch<Self::Ids>,
     ) -> Result<EpochState<Self::Ids>, UnknownLineage<Self::Ids>> {
-        self.ours(epoch.lineage)?;
-        (self.relay.lock().durability)
-            .state(epoch.lineage.seq, epoch.id)
-            .map(epoch_state)
-            .ok_or(UnknownLineage(epoch.lineage))
+        self.engine().core.epoch_state(epoch)
     }
 
     fn default_lineage(&self) -> LineageHandle {
@@ -679,34 +591,37 @@ where
     }
 
     fn mint_lineage(&mut self, description: Option<String>) -> LineageHandle {
-        let seq = self.relay.lock().durability.mint(description);
-        LineageHandle::mint(
-            Lineage {
-                instance: self.instance,
-                seq,
-            },
-            home(&self.relay),
-        )
+        let lineage = self.engine().core.mint_lineage(description);
+        LineageHandle::mint(lineage, home(&self.hub))
     }
 
     fn lineages(&self) -> Vec<LineageInfo<Self::Ids>> {
-        self.relay.lock().durability.lineages()
+        self.engine().core.lineages()
     }
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<Self::Ids>> {
         let lineage = handle.lineage();
-        let reason = if lineage.instance != self.instance {
+        let reason = if lineage.instance != self.instance() {
             EndLineageRefusal::Foreign(lineage)
-        } else if lineage.seq == DEFAULT_LINEAGE {
+        } else if lineage == self.default.lineage() {
             EndLineageRefusal::Default
         } else {
             match handle.take_last() {
                 Ok(lineage) => {
-                    let mut core = self.relay.lock();
-                    let due = core.durability.end(lineage.seq);
-                    self.settle(&mut core, due);
-                    drop(core);
-                    self.call_provider();
+                    let ended = {
+                        let mut engine = self.engine();
+                        let ended = engine.core.end_lineage(lineage);
+                        ended.map(|actions| engine.act(actions))
+                    };
+                    match ended {
+                        Ok(deliver) => self.settled(deliver),
+                        // Live, since this was its last handle and taking it disarmed it: a
+                        // refusal means a release ended it already.
+                        Err(refusal) => self.hub.inconsistent(
+                            "the last handle of a lineage found it already ended",
+                            format_args!("lineage {lineage:?}, refused as {refusal:?}"),
+                        ),
+                    }
                     return Ok(());
                 }
                 Err(handle) => {
@@ -725,17 +640,17 @@ where
         handle: LineageHandle,
     ) -> Result<(), RetireLineageError<Self::Ids>> {
         let lineage = handle.lineage();
-        let reason = if lineage.instance != self.instance {
+        let reason = if lineage.instance != self.instance() {
             RetireLineageRefusal::Foreign(lineage)
-        } else if lineage.seq == DEFAULT_LINEAGE {
+        } else if lineage == self.default.lineage() {
             RetireLineageRefusal::Default
         } else if !handle.is_last() {
             RetireLineageRefusal::Shared
         } else {
             // Unlocked before the handle is consumed: a handle's release takes this lock.
-            let retired = self.relay.lock().durability.retire(lineage.seq);
+            let retired = self.engine().core.retire_lineage(lineage);
             match retired {
-                Err(busy) => RetireLineageRefusal::Busy(busy),
+                Err(refusal) => refusal,
                 Ok(()) => {
                     // The last copy, owned here, so none can be made.
                     let taken = handle.take_last();
@@ -751,11 +666,15 @@ where
         &mut self,
         items: Vec<(FailureToken, Resolution)>,
     ) -> Result<(), ResolveError<Self::Ids>> {
-        let mut core = self.relay.lock();
-        let due = core.durability.resolve(items)?;
-        self.settle(&mut core, due);
-        drop(core);
-        self.call_provider();
+        let resolved = {
+            let mut engine = self.engine();
+            engine
+                .core
+                .resolve(items)
+                .map(|actions| engine.act(actions))
+        };
+        let deliver = resolved?;
+        self.settled(deliver);
         Ok(())
     }
 
@@ -763,185 +682,173 @@ where
         &mut self,
         scope: ImportScope<Self::Ids>,
     ) -> Result<Imported<Self::Ids>, UnknownLineage<Self::Ids>> {
-        let (reach, only, unmatched) = self.reach(&scope)?;
-        let mut core = self.relay.lock();
-        let (failure, due) = core
-            .durability
-            .import(FailureCause::Imported { scope }, &reach, only);
-        self.settle(&mut core, due);
-        Ok(Imported { failure, unmatched })
+        let imported = {
+            let mut engine = self.engine();
+            engine
+                .core
+                .import_failure(scope)
+                .map(|(imported, actions)| (imported, engine.act(actions)))
+        };
+        let (imported, deliver) = imported?;
+        self.settled(deliver);
+        Ok(imported)
     }
 
     fn failures(&self) -> Vec<FailureInfo<Self::Ids>> {
-        self.relay.lock().durability.failures()
+        self.engine().core.failures()
     }
 
     fn take_token(&mut self, failure: FailureId) -> Option<FailureToken> {
-        self.relay.lock().durability.take_token(failure)
+        self.engine().core.take_token(failure)
     }
 
     fn close(mut self) -> Leftovers<Self::Ids, B, C> {
-        let Some(shut) = self.end(|core| (core.durability.failures(), core.durability.lineages()))
-        else {
-            // Unreachable: `close` consumes the instance, so nothing has ended it before.
-            return Leftovers {
-                held: Vec::new(),
-                failures: Vec::new(),
-                lineages: Vec::new(),
-            };
-        };
-        let (failures, lineages) = shut.snapshot;
-        Leftovers {
-            held: shut.held.into_iter().map(ending::held_operation).collect(),
-            failures,
-            lineages,
-        }
+        // `close` consumes the instance, so nothing has ended it before.
+        self.end().unwrap_or_else(|| Leftovers {
+            held: Vec::new(),
+            failures: Vec::new(),
+            lineages: Vec::new(),
+        })
     }
 }
 
 impl<B, E, C, R, K> Dioring<B, E, C, R, K>
 where
-    B: Send + 'static,
+    B: IoBuf + Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
-    R: IoBufMut,
+    R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
-    /// What an imported failure reaches: see [`import_reach`].
-    fn reach(
-        &self,
-        scope: &ImportScope<DioringIds<E>>,
-    ) -> Result<ImportReach, UnknownLineage<DioringIds<E>>> {
-        import_reach(scope, &self.domains, |lineage| self.is_live(lineage))
+    /// After a consumer call, with the engine's lock released: set the readiness event if the call
+    /// made entries poppable, then make the provider's requests.
+    fn settled(&mut self, deliver: bool) {
+        if deliver {
+            self.hub.signal();
+        }
+        self.call_provider();
     }
 
-    /// Act on what a consumer call made due, then push every held operation released so far: a
-    /// consumer call is the one place a released operation can be pushed (see the `push` module).
-    /// Returns the first submission error.
-    fn settle(
-        &self,
-        core: &mut Core<E, B, C, K>,
-        due: Due<E, FlushTarget, WinInstant>,
-    ) -> Option<io::Error> {
-        let applied = self.relay.apply(core, due, &self.delivery);
-        let released = self.release_ready(core);
-        applied.or(released)
-    }
-
-    /// Make every request for the consumer's provider made so far, in order, with dioring's lock
+    /// Make every request for the consumer's provider made so far, in order, with the engine's lock
     /// released: the provider may answer inside its call, and the answer takes the lock
-    /// (DI-D-44). Called at the end of each consumer call that can start a seal. Every request is
-    /// built before the first is made, so a panic in the provider drops the completions of those
-    /// after it unanswered: each a failure of its domain, as DI-D-27 says.
+    /// (DI-D-44). Every request is built before the first is made, so a panic in the provider drops
+    /// the completions of those after it unanswered: each a failure of its domain, as DI-D-27 says.
     fn call_provider(&mut self) {
-        let calls = std::mem::take(&mut self.relay.lock().calls);
-        if calls.is_empty() {
+        let requests = self.engine().take_requests();
+        if requests.is_empty() {
             return;
         }
-        let requests: Vec<FlushRequest<DioringIds<E>>> = calls
+        let home = answers(&self.hub);
+        let requests: Vec<FlushRequest<DioringIds<E>>> = requests
             .into_iter()
-            .map(|call| self.flush_request(call))
+            .map(|request| flush_request(request, &home))
             .collect();
-        let slot = self
+        let provider = self
             .provider
             .as_mut()
             .expect("only a provider's domains make requests");
         for request in requests {
-            slot.provider.make_durable(request);
-        }
-    }
-
-    /// A request in the core's terms, as the provider is handed it.
-    fn flush_request(&self, call: ProviderCall) -> FlushRequest<DioringIds<E>> {
-        let home = answers(&self.relay);
-        let slot = self
-            .provider
-            .as_ref()
-            .expect("only a provider's domains make requests");
-        let domains = call
-            .domains
-            .into_iter()
-            .map(|part| {
-                let at = slot
-                    .domains
-                    .binary_search(&part.domain)
-                    .expect("a request names only domains the provider serves");
-                let name = slot.names[at].clone();
-                let files = part
-                    .files
-                    .into_iter()
-                    .map(|(key, writes)| IoTargetWrites { key, writes })
-                    .collect();
-                let completion = DomainCompletion::new(
-                    Weak::clone(&home),
-                    DomainCall {
-                        lineage: call.lineage,
-                        seal: call.seal,
-                        domain: part.domain,
-                        name: name.clone(),
-                    },
-                );
-                DomainRequest {
-                    domain: name,
-                    files,
-                    completion,
-                }
-            })
-            .collect();
-        FlushRequest { domains }
-    }
-
-    /// A cycle in the core's terms, as the contract reports it.
-    fn epochs(&self, cycle: Vec<Gate<E>>) -> Vec<Epoch<DioringIds<E>>> {
-        cycle
-            .into_iter()
-            .map(|at| {
-                Epoch::new(
-                    Lineage {
-                        instance: self.instance,
-                        seq: at.lineage,
-                    },
-                    at.epoch,
-                )
-            })
-            .collect()
-    }
-
-    /// Refuse another instance's lineage, which this one has no answer for.
-    fn ours(&self, lineage: Lineage) -> Result<(), UnknownLineage<DioringIds<E>>> {
-        if lineage.instance == self.instance {
-            Ok(())
-        } else {
-            Err(UnknownLineage(lineage))
+            provider.make_durable(request);
         }
     }
 }
 
+impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E, C, R, K> {
+    /// The engine, locked: what a consumer call acts through.
+    pub(crate) fn engine(&self) -> EngineGuard<'_, PoolEngine<E, B, C, K, R>> {
+        self.delivery
+            .as_ref()
+            .expect("an instance is live until it ends")
+            .engine()
+    }
+
+    /// The instance, as its lineages name it.
+    fn instance(&self) -> InstanceId {
+        self.default.lineage().instance
+    }
+
+    /// End the instance, as the module's "Ending" says, returning what is left; `None` if it has
+    /// ended already.
+    pub(crate) fn end(&mut self) -> Option<Leftovers<DioringIds<E, K::Instant>, B, C>> {
+        let delivery = self.delivery.take()?;
+        // Stops the wake, waiting for a drain in progress, and takes the engine out of its slot.
+        let engine = delivery.into_engine();
+        // Before the wait: a completion the provider keeps in itself is answered, as abandoned, by
+        // the provider's drop, which would otherwise wait for the wait it holds up.
+        self.provider = None;
+        self.hub.wait_for_answers();
+        let Engine { core, backend, .. } = engine;
+        let leftovers = core.close();
+        // The ring runs down every operation still in flight as it goes.
+        drop(backend);
+        Some(leftovers)
+    }
+}
+
+/// A request in the core's terms, as the provider is handed it: each domain's part, with the
+/// completion that answers it through `home`.
+fn flush_request<E: EpochId + 'static>(
+    request: ProviderRequest<DioringIds<E>>,
+    home: &Weak<dyn Answer>,
+) -> FlushRequest<DioringIds<E>> {
+    let ProviderRequest {
+        lineage,
+        seal,
+        domains,
+    } = request;
+    let domains = domains
+        .into_iter()
+        .map(|ProviderPart { domain, targets }| DomainRequest {
+            completion: DomainCompletion::new(
+                Weak::clone(home),
+                DomainCall {
+                    lineage,
+                    seal,
+                    name: domain.clone(),
+                },
+            ),
+            domain,
+            files: targets,
+        })
+        .collect();
+    FlushRequest { domains }
+}
+
+/// A span of the registered buffers, as the backend names it.
+fn region(span: RegisteredSpan) -> RegisteredRegion {
+    RegisteredRegion {
+        index: span.buffer_index,
+        offset: span.offset,
+        length: span.len,
+    }
+}
+
 /// The fault seam (`DI-3.2.4`): failures on demand, for tests and for the contract's worked
-/// examples. It transforms a flush's real completion through `windows-ioring-sys`' own seam, so
-/// the flush still reaches the kernel and only the answer dioring sees changes.
+/// examples. It transforms a commit's real completion through `windows-ioring-sys`' own seam, so
+/// the commit still reaches the kernel and only the answer dioring sees changes -- the backend's
+/// `fail_next_commit`, under the contract's older word for a commit (DI-3.11).
 #[cfg(feature = "fault-injection")]
-impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Dioring<B, E, C, R, K> {
+impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E, C, R, K> {
     /// Make the next flush of `file` to complete report the Win32 error `code` -- for example
     /// `1117`, `ERROR_IO_DEVICE` -- whatever the kernel answered. Armed failures for one file are
     /// used in the order they were armed. The flush may already be in flight.
     pub fn fail_next_flush(&mut self, file: IoTargetKey, code: u32) {
-        self.relay.lock().injected.push((file, code));
+        self.engine().backend.fail_next_commit(file, code);
     }
 }
 
 impl<B, E, C, R, K> RegisteredBufferRing for Dioring<B, E, C, R, K>
 where
-    B: Send + 'static,
+    B: IoBuf + Send + 'static,
     E: EpochId + Send + Sync + 'static,
     C: Send + 'static,
-    R: IoBufMut,
+    R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
     type Registered = R;
 
     fn with_registered_buffer<T>(&mut self, i: u32, f: impl FnOnce(&[u8]) -> T) -> io::Result<T> {
-        self.registration()?.get(i).map(f)
+        self.engine().backend.registered_buffer(i).map(f)
     }
 
     fn with_registered_buffer_mut<T>(
@@ -949,7 +856,7 @@ where
         i: u32,
         f: impl FnOnce(&mut [u8]) -> T,
     ) -> io::Result<T> {
-        self.registration()?.get_mut(i).map(f)
+        self.engine().backend.registered_buffer_mut(i).map(f)
     }
 
     fn write_registered_with(
@@ -961,7 +868,14 @@ where
         context: C,
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self> {
-        self.push_write_registered(file, offset, span, tag, context, options)
+        self.engine().write(
+            file,
+            offset,
+            SubmissionData::Registered(region(span)),
+            tag.epoch(),
+            context,
+            options,
+        )
     }
 
     fn read_registered_with(
@@ -972,21 +886,26 @@ where
         context: C,
         options: ReadOptions<Self::Ids>,
     ) -> PushResult<Self> {
-        self.push_read_registered(file, offset, span, context, options)
+        self.engine().read(
+            file,
+            offset,
+            SubmissionData::Registered(region(span)),
+            context,
+            options,
+        )
     }
 }
 
-impl<B, E: EpochId + 'static, C, R: IoBufMut, K> Drop for Dioring<B, E, C, R, K> {
+impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Drop
+    for Dioring<B, E, C, R, K>
+{
     fn drop(&mut self) {
-        // Before the delivery is dropped, which the field drop that follows does: once the core is
-        // closed no callback holds the delivery, so it is dropped here, on this thread, and not
-        // inside one of its own callbacks. Its rundown is what waits for the kernel. Nothing to do
-        // after `close()`, which has ended the instance already; drop discards what it would have
-        // returned.
-        let _ = self.end(|_| ());
+        // Ends the instance on this thread, never inside one of delivery's own calls, where
+        // stopping delivery would wait for itself. Nothing to do after `close()`, which has ended
+        // it already; drop discards what it would have returned.
+        let _ = self.end();
     }
 }
-
 /// The contract's spelling of a lineage's epoch state.
 pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
     state: State,

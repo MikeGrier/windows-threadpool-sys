@@ -101,37 +101,17 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.1** -- Pool delivery over the threadless backend: the portable `Engine` that drains a backend through the core, and `PoolDelivery` that drains it on the ring crate's `CompletionWake`, with an optional callback environment. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-3103561)
 
-- [ ] **DI-3.10.3.5.6.2** -- **The switch-over**: the driver onto the core, in the steps below.
-  Re-planned from one step into four once mapping the old driver onto the new path showed two
-  things. First, the new core has a defect the switch-over would expose: it holds a gated operation
-  without asking the backend whether it would admit it, and re-emits forever a submission of its own
-  that the backend refuses for a cause that cannot clear -- so a gated registered-span write on an
-  instance with no registration, which today's driver refuses at push, would be accepted and then
-  never complete, and its seal never resolve. Today's driver shares the second half ("no test
-  reaches that"), so this is a fix to both, made in the core. Second, two of the step's API changes
-  stand alone on today's driver, which keeps the switch-over itself to the swap and its deletions.
-  Re-planned again, from four steps to six, on mapping the swap itself: the Windows backend built in
-  `DI-3.10.3.5.5` bound its buffer to `IoBufMut`, which the swap would make the driver's bound and
-  so take write-only buffer types away, against [DI-D-17](DESIGN-NOTES.md#di-d-17) and API.md
-  section 8; and the registered-buffer accessors return a borrow, which no implementation can
-  give once the registration lives behind the engine's lock that pool drains share.
+- [x] **DI-3.10.3.5.6.2** -- The switch-over: the driver onto the core, in six steps, ending in the swap that runs `Dioring` on `DurableIoCore` over the Windows backend under pool delivery and deletes the old path. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-3103562)
 
-- [x] **DI-3.10.3.5.6.2.1** -- What the backend refuses for good, the core ends: a gated operation is put to the backend's `check` before it is held, and a submission of the core's own refused for a cause that is not retryable completes with a `REFUSED` fault. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035621)
+- [ ] **DI-3.10.3.5.6.3** -- **A failed submission reachable by a test -- proposed, awaiting the
+  engineer's ruling.** `pop` reports a failed submission when it has no entry to return instead,
+  and no test reaches that: nothing can make the ring fail a submission on demand, so the edge is
+  a declared blind spot in [sabotage.json](sabotage.json) ("a pop hides a failed submit"). A
+  `fault-injection` seam in the ring crate that fails the next submission would reach it, and the
+  Windows backend's failed-submit path with it; that entry is then turned to `caught`. Removed if
+  the engineer declines the seam.
 
-- [x] **DI-3.10.3.5.6.2.2** -- Readiness an associated type of the ring trait (DI-D-52 Q6); today's driver's is the `Event` it hands out now. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035622)
-
-- [x] **DI-3.10.3.5.6.2.3** -- Targets as the implementation's own type: the ring trait's `Target`, today's driver's a `Win32FileTarget`, which `TargetSetup` takes too; `FileOptions` removed. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035623)
-
-- [x] **DI-3.10.3.5.6.2.4** -- Owned writes keep write-only buffer types on the Windows backend (DI-D-17): `WindowsBackend<B: IoBuf>`, an owned read pushed through a push made where `B: IoBufMut` holds. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035624)
-
-- [x] **DI-3.10.3.5.6.2.5** -- Registered buffers reached through a closure: `with_registered_buffer` and `with_registered_buffer_mut`, run under the instance's lock (DI-D-17's guarded accessors). -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035625)
-
-- [ ] **DI-3.10.3.5.6.2.6** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
-  under pool delivery, with the callback environment in `Setup`; `PushRefusal::Ring` and
-  `PushRefusal::NoRegisteredBuffers` replaced by the backend's refusal cause; `Core`, and the ring
-  code of `push.rs` and `relay.rs`, deleted -- the merge-or-delete decision for the duplicated path;
-  the tests and sabotages moved over. Today's tests and sabotages are the proof, the sabotages
-  re-anchored where the code moved.
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M35` -> `M35.1` (a failed submission on demand) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
 - [ ] **DI-3.10.3.5.7** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the
   consumer's own thread waits on the notification and drains through a `pump` call, over the
@@ -306,7 +286,28 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `with_registered_buffer_mut`, the names `DeliveryHandle` already used, and generic over the
   closure's return, so the trait is not object-safe -- it was not before either, being "generic
   only" (DI-D-24); kept on `&mut self`, as the borrow forms were; and the Windows backend's own
-  borrow-returning accessors left as they are, since whoever owns a backend holds it `&mut`.
+  borrow-returning accessors left as they are, since whoever owns a backend holds it `&mut`. From
+  `DI-3.10.3.5.6.2.6`: what the driver's paths off the consumer's thread share is one `Hub` -- the
+  engine's slot, the readiness event, and the count of unanswered provider completions -- and the
+  hub is where a provider's answer and a lineage handle's release arrive; the engine's slot an
+  `Option` that ending empties, so a late answer or release finds nothing to act on rather than an
+  ended instance; an answer counted down before it reaches the engine, which is safe because
+  ending empties the slot before it waits; `Setup` with two lifetimes, `Setup<'env, 'pool, ..>`,
+  because a callback environment is invariant behind `&mut` and one lifetime would tie the
+  caller's borrow to the pool's; `R: Send + 'static` now required on `Dioring`, since the
+  registration lives behind the engine's lock, which pool threads take; `pop` submits and pops but no longer
+  retries the core's refused submissions -- a retryable cause always leaves completions to come,
+  whose actions the pool drain re-emits them with, so the retry was an equivalent mutant -- and
+  still makes the provider's requests, as a drain's request waits for a consumer call; geometry
+  now enforced on the driver's path, by the backend; the instance's own refusals of a duplicate
+  key and of the default lineage's end kept in the driver, ahead of the core's, so their reasons
+  stay exact; a refusal from the core when `end_lineage` ends a lineage by its last handle reported
+  as an inconsistency through the hub, as the old core reported a second end, rather than ignored
+  -- the swap first ignored it, and the full sweep caught that as a survivor; while a refusal of a
+  handle's release is still ignored, as the old relay ignored it; and of the old path's sabotages, 33 re-anchored where their rules now live and 10
+  retired -- nine that sabotage the same predicate, at the same site and in the same way, as an
+  existing core or backend entry, now that the driver's copy is gone, and the relay's control
+  with the relay.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

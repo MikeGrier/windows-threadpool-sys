@@ -3274,6 +3274,32 @@ One wording error was caught before commit: the first draft said an ended write 
 It does not -- a failed write is nullified (a `Nullified` marking) and its epoch can still become
 durable without it, as `a_failed_write_completes_as_failed_and_is_never_committed` already showed.
 
+## DI-3.10.3.5.6.2.6: the swap, and two edges no test reached (2026-10-11)
+
+Not a discussion with the engineer: the assistant's findings while landing the swap, queued for
+review in `DI-3.9.6`.
+
+Moving the old path's sabotages over found three rules the new `pop` carried with nothing to show
+them, and one that the old path carried in two places.
+
+- `pop`'s retry of the core's refused submissions was an equivalent mutant. A push submits as it
+  goes, so a retryable refusal is either SubmitNeeded after a failed submission or DrainNeeded under
+  completion pressure, and either way completions are still to come; the pool drain re-emits the
+  refused submission with the actions of the first of them. The retry was removed rather than kept
+  with a comment claiming a difference it did not make.
+- `pop` making the provider's requests was untested: every provider test let its writes complete
+  before sealing, so each request was made inside the seal's own call. A test now seals with the
+  write still in flight, so the request is made in the drain and only a pop can make it.
+- `pop`'s report of a failed submission cannot be reached: nothing makes the ring fail a submission
+  on demand. It is a declared blind spot, and a seam in the ring crate that would reach it is
+  proposed (`DI-3.10.3.5.6.3`, the ring crate's `M35.1`), awaiting the engineer.
+- Of the old sabotages, nine had the same predicate as an existing core or backend entry, now at
+  one site. They were retired rather than kept as duplicates of the same patch.
+- The full sweep found a guard the swap had dropped. When a handle consumed by `end_lineage` is
+  not disarmed, its release ends the lineage first. The old core reported the second end as an
+  inconsistency. The new driver ignored the core's refusal there, so that sabotage survived. The
+  refusal is now reported as an inconsistency through the hub.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

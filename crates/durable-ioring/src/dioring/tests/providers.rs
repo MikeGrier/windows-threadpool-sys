@@ -12,9 +12,12 @@ use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, temp};
 use super::{FlushDomain, FlushRequest, Kept, TempFile, V, domain, file, keeper, setup};
+use crate::backend::SubmissionData;
 use crate::contract::DurableRing;
 use crate::provider::DurabilityProvider;
-use crate::types::{DurabilityRequest, Entry, EpochState, Failed, FailureCause, IoTargetKey};
+use crate::types::{
+    DurabilityRequest, Entry, EpochState, Failed, FailureCause, IoTargetKey, OpKind, WriteOptions,
+};
 
 /// `ERROR_IO_DEVICE`, the error a failing provider reports.
 const IO_DEVICE: i32 = 1117;
@@ -115,6 +118,56 @@ fn a_provider_answering_inside_make_durable_makes_the_seal_durable() {
     assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
     expect_durable(&mut harness, 1);
     assert_eq!(harness.state(1), EpochState::Durable);
+    harness.finish();
+}
+
+#[test]
+fn a_request_a_drain_makes_is_made_at_a_pop() {
+    // Sealed with its write in flight -- the engine held, so no drain completes the write first --
+    // the seal's request is made as the write's completion is drained, off the consumer's thread,
+    // and waits for a consumer call (DI-D-44). Here the only calls are pops.
+    let temp = temp(&[0; 16]);
+    let (provider, kept) = keeper(&["log"]);
+    let mut harness = instance(&temp, &["log"], provider);
+    let epoch = harness.epoch(1);
+    let id = {
+        let mut engine = harness.ring.engine();
+        let id = engine
+            .write(
+                GIVEN,
+                0,
+                SubmissionData::Owned(b"log".to_vec()),
+                epoch,
+                1,
+                WriteOptions::new(),
+            )
+            .expect("accepted");
+        let (answer, _) = engine.make_durable_through(epoch).expect("seal");
+        assert_eq!(answer, DurabilityRequest::Submitted);
+        id
+    };
+    harness
+        .oracle
+        .pushed(id, OpKind::Write { epoch }, 3, 1)
+        .expect("the oracle accepts the push");
+    harness.oracle.sealed(epoch);
+    assert!(
+        taken(&kept).is_empty(),
+        "the write was in flight at the seal"
+    );
+
+    harness.next();
+    let started = Instant::now();
+    let request = loop {
+        if let Some(request) = taken(&kept).pop() {
+            break request;
+        }
+        assert!(started.elapsed() < BOUND, "no pop made the drain's request");
+        assert!(harness.ring.pop().expect("pop").is_none());
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    succeed(request);
+    expect_durable(&mut harness, 1);
     harness.finish();
 }
 
