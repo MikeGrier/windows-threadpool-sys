@@ -140,6 +140,30 @@ Opened 2026-10-07 from durable-ioring's `DI-3.2.2.1`, whose test of its caching 
   accident of the allocator. No crate test exercises write-through today, which is why this was not
   found here.
 
+## M33 -- A wake-only delivery for a caller that owns its ring
+
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6`
+([DI-D-53](../durable-ioring/DESIGN-NOTES.md#di-d-53)), whose backend owns its ring threadlessly and
+needs the thread pool only to be told when to drain.
+
+- [ ] **M33.1** -- **`CompletionWake`: the thread pool wakes an owner, and the owner drains its own
+  ring** ([D-84](DESIGN-NOTES.md#d-84)). A wake built over `&mut IoRing`, calling the owner's
+  closure on a pool thread, holding no reference to the ring and no lock while it does, with an
+  optional callback environment; the protocol -- attach unsignalled, arm, raise the setup signal;
+  call, re-arm, call -- moved out of `EventDelivery` into it, and `EventDelivery` re-expressed on
+  it, so the protocol is written once. Its contract stated in rustdoc: drain to empty on every call
+  (D-19), a call with nothing to pop is normal, calls may overlap (D-83), one waiter per ring
+  (D-21), and never dropped from inside a call. Tested: a completion after the wake is delivered, a
+  backlog before it is delivered by the setup signal, the owner may submit from inside a call, and
+  nothing is called after the wake is dropped; `EventDelivery`'s own tests are the proof the
+  re-expression keeps its contract, and the sabotages anchored in its moved code re-anchored. The
+  assistant's API choices are its, and recorded here for the engineer's review: the name
+  `CompletionWake`; `new(&mut IoRing, on_wake, env)`; `on_wake: Fn() + Send + Sync + 'static`; one
+  waiter per ring stated, not enforced; and `EventDelivery` holding a `CompletionWake` where it held
+  a `ThreadpoolWait`.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5` -> `DI-3.10.3.5.6.1` (pool delivery over the threadless backend, built on this wake). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.

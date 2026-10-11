@@ -3167,6 +3167,81 @@ through, so perhaps there are many states (submit needed, drain needed, both nee
 others...)"; Q5, "good". The blocking push was not ruled on, and is queued as a proposal. Recorded
 as DI-D-52, with the steps as DI-3.10.3.5.1 to DI-3.10.3.5.8.
 
+## DI-3.10.3.5.6: where pool delivery lives (2026-10-10 to 2026-10-11)
+
+Starting DI-3.10.3.5.6, the assistant found a blocker. DI-3.10.3.5.5 had given the `IoRing` to a
+threadless `WindowsBackend`, but today's pool delivery is the ring crate's `EventDelivery`, which
+must own the ring. dioring cannot build pool delivery itself around the backend's ring: a
+thread-pool wait on the ring's completion event needs `WaitableHandle::assume_waitable`, which is
+`unsafe` and dioring forbids it (DI-D-4); and copying `EventDelivery`'s delivery loop -- which took
+the ring crate three fixes to get right (M26.9, M26.12) -- would duplicate exactly the code most
+likely to break.
+
+It proposed R1: the Windows backend in two forms, threadless and pool, the pool form handing its
+ring to `EventDelivery` with an optional callback environment, completions arriving by callback
+already converted, pushes going through `EventDelivery`'s scope, and `pop` returning nothing --
+no change to the ring crate, at the cost of a pool-form backend having threads behind it. And R2:
+change the ring crate so `EventDelivery` can wake an owner who drains the ring itself, keeping the
+backend threadless, at the cost of a release-triggering change to `windows-ioring-sys` and a design
+pass on lock ownership there. It recommended R1, and R3, splitting 5.6 into the pool form and the
+switch-over.
+
+The engineer asked: "which shape would fit a model with a linux iouring based back end solution
+best?"
+
+The assistant's answer, recorded in full because the engineer asked for the analysis to be saved:
+
+**R2's shape fits a Linux `io_uring` backend; R1 would make the Windows backend the odd one out.**
+
+What a Linux backend looks like on its own. It is naturally threadless: submission entries are
+filled in shared memory, `io_uring_enter` submits, and completions are read from shared memory with
+no system call; even SQPOLL adds a kernel polling thread, not a user thread. So a Linux backend is
+exactly push / submit / pop, owned by whoever holds it. Its notification is an eventfd registered
+with the ring and signalled when completions are posted -- a plain file descriptor that something
+outside the ring waits on: epoll, an async runtime's reactor, or a dedicated thread. There is no
+pool-callback primitive like Windows' thread-pool wait, so "pool delivery" on Linux is necessarily
+a separate layer: something waits on the eventfd, then calls the owner to drain -- R2's shape, in
+which the waiter wakes an owner and the owner pops its own backend under its own lock. Waiting in
+place exists too: `io_uring_enter` can wait for a minimum number of completions, which matches
+pumped delivery (Model B), as `submit_and_wait` does on Windows.
+
+How each proposal maps onto Linux. R1 puts Windows' delivery inside the Windows backend, so a Linux
+backend would need its own delivery built in too, a different shape per platform; `IoBackend::pop`
+would mean nothing for any pool-form backend, and the backend trait would stop describing what
+drivers use. R2 gives every platform the same three layers:
+
+| Layer | Windows | Linux |
+|---|---|---|
+| Backend (threadless) | `IoRing` | `io_uring` |
+| Notification | completion event | eventfd |
+| Waker (delivery) | thread-pool wait, optionally NUMA-bound | epoll, a runtime, or a thread |
+
+The driver's lock wraps the core and the backend together, and the waker only says "drain now", so
+no lock is shared across layers (DI-D-18).
+
+Two smaller points also favour R2. The push/submit split is real on Linux -- submission entries
+can be batched before one `io_uring_enter` -- whereas on Windows the ring crate's D-5 submits on
+every push, so the trait as it now stands fits Linux better than Windows already. And the refusal
+causes carry over: a full submission queue maps to `SubmitNeeded`, and an overflowing completion
+queue makes submission return `-EBUSY` (with `IORING_FEAT_NODROP`), which maps to `DrainNeeded`.
+
+What R2 costs on Windows is a change to `windows-ioring-sys`: a wake-only form of `EventDelivery`
+that keeps the hard-won parts -- the event attached unsignalled, the wait armed, then the setup
+signal raised; the owner called, the wait re-armed, the owner called again -- with the owner obliged
+to drain to empty on every call, because the event fires only when the completion queue goes from
+empty to non-empty. That is a release-triggering change to another crate, so it is its own item,
+done before 5.6.
+
+The assistant changed its recommendation to R2, sequenced as the ring crate's wake-only delivery,
+then pool delivery in dioring built on it with the optional callback environment, then the
+switch-over; and asked whether to proceed or whether the engineer wanted to shape the waker's API
+first.
+
+The engineer: "yes, i thought r2 was better for this reason, its good to have a detailed analysis.
+be sure to save this and then go ahead." Recorded as DI-D-53, with the ring crate's D-84 and M33.1,
+and DI-3.10.3.5.6 split into DI-3.10.3.5.6.1 and DI-3.10.3.5.6.2. The waker's API was not shaped by
+the engineer; the assistant's choices for it are queued for review in the ring crate's M33.1.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

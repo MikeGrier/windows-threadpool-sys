@@ -95,12 +95,25 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.5** -- The Windows backend and the Win32 file target: `WindowsBackend` over `IoRing`, threadless, with its refusal causes mapped from the ring's reports, and `Win32FileTarget` over a `SharedHandle`. -> [completed 2026-10-10](COMPLETED-CHECKLIST.md#di-310355)
 
-- [ ] **DI-3.10.3.5.6** -- **The driver moved onto the core, under pool delivery**: `Dioring` runs
-  `DurableIoCore` over the Windows backend, with `EventDelivery` as its delivery (DI-D-52's
-  Model A) and an optional callback environment in `Setup` binding its pool; the ring trait's
-  readiness an associated type (DI-D-52 Q6); `PushRefusal::Ring` replaced by the backend's
-  refusal cause; `FileOptions`, `Core`, and the ring code of `push.rs` and `relay.rs` deleted.
-  Today's tests and sabotages are the proof, the sabotages re-anchored where the code moved.
+- [ ] **DI-3.10.3.5.6** -- **The driver moved onto the core, under pool delivery**, per
+  [DI-D-53](DESIGN-NOTES.md#di-d-53): delivery is a waker beside the threadless backend, never
+  delivery owning the backend's ring. Done in the steps below.
+
+- [ ] **DI-3.10.3.5.6.1** -- **Pool delivery over the threadless backend** (DI-D-52's Model A):
+  the Windows backend handing out the ring crate's `CompletionWake` over its ring, with an optional
+  callback environment so the pool may be bound to a NUMA node; and a driver-side delivery that,
+  woken, takes the driver's lock and drains the backend through `DurableIoCore` to empty. Tested
+  standalone, the core over the backend under the oracle, before the driver moves onto it.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M33` -> `M33.1` (`CompletionWake`) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+
+- [ ] **DI-3.10.3.5.6.2** -- **The switch-over**: `Dioring` runs `DurableIoCore` over the Windows
+  backend under that delivery, with the callback environment in `Setup`; `TargetSetup` and
+  `add_target` take a `Win32FileTarget`, and `FileOptions` goes; the ring trait's readiness an
+  associated type (DI-D-52 Q6); `PushRefusal::Ring` replaced by the backend's refusal cause;
+  `Core`, and the ring code of `push.rs` and `relay.rs`, deleted -- the merge-or-delete decision for
+  the duplicated path; `EntryDelivery`, CONTRACT.md's examples, the tests and the sabotages moved
+  over. Today's tests and sabotages are the proof, the sabotages re-anchored where the code moved.
 
 - [ ] **DI-3.10.3.5.7** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the
   consumer's own thread waits on the notification and drains through a `pump` call, over the
