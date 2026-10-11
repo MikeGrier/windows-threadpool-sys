@@ -168,14 +168,24 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## M35 -- A failed submission on demand (proposed)
+## M35 -- A kernel responder installed for one ring
 
-Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.3`: its driver reports a failed submission,
-and no test reaches that report, because nothing can make a ring fail a submission on demand.
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.3`, and reshaped the same day by
+[D-85](DESIGN-NOTES.md#d-85). It first proposed a new seam to fail a submission on demand; the
+`kernel-seam` feature's responder ([D-60](DESIGN-NOTES.md#d-60)) can already do that, but only on
+the thread that installed it, and durable-ioring's one ring is used from the consumer's thread and
+from pool threads alike.
 
-- [ ] **M35.1** -- **Proposed, awaiting the engineer's ruling:** a `fault-injection` seam that
-  fails a ring's next submission with a given failure, as `Completion::with_injected_failure`
-  fails a completion. Removed if the engineer declines it.
+- [ ] **M35.1** -- **A responder registered for one ring** ([D-85](DESIGN-NOTES.md#d-85)), beside
+  the thread-local `sys::install`, under the same `kernel-seam` feature: keyed by the ring's
+  `RingId`, answering that ring's seam calls on whatever thread makes them; the responder `Send`;
+  removed when its guard drops; a ring with none going to the kernel. The seam's wrappers in
+  [sys.rs](src/sys.rs) are handed a raw handle today, so they must learn which ring a call is
+  for. Which responder answers when a thread's and a ring's are both installed is decided here and
+  recorded in `D-85`. Tests, each direction asserted: a ring's responder answers its calls from a
+  thread other than the one that registered it; it does not answer another ring's; after its guard
+  drops the ring reaches the kernel; and the precedence rule, both ways round. Sabotages for each,
+  in [sabotage.json](sabotage.json).
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6` -> `DI-3.10.3.5.6.3` (a test reaching the driver's failed-submit report). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
