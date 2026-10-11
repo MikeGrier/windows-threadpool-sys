@@ -11,7 +11,6 @@ use std::hash::Hash;
 use std::io;
 
 use win_shared_os_owned_handle::SharedHandle;
-use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::types::{
@@ -78,19 +77,20 @@ pub trait DurableRing {
     type Buffer;
     /// The consumer's per-operation context, handed back with each completion.
     type Context;
+    /// The implementation's readiness signal (DI-D-28, DI-D-52 Q6): what a consumer waits on, in
+    /// whatever form the platform waits. dioring's is an auto-reset [`Event`](crate::Event): an
+    /// event rather than a bare handle, so a front end can give it to a thread-pool wait without
+    /// `unsafe`, since an `Event` is guaranteed to be an event, never a mutex.
+    type Readiness;
 
-    /// A duplicate of the readiness signal (DI-D-28): an auto-reset event the instance owns, set
-    /// after an entry becomes poppable and at least whenever the queue goes from empty to
-    /// non-empty. One waiter; pop until `None` after every wake; a wake with nothing to pop is
-    /// normal.
-    ///
-    /// An [`Event`] rather than a bare handle, so a front end can give it to a thread-pool wait
-    /// without `unsafe`: an `Event` is guaranteed to be an event, never a mutex.
+    /// A duplicate of the readiness signal (DI-D-28): one the instance owns, set after an entry
+    /// becomes poppable and at least whenever the queue goes from empty to non-empty. One waiter;
+    /// pop until `None` after every wake; a wake with nothing to pop is normal.
     ///
     /// # Errors
     ///
-    /// The error from duplicating the event's handle.
-    fn readiness(&mut self) -> io::Result<Event>;
+    /// The error from making the duplicate.
+    fn readiness(&mut self) -> io::Result<Self::Readiness>;
 
     /// `add_target_with` with default options: no declared flush domains.
     ///

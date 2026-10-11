@@ -456,11 +456,13 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 
 ## The readiness signal
 
-An instance has a **readiness signal**, of a type its driver chooses; the Windows driver's is an
-auto-reset event it owns, of which the consumer can take a duplicate, as a `win-sync-sys` `Event`
-([DI-D-28](DESIGN-NOTES.md#di-d-28), [DI-D-50](DESIGN-NOTES.md#di-d-50)). These rules bind
-every implementation of this contract and whoever waits on the signal, and the conformance module's
-`check_readiness` checks the instance's half of them:
+An instance has a **readiness signal**, of a type its driver chooses -- the ring trait's
+`Readiness` ([DI-D-52](DESIGN-NOTES.md#di-d-52) Q6); the Windows driver's is an auto-reset event it
+owns, of which the consumer can take a duplicate, as a `win-sync-sys` `Event`
+([DI-D-28](DESIGN-NOTES.md#di-d-28), [DI-D-50](DESIGN-NOTES.md#di-d-50)). These rules bind every
+implementation of this contract and whoever waits on the signal, and the conformance module's
+`check_readiness` checks the instance's half of them, for an implementation whose signal is an
+`Event`:
 
 - **The instance** sets the signal only after an entry has become poppable, and at least every time
   its queue goes from empty to non-empty. It sets it for every source of entries alike: backend

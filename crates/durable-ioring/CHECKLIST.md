@@ -113,8 +113,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2.1** -- What the backend refuses for good, the core ends: a gated operation is put to the backend's `check` before it is held, and a submission of the core's own refused for a cause that is not retryable completes with a `REFUSED` fault. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035621)
 
-- [ ] **DI-3.10.3.5.6.2.2** -- **Readiness an associated type** of the ring trait (DI-D-52 Q6), so an
-  implementation names its own; today's driver's is the `Event` it hands out now.
+- [x] **DI-3.10.3.5.6.2.2** -- Readiness an associated type of the ring trait (DI-D-52 Q6); today's driver's is the `Event` it hands out now. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035622)
 
 - [ ] **DI-3.10.3.5.6.2.3** -- **Targets as the implementation's own type**: the ring trait's
   `Target`, given to `add_target` and handed back by `remove_target` and `AddTargetError`; today's
@@ -277,7 +276,12 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   recovered by downcasting, its kind `NotFound`, `Unsupported` or `InvalidInput` where the cause
   has one; `RefusalCause` implementing `std::error::Error`, its source the backend's report; the
   ring crate gaining a public `check_span` (its M34.1) rather than dioring repeating the bounds;
-  and the Windows push still leaving spans to the ring, so only `check` asks first.
+  and the Windows push still leaving spans to the ring, so only `check` asks first. From
+  `DI-3.10.3.5.6.2.2`: `Readiness` carries no bound, so the trait says nothing about how a signal
+  is waited on; `EntryDelivery` and the oracle's `check_readiness`, which both wait through a
+  thread-pool wait, bind `Readiness = Event` rather than a waitable trait of their own, so a
+  driver with another signal needs its own front end and check -- the pumped delivery of
+  `DI-3.10.3.5.7` is where that is met.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

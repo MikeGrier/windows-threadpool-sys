@@ -96,6 +96,7 @@ impl DurableRing for Fake {
     type Ids = V;
     type Buffer = Vec<u8>;
     type Context = u32;
+    type Readiness = Event;
 
     fn readiness(&mut self) -> io::Result<Event> {
         if self.readiness_fails {

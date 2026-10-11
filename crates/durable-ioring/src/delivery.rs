@@ -4,11 +4,11 @@
 //! in queue order, to a handler on thread-pool threads, and whose operations are reachable from any
 //! thread through `&self`.
 //!
-//! Written once over the trait, so it serves every implementation. It waits on the instance's
-//! readiness signal through a thread-pool wait, and on each wake pops to `None` before waiting
-//! again (DI-D-28). The handler is called with the instance's lock released, so it may call back
-//! in through the [`DeliveryHandle`] it is given; it runs under a lock of its own, which only the
-//! single deliverer takes.
+//! Written once over the trait, so it serves every implementation whose readiness signal is an
+//! `Event` (DI-D-52 Q6). It waits on that signal through a thread-pool wait, and on each wake pops
+//! to `None` before waiting again (DI-D-28). The handler is called with the instance's lock
+//! released, so it may call back in through the [`DeliveryHandle`] it is given; it runs under a
+//! lock of its own, which only the single deliverer takes.
 
 use std::fmt;
 use std::io;
@@ -16,6 +16,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use win_shared_os_owned_handle::SharedHandle;
+use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
@@ -423,7 +424,8 @@ impl<D, F> fmt::Debug for DeliverySetupError<D, F> {
 
 /// The Model A front end: owns an instance and hands its entries, one at a time and in queue
 /// order, to a handler on thread-pool threads. Derefs to the [`DeliveryHandle`] through which the
-/// instance's operations are reached.
+/// instance's operations are reached. For an instance whose readiness signal is an [`Event`],
+/// which it waits on through the thread pool.
 ///
 /// # The handler
 ///
@@ -439,13 +441,13 @@ impl<D, F> fmt::Debug for DeliverySetupError<D, F> {
 /// returned. Drop then drops the instance, and `close` closes it, each discarding any entry not yet
 /// delivered; `into_inner` hands the instance back with those entries still queued, so it can be
 /// popped directly or closed.
-pub struct EntryDelivery<D: DurableRing + Send + 'static> {
+pub struct EntryDelivery<D: DurableRing<Readiness = Event> + Send + 'static> {
     /// `None` once the delivery has been quiesced.
     wait: Option<ThreadpoolWait>,
     inner: Arc<Inner<D, Handler<D>>>,
 }
 
-impl<D: DurableRing + Send + 'static> EntryDelivery<D> {
+impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
     /// Take `ring` and deliver its entries to `on_entry`, on the default thread pool, or on the
     /// pool and priority `env` selects.
     ///
@@ -531,7 +533,7 @@ impl<D: DurableRing + Send + 'static> EntryDelivery<D> {
     }
 }
 
-impl<D: DurableRing + Send + 'static> Deref for EntryDelivery<D> {
+impl<D: DurableRing<Readiness = Event> + Send + 'static> Deref for EntryDelivery<D> {
     type Target = DeliveryHandle<D>;
 
     fn deref(&self) -> &DeliveryHandle<D> {
@@ -539,7 +541,7 @@ impl<D: DurableRing + Send + 'static> Deref for EntryDelivery<D> {
     }
 }
 
-impl<D: DurableRing + Send + 'static> Drop for EntryDelivery<D> {
+impl<D: DurableRing<Readiness = Event> + Send + 'static> Drop for EntryDelivery<D> {
     fn drop(&mut self) {
         // Before the instance is released, which the field drop that follows does (DI-2.7 point
         // 5): no handler call can still be reaching it.

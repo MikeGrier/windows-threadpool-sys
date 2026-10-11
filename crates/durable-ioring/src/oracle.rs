@@ -888,7 +888,8 @@ impl From<io::Error> for ReadinessFailure {
 
 /// The readiness signal's harness check (DI-D-28): push into an empty queue and require the
 /// signal set; drain; push again and require it set again. The oracle sees entries, not wakes, so
-/// this runs beside it.
+/// this runs beside it. For an implementation whose signal is an [`Event`](crate::Event), which
+/// it waits on through the thread pool.
 ///
 /// `push` must start exactly one operation whose completion becomes an entry. **Nothing may be in
 /// flight when this is called**: it drains the queue and withdraws a stale signal first, and an
@@ -905,7 +906,7 @@ pub fn check_readiness<D, P>(
     bound: Duration,
 ) -> Result<Vec<EntryOf<D>>, ReadinessFailure>
 where
-    D: DurableRing,
+    D: DurableRing<Readiness = win_sync_sys::Event>,
     P: FnMut(&mut D),
 {
     let mut entries = Vec::new();

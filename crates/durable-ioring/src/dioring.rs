@@ -534,6 +534,7 @@ where
     type Ids = DioringIds<E>;
     type Buffer = B;
     type Context = C;
+    type Readiness = Event;
 
     fn readiness(&mut self) -> io::Result<Event> {
         self.relay.readiness()
