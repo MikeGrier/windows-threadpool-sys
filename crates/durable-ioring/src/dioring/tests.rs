@@ -15,7 +15,8 @@ use super::{Dioring, FileSlot, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::contract::DurableRing;
 use crate::ids::{DioringIds, LineageHandle};
 use crate::provider::{DurabilityProvider, FlushRequest};
-use crate::types::{FileOptions, FlushDomain, IoTargetKey};
+use crate::types::{FlushDomain, IoTargetKey};
+use crate::windows_backend::Win32FileTarget;
 
 // Pushes, completions and the readiness signal: DI-3.2.2.1.
 mod pushes;
@@ -143,9 +144,13 @@ fn domain(name: &str) -> FlushDomain {
 fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
     TargetSetup {
         key: IoTargetKey(key),
-        file: temp.open(),
-        options: FileOptions::new().domains(domains.iter().map(|d| domain(d))),
+        target: target(temp.open(), domains),
     }
+}
+
+/// A target over `handle`, declared with `domains`.
+pub(crate) fn target(handle: SharedHandle, domains: &[&str]) -> Win32FileTarget {
+    Win32FileTarget::new(handle).with_domains(domains.iter().map(|d| domain(d)))
 }
 
 /// A provider that serves fixed domains and is never asked for anything here.
@@ -278,7 +283,7 @@ fn the_ring_holds_construction_files_until_the_instance_is_dropped() {
 fn a_duplicate_key_is_refused_before_anything_is_created_and_everything_comes_back() {
     let (a, b) = (TempFile::new("dup-a"), TempFile::new("dup-b"));
     let given = vec![file(5, &a, &[]), file(5, &b, &[])];
-    let originals: Vec<SharedHandle> = given.iter().map(|f| f.file.clone()).collect();
+    let originals: Vec<SharedHandle> = given.iter().map(|f| f.target.handle().clone()).collect();
     let error = refused(Ring::new(setup(given, vec![vec![1, 2, 3]], serves(&["P"]))));
     assert!(matches!(
         error.reason,
@@ -287,7 +292,7 @@ fn a_duplicate_key_is_refused_before_anything_is_created_and_everything_comes_ba
     assert_eq!(error.files.len(), 2);
     for (back, original) in error.files.iter().zip(&originals) {
         assert!(
-            back.file.same_handle(original),
+            back.target.handle().same_handle(original),
             "the same handle comes back, in order"
         );
     }

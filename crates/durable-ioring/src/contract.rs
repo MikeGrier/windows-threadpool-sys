@@ -10,13 +10,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::io;
 
-use win_shared_os_owned_handle::SharedHandle;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 
+use crate::io_target::IoTarget;
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Entry, Epoch, EpochState, FailureInfo,
-    FileOptions, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError,
-    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
+    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, PushError, ReadOptions,
+    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
     UnknownLineage, WriteOptions,
 };
 
@@ -82,6 +82,10 @@ pub trait DurableRing {
     /// event rather than a bare handle, so a front end can give it to a thread-pool wait without
     /// `unsafe`, since an `Event` is guaranteed to be an event, never a mutex.
     type Readiness;
+    /// The implementation's targets (DI-D-48, DI-D-50): what a write or a read addresses and a
+    /// commit makes durable, each stating what it is through [`IoTarget`]. dioring's is a
+    /// `Win32FileTarget`.
+    type Target: IoTarget;
 
     /// A duplicate of the readiness signal (DI-D-28): one the instance owns, set after an entry
     /// becomes poppable and at least whenever the queue goes from empty to non-empty. One waiter;
@@ -92,46 +96,37 @@ pub trait DurableRing {
     /// The error from making the duplicate.
     fn readiness(&mut self) -> io::Result<Self::Readiness>;
 
-    /// `add_target_with` with default options: no declared flush domains.
+    /// Give the instance a target after construction, under a key unique within the instance. What
+    /// the target states -- its flush domains among it -- is read once, now (DI-2.10 point 3): to
+    /// change it, remove the target and add it again.
     ///
     /// # Errors
     ///
-    /// As [`add_target_with`](Self::add_target_with).
-    fn add_target(&mut self, key: IoTargetKey, file: SharedHandle) -> Result<(), AddTargetError> {
-        self.add_target_with(key, file, FileOptions::new())
-    }
-
-    /// Give the instance a file after construction, under a key unique within the instance.
-    ///
-    /// # Errors
-    ///
-    /// An [`AddTargetError`] handing back the file and its options, when a file is already present
-    /// under `key`.
-    fn add_target_with(
+    /// An [`AddTargetError`] handing the target back, when one is already present under `key`.
+    fn add_target(
         &mut self,
         key: IoTargetKey,
-        file: SharedHandle,
-        options: FileOptions,
-    ) -> Result<(), AddTargetError>;
+        target: Self::Target,
+    ) -> Result<(), AddTargetError<Self::Target>>;
 
-    /// Take a file back, under the key it was given with: the consumer's handle is returned. A file
-    /// given at construction stays open until the instance ends, because the ring's registration
-    /// holds it; its key may be reused at once.
+    /// Take a target back, under the key it was given with. Its key may be reused at once. dioring
+    /// hands back the `Win32FileTarget` it was given; one given at construction stays open until
+    /// the instance ends all the same, because the ring's registration holds its file.
     ///
     /// # Errors
     ///
-    /// [`RemoveTargetError::UnknownKey`] when no file is present under `key`, and
+    /// [`RemoveTargetError::UnknownKey`] when no target is present under `key`, and
     /// [`RemoveTargetError::Busy`] while anything still holds it -- an operation in flight or held
     /// for a gate, a write in any lineage not yet covered successfully, or an unresolved failure
-    /// suspecting a write to it -- with every hold reported at once in [`IoTargetBusy`]. Once a file is
-    /// gone it cannot be flushed, so an epoch with an uncovered write to it could never become
-    /// durable.
+    /// suspecting a write to it -- with every hold reported at once in [`IoTargetBusy`]. Once a
+    /// target is gone it cannot be committed, so an epoch with an uncovered write to it could never
+    /// become durable.
     ///
     /// [`IoTargetBusy`]: crate::IoTargetBusy
     fn remove_target(
         &mut self,
         key: IoTargetKey,
-    ) -> Result<SharedHandle, RemoveTargetError<Self::Ids>>;
+    ) -> Result<Self::Target, RemoveTargetError<Self::Ids>>;
 
     /// A handle to the lineage that always exists: a copy of the one construction returned. The
     /// instance holds a copy of its own, so the default lineage never ends while it lives.

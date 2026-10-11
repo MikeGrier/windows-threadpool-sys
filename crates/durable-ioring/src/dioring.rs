@@ -20,16 +20,18 @@ use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
 use crate::ids::{
     DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle, OpId,
 };
+use crate::io_target::IoTarget;
 use crate::provider::{
     Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites,
 };
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureCause, FailureInfo, FileOptions, FlushDomain, ImportScope, Imported, IoTargetKey,
-    Leftovers, LineageInfo, OpKind, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    FailureCause, FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers,
+    LineageInfo, OpKind, ReadOptions, RemoveTargetError, Resolution, ResolveError,
     RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
+use crate::windows_backend::Win32FileTarget;
 
 pub(crate) mod durability;
 mod ending;
@@ -91,15 +93,13 @@ pub struct Setup<E: EpochId + 'static, R> {
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
 }
 
-/// One file given at construction.
+/// One target given at construction.
 #[derive(Debug)]
 pub struct TargetSetup {
     /// The consumer's key for it, unique within the instance.
     pub key: IoTargetKey,
-    /// The file.
-    pub file: SharedHandle,
-    /// Its flush domains.
-    pub options: FileOptions,
+    /// The target: its file, and what it states, flush domains among it.
+    pub target: Win32FileTarget,
 }
 
 /// Why construction failed.
@@ -146,33 +146,40 @@ impl<E: EpochId + 'static, R> std::fmt::Debug for SetupError<E, R> {
     }
 }
 
-/// How dioring addresses one of the consumer's files.
+/// How dioring addresses one of the consumer's targets.
 pub(crate) enum FileSlot {
-    /// Given at construction: the ring holds it for its life (`windows-ioring-sys` D-81).
+    /// Given at construction: the ring holds its file for its life (`windows-ioring-sys` D-81).
     Registered {
         index: RegisteredFile,
-        file: SharedHandle,
+        target: Win32FileTarget,
     },
-    /// Added later: pushed through its handle, guarded per operation. The consumer's own
+    /// Added later: pushed through its file's handle, guarded per operation. The consumer's own
     /// `SharedHandle` -- the ring takes that type directly (`windows-ioring-sys` D-82), so a file
     /// reaches the ring with no duplicate and no conversion.
-    Shared(SharedHandle),
+    Shared(Win32FileTarget),
 }
 
 impl FileSlot {
-    /// What a push to this file is made against, borrowed.
+    /// What a push to this target is made against, borrowed.
     fn via(&self) -> Via<'_> {
         match self {
             FileSlot::Registered { index, .. } => Via::Registered(index),
-            FileSlot::Shared(handle) => Via::Shared(handle),
+            FileSlot::Shared(target) => Via::Shared(target.handle()),
         }
     }
 
-    /// What a flush of this file is pushed against.
+    /// What a flush of this target is pushed against.
     fn flush_target(&self) -> FlushTarget {
         match self {
             FileSlot::Registered { index, .. } => FlushTarget::Registered(*index),
-            FileSlot::Shared(handle) => FlushTarget::Shared(handle.clone()),
+            FileSlot::Shared(target) => FlushTarget::Shared(target.handle().clone()),
+        }
+    }
+
+    /// The consumer's target, handed back.
+    fn into_target(self) -> Win32FileTarget {
+        match self {
+            FileSlot::Registered { target, .. } | FileSlot::Shared(target) => target,
         }
     }
 }
@@ -365,7 +372,7 @@ where
                 });
             }
         };
-        let handles = files.iter().map(|f| f.file.clone()).collect();
+        let handles = files.iter().map(|f| f.target.handle().clone()).collect();
         let registered_files = match register_files(&mut ring, handles) {
             Ok(registered) => registered,
             Err(error) => {
@@ -411,15 +418,15 @@ where
 
         let mut domains = HashMap::new();
         let mut records = HashMap::with_capacity(files.len());
-        for (i, TargetSetup { key, file, options }) in files.into_iter().enumerate() {
+        for (i, TargetSetup { key, target }) in files.into_iter().enumerate() {
             let index = registered_files
                 .and_then(|r| r.get(u32::try_from(i).ok()?))
                 .expect("every file given at construction was registered, in order");
-            let interned = intern_all(&mut domains, options.domains);
+            let interned = intern_all(&mut domains, target.flush_domains().iter().cloned());
             records.insert(
                 key,
                 FileRecord {
-                    target: FileSlot::Registered { index, file },
+                    target: FileSlot::Registered { index, target },
                     domains: interned,
                     routing: Routing {
                         default: true,
@@ -535,26 +542,26 @@ where
     type Buffer = B;
     type Context = C;
     type Readiness = Event;
+    type Target = Win32FileTarget;
 
     fn readiness(&mut self) -> io::Result<Event> {
         self.relay.readiness()
     }
 
-    fn add_target_with(
+    fn add_target(
         &mut self,
         key: IoTargetKey,
-        file: SharedHandle,
-        options: FileOptions,
-    ) -> Result<(), AddTargetError> {
+        target: Win32FileTarget,
+    ) -> Result<(), AddTargetError<Win32FileTarget>> {
         if self.files.contains_key(&key) {
-            return Err(AddTargetError { key, file, options });
+            return Err(AddTargetError { key, target });
         }
-        let domains = intern_all(&mut self.domains, options.domains);
+        let domains = intern_all(&mut self.domains, target.flush_domains().iter().cloned());
         let routing = routing(&domains, served(self.provider.as_ref()));
         self.files.insert(
             key,
             FileRecord {
-                target: FileSlot::Shared(file),
+                target: FileSlot::Shared(target),
                 domains,
                 routing,
             },
@@ -565,7 +572,7 @@ where
     fn remove_target(
         &mut self,
         key: IoTargetKey,
-    ) -> Result<SharedHandle, RemoveTargetError<Self::Ids>> {
+    ) -> Result<Win32FileTarget, RemoveTargetError<Self::Ids>> {
         self.remove(key)
     }
 

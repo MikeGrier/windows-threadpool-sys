@@ -7,17 +7,16 @@
 use std::collections::VecDeque;
 use std::io;
 
-use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 
 use crate::contract::{DurableRing, EntryOf, PushResult};
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, LineageHandle, OpId};
+use crate::memory::MemoryTarget;
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, FailureInfo, FileOptions, ImportScope, Imported, IoTargetKey, Leftovers,
-    LineageInfo, OpCompletion, OpKind, Outcome, ReadOptions, RemoveTargetError, Resolution,
-    ResolveError, RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage,
-    WriteOptions,
+    EpochState, FailureInfo, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
+    OpCompletion, OpKind, Outcome, ReadOptions, RemoveTargetError, Resolution, ResolveError,
+    RetireLineageError, RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -97,6 +96,7 @@ impl DurableRing for Fake {
     type Buffer = Vec<u8>;
     type Context = u32;
     type Readiness = Event;
+    type Target = MemoryTarget;
 
     fn readiness(&mut self) -> io::Result<Event> {
         if self.readiness_fails {
@@ -105,16 +105,15 @@ impl DurableRing for Fake {
         self.signal.try_clone()
     }
 
-    fn add_target_with(
+    fn add_target(
         &mut self,
         _key: IoTargetKey,
-        _file: SharedHandle,
-        _options: FileOptions,
-    ) -> Result<(), AddTargetError> {
+        _target: MemoryTarget,
+    ) -> Result<(), AddTargetError<MemoryTarget>> {
         Ok(())
     }
 
-    fn remove_target(&mut self, key: IoTargetKey) -> Result<SharedHandle, RemoveTargetError<V>> {
+    fn remove_target(&mut self, key: IoTargetKey) -> Result<MemoryTarget, RemoveTargetError<V>> {
         Err(RemoveTargetError::UnknownKey(key))
     }
 

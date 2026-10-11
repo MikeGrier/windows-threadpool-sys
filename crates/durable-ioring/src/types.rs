@@ -7,8 +7,6 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use win_shared_os_owned_handle::SharedHandle;
-
 use crate::backend::RefusalCause;
 use crate::contract::Identities;
 use crate::error_code::ErrorCode;
@@ -198,29 +196,6 @@ impl FlushDomain {
     /// The bytes that name the domain.
     pub fn bytes(&self) -> &[u8] {
         &self.0
-    }
-}
-
-/// The advanced parameters of giving a file to dioring, taken by `TargetSetup` at construction.
-/// Set once, when the file is given; to change them, remove the file and add it again
-/// (DI-2.10 point 3).
-#[derive(Clone, Debug, Default)]
-#[must_use]
-pub struct FileOptions {
-    pub(crate) domains: Vec<FlushDomain>,
-}
-
-impl FileOptions {
-    /// No declared flush domains: the file is unknown and shares fate with every file.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Declare every flush domain the file's writes depend on. The declaration must be
-    /// complete; extra domains are safe, a missing one is not (the contract).
-    pub fn domains(mut self, domains: impl IntoIterator<Item = FlushDomain>) -> Self {
-        self.domains = domains.into_iter().collect();
-        self
     }
 }
 
@@ -717,16 +692,14 @@ pub struct Leftovers<V: Identities, B, C> {
     pub lineages: Vec<LineageInfo<V>>,
 }
 
-/// A refused `add_target`: a file is already present under `key`. The file and its options are
-/// handed back.
+/// A refused `add_target`: a target is already present under `key`. The target, of the
+/// implementation's type, is handed back.
 #[derive(Debug)]
-pub struct AddTargetError {
+pub struct AddTargetError<T> {
     /// The key already in use.
     pub key: IoTargetKey,
-    /// The consumer's file.
-    pub file: SharedHandle,
-    /// The options it was given with.
-    pub options: FileOptions,
+    /// The consumer's target.
+    pub target: T,
 }
 
 /// Everything still holding a file that `remove_target` refused, and what clears each hold. Every

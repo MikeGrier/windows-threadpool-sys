@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::types::{
-    Epoch, FileOptions, FlushDomain, IoTargetBusy, IoTargetKey, ReadOptions, SuspectSet,
-    SuspectWrite, WriteCaching, WriteOptions,
+    Epoch, FlushDomain, IoTargetBusy, IoTargetKey, ReadOptions, SuspectSet, SuspectWrite,
+    WriteCaching, WriteOptions,
 };
 
 type V = DioringIds<u64>;
@@ -61,31 +61,6 @@ fn an_empty_flush_domain_is_a_domain() {
     let empty = FlushDomain::new(Vec::new());
     assert_eq!(empty.bytes(), b"");
     assert_ne!(empty, FlushDomain::new(b"x".to_vec()));
-}
-
-#[test]
-fn file_options_declare_nothing_until_told() {
-    assert!(FileOptions::new().domains.is_empty());
-    assert!(FileOptions::default().domains.is_empty());
-    let declared = FileOptions::new().domains([FlushDomain::new(b"A".to_vec())]);
-    assert_eq!(declared.domains, vec![FlushDomain::new(b"A".to_vec())]);
-}
-
-#[test]
-fn declaring_domains_again_replaces_them() {
-    let options = FileOptions::new()
-        .domains([FlushDomain::new(b"A".to_vec())])
-        .domains([
-            FlushDomain::new(b"B".to_vec()),
-            FlushDomain::new(b"C".to_vec()),
-        ]);
-    assert_eq!(
-        options.domains,
-        vec![
-            FlushDomain::new(b"B".to_vec()),
-            FlushDomain::new(b"C".to_vec())
-        ]
-    );
 }
 
 #[test]

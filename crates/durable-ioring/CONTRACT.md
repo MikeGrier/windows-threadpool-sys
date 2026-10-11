@@ -19,9 +19,8 @@ part are in
 placeholders. The behaviour is what this document fixes; the spelling is not.
 
 **Vocabulary ahead of the code.** The crate's API, and the worked examples at the end, which
-compile against it, still take a target as a Win32 file with its flush domains in
-`FileOptions`, and call a commit a flush in `fail_next_flush`, until `DI-3.10.3` restates the
-code, which removes this note.
+compile against it, still call a commit a flush in `fail_next_flush`, until `DI-3.10.3` restates
+the code, which removes this note.
 
 ## The guarantee, in one sentence
 
@@ -601,8 +600,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         file: SharedHandle::new(OwnedHandle::from(file)),
-#         options: FileOptions::new(),
+#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
@@ -683,8 +681,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         file: SharedHandle::new(OwnedHandle::from(file)),
-#         options: FileOptions::new(),
+#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
@@ -770,8 +767,7 @@ fails as never issued.
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         file: SharedHandle::new(OwnedHandle::from(file)),
-#         options: FileOptions::new(),
+#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,

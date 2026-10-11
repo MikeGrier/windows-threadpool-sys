@@ -21,6 +21,7 @@ use crate::types::{
     DurabilityRequest, Entry, Epoch, Failed, IoTargetBusy, IoTargetKey, OpKind, PushRefusal,
     RemoveTargetError, Resolution, WriteOptions,
 };
+use crate::windows_backend::Win32FileTarget;
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
@@ -64,9 +65,13 @@ fn an_idle_file_added_later_comes_back_and_its_key_can_be_reused() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(Vec::new(), Vec::new());
     let handle = temp.open();
-    ring.add_target(ADDED, handle.clone()).expect("add a file");
+    ring.add_target(ADDED, Win32FileTarget::new(handle.clone()))
+        .expect("add a file");
     let back = ring.remove_target(ADDED).expect("remove it");
-    assert!(back.same_handle(&handle), "the consumer's own handle");
+    assert!(
+        back.handle().same_handle(&handle),
+        "the consumer's own target"
+    );
 
     let refused = ring
         .read(ADDED, 0, vec![0; 4], 1)
@@ -83,13 +88,13 @@ fn an_idle_file_added_later_comes_back_and_its_key_can_be_reused() {
 fn a_file_given_at_construction_comes_back_and_stays_open_until_the_instance_ends() {
     let temp = temp(&[0; 16]);
     let setup = given(GIVEN, &temp);
-    let original = setup.file.clone();
+    let original = setup.target.handle().clone();
     let mut ring = instance(vec![setup], Vec::new());
     let back = ring.remove_target(GIVEN).expect("remove it");
-    assert!(back.same_handle(&original));
+    assert!(back.handle().same_handle(&original));
     drop((back, original));
     assert!(temp.is_held(), "the ring's registration still holds it");
-    ring.add_target(GIVEN, temp.open())
+    ring.add_target(GIVEN, Win32FileTarget::new(temp.open()))
         .expect("the key is free again");
     drop(ring);
     assert!(!temp.is_held(), "released with the instance");
@@ -208,7 +213,7 @@ fn operations_in_flight_are_reported_and_cleared_by_their_completions() {
 
     harness
         .ring
-        .add_target(GIVEN, temp.open())
+        .add_target(GIVEN, Win32FileTarget::new(temp.open()))
         .expect("add again");
     harness.ring.relay.lock().in_flight.insert(GIVEN, 2);
     let refused = busy(&mut harness.ring, GIVEN);

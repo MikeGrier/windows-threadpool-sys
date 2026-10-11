@@ -15,7 +15,6 @@ use std::io;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
 use windows_threadpool_sys::callback_env::CallbackEnviron;
@@ -27,9 +26,8 @@ use crate::contract::{
 };
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, Epoch, EpochState, FailureInfo,
-    FileOptions, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, ReadOptions,
-    RemoveTargetError, Resolution, ResolveError, RetireLineageError, SealError, Tag,
-    UnknownLineage, WriteOptions,
+    ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo, ReadOptions, RemoveTargetError,
+    Resolution, ResolveError, RetireLineageError, SealError, Tag, UnknownLineage, WriteOptions,
 };
 
 #[cfg(test)]
@@ -93,22 +91,12 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::add_target`].
-    pub fn add_target(&self, key: IoTargetKey, file: SharedHandle) -> Result<(), AddTargetError> {
-        self.with(|ring| ring.add_target(key, file))
-    }
-
-    /// [`DurableRing::add_target_with`].
-    ///
-    /// # Errors
-    ///
-    /// As [`DurableRing::add_target_with`].
-    pub fn add_target_with(
+    pub fn add_target(
         &self,
         key: IoTargetKey,
-        file: SharedHandle,
-        options: FileOptions,
-    ) -> Result<(), AddTargetError> {
-        self.with(|ring| ring.add_target_with(key, file, options))
+        target: D::Target,
+    ) -> Result<(), AddTargetError<D::Target>> {
+        self.with(|ring| ring.add_target(key, target))
     }
 
     /// [`DurableRing::remove_target`].
@@ -116,10 +104,7 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::remove_target`].
-    pub fn remove_target(
-        &self,
-        key: IoTargetKey,
-    ) -> Result<SharedHandle, RemoveTargetError<D::Ids>> {
+    pub fn remove_target(&self, key: IoTargetKey) -> Result<D::Target, RemoveTargetError<D::Ids>> {
         self.with(|ring| ring.remove_target(key))
     }
 

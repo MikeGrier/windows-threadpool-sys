@@ -16,14 +16,14 @@
 
 use std::collections::BTreeMap;
 
-use win_shared_os_owned_handle::SharedHandle;
 use windows_ioring_sys::IoBufMut;
 
 use super::relay::{Core, HeldPush, OpData, Shut};
-use super::{Dioring, FileSlot, TimeBase};
+use super::{Dioring, TimeBase};
 use crate::contract::EpochId;
 use crate::ids::DioringIds;
 use crate::types::{Epoch, HeldOperation, IoTargetBusy, IoTargetKey, RemoveTargetError};
+use crate::windows_backend::Win32FileTarget;
 
 type V<E> = DioringIds<E>;
 
@@ -53,11 +53,11 @@ where
     R: IoBufMut,
     K: TimeBase,
 {
-    /// Remove `key`'s file, handing back the consumer's handle, unless something still holds it.
+    /// Remove `key`'s target, handing it back, unless something still holds it.
     pub(crate) fn remove(
         &mut self,
         key: IoTargetKey,
-    ) -> Result<SharedHandle, RemoveTargetError<V<E>>> {
+    ) -> Result<Win32FileTarget, RemoveTargetError<V<E>>> {
         if !self.files.contains_key(&key) {
             return Err(RemoveTargetError::UnknownKey(key));
         }
@@ -86,10 +86,7 @@ where
         };
         if in_flight == 0 && held_for_gate == 0 && holds.is_empty() {
             let record = self.files.remove(&key).expect("present, checked above");
-            return Ok(match record.target {
-                FileSlot::Registered { file, .. } => file,
-                FileSlot::Shared(handle) => handle,
-            });
+            return Ok(record.target.into_target());
         }
         Err(RemoveTargetError::Busy(IoTargetBusy {
             target: key,

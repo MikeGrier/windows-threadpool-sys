@@ -115,10 +115,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2.2** -- Readiness an associated type of the ring trait (DI-D-52 Q6); today's driver's is the `Event` it hands out now. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035622)
 
-- [ ] **DI-3.10.3.5.6.2.3** -- **Targets as the implementation's own type**: the ring trait's
-  `Target`, given to `add_target` and handed back by `remove_target` and `AddTargetError`; today's
-  driver's is `Win32FileTarget`, which `TargetSetup` takes too, its flush domains now the target's;
-  `FileOptions` removed. CONTRACT.md's examples, `EntryDelivery`, the fake and the tests follow.
+- [x] **DI-3.10.3.5.6.2.3** -- Targets as the implementation's own type: the ring trait's `Target`, today's driver's a `Win32FileTarget`, which `TargetSetup` takes too; `FileOptions` removed. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035623)
 
 - [ ] **DI-3.10.3.5.6.2.4** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
   under pool delivery, with the callback environment in `Setup`; `PushRefusal::Ring` and
@@ -281,7 +278,14 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   is waited on; `EntryDelivery` and the oracle's `check_readiness`, which both wait through a
   thread-pool wait, bind `Readiness = Event` rather than a waitable trait of their own, so a
   driver with another signal needs its own front end and check -- the pumped delivery of
-  `DI-3.10.3.5.7` is where that is met.
+  `DI-3.10.3.5.7` is where that is met. From `DI-3.10.3.5.6.2.3`: the ring trait's `Target` is
+  bounded by `IoTarget`, so a consumer can always read what a target states; `add_target_with`
+  goes with `FileOptions`, leaving one `add_target` with no defaulted form; `AddTargetError`
+  keeps its name and becomes generic, carrying the target, rather than the contract reusing the
+  backend module's `DuplicateTarget`; the test fake's target is `MemoryTarget`; `TargetSetup`
+  carries the `Win32FileTarget` whole; and until the swap, today's driver reads only a target's
+  file and flush domains, so a declared geometry is not enforced on its path -- the backend's
+  `check` and `push` enforce it once `DI-3.10.3.5.6.2.4` lands.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

@@ -523,6 +523,19 @@ fn a_file_target_states_what_it_is_built_with() {
 }
 
 #[test]
+fn declaring_a_file_targets_domains_again_replaces_them() {
+    // Carried over from `FileOptions`, which the target replaced: a declaration is the whole set.
+    let file = TempFile::new("wb-domains");
+    let domain = |name: &[u8]| FlushDomain::new(name.to_vec());
+    let target = Win32FileTarget::new(file.open())
+        .with_domains([domain(b"A")])
+        .with_domains([domain(b"B"), domain(b"C")]);
+    assert_eq!(target.flush_domains(), [domain(b"B"), domain(b"C")]);
+    let cleared = target.with_domains([]);
+    assert!(cleared.flush_domains().is_empty(), "none declared again");
+}
+
+#[test]
 fn nothing_to_submit_is_success_and_notifications_are_handed_out() {
     let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
     let mut backend = backend(&given, &added);

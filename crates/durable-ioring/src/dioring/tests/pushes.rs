@@ -22,11 +22,13 @@ fn length(len: usize) -> u32 {
 use crate::contract::{DurableRing, RegisteredBufferRing};
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::ids::{Lineage, LineageHandle, OpId};
+use crate::io_target::IoTarget;
 use crate::oracle::{ConformanceOracle, check_readiness};
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FileOptions, IoTargetKey, OpCompletion, OpKind,
-    Outcome, PushRefusal, WriteCaching, WriteOptions,
+    DurabilityRequest, Entry, Epoch, EpochState, IoTargetKey, OpCompletion, OpKind, Outcome,
+    PushRefusal, WriteCaching, WriteOptions,
 };
+use crate::windows_backend::Win32FileTarget;
 
 /// The instances here carry a `u32` context, so the oracle can compare them, and stamp failures
 /// with `K`.
@@ -81,8 +83,7 @@ pub(super) fn instance_with_clock<K: TimeBase>(
 pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
     TargetSetup {
         key,
-        file: temp.open(),
-        options: FileOptions::new(),
+        target: Win32FileTarget::new(temp.open()),
     }
 }
 
@@ -275,7 +276,7 @@ fn a_write_and_a_read_round_trip_through_a_file_added_later() {
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     harness
         .ring
-        .add_target(ADDED, temp.open())
+        .add_target(ADDED, Win32FileTarget::new(temp.open()))
         .expect("add the file");
     round_trip(&mut harness, ADDED);
     harness.finish();
@@ -348,7 +349,7 @@ fn every_operation_completes_once_with_its_context() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &first)], Vec::new()));
     harness
         .ring
-        .add_target(ADDED, second.open())
+        .add_target(ADDED, Win32FileTarget::new(second.open()))
         .expect("add a file");
 
     for i in 0..32_u32 {
@@ -399,7 +400,7 @@ fn a_write_the_kernel_fails_completes_as_failed() {
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
     harness
         .ring
-        .add_target(ADDED, read_only(&temp))
+        .add_target(ADDED, Win32FileTarget::new(read_only(&temp)))
         .expect("add a read-only file");
     harness.write(ADDED, 0, b"refused", 1, 5);
     let completion = harness.next();
@@ -629,21 +630,22 @@ fn a_refused_push_spends_no_identity() {
 fn a_file_added_under_a_key_in_use_is_refused_and_handed_back() {
     let temp = temp(&[0; 16]);
     let mut ring = instance(vec![given(GIVEN, &temp)], Vec::new());
-    ring.add_target(ADDED, temp.open()).expect("a new key");
+    ring.add_target(ADDED, Win32FileTarget::new(temp.open()))
+        .expect("a new key");
 
     for key in [GIVEN, ADDED] {
         let file = temp.open();
         let raw = file.as_raw_handle();
         let error = ring
-            .add_target_with(key, file, FileOptions::new().domains([super::domain("d")]))
+            .add_target(key, super::target(file, &["d"]))
             .expect_err("a key already in use");
         assert_eq!(error.key, key);
         assert_eq!(
-            error.file.as_raw_handle(),
+            error.target.handle().as_raw_handle(),
             raw,
             "the consumer's own handle comes back"
         );
-        assert_eq!(error.options.domains, vec![super::domain("d")]);
+        assert_eq!(error.target.flush_domains(), [super::domain("d")]);
     }
     assert!(
         !ring.domains.contains_key(&super::domain("d")),

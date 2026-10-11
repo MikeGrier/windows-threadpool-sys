@@ -17,9 +17,9 @@ use crate::fake::{Fake, Signals};
 use crate::ids::DioringIds;
 use crate::oracle::ConformanceOracle;
 use crate::types::{
-    DurabilityRequest, Entry, Epoch, EpochState, FileOptions, IoTargetKey, OpKind, PushRefusal,
-    Resolution,
+    DurabilityRequest, Entry, Epoch, EpochState, IoTargetKey, OpKind, PushRefusal, Resolution,
 };
+use crate::windows_backend::Win32FileTarget;
 
 type Ring = Dioring<Vec<u8>, u64, u32>;
 type V = DioringIds<u64>;
@@ -41,8 +41,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         completion_queue_size: 128,
         files: vec![TargetSetup {
             key: FILE,
-            file: temp.open(),
-            options: FileOptions::new(),
+            target: Win32FileTarget::new(temp.open()),
         }],
         buffers,
         provider: None,
@@ -366,7 +365,7 @@ fn a_refusal_through_the_handle_hands_back_what_it_took() {
     ));
     assert_eq!((error.buffer, error.context), (Some(vec![7]), 3));
     let error = delivery
-        .add_target(FILE, temp.open())
+        .add_target(FILE, Win32FileTarget::new(temp.open()))
         .expect_err("a key in use");
     assert_eq!(error.key, FILE);
     assert!(
@@ -466,10 +465,10 @@ fn a_file_is_removed_through_the_handle() {
     let (delivery, _rx) = forwarding(instance(&temp, Vec::new()));
     let file = other.open();
     delivery
-        .add_target(IoTargetKey(2), file.clone())
+        .add_target(IoTargetKey(2), Win32FileTarget::new(file.clone()))
         .expect("add a file");
     let back = delivery.remove_target(IoTargetKey(2)).expect("remove it");
-    assert!(back.same_handle(&file));
+    assert!(back.handle().same_handle(&file));
     assert!(matches!(
         delivery.remove_target(IoTargetKey(2)),
         Err(crate::types::RemoveTargetError::UnknownKey(IoTargetKey(2)))
