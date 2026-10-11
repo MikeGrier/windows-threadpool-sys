@@ -113,7 +113,7 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// default.
     pub provider: Option<Box<dyn DurabilityProvider<DioringIds<E>>>>,
     /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, which is
-    /// [`NoDiagnostics`] until `DI-3.6` makes it ETW.
+    /// [`NoDiagnostics`] until `DI-12.1` makes it ETW.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
     /// The thread pool, and the priority within it, that the instance's delivery runs on
     /// (DI-D-52) -- a NUMA node's own pool, for one. `None` is the process's default pool. Read
@@ -547,7 +547,7 @@ where
         //
         // No test reaches the failed-submit report yet. The ring crate's kernel responder can fail
         // a submit, but only on the thread that installed it, and this ring is submitted to from
-        // pool threads too; a responder for one ring will reach it (DI-3.10.3.5.6.3).
+        // pool threads too; a responder for one ring will reach it (DI-7.1).
         let popped = {
             let mut engine = self.engine();
             let submitted = engine.backend.submit();
@@ -827,7 +827,7 @@ fn region(span: RegisteredSpan) -> RegisteredRegion {
 /// The fault seam (`DI-3.2.4`): failures on demand, for tests and for the contract's worked
 /// examples. It transforms a commit's real completion through `windows-ioring-sys`' own seam, so
 /// the commit still reaches the kernel and only the answer dioring sees changes -- the backend's
-/// `fail_next_commit`, under the contract's older word for a commit (DI-3.11).
+/// `fail_next_commit`, under the contract's older word for a commit (DI-11.2).
 #[cfg(feature = "fault-injection")]
 impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E, C, R, K> {
     /// Make the next flush of `file` to complete report the Win32 error `code` -- for example

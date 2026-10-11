@@ -2,7 +2,7 @@
 //! An in-memory backend and target (DI-D-50 P13, DI-D-52): a deterministic backend, holding each
 //! target's bytes in memory, for testing the core and driving it without a device.
 //!
-//! It faults on nothing of its own accord; `DI-3.3` adds the fault script. A submission is executed
+//! It faults on nothing of its own accord; `DI-11.1` adds the fault script. A submission is executed
 //! when it is submitted, in push order, and its completion is ready at once. A commit makes the
 //! target's current bytes its durable bytes, so a test can read what a commit warranted.
 //!

@@ -16,20 +16,20 @@ readme = "COMPONENT.md"
 # **Path only, with no `version`, deliberately** (DI-D-16 in DESIGN-NOTES.md). dioring is built
 # against the ring crate's unreleased tree, and a version written now would guess the number
 # release-please will choose. A path-only dependency also makes `cargo publish` refuse, so the pin
-# cannot be skipped at release: DI-3.5 adds the version, keeping the path.
+# cannot be skipped at release: DI-12.4 adds the version, keeping the path.
 windows-ioring-sys = { path = "../windows-ioring-sys" }
 # The contract's file type (DI-D-29): a consumer's file is a `SharedHandle`, and dioring hands that
 # same handle to the ring, which takes the type directly.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 # The readiness signal's type (DI-D-28): an `Event`, so a front end can hand it to a thread-pool
-# wait without `unsafe`. Path only, as for the ring crate: it is unreleased, and DI-3.5 pins it.
+# wait without `unsafe`. Path only, as for the ring crate: it is unreleased, and DI-12.4 pins it.
 win-sync-sys = { path = "../win-sync-sys" }
 # The thread-pool wait the conformance module's readiness check waits through. Path only: it needs
-# `From<Event> for WaitableHandle`, which is unreleased, and DI-3.5 pins it.
+# `From<Event> for WaitableHandle`, which is unreleased, and DI-12.4 pins it.
 windows-threadpool-sys = { path = "../windows-threadpool-sys" }
 # dioring's one time base, interrupt time (DI-D-37), read through `InterruptClock`: dioring forbids
 # `unsafe`, so it cannot call `QueryInterruptTime` itself. Path only, as for the ring crate: it is
-# unreleased, and DI-3.5 pins it.
+# unreleased, and DI-12.4 pins it.
 win-time-sys = { path = "../win-time-sys" }
 
 [features]

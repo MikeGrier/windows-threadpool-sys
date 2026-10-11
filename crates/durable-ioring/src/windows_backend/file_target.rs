@@ -13,7 +13,7 @@ use crate::types::FlushDomain;
 /// The warranty class is taken on the consumer's declaration, and `BestEffort` is the default
 /// because a file opened for cached I/O can claim no more: its system write-back can fail without
 /// telling its writer. One opened unbuffered can claim `SharedDevice`. Whether dioring should read
-/// the class from the handle rather than take it on declaration is `DI-3.10.4`'s.
+/// the class from the handle rather than take it on declaration is `DI-10.1`'s.
 #[derive(Clone, Debug)]
 pub struct Win32FileTarget {
     handle: SharedHandle,

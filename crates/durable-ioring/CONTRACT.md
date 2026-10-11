@@ -19,8 +19,8 @@ part are in
 placeholders. The behaviour is what this document fixes; the spelling is not.
 
 **Vocabulary ahead of the code.** The crate's API, and the worked examples at the end, which
-compile against it, still call a commit a flush in `fail_next_flush`, until `DI-3.10.3` restates
-the code, which removes this note.
+compile against it, still call a commit a flush in `fail_next_flush`, until `DI-8.2` moves
+the examples, which removes this note.
 
 ## The guarantee, in one sentence
 

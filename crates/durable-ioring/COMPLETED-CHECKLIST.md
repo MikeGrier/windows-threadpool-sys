@@ -1883,3 +1883,90 @@ Per [DI-D-53](DESIGN-NOTES.md#di-d-53): the merge-or-delete decision for the dup
 Its steps, each archived above: [DI-3.10.3.5.6.2.1](#di-31035621), [DI-3.10.3.5.6.2.2](#di-31035622), [DI-3.10.3.5.6.2.3](#di-31035623), [DI-3.10.3.5.6.2.4](#di-31035624), [DI-3.10.3.5.6.2.5](#di-31035625) and [DI-3.10.3.5.6.2.6](#di-31035626). The item as it stood at completion, with both re-plans:
 
 **The switch-over**: the driver onto the core, in the steps below. Re-planned from one step into four once mapping the old driver onto the new path showed two things. First, the new core has a defect the switch-over would expose: it holds a gated operation without asking the backend whether it would admit it, and re-emits forever a submission of its own that the backend refuses for a cause that cannot clear -- so a gated registered-span write on an instance with no registration, which today's driver refuses at push, would be accepted and then never complete, and its seal never resolve. Today's driver shares the second half ("no test reaches that"), so this is a fix to both, made in the core. Second, two of the step's API changes stand alone on today's driver, which keeps the switch-over itself to the swap and its deletions. Re-planned again, from four steps to six, on mapping the swap itself: the Windows backend built in `DI-3.10.3.5.5` bound its buffer to `IoBufMut`, which the swap would make the driver's bound and so take write-only buffer types away, against [DI-D-17](DESIGN-NOTES.md#di-d-17) and API.md section 8; and the registered-buffer accessors return a borrow, which no implementation can give once the registration lives behind the engine's lock that pool drains share.
+
+## Moved 2026-10-11 15:59:15 -04:00 -- DI-M3 closed, its open work restructured into DI-M7 to DI-M12
+
+<a id="di-m3-restructured"></a>The engineer, 2026-10-11: "please re-do the di-m3 plan, this depth of subitem is hard to work with."
+DI-M3's items had nested six levels (`DI-3.10.3.5.6.2.6`). Its open work became six flat milestones;
+its completed items were already archived above, each under its own heading, and their stubs were
+removed. The old IDs map as follows.
+
+| Old ID | New ID |
+|---|---|
+| `DI-3.10.3.5.6.3` | DI-7.1 |
+| none: new, the construction-time hook | DI-7.2 |
+| `DI-3.10.3.5.7` | DI-7.3 |
+| `DI-3.10.3.5.8` | DI-7.4 |
+| `DI-3.10.3.6` | DI-8.1, DI-8.2, DI-8.3 |
+| `DI-3.9.3` | DI-9.1 |
+| `DI-3.9.4` | DI-9.2 |
+| `DI-3.9.5` | DI-9.3 |
+| `DI-3.9.6` | DI-9.4, DI-9.5, DI-9.6, and DI-9.7 for what follows |
+| `DI-3.10.4` | DI-10.1 |
+| `DI-3.10.5` | DI-10.2 |
+| `DI-3.3` | DI-11.1 |
+| `DI-3.11` | DI-11.2 |
+| `DI-3.6` | DI-12.1 |
+| `DI-3.8` | DI-12.2 |
+| `DI-3.4` | DI-12.3 |
+| `DI-3.5` | DI-12.4 |
+
+The umbrella items, whose own text was a plan for steps that now each have a home, are dissolved
+rather than checked; each is kept here as it stood. `DI-3.7`, folded into `DI-3.2` on 2026-10-07, is
+archived with them.
+
+### <a id="di-39"></a>DI-3.9 -- Dissolved into DI-M9. *(dissolved 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **The engineer confirms or amends the shapes the assistant chose while
+implementing `DI-3.2`**, one decision per step below; checked when the last of them is. The code
+binds to each already, because the steps could not be built without choosing; what is open is the
+review. A rejected point is reworked in its step, with its decision row amended. Placed before
+`DI-3.3`, because a reworked point can change the trait the fault-injecting implementation
+implements. Each step reviews only what its decision row marks as the assistant's: where the
+engineer had already decided part of a row, that part is not reopened.
+
+### <a id="di-310"></a>DI-3.10 -- Dissolved into DI-M7 to DI-M10. *(dissolved 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **The contract over targets, and dioring as a portable algorithm**
+([DI-D-48](DESIGN-NOTES.md#di-d-48), [DI-D-49](DESIGN-NOTES.md#di-d-49)): the unit of I/O and
+durability becomes a target, defined only by its obligations, files leave the contract's vocabulary,
+and the core becomes a portable public state machine with targets and a backend beneath it and a
+threaded driver above it. Checked when the last step below is. Placed before `DI-3.9.5` and
+`DI-3.3`, which are written in the file vocabulary this restates; `DI-3.9.3` and `DI-3.9.4` do not
+use it, and stay ahead.
+
+### <a id="di-3103"></a>DI-3.10.3 -- Dissolved into DI-M7 and DI-M8. *(dissolved 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **The portable core, the Windows backend and the driver, restated in place**
+as `DI-3.10.1` and `DI-3.10.2` settle them: the durability core as a public state machine naming no
+platform type; targets and a backend beneath it, with `windows-ioring-sys` inside the Windows
+backend; the threaded driver above it implementing `DurableRing`; the trait, types, oracle and fake
+restated over targets. Split as [DI-D-50](DESIGN-NOTES.md#di-d-50) names: `durable-ioring`,
+portable, and `win-durable-ioring` for the driver, the Windows backend and its targets, registered
+for release. Today's tests and sabotages are the proof the Windows backend passes, and today's file
+path stands in as its target until `DI-3.10.4`. The portable crate joins CI's `portable` job.
+CONTRACT.md's worked examples are restated in the new API, and its "Vocabulary ahead of the code"
+note is removed. Diagnostics per [DI-D-51](DESIGN-NOTES.md#di-d-51): the `DiagnosticSink` trait,
+`NoDiagnostics`, `StderrDiagnostics` and `FanOutDiagnostics`, the inconsistency report sent through
+the sink, and the `trace` feature removed. Done in the steps below, each compiling and passing the
+tests and the sabotage sweep on its own.
+
+### <a id="di-31035"></a>DI-3.10.3.5 -- Dissolved into DI-M7. *(dissolved 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **Targets, the backend, and the public core**, per
+[DI-D-50](DESIGN-NOTES.md#di-d-50) P10-P11 and [DI-D-52](DESIGN-NOTES.md#di-d-52): built as a new
+path beside today's driver (`DI-3.10.3.5.1` to `DI-3.10.3.5.5`), which the driver then moves onto,
+deleting the old path (`DI-3.10.3.5.6`) -- the merge-or-delete decision for the duplication, taken
+when the new path is proven. Done in the steps below.
+
+### <a id="di-310356"></a>DI-3.10.3.5.6 -- Dissolved into DI-M7. *(dissolved 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **The driver moved onto the core, under pool delivery**, per
+[DI-D-53](DESIGN-NOTES.md#di-d-53): delivery is a waker beside the threadless backend, never
+delivery owning the backend's ring. Done in the steps below.
+
+### <a id="di-37"></a>DI-3.7 -- Folded into `DI-3.2` by the engineer: the conformance oracle is built from `DI-3.2.2.1`. *(folded 2026-10-07; archived 2026-10-11 15:59:15 -04:00)*
+
+The item as it stood: **Folded into `DI-3.2` by the engineer, 2026-10-07: the conformance oracle is
+built from `DI-3.2.2.1`, and each later step adds its rules.** What the oracle is, and the readiness
+signal's harness check beside it, are stated under `DI-3.2` and `DI-3.2.2.1`.

@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub(crate) mod tests;
 
 /// What a [`Diagnostic`] is about: what a sink answers [`DiagnosticSink::wants`] for, before the
-/// event is built. Open to further kinds -- the delay events of `DI-3.6` among them.
+/// event is built. Open to further kinds -- the delay events of `DI-12.1` among them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DiagnosticKind {

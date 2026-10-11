@@ -3330,6 +3330,40 @@ it happen." Recorded as the ring crate's
 [D-85](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-85), built in its `M35.1`, and used by
 durable-ioring's `DI-3.10.3.5.6.3`.
 
+## The thread-local responder removed, and DI-M3 flattened (2026-10-11)
+
+The engineer: "Can we get rid of the thread-affined ring form of the ring responder? It just feels
+like a bad workaround if we have the non-thread-affined variant available."
+
+The assistant checked the thread-local form's uses before answering. The per-ring form covers
+them: every call through the seam names a ring, no ring constructor makes a seam call, and every
+current user names its rings. Removing it is justified on analytic grounds, not on a measurement:
+for any ring used from more than one thread, the thread-local form gives a wrong answer silently.
+It costs four things:
+
+- `Resolver` is made `Send`.
+- `Resolver::scoped`'s install-before-the-ring guarantee is replaced by a registration that ends
+  when its ring drops, after the rundown.
+- The shipped `kernel-seam` surface takes a breaking change.
+- One capability is lost: answering calls a component makes on a ring of its own before handing
+  the ring out. Nothing uses it, but durable-ioring's construction is exactly that case: it
+  registers files and buffers and submits the registrations before returning.
+
+The engineer: "make the plan changes including the construction time hook. also please re-do the
+di-m3 plan, this depth of subitem is hard to work with."
+
+- The ring crate's [D-85](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-85) now says the
+  per-ring form replaces the thread-local one. `M35.1` builds it, and `M35.2` moves its users and
+  removes `sys::install`.
+- The construction-time hook is durable-ioring's `DI-7.2`: a test-only hook passed down through
+  construction, never a thread-local or a global, called with the ring as soon as it exists.
+- DI-M3 is closed. Its open work is now DI-M7 to DI-M12, two levels deep. The old-to-new ID table
+  is in durable-ioring's archive.
+- One placement changed in the restructure. The reviews, now DI-M9, gate nothing, because the
+  engineer is not to be the blocking factor. They had been placed ahead of the scripted backend so
+  a rework could not change the trait it implements; a rework that does is now that item's to
+  absorb.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
