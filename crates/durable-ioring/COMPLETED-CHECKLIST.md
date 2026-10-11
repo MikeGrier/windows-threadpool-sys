@@ -1815,3 +1815,17 @@ The core now carries the whole `DurableRing` surface without a ring: `src/io_cor
   as its notification -- its refusal causes mapped from `RingCondition`, with a test for each
   mapping a developer machine can reach; and the Win32 file target over a `SharedHandle`, carrying
   its flush domains and warranty class.
+
+## Moved 2026-10-11 10:40:04 -04:00 -- DI-3.10.3.5.6.1: pool delivery over the threadless backend
+
+### <a id="di-3103561"></a>DI-3.10.3.5.6.1 -- Pool delivery over the threadless backend: the portable `Engine` that drains a backend through the core, and `PoolDelivery` that drains it on the ring crate's `CompletionWake`, with an optional callback environment. *(completed 2026-10-11 10:40:04 -04:00)*
+
+Built per [DI-D-53](DESIGN-NOTES.md#di-d-53), on the ring crate's `M33.1`. `src/engine.rs` holds the engine, tested over the in-memory backend under the oracle; `src/windows_backend/pool.rs` holds pool delivery, tested over a real ring and the thread pool under the oracle -- delivery, readiness on each transition, a backlog reached at setup, a callback environment's pool, and the engine handed back -- and run fifty times without a failure. Nothing in `Dioring` uses either yet: that is `DI-3.10.3.5.6.2`. The assistant's choices are queued in `DI-3.9.6`. The item as it stood at completion:
+
+**Pool delivery over the threadless backend** (DI-D-52's Model A):
+  the Windows backend handing out the ring crate's `CompletionWake` over its ring, with an optional
+  callback environment so the pool may be bound to a NUMA node; and a driver-side delivery that,
+  woken, takes the driver's lock and drains the backend through `DurableIoCore` to empty. Tested
+  standalone, the core over the backend under the oracle, before the driver moves onto it.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M33` -> `M33.1` (`CompletionWake`) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).

@@ -1772,6 +1772,62 @@
       "why": "The manifest checking itself on the backend: negating a bool and comparing it with false are the same test. If it comes back caught, something is reacting to more than behaviour.",
       "find": ["        if !self.unsubmitted {\n"],
       "replace": ["        if self.unsubmitted == false {\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.1: a submission the backend refuses is dropped",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "DI-D-52: a refused submission the core originated goes back to it, which keeps it and emits it again; dropped, its seal waits forever.",
+      "find": ["                self.core.refused(refused);\n"],
+      "replace": ["                drop(refused);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.1: the engine keeps no provider requests",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "DI-D-44: the driver makes the provider's requests with its lock released, so the engine keeps them; dropped, a served seal never finishes.",
+      "find": ["        self.requests.extend(requests);\n"],
+      "replace": ["        let _ = requests;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.1: a drain stops after one pass",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The notification is an edge (the ring crate's D-19), so a drain runs until a pass pops nothing; one pass leaves what the completions made due unissued.",
+      "find": ["            if !popped {\n                return deliver;\n            }\n"],
+      "replace": ["            return deliver;\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.1: a drain reports no readiness",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "DI-D-28: entries made poppable by a drain must be told, or a consumer waiting on readiness waits forever.",
+      "find": ["                deliver |= self.act(actions);\n"],
+      "replace": ["                self.act(actions);\n"]
+    },
+    {
+      "name": "DI-3.10.3.5.6.1: pool delivery never tells the driver",
+      "file": "src/windows_backend/pool.rs",
+      "expect": "caught",
+      "why": "DI-D-28: a drain that made entries poppable tells the driver, after releasing the engine's lock.",
+      "find": ["            if deliver {\n"],
+      "replace": ["            if false {\n"]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: the backend's wake ignores its pool",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "DI-D-52: an optional callback environment binds pool delivery to a pool, a NUMA node's for one; dropping it puts delivery on the default pool, which no test of behaviour can see: either pool runs the drain, and a single-thread pool's repeated thread proves nothing the default pool might not also do. The callback-environment test proves only that delivery works when one is given.",
+      "find": ["        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)\n"],
+      "replace": ["        let _ = env;\n        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, None)\n"]
+    },
+    {
+      "name": "CONTROL: the engine tests a pass's pops by comparison",
+      "file": "src/engine.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the engine: negating a bool and comparing it with false are the same test. If it comes back caught, something is reacting to more than behaviour.",
+      "find": ["            if !popped {\n"],
+      "replace": ["            if popped == false {\n"]
     }
   ]
 }

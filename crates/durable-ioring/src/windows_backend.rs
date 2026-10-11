@@ -38,6 +38,7 @@ use crate::io_target::IoTarget;
 use crate::types::{IoFault, IoTargetKey, WriteCaching};
 
 mod file_target;
+mod pool;
 
 pub use file_target::Win32FileTarget;
 
@@ -250,6 +251,31 @@ impl<B: IoBufMut, R: IoBufMut> WindowsBackend<B, R> {
             #[cfg(feature = "fault-injection")]
             injected: Vec::new(),
         })
+    }
+
+    /// A thread-pool wake over this backend's ring (DI-D-53): `on_wake` is called on a pool thread
+    /// whenever the ring's completions may have gone from none to some, and once at setup, and
+    /// must drain this backend to empty each time. `env` binds the pool; `None` is the process's
+    /// default. The ring crate's `CompletionWake` is the protocol; this backend only lends it the
+    /// ring.
+    ///
+    /// # Errors
+    ///
+    /// As `CompletionWake::new`: the system does not support a ring completion event, or the
+    /// wait could not be made or armed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the driver moves onto pool delivery in DI-3.10.3.5.6.2"
+        )
+    )]
+    pub(crate) fn wake(
+        &mut self,
+        on_wake: impl Fn() + Send + Sync + 'static,
+        env: Option<&mut windows_threadpool_sys::callback_env::CallbackEnviron<'_>>,
+    ) -> io::Result<windows_ioring_sys::CompletionWake> {
+        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)
     }
 
     /// The target under `key`, if there is one.

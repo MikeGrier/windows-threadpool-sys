@@ -99,13 +99,7 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   [DI-D-53](DESIGN-NOTES.md#di-d-53): delivery is a waker beside the threadless backend, never
   delivery owning the backend's ring. Done in the steps below.
 
-- [ ] **DI-3.10.3.5.6.1** -- **Pool delivery over the threadless backend** (DI-D-52's Model A):
-  the Windows backend handing out the ring crate's `CompletionWake` over its ring, with an optional
-  callback environment so the pool may be bound to a NUMA node; and a driver-side delivery that,
-  woken, takes the driver's lock and drains the backend through `DurableIoCore` to empty. Tested
-  standalone, the core over the backend under the oracle, before the driver moves onto it.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M33` -> `M33.1` (`CompletionWake`) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+- [x] **DI-3.10.3.5.6.1** -- Pool delivery over the threadless backend: the portable `Engine` that drains a backend through the core, and `PoolDelivery` that drains it on the ring crate's `CompletionWake`, with an optional callback environment. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-3103561)
 
 - [ ] **DI-3.10.3.5.6.2** -- **The switch-over**: `Dioring` runs `DurableIoCore` over the Windows
   backend under that delivery, with the callback environment in `Setup`; `TargetSetup` and
@@ -242,7 +236,19 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   `fail_next_flush` under `DI-3.11`; the short-write rule moved into the backend as `transfer`,
   which the relay's `op_outcome` now calls; `register_files` takes handles rather than
   `TargetSetup`s; and the backend lives in a public `windows_backend` module, `Win32FileTarget`
-  with it rather than at the crate root.
+  with it rather than at the crate root. From `DI-3.10.3.5.6.1`: the driver's core and backend sit
+  together in a portable, crate-private `Engine`, the one place `CoreActions` become backend pushes
+  -- refusals back to the core, provider requests kept for the driver -- and the drain every
+  delivery shares, so pumped delivery reuses it; a drain runs until a pass pops nothing and does
+  not call `retry`, since the core re-emits what was refused with every completion's actions;
+  pool delivery tells the driver through an `on_ready` closure, called after the engine's lock is
+  released, rather than setting an `Event` itself, so the driver chooses the signal; the backend
+  lends its ring through a crate-private `WindowsBackend::wake`; a failed construction hands the
+  engine back boxed; `into_engine` stops delivery and returns it; the engine, the pool delivery
+  and `wake` carry `expect(dead_code)` outside tests until the driver moves onto them, so the
+  build fails when they are used and the expectations go; and that the callback environment is
+  honoured is a declared blind spot, no behaviour test being able to tell which pool ran a
+  drain.
 
 - [ ] **DI-3.3** -- **An in-memory backend whose targets and backend fault on a script**
   ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an

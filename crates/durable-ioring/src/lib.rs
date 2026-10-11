@@ -16,6 +16,7 @@ mod contract;
 mod delivery;
 mod diagnostics;
 mod dioring;
+mod engine;
 mod error_code;
 #[cfg(test)]
 mod fake;
