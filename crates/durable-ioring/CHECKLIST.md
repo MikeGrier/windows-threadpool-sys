@@ -110,6 +110,11 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
   never complete, and its seal never resolve. Today's driver shares the second half ("no test
   reaches that"), so this is a fix to both, made in the core. Second, two of the step's API changes
   stand alone on today's driver, which keeps the switch-over itself to the swap and its deletions.
+  Re-planned again, from four steps to six, on mapping the swap itself: the Windows backend built in
+  `DI-3.10.3.5.5` bound its buffer to `IoBufMut`, which the swap would make the driver's bound and
+  so take write-only buffer types away, against [DI-D-17](DESIGN-NOTES.md#di-d-17) and API.md
+  section 8; and the registered-buffer accessors return a borrow, which no implementation can
+  give once the registration lives behind the engine's lock that pool drains share.
 
 - [x] **DI-3.10.3.5.6.2.1** -- What the backend refuses for good, the core ends: a gated operation is put to the backend's `check` before it is held, and a submission of the core's own refused for a cause that is not retryable completes with a `REFUSED` fault. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035621)
 
@@ -117,7 +122,19 @@ from `DI-3+.n` to `DI-3.n`, which older records still cite.
 
 - [x] **DI-3.10.3.5.6.2.3** -- Targets as the implementation's own type: the ring trait's `Target`, today's driver's a `Win32FileTarget`, which `TargetSetup` takes too; `FileOptions` removed. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-31035623)
 
-- [ ] **DI-3.10.3.5.6.2.4** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
+- [ ] **DI-3.10.3.5.6.2.4** -- **Owned writes keep write-only buffer types on the Windows backend**
+  ([DI-D-17](DESIGN-NOTES.md#di-d-17), [API.md](API.md) section 8): `WindowsBackend<B: IoBuf>`;
+  an owned read is pushed through a push captured where `B: IoBufMut` holds, as today's driver
+  does, and refused as `Unsupported` without one; a test writing an `Arc<[u8]>` through the backend,
+  and through the core over it, pins the bound that was missing.
+
+- [ ] **DI-3.10.3.5.6.2.5** -- **Registered buffers reached through a closure**: the registered-buffer
+  ring's accessors become `with_registered_buffer` and `with_registered_buffer_mut`, run under the
+  instance's lock -- DI-D-17's guarded accessors, in the shape `DeliveryHandle` already has --
+  because once the swap puts the registration behind the engine's lock, no borrow of it can outlive
+  that lock; today's driver implements them.
+
+- [ ] **DI-3.10.3.5.6.2.6** -- **The swap**: `Dioring` runs `DurableIoCore` over the Windows backend
   under pool delivery, with the callback environment in `Setup`; `PushRefusal::Ring` and
   `PushRefusal::NoRegisteredBuffers` replaced by the backend's refusal cause; `Core`, and the ring
   code of `push.rs` and `relay.rs`, deleted -- the merge-or-delete decision for the duplicated path;
