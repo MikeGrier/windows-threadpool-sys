@@ -58,7 +58,15 @@ unsafe fn submit_through_seam() -> HRESULT {
     let mut submitted = 0_u32;
     // SAFETY: forwarded from this function's own contract -- the caller has
     // installed a non-forwarding responder.
-    unsafe { crate::sys::submit(std::ptr::null_mut(), 0, 0, &raw mut submitted) }
+    unsafe {
+        crate::sys::submit(
+            crate::accounting::RingId::next(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            &raw mut submitted,
+        )
+    }
 }
 
 #[test]

@@ -80,6 +80,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // than a property of where the value lives.
         let hr = unsafe {
             crate::sys::build_write(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -132,6 +133,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // completes it.
         let hr = unsafe {
             crate::sys::build_read(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -180,6 +182,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: as `write`.
         let hr = unsafe {
             crate::sys::build_write(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -249,6 +252,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // contract rather than a property of where the value lives.
         let hr = unsafe {
             crate::sys::build_read(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -335,6 +339,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // no buffer.
         let hr = unsafe {
             crate::sys::build_flush(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -379,6 +384,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // forwarded from this function's own contract; there is no buffer.
         let hr = unsafe {
             crate::sys::build_flush(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -434,6 +440,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // completes this operation.
         let hr = unsafe {
             crate::sys::build_flush(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -521,8 +528,15 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             registration: None,
         };
         // SAFETY: as `cancel_raw`.
-        let hr =
-            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
+        let hr = unsafe {
+            crate::sys::build_cancel(
+                self.ring.ring_id(),
+                self.ring.raw_handle(),
+                handle,
+                target,
+                user_data,
+            )
+        };
         self.finish_owned(hr, id, None, extra, held)
     }
 
@@ -558,8 +572,15 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
         // keep alive, forwarded from this function's own contract;
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
-        let hr =
-            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
+        let hr = unsafe {
+            crate::sys::build_cancel(
+                self.ring.ring_id(),
+                self.ring.raw_handle(),
+                handle,
+                target,
+                user_data,
+            )
+        };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
             return Err(error);
@@ -646,7 +667,13 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // copy the ring now holds, which outlives every submit that could run
         // this SQE.
         let hr = unsafe {
-            crate::sys::build_register_files(self.ring.raw_handle(), count, handles_ptr, user_data)
+            crate::sys::build_register_files(
+                self.ring.ring_id(),
+                self.ring.raw_handle(),
+                count,
+                handles_ptr,
+                user_data,
+            )
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
@@ -792,7 +819,13 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // keeps alive via the returned `PendingBufferRegistration` and, once
         // claimed, `RegisteredBuffers`.
         let hr = unsafe {
-            crate::sys::build_register_buffers(self.ring.raw_handle(), count, infos_ptr, user_data)
+            crate::sys::build_register_buffers(
+                self.ring.ring_id(),
+                self.ring.raw_handle(),
+                count,
+                infos_ptr,
+                user_data,
+            )
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation(user_data);
@@ -854,6 +887,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: as `read_registered_raw`.
         let hr = unsafe {
             crate::sys::build_read(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -900,6 +934,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: as `read_registered`.
         let hr = unsafe {
             crate::sys::build_read(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -961,6 +996,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: as `write_registered_raw`.
         let hr = unsafe {
             crate::sys::build_write(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1020,6 +1056,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: as `write_registered`.
         let hr = unsafe {
             crate::sys::build_write(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),

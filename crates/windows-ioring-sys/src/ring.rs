@@ -895,7 +895,7 @@ impl<T, X> IoRing<T, X> {
             Information: 0,
         };
         // SAFETY: `self.handle` is a live ring; valid out-pointer.
-        let hr = unsafe { crate::sys::pop(self.handle, &raw mut cqe) };
+        let hr = unsafe { crate::sys::pop(self.ring_id(), self.handle, &raw mut cqe) };
         if hr == S_FALSE {
             return Ok(None);
         }
@@ -1139,7 +1139,15 @@ impl RingWait<'_> {
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
-        let hr = unsafe { crate::sys::submit(self.handle, 1, timeout_ms, &raw mut submitted) };
+        let hr = unsafe {
+            crate::sys::submit(
+                self.accounting.ring_id(),
+                self.handle,
+                1,
+                timeout_ms,
+                &raw mut submitted,
+            )
+        };
         wait_outcome(hr)
     }
 
@@ -1250,6 +1258,14 @@ impl<T, X> Drop for IoRing<T, X> {
                 false
             }
         };
+
+        // A responder registered for this ring answers through the rundown
+        // above and no further (D-85): it may hold operations the kernel never
+        // saw, so the rundown is its to answer, and nothing after this line
+        // calls through the seam. Ended before `CloseIoRing`, so the handle
+        // cannot be reused while it is registered.
+        #[cfg(feature = "kernel-seam")]
+        crate::sys::ring_dropped(self.accounting.ring_id());
 
         // The inventory is dropped only when rundown actually quiesced the
         // ring, and **forgotten otherwise** (D-73). This is `Token`'s

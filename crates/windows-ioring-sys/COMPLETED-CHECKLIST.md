@@ -6344,3 +6344,36 @@ The decision is [D-84](DESIGN-NOTES.md#d-84), raised by durable-ioring's [DI-D-5
 ### <a id="m341"></a>M34.1 -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. *(completed 2026-10-11 11:50:59 -04:00)*
 
 Raised by durable-ioring's `DI-3.10.3.5.6.2.1`: its core holds a gated operation until the gate is durable and pushes it then, so a span the registration does not contain has to be refused when the operation is accepted, not at a push nobody is waiting on. `check_span` is `checked_span`, the private check every span push already makes, made public; it adds no rule of its own. `check_span_answers_what_a_push_against_the_span_does` in `tests/registration.rs` binds it to the push both ways, span by span -- every span it accepts a push accepts, and every span it refuses a push refuses, with the same kind -- and the two `M34.1` sabotages, one accepting every span and one refusing every span, are each caught.
+
+## Moved 2026-10-11 18:03:39 -04:00 -- M35.1: a kernel responder registered for one ring
+
+### <a id="m351"></a>M35.1 -- A responder registered for one ring, answering its calls on any thread, ending at the ring's drop after its rundown or at `Registration::end`. *(completed 2026-10-11 18:03:39 -04:00)*
+
+Per [D-85](DESIGN-NOTES.md#d-85). `sys::register(&ring, responder)` registers a `Responses + Send`
+in a process-wide registry keyed by the ring's `RingId`; every seam wrapper now takes the ring's id
+beside its handle, and a ring's responder is consulted before a thread's. A responder is not
+consulted re-entrantly for its own ring, and a panicking one neither wedges its ring nor poisons the
+dispatch. `IoRing`'s `Drop` ends the registration after its rundown and before `CloseIoRing`. **One
+departure from the item as written:** the item said a guard dropped early would end the
+registration; instead **dropping the `Registration` ends nothing**, and `Registration::end` ends it
+explicitly, handing the responder back -- because locals drop in reverse order, a drop-ending guard
+would end before the ring's rundown in the ordinary `let ring; let registration;` shape, the very
+hazard the form removes. Recorded in `D-85`. `Resolver` is `Send`: its stats are an `Arc<Mutex<..>>`
+and its completion event a `Send` wrapper; `ResolverWatch` keeps its API. Tests: ten unit tests of
+the registry in `sys/registered/tests.rs`, which open no ring, and four in
+[tests/responder_per_ring.rs](tests/responder_per_ring.rs) over real rings -- a submit on another
+thread answered, another ring not, the rundown answered then the registration ended, and a later
+ring not answered by a dropped one's registration. Eight sabotages behave as declared, one refused
+by the build, and a control survives. The item as it stood at completion:
+
+**A responder registered for one ring** ([D-85](DESIGN-NOTES.md#d-85)), under the `kernel-seam`
+feature: keyed by the ring's `RingId`, answering that ring's seam calls on whatever thread makes
+them; a ring with none going to the kernel. The responder is `Send`, so `Resolver` is made `Send`:
+its stats are shared through `Rc<RefCell<..>>` (`ResolverWatch`), and it keeps the completion event
+as a raw pointer. A registration ends when its ring drops, after the ring's rundown, so a responder
+holding operations still answers the rundown that pops them; a guard may end it earlier. The seam's
+wrappers in [sys.rs](src/sys.rs) are handed a raw handle today, so they must learn which ring a call
+is for. Tests, each direction asserted: a ring's responder answers its calls from a thread other
+than the one that registered it; it does not answer another ring's; left alone, a registration ends
+at the ring's drop, after answering the rundown; its guard dropped first ends it then; and after it
+ends the ring reaches the kernel. Sabotages for each, in [sabotage.json](sabotage.json).

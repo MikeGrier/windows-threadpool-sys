@@ -6,7 +6,9 @@
 //! feature off -- which is the published configuration and the default -- each
 //! wrapper is an `#[inline(always)]` forward to the same call the crate made
 //! before, and nothing in this module exists at all. With the feature on, a
-//! test may install a `Responses` implementation that answers instead.
+//! test may register a `Responses` implementation for one ring, or install one
+//! for its thread, and it answers instead
+//! ([D-85](../DESIGN-NOTES.md#d-85)).
 //!
 //! # Why a module of wrappers rather than a generic `IoRing<K>`
 //!
@@ -63,31 +65,52 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::core::HRESULT;
 
+use crate::accounting::RingId;
+
 #[cfg(feature = "kernel-seam")]
 mod installed;
+#[cfg(feature = "kernel-seam")]
+mod registered;
 #[cfg(feature = "kernel-seam")]
 mod resolver;
 #[cfg(feature = "kernel-seam")]
 pub use installed::{Installed, Responses, install};
 #[cfg(feature = "kernel-seam")]
+pub(crate) use registered::ring_dropped;
+#[cfg(feature = "kernel-seam")]
+pub use registered::{Registration, register};
+#[cfg(feature = "kernel-seam")]
 pub use resolver::{
     Resolver, ResolverConfig, ResolverStats, ResolverWatch, SEED_VAR as RESOLVER_SEED_VAR,
 };
 
-/// Dispatch to an installed `Responses`, or fall through to the real call.
+/// Dispatch to the ring's registered `Responses`, then to the thread's
+/// installed one, or fall through to the real call (D-85: the ring's is the
+/// more specific, so it answers first).
 ///
 /// The feature-off arm expands to the real call and nothing else, so a
-/// published build has no branch, no thread-local access, and no trait object
-/// -- the wrapper is the call.
+/// published build has no branch, no registry or thread-local access, and no
+/// trait object -- the wrapper is the call, and the ring's identity is unused.
+///
+/// Every wrapper takes `ring_id` beside `ring`, and the two must name the same
+/// ring: the identity is what a registered responder is found by, and a
+/// mismatched one would have another ring's responder answer.
 macro_rules! through_seam {
-    ($method:ident ( $($arg:expr),* $(,)? ) else $real:expr) => {{
+    ($ring_id:expr; $method:ident ( $($arg:expr),* $(,)? ) else $real:expr) => {{
         #[cfg(feature = "kernel-seam")]
         {
+            if let Some(answer) =
+                $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })
+            {
+                return answer;
+            }
             if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })
             {
                 return answer;
             }
         }
+        #[cfg(not(feature = "kernel-seam"))]
+        let _ = $ring_id;
         unsafe { $real }
     }};
 }
@@ -100,13 +123,14 @@ macro_rules! through_seam {
 /// the Win32 call requires. Forwarded unchanged.
 #[inline(always)]
 pub(crate) unsafe fn submit(
+    ring_id: RingId,
     ring: *mut c_void,
     wait_operations: u32,
     milliseconds: u32,
     submitted: *mut u32,
 ) -> HRESULT {
     through_seam!(
-        submit(ring, wait_operations, milliseconds, submitted)
+        ring_id; submit(ring, wait_operations, milliseconds, submitted)
             else SubmitIoRing(ring, wait_operations, milliseconds, submitted)
     )
 }
@@ -117,8 +141,8 @@ pub(crate) unsafe fn submit(
 ///
 /// `ring` must be a live ring and `cqe` a valid out-pointer.
 #[inline(always)]
-pub(crate) unsafe fn pop(ring: *mut c_void, cqe: *mut IORING_CQE) -> HRESULT {
-    through_seam!(pop(ring, cqe) else PopIoRingCompletion(ring, cqe))
+pub(crate) unsafe fn pop(ring_id: RingId, ring: *mut c_void, cqe: *mut IORING_CQE) -> HRESULT {
+    through_seam!(ring_id; pop(ring, cqe) else PopIoRingCompletion(ring, cqe))
 }
 
 /// `BuildIoRingReadFile`.
@@ -130,6 +154,7 @@ pub(crate) unsafe fn pop(ring: *mut c_void, cqe: *mut IORING_CQE) -> HRESULT {
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn build_read(
+    ring_id: RingId,
     ring: *mut c_void,
     file: IORING_HANDLE_REF,
     buffer: IORING_BUFFER_REF,
@@ -139,7 +164,7 @@ pub(crate) unsafe fn build_read(
     flags: i32,
 ) -> HRESULT {
     through_seam!(
-        build_read(ring, file, buffer, bytes, offset, user_data, flags)
+        ring_id; build_read(ring, file, buffer, bytes, offset, user_data, flags)
             else BuildIoRingReadFile(ring, file, buffer, bytes, offset, user_data, flags)
     )
 }
@@ -152,6 +177,7 @@ pub(crate) unsafe fn build_read(
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn build_write(
+    ring_id: RingId,
     ring: *mut c_void,
     file: IORING_HANDLE_REF,
     buffer: IORING_BUFFER_REF,
@@ -162,7 +188,7 @@ pub(crate) unsafe fn build_write(
     flags: i32,
 ) -> HRESULT {
     through_seam!(
-        build_write(ring, file, buffer, bytes, offset, caching, user_data, flags)
+        ring_id; build_write(ring, file, buffer, bytes, offset, caching, user_data, flags)
             else BuildIoRingWriteFile(ring, file, buffer, bytes, offset, caching, user_data, flags)
     )
 }
@@ -174,6 +200,7 @@ pub(crate) unsafe fn build_write(
 /// `ring` must be live and `file` a valid handle reference.
 #[inline(always)]
 pub(crate) unsafe fn build_flush(
+    ring_id: RingId,
     ring: *mut c_void,
     file: IORING_HANDLE_REF,
     mode: FILE_FLUSH_MODE,
@@ -181,7 +208,7 @@ pub(crate) unsafe fn build_flush(
     flags: i32,
 ) -> HRESULT {
     through_seam!(
-        build_flush(ring, file, mode, user_data, flags)
+        ring_id; build_flush(ring, file, mode, user_data, flags)
             else BuildIoRingFlushFile(ring, file, mode, user_data, flags)
     )
 }
@@ -193,13 +220,14 @@ pub(crate) unsafe fn build_flush(
 /// `ring` must be live and `file` a valid handle reference.
 #[inline(always)]
 pub(crate) unsafe fn build_cancel(
+    ring_id: RingId,
     ring: *mut c_void,
     file: IORING_HANDLE_REF,
     cancel_user_data: usize,
     user_data: usize,
 ) -> HRESULT {
     through_seam!(
-        build_cancel(ring, file, cancel_user_data, user_data)
+        ring_id; build_cancel(ring, file, cancel_user_data, user_data)
             else BuildIoRingCancelRequest(ring, file, cancel_user_data, user_data)
     )
 }
@@ -214,13 +242,14 @@ pub(crate) unsafe fn build_cancel(
 /// `BuildIoRingRegisterBuffers` below; see [D-32](../DESIGN-NOTES.md#d-32).
 #[inline(always)]
 pub(crate) unsafe fn build_register_files(
+    ring_id: RingId,
     ring: *mut c_void,
     count: u32,
     handles: *const *mut c_void,
     user_data: usize,
 ) -> HRESULT {
     through_seam!(
-        build_register_files(ring, count, handles, user_data)
+        ring_id; build_register_files(ring, count, handles, user_data)
             else BuildIoRingRegisterFileHandles(ring, count, handles, user_data)
     )
 }
@@ -235,13 +264,14 @@ pub(crate) unsafe fn build_register_files(
 /// difference.
 #[inline(always)]
 pub(crate) unsafe fn build_register_buffers(
+    ring_id: RingId,
     ring: *mut c_void,
     count: u32,
     buffers: *const IORING_BUFFER_INFO,
     user_data: usize,
 ) -> HRESULT {
     through_seam!(
-        build_register_buffers(ring, count, buffers, user_data)
+        ring_id; build_register_buffers(ring, count, buffers, user_data)
             else BuildIoRingRegisterBuffers(ring, count, buffers, user_data)
     )
 }
@@ -253,9 +283,13 @@ pub(crate) unsafe fn build_register_buffers(
 /// `ring` must be a live ring and `event` a live event handle the ring will
 /// own for the rest of its life.
 #[inline(always)]
-pub(crate) unsafe fn set_completion_event(ring: *mut c_void, event: *mut c_void) -> HRESULT {
+pub(crate) unsafe fn set_completion_event(
+    ring_id: RingId,
+    ring: *mut c_void,
+    event: *mut c_void,
+) -> HRESULT {
     through_seam!(
-        set_completion_event(ring, event) else SetIoRingCompletionEvent(ring, event)
+        ring_id; set_completion_event(ring, event) else SetIoRingCompletionEvent(ring, event)
     )
 }
 

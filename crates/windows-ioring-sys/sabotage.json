@@ -1410,6 +1410,125 @@
         "        let _ = span;",
         "        self.checked_index(u32::MAX).map(|_| ())"
       ]
+    },
+    {
+      "name": "M35.1: a ring's responder answers every ring",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "D-85: a registration answers its own ring and no other; tests share a process, so one answering every ring would answer other tests' calls.",
+      "find": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| *id == ring)?;"
+      ],
+      "replace": [
+        "        let (_, slot) = registry.first()?;"
+      ]
+    },
+    {
+      "name": "CONTROL: a ring's responder is found with its comparison reversed",
+      "file": "src/sys/registered.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: equality is symmetric, so the lookup finds the same entry.",
+      "find": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| *id == ring)?;"
+      ],
+      "replace": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| ring == *id)?;"
+      ]
+    },
+    {
+      "name": "M35.1: a ring's drop does not end its registration",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-85: a registration ends when its ring drops. Left registered, it outlives the ring, and Registration::end finds it still there; the real-ring test asserts it is gone.",
+      "find": [
+        "        crate::sys::ring_dropped(self.accounting.ring_id());"
+      ],
+      "replace": [
+        "        let _ = self.accounting.ring_id();"
+      ]
+    },
+    {
+      "name": "M35.1: a registration ends before its ring's rundown",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-85: the rundown is the responder's to answer, since it may hold operations the kernel never saw. Ended first, the rundown pops from the kernel and the responder never sees it; the real-ring test counts its pops.",
+      "find": [
+        "        let quiesced = match self.run_down() {"
+      ],
+      "replace": [
+        "        #[cfg(feature = \"kernel-seam\")]",
+        "        crate::sys::ring_dropped(self.accounting.ring_id());",
+        "        let quiesced = match self.run_down() {"
+      ]
+    },
+    {
+      "name": "M35.1: a thread's responder answers before a ring's",
+      "file": "src/sys.rs",
+      "expect": "caught",
+      "why": "D-85: while both forms exist, a ring's responder, the more specific, answers first. Caught by the precedence test, which installs both.",
+      "find": [
+        "            if let Some(answer) =",
+        "                $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
+        "            {"
+      ],
+      "replace": [
+        "            if $crate::sys::installed::with(|_| ()).is_none()",
+        "                && let Some(answer) =",
+        "                    $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
+        "            {"
+      ]
+    },
+    {
+      "name": "M35.1: a responder is consulted re-entrantly for its own ring",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "A call a responder makes into the seam for its own ring must fall through, as the thread-local form's does. Consulted again, it blocks on its own lock; the re-entrancy test hangs, which a timeout counts as caught.",
+      "find": [
+        "                if answering.contains(&ring) {"
+      ],
+      "replace": [
+        "                if false {"
+      ]
+    },
+    {
+      "name": "M35.1: a responder that panicked leaves its ring marked as answering",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "The mark is cleared by a guard, so a panicking responder unwinds through it. Left set, every later call on that thread falls through, and the ring is never answered there again.",
+      "find": [
+        "                answering.remove(at);"
+      ],
+      "replace": [
+        "                let _ = at;"
+      ]
+    },
+    {
+      "name": "M35.1: ending a registration leaves it in place",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "Registration::end ends it now and hands the responder back; left in place, the ring is still answered. Caught by every test that ends a registration and expects its responder back.",
+      "find": [
+        "    pub fn end(self) -> Option<Box<dyn Responses + Send>> {",
+        "        end_id(self.ring)"
+      ],
+      "replace": [
+        "    pub fn end(self) -> Option<Box<dyn Responses + Send>> {",
+        "        let _ = self.ring;",
+        "        None"
+      ]
+    },
+    {
+      "name": "M35.1: the resolver cannot be registered",
+      "file": "src/sys/resolver.rs",
+      "expect": "refused-by-build",
+      "buildError": "cannot be sent between threads safely",
+      "why": "A registered responder answers on whatever thread calls, so it is Send. Without CompletionEvent's Send, the resolver is not, and the test that registers one does not build.",
+      "find": [
+        "unsafe impl Send for CompletionEvent {}"
+      ],
+      "replace": [
+        ""
+      ]
     }
   ]
 }

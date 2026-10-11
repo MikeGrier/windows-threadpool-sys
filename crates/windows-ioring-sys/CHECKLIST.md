@@ -176,17 +176,7 @@ the same day by [D-85](DESIGN-NOTES.md#d-85): the `kernel-seam` feature's respon
 ring is used from the consumer's thread and from pool threads alike. The per-ring form is built
 beside the thread-local one, then replaces it.
 
-- [ ] **M35.1** -- **A responder registered for one ring** ([D-85](DESIGN-NOTES.md#d-85)), under
-  the `kernel-seam` feature: keyed by the ring's `RingId`, answering that ring's seam calls on
-  whatever thread makes them; a ring with none going to the kernel. The responder is `Send`, so
-  `Resolver` is made `Send`: its stats are shared through `Rc<RefCell<..>>` (`ResolverWatch`), and
-  it keeps the completion event as a raw pointer. A registration ends when its ring drops, after
-  the ring's rundown, so a responder holding operations still answers the rundown that pops them;
-  a guard may end it earlier. The seam's wrappers in [sys.rs](src/sys.rs) are handed a raw handle
-  today, so they must learn which ring a call is for. Tests, each direction asserted: a ring's
-  responder answers its calls from a thread other than the one that registered it; it does not
-  answer another ring's; left alone, a registration ends at the ring's drop, after answering the
-  rundown; its guard dropped first ends it then; and after it ends the ring reaches the kernel. Sabotages for each, in [sabotage.json](sabotage.json).
+- [x] **M35.1** -- A responder registered for one ring, answering its calls on any thread, ending at the ring's drop after its rundown or at `Registration::end`. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m351)
 
 - [ ] **M35.2** -- **The thread-local responder removed** ([D-85](DESIGN-NOTES.md#d-85)): every
   user moved to the per-ring form -- `Resolver::scoped`, which installs before its ring exists and
@@ -197,6 +187,17 @@ beside the thread-local one, then replaces it.
   or re-anchored with it.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## M36 -- `CompletionWake`'s ring-opening tests moved to `tests/`
+
+Opened 2026-10-11 while landing `M35.1`, from the entry recorded in
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md): `tools/check-ring-tests.ps1`, which
+CI runs, fails on five `completion_wake::` lib tests that `M33.1` added without answering its
+question.
+
+- [ ] **M36.1** -- **The five `completion_wake::` lib tests moved to an integration test**, since
+  they use only public API (`M24.3`), and the check passing again with the inventory unchanged.
+  The entry moves to [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in the same commit.
 
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 

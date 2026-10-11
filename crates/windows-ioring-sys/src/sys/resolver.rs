@@ -59,15 +59,16 @@
 //! [`Resolver::scoped`] arranges both by construction and is the shape to
 //! reach for.
 //!
-//! **A ring under a resolver is answered per thread**, as
+//! **Installed for a thread, a resolver answers that thread's calls only**, as
 //! the seam's `installed` module explains. Moving such a ring to a thread with nothing
 //! installed hands its operations straight to a kernel that never received
-//! them.
+//! them. **Registered for a ring** ([`super::register`], D-85), it answers
+//! that ring's calls on whatever thread makes them, which is why it is
+//! `Send`.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLUSH_MODE, IORING_BUFFER_INFO, IORING_BUFFER_REF, IORING_CQE, IORING_HANDLE_REF,
@@ -252,21 +253,31 @@ pub struct ResolverStats {
     pub partial_transfers: usize,
 }
 
-/// A live view of [`ResolverStats`] for an installed resolver.
+/// A live view of [`ResolverStats`] for a resolver in use.
 ///
-/// `Rc` rather than `Arc` because a responder is thread-local
-/// (the seam's `installed` module), so sharing it across threads is already
-/// meaningless.
+/// Shared across threads, because a resolver registered for a ring answers
+/// that ring's calls on whatever thread makes them
+/// ([D-85](../../DESIGN-NOTES.md#d-85)).
 #[derive(Debug, Clone)]
-pub struct ResolverWatch(Rc<RefCell<ResolverStats>>);
+pub struct ResolverWatch(Arc<Mutex<ResolverStats>>);
 
 impl ResolverWatch {
     /// The statistics as of now.
     #[must_use]
     pub fn stats(&self) -> ResolverStats {
-        *self.0.borrow()
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
+
+/// The ring's completion event, as the resolver keeps it: borrowed, never
+/// owned, and signalled from whichever thread the resolver is answering on.
+#[derive(Debug, Clone, Copy)]
+struct CompletionEvent(*mut c_void);
+
+// SAFETY: an event handle is a kernel object reference usable from any thread
+// in the process; the resolver neither owns nor closes it, and `SetEvent` is
+// the only call it makes with it.
+unsafe impl Send for CompletionEvent {}
 
 /// One operation the resolver is answering for.
 #[derive(Debug, Clone, Copy)]
@@ -306,8 +317,8 @@ pub struct Resolver {
     consecutive_submit_failures: u32,
     /// The ring's completion event, if one has been attached. Borrowed, never
     /// owned: the ring closes it, and this resolver must not outlive the ring.
-    event: *mut c_void,
-    stats: Rc<RefCell<ResolverStats>>,
+    event: CompletionEvent,
+    stats: Arc<Mutex<ResolverStats>>,
 }
 
 impl std::fmt::Debug for Resolver {
@@ -318,7 +329,10 @@ impl std::fmt::Debug for Resolver {
             .field("staged", &self.staged.len())
             .field("pool", &self.pool.len())
             .field("posted", &self.posted.len())
-            .field("stats", &*self.stats.borrow())
+            .field(
+                "stats",
+                &*self.stats.lock().unwrap_or_else(PoisonError::into_inner),
+            )
             .finish()
     }
 }
@@ -343,8 +357,8 @@ impl Resolver {
             posted: VecDeque::new(),
             next_seq: 0,
             consecutive_submit_failures: 0,
-            event: std::ptr::null_mut(),
-            stats: Rc::new(RefCell::new(ResolverStats::default())),
+            event: CompletionEvent(std::ptr::null_mut()),
+            stats: Arc::new(Mutex::new(ResolverStats::default())),
         }
     }
 
@@ -357,7 +371,7 @@ impl Resolver {
     /// A live view of what this resolution has done so far.
     #[must_use]
     pub fn watch(&self) -> ResolverWatch {
-        ResolverWatch(Rc::clone(&self.stats))
+        ResolverWatch(Arc::clone(&self.stats))
     }
 
     /// The seed for this run: pinned from [`SEED_VAR`] when set, otherwise
@@ -438,7 +452,7 @@ impl Resolver {
     }
 
     fn record(&self, f: impl FnOnce(&mut ResolverStats)) {
-        f(&mut self.stats.borrow_mut());
+        f(&mut self.stats.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     /// Record a built operation and return the success every `Build*` call
@@ -552,12 +566,12 @@ impl Resolver {
         // its own (D-19, measured). With `edge_triggered_signal` off this
         // signals every post, which is wider than the platform and exists to
         // show the edge is load-bearing.
-        if !self.event.is_null() && (was_empty || !self.config.edge_triggered_signal) {
+        if !self.event.0.is_null() && (was_empty || !self.config.edge_triggered_signal) {
             self.record(|s| s.signals += 1);
             // SAFETY: `event` was handed to `set_completion_event` by the ring
             // that owns it, and this resolver is required to be uninstalled
             // only after that ring is gone.
-            unsafe { SetEvent(self.event) };
+            unsafe { SetEvent(self.event.0) };
         }
         true
     }
@@ -761,7 +775,7 @@ impl Responses for Resolver {
         // Kept, not forwarded. The real ring would signal for operations it
         // never received; this resolver signals for the ones it is answering
         // for, on the edge `RS-P-6` describes.
-        self.event = event;
+        self.event = CompletionEvent(event);
         S_OK
     }
 }

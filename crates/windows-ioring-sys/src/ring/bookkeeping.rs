@@ -235,7 +235,9 @@ impl<T, X> IoRing<T, X> {
 
         // SAFETY: `self.handle` is a live ring; `event` is a live event that
         // this ring will own for the rest of its life once stored below.
-        let hr = unsafe { crate::sys::set_completion_event(self.handle, event.as_raw_handle()) };
+        let hr = unsafe {
+            crate::sys::set_completion_event(self.ring_id(), self.handle, event.as_raw_handle())
+        };
         // On failure `event` drops here, closing a handle the ring never
         // successfully referenced.
         check(hr)?;
@@ -698,7 +700,9 @@ impl<T, X> IoRing<T, X> {
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
-            let hr = unsafe { crate::sys::submit(self.handle, 1, poll_ms, &raw mut submitted) };
+            let hr = unsafe {
+                crate::sys::submit(self.ring_id(), self.handle, 1, poll_ms, &raw mut submitted)
+            };
             wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }

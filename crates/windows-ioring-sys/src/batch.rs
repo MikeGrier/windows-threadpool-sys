@@ -1367,6 +1367,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: `self.ring`'s handle is live.
         let hr = unsafe {
             crate::sys::submit(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 wait_operations,
                 timeout_ms,
