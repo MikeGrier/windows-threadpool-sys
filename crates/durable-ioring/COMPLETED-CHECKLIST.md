@@ -1970,3 +1970,45 @@ delivery owning the backend's ring. Done in the steps below.
 The item as it stood: **Folded into `DI-3.2` by the engineer, 2026-10-07: the conformance oracle is
 built from `DI-3.2.2.1`, and each later step adds its rules.** What the oracle is, and the readiness
 signal's harness check beside it, are stated under `DI-3.2` and `DI-3.2.2.1`.
+
+## Moved 2026-10-11 23:29:17 -04:00 -- DI-7.1: failed submissions reached by tests
+
+### <a id="di-71"></a>DI-7.1 -- Failed submissions reached by tests, through the ring crate's safe submit-fault responder registered on the instance's ring. *(completed 2026-10-11 23:29:17 -04:00)*
+
+Raised by implementing it: a test in this crate cannot implement the ring crate's `Responses`, whose
+methods are `unsafe fn`, and the crate forbids `unsafe` ([DI-D-4](DESIGN-NOTES.md#di-d-4)). That
+decision says to add the safe wrapper to the lower crate, so the ring crate gained
+`sys::submit_faults` (its `M37.1`, [D-86](../windows-ioring-sys/DESIGN-NOTES.md#d-86)) and this item
+waited on it. The tests, in [dioring/tests/submits.rs](src/dioring/tests/submits.rs) and the
+backend's tests: a push whose submit fails is accepted and owed; a pop whose submit fails reports
+the cause as an error that downcasts to its `RefusalCause`, repeatedly, and the work is issued and
+completes once submits succeed; a drain's submit fails on a pool thread, shown by the thread the
+responder records, leaving the second read queued until the next submit; a seal's commit, a
+submission of the core's own, whose submit fails is made durable once they succeed; and the
+backend's own failed submit after an accepted push, its reissue, that the ring is asked only while a
+submit is owed, and each ring condition's cause through the real flow. Stable over 150 runs. The
+blind-spot entry is `caught`, seven sabotages are added for the reissue, `pop`'s preference of an
+entry over the report, and the drain's first submit, and the two sentences of the manifest's
+`notCoveredHere` that these tests reach are removed. The assistant's choices are queued in `DI-9.7`.
+The item as it stood at completion:
+
+**Failed submissions reached by tests, through a responder on the instance's ring.** `pop` reports a
+failed submission when it has no entry to return instead, and no test reaches that today, so it is a
+declared blind spot in [sabotage.json](sabotage.json) ("a pop hides a failed submit"). The ring
+crate's kernel responder, registered for one ring
+([D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85)), answers that ring's calls on whatever thread
+makes them, so it fails the submits this instance's pool threads make too, and a drain's real submit
+cannot undo the injected failure. **The responder is the ring crate's safe `sys::submit_faults`, not
+one implemented here**: `Responses`' methods are `unsafe fn`, which this crate's
+`#![forbid(unsafe_code)]` rejects, and [DI-D-4](DESIGN-NOTES.md#di-d-4) says a build that fails on
+the `forbid` is the moment to add the safe wrapper to the lower crate, not to relax the lint. The
+tests enable `kernel-seam` as a dev-dependency feature and reach the ring through a test-only
+accessor on the backend, which is why they live in this crate. Tests: a push whose submit fails and
+a pop whose submit fails, the pop reporting the cause as an error that downcasts to its
+`RefusalCause`, then the work issued and completed once submits succeed; a drain whose submit fails
+on a pool thread -- held there by the engine's lock, so it is a guaranteed one -- leaving the work
+queued for the next submit; and the Windows backend's own failed submit after an accepted push, and
+its reissue. The blind-spot entry is turned to `caught`, sabotages are added for the backend's
+reissue, and the paths now reached are removed from the manifest's `notCoveredHere`.
+
+> **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M37` -> `M37.1` (a safe responder that fails a ring's submits), landed first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).

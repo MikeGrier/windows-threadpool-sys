@@ -37,6 +37,7 @@ mod gates;
 mod providers;
 // Removing a file, and ending the instance: DI-3.2.7.
 mod ending;
+mod submits;
 
 type Ring = Dioring<Vec<u8>>;
 type V = DioringIds<u64>;

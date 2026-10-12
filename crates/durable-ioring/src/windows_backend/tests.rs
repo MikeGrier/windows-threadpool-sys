@@ -548,6 +548,125 @@ fn nothing_to_submit_is_success_and_notifications_are_handed_out() {
     assert!(backend.pop().expect("pop").is_none());
 }
 
+/// The failure the tests below arm on a ring's submits: `ERROR_IO_DEVICE`, which no ring condition
+/// names, so it is of unknown cause.
+fn device() -> InjectedFailure {
+    InjectedFailure::Win32(1117)
+}
+
+#[test]
+fn a_submit_that_fails_after_an_accepted_push_is_reported_and_reissued() {
+    let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
+    let mut backend = backend(&given, &added);
+    let faults = backend.submit_faults();
+    faults.fail_until_cleared(device());
+
+    backend
+        .push(write(1, GIVEN, 0, b"queued"))
+        .expect("a push is accepted though its own submit failed");
+    assert!(
+        backend.pop().expect("pop").is_none(),
+        "the ring never submitted it, so nothing completed"
+    );
+    let RefusalCause::Unknown(fault) = backend
+        .submit()
+        .expect_err("the submit is owed, and fails again")
+    else {
+        panic!("an error no ring condition names is of unknown cause");
+    };
+    assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
+    assert_eq!(fault.code.and_then(crate::ErrorCode::win32), Some(1117));
+    assert!(
+        backend.pop().expect("pop").is_none(),
+        "a failed reissue leaves it queued"
+    );
+
+    faults.clear();
+    backend.submit().expect("the reissue succeeds");
+    let completion = next(&mut backend);
+    assert_eq!(completion.token, SubmissionToken(1));
+    assert_eq!(completion.result, Ok(6));
+    assert_eq!(
+        std::fs::read(&given.0).expect("read the file"),
+        b"queued",
+        "and it ran"
+    );
+    assert_eq!(
+        faults.failures().len(),
+        2,
+        "the push's own submit, and the first reissue"
+    );
+}
+
+#[test]
+fn the_ring_is_asked_to_submit_only_while_a_submit_is_owed() {
+    let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
+    let mut backend = backend(&given, &added);
+    let faults = backend.submit_faults();
+
+    faults.fail_until_cleared(device());
+    backend
+        .submit()
+        .expect("nothing is owed, so the ring is not asked");
+    assert!(faults.failures().is_empty());
+
+    backend
+        .push(write(1, GIVEN, 0, b"owed"))
+        .expect("accepted, its submit failing");
+    backend.submit().expect_err("owed, so asked, and fails");
+    assert_eq!(faults.failures().len(), 2);
+
+    faults.clear();
+    backend.submit().expect("the reissue succeeds");
+    next(&mut backend);
+
+    faults.fail_until_cleared(device());
+    backend
+        .submit()
+        .expect("the reissue cleared what was owed, so the ring is not asked");
+    assert_eq!(
+        faults.failures().len(),
+        2,
+        "no further failure: nothing was asked"
+    );
+    faults.clear();
+}
+
+#[test]
+fn a_failed_submit_reports_its_cause_as_the_action_that_clears_it() {
+    // The real flow, not `refusal_cause` alone: what the ring reports from a failed submit is what
+    // the caller is told.
+    for (condition, expected) in [
+        (
+            RingCondition::SubmissionQueueFull,
+            RefusalCause::SubmitNeeded,
+        ),
+        (
+            RingCondition::CompletionQueueTooFull,
+            RefusalCause::DrainNeeded,
+        ),
+        (RingCondition::SubmitInProgress, RefusalCause::Busy),
+    ] {
+        let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
+        let mut backend = backend(&given, &added);
+        let faults = backend.submit_faults();
+        faults.fail_until_cleared(InjectedFailure::Ring(condition));
+        backend
+            .push(write(1, GIVEN, 0, b"x"))
+            .expect("accepted, its submit failing");
+
+        assert_eq!(
+            backend.submit().expect_err("owed, and failing"),
+            expected,
+            "{condition:?}"
+        );
+
+        faults.clear();
+        backend.submit().expect("the reissue succeeds");
+        next(&mut backend);
+    }
+}
+
 /// A real ring completion, to inject conditions into.
 fn real_completion() -> windows_ioring_sys::Completion {
     let file = TempFile::new("wb-ring");

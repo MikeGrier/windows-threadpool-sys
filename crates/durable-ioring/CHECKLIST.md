@@ -17,27 +17,7 @@ convention.
 The driver runs on the core over the Windows backend under pool delivery. What remains is the
 paths no test reaches yet, the second delivery model, and the blocking push.
 
-- [ ] **DI-7.1** -- **Failed submissions reached by tests, through a responder on the instance's
-  ring.** `pop` reports a failed submission when it has no entry to return instead, and no test
-  reaches that today, so it is a declared blind spot in [sabotage.json](sabotage.json) ("a pop hides
-  a failed submit"). The ring crate's kernel responder, registered for one ring
-  ([D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85)), answers that ring's calls on whatever thread
-  makes them, so it fails the submits this instance's pool threads make too, and a drain's real
-  submit cannot undo the injected failure. **The responder is the ring crate's safe
-  `sys::submit_faults`, not one implemented here**: `Responses`' methods are `unsafe fn`, which
-  this crate's `#![forbid(unsafe_code)]` rejects, and [DI-D-4](DESIGN-NOTES.md#di-d-4) says a
-  build that fails on the `forbid` is the moment to add the safe wrapper to the lower crate, not to
-  relax the lint. The tests enable `kernel-seam` as a dev-dependency feature and reach the ring
-  through a test-only accessor on the backend, which is why they live in this crate. Tests: a push
-  whose submit fails and a pop whose submit fails, the pop reporting the cause as an error that
-  downcasts to its `RefusalCause`, then the work issued and completed once submits succeed; a
-  drain whose submit fails on a pool thread -- held there by the engine's lock, so it is a
-  guaranteed one -- leaving the work queued for the next submit; and the Windows backend's own
-  failed submit after an accepted push, and its reissue. The blind-spot entry is turned to
-  `caught`, sabotages are added for the backend's reissue, and the paths now reached are removed
-  from the manifest's `notCoveredHere`.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M37` -> `M37.1` (a safe responder that fails a ring's submits) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+- [x] **DI-7.1** -- Failed submissions reached by tests, through the ring crate's safe submit-fault responder registered on the instance's ring. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-71)
 
 - [ ] **DI-7.2** -- **Construction's registration paths reached by tests, through a hook that
   registers a responder on the instance's ring as it is created.** `Dioring::new` creates its ring,
@@ -279,12 +259,19 @@ does is now that item's to absorb.
   sabotage the same predicate, at the same site and in the same way, as an existing core or backend
   entry, now that the driver's copy is gone, and the relay's control with the relay.
 
-- [ ] **DI-9.7** -- **The assistant's choices from DI-M7 on**, each step adding its own here as it
-  lands. From `DI-7.1`: the responder that fails submits is asked of the ring crate, as a safe
+- [ ] **DI-9.7** -- **The assistant's choices from DI-M7 on**, each step adding its own here as it lands.
+  From `DI-7.1`: the responder that fails submits is asked of the ring crate, as a safe
   `sys::submit_faults` (its `M37.1`), rather than implemented here behind an `expect(unsafe_code)`
-  or reached through a macro that hides the `unsafe` -- [DI-D-4](DESIGN-NOTES.md#di-d-4) says to
-  add the safe wrapper to the lower crate, and either alternative is the lint relaxed by another
-  name.
+  or reached through a macro that hides the `unsafe` -- [DI-D-4](DESIGN-NOTES.md#di-d-4) says to add
+  the safe wrapper to the lower crate, and either alternative is the lint relaxed by another name.
+  Also from `DI-7.1`: the tests that need the ring reach it through a `cfg(test)`
+  `WindowsBackend::submit_faults`, which registers the responder and returns only its control, so
+  the ring's private sidecar type stays out of the signature, once per backend; `windows-ioring-sys`
+  is a dev-dependency beside the normal one, enabling `kernel-seam` for test builds; the pool-thread
+  test holds the engine's lock across both pushes, so the drain that fails is a guaranteed one
+  rather than a race; and the failure armed is `ERROR_IO_DEVICE`, which no ring condition names, so
+  it surfaces as a `RefusalCause::Unknown` carrying its code, that `pop` reports as an error
+  downcasting to the `RefusalCause`.
 
 ## DI-M10 -- Target backings
 

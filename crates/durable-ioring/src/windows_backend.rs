@@ -302,6 +302,16 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)
     }
 
+    /// Fail this backend's ring's submits on demand, whichever thread makes them (DI-7.1): a
+    /// responder is registered for the ring, which its drop ends after the rundown, so the fault
+    /// is cleared before the backend drops with an operation outstanding. Once per backend.
+    #[cfg(test)]
+    pub(crate) fn submit_faults(&self) -> windows_ioring_sys::sys::SubmitFaultControl {
+        let (faults, control) = windows_ioring_sys::sys::submit_faults();
+        let _ = windows_ioring_sys::sys::register(&self.ring, Box::new(faults));
+        control
+    }
+
     /// The target under `key`, if there is one.
     #[must_use]
     pub fn target(&self, key: IoTargetKey) -> Option<&Win32FileTarget> {

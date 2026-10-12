@@ -3364,6 +3364,31 @@ di-m3 plan, this depth of subitem is hard to work with."
   a rework could not change the trait it implements; a rework that does is now that item's to
   absorb.
 
+## DI-7.1: the seam needs `unsafe`, so the ring crate provides the safe form (2026-10-11)
+
+Not a discussion with the engineer: a finding while implementing, with the assistant's choice queued for review in `DI-9.7`.
+
+The plan for `DI-7.1` was to register the ring crate's responder on the instance's ring and fail its
+submits. Writing it showed the plan could not be built as written: `Responses`' methods are `unsafe
+fn`, which the crate's `#![forbid(unsafe_code)]` rejects, even in a test.
+[DI-D-4](../crates/durable-ioring/DESIGN-NOTES.md#di-d-4) had already said what to do -- "A build
+that fails on the `forbid` is the moment to raise it, not a lint to relax", with the safe wrapper
+added to the lower crate -- so the step was re-planned before any code was written, and the ring
+crate got `sys::submit_faults` (its `M37.1`, `D-86`).
+
+Two ways round it were considered and rejected as the lint relaxed by another name: an
+`expect(unsafe_code)` in the test module, and a macro in the ring crate expanding to the `unsafe`
+impl inside this crate, which a lint does not see through an external macro and so would hide the
+`unsafe` from the review the `forbid` exists to force. Providing a safe general `Responses` was also
+rejected: the trait mirrors the FFI on purpose, and the one case needed is small enough to provide
+whole.
+
+The pool-thread test needed one thing the plan left open. Showing a failure was answered off the
+test's thread is only sound if a drain is certain to run with a submit owed. Holding the engine's
+lock across both pushes makes it so: the drain the first read's completion calls for blocks on the
+lock, then starts with an owed submit. The responder records the thread of each failed call, which
+is what lets the test say so rather than infer it from a count.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.
