@@ -28,15 +28,27 @@ other handles.
   driver policy above refusal that submits, waits on the notification and retries; never from inside
   a callback, and pumping for itself under pumped delivery. Removed if the engineer declines it.
 
-- [ ] **DI-7.5** -- **A way for a pumped consumer to wait on the ring's event together with other
-  handles -- proposed, awaiting the engineer's ruling** ([DI-D-55](DESIGN-NOTES.md#di-d-55)): the
-  ring crate's [D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20) makes the completion event
-  reachable for exactly a consumer that mixes ring I/O with other waits, and `pump` waits on it
-  alone. Handing a pumped instance's notification out would let such a consumer wait on it beside
-  its own handles and then `pump(Some(Duration::ZERO))`; it also puts in the consumer's hands a
-  handle that can reset the event, which [DI-D-10](DESIGN-NOTES.md#di-d-10) rules out for anything
-  that interferes with dioring's control of its ring. What blocks it is that ruling, not the lack of
-  a consumer. Removed if the engineer declines it.
+- [ ] **DI-7.5** -- **A third delivery mode, `DeliveryMode::Signalled`: the pool tells the consumer
+  through an event it can wait on beside its own handles, and the consumer drains.** The engineer's
+  ruling, 2026-10-12, on a consumer that mixes ring I/O with other waits, which the ring crate's
+  [D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20) makes the completion event reachable for.
+  Handing out the ring's own event would put a handle that can reset it in the consumer's hands
+  ([DI-D-10](DESIGN-NOTES.md#di-d-10)) and let its wait take the edge the pump waits on, so the
+  event is a tee: the ring crate's `CompletionWake`, a thread-pool wait that holds no thread while it
+  waits, owns the ring's event and its callback sets an auto-reset `Event` of dioring's own, which
+  `Dioring::completion_signal` hands out a duplicate of. Nothing is shared with the ring: the
+  consumer may wait on it, set it or reset it, and the worst it costs is its own wakeup. The mode
+  takes the optional callback environment, as the pool's does. `pump` in this mode waits on that
+  same event, never the ring's, which the wake owns (D-21). **Every pump, in either pumped mode,
+  drains before it waits** and returns at once if that delivered entries, as the ring crate's D-19
+  says a waiter must: a consumer's wait that took the edge first can no longer leave `pump(None)`
+  blocked while completions sit in the ring. `completion_signal` and the mode are refused as
+  `Unsupported` where they do not apply. Tests: over the in-memory backend, a pump delivers what is
+  there when the edge was taken by someone else, and a wait that fails still drains; over a real
+  ring, a signalled instance delivers nothing until the consumer drains, its signal is set when a
+  completion arrives, the consumer's own wait then `pump(Some(Duration::ZERO))` delivers, a consumer
+  that resets the signal costs nothing but its own wakeup, an environment is accepted, and the
+  instance ends with work outstanding. Sabotages for each. `DI-D-55` is amended.
 
 ## DI-M8 -- The split: a portable crate and a Windows crate
 
