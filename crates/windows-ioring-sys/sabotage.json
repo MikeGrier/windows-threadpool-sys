@@ -1366,7 +1366,7 @@
       "name": "EQUIVALENT: a dropped wake leaves the drain to ThreadpoolWait's own Drop",
       "file": "src/completion_wake.rs",
       "expect": "survives",
-      "why": "An equivalent mutant, recorded so a reader does not go looking for the missing test. D-84 promises that a dropped wake calls no one afterwards, and that holds either way: ThreadpoolWait's own Drop disarms and drains before it closes the wait. The explicit stop_and_drain only discharges the drain obligation windows-threadpool-sys reports, and panics on under its fail-fast feature, which this crate's tests do not enable. completion_wake/tests.rs's nothing_is_called_once_the_wake_is_dropped pins the promise itself. Measured: survived when first swept as expect caught.",
+      "why": "An equivalent mutant, recorded so a reader does not go looking for the missing test. D-84 promises that a dropped wake calls no one afterwards, and that holds either way: ThreadpoolWait's own Drop disarms and drains before it closes the wait. The explicit stop_and_drain only discharges the drain obligation windows-threadpool-sys reports, and panics on under its fail-fast feature, which this crate's tests do not enable. tests/completion_wake.rs's nothing_is_called_once_the_wake_is_dropped pins the promise itself. Measured: survived when first swept as expect caught.",
       "find": [
         "        self.wait.stop_and_drain();"
       ],

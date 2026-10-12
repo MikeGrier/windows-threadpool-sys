@@ -6407,3 +6407,18 @@ ring is made; the property test `Stalled`; the forged-completion tests in
 re-anchored with it.
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-11 22:22:15 -04:00 -- M36.1, completing M36: `CompletionWake`'s tests moved to `tests/`
+
+### <a id="m361"></a>M36.1 -- The five `completion_wake::` lib tests moved to an integration test, and the ring-opening inventory check passing again. *(completed 2026-10-11 22:22:15 -04:00)*
+
+Five tests `M33.1` added as lib tests opened a real ring and waited on the thread pool using only
+public API, so `tools/check-ring-tests.ps1` failed on them. Moved by `git mv` to
+[tests/completion_wake.rs](tests/completion_wake.rs), gated on `threadpool`; the check passes with
+the inventory unchanged, and the entry is moved to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). One sabotage rationale named the old path
+and now names the new. The item as it stood at completion:
+
+**The five `completion_wake::` lib tests moved to an integration test**, since they use only public
+API (`M24.3`), and the check passing again with the inventory unchanged. The entry moves to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in the same commit.

@@ -1,6 +1,15 @@
 // Copyright (c) 2026 Mike Grier
 //! `CompletionWake` over a ring its owner keeps: what it delivers, the setup signal's reach, the
 //! owner submitting from inside a call, and silence once dropped.
+//!
+//! # Why this is an integration test
+//!
+//! Every test here opens a real ring and waits on the thread pool, an operating-system boundary
+//! this repository's Quality rule places in `tests/`, and they use only public API. They were lib
+//! tests from `M33.1` until `M36.1` moved them here, for `tools/check-ring-tests.ps1`, which keeps
+//! that population from growing (D-49).
+
+#![cfg(all(windows, feature = "threadpool"))]
 
 use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
@@ -9,8 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use super::CompletionWake;
-use crate::{Batch, IoRing, PushOptions, SharedHandle};
+use windows_ioring_sys::{Batch, CompletionWake, IoRing, PushOptions, SharedHandle};
 
 /// Generous: each wait is for a real completion on a local file and a pool callback.
 const BOUND: Duration = Duration::from_secs(5);

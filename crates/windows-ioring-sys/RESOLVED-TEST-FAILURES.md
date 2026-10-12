@@ -559,3 +559,24 @@ next experiments are queued in [CHECKLIST.md](CHECKLIST.md) under `M26.13`.
 **Why it matters beyond these two tests.** The sabotage harness runs the whole suite once per case,
 and a suite that fails for this reason is recorded as the case being `caught`. That is the dangerous
 direction: a sabotage the tests did not really catch reads as a clean bill of health.
+
+## Resolved 2026-10-11 22:22:15 -04:00 -- the ring-opening lib-test inventory check failed on `CompletionWake`'s tests
+
+Recorded 2026-10-11 18:03:39 -04:00, as it stood:
+
+`tools/check-ring-tests.ps1`, which CI runs, reports five `completion_wake::` lib tests as
+`ADDED` to the inventory in [RING-OPENING-LIB-TESTS.txt](RING-OPENING-LIB-TESTS.txt). They
+came with `CompletionWake` in `M33.1` (commit `f80ba6d7`), which added them without answering
+the check's question -- does each test need the kernel, or only a ring-shaped thing? Found
+while landing `M35.1`, which adds no lib test that opens a ring.
+
+What the answer looks like, not yet acted on: the five use only public API
+(`CompletionWake`, `Batch`, `IoRing`, `PushOptions`, `SharedHandle`), which the check's own
+guidance says moves them to `tests/` (`M24.3`) rather than into the inventory.
+
+**Closed by `M36.1`:** the five tests moved, by `git mv`, from `src/completion_wake/tests.rs` to
+[tests/completion_wake.rs](tests/completion_wake.rs), gated on the `threadpool` feature as
+`tests/event_delivery.rs` is and importing through the public API. The check passes with the
+inventory unchanged, and the three sabotages these tests catch or pin -- `M33.1`'s unarmed wake,
+`M26.12`'s setup signal, and the equivalent mutant on the wake's drop -- behave as declared from
+there.

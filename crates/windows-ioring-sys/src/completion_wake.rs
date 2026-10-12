@@ -128,6 +128,3 @@ impl Drop for CompletionWake {
         self.wait.stop_and_drain();
     }
 }
-
-#[cfg(test)]
-mod tests;

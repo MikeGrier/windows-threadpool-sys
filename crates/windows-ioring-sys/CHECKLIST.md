@@ -168,17 +168,6 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## M36 -- `CompletionWake`'s ring-opening tests moved to `tests/`
-
-Opened 2026-10-11 while landing `M35.1`, from the entry recorded in
-[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md): `tools/check-ring-tests.ps1`, which
-CI runs, fails on five `completion_wake::` lib tests that `M33.1` added without answering its
-question.
-
-- [ ] **M36.1** -- **The five `completion_wake::` lib tests moved to an integration test**, since
-  they use only public API (`M24.3`), and the check passing again with the inventory unchanged.
-  The entry moves to [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in the same commit.
-
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.
