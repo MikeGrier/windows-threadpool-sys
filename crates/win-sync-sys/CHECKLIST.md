@@ -26,13 +26,7 @@ milestones when the next of these is taken up.
   kernel object one waits on, unlike a thread-pool timer, which runs a callback. Gets the thread
   pool's `From` conversion.
 
-- [ ] **WS-1+.5** -- **Duplicate a handle with chosen access.** `DuplicateHandle` with an explicit
-  access mask rather than the same access, on `Event` and on an `OwnedHandle`, so a holder can be
-  given a duplicate that can wait but not set or reset (`SYNCHRONIZE` alone). The first consumer is
-  [DI-7+.1](../durable-ioring/CHECKLIST.md), a read-only duplicate of the ring's own completion
-  event; the primitive is not specific to it. The open design question is the type: a duplicate
-  that cannot signal should not offer `set` or `reset`, so it is probably a distinct wait-only type
-  rather than an `Event` that fails at run time.
+- [x] **WS-1+.5** -- A handle duplicated with a chosen access, and a wait-only event built on it. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ws-1+5)
 
 ## M-inf -- Parked
 
@@ -45,7 +39,9 @@ milestones when the next of these is taken up.
 - [ ] **WS-inf.2** -- **Named objects, `OpenEvent`, and private namespaces.** Not decided
   ([WS-D-1](DESIGN-NOTES.md#ws-d-1)). If taken up they belong here, and adding them changes nothing
   that exists; the open part is where an owned security-attributes type lives, since the one in
-  `windows-namespace-request-sys` sits in a crate about the file-system namespace.
+  `windows-namespace-request-sys` sits in a crate about the file-system namespace. Duplicating a
+  handle into another process, which `duplicate_handle_with_access` does not do
+  ([WS-D-7](DESIGN-NOTES.md#ws-d-7)), crosses the same boundary and belongs here.
 
 - [ ] **WS-inf.3** -- **Whether the workspace's private events move onto `Event`.** Each is the
   engineer's decision, taken per crate. Found by sweeping non-test sources for raw `CreateEventW`,

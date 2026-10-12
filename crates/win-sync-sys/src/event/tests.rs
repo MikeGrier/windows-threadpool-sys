@@ -10,10 +10,12 @@ use windows_sys::Win32::Foundation::{
     WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{
-    EVENT_MODIFY_STATE, GetCurrentProcess, SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+    EVENT_MODIFY_STATE, GetCurrentProcess, ResetEvent, SYNCHRONIZATION_SYNCHRONIZE, SetEvent,
+    WaitForSingleObject,
 };
 
-use super::{Event, ResetMode};
+use super::{Event, ResetMode, WaitOnlyEvent};
+use crate::{WaitOutcome, wait_for_single_object};
 
 /// How long a test waits for something that should happen, in milliseconds.
 const BOUND_MS: u32 = 5_000;
@@ -331,4 +333,149 @@ fn as_handle_lends_the_handle_as_raw_handle_names() {
 fn an_event_is_send_and_sync() {
     fn assert_send_and_sync<T: Send + Sync>() {}
     assert_send_and_sync::<Event>();
+}
+
+fn wait_only(event: &Event) -> WaitOnlyEvent {
+    event.try_clone_wait_only().expect("wait-only clone")
+}
+
+/// The error a raw `SetEvent` on `handle` reports, `None` if it succeeded.
+fn raw_set_error(handle: &impl AsRawHandle) -> Option<i32> {
+    // SAFETY: the handle is open for the duration of the borrow.
+    if unsafe { SetEvent(handle.as_raw_handle()) } == FALSE {
+        return std::io::Error::last_os_error().raw_os_error();
+    }
+    None
+}
+
+/// The error a raw `ResetEvent` on `handle` reports, `None` if it succeeded.
+fn raw_reset_error(handle: &impl AsRawHandle) -> Option<i32> {
+    // SAFETY: the handle is open for the duration of the borrow.
+    if unsafe { ResetEvent(handle.as_raw_handle()) } == FALSE {
+        return std::io::Error::last_os_error().raw_os_error();
+    }
+    None
+}
+
+#[test]
+fn a_wait_only_clone_is_the_same_object_and_a_new_event_is_not() {
+    let event = event(ResetMode::Manual, false);
+    let other = self::event(ResetMode::Manual, false);
+    let waiter = wait_only(&event);
+    assert!(same_object(&event, &waiter));
+    assert!(!same_object(&other, &waiter));
+}
+
+#[test]
+fn a_wait_only_clone_sees_the_original_set_and_reset() {
+    let event = event(ResetMode::Manual, false);
+    let waiter = wait_only(&event);
+    assert!(!take(&waiter));
+    event.set().expect("set");
+    assert!(take(&waiter));
+    event.reset().expect("reset");
+    assert!(!take(&waiter));
+}
+
+#[test]
+fn a_wait_through_a_wait_only_clone_takes_an_auto_reset_signal() {
+    let event = event(ResetMode::Auto, true);
+    let waiter = wait_only(&event);
+    assert!(take(&waiter), "the wait took the signal");
+    assert!(!take(&event), "and the original no longer has it");
+}
+
+#[test]
+fn a_wait_only_clone_can_neither_set_nor_reset_the_event() {
+    let event = event(ResetMode::Manual, false);
+    let waiter = wait_only(&event);
+    let denied = Some(ERROR_ACCESS_DENIED as i32);
+
+    assert_eq!(raw_set_error(&waiter), denied);
+    assert!(!take(&event), "the refused set changed nothing");
+
+    event.set().expect("set the original");
+    assert_eq!(raw_reset_error(&waiter), denied);
+    assert!(take(&event), "the refused reset changed nothing");
+}
+
+#[test]
+fn a_wait_only_clone_converted_to_a_handle_and_adopted_as_an_event_cannot_set_it() {
+    let event = event(ResetMode::Manual, false);
+    let handle: OwnedHandle = wait_only(&event).into();
+    // SAFETY: a duplicate of an event is an event, and this one carries SYNCHRONIZE.
+    let adopted = unsafe { Event::from_owned_handle(handle) };
+    let refused = adopted.set().expect_err("the access was narrowed away");
+    assert_eq!(refused.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+    assert!(!take(&event));
+}
+
+#[test]
+fn a_clone_of_a_wait_only_clone_is_wait_only_too() {
+    let event = event(ResetMode::Manual, false);
+    let first = wait_only(&event);
+    let second = first.try_clone().expect("clone the clone");
+    assert!(same_object(&first, &second));
+    assert!(same_object(&event, &second));
+    assert_eq!(raw_set_error(&second), Some(ERROR_ACCESS_DENIED as i32));
+    event.set().expect("set");
+    assert!(take(&second));
+}
+
+#[test]
+fn a_wait_only_clone_outlives_the_event_it_came_from() {
+    let event = event(ResetMode::Manual, false);
+    let keeper = event.try_clone().expect("clone");
+    let waiter = wait_only(&event);
+    drop(event);
+    keeper.set().expect("set through the kept clone");
+    drop(keeper);
+    assert!(take(&waiter), "the object lives while any handle does");
+}
+
+#[test]
+fn a_wait_only_clone_is_waited_on_by_the_crates_wait() {
+    let event = event(ResetMode::Auto, false);
+    let waiter = wait_only(&event);
+    assert_eq!(
+        wait_for_single_object(&waiter, Some(Duration::ZERO)).expect("wait"),
+        WaitOutcome::TimedOut
+    );
+    event.set().expect("set");
+    assert_eq!(
+        wait_for_single_object(&waiter, Some(bound())).expect("wait"),
+        WaitOutcome::Signalled
+    );
+}
+
+#[test]
+fn a_set_on_another_thread_releases_a_wait_only_waiter_on_this_one() {
+    let event = event(ResetMode::Auto, false);
+    let waiter = wait_only(&event);
+    let signaller = event.try_clone().expect("clone");
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(10));
+        signaller.set()
+    });
+    assert_eq!(
+        wait_for_single_object(&waiter, Some(bound())).expect("wait"),
+        WaitOutcome::Signalled
+    );
+    worker.join().expect("worker").expect("set");
+}
+
+#[test]
+fn as_handle_lends_a_wait_only_clones_handle_as_raw_handle_names() {
+    let event = event(ResetMode::Auto, false);
+    let waiter = wait_only(&event);
+    assert_eq!(waiter.as_handle().as_raw_handle(), waiter.as_raw_handle());
+    let raw = waiter.as_raw_handle();
+    let owned: OwnedHandle = waiter.into();
+    assert_eq!(owned.as_raw_handle(), raw, "the handle itself moved out");
+}
+
+#[test]
+fn a_wait_only_event_is_send_and_sync() {
+    fn assert_send_and_sync<T: Send + Sync>() {}
+    assert_send_and_sync::<WaitOnlyEvent>();
 }

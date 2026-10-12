@@ -10,6 +10,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
+use crate::duplicate::{Access, duplicate_handle_with_access};
+
 /// How an event returns to unsignalled after it is set.
 ///
 /// Fixed when the event is created: Windows offers no way to change it, or to
@@ -149,6 +151,88 @@ impl Event {
         Ok(Self {
             handle: self.handle.try_clone()?,
         })
+    }
+
+    /// A second handle to the same event that can wait on it and do nothing else.
+    ///
+    /// The handle carries `SYNCHRONIZE` access alone, so it can neither set nor reset the event:
+    /// the kernel refuses a `SetEvent` or `ResetEvent` on it. That is something [`try_clone`] cannot
+    /// give, since its clone holds whatever access the original does. See [`WaitOnlyEvent`] for
+    /// what the result is, why it is not an `Event`, and what the guarantee does not cover.
+    ///
+    /// A wait through it takes what a signalled event gives, as any wait does: waiting through a
+    /// wait-only handle consumes an auto-reset event's signal. What it cannot do is signal or
+    /// withdraw one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `DuplicateHandle`. Like [`try_clone`](Self::try_clone)'s, no test
+    /// reaches it: duplicating a handle this process owns fails only when the process cannot get
+    /// another handle.
+    ///
+    /// [`try_clone`]: Self::try_clone
+    pub fn try_clone_wait_only(&self) -> io::Result<WaitOnlyEvent> {
+        Ok(WaitOnlyEvent {
+            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE)?,
+        })
+    }
+}
+
+/// A handle to an event that can wait on it and cannot set or reset it.
+///
+/// Made by [`Event::try_clone_wait_only`], carrying `SYNCHRONIZE` access and no more. It is its own
+/// type, not an [`Event`] that fails when set, because what it cannot do is not an error to be
+/// discovered at run time: it has no `set` and no `reset`, and the kernel would refuse them if it
+/// were handed to code that tried ([WS-D-7](../DESIGN-NOTES.md#ws-d-7)).
+///
+/// **What that guarantees**: the handle cannot be used to signal the event, by this crate or by a
+/// raw call, because the kernel refuses. **What it does not**: code that holds the handle can
+/// duplicate it asking for more access, which Windows allows
+/// ([`duplicate_handle_with_access`](crate::duplicate_handle_with_access)), so this guards against
+/// a handle used for what it was not handed out for, not against a holder bent on signalling.
+///
+/// **It is still known to be an event**, so what [WS-D-4](../DESIGN-NOTES.md#ws-d-4) lets a consumer
+/// rely on holds here too: the handle is not a mutex, which is the one kind of object a thread-pool
+/// wait cannot take. There is no way to adopt a handle as one, so that stays true without `unsafe`.
+///
+/// It lends its handle, so [`wait_for_single_object`](crate::wait_for_single_object) waits on it.
+/// `Send` and `Sync`, as an event is.
+#[derive(Debug)]
+pub struct WaitOnlyEvent {
+    handle: OwnedHandle,
+}
+
+impl WaitOnlyEvent {
+    /// A second wait-only handle to the same event.
+    ///
+    /// It holds the same access as this one, so the clone cannot signal either.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `DuplicateHandle`; no test reaches it, as for
+    /// [`Event::try_clone`].
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            handle: self.handle.try_clone()?,
+        })
+    }
+}
+
+impl AsHandle for WaitOnlyEvent {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+impl AsRawHandle for WaitOnlyEvent {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.handle.as_raw_handle()
+    }
+}
+
+impl From<WaitOnlyEvent> for OwnedHandle {
+    fn from(event: WaitOnlyEvent) -> Self {
+        event.handle
     }
 }
 

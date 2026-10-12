@@ -57,6 +57,33 @@ assert_eq!(
 `windows-threadpool-sys` accepts an `Event` as a thread-pool wait target without `unsafe`, because
 an `Event` is never a mutex -- the one kind of object the pool cannot wait on.
 
+- **`WaitOnlyEvent`** and **`duplicate_handle_with_access`** -- a handle to the same object that can
+  do less. `Event::try_clone_wait_only` gives a handle to the event that can be waited on and can
+  neither set nor reset it: the kernel refuses a `SetEvent` or `ResetEvent` on it.
+  `duplicate_handle_with_access` is `DuplicateHandle` with the access mask chosen, over any handle
+  and returning an `OwnedHandle`. **Windows does not confine a duplicate to the source's access**,
+  so a holder that sets out to can duplicate a wait-only handle into a wider one; the narrowing
+  guards against a handle used for what it was not handed out for, and is not a boundary within
+  the process.
+
+```rust
+use std::time::Duration;
+use win_sync_sys::{Access, Event, ResetMode, WaitOutcome, duplicate_handle_with_access, wait_for_single_object};
+
+let event = Event::new(ResetMode::Manual, false)?;
+
+// Hand this to something that should wait for the event and never signal it.
+let waiter = event.try_clone_wait_only()?;
+assert_eq!(wait_for_single_object(&waiter, Some(Duration::ZERO))?, WaitOutcome::TimedOut);
+event.set()?;
+assert_eq!(wait_for_single_object(&waiter, None)?, WaitOutcome::Signalled);
+
+// The same for a handle that is not an `Event`, such as one received from elsewhere.
+let adopted = duplicate_handle_with_access(&event, Access::SYNCHRONIZE)?;
+assert_eq!(wait_for_single_object(&adopted, None)?, WaitOutcome::Signalled);
+# Ok::<(), std::io::Error>(())
+```
+
 ## What is not here
 
 - **`PulseEvent`, deliberately.** Its own documentation calls it unreliable and says it should not

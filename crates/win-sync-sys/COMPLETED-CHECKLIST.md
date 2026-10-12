@@ -74,3 +74,35 @@ thread is `Abandoned`; the conversion of every timeout. Sabotages for each, in
 and `Event` still has no `wait` of its own, the wait being over any handle.
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.3` (pumped delivery). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 15:58:00 -04:00 -- WS-1+.5: a handle duplicated with a chosen access
+
+### <a id="ws-1+5"></a>WS-1+.5 -- A handle duplicated with a chosen access, and a wait-only event built on it. *(completed 2026-10-12 15:58:00 -04:00)*
+
+Per [WS-D-7](DESIGN-NOTES.md#ws-d-7), the assistant's choices queued for the engineer's review in
+durable-ioring's `DI-9.7`. Built: `duplicate_handle_with_access(handle, Access)` over any handle,
+returning an `OwnedHandle`; `Access`, a typed mask with `SYNCHRONIZE` and `EVENT_MODIFY_STATE` named,
+`|`, `from_bits` and `bits`; `Event::try_clone_wait_only`, returning `WaitOnlyEvent`, which has no
+`set` or `reset`, lends its handle, converts into an `OwnedHandle`, and clones to another wait-only
+handle. The README documents it with a doctest.
+
+**A claim in the item was false, and a test found it.** The item as written said the function would
+narrow; the first run of a test written to expect Windows to refuse a wider duplicate found that it
+does not. A duplicate of a `SYNCHRONIZE`-only handle asking for `EVENT_MODIFY_STATE` succeeds and can
+set the event. The documentation of the function, of `WaitOnlyEvent`, of the README and of durable-ioring's
+`DI-7+.1` now say what the guarantee is, and a test records the platform behaviour so a Windows that
+changed it would show. The tests observe a duplicate's powers through raw `SetEvent`, `ResetEvent`,
+`WaitForSingleObject` and `CompareObjectHandles`, never through this crate's own, so a defect in the
+duplication cannot hide behind what it duplicated. Nine sabotages and a control are in
+[sabotage.json](sabotage.json), and one existing entry was re-anchored because the new type's
+`try_clone` made its line anchor ambiguous.
+
+The item as it stood at completion:
+
+- [x] **WS-1+.5** -- **Duplicate a handle with chosen access.** `DuplicateHandle` with an explicit
+  access mask rather than the same access, on `Event` and on an `OwnedHandle`, so a holder can be
+  given a duplicate that can wait but not set or reset (`SYNCHRONIZE` alone). The first consumer is
+  [DI-7+.1](../durable-ioring/CHECKLIST.md), a read-only duplicate of the ring's own completion
+  event; the primitive is not specific to it. The open design question is the type: a duplicate
+  that cannot signal should not offer `set` or `reset`, so it is probably a distinct wait-only type
+  rather than an `Event` that fails at run time.
