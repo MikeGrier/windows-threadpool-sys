@@ -3483,6 +3483,34 @@ the real event the wake's two calls per activation set the signal again and hide
 Not built: the wait-only duplicate of the ring's own event, which serves a consumer wanting no
 callback at all. It needs a duplicate-with-access in `win-sync-sys`, and stays available.
 
+## DI-7.4: the blocking push, as an example (2026-10-12)
+
+A discussion with the engineer. Asked to explain the `DI-7.4` question and why they would or would
+not decline, the assistant set out both sides. For: back-pressure as a convenience, and a loop that
+is subtle to write for three delivery modes. Against: it is not a capability, since the refusal
+names its cause and hands the buffer back; the policy -- wait, shed or queue -- is the caller's; and
+a blocking call that a pool thread or a callback can hold up deadlocks, which a library method
+invites. The assistant leaned to parking it, offering "too early to say" as an answer.
+
+The engineer's reply changed the question: build it as an example, "an on the side helper", a
+maintained source the consumer takes literally or adapts. That keeps what the assistant valued in
+building it -- the delivery cases got right once -- and drops what it feared, since an example can
+state the deadlock rule plainly and leave the policy to the caller. It also made the test of the
+claim concrete: an example built only on public API is the proof that the API is enough. It was,
+and `PushRefusal::Backend`, `RefusalCause::is_retryable`, `pump` and `completion_signal` were all
+that was needed.
+
+Building it found a defect the library's own tests had not. The first test of a full queue dropped a
+pumped instance with its completions unpopped and an entry still queued behind them, and the ring's
+rundown failed with `IORING_E_COMPLETION_QUEUE_TOO_FULL`: `SubmitIoRing` with a wait reports that
+whatever it waits for when the queue is full, and rundown waited before it reaped. It is the same
+rule as the completion event's edge, drain then wait, applied to the one waiter that did not follow
+it. It was fixed in the ring crate rather than worked round (its `M39.1`, `D-88`). Two false starts
+on the way, both caught by running rather than reading: a ring-level reproduction that did not
+reproduce, because it filled the queue without leaving an entry queued behind it, and a first fix
+that reaped before the quiescence check, which broke four unit tests over a ring whose handle the
+kernel refuses, since a bound of zero makes no kernel call.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

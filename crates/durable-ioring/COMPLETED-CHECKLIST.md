@@ -2180,3 +2180,38 @@ nothing until the consumer drains, its signal is set when a completion arrives, 
 wait then `pump(Some(Duration::ZERO))` delivers, a consumer that resets the signal costs nothing but
 its own wakeup, an environment is accepted, and the instance ends with work outstanding. Sabotages
 for each. `DI-D-55` is amended.
+
+## Moved 2026-10-12 15:08:45 -04:00 -- DI-7.4, completing DI-M7: a blocking push, as an example
+
+DI-M7 (the driver's delivery, finished) completed with this item: `DI-7.1` to `DI-7.3` and `DI-7.5`
+are archived above under their own anchors, and the milestone heading and its stubs left
+[CHECKLIST.md](CHECKLIST.md) together.
+
+### <a id="di-74"></a>DI-7.4 -- A blocking push, built as a maintained example on the public API rather than as an API of the crate. *(completed 2026-10-12 15:08:45 -04:00)*
+
+Proposed with the engineer's ruling awaited; asked to explain it, the assistant set out the case for
+and against and leaned to parking it. The engineer's reply turned it: "Can we build it as an
+example, an on-the-side helper? I assume ... it's all built on public APIs, so what we would be
+providing is a maintained source code example that clients could use literally or take and adapt."
+Per [DI-D-56](DESIGN-NOTES.md#di-d-56). What was built, in
+[examples/blocking_push/main.rs](examples/blocking_push/main.rs): `push_blocking`, which tries a
+push through a closure given the buffer and context each time, and while the refusal is one
+`RefusalCause::is_retryable` clears calls the caller's `make_room` and tries again, up to a patience,
+handing the push back whole on a refusal waiting cannot clear, on timing out, and on `make_room`
+failing; and a demonstration over a real file and ring in each delivery mode, with queues far smaller
+than the writes pushed. Making room is `pump` for a pumped or signalled instance and a short sleep
+for a pooled one. Tests, in [examples/blocking_push/tests.rs](examples/blocking_push/tests.rs), run
+with the crate's through `test = true` on the example: a pumped and a signalled instance taking
+many times their queues' worth of writes by pumping, with a refusal certain to occur; a pooled one
+taking them all; a refusal that cannot clear returned at once with its buffer; a push that never
+gets room timing out with its buffer; a failing `make_room` reported with the push handed back;
+and a push the ring takes never calling `make_room`. Five sabotages, one a hang, are added in this
+crate's manifest under `examples/`. **It found a defect below this crate**: its first full-queue test
+dropped a pumped instance whose queues were full and the ring's rundown failed with
+`IORING_E_COMPLETION_QUEUE_TOO_FULL`, tripping a debug assertion in `Drop`. The ring crate fixed it
+at the source, its `M39.1` ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)), and this item waited
+on that commit. The assistant's choices are queued in `DI-9.7`. The item as it stood at completion:
+
+**A blocking push -- proposed, awaiting the engineer's ruling** (DI-D-52 Q4): a driver policy above
+refusal that submits, waits on the notification and retries; never from inside a callback, and
+pumping for itself under pumped delivery. Removed if the engineer declines it.

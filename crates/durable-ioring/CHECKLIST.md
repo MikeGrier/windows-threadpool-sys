@@ -12,23 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) and the reviews (DI-M9) run alongside and gate nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
 convention.
 
-## DI-M7 -- The driver's delivery, finished
-
-The driver runs on the core over the Windows backend, drained on the thread pool or by the
-consumer's own thread, which the pool may tell. What remains is the blocking push.
-
-- [x] **DI-7.1** -- Failed submissions reached by tests, through the ring crate's safe submit-fault responder registered on the instance's ring. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-71)
-
-- [x] **DI-7.2** -- Construction's registration paths reached by tests, through a hook that registers the ring crate's safe call-fault responder on the instance's ring as it is created. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-72)
-
-- [x] **DI-7.3** -- Pumped delivery: the consumer's own thread waits on the backend's notification and drains through `pump`, over the Windows backend and the in-memory one. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-73)
-
-- [ ] **DI-7.4** -- **A blocking push -- proposed, awaiting the engineer's ruling** (DI-D-52 Q4): a
-  driver policy above refusal that submits, waits on the notification and retries; never from inside
-  a callback, and pumping for itself under pumped delivery. Removed if the engineer declines it.
-
-- [x] **DI-7.5** -- A third delivery mode, `DeliveryMode::Signalled`: the pool tells the consumer through an event it can wait on beside its own handles, and the consumer drains; and a pump that drains before it waits. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-75)
-
 ## DI-M8 -- The split: a portable crate and a Windows crate
 
 Per [DI-D-50](DESIGN-NOTES.md#di-d-50): `durable-ioring` portable, and `win-durable-ioring` for
@@ -297,7 +280,16 @@ does is now that item's to absorb.
   beside the pool's, and `PumpedDelivery` gained `with_notification`; the wait-only duplicate of the
   ring's own event is not built and stays available, needing a duplicate-with-access in
   `win-sync-sys`; and the signalled mode's construction failures and its callback environment are
-  declared in the sabotage manifest as not covered, as the pool's are.
+  declared in the sabotage manifest as not covered, as the pool's are. From `DI-7.4`: it was built
+  as an example, `examples/blocking_push/`, on the engineer's ruling, not as an API of the crate
+  ([DI-D-56](DESIGN-NOTES.md#di-d-56)); `push_blocking` takes the buffer and the context by value
+  and the push as a closure given them each time, so a refused push's buffer is never copied, and
+  what "make room" means is the caller's, per delivery mode; the pooled form backs off in sleeps of
+  at most a millisecond, the instance offering no signal that a drain ran; a push of a registered
+  span is outside it, having no buffer to hand back; the example's tests run with the crate's,
+  through `test = true`, and its sabotages are in this crate's manifest under `examples/`; and it
+  found a defect in the ring crate's rundown, fixed there as its `M39.1`
+  ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)) rather than worked round here.
 
 ## DI-M10 -- Target backings
 

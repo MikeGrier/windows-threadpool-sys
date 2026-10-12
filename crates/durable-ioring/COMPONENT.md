@@ -29,7 +29,10 @@ failure has put in doubt; and a protocol by which the consumer resolves a failur
 **Does not own:** retaining written data until it is durable, rewriting or replaying it after a
 failure, record formats, checkpointing, or space reclamation. Retention and automatic rewrite are a
 separate layer above this one, queued as its own future crate. Overlapping writes are the
-consumer's to order ([DI-D-6](DESIGN-NOTES.md#di-d-6)).
+consumer's to order ([DI-D-6](DESIGN-NOTES.md#di-d-6)). **A blocking push is not here either**: a
+refused push names its cause, and the loop that waits it out is a maintained example,
+[examples/blocking_push/](examples/blocking_push/main.rs), to use as it stands or adapt
+([DI-D-56](DESIGN-NOTES.md#di-d-56)).
 
 ## Where it sits
 

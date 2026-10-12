@@ -2309,6 +2309,46 @@
       "why": "The manifest checking itself on the new module: the wake's callback holds only a duplicate of the event and never the engine, so when it stops relative to the engine's coming out of its slot changes nothing observable; if this comes back caught, something is matching incidental text.",
       "find": ["        drop(wake);"],
       "replace": ["        let _later = &wake;"]
+    },
+    {
+      "name": "DI-7.4: the blocking push retries a refusal that cannot clear",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Only a refusal waiting clears is waited out; the rest -- no such file, a sealed epoch -- is returned at once with the buffer, so a caller is not held for its patience over a push that can never succeed.",
+      "find": ["        if !clears || refused.buffer.is_none() {"],
+      "replace": ["        if refused.buffer.is_none() {"]
+    },
+    {
+      "name": "DI-7.4: the blocking push never gives up",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "The patience is the helper's whole bound; without it a ring that never makes room blocks its caller for ever.",
+      "find": ["        if left.is_zero() {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-7.4: the blocking push's patience is counted in the wrong unit",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A push that gives up must have waited the patience it was given, not a thousandth of it.",
+      "find": ["    let deadline = Instant::now() + patience;"],
+      "replace": ["    let deadline = Instant::now() + patience / 1000;"]
+    },
+    {
+      "name": "DI-7.4: the blocking push swallows a failure to make room",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "A make_room that fails is reported with the push handed back, rather than retried until the patience is spent and reported as a timeout, which names the wrong cause.",
+      "find": ["        if let Err(error) = make_room(ring, left.min(SLICE)) {"],
+      "replace": ["        if let Err(error) = make_room(ring, left.min(SLICE)).or(Ok::<(), io::Error>(())) {"]
+    },
+    {
+      "name": "DI-7.4: making room for a pumped instance does not pump it",
+      "file": "examples/blocking_push/main.rs",
+      "expect": "caught",
+      "why": "Nothing else drains a pumped or signalled instance, so a blocking push that does not pump waits for room that never comes.",
+      "find": ["            Self::Pumped | Self::Signalled => ring.pump(Some(slice)).map(|_| ()),"],
+      "replace": ["            Self::Pumped | Self::Signalled => Ok(()),"]
     }
   ]
 }

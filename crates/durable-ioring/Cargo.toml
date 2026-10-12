@@ -50,6 +50,13 @@ durable-ioring = { path = ".", features = ["fault-injection"] }
 # `forbid(unsafe_code)` stands (DI-D-4). A dev-dependency's features reach test builds only.
 windows-ioring-sys = { path = "../windows-ioring-sys", features = ["kernel-seam"] }
 
+# A blocking push, built on the public API as a helper to use or adapt (DI-7.4, DI-D-56). Its own
+# tests run with the crate's: without `test = true` cargo builds an example and never runs them.
+[[example]]
+name = "blocking_push"
+path = "examples/blocking_push/main.rs"
+test = true
+
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it would render an
 # almost-empty crate.
