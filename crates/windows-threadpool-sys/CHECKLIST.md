@@ -1306,6 +1306,16 @@ finding is of a different and worse kind: a rule nothing tests.
   justification needs replacing with the real reason rather than deleting, since the flag is still
   required.
 
+## M-T14+ -- Follow-ups to the `Event` conversion
+
+- [ ] **M-T14+.1** -- **A thread-pool wait target from `win_sync_sys::WaitOnlyEvent`.** From
+  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5): a wait-only handle is still known to be
+  an event and carries `SYNCHRONIZE`, which is all a pool wait needs, so a `From` conversion
+  alongside `Event`'s is safe for the reason [WS-D-5](../win-sync-sys/DESIGN-NOTES.md#ws-d-5) gives.
+  Decide whether it is a `From` impl or a second constructor, with the pool's `Event` conversion as
+  the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
+  handle it was given without giving the pool the power to signal it.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

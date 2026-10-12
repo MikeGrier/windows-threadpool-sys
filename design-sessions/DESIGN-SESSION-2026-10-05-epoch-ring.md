@@ -3511,6 +3511,28 @@ reproduce, because it filled the queue without leaving an entry queued behind it
 that reaped before the quiescence check, which broke four unit tests over a ring whose handle the
 kernel refuses, since a bound of zero makes no kernel call.
 
+## WS-1+.5: a handle with chosen access, and a premise that was false (2026-10-12)
+
+Asked whether the wait-only duplicate of the ring's event needed a checklist item, the assistant found
+it recorded only as prose, in `DI-D-55` and a done-note, and queued it as `WS-1+.5` in `win-sync-sys`
+and `DI-7+.1` in this crate; the engineer then asked for `WS-1+.5`.
+
+The item said a duplicate "can only narrow", on the assistant's reading that Windows would refuse a
+duplicate with a right its source lacks. The first test written for it, a refusal expected when
+widening a `SYNCHRONIZE`-only handle, failed: Windows allowed it, and the widened handle set the
+event. A short probe over several masks confirmed it, and showed one mask Windows does refuse, every
+bit set, which became the error path's test. Nothing had bound to the claim yet, so what changed was
+the documentation of the function, of the new type, of the README and of `DI-7+.1`, and a test that
+records the platform behaviour: a wait-only handle cannot be used to signal, and is not a boundary
+against a holder that duplicates it wider, which no in-process handle is.
+
+The type question the item left open was settled as a distinct `WaitOnlyEvent`, since an `Event` with
+reduced access is an `Event` whose `set` fails, and this has no `set`. The function is over any handle
+and returns an `OwnedHandle`, because the first consumer holds the ring's event as one and whether a
+handle is an event cannot be asked. A thread-pool conversion for the new type was queued in
+`windows-threadpool-sys` as `M-T14+.1` rather than built here, since it is that crate's `From` and its
+release.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

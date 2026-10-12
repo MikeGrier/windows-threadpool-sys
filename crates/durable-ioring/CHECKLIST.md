@@ -289,19 +289,28 @@ does is now that item's to absorb.
   span is outside it, having no buffer to hand back; the example's tests run with the crate's,
   through `test = true`, and its sabotages are in this crate's manifest under `examples/`; and it
   found a defect in the ring crate's rundown, fixed there as its `M39.1`
-  ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)) rather than worked round here.
+  ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)) rather than worked round here. From `WS-1+.5`:
+  the handle with chosen access is `win-sync-sys`' `duplicate_handle_with_access` over any handle,
+  with a typed `Access` mask, and `Event::try_clone_wait_only` gives a `WaitOnlyEvent` with no `set`
+  or `reset`, a type and not an `Event` that fails at run time
+  ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)); Windows does not confine a duplicate to the
+  source's access, so a wait-only handle guards against misuse and is not a boundary against a
+  holder that duplicates it wider.
 
-## DI-M7+ -- Delivery follow-ups (gated on a lower crate)
+## DI-M7+ -- Delivery follow-ups
 
 - [ ] **DI-7+.1** -- **A wait-only handle on the ring's own completion event, for a consumer who
   wants no callback.** From `DI-7.5`: [DI-D-55](DESIGN-NOTES.md#di-d-55)'s `Signalled` tees the
   event through a thread-pool wait, which a consumer who would rather wait on the ring's event
-  directly pays for with a callback. A duplicate with `SYNCHRONIZE` access alone removes the reset
-  but not the shared edge ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19)); since a pump drains
-  before it waits, a consumer taking the edge costs only its own wakeup. Gated on
-  [WS-1+.5](../win-sync-sys/CHECKLIST.md), a duplicate with chosen access, in `win-sync-sys`. The
-  shape here is not decided: a fourth `DeliveryMode`, an option on `Pumped`, or a second accessor
-  beside `completion_signal`. Decide it when WS-1+.5 lands, and note that the ring crate's
+  directly pays for with a callback. A duplicate with `SYNCHRONIZE` access alone gives the consumer
+  a handle that cannot set or reset the event, but not one that cannot be duplicated wider by a
+  consumer that sets out to ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)), and it does not
+  remove the shared edge ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19)); since a pump drains
+  before it waits, a consumer taking the edge costs only its own wakeup. The primitive,
+  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5), is built in `win-sync-sys`:
+  `duplicate_handle_with_access`, which returns an `OwnedHandle` this crate can lend without
+  `unsafe`. The shape here is not decided: a fourth `DeliveryMode`, an option on `Pumped`, or a second accessor
+  beside `completion_signal`. Note that the ring crate's
   [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21) allows one waiter per ring, which the shared
   edge bends for the consumer's waiter and the pump's.
 
