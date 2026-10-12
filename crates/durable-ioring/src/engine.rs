@@ -10,8 +10,14 @@
 //! the backend to empty, as an edge-triggered notification requires
 //! (`windows-ioring-sys`' D-19), so it is the same for every delivery: woken by a thread pool, or
 //! pumped by the consumer's own thread.
+//!
+//! The engine sits in a [`Slot`] the driver may share, so a provider's answer or a lineage
+//! handle's release, on any thread, can reach it under the same lock; stopping delivery takes the
+//! engine out of the slot, so anything reaching it afterwards finds it empty.
 
 use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::backend::{IoBackend, SubmissionData};
 use crate::clock::StampClock;
@@ -162,5 +168,40 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// The provider requests made so far, in order, taken for the driver to make.
     pub(crate) fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
         std::mem::take(&mut self.requests)
+    }
+}
+
+/// The slot an engine sits in, shared between its delivery and whatever else of the driver's
+/// reaches it; empty once delivery has stopped.
+pub(crate) type Slot<E, Bk, C, K> = Arc<Mutex<Option<Engine<E, Bk, C, K>>>>;
+
+/// Lock the engine's slot. A panic while it was held is an inconsistency the core already reported
+/// and panicked on (DI-D-46); the state is left as that panic found it.
+pub(crate) fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
+    engine.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The engine, locked, while delivery runs: its slot is full until delivery stops.
+pub(crate) struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
+
+pub(crate) fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
+    assert!(
+        guard.is_some(),
+        "the engine is taken only as delivery stops"
+    );
+    EngineGuard(guard)
+}
+
+impl<T> Deref for EngineGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.0.as_ref().expect("checked when locked")
+    }
+}
+
+impl<T> DerefMut for EngineGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.0.as_mut().expect("checked when locked")
     }
 }

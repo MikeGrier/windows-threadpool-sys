@@ -19,9 +19,10 @@ use super::durability::inconsistent;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::diagnostics::DiagnosticSink;
+use crate::engine::lock;
 use crate::ids::{Home, InstanceId, Lineage};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
-use crate::windows_backend::pool::{PoolEngine, Shared, lock};
+use crate::windows_backend::pool::{PoolEngine, Shared};
 
 /// What an instance shares with its paths off the consumer's thread.
 pub(crate) struct Hub<E, B, C, K, R>
@@ -31,7 +32,7 @@ where
     R: IoBufMut,
     K: StampClock,
 {
-    /// The engine's slot, shared with pool delivery; empty once the instance has ended.
+    /// The engine's slot, shared with its delivery; empty once the instance has ended.
     engine: Shared<E, B, C, K, R>,
     /// Auto-reset; the consumer's `readiness()` is a duplicate of it.
     readiness: Event,

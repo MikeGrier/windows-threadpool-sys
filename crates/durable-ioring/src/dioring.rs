@@ -1,11 +1,13 @@
 // Copyright (c) 2026 Mike Grier
 //! dioring: the contract's implementation over `windows-ioring-sys` (DI-D-49, DI-D-53).
 //!
-//! An instance is a [`DurableIoCore`] over a [`WindowsBackend`], joined by an [`Engine`] that pool
+//! An instance is a [`DurableIoCore`] over a [`WindowsBackend`], joined by an [`Engine`] that its
 //! delivery drains whenever the ring's completion event says to: the core decides, the backend runs
-//! the I/O, and the driver here joins them to the consumer's calls. Every path -- a consumer's call,
-//! a pool drain, a provider's answer, a lineage handle's release -- takes the engine's one lock, so
-//! the queue's order is the order completions were recorded in, whichever thread recorded them.
+//! the I/O, and the driver here joins them to the consumer's calls. **Delivery is chosen at
+//! construction** ([`DeliveryMode`], DI-D-55): drained on the thread pool, or by the consumer's own
+//! thread in [`Dioring::pump`]. Every path -- a consumer's call, a drain, a provider's answer, a
+//! lineage handle's release -- takes the engine's one lock, so the queue's order is the order
+//! completions were recorded in, whichever thread recorded them.
 //!
 //! **The readiness event** is set whenever a path made entries poppable where there were none, after
 //! it releases the lock, so they are poppable before it is set (DI-D-28).
@@ -39,7 +41,7 @@ use crate::backend::{IoBackend, RegisteredRegion, SubmissionData};
 use crate::clock::{Instant, StampClock};
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
-use crate::engine::Engine;
+use crate::engine::{Engine, EngineGuard};
 use crate::ids::{DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle};
 use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
@@ -47,21 +49,24 @@ use crate::provider::{
     Answer, DomainCall, DomainCompletion, DomainRequest, DurabilityProvider, FlushRequest,
     ProviderPart, ProviderRequest,
 };
+use crate::pump::PumpedDelivery;
 use crate::types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
     FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
     ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
-use crate::windows_backend::pool::{EngineGuard, PoolDelivery, PoolEngine};
+use crate::windows_backend::pool::{PoolDelivery, PoolEngine};
 use crate::windows_backend::{
     Construction, Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
     WindowsBackendSetup,
 };
 
+mod delivery;
 pub(crate) mod durability;
 mod hub;
 
+use delivery::Delivery;
 use durability::{Reach, Routing, State};
 use hub::Hub;
 
@@ -115,10 +120,21 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     /// Where the instance's diagnostics go (DI-D-51). `None` is the driver's default, which is
     /// [`NoDiagnostics`] until `DI-12.1` makes it ETW.
     pub diagnostics: Option<Arc<dyn DiagnosticSink>>,
-    /// The thread pool, and the priority within it, that the instance's delivery runs on
-    /// (DI-D-52) -- a NUMA node's own pool, for one. `None` is the process's default pool. Read
-    /// once, as the instance is built.
-    pub environment: Option<&'env mut CallbackEnviron<'pool>>,
+    /// How the instance's completions are drained (DI-D-52, DI-D-55).
+    pub delivery: DeliveryMode<'env, 'pool>,
+}
+
+/// How an instance's completions are drained: by the thread pool, or by the consumer's own thread.
+/// Chosen once, as the instance is built, and not changed after.
+pub enum DeliveryMode<'env, 'pool> {
+    /// Drained on a pool thread whenever the ring's completion event says to, and the consumer
+    /// told through [`DurableRing::readiness`]. Holds the thread pool, and the priority within it,
+    /// that delivery runs on -- a NUMA node's own pool, for one; `None` is the process's default
+    /// pool. Read once, as the instance is built.
+    Pool(Option<&'env mut CallbackEnviron<'pool>>),
+    /// Drained by the consumer's own thread, which calls [`Dioring::pump`]: no thread of the
+    /// instance's own, and none of the pool's. Nothing is drained until it does.
+    Pumped,
 }
 
 /// One target given at construction.
@@ -209,8 +225,8 @@ pub struct Dioring<
     R: IoBufMut = Vec<u8>,
     K: StampClock = InterruptClock,
 > {
-    /// The core and its backend, drained on the thread pool; `None` once the instance has ended.
-    pub(crate) delivery: Option<PoolDelivery<E, B, C, K, R>>,
+    /// The core and its backend, and how they are drained; `None` once the instance has ended.
+    pub(crate) delivery: Option<Delivery<E, B, C, K, R>>,
     pub(crate) hub: Arc<Hub<E, B, C, K, R>>,
     pub(crate) provider: Option<Box<dyn DurabilityProvider<DioringIds<E>>>>,
     /// A copy of the default lineage's handle, so the default lineage lives as long as the
@@ -279,7 +295,7 @@ where
             buffers,
             provider,
             diagnostics,
-            environment,
+            delivery,
         } = setup;
         let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(NoDiagnostics));
 
@@ -363,7 +379,16 @@ where
             let set = ready.set();
             debug_assert!(set.is_ok(), "setting the readiness event failed: {set:?}");
         };
-        let delivery = match PoolDelivery::new(Engine::new(core, backend), on_ready, environment) {
+        let engine = Engine::new(core, backend);
+        let delivered = match delivery {
+            DeliveryMode::Pool(environment) => {
+                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)
+            }
+            // Nothing sets the signal the pool's wake would: entries are made poppable by the
+            // pump, which sets the readiness event itself, as every other path does.
+            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),
+        };
+        let delivery = match delivered {
             Ok(delivery) => delivery,
             Err((error, engine)) => {
                 let mut backend = engine.backend;
@@ -736,6 +761,47 @@ where
     R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
+    /// Drain what the ring has completed, on this thread (DI-D-55): wait up to `timeout` for its
+    /// completion event -- `None` is no limit, and `Duration::ZERO` is a pump that does not wait --
+    /// then drain it to empty, make the provider's requests, and set the readiness event if that
+    /// made entries poppable. Whether it did. Pop what became poppable with [`DurableRing::pop`].
+    ///
+    /// **Only for an instance built with [`DeliveryMode::Pumped`]**, where nothing else drains: a
+    /// completion waits in the ring until a pump, so an instance that is never pumped delivers
+    /// nothing. The wait is made with the engine's lock released, so another thread's push, a
+    /// provider's answer or a lineage handle's release is not held up by it.
+    ///
+    /// A return does not promise entries: the wait is satisfied by a raising whose completions an
+    /// earlier drain took, and by the one signal the ring crate raises as it attaches the event
+    /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)), so a first pump returns at once.
+    /// Pump in a loop, and pop to empty each time. With no limit and nothing in flight a pump never
+    /// returns.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] for an instance built with [`DeliveryMode::Pool`], which the
+    /// pool drains. Otherwise the wait's own error, when the ring's completion event cannot be
+    /// waited on; the drain is made all the same, so what has completed is delivered, and the entries
+    /// it made poppable are there to pop.
+    pub fn pump(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+        let pumped = match self
+            .delivery
+            .as_mut()
+            .expect("an instance is live until it ends")
+        {
+            Delivery::Pumped(pumped) => pumped.pump(timeout),
+            Delivery::Pool(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "the instance was built with pool delivery, which drains it; pumping is for \
+                     DeliveryMode::Pumped",
+                ));
+            }
+        };
+        self.settled(pumped.ready);
+        pumped.waited.map(|_| pumped.ready)
+    }
+
     /// After a consumer call, with the engine's lock released: set the readiness event if the call
     /// made entries poppable, then make the provider's requests.
     fn settled(&mut self, deliver: bool) {

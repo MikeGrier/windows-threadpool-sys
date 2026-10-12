@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{Clock, InterruptTime, Steady, TimePoint};
 
-use super::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
+use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::backend::IoBackend;
 use crate::contract::DurableRing;
 use crate::ids::{DioringIds, LineageHandle};
@@ -38,6 +38,7 @@ mod providers;
 // Removing a file, and ending the instance: DI-3.2.7.
 mod construction;
 mod ending;
+mod pumped;
 mod submits;
 
 type Ring = Dioring<Vec<u8>>;
@@ -58,7 +59,7 @@ fn setup(
         buffers,
         provider,
         diagnostics: None,
-        environment: None,
+        delivery: DeliveryMode::Pool(None),
     }
 }
 
@@ -379,7 +380,7 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
         buffers: Vec::new(),
         provider: None,
         diagnostics: None,
-        environment: None,
+        delivery: DeliveryMode::Pool(None),
     })
     .expect("build")
     .0;
@@ -407,7 +408,7 @@ fn an_instance_delivers_on_the_pool_its_environment_names() {
         buffers: Vec::new(),
         provider: None,
         diagnostics: None,
-        environment: Some(&mut env),
+        delivery: DeliveryMode::Pool(Some(&mut env)),
     })
     .expect("build")
     .0;

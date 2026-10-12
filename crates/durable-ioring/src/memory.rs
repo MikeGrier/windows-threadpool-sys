@@ -22,6 +22,7 @@ use crate::backend::{
     SubmissionData, SubmissionOp,
 };
 use crate::io_target::{Capabilities, Geometry, IoTarget, WarrantyClass};
+use crate::pump::Waitable;
 use crate::types::{FlushDomain, IoFault, IoTargetKey};
 
 #[cfg(test)]
@@ -149,32 +150,61 @@ impl IoTarget for MemoryTarget {
 }
 
 /// The in-memory backend's notification: a count of its raisings, which a thread can wait to see
-/// pass a value it has seen. Clones share one count.
+/// pass a value it has seen. Clones share one count, and each keeps its own record of how many
+/// raisings its own waits have seen, which starts at none -- so a raising before a notification's
+/// first wait is seen by it, as the Windows ring's setup signal makes one that was raised before
+/// the wait began seen.
 #[derive(Clone, Debug, Default)]
-pub struct MemoryNotification(Arc<(Mutex<u64>, Condvar)>);
+pub struct MemoryNotification {
+    count: Arc<(Mutex<u64>, Condvar)>,
+    /// The count at the end of the last [`Waitable::wait`] that saw a raising.
+    seen: u64,
+}
 
 impl MemoryNotification {
     /// How many times it has been raised.
     #[must_use]
     pub fn raised(&self) -> u64 {
-        *self.0.0.lock().unwrap_or_else(PoisonError::into_inner)
+        *self.count.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Wait up to `timeout` for it to have been raised more than `seen` times; the count then.
     #[must_use]
     pub fn wait_past(&self, seen: u64, timeout: Duration) -> u64 {
-        let (count, raised) = &*self.0;
+        self.count_past(seen, Some(timeout))
+    }
+
+    /// [`wait_past`](Self::wait_past), with no limit for `None`.
+    fn count_past(&self, seen: u64, timeout: Option<Duration>) -> u64 {
+        let (count, raised) = &*self.count;
         let guard = count.lock().unwrap_or_else(PoisonError::into_inner);
-        let (guard, _) = raised
-            .wait_timeout_while(guard, timeout, |count| *count <= seen)
-            .unwrap_or_else(PoisonError::into_inner);
+        let guard = match timeout {
+            Some(timeout) => {
+                raised
+                    .wait_timeout_while(guard, timeout, |count| *count <= seen)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            }
+            None => raised
+                .wait_while(guard, |count| *count <= seen)
+                .unwrap_or_else(PoisonError::into_inner),
+        };
         *guard
     }
 
     fn raise(&self) {
-        let (count, raised) = &*self.0;
+        let (count, raised) = &*self.count;
         *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         raised.notify_all();
+    }
+}
+
+impl Waitable for MemoryNotification {
+    fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+        let count = self.count_past(self.seen, timeout);
+        let raised = count > self.seen;
+        self.seen = count;
+        Ok(raised)
     }
 }
 

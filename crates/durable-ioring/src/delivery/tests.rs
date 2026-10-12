@@ -12,7 +12,7 @@ use windows_ioring_sys::RegisteredSpan;
 use super::EntryDelivery;
 use crate::contract::DurableRing;
 use crate::dioring::tests::TempFile;
-use crate::dioring::{Dioring, Setup, TargetSetup};
+use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::fake::{Fake, Signals};
 use crate::ids::DioringIds;
 use crate::oracle::ConformanceOracle;
@@ -46,7 +46,7 @@ fn instance(temp: &TempFile, buffers: Vec<Vec<u8>>) -> Ring {
         buffers,
         provider: None,
         diagnostics: None,
-        environment: None,
+        delivery: DeliveryMode::Pool(None),
     })
     .expect("build an instance")
     .0

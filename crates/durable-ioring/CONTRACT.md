@@ -605,7 +605,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
-#     environment: None,
+#     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
@@ -687,7 +687,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
-#     environment: None,
+#     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
 let tag = |n: u64| lineage.at(n); // what a write or a seal takes
@@ -774,7 +774,7 @@ fails as never issued.
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
-#     environment: None,
+#     delivery: DeliveryMode::Pool(None),
 # })
 # .expect("an instance");
 # let tag = |n: u64| lineage.at(n);

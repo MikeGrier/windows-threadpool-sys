@@ -14,45 +14,29 @@ convention.
 
 ## DI-M7 -- The driver's delivery, finished
 
-The driver runs on the core over the Windows backend under pool delivery. What remains is the
-paths no test reaches yet, the second delivery model, and the blocking push.
+The driver runs on the core over the Windows backend, drained on the thread pool or by the
+consumer's own thread. What remains is the blocking push, and a question about waiting beside
+other handles.
 
 - [x] **DI-7.1** -- Failed submissions reached by tests, through the ring crate's safe submit-fault responder registered on the instance's ring. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-71)
 
 - [x] **DI-7.2** -- Construction's registration paths reached by tests, through a hook that registers the ring crate's safe call-fault responder on the instance's ring as it is created. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-72)
 
-- [ ] **DI-7.3** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the consumer's own
-  thread waits on the backend's notification and drains through a `pump` call, over the Windows
-  backend and the in-memory one. **A portable `PumpedDelivery` over any `IoBackend` whose
-  notification is `Waitable`**, a new public trait -- wait up to a timeout for the notification to
-  have been raised since the last wait returned -- implemented for `MemoryNotification` and, for the
-  Windows backend, for the `OwnedHandle` its notification is, through `win-sync-sys`' safe
-  `wait_for_single_object`, which this crate cannot write itself (`forbid(unsafe_code)`). It sits
-  beside `PoolDelivery`, sharing the engine's slot helpers, which move from `pool.rs` to
-  `engine.rs` since they are generic already. `pump(timeout)` waits **outside the engine's lock**,
-  so a push, an answer or a release is never held up by a wait; then drains to empty under it, the
-  one drain every delivery shares; then, with the lock released, makes the provider's requests and
-  sets the readiness event if entries became poppable. A wait that times out drains too: a drain of
-  nothing is a no-op, and a zero timeout is the non-blocking pump. A return does not promise
-  entries, since the ring crate's setup signal makes the first wait return at once
-  ([D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20)). **The driver** chooses its delivery at
-  construction: `Setup`'s `environment` becomes `delivery: DeliveryMode`, `Pool(environment)` or
-  `Pumped`, so an environment cannot be given where nothing uses it, and `Dioring::pump` on an
-  instance built with a pool is refused as `Unsupported`. Tests: over the in-memory backend, a pump
-  drains every completion at once, a wait times out after at least its timeout and a zero one never
-  blocks, a completion raised from another thread wakes a waiting pump, a backlog raised before the
-  pump is not lost, the engine is handed back at the end, and a notification that cannot be made or
-  waited on is reported with the engine handed back; over the Windows backend through
-  `Dioring::new`, nothing is delivered until a pump, a pumped instance delivers what an instance
-  with a pool does, the provider is called from the pump, and the instance ends with work
-  outstanding. Sabotages for each, in [sabotage.json](sabotage.json). A decision row, `DI-D-55`,
-  records the shape.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M2` -> `WS-2.1` (a safe wait on one handle) must land first. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+- [x] **DI-7.3** -- Pumped delivery: the consumer's own thread waits on the backend's notification and drains through `pump`, over the Windows backend and the in-memory one. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-73)
 
 - [ ] **DI-7.4** -- **A blocking push -- proposed, awaiting the engineer's ruling** (DI-D-52 Q4): a
   driver policy above refusal that submits, waits on the notification and retries; never from inside
   a callback, and pumping for itself under pumped delivery. Removed if the engineer declines it.
+
+- [ ] **DI-7.5** -- **A way for a pumped consumer to wait on the ring's event together with other
+  handles -- proposed, awaiting the engineer's ruling** ([DI-D-55](DESIGN-NOTES.md#di-d-55)): the
+  ring crate's [D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20) makes the completion event
+  reachable for exactly a consumer that mixes ring I/O with other waits, and `pump` waits on it
+  alone. Handing a pumped instance's notification out would let such a consumer wait on it beside
+  its own handles and then `pump(Some(Duration::ZERO))`; it also puts in the consumer's hands a
+  handle that can reset the event, which [DI-D-10](DESIGN-NOTES.md#di-d-10) rules out for anything
+  that interferes with dioring's control of its ring. What blocks it is that ruling, not the lack of
+  a consumer. Removed if the engineer declines it.
 
 ## DI-M8 -- The split: a portable crate and a Windows crate
 
@@ -294,6 +278,24 @@ does is now that item's to absorb.
   the bound the error names and on the ring running down after the stall, rather than on elapsed
   time; and the ring crate's `M38.1`, which this step asked for, is the stalled submit rather than
   withheld completions, for the reason its [D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87) gives.
+  From `DI-7.3`: pumped delivery needed a blocking wait on a handle, which this crate cannot write,
+  so `win-sync-sys` gained `wait_for_single_object` as the first slice of its parked wait functions
+  ([WS-D-6](../win-sync-sys/DESIGN-NOTES.md#ws-d-6)), rather than the wait being written in the ring
+  crate; `Waitable` is a public one-method trait, so a backend of another crate can implement it;
+  `Setup`'s `environment` became `delivery: DeliveryMode`, which touched every construction site and
+  `CONTRACT.md`'s three worked examples, rather than a flag or a second constructor; `Dioring::pump`
+  returns `io::Result<bool>`, whether entries became poppable, rather than a struct of what woke it
+  and what it drained; a pump whose wait failed drains anyway and then reports the failure, and one
+  whose wait timed out drains too; `pump` on an instance built with a pool is a runtime
+  `Unsupported`, not a type error, which the crate split revisits; the readiness event is still set
+  under pumped delivery; the engine's slot helpers moved from `pool.rs` to `engine.rs`, being
+  generic already; the delivery enum is in `dioring/delivery.rs`, so `dioring.rs`, already over
+  32 KiB, grows by little; `MemoryNotification` gained a per-handle record of the raisings its own
+  waits have seen, beginning at none, so a raising before the first wait is seen; the Windows
+  notification's failing wait and an abandoned one are declared blind spots in the sabotage
+  manifest, since reaching them needs `unsafe`; and waiting beside other handles is raised as
+  `DI-7.5` rather than built, because handing out the event touches
+  [DI-D-10](DESIGN-NOTES.md#di-d-10).
 
 ## DI-M10 -- Target backings
 

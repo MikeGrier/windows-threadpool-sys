@@ -3420,6 +3420,43 @@ thread-local would miss the calls a pool thread makes and a global would be shar
 as threads of one process. A ring without the registration operation stays unreached as a cause: its
 path is the refused build's, which is reached, and the capability probe is outside the seam.
 
+## DI-7.3: pumped delivery needs a wait nobody had written safely (2026-10-12)
+
+Not a discussion with the engineer: a finding while implementing, with the assistant's choices
+queued for review in `DI-9.7`.
+
+The item said the consumer's own thread waits on the notification and drains through a `pump`
+call. Reading what existed showed the wait was the missing piece: the Windows backend's
+notification is the ring's completion event as an `OwnedHandle`, waiting on a handle is
+`WaitForSingleObject`, and this crate forbids `unsafe`
+([DI-D-4](../crates/durable-ioring/DESIGN-NOTES.md#di-d-4)). `win-sync-sys` had parked exactly that
+as its wait functions, behind `Event`
+([WS-D-2](../crates/win-sync-sys/DESIGN-NOTES.md#ws-d-2)), so the step was re-planned before any
+code: `win-sync-sys` takes up the single-object wait, the first slice of that item, and `DI-7.3`
+waits on it. Two other homes were weighed and rejected: the ring crate, which is about rings, and a
+relay through a thread-pool wait, which would put a pool thread under a delivery whose point is
+that there is none.
+
+Three design points came out of reading the ring's contract rather than being chosen in advance.
+The wait has to be made outside the engine's lock, or nothing another thread does -- a push, a
+provider's answer, a handle's release -- can end it. A pump has to drain even when its wait failed
+or timed out, since the drain of nothing is a no-op and a delivery that cannot wait should still
+deliver what completed. And the ring crate signals the event once as it attaches it
+([D-20](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-20)), so a first pump returns at once and a
+return promises no entries; the documentation says to pump in a loop and pop to empty.
+
+Two mistakes of mine were caught by running rather than reading. A test that a handle without wait
+access reports its failure assumed `CreateFile` would grant none; it always adds `SYNCHRONIZE`, so
+that failure cannot be reached without `unsafe`, and the sabotage manifest declares it a blind spot
+beside the abandoned ending, which needs a mutex. And a test of the readiness signal asserted it
+unset after a pump had set it; the event is auto-reset and nothing had taken it.
+
+One question was raised and not built: a pumped consumer that wants to wait on the ring's event
+beside its own handles, which the ring crate's D-20 names as what the event's reachability is for.
+Handing the event out puts a handle that can reset it in the consumer's hands, which
+[DI-D-10](../crates/durable-ioring/DESIGN-NOTES.md#di-d-10) rules out for anything that interferes
+with dioring's control of its ring. It is `DI-7.5`, awaiting the engineer's ruling.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

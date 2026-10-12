@@ -26,6 +26,7 @@ mod io_target;
 pub mod memory;
 pub mod oracle;
 mod provider;
+mod pump;
 mod types;
 pub mod windows_backend;
 
@@ -38,7 +39,7 @@ pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
 };
-pub use dioring::{Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
+pub use dioring::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
 pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
@@ -49,6 +50,7 @@ pub use provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
+pub use pump::Waitable;
 pub use types::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
     EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,

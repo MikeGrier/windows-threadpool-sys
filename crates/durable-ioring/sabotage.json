@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; and an owned buffer the ring refuses, which needs one longer than a u32.",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait failing, or ending as abandoned (windows_backend/wait.rs), is absent as well, and so is Dioring::pump reporting such a wait's error: the first needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and the second a mutex, and making either needs unsafe, which this crate forbids. win-sync-sys' tests reach both in the function it calls, and pump/tests.rs reaches a failing wait's report over the in-memory backend. Each has a survives entry named DI-7.3: blind spot.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -2069,6 +2069,174 @@
       "why": "The manifest checking itself on construction: a reborrow changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
       "find": ["            on_ring(&ring);"],
       "replace": ["            on_ring(&*&ring);"]
+    },
+    {
+      "name": "DI-7.3: a pump drains before it waits",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "The wait is for the completions the drain then takes. Drained first, a pump woken by a raising returns having taken nothing, and the entries are there only for the next one.",
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);", "        let waited = self.notification.wait(timeout);"]
+    },
+    {
+      "name": "DI-7.3: a pump waits holding the engine's lock",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "The wait is for something another thread does, and doing it takes the lock: a push, a provider's answer, a handle's release. Held through the wait, nothing can wake the pump but its own timeout.",
+      "find": ["        let waited = self.notification.wait(timeout);", "        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let mut held = lock(&self.engine);", "        let waited = self.notification.wait(timeout);", "        let ready = held.as_mut().is_some_and(Engine::drain);"]
+    },
+    {
+      "name": "DI-7.3: a pump whose wait failed does not drain",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "A delivery that cannot wait still delivers what has completed, and says why it could not wait. Skipping the drain makes a broken notification stop an instance delivering at all.",
+      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = waited.is_ok() && lock(&self.engine).as_mut().is_some_and(Engine::drain);"]
+    },
+    {
+      "name": "DI-7.3: a pump reports the drain's result inverted",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "Whether entries became poppable is what sets the readiness event and what a consumer's loop keys on.",
+      "find": ["        Pumped { ready, waited }"],
+      "replace": ["        Pumped { ready: !ready, waited }"]
+    },
+    {
+      "name": "DI-7.3: a delivery's shared slot is not its own",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "A provider's answer and a handle's release reach the engine through the slot shared out; a slot of its own finds nothing there.",
+      "find": ["        Arc::clone(&self.engine)"],
+      "replace": ["        Arc::new(Mutex::new(None))"]
+    },
+    {
+      "name": "DI-7.3: a fault the backend does not keep loses its report",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "A construction that fails names why: the backend's own report, whole, when nothing else holds it.",
+      "find": ["    Arc::try_unwrap(fault.error)"],
+      "replace": ["    Arc::try_unwrap(Arc::new(io::Error::other(fault.source)))"]
+    },
+    {
+      "name": "DI-7.3: a fault the backend keeps loses its kind",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "A report that cannot be taken whole is reproduced by its kind and its text, so a caller that matches on the kind still can.",
+      "find": ["        .unwrap_or_else(|shared| io::Error::new(shared.kind(), shared.to_string()))"],
+      "replace": ["        .unwrap_or_else(|shared| io::Error::other(shared.to_string()))"]
+    },
+    {
+      "name": "DI-7.3: a memory notification forgets what its wait saw",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A wait is for a raising since the last one that saw any. Forgetting makes every wait after the first return at once.",
+      "find": ["        self.seen = count;"],
+      "replace": ["        let _ = count;"]
+    },
+    {
+      "name": "DI-7.3: a memory notification's wait with no limit returns at once",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "None is no limit: a wait that does not wait is a poll, and a pump with no limit would spin.",
+      "find": ["                .wait_while(guard, |count| *count <= seen)"],
+      "replace": ["                .wait_while(guard, |_| false)"]
+    },
+    {
+      "name": "DI-7.3: a memory notification's timeout is ignored",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A wait that returns before its timeout reports no raising when one was about to come.",
+      "find": ["                    .wait_timeout_while(guard, timeout, |count| *count <= seen)"],
+      "replace": ["                    .wait_timeout_while(guard, Duration::ZERO, |count| *count <= seen)"]
+    },
+    {
+      "name": "DI-7.3: a memory notification reports a raising when it timed out",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Whether it was raised is the answer the wait exists to give; the boundary is a count equal to the one already seen.",
+      "find": ["        let raised = count > self.seen;"],
+      "replace": ["        let raised = count >= self.seen;"]
+    },
+    {
+      "name": "DI-7.3: a signalled ring event is reported as not raised",
+      "file": "src/windows_backend/wait.rs",
+      "expect": "caught",
+      "why": "The ring's completion event is the Windows backend's notification: its being set is the raising.",
+      "find": ["            WaitOutcome::Signalled => Ok(true),"],
+      "replace": ["            WaitOutcome::Signalled => Ok(false),"]
+    },
+    {
+      "name": "DI-7.3: a timed-out ring event wait is reported as raised",
+      "file": "src/windows_backend/wait.rs",
+      "expect": "caught",
+      "why": "The other direction: a wait that timed out saw nothing raised.",
+      "find": ["            WaitOutcome::TimedOut => Ok(false),"],
+      "replace": ["            WaitOutcome::TimedOut => Ok(true),"]
+    },
+    {
+      "name": "DI-7.3: blind spot: a wait on the ring's event that fails is taken for a timeout",
+      "file": "src/windows_backend/wait.rs",
+      "expect": "survives",
+      "why": "Declared, not caught: no test here can make the wait fail. It needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and making one otherwise needs unsafe, which this crate forbids. win-sync-sys' tests reach the failing wait in the function this calls.",
+      "find": ["        match wait_for_single_object(&*self, timeout)? {"],
+      "replace": ["        match wait_for_single_object(&*self, timeout).unwrap_or(WaitOutcome::TimedOut) {"]
+    },
+    {
+      "name": "DI-7.3: blind spot: an abandoned ending of the ring's event wait is taken for a timeout",
+      "file": "src/windows_backend/wait.rs",
+      "expect": "survives",
+      "why": "Declared, not caught: only a mutex is abandoned, an event never is, and a test would need a mutex, which needs unsafe to make. win-sync-sys' tests reach the abandoned ending in the function this calls.",
+      "find": ["            WaitOutcome::TimedOut => Ok(false),"],
+      "replace": ["            WaitOutcome::TimedOut | WaitOutcome::Abandoned => Ok(false),"]
+    },
+    {
+      "name": "DI-7.3: pumping an instance built with a pool is not refused as unsupported",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The pool drains the instance, and a consumer that pumps it has misread how it was built; the refusal says so by its kind.",
+      "find": ["                    io::ErrorKind::Unsupported,"],
+      "replace": ["                    io::ErrorKind::Other,"]
+    },
+    {
+      "name": "DI-7.3: a pump does not settle what it drained",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The pump is the consumer call after which the readiness event is set and the provider's requests are made, as for every other path that makes entries poppable.",
+      "find": ["        self.settled(pumped.ready);"],
+      "replace": ["        let _ = pumped.ready;"]
+    },
+    {
+      "name": "DI-7.3: blind spot: a pump's failed wait is reported as success",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "Declared, not caught: no test through the driver can make the Windows notification's wait fail. The delivery's reporting of a failed wait is caught over the in-memory backend, in pump/tests.rs.",
+      "find": ["        pumped.waited.map(|_| pumped.ready)"],
+      "replace": ["        Ok(pumped.ready)"]
+    },
+    {
+      "name": "DI-7.3: an instance set up for pumping is built with a pool",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
+      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),"],
+      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None).map(Delivery::Pool),"]
+    },
+    {
+      "name": "DI-7.3: an instance set up with a pool is built for pumping",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
+      "find": ["                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)"],
+      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+    },
+    {
+      "name": "CONTROL: DI-7.3: a pump asks whether the drain made entries poppable another way",
+      "file": "src/pump.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: map_or(false, ..) is is_some_and(..), so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
+      "replace": ["        let ready = lock(&self.engine).as_mut().map_or(false, Engine::drain);"]
     }
   ]
 }
