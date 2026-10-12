@@ -21,11 +21,13 @@ categories = ["api-bindings", "os::windows-apis", "concurrency"]
 # `default-features = false` matches every other crate in the workspace.
 #
 # `Win32_System_Threading` is `CreateEventW`, `SetEvent` and `ResetEvent`.
+# `Win32_System_SystemServices` is `MAXIMUM_WAIT_OBJECTS`, the most handles one wait takes.
 # `Win32_Security` is there only because `CreateEventW`'s attributes parameter
 # is a `SECURITY_ATTRIBUTES` pointer, and the binding is gated on it.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Security",
+	"Win32_System_SystemServices",
 	"Win32_System_Threading",
 ] }
 

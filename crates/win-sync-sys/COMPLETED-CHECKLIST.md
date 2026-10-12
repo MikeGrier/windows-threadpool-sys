@@ -106,3 +106,41 @@ The item as it stood at completion:
   event; the primitive is not specific to it. The open design question is the type: a duplicate
   that cannot signal should not offer `set` or `reset`, so it is probably a distinct wait-only type
   rather than an `Event` that fails at run time.
+
+## Moved 2026-10-12 17:20:00 -04:00 -- WS-1+.1: the rest of the wait functions
+
+### <a id="ws-1+1"></a>WS-1+.1 -- The rest of the wait functions: alertable and multiple-object waits, `SignalObjectAndWait` and `QueueUserAPC`. *(completed 2026-10-12 17:20:00 -04:00)*
+
+Per [WS-D-8](DESIGN-NOTES.md#ws-d-8), the assistant's choices queued for the engineer's review in
+durable-ioring's `DI-9.7`. Built: `Alertable`; `WaitOutcome::Alerted`; `wait_for_single_object_ex`;
+`wait_for_any` returning `WaitAnyOutcome`, `wait_for_all` returning `WaitOutcome`, and
+`MAXIMUM_OBJECTS`; `signal_object_and_wait` over the `Signalable` trait; and `queue_user_apc` with a
+form for the calling thread. The README documents them with a doctest, and a `compile_fail` doctest
+shows a `WaitOnlyEvent` refused as a signal object.
+
+**The item differs from what was built in one respect it named:** it proposed "a trait every object
+type here implements and `BorrowedHandle` implements too" for the waits. The waits stay over
+`AsHandle`, which `BorrowedHandle` and `OwnedHandle` already implement, and the one place a trait
+restricts something real is what can be signalled, so that is where it went
+([WS-D-8](DESIGN-NOTES.md#ws-d-8)).
+
+**What running it found.** The first full run of the new tests aborted the test process with
+"current thread handle already set during thread spawn": an APC queued to a thread that had not yet
+started runs as the thread starts, before the Rust runtime has set the thread up, and a routine that
+called `std::thread::current` there aborted it. The tests now queue only to a thread that has
+announced itself, and the documentation of `queue_user_apc` says why. Three platform behaviours
+were probed rather than assumed and are each a test: a pending APC ends an alertable wait even when
+an object is already signalled; a wait for any tolerates a handle named twice and a wait for all
+refuses it. The new sabotages are all caught except two declared `survives`, because the kernel's own
+refusal of a count of zero or above 64 makes this crate's check unobservable, and a control that
+survives as it should. Two further entries needed repair when the sweep ran: one patch did not compile, and one
+existing anchor named the error text this item changed.
+
+The item as it stood at completion:
+
+- [x] **WS-1+.1** -- **The rest of the wait functions.** `WaitForSingleObjectEx`,
+  `WaitForMultipleObjects(Ex)` with its 64-handle limit and both any and all, and
+  `SignalObjectAndWait`, over a trait every object type here implements and `BorrowedHandle`
+  implements too. The outcome as an enum: signalled or abandoned with an index, timed out, or ended
+  by an APC in an alertable wait. `QueueUserAPC` belongs with it, as what ends an alertable wait.
+  `WaitForSingleObject` itself was taken up first, as [WS-2.1](COMPLETED-CHECKLIST.md#ws-21).

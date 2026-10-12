@@ -1,7 +1,7 @@
 {
   "package": "win-sync-sys",
   "description": "Sabotages for win-sync-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Event::new's and Event::try_clone's error paths are absent: CreateEventW and DuplicateHandle fail only when the process cannot get another handle or the kernel cannot allocate the object, which no test can produce on demand. event.rs says so at each definition.",
+  "notCoveredHere": "Event::new's and Event::try_clone's error paths are absent: CreateEventW and DuplicateHandle fail only when the process cannot get another handle or the kernel cannot allocate the object, which no test can produce on demand. event.rs says so at each definition. The APC routine's panic is absent: a panic out of an extern \"system\" function aborts the process, which no in-process test survives. So is an APC delivered during a thread's start, which aborts when the routine touches the Rust runtime and is documented on queue_user_apc rather than tested. QueueUserAPC's failure for the current thread (the kernel cannot allocate the APC) is not reachable on demand.",
   "sabotages": [
     {
       "name": "WS-1.1: set resets instead",
@@ -96,7 +96,7 @@
       "file": "src/wait.rs",
       "expect": "caught",
       "why": "A code the call is not documented to return here is reported, not assumed to mean success.",
-      "find": ["        other => Err(io::Error::other(format!(\n            \"WaitForSingleObject returned {other:#x}\"\n        ))),\n"],
+      "find": ["        other => Err(io::Error::other(format!(\"a wait returned {other:#x}\"))),\n"],
       "replace": ["        _ => Ok(WaitOutcome::Signalled),\n"]
     },
     {
@@ -218,6 +218,166 @@
       "why": "A clone that waits on some other event looks right until the original is set.",
       "find": ["            handle: duplicate_handle_with_access(self, Access::SYNCHRONIZE)?,\n"],
       "replace": ["            handle: duplicate_handle_with_access(Event::new(ResetMode::Manual, false)?, Access::SYNCHRONIZE)?,\n"]
+    },
+    {
+      "name": "WS-1+.1: an alerted wait is reported as a timeout",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A caller told its wait timed out when an APC ran in it would retry as if nothing had happened, and its APC's effect would be invisible to it.",
+      "find": ["        WAIT_IO_COMPLETION => Ok(WaitOutcome::Alerted),\n"],
+      "replace": ["        WAIT_IO_COMPLETION => Ok(WaitOutcome::TimedOut),\n"]
+    },
+    {
+      "name": "WS-1+.1: Alertable::Yes is not alertable",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "Every alertable wait would silently be an ordinary one; an APC would never end it.",
+      "find": ["            Self::Yes => TRUE,\n"],
+      "replace": ["            Self::Yes => FALSE,\n"]
+    },
+    {
+      "name": "WS-1+.1: Alertable::No is alertable",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The other direction: a wait that must not be ended by an APC would be, and the APC would run at a point the caller did not choose.",
+      "find": ["            Self::No => FALSE,\n"],
+      "replace": ["            Self::No => TRUE,\n"]
+    },
+    {
+      "name": "WS-1+.1: a wait for all is made a wait for any",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "The two functions differ by one argument; swapped, a wait for all is satisfied by one object and takes from only that one, which the atomicity tests see.",
+      "find": ["            if wait_all { TRUE } else { FALSE },\n"],
+      "replace": ["            if wait_all { FALSE } else { FALSE },\n"]
+    },
+    {
+      "name": "WS-1+.1: a wait for any is made a wait for all",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "The other direction: a wait for any that needs every object never reports an index.",
+      "find": ["            if wait_all { TRUE } else { FALSE },\n"],
+      "replace": ["            if wait_all { TRUE } else { TRUE },\n"]
+    },
+    {
+      "name": "WS-1+.1: the handles are taken from the wrong objects",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "A wait that waits on a shifted set reports an index that is not the object signalled.",
+      "find": ["    for (slot, object) in handles.iter_mut().zip(objects) {\n"],
+      "replace": ["    for (slot, object) in handles.iter_mut().zip(objects.iter().rev()) {\n"]
+    },
+    {
+      "name": "WS-1+.1: the wait for many ignores alertability",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "An APC would never end a wait for several objects.",
+      "find": ["            alertable.as_bool(),\n"],
+      "replace": ["            FALSE,\n"]
+    },
+    {
+      "name": "WS-1+.1: an index one past the objects given is accepted as signalled",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "A code the call cannot return for this many objects must be an error, not an index the caller then uses on its slice.",
+      "find": ["            .filter(|&index| index < count)\n"],
+      "replace": ["            .filter(|&index| index <= count)\n"]
+    },
+    {
+      "name": "WS-1+.1: an abandoned mutex found by a wait for any is reported as signalled",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "The wait is over any handle, and calling an abandoned mutex a plain signal hides that what it protected may be inconsistent.",
+      "find": ["        return Ok(WaitAnyOutcome::Abandoned(index));\n"],
+      "replace": ["        return Ok(WaitAnyOutcome::Signalled(index));\n"]
+    },
+    {
+      "name": "WS-1+.1: an abandoned mutex found by a wait for all is reported as signalled",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "The same for a wait for all.",
+      "find": ["        return Ok(WaitOutcome::Abandoned);\n"],
+      "replace": ["        return Ok(WaitOutcome::Signalled);\n"]
+    },
+    {
+      "name": "WS-1+.1: a wait for any that was alerted is reported as a timeout",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "As for a single object: the caller is told nothing ran.",
+      "find": ["        WAIT_IO_COMPLETION => Ok(WaitAnyOutcome::Alerted),\n"],
+      "replace": ["        WAIT_IO_COMPLETION => Ok(WaitAnyOutcome::TimedOut),\n"]
+    },
+    {
+      "name": "WS-1+.1: a wait for all accepts an index past the objects given",
+      "file": "src/wait_many.rs",
+      "expect": "caught",
+      "why": "The bound on the code a wait for all can return, checked from both sides.",
+      "find": ["usize::try_from(code - first).is_ok_and(|n| n < count)"],
+      "replace": ["usize::try_from(code - first).is_ok_and(|n| n <= count)"]
+    },
+    {
+      "name": "WS-1+.1: a wait for no objects is not refused here",
+      "file": "src/wait_many.rs",
+      "expect": "survives",
+      "why": "Declared, not a gap to close: Windows refuses a count of zero with the same error kind, so no test can tell this check from the kernel's. The check exists so the call is never made with a count it would mishandle, and what it guards is not observable.",
+      "find": ["    if count == 0 || count > MAXIMUM_OBJECTS {\n"],
+      "replace": ["    if count > MAXIMUM_OBJECTS {\n"]
+    },
+    {
+      "name": "WS-1+.1: a wait for more than the maximum is not refused here",
+      "file": "src/wait_many.rs",
+      "expect": "survives",
+      "why": "Declared, not a gap to close: Windows refuses a count above MAXIMUM_WAIT_OBJECTS with the same error kind before it reads the array, so no test can tell this check from the kernel's. The check is what keeps the handle array from being read past its length should the kernel ever not refuse, which no test can observe without a kernel that does not.",
+      "find": ["    if count == 0 || count > MAXIMUM_OBJECTS {\n"],
+      "replace": ["    if count == 0 {\n"]
+    },
+    {
+      "name": "WS-1+.1: signal_object_and_wait ignores alertability",
+      "file": "src/signal.rs",
+      "expect": "caught",
+      "why": "An APC would never end the combined step.",
+      "find": ["            alertable.as_bool(),\n"],
+      "replace": ["            0,\n"]
+    },
+    {
+      "name": "WS-1+.1: signal_object_and_wait waits on the object it should signal",
+      "file": "src/signal.rs",
+      "expect": "caught",
+      "why": "The two handles are different kinds of argument; swapped, the wait object is signalled and the other is waited on.",
+      "find": ["            signal.as_handle().as_raw_handle(),\n            wait.as_handle().as_raw_handle(),\n"],
+      "replace": ["            wait.as_handle().as_raw_handle(),\n            signal.as_handle().as_raw_handle(),\n"]
+    },
+    {
+      "name": "WS-1+.1: a refused APC is reported as queued",
+      "file": "src/apc.rs",
+      "expect": "caught",
+      "why": "The error path, reached by a handle that is not a thread. Swallowed, a routine that will never run is reported queued.",
+      "find": ["    if queued == 0 {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WS-1+.1: a refused APC's routine is leaked",
+      "file": "src/apc.rs",
+      "expect": "caught",
+      "why": "When the call fails nothing was queued, so the routine is still the caller's to drop; kept alive it is a leak of everything it captured. The drop-count tests see it.",
+      "find": ["        drop(unsafe { Box::from_raw(data) });\n"],
+      "replace": ["        let _ = data;\n"]
+    },
+    {
+      "name": "WS-1+.1: the APC routine is dropped instead of run",
+      "file": "src/apc.rs",
+      "expect": "caught",
+      "why": "A routine that is delivered and not run is the whole feature failing quietly.",
+      "find": ["    (*routine)();\n"],
+      "replace": ["    drop(routine);\n"]
+    },
+    {
+      "name": "CONTROL: the wait-all flag is spelled as the integers",
+      "file": "src/wait_many.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new modules: TRUE is 1 and FALSE is 0, so this is an equivalent change on code every multiple wait runs. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["            if wait_all { TRUE } else { FALSE },\n"],
+      "replace": ["            if wait_all { 1 } else { 0 },\n"]
     },
     {
       "name": "CONTROL: the duplicate's failure is tested against 0 rather than FALSE",

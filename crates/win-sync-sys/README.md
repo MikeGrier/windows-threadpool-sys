@@ -57,6 +57,47 @@ assert_eq!(
 `windows-threadpool-sys` accepts an `Event` as a thread-pool wait target without `unsafe`, because
 an `Event` is never a mutex -- the one kind of object the pool cannot wait on.
 
+- **`wait_for_any`**, **`wait_for_all`**, **`signal_object_and_wait`**, **`wait_for_single_object_ex`**
+  and **`queue_user_apc`** -- the rest of the wait functions: `WaitForMultipleObjectsEx` for up to
+  `MAXIMUM_OBJECTS` (64) objects, either until any one is signalled, reporting which, or until all
+  are at once, which takes from them atomically; `SignalObjectAndWait`, which can signal only a
+  `Signalable` object, so a `WaitOnlyEvent` is refused by the compiler; and the alertable form of
+  each, an `Alertable::Yes` wait that an APC ends with `Alerted`. `queue_user_apc` takes a Rust
+  closure and runs it on the target thread in its next alertable wait.
+
+```rust
+use std::time::Duration;
+use win_sync_sys::{
+    Alertable, Event, ResetMode, WaitAnyOutcome, WaitOutcome, queue_user_apc_to_current_thread,
+    signal_object_and_wait, wait_for_all, wait_for_any,
+};
+
+let events = [
+    Event::new(ResetMode::Auto, false)?,
+    Event::new(ResetMode::Auto, false)?,
+];
+let poll = Some(Duration::ZERO);
+
+events[1].set()?;
+assert_eq!(wait_for_any(&events, poll, Alertable::No)?, WaitAnyOutcome::Signalled(1));
+
+// All, atomically: one signalled is not enough, and nothing is taken until both are.
+events[0].set()?;
+assert_eq!(wait_for_all(&events, poll, Alertable::No)?, WaitOutcome::TimedOut);
+events[1].set()?;
+assert_eq!(wait_for_all(&events, poll, Alertable::No)?, WaitOutcome::Signalled);
+
+// An APC ends an alertable wait, and runs first.
+queue_user_apc_to_current_thread(|| println!("ran in the wait"))?;
+let outcome = wait_for_any(&events, poll, Alertable::Yes)?;
+assert_eq!(outcome, WaitAnyOutcome::Alerted);
+
+// Signal one object and wait on another in one call.
+let (ping, pong) = (Event::new(ResetMode::Auto, false)?, Event::new(ResetMode::Auto, true)?);
+signal_object_and_wait(&ping, &pong, poll, Alertable::No)?;
+# Ok::<(), std::io::Error>(())
+```
+
 - **`WaitOnlyEvent`** and **`duplicate_handle_with_access`** -- a handle to the same object that can
   do less. `Event::try_clone_wait_only` gives a handle to the event that can be waited on and can
   neither set nor reset it: the kernel refuses a `SetEvent` or `ResetEvent` on it.
@@ -93,9 +134,8 @@ assert_eq!(wait_for_single_object(&adopted, None)?, WaitOutcome::Signalled);
   reports that it did. Microsoft's replacement is a condition variable.
 - **Named events and `OpenEvent`.** Every event here is unnamed. Whether named objects belong in
   this crate is not yet decided.
-- **The other kernel objects and the rest of the wait functions** -- semaphores, mutexes, waitable
-  timers, waiting on several objects at once, an alertable wait and `QueueUserAPC` -- are planned in
-  this crate's `CHECKLIST.md`.
+- **The other kernel objects** -- semaphores, mutexes and waitable timers -- are planned in this
+  crate's `CHECKLIST.md`.
 - **The in-process primitives** -- SRW locks, condition variables, critical sections, one-time
   initialization, barriers and `WaitOnAddress` -- are parked rather than rejected.
 

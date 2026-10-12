@@ -8,12 +8,7 @@ and [DESIGN-NOTES.md](DESIGN-NOTES.md) for its decisions.
 Sequenced after `Event` by the engineer ([WS-D-2](DESIGN-NOTES.md#ws-d-2)); graduates to numbered
 milestones when the next of these is taken up.
 
-- [ ] **WS-1+.1** -- **The rest of the wait functions.** `WaitForSingleObjectEx`,
-  `WaitForMultipleObjects(Ex)` with its 64-handle limit and both any and all, and
-  `SignalObjectAndWait`, over a trait every object type here implements and `BorrowedHandle`
-  implements too. The outcome as an enum: signalled or abandoned with an index, timed out, or ended
-  by an APC in an alertable wait. `QueueUserAPC` belongs with it, as what ends an alertable wait.
-  `WaitForSingleObject` itself was taken up first, as [WS-2.1](COMPLETED-CHECKLIST.md#ws-21).
+- [x] **WS-1+.1** -- The rest of the wait functions: alertable and multiple-object waits, `SignalObjectAndWait` and `QueueUserAPC`. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ws-1+1)
 
 - [ ] **WS-1+.2** -- **`Semaphore`.** Created with an initial and a maximum count; `release(n)`
   returning the previous count. Gets `windows-threadpool-sys`' `From` conversion, as `Event` does.
@@ -42,6 +37,14 @@ milestones when the next of these is taken up.
   `windows-namespace-request-sys` sits in a crate about the file-system namespace. Duplicating a
   handle into another process, which `duplicate_handle_with_access` does not do
   ([WS-D-7](DESIGN-NOTES.md#ws-d-7)), crosses the same boundary and belongs here.
+
+- [ ] **WS-inf.4** -- **`QueueUserAPC2` and the special user-mode APC.** From
+  [WS-D-8](DESIGN-NOTES.md#ws-d-8): `QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC` delivers the routine
+  without the target being in an alertable wait, which changes what `queue_user_apc`'s documentation
+  says about when a routine runs and what it may assume of the thread's state. Parked behind the
+  Windows versions that have it and behind a decision on how a routine that can interrupt a thread
+  anywhere is expressed, since [WS-1+.1](COMPLETED-CHECKLIST.md#ws-1+1)'s routine may assume the
+  thread is at a wait.
 
 - [ ] **WS-inf.3** -- **Whether the workspace's private events move onto `Event`.** Each is the
   engineer's decision, taken per crate. Found by sweeping non-test sources for raw `CreateEventW`,
