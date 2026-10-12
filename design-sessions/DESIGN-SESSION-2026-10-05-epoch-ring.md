@@ -3389,6 +3389,37 @@ lock across both pushes makes it so: the drain the first read's completion calls
 lock, then starts with an owed submit. The responder records the thread of each failed call, which
 is what lets the test say so rather than infer it from a count.
 
+## DI-7.2: the registration paths need three behaviours, so the ring crate gains `call_faults` (2026-10-12)
+
+Not a discussion with the engineer: a finding while implementing, with the assistant's choices queued for review in `DI-9.7`.
+
+Reading the construction paths showed that `DI-7.1`'s `submit_faults` could not reach them. What
+`Dioring::new` does between creating its ring and returning it needs three behaviours the safe
+responder lacked: a `Build*` call refused, a completion's result failed, and a completion that
+never arrives. The step was re-planned before any code was written, and the ring crate's `M38.1`
+widened its responder to any seam call, a popped completion's result, and stalled submits (its
+[D-87](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-87)), `submit_faults` staying as the submit-only
+name over the same responder.
+
+Three ways to get a completion that does not arrive were weighed. The ring crate's seeded `Resolver`
+fails calls probabilistically, so it cannot be asked for one call on demand. Shortening
+`REGISTRATION_BOUND` under `cfg(test)` would change every test's wait, and could fail a slow
+machine's real registration. Withholding the completions the kernel has made would make
+`SubmitIoRing(wait)` fail with `E_INVALIDARG` and the ring's rundown panic. What was built instead
+stalls the submit, which the platform permits (RS-P-1): the operation stays queued, a bounded wait
+expires on the real clock, and once the stall ends submits reach the kernel and run what is queued,
+so a ring dropped mid-stall still runs down.
+
+The ring crate's own sweep found a hole in its first test of a failed completion. The failed
+completion was the first one popped, so zeroing its identity named the same operation and nothing
+noticed; the test now fails the last of three in flight, whose identity cannot coincide with a
+zeroed one.
+
+In this crate the hook and the bound travel in one `Construction`, passed down explicitly, because a
+thread-local would miss the calls a pool thread makes and a global would be shared by tests running
+as threads of one process. A ring without the registration operation stays unreached as a cause: its
+path is the refused build's, which is reached, and the capability probe is outside the seam.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

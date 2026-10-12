@@ -2012,3 +2012,57 @@ its reissue. The blind-spot entry is turned to `caught`, sabotages are added for
 reissue, and the paths now reached are removed from the manifest's `notCoveredHere`.
 
 > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M37` -> `M37.1` (a safe responder that fails a ring's submits), landed first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+
+## Moved 2026-10-12 12:15:36 -04:00 -- DI-7.2: construction's registration paths reached by tests
+
+### <a id="di-72"></a>DI-7.2 -- Construction's registration paths reached by tests, through a hook that registers the ring crate's safe call-fault responder on the instance's ring as it is created. *(completed 2026-10-12 12:15:36 -04:00)*
+
+Raised by implementing it: `DI-7.1`'s `submit_faults` reaches no registration path, since those need
+a `Build*` call refused, a completion's result failed, and a completion that does not arrive, and
+the safe responder could do none of them. The item was re-planned and the ring crate gained
+`sys::call_faults` (its `M38.1`, [D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87)), which this item
+waited on. A crate-private `Construction`, carrying the registration bound and a test-only hook
+called with the ring as soon as it exists, is handed from `Dioring::with_construction` to
+`WindowsBackend::construct`; `with_clock` and `without_owned_reads` keep their signatures and pass
+the production default. The tests: at the backend, in
+[windows_backend/tests/construction.rs](src/windows_backend/tests/construction.rs), what comes back
+for a refused file-registration build, a refused buffer-registration build, a failed submit of
+each registration, a failed completion of each, a registration that does not complete within the
+bound for files and for buffers, and a completion event that cannot be attached, with the targets
+always back and the buffers back only while the kernel was not given them, and a fault armed for a
+call construction does not make leaving it alone; and through `Dioring::new`, in
+[dioring/tests/construction.rs](src/dioring/tests/construction.rs), that each becomes a
+`SetupRefusal::Ring` carrying the ring's own error, with the files, the provider and the buffers
+where due handed back. Stable over 30 runs. Fourteen sabotages and a control are added, one
+control re-anchored, and the manifest's `notCoveredHere` no longer lists the registration paths or
+the completion event's attach; what remains there for them is a ring without the registration
+operation as a cause, whose path is the refused build's. The assistant's choices are queued in
+`DI-9.7`. The item as it stood at completion:
+
+**Construction's registration paths reached by tests, through a hook that
+registers a responder on the instance's ring as it is created.** `Dioring::new` creates its ring,
+then registers its files and buffers, submits each registration and waits for its completion, all
+before the consumer can name the ring, so a responder registered afterwards cannot answer those
+calls. [sabotage.json](sabotage.json)'s `notCoveredHere` lists them as unreached. A crate-private
+`Construction`, passed down explicitly from `Dioring::with_clock` to the Windows backend -- never
+through a thread-local or a global, per the ring crate's
+[D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85) -- carries two things: a test-only hook,
+called with the ring as soon as it exists and before anything is registered, and how long
+construction waits for a registration, so a test can shorten the wait for one build rather than
+the constant for every test. **The responder is the ring crate's safe `sys::call_faults`**, as
+`DI-7.1`'s was `submit_faults`, for the same reason ([DI-D-4](DESIGN-NOTES.md#di-d-4)): the
+paths need a `Build*` call refused, a completion's result failed, and a completion that does not
+arrive, which no consumer that forbids `unsafe` can write. Tests, each through `Dioring::new`
+with everything handed back in its `SetupError`, and at the backend where its own handing back is
+the subject: a file registration whose build is refused; a buffer registration whose build is
+refused, the buffers handed back; a registration whose submit fails; a registration whose
+completion fails; one whose completion does not arrive within the bound, a stalled submit with
+the wait shortened; and the completion event's attach failing, the buffers not handed back since
+the kernel was given them. **A ring without the registration operation stays unreached as a
+cause**: its path is the refused build's, which is reached, and the capability probe is outside
+the seam ([D-60](../windows-ioring-sys/DESIGN-NOTES.md#d-60)). The paths reached come out of
+`notCoveredHere`, with a sabotage for each.
+
+> **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M38` -> `M38.1` (a safe responder that fails any seam call, a completion's result, and stalls submits) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+
+> **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M38` -> `M38.1` (a safe responder that fails any seam call, a completion's result, and stalls submits), landed first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).

@@ -19,31 +19,7 @@ paths no test reaches yet, the second delivery model, and the blocking push.
 
 - [x] **DI-7.1** -- Failed submissions reached by tests, through the ring crate's safe submit-fault responder registered on the instance's ring. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#di-71)
 
-- [ ] **DI-7.2** -- **Construction's registration paths reached by tests, through a hook that
-  registers a responder on the instance's ring as it is created.** `Dioring::new` creates its ring,
-  then registers its files and buffers, submits each registration and waits for its completion, all
-  before the consumer can name the ring, so a responder registered afterwards cannot answer those
-  calls. [sabotage.json](sabotage.json)'s `notCoveredHere` lists them as unreached. A crate-private
-  `Construction`, passed down explicitly from `Dioring::with_clock` to the Windows backend -- never
-  through a thread-local or a global, per the ring crate's
-  [D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85) -- carries two things: a test-only hook,
-  called with the ring as soon as it exists and before anything is registered, and how long
-  construction waits for a registration, so a test can shorten the wait for one build rather than
-  the constant for every test. **The responder is the ring crate's safe `sys::call_faults`**, as
-  `DI-7.1`'s was `submit_faults`, for the same reason ([DI-D-4](DESIGN-NOTES.md#di-d-4)): the
-  paths need a `Build*` call refused, a completion's result failed, and a completion that does not
-  arrive, which no consumer that forbids `unsafe` can write. Tests, each through `Dioring::new`
-  with everything handed back in its `SetupError`, and at the backend where its own handing back is
-  the subject: a file registration whose build is refused; a buffer registration whose build is
-  refused, the buffers handed back; a registration whose submit fails; a registration whose
-  completion fails; one whose completion does not arrive within the bound, a stalled submit with
-  the wait shortened; and the completion event's attach failing, the buffers not handed back since
-  the kernel was given them. **A ring without the registration operation stays unreached as a
-  cause**: its path is the refused build's, which is reached, and the capability probe is outside
-  the seam ([D-60](../windows-ioring-sys/DESIGN-NOTES.md#d-60)). The paths reached come out of
-  `notCoveredHere`, with a sabotage for each.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M38` -> `M38.1` (a safe responder that fails any seam call, a completion's result, and stalls submits) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+- [x] **DI-7.2** -- Construction's registration paths reached by tests, through a hook that registers the ring crate's safe call-fault responder on the instance's ring as it is created. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-72)
 
 - [ ] **DI-7.3** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the consumer's own
   thread waits on the notification and drains through a `pump` call, over the Windows backend and
@@ -281,10 +257,18 @@ does is now that item's to absorb.
   rather than a race; and the failure armed is `ERROR_IO_DEVICE`, which no ring condition names, so
   it surfaces as a `RefusalCause::Unknown` carrying its code, that `pop` reports as an error
   downcasting to the `RefusalCause`. From `DI-7.2`: construction's two knobs, the test-only hook and
-  the registration bound, travel together in one crate-private `Construction` rather than the
-  constant being made shorter under `cfg(test)`, which would change every test's wait and could fail
-  a slow machine's registration; and `Sidecar`, the backend's per-operation record, becomes
-  crate-visible so the hook can name the ring's type.
+  the registration bound, travel together in one crate-private `Construction`, handed from
+  `Dioring::with_construction` to `WindowsBackend::construct`, rather than the constant being made
+  shorter under `cfg(test)`, which would change every test's wait and could fail a slow machine's
+  registration, or the hook being a thread-local or a global; `without_owned_reads` and
+  `Dioring::with_clock` keep their signatures and pass the production default; `Sidecar`, the
+  backend's per-operation record, becomes crate-visible, and the hook has a `RingHook` alias, so the
+  hook can name the ring's type; the construction tests are two sibling modules, the backend's
+  because its `tests.rs` is already over 32 KiB, and `TempFile::is_held` is made crate-visible for
+  them; a stalled registration is tested with a 50ms bound against a 600ms stall, which asserts on
+  the bound the error names and on the ring running down after the stall, rather than on elapsed
+  time; and the ring crate's `M38.1`, which this step asked for, is the stalled submit rather than
+  withheld completions, for the reason its [D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87) gives.
 
 ## DI-M10 -- Target backings
 

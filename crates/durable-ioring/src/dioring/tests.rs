@@ -36,6 +36,7 @@ mod gates;
 // The consumer's durability provider: DI-3.2.6.
 mod providers;
 // Removing a file, and ending the instance: DI-3.2.7.
+mod construction;
 mod ending;
 mod submits;
 
@@ -121,7 +122,7 @@ impl TempFile {
     }
 
     /// Whether any handle to the file is open: an exclusive open fails exactly then.
-    fn is_held(&self) -> bool {
+    pub(crate) fn is_held(&self) -> bool {
         held(&self.0)
     }
 }

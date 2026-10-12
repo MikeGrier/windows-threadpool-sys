@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "Construction's registration error paths (a ring without the registration op, a registration whose completion fails or never arrives) are absent: no test reaches them, because the kernel completed every registration tried, a thread handle and a zero-length buffer included. dioring.rs says what would reach each. Also absent, and for the same reason -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; an owned buffer the ring refuses, which needs one longer than a u32; and attaching the completion event at construction.",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated; and an owned buffer the ring refuses, which needs one longer than a u32.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -449,9 +449,9 @@
       "name": "CONTROL: the registration timeout's message is reworded",
       "file": "src/dioring.rs",
       "expect": "survives",
-      "why": "The manifest checking itself. Nothing asserts on this wording, and no test reaches it, so the change must survive; if it comes back caught, something is matching incidental text.",
-      "find": ["                \"the ring did not complete a registration within {}s\","],
-      "replace": ["                \"no registration completion arrived within {}s\","]
+      "why": "The manifest checking itself. The tests assert on the bound the message names (DI-7.2) and not on the wording around it, so a rewording that keeps the bound must survive; if it comes back caught, something is matching incidental text.",
+      "find": ["            format!(\"the ring did not complete a registration within {bound:?}\"),"],
+      "replace": ["            format!(\"no registration completion arrived within {bound:?}\"),"]
     },
     {
       "name": "WT-2.2.2: every failure is stamped with the first failure's reading, not the clock",
@@ -1949,6 +1949,126 @@
       "why": "A reissue's failure is reported as the cause the ring gave, mapped as every other refusal is, so the caller can act on it without probing.",
       "find": ["            Err(error) => Err(refusal_cause(error)),"],
       "replace": ["            Err(_) => Err(RefusalCause::Invalid),"]
+    },
+    {
+      "name": "DI-7.2: a refused file-registration build loses its cause",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A registration the ring refuses to build ends construction as the ring's own error, so a consumer can act on the cause rather than a placeholder.",
+      "find": ["        .map_err(PushRefused::into_error)?;"],
+      "replace": ["        .map_err(|_| io::Error::from(io::ErrorKind::Other))?;"]
+    },
+    {
+      "name": "DI-7.2: a file registration's failed submit is swallowed",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A registration that was not submitted can never complete: the failure is the answer, and swallowing it turns it into a wait for the bound.",
+      "find": ["    batch.submit()?;"],
+      "replace": ["    let _ = batch.submit();"]
+    },
+    {
+      "name": "DI-7.2: a failed file-registration completion is taken for success",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A registration the kernel failed is not a registration made: reporting success hands the engine files the ring does not hold.",
+      "find": ["        Ok(result) => result.map(Some),"],
+      "replace": ["        Ok(_) => Ok(None),"]
+    },
+    {
+      "name": "DI-7.2: a refused buffer-registration build keeps the buffers",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A build the ring refused never gave the kernel the buffers, so they go back to the caller; dropping them loses what the caller handed in.",
+      "find": ["        .map_err(|refused| (refused.error, refused.payload))?;"],
+      "replace": ["        .map_err(|refused| (refused.error, None))?;"]
+    },
+    {
+      "name": "DI-7.2: a failed buffer-registration completion is taken for success",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "As for files: a buffer registration the kernel failed is not one made.",
+      "find": ["        Ok(result) => result.map(Some).map_err(|error| (error, None)),"],
+      "replace": ["        Ok(_) => Ok(None),"]
+    },
+    {
+      "name": "DI-7.2: a registration waits the default bound, not the one construction was given",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The bound is a property of the construction, so a test can shorten one wait rather than the constant for every test. Ignoring it makes the stalled-registration tests wait the default 30s, and the stall ends first.",
+      "find": ["    match ring.pop_within(bound)? {"],
+      "replace": ["    match ring.pop_within(REGISTRATION_BOUND)? {"]
+    },
+    {
+      "name": "DI-7.2: a registration that times out is not reported as a timeout",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A completion that did not arrive is a timeout, and says so.",
+      "find": ["            io::ErrorKind::TimedOut,"],
+      "replace": ["            io::ErrorKind::Other,"]
+    },
+    {
+      "name": "DI-7.2: a registration's timeout does not name the bound it waited",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The message states what construction waited, so a reader is not told 30s of a 50ms wait.",
+      "find": ["            format!(\"the ring did not complete a registration within {bound:?}\"),"],
+      "replace": ["            \"the ring did not complete a registration within 30s\".to_string(),"]
+    },
+    {
+      "name": "DI-7.2: a construction failure loses the ring's error",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The instance's refusal carries the ring's own error, with its HRESULT, not just a kind.",
+      "find": ["                    WindowsBackendRefusal::Ring(error) => SetupRefusal::Ring(error),"],
+      "replace": ["                    WindowsBackendRefusal::Ring(error) => SetupRefusal::Ring(io::Error::from(error.kind())),"]
+    },
+    {
+      "name": "DI-7.2: a construction failure does not hand the buffers back",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "What the backend hands back, the instance hands back: the buffers while the kernel was not given them.",
+      "find": ["                    files: setups(targets),", "                    buffers,", "                    provider,"],
+      "replace": ["                    files: setups(targets),", "                    buffers: None,", "                    provider,"]
+    },
+    {
+      "name": "DI-7.2: the files' registration waits the default bound",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "Construction's bound reaches the files' registration.",
+      "find": ["        let files = match register_files(&mut ring, handles, registration_bound) {"],
+      "replace": ["        let files = match register_files(&mut ring, handles, crate::dioring::REGISTRATION_BOUND) {"]
+    },
+    {
+      "name": "DI-7.2: the buffers' registration waits the default bound",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "Construction's bound reaches the buffers' registration too, which only a stall with no files to register first can show.",
+      "find": ["        let registered = match register_buffers(&mut ring, buffers, registration_bound) {"],
+      "replace": ["        let registered = match register_buffers(&mut ring, buffers, crate::dioring::REGISTRATION_BOUND) {"]
+    },
+    {
+      "name": "DI-7.2: a failed completion-event attach loses the targets",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "Whatever fails, the targets come back: they were the caller's.",
+      "find": ["            Err(error) => return Err(fail(error, targets, None)),"],
+      "replace": ["            Err(error) => return Err(fail(error, Vec::new(), None)),"]
+    },
+    {
+      "name": "DI-7.2: the construction hook runs after the files are registered",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "The hook is the only moment a responder can answer the registration calls: called after the first of them it has missed it, and a refused file-registration build is never seen.",
+      "find": ["        #[cfg(test)]", "        if let Some(on_ring) = on_ring {", "            on_ring(&ring);", "        }", "        let handles = targets", "            .iter()", "            .map(|(_, target)| target.handle().clone())", "            .collect();", "        let files = match register_files(&mut ring, handles, registration_bound) {", "            Ok(files) => files,", "            Err(error) => return Err(fail(error, targets, Some(buffers))),", "        };"],
+      "replace": ["        let handles = targets", "            .iter()", "            .map(|(_, target)| target.handle().clone())", "            .collect();", "        let files = match register_files(&mut ring, handles, registration_bound) {", "            Ok(files) => files,", "            Err(error) => return Err(fail(error, targets, Some(buffers))),", "        };", "        #[cfg(test)]", "        if let Some(on_ring) = on_ring {", "            on_ring(&ring);", "        }"]
+    },
+    {
+      "name": "CONTROL: DI-7.2: the construction hook is called through an identity",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on construction: a reborrow changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": ["            on_ring(&ring);"],
+      "replace": ["            on_ring(&*&ring);"]
     }
   ]
 }

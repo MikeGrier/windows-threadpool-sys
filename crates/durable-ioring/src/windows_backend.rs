@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
+use std::time::Duration;
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId,
@@ -98,7 +99,7 @@ pub(crate) fn refusal_cause(error: io::Error) -> RefusalCause {
 
 /// What the ring carries for each operation, and hands back with its completion.
 #[derive(Clone, Copy, Debug)]
-struct Sidecar {
+pub(crate) struct Sidecar {
     token: SubmissionToken,
     target: IoTargetKey,
     kind: Kind,
@@ -118,6 +119,59 @@ struct Slot {
     target: Win32FileTarget,
     /// Its registration, for a target given at construction.
     registered: Option<RegisteredFile>,
+}
+
+/// A test hook called with a ring as soon as it exists (DI-7.2).
+#[cfg(test)]
+pub(crate) type RingHook<B> = Box<dyn FnOnce(&IoRing<B, Sidecar>)>;
+
+/// What construction needs beyond [`WindowsBackendSetup`], passed down explicitly from
+/// [`Dioring::with_construction`](crate::dioring::Dioring::with_construction) (DI-7.2): never a
+/// thread-local or a global, since the ring is created and registered before its consumer can
+/// name it, and a responder installed by thread would miss a pool thread's calls (the ring
+/// crate's D-85).
+pub(crate) struct Construction<B> {
+    /// How long construction waits for each registration's completion.
+    pub(crate) registration_bound: Duration,
+    /// Called with the ring as soon as it exists, before anything is registered on it: a test
+    /// registers a responder here, which is the only moment that reaches the registration calls.
+    #[cfg(test)]
+    pub(crate) on_ring: Option<RingHook<B>>,
+    /// `B` is named only by the test hook.
+    ring: std::marker::PhantomData<fn(B)>,
+}
+
+impl<B> Default for Construction<B> {
+    /// What every instance outside a test is built with.
+    fn default() -> Self {
+        Self {
+            registration_bound: crate::dioring::REGISTRATION_BOUND,
+            #[cfg(test)]
+            on_ring: None,
+            ring: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+impl<B> Construction<B> {
+    /// A construction whose ring answers through the ring crate's safe call-fault responder,
+    /// registered as the ring is created, waiting `registration_bound` for each registration. The
+    /// control arms it from any thread; nothing is armed to begin with.
+    pub(crate) fn faulted(
+        registration_bound: Duration,
+    ) -> (Self, windows_ioring_sys::sys::CallFaultControl) {
+        let (faults, control) = windows_ioring_sys::sys::call_faults();
+        let on_ring: RingHook<B> = Box::new(move |ring| {
+            let _ = windows_ioring_sys::sys::register(ring, Box::new(faults));
+        });
+        let construction = Self {
+            registration_bound,
+            on_ring: Some(on_ring),
+            ring: std::marker::PhantomData,
+        };
+        (construction, control)
+    }
 }
 
 /// What [`WindowsBackend::new`] takes.
@@ -217,6 +271,24 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
     pub fn without_owned_reads(
         setup: WindowsBackendSetup<R>,
     ) -> Result<Self, WindowsBackendError<R>> {
+        Self::construct(setup, Construction::default())
+    }
+
+    /// [`without_owned_reads`](Self::without_owned_reads), as `construction` says (DI-7.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`without_owned_reads`](Self::without_owned_reads).
+    pub(crate) fn construct(
+        setup: WindowsBackendSetup<R>,
+        construction: Construction<B>,
+    ) -> Result<Self, WindowsBackendError<R>> {
+        let Construction {
+            registration_bound,
+            #[cfg(test)]
+            on_ring,
+            ..
+        } = construction;
         let WindowsBackendSetup {
             submission_queue_size,
             completion_queue_size,
@@ -239,15 +311,19 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
             Ok(ring) => ring,
             Err(error) => return Err(fail(error, targets, Some(buffers))),
         };
+        #[cfg(test)]
+        if let Some(on_ring) = on_ring {
+            on_ring(&ring);
+        }
         let handles = targets
             .iter()
             .map(|(_, target)| target.handle().clone())
             .collect();
-        let files = match register_files(&mut ring, handles) {
+        let files = match register_files(&mut ring, handles, registration_bound) {
             Ok(files) => files,
             Err(error) => return Err(fail(error, targets, Some(buffers))),
         };
-        let registered = match register_buffers(&mut ring, buffers) {
+        let registered = match register_buffers(&mut ring, buffers, registration_bound) {
             Ok(registered) => registered,
             Err((error, buffers)) => return Err(fail(error, targets, buffers)),
         };

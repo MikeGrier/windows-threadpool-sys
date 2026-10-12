@@ -55,7 +55,7 @@ use crate::types::{
 };
 use crate::windows_backend::pool::{EngineGuard, PoolDelivery, PoolEngine};
 use crate::windows_backend::{
-    Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
+    Construction, Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
     WindowsBackendSetup,
 };
 
@@ -94,7 +94,7 @@ impl<K: Clock<Timeline = InterruptTime> + Steady + Send + 'static> StampClock fo
 /// How long construction waits for each registration's completion. A registration is a
 /// bookkeeping operation the kernel completes at once; the bound exists so a ring that never
 /// answers fails construction instead of hanging it.
-const REGISTRATION_BOUND: Duration = Duration::from_secs(30);
+pub(crate) const REGISTRATION_BOUND: Duration = Duration::from_secs(30);
 
 /// What a dioring instance is built with. Both registrations are the ring's only ones (one of
 /// each per ring), so they are made here or never.
@@ -259,6 +259,19 @@ where
         setup: Setup<'_, '_, E, R>,
         clock: K,
     ) -> Result<(Self, LineageHandle), SetupError<E, R>> {
+        Self::with_construction(setup, clock, Construction::default())
+    }
+
+    /// [`with_clock`](Self::with_clock), as `construction` says (DI-7.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Dioring::new`].
+    pub(crate) fn with_construction(
+        setup: Setup<'_, '_, E, R>,
+        clock: K,
+        construction: Construction<B>,
+    ) -> Result<(Self, LineageHandle), SetupError<E, R>> {
         let Setup {
             submission_queue_size,
             completion_queue_size,
@@ -316,12 +329,15 @@ where
             .into_iter()
             .map(|TargetSetup { key, target }| (key, target))
             .collect();
-        let backend = match WindowsBackend::without_owned_reads(WindowsBackendSetup {
-            submission_queue_size,
-            completion_queue_size,
-            targets,
-            buffers,
-        }) {
+        let backend = match WindowsBackend::construct(
+            WindowsBackendSetup {
+                submission_queue_size,
+                completion_queue_size,
+                targets,
+                buffers,
+            },
+            construction,
+        ) {
             Ok(backend) => backend,
             Err(WindowsBackendError {
                 reason,
@@ -922,14 +938,18 @@ pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for
 /// no files: an instance whose files are all added later makes no file registration.
 ///
-/// The error paths here are not reached by this crate's tests. Tried on the development machine,
-/// the kernel completed a registration of a thread handle, and of a zero-length buffer,
-/// successfully. What would reach them is a ring without the registration op (an older Windows),
-/// more than `u32::MAX` files, a completion that never arrives, or the kernel failing the
-/// completion. Each ends construction as `SetupRefusal::Ring`.
+/// Waits `bound` for the completion. Each way it fails ends construction as
+/// `SetupRefusal::Ring`, and each is reached by a test (DI-7.2) through the ring crate's safe
+/// responder, registered on the ring as it is created: a build refused, a submit failed, a
+/// completion failed, and a completion that does not arrive within `bound`. Tried on the
+/// development machine, the kernel completed a registration of a thread handle, and of a
+/// zero-length buffer, successfully, so no real input reaches them; a ring without the registration
+/// op (an older Windows) takes the refused build's path, and more than `u32::MAX` files takes it
+/// too, refused before submission.
 pub(crate) fn register_files<B, S>(
     ring: &mut IoRing<B, S>,
     handles: Vec<SharedHandle>,
+    bound: Duration,
 ) -> io::Result<Option<RegisteredFiles>> {
     if handles.is_empty() {
         return Ok(None);
@@ -940,7 +960,7 @@ pub(crate) fn register_files<B, S>(
         .register_shared_files(handles)
         .map_err(PushRefused::into_error)?;
     batch.submit()?;
-    let completion = registration_completion(ring)?;
+    let completion = registration_completion(ring, bound)?;
     match pending.claim_if(&completion) {
         Ok(result) => result.map(Some),
         // Unreachable in practice: nothing else is in flight on a ring this function created a
@@ -956,12 +976,13 @@ pub(crate) fn register_files<B, S>(
 pub(crate) type BufferRegistration<R> =
     Result<Option<RegisteredBuffers<R>>, (io::Error, Option<Vec<R>>)>;
 
-/// Register `buffers` with `ring`, and wait for the registration to complete. Its error paths are
-/// unreached by tests, as [`register_files`]' are; a buffer longer than `u32::MAX` also reaches
-/// one, refused before submission with the buffers handed back.
+/// Register `buffers` with `ring`, and wait `bound` for the registration to complete. Its error
+/// paths are reached as [`register_files`]' are; a refused build hands the buffers back, and a
+/// failure after the kernel was given them does not.
 pub(crate) fn register_buffers<B, S, R: IoBufMut>(
     ring: &mut IoRing<B, S>,
     buffers: Vec<R>,
+    bound: Duration,
 ) -> BufferRegistration<R> {
     if buffers.is_empty() {
         return Ok(None);
@@ -971,7 +992,7 @@ pub(crate) fn register_buffers<B, S, R: IoBufMut>(
         .register_buffers(buffers)
         .map_err(|refused| (refused.error, refused.payload))?;
     batch.submit().map_err(|error| (error, None))?;
-    let completion = registration_completion(ring).map_err(|error| (error, None))?;
+    let completion = registration_completion(ring, bound).map_err(|error| (error, None))?;
     match pending.claim_if(&completion) {
         Ok(result) => result.map(Some).map_err(|error| (error, None)),
         // Unreachable in practice, as for files.
@@ -982,16 +1003,16 @@ pub(crate) fn register_buffers<B, S, R: IoBufMut>(
     }
 }
 
-/// The completion of the one registration in flight on `ring`.
-fn registration_completion<B, S>(ring: &mut IoRing<B, S>) -> io::Result<Completion> {
-    match ring.pop_within(REGISTRATION_BOUND)? {
+/// The completion of the one registration in flight on `ring`, within `bound`.
+fn registration_completion<B, S>(
+    ring: &mut IoRing<B, S>,
+    bound: Duration,
+) -> io::Result<Completion> {
+    match ring.pop_within(bound)? {
         Some((completion, _)) => Ok(completion),
         None => Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            format!(
-                "the ring did not complete a registration within {}s",
-                REGISTRATION_BOUND.as_secs()
-            ),
+            format!("the ring did not complete a registration within {bound:?}"),
         )),
     }
 }

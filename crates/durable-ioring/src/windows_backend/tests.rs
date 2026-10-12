@@ -26,6 +26,8 @@ const BOUND: Duration = Duration::from_secs(5);
 
 type Backend = WindowsBackend<Vec<u8>>;
 
+mod construction;
+
 fn setup(
     targets: Vec<(IoTargetKey, Win32FileTarget)>,
     buffers: Vec<Vec<u8>>,
