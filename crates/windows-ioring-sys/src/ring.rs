@@ -162,7 +162,7 @@ impl InjectedFailure {
     /// guarantee is true by construction rather than by convention. A seam
     /// that could turn a real failure into an apparent success would let a
     /// test conceal the very defects it exists to find.
-    fn as_hresult(self) -> windows_sys::core::HRESULT {
+    pub(crate) fn as_hresult(self) -> windows_sys::core::HRESULT {
         let code = match self {
             Self::Ring(condition) => condition.code(),
             // `HRESULT_FROM_WIN32`: severity 1, facility 7 (`FACILITY_WIN32`),

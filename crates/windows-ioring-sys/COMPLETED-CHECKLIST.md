@@ -6422,3 +6422,36 @@ and now names the new. The item as it stood at completion:
 **The five `completion_wake::` lib tests moved to an integration test**, since they use only public
 API (`M24.3`), and the check passing again with the inventory unchanged. The entry moves to
 [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in the same commit.
+
+## Moved 2026-10-11 23:20:20 -04:00 -- M37.1, completing M37: a safe responder that fails a ring's submits
+
+### <a id="m371"></a>M37.1 -- `sys::submit_faults()`: a safe responder that fails a ring's submits on demand, for a consumer that forbids `unsafe`. *(completed 2026-10-11 23:20:20 -04:00)*
+
+Per [D-86](DESIGN-NOTES.md#d-86). `SubmitFaults` and `SubmitFaultControl` in `sys/submit_faults.rs`,
+under both `kernel-seam` and `fault-injection`; `InjectedFailure::as_hresult` became crate-visible
+for it, and `submit_faults` compiles away when either feature is missing. A failing submit returns
+without reaching the kernel, so entries stay queued; its out-parameter is left untouched, the real
+call's being undocumented. `failures()` reports each failed call's thread, so a test can show a
+failure was answered off its own thread. Tests: eleven unit tests that call the responder directly
+and open no ring, a doctest that runs the usage, and one real-ring test in
+[tests/submit_faults.rs](tests/submit_faults.rs) showing a failed submit leaves the entry queued,
+the kernel never sees it, a pop still reaches the kernel, and the next submit runs it. Seven
+sabotages caught and a control survives. Not provided, by decision: a safe general `Responses`. The
+item as it stood at completion:
+
+**`sys::submit_faults()`**, under both `kernel-seam` and `fault-injection`: a `SubmitFaults`
+responder, for `sys::register`, that fails the ring's submits on demand and forwards every other
+call to the kernel, and a `SubmitFaultControl` handle -- `Clone`, `Send` and `Sync` -- that arms it
+from any thread: `fail_next(count, failure)`, `fail_until_cleared(failure)` and `clear()`, the
+failure an `InjectedFailure`, which is a failure by construction and is checked when it is armed. A
+failing submit returns the failure without reaching the kernel, so the entries stay queued, as
+`SubmitIoRing` documents ([RS-P-7](RESPONSE-SPACE.md)); `failures()` reports the thread that made
+each failed call, so a test can show a failure was answered on a thread other than its own. A submit
+that waits is failed too, so a ring dropped with the fault armed and operations outstanding cannot
+run down: the fault is cleared first. Tests, each direction asserted: armed, a submit fails with the
+injected code and a clear stops it; a count fails exactly that many; the thread of each failure is
+reported; a failed submit leaves the entry queued on a real ring, and the next submit runs it.
+Sabotages for each, in [sabotage.json](sabotage.json). A decision row records why the responder is
+safe rather than implemented by its consumers.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

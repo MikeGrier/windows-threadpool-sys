@@ -1513,6 +1513,113 @@
       "replace": [
         ""
       ]
+    },
+    {
+      "name": "M37.1: a failing submit still reaches the kernel",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "A failed submit must return without reaching the kernel, so the entries stay queued as SubmitIoRing documents (RS-P-7). Falling through makes the real call, which submits them: the failure is reported and the work runs anyway. Caught by the unit tests, which see the kernel's answer instead of the injected one, and by the real-ring test, whose try_pop finds a completion nothing had submitted.",
+      "find": [
+        "                return code;"
+      ],
+      "replace": [
+        "                let _ = code;"
+      ]
+    },
+    {
+      "name": "M37.1: a counted fault never ends",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "fail_next(n) fails n submits and then reaches the kernel again. Staying armed turns every count into fail_until_cleared, which a test written for one failed submit would not survive.",
+      "find": [
+        "                    Some(_) => Plan::Pass,"
+      ],
+      "replace": [
+        "                    Some(_) => Plan::Fail {",
+        "                        code,",
+        "                        remaining: None,",
+        "                    },"
+      ]
+    },
+    {
+      "name": "M37.1: a counted fault is cut one short",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "The boundary a decrement-then-compare gets wrong: a count of n must fail n submits, not n-1.",
+      "find": [
+        "                    Some(left) if left > 1 => Plan::Fail {"
+      ],
+      "replace": [
+        "                    Some(left) if left > 2 => Plan::Fail {"
+      ]
+    },
+    {
+      "name": "M37.1: a failure is not recorded with its thread",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "failures() is how a test shows a failure was answered on a thread other than its own, which is what D-85 exists for. Unrecorded, every such test is told nothing happened.",
+      "find": [
+        "                state.failed_from.push(std::thread::current().id());"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M37.1: clearing does not clear",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "clear() is how a test lets the work through again after a failure. A no-op leaves every later submit failing, so the ring can never be run down.",
+      "find": [
+        "    pub fn clear(&self) {",
+        "        lock(&self.shared).plan = Plan::Pass;"
+      ],
+      "replace": [
+        "    pub fn clear(&self) {",
+        "        let _ = &self.shared;"
+      ]
+    },
+    {
+      "name": "M37.1: a count of zero arms a failure",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "fail_next(0) is documented to clear: zero failures means none. Arming it anyway fails once.",
+      "find": [
+        "        lock(&self.shared).plan = if count == 0 {"
+      ],
+      "replace": [
+        "        lock(&self.shared).plan = if false {"
+      ]
+    },
+    {
+      "name": "M37.1: arming a non-failure changes the responder before it is refused",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "caught",
+      "why": "A failure that is not one is refused when armed and must change nothing: the responder stays as it was, not half-armed with a placeholder.",
+      "find": [
+        "    pub fn fail_until_cleared(&self, failure: InjectedFailure) {",
+        "        let code = failure.as_hresult();"
+      ],
+      "replace": [
+        "    pub fn fail_until_cleared(&self, failure: InjectedFailure) {",
+        "        lock(&self.shared).plan = Plan::Fail {",
+        "            code: 0,",
+        "            remaining: None,",
+        "        };",
+        "        let code = failure.as_hresult();"
+      ]
+    },
+    {
+      "name": "CONTROL: a failing submit returns its code through an identity",
+      "file": "src/sys/submit_faults.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: masking with all ones changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": [
+        "                return code;"
+      ],
+      "replace": [
+        "                return code & !0;"
+      ]
     }
   ]
 }

@@ -168,32 +168,6 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## M37 -- A safe responder that fails a ring's submits on demand
-
-Opened 2026-10-11 from durable-ioring's `DI-7.1`. A responder registered for one ring
-([D-85](DESIGN-NOTES.md#d-85)) can fail that ring's submits, but `Responses`' methods are
-`unsafe fn`, and durable-ioring forbids `unsafe` ([DI-D-4](../durable-ioring/DESIGN-NOTES.md#di-d-4))
-and says the safe wrapper belongs in the lower crate. So the common case -- fail a ring's submits,
-forward everything else -- is provided safely here.
-
-- [ ] **M37.1** -- **`sys::submit_faults()`**, under both `kernel-seam` and `fault-injection`: a
-  `SubmitFaults` responder, for `sys::register`, that fails the ring's submits on demand and
-  forwards every other call to the kernel, and a `SubmitFaultControl` handle -- `Clone`, `Send` and
-  `Sync` -- that arms it from any thread: `fail_next(count, failure)`, `fail_until_cleared(failure)`
-  and `clear()`, the failure an `InjectedFailure`, which is a failure by construction and is
-  checked when it is armed. A failing submit returns the failure without reaching the kernel, so the
-  entries stay queued, as `SubmitIoRing` documents ([RS-P-7](RESPONSE-SPACE.md)); `failures()`
-  reports the thread that made each failed call, so a test can show a failure was answered on a
-  thread other than its own. A submit that waits is failed too, so a ring dropped with the fault
-  armed and operations outstanding cannot run down: the fault is cleared first. Tests, each
-  direction asserted: armed, a submit fails with the injected code and a clear stops it; a count
-  fails exactly that many; the thread of each failure is reported; a failed submit leaves the entry
-  queued on a real ring, and the next submit runs it. Sabotages for each, in
-  [sabotage.json](sabotage.json). A decision row records why the responder is safe rather than
-  implemented by its consumers.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.
