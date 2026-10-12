@@ -291,6 +291,20 @@ does is now that item's to absorb.
   found a defect in the ring crate's rundown, fixed there as its `M39.1`
   ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)) rather than worked round here.
 
+## DI-M7+ -- Delivery follow-ups (gated on a lower crate)
+
+- [ ] **DI-7+.1** -- **A wait-only handle on the ring's own completion event, for a consumer who
+  wants no callback.** From `DI-7.5`: [DI-D-55](DESIGN-NOTES.md#di-d-55)'s `Signalled` tees the
+  event through a thread-pool wait, which a consumer who would rather wait on the ring's event
+  directly pays for with a callback. A duplicate with `SYNCHRONIZE` access alone removes the reset
+  but not the shared edge ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19)); since a pump drains
+  before it waits, a consumer taking the edge costs only its own wakeup. Gated on
+  [WS-1+.5](../win-sync-sys/CHECKLIST.md), a duplicate with chosen access, in `win-sync-sys`. The
+  shape here is not decided: a fourth `DeliveryMode`, an option on `Pumped`, or a second accessor
+  beside `completion_signal`. Decide it when WS-1+.5 lands, and note that the ring crate's
+  [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21) allows one waiter per ring, which the shared
+  edge bends for the consumer's waiter and the pump's.
+
 ## DI-M10 -- Target backings
 
 - [ ] **DI-10.1** -- **The Win32 file object as a target backing** -- the separate concern DI-D-48
