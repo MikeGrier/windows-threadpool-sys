@@ -68,12 +68,100 @@
       "replace": ["            handle: Event::new(ResetMode::Manual, false)?.handle,\n"]
     },
     {
+      "name": "WS-2.1: a timeout is reported as a signal",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A caller that waits for a signal and is told it has one when the time ran out acts on work that is not there. Every timeout test sees it.",
+      "find": ["        WAIT_TIMEOUT => Ok(WaitOutcome::TimedOut),\n"],
+      "replace": ["        WAIT_TIMEOUT => Ok(WaitOutcome::Signalled),\n"]
+    },
+    {
+      "name": "WS-2.1: an abandoned mutex is reported as a signal",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The wait is over any handle, so it can be a mutex whose owner died; calling that a plain signal hides that what it protected may be inconsistent.",
+      "find": ["        WAIT_ABANDONED => Ok(WaitOutcome::Abandoned),\n"],
+      "replace": ["        WAIT_ABANDONED => Ok(WaitOutcome::Signalled),\n"]
+    },
+    {
+      "name": "WS-2.1: a failed wait is reported as a timeout",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A wait that could not be made says so, with the system's error. Reporting it as a timeout makes a caller retry a wait that can never succeed.",
+      "find": ["        WAIT_FAILED => Err(io::Error::last_os_error()),\n"],
+      "replace": ["        WAIT_FAILED => Ok(WaitOutcome::TimedOut),\n"]
+    },
+    {
+      "name": "WS-2.1: a return code no wait gives is reported as a signal",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A code the call is not documented to return here is reported, not assumed to mean success.",
+      "find": ["        other => Err(io::Error::other(format!(\n            \"WaitForSingleObject returned {other:#x}\"\n        ))),\n"],
+      "replace": ["        _ => Ok(WaitOutcome::Signalled),\n"]
+    },
+    {
+      "name": "WS-2.1: no limit is a poll",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "None is no limit. Mapped to zero, a wait for a signal another thread is about to give returns at once with a timeout.",
+      "find": ["        return Ok(INFINITE);\n"],
+      "replace": ["        return Ok(0);\n"]
+    },
+    {
+      "name": "WS-2.1: a timeout is truncated instead of rounded up",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A nonzero wait shorter than a millisecond would become a poll, and every fractional timeout would be cut short.",
+      "find": ["    let rounded_up = timeout.as_nanos().div_ceil(1_000_000);\n"],
+      "replace": ["    let rounded_up = timeout.as_nanos() / 1_000_000;\n"]
+    },
+    {
+      "name": "WS-2.1: the timeout is converted in the wrong unit",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The conversion test sees microseconds taken for milliseconds, as does the timed wait.",
+      "find": ["    let rounded_up = timeout.as_nanos().div_ceil(1_000_000);\n"],
+      "replace": ["    let rounded_up = timeout.as_nanos().div_ceil(1_000);\n"]
+    },
+    {
+      "name": "WS-2.1: a timeout equal to INFINITE is accepted",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "u32::MAX is a value of the same parameter as no limit, so a finite wait of that many milliseconds would be an endless one.",
+      "find": ["        Ok(milliseconds) if milliseconds != INFINITE => Ok(milliseconds),\n"],
+      "replace": ["        Ok(milliseconds) => Ok(milliseconds),\n"]
+    },
+    {
+      "name": "WS-2.1: a timeout too long is clamped instead of refused",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A wait that ends early without saying so has given a wrong answer; the call refuses what it cannot express.",
+      "find": ["    match u32::try_from(rounded_up) {\n"],
+      "replace": ["    match Ok::<u32, ()>(u32::try_from(rounded_up).unwrap_or(u32::MAX - 1)) {\n"]
+    },
+    {
+      "name": "WS-2.1: the wait is made on no object",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The handle given is the one waited on; every wait test sees the call fail instead.",
+      "find": ["    let code = unsafe { WaitForSingleObject(object.as_handle().as_raw_handle(), milliseconds) };\n"],
+      "replace": ["    let code = unsafe { WaitForSingleObject(std::ptr::null_mut(), milliseconds) };\n"]
+    },
+    {
       "name": "CONTROL: set compares against 0 rather than FALSE",
       "file": "src/event.rs",
       "expect": "survives",
       "why": "The manifest checking itself: FALSE is 0, so this is an equivalent change on code every set test executes. If it comes back caught, the harness or a test is reacting to something other than behaviour.",
       "find": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == FALSE {\n"],
       "replace": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == 0 {\n"]
+    },
+    {
+      "name": "CONTROL: the timeout is rounded up by adding before dividing",
+      "file": "src/wait.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: rounding up by addition is the same value for every timeout a Duration can hold, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": ["    let rounded_up = timeout.as_nanos().div_ceil(1_000_000);\n"],
+      "replace": ["    let rounded_up = (timeout.as_nanos() + 999_999) / 1_000_000;\n"]
     }
   ]
 }

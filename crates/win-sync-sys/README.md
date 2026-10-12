@@ -29,6 +29,31 @@ let handle: OwnedHandle = ready.into();
 # Ok::<(), std::io::Error>(())
 ```
 
+- **`wait_for_single_object`** -- `WaitForSingleObject` over any handle, an `Event` included, with
+  a timeout of `None` for no limit or a `Duration`. It reports how the wait ended as a
+  `WaitOutcome`, so a mutex abandoned by its owner is not mistaken for a signal. A satisfied wait
+  changes the object as the Win32 call does: an auto-reset event is consumed.
+
+```rust
+use std::time::Duration;
+use win_sync_sys::{Event, ResetMode, WaitOutcome, wait_for_single_object};
+
+let event = Event::new(ResetMode::Auto, false)?;
+assert_eq!(
+    wait_for_single_object(&event, Some(Duration::ZERO))?,
+    WaitOutcome::TimedOut,
+);
+
+event.set()?;
+assert_eq!(wait_for_single_object(&event, None)?, WaitOutcome::Signalled);
+// The wait took the signal.
+assert_eq!(
+    wait_for_single_object(&event, Some(Duration::ZERO))?,
+    WaitOutcome::TimedOut,
+);
+# Ok::<(), std::io::Error>(())
+```
+
 `windows-threadpool-sys` accepts an `Event` as a thread-pool wait target without `unsafe`, because
 an `Event` is never a mutex -- the one kind of object the pool cannot wait on.
 
@@ -41,9 +66,9 @@ an `Event` is never a mutex -- the one kind of object the pool cannot wait on.
   reports that it did. Microsoft's replacement is a condition variable.
 - **Named events and `OpenEvent`.** Every event here is unnamed. Whether named objects belong in
   this crate is not yet decided.
-- **The other kernel objects and the wait functions** -- semaphores, mutexes, waitable timers, and
-  waiting on any of them -- are planned in this crate's `CHECKLIST.md`. Until then, wait on an
-  event through its handle.
+- **The other kernel objects and the rest of the wait functions** -- semaphores, mutexes, waitable
+  timers, waiting on several objects at once, an alertable wait and `QueueUserAPC` -- are planned in
+  this crate's `CHECKLIST.md`.
 - **The in-process primitives** -- SRW locks, condition variables, critical sections, one-time
   initialization, barriers and `WaitOnAddress` -- are parked rather than rejected.
 
