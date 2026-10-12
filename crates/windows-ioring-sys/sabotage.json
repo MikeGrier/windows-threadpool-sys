@@ -966,11 +966,13 @@
         "resolver_over_a_real_ring"
       ],
       "find": [
+        "        loop {",
         "            if self.is_quiescent() {",
         "                return Ok(true);",
         "            }"
       ],
       "replace": [
+        "        loop {",
         "            return Ok(true);"
       ]
     },
@@ -1793,6 +1795,19 @@
       ],
       "replace": [
         "        state.stall = Stall::Off;"
+      ]
+    },
+    {
+      "name": "M39.1: rundown waits before it reaps",
+      "file": "src/ring/bookkeeping.rs",
+      "expect": "caught",
+      "why": "SubmitIoRing with a wait reports IORING_E_COMPLETION_QUEUE_TOO_FULL when the completion queue is full, whatever it waits for, and an entry that failed to submit for want of room is queued behind the completions. Waiting first fails the rundown of the ring that most needs one, with the room it wants one pop away; every full-queue test sees it, and so does a ring dropped that way.",
+      "find": [
+        "            self.drain_for_rundown()?;",
+        "            if self.is_quiescent() {"
+      ],
+      "replace": [
+        "            if self.is_quiescent() {"
       ]
     }
   ]

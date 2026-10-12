@@ -691,6 +691,17 @@ impl<T, X> IoRing<T, X> {
             if remaining.is_zero() {
                 return Ok(false);
             }
+            // Reap before waiting, once the bound has said to wait at all: `SubmitIoRing` with a
+            // wait reports `IORING_E_COMPLETION_QUEUE_TOO_FULL` when the completion queue holds as
+            // many completions as it can, whatever it was asked to wait for, and an entry that
+            // failed to submit for the same want of room is still queued behind them. Waiting first
+            // fails the rundown of exactly the ring that most needs one, with the room it wants one
+            // pop away (M39.1; the same rule the completion event's edge states, D-19: drain, then
+            // wait).
+            self.drain_for_rundown()?;
+            if self.is_quiescent() {
+                return Ok(true);
+            }
             // Segments sit inside the caller's period, never outside it: the
             // poll is the shorter of the rundown step and what is left.
             let poll_ms = u32::try_from(remaining.as_millis())

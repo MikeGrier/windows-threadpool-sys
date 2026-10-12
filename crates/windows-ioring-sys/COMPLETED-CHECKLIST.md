@@ -6499,3 +6499,21 @@ unrun until the stall ends, then running it; and a refused `BuildRegisterFiles`,
 [sabotage.json](sabotage.json). A decision row records the widening of `D-86`.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.2` (construction's registration paths reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 15:05:39 -04:00 -- M39.1: rundown reaps before it waits
+
+### <a id="m391"></a>M39.1 -- `run_down_within` reaps the completion queue before its submit-wait, so a ring whose queue is full runs down. *(completed 2026-10-12 15:05:39 -04:00)*
+
+Found, not planned: durable-ioring's blocking-push example filled a pumped instance's queues and
+dropped it, and the ring's rundown failed with `IORING_E_COMPLETION_QUEUE_TOO_FULL`, tripping the
+debug assertion in `Drop`. Per [D-88](DESIGN-NOTES.md#d-88). `SubmitIoRing` with a wait reports that
+error when the completion queue is full whatever it waits for, and an entry whose submit failed for
+the same want of room stays queued behind the completions; rundown waited and then reaped, so it
+could never get the room it needed. It now reaps once the bound has said to wait, and re-checks
+quiescence, before the submit-wait -- not before the bound check, since a zero bound makes no kernel
+call and the unit tests of a ring whose handle the kernel refuses pin that. Reproduced first, by
+[tests/run_down_full_queue.rs](tests/run_down_full_queue.rs): a ring whose queue is full with an entry
+still queued runs down, runs down within a bound, and drops cleanly, all three failing before the
+change. A first attempt, which reaped before the quiescence check, broke four unit tests over the
+null-handle ring and was moved. One sabotage is added, and the existing `M26.8` entry re-anchored,
+its pattern now occurring twice.
