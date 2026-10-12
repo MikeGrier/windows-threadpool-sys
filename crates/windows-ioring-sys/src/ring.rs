@@ -550,7 +550,7 @@ const RUN_DOWN_POLL_MS: u32 = 50;
 /// reader does not re-derive it from a run. The `0x8007_0000` is
 /// `HRESULT_FROM_WIN32`'s severity-plus-`FACILITY_WIN32` prefix, which that
 /// macro ors onto any code of `0xFFFF` or less.
-const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
+pub(crate) const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
     (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as windows_sys::core::HRESULT;
 
 /// The largest `timeout_ms` a [`CompletionWait`] is ever handed: one below

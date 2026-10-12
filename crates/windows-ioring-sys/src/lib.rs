@@ -202,9 +202,10 @@ mod ring;
 /// `sys::Responses` and `sys::register` -- a responder for one ring, on any
 /// thread ([D-85](../DESIGN-NOTES.md#d-85)) -- so a test can answer the calls
 /// that carry an operation instead of the kernel.
-/// With `fault-injection` as well it publishes `sys::submit_faults`, a safe
-/// responder that fails a ring's submits on demand
-/// ([D-86](../DESIGN-NOTES.md#d-86)), for a consumer that forbids `unsafe`.
+/// With `fault-injection` as well it publishes `sys::call_faults` and
+/// `sys::submit_faults`, a safe responder that fails a ring's calls,
+/// completions and submits on demand ([D-86](../DESIGN-NOTES.md#d-86)), for a
+/// consumer that forbids `unsafe`.
 #[cfg(windows)]
 pub mod sys;
 #[cfg(windows)]

@@ -1516,50 +1516,49 @@
     },
     {
       "name": "M37.1: a failing submit still reaches the kernel",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "A failed submit must return without reaching the kernel, so the entries stay queued as SubmitIoRing documents (RS-P-7). Falling through makes the real call, which submits them: the failure is reported and the work runs anyway. Caught by the unit tests, which see the kernel's answer instead of the injected one, and by the real-ring test, whose try_pop finds a completion nothing had submitted.",
       "find": [
-        "                return code;"
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;"
       ],
       "replace": [
-        "                let _ = code;"
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            let _ = code;"
       ]
     },
     {
       "name": "M37.1: a counted fault never ends",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "fail_next(n) fails n submits and then reaches the kernel again. Staying armed turns every count into fail_until_cleared, which a test written for one failed submit would not survive.",
       "find": [
-        "                    Some(_) => Plan::Pass,"
+        "            Some(_) => None,"
       ],
       "replace": [
-        "                    Some(_) => Plan::Fail {",
-        "                        code,",
-        "                        remaining: None,",
-        "                    },"
+        "            Some(_) => Some(fail),"
       ]
     },
     {
       "name": "M37.1: a counted fault is cut one short",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "The boundary a decrement-then-compare gets wrong: a count of n must fail n submits, not n-1.",
       "find": [
-        "                    Some(left) if left > 1 => Plan::Fail {"
+        "            Some(left) if left > 1 => Some(Self {"
       ],
       "replace": [
-        "                    Some(left) if left > 2 => Plan::Fail {"
+        "            Some(left) if left > 2 => Some(Self {"
       ]
     },
     {
       "name": "M37.1: a failure is not recorded with its thread",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "failures() is how a test shows a failure was answered on a thread other than its own, which is what D-85 exists for. Unrecorded, every such test is told nothing happened.",
       "find": [
-        "                state.failed_from.push(std::thread::current().id());"
+        "        state.failed_from.push((call, std::thread::current().id()));"
       ],
       "replace": [
         ""
@@ -1567,58 +1566,233 @@
     },
     {
       "name": "M37.1: clearing does not clear",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
-      "why": "clear() is how a test lets the work through again after a failure. A no-op leaves every later submit failing, so the ring can never be run down.",
+      "why": "clear() is how a test lets the work through again after a failure. A clear that leaves the per-call plans leaves every later call failing, so the ring can never be run down.",
       "find": [
-        "    pub fn clear(&self) {",
-        "        lock(&self.shared).plan = Plan::Pass;"
+        "        state.calls.clear();"
       ],
       "replace": [
-        "    pub fn clear(&self) {",
-        "        let _ = &self.shared;"
+        ""
       ]
     },
     {
       "name": "M37.1: a count of zero arms a failure",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "fail_next(0) is documented to clear: zero failures means none. Arming it anyway fails once.",
       "find": [
-        "        lock(&self.shared).plan = if count == 0 {"
+        "        if count == 0 {"
       ],
       "replace": [
-        "        lock(&self.shared).plan = if false {"
+        "        if false {"
       ]
     },
     {
       "name": "M37.1: arming a non-failure changes the responder before it is refused",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "caught",
       "why": "A failure that is not one is refused when armed and must change nothing: the responder stays as it was, not half-armed with a placeholder.",
       "find": [
-        "    pub fn fail_until_cleared(&self, failure: InjectedFailure) {",
+        "    pub fn fail_until_cleared(&self, call: Call, failure: InjectedFailure) {",
         "        let code = failure.as_hresult();"
       ],
       "replace": [
-        "    pub fn fail_until_cleared(&self, failure: InjectedFailure) {",
-        "        lock(&self.shared).plan = Plan::Fail {",
-        "            code: 0,",
-        "            remaining: None,",
-        "        };",
+        "    pub fn fail_until_cleared(&self, call: Call, failure: InjectedFailure) {",
+        "        lock(&self.shared).calls.insert(",
+        "            call,",
+        "            Fail {",
+        "                code: 0,",
+        "                remaining: None,",
+        "            },",
+        "        );",
         "        let code = failure.as_hresult();"
       ]
     },
     {
       "name": "CONTROL: a failing submit returns its code through an identity",
-      "file": "src/sys/submit_faults.rs",
+      "file": "src/sys/call_faults.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the new module: masking with all ones changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
       "find": [
-        "                return code;"
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;"
       ],
       "replace": [
-        "                return code & !0;"
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code & !0;"
+      ]
+    },
+    {
+      "name": "M38.1: a call's plan is looked up without regard to which call",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failure armed for one call must not fail another: a test that arms BuildRegisterFiles to see a registration refused would otherwise also fail every submit and pop. The lookup by call is the whole of the per-call contract.",
+      "find": [
+        "        let mut slot = state.calls.get(&call).copied();"
+      ],
+      "replace": [
+        "        let mut slot = state.calls.values().next().copied();"
+      ]
+    },
+    {
+      "name": "M38.1: a failure is not recorded with its call",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "failures(call) is how a test shows which call was refused, and on which thread. Recording every failure as a submit's tells a test of a failed pop that nothing failed.",
+      "find": [
+        "        state.failed_from.push((call, std::thread::current().id()));"
+      ],
+      "replace": [
+        "        state.failed_from.push((Call::Submit, std::thread::current().id()));"
+      ]
+    },
+    {
+      "name": "M38.1: a failed completion loses its identity",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A completion failed on demand is the kernel's completion with a different result, not a different completion: its user data names the operation the ring's accounting settles. Zeroing it settles nothing and the ring's counts no longer balance.",
+      "find": [
+        "            unsafe { (*cqe).ResultCode = code };"
+      ],
+      "replace": [
+        "            unsafe {",
+        "                *cqe = std::mem::zeroed();",
+        "                (*cqe).ResultCode = code;",
+        "            };"
+      ]
+    },
+    {
+      "name": "M38.1: a failed completion is spent on an empty pop",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "An empty queue answers S_FALSE with no completion to fail. Spending the plan on it uses up the failure before any completion exists, so the one a test armed for never fails.",
+      "find": [
+        "        if answer == S_OK",
+        "            && let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
+      ],
+      "replace": [
+        "        if let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled submit reaches the kernel",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stalled submit must not reach the kernel: that is what leaves the work queued and its completion absent. Falling through submits it, and the completion arrives during the stall it was meant to outlast.",
+      "find": [
+        "            return answer;"
+      ],
+      "replace": [
+        "            let _ = answer;"
+      ]
+    },
+    {
+      "name": "M38.1: the stall clock starts at arming",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "The stall is measured from the first submit it stalls, so a test that arms it and then builds its work is not charged for the building. Measured from arming, a slow build leaves nothing to stall.",
+      "find": [
+        "            Stall::For(duration)"
+      ],
+      "replace": [
+        "            Stall::Since(Instant::now(), duration)"
+      ]
+    },
+    {
+      "name": "M38.1: a stall never ends",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stall that never ends leaves a ring dropped mid-stall unable to run down: every submit is answered without reaching the kernel, forever.",
+      "find": [
+        "        if left.is_zero() {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled wait does not sleep",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stalled submit that waits answers after the time it was asked to wait, as the kernel's wait would. Answering at once turns the stall into a spin of failed waits, and a bound measured on the clock passes without the time having passed.",
+      "find": [
+        "            std::thread::sleep(wait);"
+      ],
+      "replace": [
+        "            let _ = wait;"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled wait is answered as a success",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A submit that waits for a completion and is not given one answers IORING_E_WAIT_TIMEOUT, which is how callers learn the wait expired. S_OK tells them the wait was satisfied.",
+      "find": [
+        "                IORING_E_WAIT_TIMEOUT,"
+      ],
+      "replace": [
+        "                S_OK,"
+      ]
+    },
+    {
+      "name": "M38.1: a stall takes precedence over a failure",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failure armed is a failure delivered: it is the answer a test asked for. Checked after the stall, a failure armed during a stall is never seen until the stall ends.",
+      "find": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;",
+        "        }",
+        "        if let Some((answer, wait)) = self.stalled(wait_operations, milliseconds) {",
+        "            std::thread::sleep(wait);",
+        "            if answer == S_OK && !submitted.is_null() {",
+        "                // SAFETY: `submitted` is the caller's valid out-pointer, as `SubmitIoRing`",
+        "                // requires; nothing was submitted, which is what is written.",
+        "                unsafe { submitted.write(0) };",
+        "            }",
+        "            return answer;",
+        "        }"
+      ],
+      "replace": [
+        "        if let Some((answer, wait)) = self.stalled(wait_operations, milliseconds) {",
+        "            std::thread::sleep(wait);",
+        "            if answer == S_OK && !submitted.is_null() {",
+        "                // SAFETY: `submitted` is the caller's valid out-pointer, as `SubmitIoRing`",
+        "                // requires; nothing was submitted, which is what is written.",
+        "                unsafe { submitted.write(0) };",
+        "            }",
+        "            return answer;",
+        "        }",
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;",
+        "        }"
+      ]
+    },
+    {
+      "name": "M38.1: clearing leaves the stall",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "clear() lets every call reach the kernel again, a stall included: a stall that survives it leaves the ring unable to run down after a test that cleared.",
+      "find": [
+        "        state.completions = None;",
+        "        state.stall = Stall::Off;"
+      ],
+      "replace": [
+        "        state.completions = None;"
+      ]
+    },
+    {
+      "name": "M38.1: clearing leaves the failed completions",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "clear() ends a failed-completion plan as it ends the others: a plan that survives it fails a completion the kernel completed.",
+      "find": [
+        "        state.completions = None;",
+        "        state.stall = Stall::Off;"
+      ],
+      "replace": [
+        "        state.stall = Stall::Off;"
       ]
     }
   ]

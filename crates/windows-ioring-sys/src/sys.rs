@@ -67,6 +67,8 @@ use windows_sys::core::HRESULT;
 
 use crate::accounting::RingId;
 
+#[cfg(all(feature = "kernel-seam", feature = "fault-injection"))]
+mod call_faults;
 #[cfg(feature = "kernel-seam")]
 mod registered;
 #[cfg(feature = "kernel-seam")]
@@ -74,7 +76,9 @@ mod resolver;
 #[cfg(feature = "kernel-seam")]
 mod responses;
 #[cfg(all(feature = "kernel-seam", feature = "fault-injection"))]
-mod submit_faults;
+pub use call_faults::{
+    Call, CallFaultControl, CallFaults, SubmitFaultControl, call_faults, submit_faults,
+};
 #[cfg(feature = "kernel-seam")]
 pub(crate) use registered::ring_dropped;
 #[cfg(feature = "kernel-seam")]
@@ -85,8 +89,6 @@ pub use resolver::{
 };
 #[cfg(feature = "kernel-seam")]
 pub use responses::Responses;
-#[cfg(all(feature = "kernel-seam", feature = "fault-injection"))]
-pub use submit_faults::{SubmitFaultControl, SubmitFaults, submit_faults};
 
 /// Dispatch to the ring's registered `Responses`, or fall through to the real
 /// call (D-85).

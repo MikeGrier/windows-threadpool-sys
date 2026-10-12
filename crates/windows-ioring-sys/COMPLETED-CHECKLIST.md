@@ -6455,3 +6455,47 @@ Sabotages for each, in [sabotage.json](sabotage.json). A decision row records wh
 safe rather than implemented by its consumers.
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 12:02:28 -04:00 -- M38.1, completing M38: a safe responder that fails any seam call, a completion's result, or stalls submits
+
+### <a id="m381"></a>M38.1 -- `sys::call_faults()`: a safe responder that fails any seam call, a popped completion's result, or stalls submits, with `submit_faults()` its submit-only name. *(completed 2026-10-12 12:02:28 -04:00)*
+
+Per [D-87](DESIGN-NOTES.md#d-87). `CallFaults`, `CallFaultControl` and `Call` in `sys/call_faults.rs`
+(`submit_faults.rs` renamed, its history following), under both `kernel-seam` and `fault-injection`;
+`submit_faults()` now returns the same responder with a control narrowed to submits, so durable-ioring's
+`DI-7.1` tests compile unchanged. A stalled submit never reaches the kernel until the stall ends, after
+which submits run what is queued, so a ring dropped mid-stall still runs down; withholding completions
+was rejected because `SubmitIoRing(wait)` then fails with `E_INVALIDARG`. Tests: unit tests that call
+the responder directly and open no ring, two running doctests, and seven real-ring tests in
+[tests/call_faults.rs](tests/call_faults.rs): a refused file-registration build and a retry that
+registers, a refused buffer-registration build handing the buffers back, a failed completion keeping its
+identity with the accounting balanced, a cleared completion plan, a failed pop reported once, a stalled
+submit leaving the write unrun until the stall ends, and a ring dropped during a stall running down.
+Twelve new sabotages and the seven M37.1 ones re-anchored, all caught, and the control survives. The
+sweep found one hole: the failed completion was the first popped, and zeroing its identity named the
+same operation, so the test now fails the last of three in flight. The item as it stood at completion:
+
+**`sys::call_faults()`**, under both `kernel-seam` and `fault-injection`: a
+`CallFaults` responder, for `sys::register`, and a `CallFaultControl` handle, `Clone + Send + Sync`,
+that arms it from any thread. **A call fails**: `fail_next(call, count, failure)` and
+`fail_until_cleared(call, failure)`, for every call the seam carries -- `Call::Submit`, `Pop`,
+`BuildRead`, `BuildWrite`, `BuildFlush`, `BuildCancel`, `BuildRegisterFiles`,
+`BuildRegisterBuffers` and `SetCompletionEvent` -- with an `InjectedFailure`, returned without
+reaching the kernel; `failures(call)` reports the thread of each. **A completion fails**:
+`fail_next_completions(count, failure)` pops the real completion and rewrites its result code,
+the identity and the rest untouched, as `Completion::with_injected_failure` does for a popped
+one. **A submit stalls**: `stall_submits(duration)` makes a submit return without reaching the
+kernel -- success with nothing submitted if it does not wait, `IORING_E_WAIT_TIMEOUT` after its
+wait or what is left of the stall if it does -- until `duration` has passed since the first it
+stalled, after which submits reach the kernel and run everything queued: the platform's
+permission to leave an operation pending (RS-P-1), so a bounded wait for its completion
+expires, and a ring dropped meanwhile still runs down once the stall ends. `clear()` ends all of
+it. `submit_faults()` stays, its control narrowed to submits over the same responder, so
+there is one implementation and two ways to name it. Tests, each direction asserted: every call
+fails when armed and only that call; counts; the thread of each failure; a completion's result
+failed exactly that many times with its identity intact; a stalled submit leaving an operation
+unrun until the stall ends, then running it; and a refused `BuildRegisterFiles`,
+`BuildRegisterBuffers` and `SetCompletionEvent` on a real ring. Sabotages for each, in
+[sabotage.json](sabotage.json). A decision row records the widening of `D-86`.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.2` (construction's registration paths reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

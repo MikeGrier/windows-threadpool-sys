@@ -168,38 +168,6 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## M38 -- A safe responder that fails any seam call, a completion's result, or stalls submits
-
-Opened 2026-10-12 from durable-ioring's `DI-7.2`. `M37.1`'s `submit_faults` fails a ring's submits.
-Construction's registration paths need more: a `Build*` call refused, a completion whose result is
-a failure, and a completion that does not arrive -- and `Responses`' methods are `unsafe fn`, which
-a consumer that forbids `unsafe` cannot implement ([D-86](DESIGN-NOTES.md#d-86)).
-
-- [ ] **M38.1** -- **`sys::call_faults()`**, under both `kernel-seam` and `fault-injection`: a
-  `CallFaults` responder, for `sys::register`, and a `CallFaultControl` handle, `Clone + Send + Sync`,
-  that arms it from any thread. **A call fails**: `fail_next(call, count, failure)` and
-  `fail_until_cleared(call, failure)`, for every call the seam carries -- `Call::Submit`, `Pop`,
-  `BuildRead`, `BuildWrite`, `BuildFlush`, `BuildCancel`, `BuildRegisterFiles`,
-  `BuildRegisterBuffers` and `SetCompletionEvent` -- with an `InjectedFailure`, returned without
-  reaching the kernel; `failures(call)` reports the thread of each. **A completion fails**:
-  `fail_next_completions(count, failure)` pops the real completion and rewrites its result code,
-  the identity and the rest untouched, as `Completion::with_injected_failure` does for a popped
-  one. **A submit stalls**: `stall_submits(duration)` makes a submit return without reaching the
-  kernel -- success with nothing submitted if it does not wait, `IORING_E_WAIT_TIMEOUT` after its
-  wait or what is left of the stall if it does -- until `duration` has passed since the first it
-  stalled, after which submits reach the kernel and run everything queued: the platform's
-  permission to leave an operation pending (RS-P-1), so a bounded wait for its completion
-  expires, and a ring dropped meanwhile still runs down once the stall ends. `clear()` ends all of
-  it. `submit_faults()` stays, its control narrowed to submits over the same responder, so
-  there is one implementation and two ways to name it. Tests, each direction asserted: every call
-  fails when armed and only that call; counts; the thread of each failure; a completion's result
-  failed exactly that many times with its identity intact; a stalled submit leaving an operation
-  unrun until the stall ends, then running it; and a refused `BuildRegisterFiles`,
-  `BuildRegisterBuffers` and `SetCompletionEvent` on a real ring. Sabotages for each, in
-  [sabotage.json](sabotage.json). A decision row records the widening of `D-86`.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.2` (construction's registration paths reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.
