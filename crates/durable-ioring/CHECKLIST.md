@@ -21,20 +21,29 @@ paths no test reaches yet, the second delivery model, and the blocking push.
 
 - [ ] **DI-7.2** -- **Construction's registration paths reached by tests, through a hook that
   registers a responder on the instance's ring as it is created.** `Dioring::new` creates its ring,
-  then registers its files and buffers and submits the registrations, all before the consumer can
-  name the ring, so a responder registered afterwards cannot answer those calls.
-  [sabotage.json](sabotage.json)'s `notCoveredHere` lists them as unreached: a ring without the
-  registration operation, and a registration whose completion fails or never arrives. A
-  crate-private, test-only hook, passed down explicitly through construction to the Windows backend
-  -- never through a thread-local or a global, per the ring crate's
-  [D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85) -- is called with the ring as soon as it
-  exists, before anything is registered. Tests: a registration build refused; a registration whose
-  completion fails, with everything handed back in `SetupError`; and one whose completion never
-  arrives. That last waits out `REGISTRATION_BOUND`, so the bound must be shortened for the test, or
-  the case stays declared in `notCoveredHere` with that reason. The paths reached come out of
+  then registers its files and buffers, submits each registration and waits for its completion, all
+  before the consumer can name the ring, so a responder registered afterwards cannot answer those
+  calls. [sabotage.json](sabotage.json)'s `notCoveredHere` lists them as unreached. A crate-private
+  `Construction`, passed down explicitly from `Dioring::with_clock` to the Windows backend -- never
+  through a thread-local or a global, per the ring crate's
+  [D-85](../windows-ioring-sys/DESIGN-NOTES.md#d-85) -- carries two things: a test-only hook,
+  called with the ring as soon as it exists and before anything is registered, and how long
+  construction waits for a registration, so a test can shorten the wait for one build rather than
+  the constant for every test. **The responder is the ring crate's safe `sys::call_faults`**, as
+  `DI-7.1`'s was `submit_faults`, for the same reason ([DI-D-4](DESIGN-NOTES.md#di-d-4)): the
+  paths need a `Build*` call refused, a completion's result failed, and a completion that does not
+  arrive, which no consumer that forbids `unsafe` can write. Tests, each through `Dioring::new`
+  with everything handed back in its `SetupError`, and at the backend where its own handing back is
+  the subject: a file registration whose build is refused; a buffer registration whose build is
+  refused, the buffers handed back; a registration whose submit fails; a registration whose
+  completion fails; one whose completion does not arrive within the bound, a stalled submit with
+  the wait shortened; and the completion event's attach failing, the buffers not handed back since
+  the kernel was given them. **A ring without the registration operation stays unreached as a
+  cause**: its path is the refused build's, which is reached, and the capability probe is outside
+  the seam ([D-60](../windows-ioring-sys/DESIGN-NOTES.md#d-60)). The paths reached come out of
   `notCoveredHere`, with a sabotage for each.
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M35` -> `M35.1` (a responder registered for one ring) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-ioring-sys` -> `M38` -> `M38.1` (a safe responder that fails any seam call, a completion's result, and stalls submits) must land first. See [CHECKLIST.md](../windows-ioring-sys/CHECKLIST.md).
 
 - [ ] **DI-7.3** -- **Pumped delivery** (DI-D-52's Model B): no pool threads; the consumer's own
   thread waits on the notification and drains through a `pump` call, over the Windows backend and
@@ -259,8 +268,8 @@ does is now that item's to absorb.
   sabotage the same predicate, at the same site and in the same way, as an existing core or backend
   entry, now that the driver's copy is gone, and the relay's control with the relay.
 
-- [ ] **DI-9.7** -- **The assistant's choices from DI-M7 on**, each step adding its own here as it lands.
-  From `DI-7.1`: the responder that fails submits is asked of the ring crate, as a safe
+- [ ] **DI-9.7** -- **The assistant's choices from DI-M7 on**, each step adding its own here as it
+  lands. From `DI-7.1`: the responder that fails submits is asked of the ring crate, as a safe
   `sys::submit_faults` (its `M37.1`), rather than implemented here behind an `expect(unsafe_code)`
   or reached through a macro that hides the `unsafe` -- [DI-D-4](DESIGN-NOTES.md#di-d-4) says to add
   the safe wrapper to the lower crate, and either alternative is the lint relaxed by another name.
@@ -271,7 +280,11 @@ does is now that item's to absorb.
   test holds the engine's lock across both pushes, so the drain that fails is a guaranteed one
   rather than a race; and the failure armed is `ERROR_IO_DEVICE`, which no ring condition names, so
   it surfaces as a `RefusalCause::Unknown` carrying its code, that `pop` reports as an error
-  downcasting to the `RefusalCause`.
+  downcasting to the `RefusalCause`. From `DI-7.2`: construction's two knobs, the test-only hook and
+  the registration bound, travel together in one crate-private `Construction` rather than the
+  constant being made shorter under `cfg(test)`, which would change every test's wait and could fail
+  a slow machine's registration; and `Sidecar`, the backend's per-operation record, becomes
+  crate-visible so the hook can name the ring's type.
 
 ## DI-M10 -- Target backings
 
