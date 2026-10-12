@@ -39,6 +39,7 @@ mod providers;
 mod construction;
 mod ending;
 mod pumped;
+mod signalled;
 mod submits;
 
 type Ring = Dioring<Vec<u8>>;

@@ -46,8 +46,9 @@ pub trait Waitable {
 pub(crate) struct Pumped {
     /// Whether the drain made entries poppable where there were none.
     pub(crate) ready: bool,
-    /// How the wait went. The drain happens whatever it was: a delivery that cannot wait still
-    /// delivers what has completed.
+    /// How the wait went: whether it saw the notification raised, which is `false` when no wait
+    /// was made because the first drain delivered. The drain after a wait happens whatever the
+    /// wait's outcome: a delivery that cannot wait still delivers what has completed.
     pub(crate) waited: io::Result<bool>,
 }
 
@@ -81,22 +82,42 @@ where
     /// The backend's, with the engine handed back: it could not make its notification.
     pub(crate) fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
         match engine.backend.notification() {
-            Ok(notification) => Ok(Self {
-                notification,
-                engine: Arc::new(Mutex::new(Some(engine))),
-            }),
+            Ok(notification) => Ok(Self::with_notification(engine, notification)),
             Err(fault) => Err((fault_error(fault), Box::new(engine))),
         }
     }
 
-    /// Wait up to `timeout` for the notification, then drain the backend to empty. A wait that
-    /// times out drains too: a drain of nothing is a no-op, a notification raised before the first
-    /// wait is not lost, and a zero timeout is the pump that does not wait.
+    /// Deliver `engine`, waiting on `notification` -- not the backend's own -- when a pump waits.
+    /// For a delivery whose waker is something else, which signals `notification` itself.
+    pub(crate) fn with_notification(
+        engine: Engine<E, Bk, C, K>,
+        notification: Bk::Notification,
+    ) -> Self {
+        Self {
+            notification,
+            engine: Arc::new(Mutex::new(Some(engine))),
+        }
+    }
+
+    /// Drain the backend to empty; if that delivered entries, return. Otherwise wait up to
+    /// `timeout` for the notification and drain again. A wait that times out drains too: a drain of
+    /// nothing is a no-op, and a zero timeout is the pump that does not wait.
+    ///
+    /// **Drained before it waits**, as the notification being an edge requires (the ring crate's
+    /// D-19): the completions that raised it may already have been taken by a wait that was not
+    /// this one -- another handle on the same event -- and waiting for a raising that has happened
+    /// would block while they sit in the backend.
     ///
     /// Returning does not promise entries: the wait may have been satisfied by a raising whose
     /// completions an earlier drain took, or by the setup signal the ring crate raises once
     /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)).
     pub(crate) fn pump(&mut self, timeout: Option<Duration>) -> Pumped {
+        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {
+            return Pumped {
+                ready: true,
+                waited: Ok(false),
+            };
+        }
         let waited = self.notification.wait(timeout);
         let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);
         Pumped { ready, waited }

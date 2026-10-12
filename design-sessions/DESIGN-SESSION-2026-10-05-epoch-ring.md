@@ -3457,6 +3457,32 @@ Handing the event out puts a handle that can reset it in the consumer's hands, w
 [DI-D-10](../crates/durable-ioring/DESIGN-NOTES.md#di-d-10) rules out for anything that interferes
 with dioring's control of its ring. It is `DI-7.5`, awaiting the engineer's ruling.
 
+## DI-7.5: the tee, and a correction (2026-10-12)
+
+A discussion with the engineer, after `DI-7.3`, on a consumer that mixes ring I/O with other waits.
+The assistant raised it as a question because handing out the ring's event has two problems: the
+handle can reset the event, which [DI-D-10](../crates/durable-ioring/DESIGN-NOTES.md#di-d-10) rules
+out, and the consumer's wait takes the edge the pump waits on.
+
+The engineer asked whether a handle could be had that waits but cannot set or reset. It can: access
+rights are per handle, and a duplicate with `SYNCHRONIZE` alone cannot be set or reset. That removes
+the first problem and not the second. The assistant then said the only way to a private signal was a
+tee, a waiter that sets a second event, and that it needed a thread. **That was wrong, and the
+engineer corrected it:** a thread-pool wait holds no thread while it waits, which the ring crate's
+D-3 calls threadless dispatch, and its `CompletionWake` already is exactly that waiter. The engineer
+then ruled a third delivery mode.
+
+Thinking through the shared edge turned up a defect in `DI-7.3`'s pump, which waited and then
+drained. The ring crate's D-19 says a waiter must drain before it waits again, and a wait that
+another handle on the same event had already satisfied would leave a pump blocked while the
+completions it announced sat in the backend. Nothing shared an event until this mode, so it was not
+reachable before; the mode made it so, and the pump now drains first in both pumped modes. The
+test of it is at the delivery layer, over a notification that never reports a raising, because over
+the real event the wake's two calls per activation set the signal again and hide the difference.
+
+Not built: the wait-only duplicate of the ring's own event, which serves a consumer wanting no
+callback at all. It needs a duplicate-with-access in `win-sync-sys`, and stays available.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

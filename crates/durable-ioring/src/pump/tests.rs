@@ -8,8 +8,8 @@
 
 use std::io;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{PumpedDelivery, Waitable};
@@ -19,7 +19,7 @@ use crate::backend::{
 };
 use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
-use crate::engine::{Engine, lock};
+use crate::engine::{Engine, Slot, lock};
 use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
@@ -43,6 +43,7 @@ impl StampClock for Ticks {
 }
 
 type Pump = PumpedDelivery<u64, MemoryBackend, u32, Ticks>;
+type ScriptedSlot = Slot<u64, Scripted, u32, Ticks>;
 
 fn nz(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("non-zero")
@@ -172,7 +173,7 @@ fn a_zero_timeout_is_the_pump_that_does_not_wait() {
 }
 
 #[test]
-fn a_raising_before_the_first_pump_is_not_lost() {
+fn completions_already_in_the_backend_are_delivered_without_waiting() {
     let mut pump = pump();
     {
         let mut engine = pump.engine();
@@ -184,13 +185,41 @@ fn a_raising_before_the_first_pump_is_not_lost() {
     }
     let started = Instant::now();
     let pumped = pump.pump(Some(BOUND));
-    assert!(
-        started.elapsed() < BOUND,
-        "waited for a raising already made"
-    );
-    assert!(raised(&pumped));
+    assert!(started.elapsed() < BOUND, "waited with work to take");
     assert!(pumped.ready);
+    assert!(
+        !raised(&pumped),
+        "no wait was made: the first drain delivered"
+    );
     assert_eq!(written(&mut pump.engine()), vec![3]);
+    // The raising was not consumed: the next wait sees it, and finds nothing left.
+    let spurious = pump.pump(Some(Duration::ZERO));
+    assert!(raised(&spurious) && !spurious.ready);
+}
+
+#[test]
+fn a_pump_whose_edge_was_taken_by_another_waiter_still_delivers_at_once() {
+    // The notification here never reports a raising, as one whose edge another handle on the same
+    // event had already taken. Waiting first would sleep out the whole timeout with the completion
+    // sitting in the backend; draining first takes it.
+    let mut backend = scripted(false, false);
+    backend.starve = true;
+    let mut pump = delivered(engine(backend));
+    {
+        let mut engine = pump.engine();
+        push(&mut engine, ONE, b"edge");
+        engine.backend.submit().expect("the backend submits");
+    }
+    let timeout = Duration::from_secs(3);
+    let started = Instant::now();
+    let pumped = pump.pump(Some(timeout));
+    assert!(pumped.ready, "delivered");
+    assert!(
+        started.elapsed() < timeout / 2,
+        "waited {:?} with work to take",
+        started.elapsed()
+    );
+    assert_eq!(written(&mut pump.engine()), vec![4]);
 }
 
 #[test]
@@ -327,17 +356,30 @@ struct Scripted {
     /// whole.
     kept_fault: Option<Arc<io::Error>>,
     wait_fails: bool,
+    /// A notification that never reports a raising, sleeping out its timeout instead.
+    starve: bool,
+    /// Run as a wait begins, as something completing while the pump waits.
+    on_wait: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 struct ScriptedNotification {
     inner: MemoryNotification,
     fails: bool,
+    starve: bool,
+    on_wait: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Waitable for ScriptedNotification {
     fn wait(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+        if let Some(on_wait) = &self.on_wait {
+            on_wait();
+        }
         if self.fails {
             return Err(io::Error::other("the wait failed"));
+        }
+        if self.starve {
+            std::thread::sleep(timeout.unwrap_or(BOUND));
+            return Ok(false);
         }
         self.inner.wait(timeout)
     }
@@ -397,6 +439,8 @@ impl IoBackend for Scripted {
         Ok(ScriptedNotification {
             inner: self.inner.notification()?,
             fails: self.wait_fails,
+            starve: self.starve,
+            on_wait: self.on_wait.clone(),
         })
     }
 }
@@ -407,6 +451,8 @@ fn scripted(notification_fails: bool, wait_fails: bool) -> Scripted {
         notification_fails,
         kept_fault: None,
         wait_fails,
+        starve: false,
+        on_wait: None,
     }
 }
 
@@ -444,12 +490,25 @@ fn a_notification_fault_the_backend_keeps_is_reported_by_its_kind_and_text() {
 }
 
 #[test]
-fn a_wait_that_fails_still_drains_what_completed_and_reports_why() {
-    let mut pump = delivered(engine(scripted(false, true)));
-    push(&mut pump.engine(), ONE, b"delivered anyway");
+fn a_wait_that_fails_still_drains_what_completed_during_it_and_reports_why() {
+    // Something completes as the wait begins -- the hook pushes and submits through the delivery's
+    // shared slot, which the pump does not hold while it waits -- and the wait then fails.
+    let shared: Arc<Mutex<Option<ScriptedSlot>>> = Arc::default();
+    let mut backend = scripted(false, true);
+    let slot = Arc::clone(&shared);
+    backend.on_wait = Some(Arc::new(move || {
+        let slot = lock(&slot).clone().expect("the delivery's slot is set");
+        let mut guard = lock(&slot);
+        let engine = guard.as_mut().expect("delivery has not stopped");
+        push(engine, ONE, b"during the wait");
+        engine.backend.submit().expect("the backend submits");
+    }));
+    let mut pump = delivered(engine(backend));
+    *lock(&shared) = Some(pump.shared());
+
     let pumped = pump.pump(Some(Duration::ZERO));
-    assert!(pumped.ready, "what completed is delivered");
+    assert!(pumped.ready, "what completed during the wait is delivered");
     let error = pumped.waited.expect_err("the wait failed");
     assert!(error.to_string().contains("the wait failed"), "{error}");
-    assert_eq!(written(&mut pump.engine()), vec![16]);
+    assert_eq!(written(&mut pump.engine()), vec![15]);
 }

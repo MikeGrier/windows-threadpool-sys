@@ -41,7 +41,7 @@ fn pumped_with(setup: Setup<'static, 'static, u64, Vec<u8>>) -> Harness {
 }
 
 /// The next entry, pumping for it, within the bound.
-fn next(harness: &mut Harness) -> RingEntry {
+pub(super) fn next(harness: &mut Harness) -> RingEntry {
     let started = Instant::now();
     loop {
         if let Some(entry) = harness.ring.pop().expect("pop") {
@@ -64,7 +64,7 @@ fn next(harness: &mut Harness) -> RingEntry {
 }
 
 /// Whether the readiness event is set now. Taking it resets it, as the instance's consumer does.
-fn readiness_set(harness: &mut Harness) -> bool {
+pub(super) fn readiness_set(harness: &mut Harness) -> bool {
     let event = harness.ring.readiness().expect("the readiness event");
     match wait_for_single_object(&event, Some(Duration::ZERO)).expect("a poll") {
         WaitOutcome::Signalled => true,
@@ -263,6 +263,11 @@ fn pumping_an_instance_built_with_a_pool_is_refused() {
         .ring
         .pump(Some(Duration::ZERO))
         .expect_err("the pool drains it");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let error = harness
+        .ring
+        .completion_signal()
+        .expect_err("only a signalled instance has one");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     // And it is untouched: it still delivers, on the pool.
     harness.write(GIVEN, 0, b"pool", 1, 1);

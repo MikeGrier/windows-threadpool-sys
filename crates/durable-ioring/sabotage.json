@@ -3,7 +3,7 @@
   "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait failing, or ending as abandoned (windows_backend/wait.rs), is absent as well, and so is Dioring::pump reporting such a wait's error: the first needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and the second a mutex, and making either needs unsafe, which this crate forbids. win-sync-sys' tests reach both in the function it calls, and pump/tests.rs reaches a failing wait's report over the in-memory backend. Each has a survives entry named DI-7.3: blind spot.",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait failing, or ending as abandoned (windows_backend/wait.rs), is absent as well, and so is Dioring::pump reporting such a wait's error: the first needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and the second a mutex, and making either needs unsafe, which this crate forbids. win-sync-sys' tests reach both in the function it calls, and pump/tests.rs reaches a failing wait's report over the in-memory backend. Each has a survives entry named DI-7.3: blind spot. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's, and that a signalled instance's callback environment names the pool its callback runs on is a declared blind spot, as the pool's is.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -2237,6 +2237,78 @@
       "why": "The manifest checking itself on the new module: map_or(false, ..) is is_some_and(..), so this must survive; if it comes back caught, something is matching incidental text.",
       "find": ["        let ready = lock(&self.engine).as_mut().is_some_and(Engine::drain);"],
       "replace": ["        let ready = lock(&self.engine).as_mut().map_or(false, Engine::drain);"]
+    },
+    {
+      "name": "DI-7.5: a pump does not drain before it waits",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "The notification is an edge: the completions that raised it may have been taken by another waiter on the same event, and waiting for a raising that has happened blocks while they sit in the backend.",
+      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "DI-7.5: a pump whose first drain delivered reports none",
+      "file": "src/pump.rs",
+      "expect": "caught",
+      "why": "A first drain that delivered returns that it did, which sets the readiness event and tells the consumer to pop.",
+      "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
+      "replace": ["        if !lock(&self.engine).as_mut().is_some_and(Engine::drain) {"]
+    },
+    {
+      "name": "DI-7.5: the pool's callback sets nothing",
+      "file": "src/windows_backend/signalled.rs",
+      "expect": "caught",
+      "why": "The wake exists to set the consumer's event; a callback that does not leaves a consumer waiting beside its other handles for a completion nothing tells it of.",
+      "find": ["            let set = waker.set();"],
+      "replace": ["            let set: io::Result<()> = Ok(());"]
+    },
+    {
+      "name": "DI-7.5: each call for the signal makes a new event",
+      "file": "src/windows_backend/signalled.rs",
+      "expect": "caught",
+      "why": "Every duplicate is a handle to the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
+      "find": ["        self.signal.try_clone()"],
+      "replace": ["        Event::new(ResetMode::Auto, false)"]
+    },
+    {
+      "name": "DI-7.5: the signal is made manual-reset",
+      "file": "src/windows_backend/signalled.rs",
+      "expect": "caught",
+      "why": "Auto-reset, so a wait takes the signal and a consumer's loop does not spin: manual-reset stays set until someone resets it, and a pump's wait on it returns at once for ever.",
+      "find": ["        let made = Event::new(ResetMode::Auto, false).and_then(|signal| {"],
+      "replace": ["        let made = Event::new(ResetMode::Manual, false).and_then(|signal| {"]
+    },
+    {
+      "name": "DI-7.5: a signalled instance is built pumped",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
+      "find": ["                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)"],
+      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
+    },
+    {
+      "name": "DI-7.5: a signalled instance has no completion signal",
+      "file": "src/dioring/delivery.rs",
+      "expect": "caught",
+      "why": "The signal is the mode's point: the consumer reaches it through the instance.",
+      "find": ["            Self::Signalled(signalled) => Some(signalled.signal()),"],
+      "replace": ["            Self::Signalled(_) => None,"]
+    },
+    {
+      "name": "DI-7.5: a signalled instance cannot be pumped",
+      "file": "src/dioring/delivery.rs",
+      "expect": "caught",
+      "why": "Nothing else drains a signalled instance: a consumer woken by the signal drains it with pump.",
+      "find": ["            Self::Signalled(signalled) => Some(signalled.pump(timeout)),"],
+      "replace": ["            Self::Signalled(_) => None,"]
+    },
+    {
+      "name": "CONTROL: DI-7.5: the wake is dropped at the end of into_engine instead of its start",
+      "file": "src/windows_backend/signalled.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: the wake's callback holds only a duplicate of the event and never the engine, so when it stops relative to the engine's coming out of its slot changes nothing observable; if this comes back caught, something is matching incidental text.",
+      "find": ["        drop(wake);"],
+      "replace": ["        let _later = &wake;"]
     }
   ]
 }

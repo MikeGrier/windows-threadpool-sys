@@ -57,6 +57,7 @@ use crate::types::{
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use crate::windows_backend::pool::{PoolDelivery, PoolEngine};
+use crate::windows_backend::signalled::SignalledDelivery;
 use crate::windows_backend::{
     Construction, Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
     WindowsBackendSetup,
@@ -124,8 +125,8 @@ pub struct Setup<'env, 'pool, E: EpochId + 'static, R> {
     pub delivery: DeliveryMode<'env, 'pool>,
 }
 
-/// How an instance's completions are drained: by the thread pool, or by the consumer's own thread.
-/// Chosen once, as the instance is built, and not changed after.
+/// How an instance's completions are drained: by the thread pool, or by the consumer's own thread,
+/// which the pool may tell. Chosen once, as the instance is built, and not changed after.
 pub enum DeliveryMode<'env, 'pool> {
     /// Drained on a pool thread whenever the ring's completion event says to, and the consumer
     /// told through [`DurableRing::readiness`]. Holds the thread pool, and the priority within it,
@@ -133,8 +134,16 @@ pub enum DeliveryMode<'env, 'pool> {
     /// pool. Read once, as the instance is built.
     Pool(Option<&'env mut CallbackEnviron<'pool>>),
     /// Drained by the consumer's own thread, which calls [`Dioring::pump`]: no thread of the
-    /// instance's own, and none of the pool's. Nothing is drained until it does.
+    /// instance's own, and none of the pool's. Nothing is drained until it does. Its pump waits on
+    /// the ring's own completion event.
     Pumped,
+    /// Drained by the consumer's own thread, as [`Pumped`](Self::Pumped), which the thread pool
+    /// tells: it sets an event of the instance's own, [`Dioring::completion_signal`], whenever
+    /// completions may be waiting, and the consumer waits on that beside its own handles and then
+    /// calls [`Dioring::pump`]. A thread-pool wait holds no thread while it waits; its callback only
+    /// sets the event. Holds the thread pool, and the priority within it, that callback runs on,
+    /// as [`Pool`](Self::Pool)'s does.
+    Signalled(Option<&'env mut CallbackEnviron<'pool>>),
 }
 
 /// One target given at construction.
@@ -387,6 +396,9 @@ where
             // Nothing sets the signal the pool's wake would: entries are made poppable by the
             // pump, which sets the readiness event itself, as every other path does.
             DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),
+            DeliveryMode::Signalled(environment) => {
+                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)
+            }
         };
         let delivery = match delivered {
             Ok(delivery) => delivery,
@@ -761,45 +773,74 @@ where
     R: IoBufMut + Send + 'static,
     K: TimeBase,
 {
-    /// Drain what the ring has completed, on this thread (DI-D-55): wait up to `timeout` for its
-    /// completion event -- `None` is no limit, and `Duration::ZERO` is a pump that does not wait --
-    /// then drain it to empty, make the provider's requests, and set the readiness event if that
-    /// made entries poppable. Whether it did. Pop what became poppable with [`DurableRing::pop`].
+    /// Drain what the ring has completed, on this thread (DI-D-55): drain it to empty and, if that
+    /// delivered entries, return; otherwise wait up to `timeout` -- `None` is no limit, and
+    /// `Duration::ZERO` is a pump that does not wait -- and drain again. Then make the provider's
+    /// requests, and set the readiness event if entries became poppable. Whether they did. Pop what
+    /// became poppable with [`DurableRing::pop`].
     ///
-    /// **Only for an instance built with [`DeliveryMode::Pumped`]**, where nothing else drains: a
-    /// completion waits in the ring until a pump, so an instance that is never pumped delivers
-    /// nothing. The wait is made with the engine's lock released, so another thread's push, a
-    /// provider's answer or a lineage handle's release is not held up by it.
+    /// **Only for an instance drained by its consumer**, built with [`DeliveryMode::Pumped`] or
+    /// [`DeliveryMode::Signalled`]: a completion waits in the ring until a pump, so an instance that
+    /// is never pumped delivers nothing. A pumped instance waits on the ring's own completion
+    /// event, and a signalled one on its [`completion_signal`](Self::completion_signal), which the
+    /// consumer may be waiting on too. **It drains before it waits**, so a wait of the consumer's
+    /// own that took the signal cannot leave a pump blocked while completions sit in the ring. The
+    /// wait is made with the engine's lock released, so another thread's push, a provider's answer or
+    /// a lineage handle's release is not held up by it.
     ///
     /// A return does not promise entries: the wait is satisfied by a raising whose completions an
     /// earlier drain took, and by the one signal the ring crate raises as it attaches the event
-    /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)), so a first pump returns at once.
+    /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)), so a first pump may return at once.
     /// Pump in a loop, and pop to empty each time. With no limit and nothing in flight a pump never
     /// returns.
     ///
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] for an instance built with [`DeliveryMode::Pool`], which the
-    /// pool drains. Otherwise the wait's own error, when the ring's completion event cannot be
-    /// waited on; the drain is made all the same, so what has completed is delivered, and the entries
-    /// it made poppable are there to pop.
+    /// pool drains. Otherwise the wait's own error, when the event cannot be waited on; the drain is
+    /// made all the same, so what has completed is delivered, and the entries it made poppable are
+    /// there to pop.
     pub fn pump(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
-        let pumped = match self
+        let Some(pumped) = self
             .delivery
             .as_mut()
             .expect("an instance is live until it ends")
-        {
-            Delivery::Pumped(pumped) => pumped.pump(timeout),
-            Delivery::Pool(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "the instance was built with pool delivery, which drains it; pumping is for \
-                     DeliveryMode::Pumped",
-                ));
-            }
+            .pump(timeout)
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the instance was built with pool delivery, which drains it; pumping is for \
+                 DeliveryMode::Pumped and DeliveryMode::Signalled",
+            ));
         };
         self.settled(pumped.ready);
         pumped.waited.map(|_| pumped.ready)
+    }
+
+    /// A duplicate of the event the thread pool sets whenever completions may be waiting, for the
+    /// consumer to wait on beside its own handles, and then to [`pump`](Self::pump) (DI-7.5). Each
+    /// call makes another duplicate of the one event.
+    ///
+    /// The event is the instance's own and shares nothing with the ring: it is auto-reset, so a wait
+    /// takes the signal, and the consumer may set or reset it, which costs it nothing but its own
+    /// wakeup, since a pump drains before it waits. It is set once as the instance is built, so a
+    /// first wait may return with nothing to drain.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] unless the instance was built with [`DeliveryMode::Signalled`].
+    /// Otherwise the duplication's: the process cannot get another handle.
+    pub fn completion_signal(&self) -> io::Result<Event> {
+        self.delivery
+            .as_ref()
+            .expect("an instance is live until it ends")
+            .signal()
+            .unwrap_or_else(|| {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "only an instance built with DeliveryMode::Signalled has a completion signal",
+                ))
+            })
     }
 
     /// After a consumer call, with the engine's lock released: set the readiness event if the call

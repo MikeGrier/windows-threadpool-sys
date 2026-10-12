@@ -41,6 +41,7 @@ use crate::types::{IoFault, IoTargetKey, WriteCaching};
 
 mod file_target;
 pub(crate) mod pool;
+pub(crate) mod signalled;
 mod wait;
 
 pub use file_target::Win32FileTarget;

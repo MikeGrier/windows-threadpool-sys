@@ -2126,3 +2126,57 @@ provider is called from the pump, and the instance ends with work outstanding. S
 in [sabotage.json](sabotage.json). A decision row, `DI-D-55`, records the shape.
 
 > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M2` -> `WS-2.1` (a safe wait on one handle), landed first. See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
+## Moved 2026-10-12 14:43:41 -04:00 -- DI-7.5: a third delivery mode, signalled
+
+### <a id="di-75"></a>DI-7.5 -- A third delivery mode, `DeliveryMode::Signalled`: the pool tells the consumer through an event it can wait on beside its own handles, and the consumer drains; and a pump that drains before it waits. *(completed 2026-10-12 14:43:41 -04:00)*
+
+Raised as a question after `DI-7.3`: a pumped consumer that mixes ring I/O with other waits wants the
+ring's event, which the ring crate's [D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20) makes
+reachable for it. The engineer asked whether a read-only handle would do, then whether a tee needs a
+thread, and ruled "third delivery mode". Per [DI-D-55](DESIGN-NOTES.md#di-d-55). What was built:
+[windows_backend/signalled.rs](src/windows_backend/signalled.rs), a `SignalledDelivery` in which the
+ring crate's `CompletionWake` owns the ring's event and its callback sets an auto-reset `Event` of
+dioring's own; `DeliveryMode::Signalled(environment)` and `Dioring::completion_signal`, which hands out
+a duplicate of that event and is refused as `Unsupported` for an instance built another way, in
+[dioring.rs](src/dioring.rs); the third variant of the delivery enum in
+[dioring/delivery.rs](src/dioring/delivery.rs); and `PumpedDelivery::with_notification` in
+[pump.rs](src/pump.rs), so the pump waits on the signal and never on the ring's event, which the wake
+owns. **The pump changed for both pumped modes**: it drains before it waits, and returns at once if
+that delivered entries, as the ring crate's D-19 says a waiter on an edge must, so a wait of the
+consumer's own that took the signal first cannot leave a pump blocked while completions sit in the
+ring. That altered `DI-7.3`'s tests, which now assert that a completion already in the backend is
+delivered without a wait. Tests: over the in-memory backend, a pump whose edge another waiter took
+still delivers at once, and a wait that fails still drains what completed during it; over a real
+ring, in [dioring/tests/signalled.rs](src/dioring/tests/signalled.rs), a signalled instance
+delivering nothing until its consumer drains though the pool has said so, the signal set when a
+completion arrives and not before, the consumer's own wait then a zero pump delivering, a pump after
+the consumer took the signal still delivering at once, a consumer that resets the signal costing
+nothing but its own wakeup, one event behind every duplicate, an environment accepted, and the
+instance ending with work outstanding while the consumer's handle stays good. Eight sabotages and a
+control are added, all behaving as declared; the signalled mode's construction failures and its
+callback environment are declared not covered, as the pool's are. The wait-only duplicate of the
+ring's own event, `SYNCHRONIZE` access alone, is not built and stays available. The assistant's
+choices are queued in `DI-9.7`. The item as it stood at completion:
+
+**A third delivery mode, `DeliveryMode::Signalled`: the pool tells the consumer through an event it
+can wait on beside its own handles, and the consumer drains.** The engineer's ruling, 2026-10-12, on
+a consumer that mixes ring I/O with other waits, which the ring crate's
+[D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20) makes the completion event reachable for. Handing
+out the ring's own event would put a handle that can reset it in the consumer's hands
+([DI-D-10](DESIGN-NOTES.md#di-d-10)) and let its wait take the edge the pump waits on, so the event
+is a tee: the ring crate's `CompletionWake`, a thread-pool wait that holds no thread while it waits,
+owns the ring's event and its callback sets an auto-reset `Event` of dioring's own, which
+`Dioring::completion_signal` hands out a duplicate of. Nothing is shared with the ring: the consumer
+may wait on it, set it or reset it, and the worst it costs is its own wakeup. The mode takes the
+optional callback environment, as the pool's does. `pump` in this mode waits on that same event,
+never the ring's, which the wake owns (D-21). **Every pump, in either pumped mode, drains before it
+waits** and returns at once if that delivered entries, as the ring crate's D-19 says a waiter must: a
+consumer's wait that took the edge first can no longer leave `pump(None)` blocked while completions
+sit in the ring. `completion_signal` and the mode are refused as `Unsupported` where they do not
+apply. Tests: over the in-memory backend, a pump delivers what is there when the edge was taken by
+someone else, and a wait that fails still drains; over a real ring, a signalled instance delivers
+nothing until the consumer drains, its signal is set when a completion arrives, the consumer's own
+wait then `pump(Some(Duration::ZERO))` delivers, a consumer that resets the signal costs nothing but
+its own wakeup, an environment is accepted, and the instance ends with work outstanding. Sabotages
+for each. `DI-D-55` is amended.
