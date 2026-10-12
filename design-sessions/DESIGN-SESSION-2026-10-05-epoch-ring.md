@@ -3533,6 +3533,36 @@ handle is an event cannot be asked. A thread-pool conversion for the new type wa
 `windows-threadpool-sys` as `M-T14+.1` rather than built here, since it is that crate's `From` and its
 release.
 
+## WS-1+.1: the rest of the wait functions, and an APC that ran too early (2026-10-12)
+
+The engineer asked for `WS-1+.1` with no further steer, so the shape was the assistant's, queued for
+review. The item had proposed a trait for what can be waited on; the assistant kept the waits over
+`AsHandle` because every handle can be waited on, so a trait would restrict nothing and would exclude
+the `OwnedHandle` durable-ioring holds, and put the one trait with something to say, `Signalable`, on
+what `SignalObjectAndWait` can signal, which lets the compiler refuse the wait-only handle `WS-1+.5`
+had just made.
+
+Alertability followed the same instinct as the earlier choice of a type over a runtime failure: an
+`Alertable` argument rather than a second set of functions, and `WaitOutcome::Alerted` joining the
+enum that was made non-exhaustive for it. A wait for all returns the plain outcome, since the index
+Win32 gives with it is not one a caller can use.
+
+The first run of the new tests aborted the whole test process, "current thread handle already set
+during thread spawn". An APC queued to a thread that has not started runs as the thread starts,
+before the Rust runtime has set it up, so a routine calling `std::thread::current` there is a
+process abort. Nothing in the item or in Microsoft's description of the call had suggested it. It is
+on the function's documentation and the tests wait for a thread to announce itself. Two other
+behaviours were probed instead of assumed, and each is a test: an alertable wait with an APC pending
+returns `Alerted` even when the object is already signalled, and a wait for any tolerates a handle
+named twice where a wait for all refuses it.
+
+The sweep found two entries of its own that were wrong rather than the tests: a patch that did not
+compile, and an anchor naming an error text the item had changed. Two of the new sabotages are
+declared `survives` and say why: the kernel refuses a count of zero or above sixty-four with the same
+error kind, so this crate's own check guards something no test can see. `QueueUserAPC2`, whose
+special APC needs no alertable wait, is queued as `WS-inf.4`, parked behind the question of how a
+routine that can interrupt a thread anywhere is expressed.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

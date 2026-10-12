@@ -295,7 +295,11 @@ does is now that item's to absorb.
   or `reset`, a type and not an `Event` that fails at run time
   ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)); Windows does not confine a duplicate to the
   source's access, so a wait-only handle guards against misuse and is not a boundary against a
-  holder that duplicates it wider.
+  holder that duplicates it wider. From `WS-1+.1`: alertability is an `Alertable` argument and not
+  separate functions; the waits stay over `AsHandle` with no `Waitable` trait, which the item
+  proposed; wait for any and wait for all are two functions with different results; a `Signalable`
+  trait says what `SignalObjectAndWait` may signal; and `queue_user_apc` takes a Rust closure
+  ([WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8)).
 
 ## DI-M7+ -- Delivery follow-ups
 
