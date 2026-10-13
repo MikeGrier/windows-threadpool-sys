@@ -2289,3 +2289,26 @@ The item as it stood at completion:
   removed. `IoBuf`, `IoBufMut` and `RegisteredSpan`, which `contract.rs` and the re-exports name,
   come from `io-buffers`, not from `windows-ioring-sys`, so the portable crate has no Windows
   dependency.
+
+## Moved 2026-10-13 12:20:00 -04:00 -- DI-8.3: CI covers the portable crate; DI-M8 is complete
+
+### <a id="di-83"></a>DI-8.3 -- `durable-ioring` added to CI's `portable` job, so its non-Windows build, tests and lints are checked on Linux and macOS. *(completed 2026-10-13 12:20:00 -04:00)*
+
+`durable-ioring` joins `wtf-string` and `io-buffers` in the build, test and clippy steps of the
+`portable` job in [ci.yml](../../.github/workflows/ci.yml), and in the list [DEVELOPMENT.md](../../DEVELOPMENT.md)
+gives of crates with a portable core. The job's name, "wtf-string (non-Windows)", is unchanged: it
+may be a required status check, which makes renaming it the engineer's call. Checked locally as far
+as this host reaches: the crate's build and clippy over all targets for `x86_64-unknown-linux-gnu`
+are clean. **Its tests have not been run on a non-Windows host**; the first CI run is the first time
+they are, and a failure there is the item's finding, not a regression in the split.
+
+The item as it stood at completion:
+
+- [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
+  tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
+  describes for a crate with a portable core.
+
+## <a id="di-m8-complete"></a>DI-M8 is complete
+
+`DI-8.1` to `DI-8.3` are archived above under their own anchors. The milestone heading and its stubs
+left [CHECKLIST.md](CHECKLIST.md) with this item, which finished it.

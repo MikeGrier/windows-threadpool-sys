@@ -12,19 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) and the reviews (DI-M9) run alongside and gate nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
 convention.
 
-## DI-M8 -- The split: a portable crate and a Windows crate
-
-Per [DI-D-50](DESIGN-NOTES.md#di-d-50): `durable-ioring` portable, and `win-durable-ioring` for
-the driver, the Windows backend and its targets, registered for release.
-
-- [x] **DI-8.1** -- The core's tests made portable, while still in one crate: a shared portable clock and fault in place of interrupt time and the Windows fault. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-81)
-
-- [x] **DI-8.2** -- The split: `win-durable-ioring` created and registered for release, holding the driver, the Windows backend and file target, the readiness `Event` and its check, and the interrupt clock; `durable-ioring` left with no Windows dependency; the worked examples moved and linked. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-82)
-
-- [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
-  tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
-  describes for a crate with a portable core.
-
 ## DI-M9 -- Reviews: the engineer confirms or amends the assistant's choices (ungated; gates nothing)
 
 The code binds to each choice already, because the steps could not be built without choosing; what
