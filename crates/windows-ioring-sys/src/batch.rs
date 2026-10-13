@@ -17,10 +17,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE,
 };
 
-use crate::buf::{IoBuf, IoBufMut};
 use crate::error::{PushRefused, check};
 use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
 use crate::token::OperationId;
+use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 use win_shared_os_owned_handle::SharedHandle;
 
 /// Per-push options shared across every op builder (M3.2).
@@ -1103,19 +1103,6 @@ impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
         // ever dropped.
         unsafe { ManuallyDrop::drop(&mut self.buffers) };
     }
-}
-
-/// Which bytes of one [`RegisteredBuffers`] entry an op reads or writes
-/// (M5.2): bundled into one value so `read_registered`/`write_registered`
-/// stay under a sane argument count.
-#[derive(Clone, Copy, Debug)]
-pub struct RegisteredSpan {
-    /// Which buffer within the registration, per [`RegisteredBuffers::get`].
-    pub buffer_index: u32,
-    /// The starting byte offset within that buffer.
-    pub offset: u32,
-    /// How many bytes to read or write.
-    pub len: u32,
 }
 
 /// A [`Batch::register_buffers`] push not yet matched to its completion.

@@ -207,6 +207,7 @@ dependencies = [
 name = "windows-ioring-sys"
 version = "0.7.0"
 dependencies = [
+ "io-buffers",
  "serde_json",
  "win-numa-sys",
  "win-shared-os-owned-handle",

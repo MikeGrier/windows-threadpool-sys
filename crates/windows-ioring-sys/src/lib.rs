@@ -171,8 +171,6 @@ mod accounting;
 #[cfg(windows)]
 mod batch;
 #[cfg(windows)]
-mod buf;
-#[cfg(windows)]
 mod capability;
 #[cfg(all(windows, feature = "threadpool"))]
 mod completion_wake;
@@ -187,8 +185,6 @@ pub mod contract;
 mod error;
 #[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
-#[cfg(windows)]
-mod numa_buffer_io;
 // M23.3 SPIKE -- exported so a real consumer can be converted, which is the
 // only way to validate whether one type fits the twelve hand-rolled shapes.
 // Whether it stays public is the decision M23.3 has not yet taken.
@@ -215,10 +211,8 @@ mod token;
 pub use batch::{
     Batch, FileRef, FileTarget, FlushCoverage, FlushMode, PendingBufferRegistration,
     PendingFileRegistration, PushOptions, RegisteredBuffers, RegisteredFile, RegisteredFiles,
-    RegisteredSpan, RegisteredUse, WriteCaching,
+    RegisteredUse, WriteCaching,
 };
-#[cfg(windows)]
-pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(all(windows, feature = "threadpool"))]
@@ -244,10 +238,14 @@ pub use token::OperationId;
 /// crate. It replaced this crate's own `SharedFile` (D-82).
 #[cfg(windows)]
 pub use win_shared_os_owned_handle::SharedHandle;
-// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
-// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
-// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
-// `numa_buffer_io`, which explains there why they are separated from the type.
+// Re-exported rather than defined here: the buffer contract is `io-buffers`', defined once in a
+// portable crate, and re-exporting keeps `windows_ioring_sys::IoBuf`, `IoBufMut` and
+// `RegisteredSpan` resolving for anyone who already bound to them (IB-1.3).
+#[cfg(windows)]
+pub use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`, and re-exporting
+// keeps `windows_ioring_sys::NumaBuffer` resolving for anyone who already bound to it. Its
+// `IoBuf`/`IoBufMut` impls are that crate's own, of `io-buffers`' traits.
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
 
