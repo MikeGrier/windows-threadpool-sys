@@ -2563,3 +2563,26 @@ re-emitting every refusal, is the hang the row records.
 
 Accepted by the engineer: "yes." The registration lives behind the engine's lock, which pool threads
 take, so the registered buffer type must be sendable and own its data.
+
+## Moved 2026-10-13 17:57:00 -04:00 -- DI-9.6.3: the engineer accepts the release path's refusals, and it is built
+
+### <a id="di-963"></a>DI-9.6.3 -- A lineage's last-handle release reports a core refusal as not live, and ignores the default lineage's. *(completed 2026-10-13 17:57:00 -04:00)*
+
+Accepted by the engineer, as recommended: "yes I accept it." The question was which refusals of a
+lineage's end are reported on the two paths that end one. The explicit end (`Dioring::end_lineage`
+taking the last handle) already reported a core refusal as an inconsistency, the driver having
+refused the default first. The release (the last copy of a handle dropped on any thread) ignored
+every refusal, which the swap onto the core had carried over from the old relay without anyone
+choosing it. It now ignores only `Default`, dropping the default lineage's handle being legitimate
+and ending nothing, and reports `Foreign` as an inconsistency ([DI-D-46](DESIGN-NOTES.md#di-d-46)): a
+handle releases only when no explicit end or retire disarmed it, so its lineage is live and a
+refusal as not live means the bookkeeping is wrong. The report is made after the engine's lock is
+released, since it panics, and while the thread is already unwinding it is reported only, so a drop
+during a panic does not abort.
+
+Built in commit `c98ff3b5`: `Hub::release` in `win-durable-ioring`'s
+[hub.rs](../win-durable-ioring/src/dioring/hub.rs); two tests in `dioring/tests/ending.rs`, one for
+each direction, the first proving the instance is still usable after the report; and two entries in
+that crate's [sabotage.json](../win-durable-ioring/sabotage.json), one for each direction. Before
+the change nothing tested a release of a lineage that is not live, so the first sabotage, which
+ignores such a release again, would have survived; with it both are caught.

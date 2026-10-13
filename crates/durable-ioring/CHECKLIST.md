@@ -92,18 +92,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.6.2** -- `Dioring` requires `R: Send + 'static`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-962)
 
-- [ ] **DI-9.6.3** -- **DECIDE: which core refusals of a lineage's end are reported, on the two
-  paths that end a lineage.** The core refuses `end_lineage` as `Foreign` (the lineage is not live)
-  or `Default` (the default lineage never ends). *Explicit end*, `Dioring::end_lineage` taking the
-  last handle: the default is refused by the driver first, and a core refusal can only mean the
-  lineage was already ended, so it is reported as an inconsistency (DI-D-46) -- now. *Release*, the
-  last copy of a handle dropped on any thread: every refusal is ignored -- now, as the old relay
-  ignored them. Recommended: on release, ignore `Default` (dropping the default lineage's handle is
-  legitimate and ends nothing) but report `Foreign` as an inconsistency, as the explicit end does,
-  since a release fires only when no explicit end or retire disarmed the handle, so the lineage is
-  live and `Foreign` would mean the bookkeeping is wrong. A report is safe in a drop: while the
-  thread is already unwinding it is reported only, never a second panic. Accepting this changes
-  `Hub::release` and adds a test and a sabotage entry.
+- [x] **DI-9.6.3** -- A lineage's last-handle release reports a core refusal as not live, and ignores the default lineage's. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-963)
 
 - [ ] **DI-9.6.4** -- **DECIDE: a declared geometry is now enforced on the driver's path.** Now: the
   backend's `check` and `push` refuse an operation that does not fit a target's declared geometry,
