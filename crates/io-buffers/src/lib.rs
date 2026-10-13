@@ -5,8 +5,10 @@
 // Every `unsafe` here states why it is sound.
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod aligned;
 mod buf;
 mod span;
 
+pub use aligned::{AlignedBuf, AlignedBufError};
 pub use buf::{IoBuf, IoBufMut};
 pub use span::RegisteredSpan;

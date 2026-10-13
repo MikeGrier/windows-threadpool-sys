@@ -1,34 +1,8 @@
 # Checklist: io-buffers
 
 Buffers for asynchronous I/O, portable. See [README.md](README.md) for what the crate is and
-[DESIGN-NOTES.md](DESIGN-NOTES.md) for its decisions.
-
-## IB-M1 -- The contract, adopted by the ring and the allocator, and an aligned buffer
-
-Sequenced before `durable-ioring`'s [DI-8.2](../durable-ioring/CHECKLIST.md), which needs the buffer
-contract in a portable crate. Items are in dependency order.
-
-- [x] **IB-1.1** -- The buffer contract in a portable crate: `IoBuf`, `IoBufMut`, `RegisteredSpan` and the standard-type implementations, copied from `windows-ioring-sys` with their tests. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-11)
-
-- [x] **IB-1.2** -- `NumaBuffer` implements `io-buffers`' `IoBuf` and `IoBufMut`, in `win-numa-sys`, with the ring crate's tests and safety argument. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-12)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-ioring-sys` ->
-  > `IB-1.3`.
-
-- [x] **IB-1.3** -- `windows-ioring-sys` takes the buffer contract from `io-buffers` and re-exports it at the same paths. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-13)
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` ->
-  > `DI-8.2` (the split), which needs this item. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
-
-- [ ] **IB-1.4** -- **An owned, aligned buffer** ([IB-D-3](DESIGN-NOTES.md#ib-d-3)): an allocation
-  whose alignment the caller chooses at construction, zeroed or copied from bytes, implementing
-  `IoBuf` and `IoBufMut`, `Send` and `Sync`, with no `unsafe` needed to construct or use it. The
-  interface is this item's to settle: how a bad alignment, an overflowing length and an allocation
-  failure are reported (`windows-namespace-request-sys`' `AlignedBuffer` panics on a bad alignment,
-  which a buffer built by a consumer from a target's declared geometry would rather receive as an
-  error), whether it can grow, and what its `Debug` and `Clone` say. Tests include every alignment
-  from one to a page, lengths of zero and not a multiple of the alignment, the allocation's address
-  checked, and the drop path. Gated on `IB-1.1`; independent of `IB-1.2` and `IB-1.3`.
+[DESIGN-NOTES.md](DESIGN-NOTES.md) for its decisions. IB-M1, the contract and the aligned buffer,
+is complete and archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ib-m1-complete).
 
 ## IB-M2+ -- Merging the duplicated copies (parked behind IB-M1)
 
@@ -43,5 +17,6 @@ the duplication does not become permanent by being forgotten.
 
 - [ ] **IB-2+.2** -- **Whether the other aligned-buffer copies move onto `IB-1.4`'s buffer:**
   `windows-namespace-request-sys`' `AlignedBuffer`, the aligned allocation in
-  `windows-overlapped-io-sys`' `fs.rs`, and the ring crate's test-local `Aligned` structs. Gated on
-  `IB-1.4`.
+  `windows-overlapped-io-sys`' `fs.rs`, and the ring crate's test-local `Aligned` structs. Its
+  interface is [IB-D-6](DESIGN-NOTES.md#ib-d-6): fallible to build, where `AlignedBuffer` panics,
+  and with no `Clone`, so moving a copy onto it changes its callers' error handling.

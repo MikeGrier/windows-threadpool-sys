@@ -60,9 +60,26 @@ assert_eq!(moved.stable_ptr(), address);
 
 - **The contract:** the two traits, the span type that names part of a registered buffer, and
   implementations for the standard types that meet it.
-- **One concrete buffer:** an owned, aligned allocation. A target that does unbuffered I/O needs
-  buffer addresses aligned to its sector size, which a `Vec<u8>` cannot promise, and a consumer
-  should not have to write `unsafe` to get one.
+- **One concrete buffer, `AlignedBuf`:** an owned, zeroed allocation at an alignment the caller
+  chooses. A target that does unbuffered I/O needs buffer addresses aligned to its sector size, which
+  a `Vec<u8>` cannot promise, and a consumer should not have to write `unsafe` to get one. Building
+  one is fallible -- a bad alignment or a request the machine cannot meet is an error, not a panic or
+  an abort -- because the alignment is usually read from a device.
+
+```rust
+use io_buffers::{AlignedBuf, AlignedBufError, IoBuf};
+
+let sector = 4096; // as a device reported it
+let buffer = AlignedBuf::zeroed(8 * sector, sector)?;
+assert_eq!(buffer.stable_ptr() as usize % sector, 0);
+
+// A device that reports nonsense is an error to handle.
+assert_eq!(
+    AlignedBuf::zeroed(512, 3).unwrap_err(),
+    AlignedBufError::InvalidAlignment { align: 3 },
+);
+# Ok::<(), AlignedBufError>(())
+```
 
 ## What it is not
 

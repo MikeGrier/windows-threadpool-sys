@@ -110,3 +110,51 @@ The item as it stood at completion:
   which the publish workflow's wait for workspace siblings exists for. (`durable-ioring`'s
   path-only dependencies are different: it has no `Release-As` to rely on, and `DI-12.4` is where
   it pins them.)
+
+## Moved 2026-10-12 21:26:37 -04:00 -- IB-1.4: an owned, aligned buffer
+
+### <a id="ib-14"></a>IB-1.4 -- An owned, aligned buffer, `AlignedBuf`: fallible to build, zeroed, fixed in length, implementing `IoBuf` and `IoBufMut`. *(completed 2026-10-12 21:26:37 -04:00)*
+
+Per [IB-D-3](DESIGN-NOTES.md#ib-d-3) and [IB-D-6](DESIGN-NOTES.md#ib-d-6), which records the interface
+the item left to be settled: construction returns `Result<_, AlignedBufError>`, with three reasons --
+a bad alignment, a length no allocation can have, and an allocator that cannot provide it -- where
+`windows-namespace-request-sys`' `AlignedBuffer` panics and aborts; there is `try_clone` and no
+`Clone`; the length is fixed; and the bytes are zeroed or copied, never uninitialised. It derefs to
+`[u8]`, its `Debug` shows the length and alignment and never the contents, and equality is by contents
+and alignment. A length of zero allocates nothing and still has an aligned, non-null address. The
+README and the type's documentation each carry a doctest.
+
+**Tests** cover every alignment from one to 64 KiB against nine lengths, including zero, one, awkward
+and not a multiple of the alignment; zeroing against an allocator reusing a block just filled with
+`0xAB`; the copy, the clone and equality; each error with its numbers, and the allocator-failure arm
+reached by asking for the largest length that fits an `isize`; the traits as a bound; the address
+across a move and across a collection growing; and use from another thread and from several. **The
+test binary installs a counting allocator**, per thread, because a missed free is invisible to every
+other assertion: three tests read it, for a drop, for a clone, and for the empty and the failed
+cases. The sabotages are all caught, one of them the leak, and the controls survive; two of the caught
+are scored as a process abort, which the manifest says is a weaker catch.
+
+The item's open points, answered: a bad alignment, an overflowing length and an allocation failure
+are reported as the three errors; it cannot grow; `Debug` shows the shape, not the contents; and
+there is no `Clone`. The assistant's choices are queued in `DI-9.7`. The crate's two parked decisions,
+`IB-2+.1` and `IB-2+.2`, remain.
+
+The item as it stood at completion:
+
+- [x] **IB-1.4** -- **An owned, aligned buffer** ([IB-D-3](DESIGN-NOTES.md#ib-d-3)): an allocation
+  whose alignment the caller chooses at construction, zeroed or copied from bytes, implementing
+  `IoBuf` and `IoBufMut`, `Send` and `Sync`, with no `unsafe` needed to construct or use it. The
+  interface is this item's to settle: how a bad alignment, an overflowing length and an allocation
+  failure are reported (`windows-namespace-request-sys`' `AlignedBuffer` panics on a bad alignment,
+  which a buffer built by a consumer from a target's declared geometry would rather receive as an
+  error), whether it can grow, and what its `Debug` and `Clone` say. Tests include every alignment
+  from one to a page, lengths of zero and not a multiple of the alignment, the allocation's address
+  checked, and the drop path. Gated on `IB-1.1`; independent of `IB-1.2` and `IB-1.3`.
+
+## <a id="ib-m1-complete"></a>IB-M1 is complete
+
+`IB-1.1` to `IB-1.4` are archived above under their own anchors. The milestone heading and its stubs
+left [CHECKLIST.md](CHECKLIST.md) with this item, which finished it. The cross-component handoffs the
+stubs carried -- to `windows-ioring-sys`' `IB-1.3` after `IB-1.2`, and to `durable-ioring`'s `DI-8.2`
+after `IB-1.3` -- are discharged by the items they named, and `DI-8.2`'s own prerequisite note stays in
+[its checklist](../durable-ioring/CHECKLIST.md).
