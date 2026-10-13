@@ -19,26 +19,7 @@ the driver, the Windows backend and its targets, registered for release.
 
 - [x] **DI-8.1** -- The core's tests made portable, while still in one crate: a shared portable clock and fault in place of interrupt time and the Windows fault. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-81)
 
-- [ ] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
-  the driver, the Windows backend and file target, `ErrorCode`'s reading from an `io::Error`, the
-  readiness `Event`, the interrupt clock, the oracle's readiness check, and `DioringIds`' default
-  time type; `durable-ioring` left with no Windows dependency. CONTRACT.md's worked examples drive
-  the Windows driver, so they move in the same step, to `win-durable-ioring`'s documentation,
-  compiled there as doctests, and CONTRACT.md links them; its "Vocabulary ahead of the code" note is
-  removed. `IoBuf`, `IoBufMut` and `RegisteredSpan`, which `contract.rs` and the re-exports name,
-  come from `io-buffers`, not from `windows-ioring-sys`, so the portable crate has no Windows
-  dependency.
-
-  `DI-8.1` made the tests of the portable modules free of Windows types; what is left is the
-  production code and the tests that are Windows' by nature. Those are `fake.rs` and
-  `oracle/tests/readiness.rs`, which move with the readiness check; the driver's `MockClock` and
-  the tests that drive a `Dioring`, `Win32FileTarget` or the fault seam, which move with the driver;
-  and the portable modules' own imports of `win-sync-sys`, `win-time-sys`, `windows-ioring-sys` and
-  `windows-threadpool-sys`, which this item removes.
-
-  > **-> CROSS-COMPONENT PREREQUISITE:** `crates/io-buffers` -> `IB-1.1` and `IB-1.3` (the buffer
-  > contract in a portable crate, and the ring crate's adoption of it) must land first. See
-  > [CHECKLIST.md](../io-buffers/CHECKLIST.md).
+- [x] **DI-8.2** -- The split: `win-durable-ioring` created and registered for release, holding the driver, the Windows backend and file target, the readiness `Event` and its check, and the interrupt clock; `durable-ioring` left with no Windows dependency; the worked examples moved and linked. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-82)
 
 - [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
   tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
@@ -326,7 +307,13 @@ does is now that item's to absorb.
   that the core's tests share one portable clock and fault in `test_support`, that a stamp in them
   is a plain `u64`, that the test of the driver's default clock stamping with interrupt time stays
   only in the driver's own tests, and that the readiness-check tests, being over a Windows event,
-  sit in a module of their own for the split to take whole.
+  sit in a module of their own for the split to take whole; and from `DI-8.2`, in
+  [DI-D-57](DESIGN-NOTES.md#di-d-57), that the driver's clock is a `StampClock` and not a
+  `win-time-sys` clock, with `InterruptStamps` as the default and `FromClock` as the adapter, that
+  the notification is `CompletionEvent`, that `ErrorCode::of` is `error_code_of`, that
+  `DioringIds` has no default time type and the driver names it `WindowsIds`, that the portable crate
+  has a public `driver` module and `Lineage` and `OpId` have public fields, and that the Windows crate
+  re-exports the portable crate's API.
 
 ## DI-M7+ -- Delivery follow-ups
 
@@ -409,7 +396,9 @@ does is now that item's to absorb.
   readiness signal's `Event`), at its first release, and `windows-threadpool-sys` (the readiness
   check's wait), at the release carrying its `M-T14.1` (`From<Event> for WaitableHandle`).
   win-time-sys' `WT-2.2.2` adds a fourth, `win-time-sys` (the failure timestamps' clock), at its
-  first release.
+  first release. Since `DI-8.2` these dependencies are `win-durable-ioring`'s, with a fifth: its
+  path-only dependency on `durable-ioring`, pinned at `durable-ioring`'s first release, which must
+  publish first. `durable-ioring` itself has only `io-buffers`, already pinned.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 

@@ -4,8 +4,12 @@
 
 ## What it is
 
-A ring for file I/O with **durability scheduled into its work**, layered on
-[windows-ioring-sys](../windows-ioring-sys/README.md)'s `IoRing`. A consumer submits reads and
+A ring for file I/O with **durability scheduled into its work**. This crate is the portable half
+([DI-D-50](DESIGN-NOTES.md#di-d-50)): the contract, the core that decides when writes are durable,
+the target and backend traits, an in-memory backend and a conformance oracle, with no platform
+dependency. A driver supplies the platform; [win-durable-ioring](../win-durable-ioring/README.md)
+is the Windows one, layered on [windows-ioring-sys](../windows-ioring-sys/README.md)'s `IoRing`, and
+the worked examples and the thing a consumer on Windows uses are there. A consumer submits reads and
 writes as it would to the ring, tags each write with an epoch -- an epoch id of its own choosing
 within a durability lineage -- asks for durability with `make_durable_through(n)`, and learns -- in the same completion stream as its
 operations -- when everything through `n` has become durable, or that it has failed and which
@@ -31,7 +35,7 @@ failure, record formats, checkpointing, or space reclamation. Retention and auto
 separate layer above this one, queued as its own future crate. Overlapping writes are the
 consumer's to order ([DI-D-6](DESIGN-NOTES.md#di-d-6)). **A blocking push is not here either**: a
 refused push names its cause, and the loop that waits it out is a maintained example,
-[examples/blocking_push/](examples/blocking_push/main.rs), to use as it stands or adapt
+[examples/blocking_push/](../win-durable-ioring/examples/blocking_push/main.rs), to use as it stands or adapt
 ([DI-D-56](DESIGN-NOTES.md#di-d-56)).
 
 ## Where it sits

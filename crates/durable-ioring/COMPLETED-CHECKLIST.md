@@ -2253,3 +2253,39 @@ The item as it stood at completion:
 - [ ] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
   interrupt time and Windows faults today, so they move to a portable mock clock and fault, which
   the split needs: once `durable-ioring` has no Windows dependency, they could not build.
+
+## Moved 2026-10-12 23:05:00 -04:00 -- DI-8.2: the split
+
+### <a id="di-82"></a>DI-8.2 -- The split: `win-durable-ioring` created and registered for release, holding the driver, the Windows backend and file target, the readiness `Event` and its check, and the interrupt clock; `durable-ioring` left with no Windows dependency; the worked examples moved and linked. *(completed 2026-10-12 23:05:00 -04:00)*
+
+Built in two commits so the second could be a move and not a rewrite. The first moved the durability
+state out of the driver's module and cut the six helpers the core shares with the driver into
+`domains.rs`, with the provenance trail a split needs, inside the one crate. The second made the
+crate boundary: the Windows side was `git mv`'d into `crates/win-durable-ioring` and its imports
+rewritten to name the portable crate. The decisions it took are
+[DI-D-57](DESIGN-NOTES.md#di-d-57), the assistant's, queued in `DI-9.7`.
+
+**What the compiler found that the plan did not name.** Four public names changed because Rust's
+orphan rule forbids what the single crate did: a blanket `StampClock` for any `win-time-sys` clock,
+`Waitable` for `OwnedHandle`, an inherent `ErrorCode::of`, and a default time type on `DioringIds`.
+The portable crate also had to show the driver more than it had shown a consumer, which is a
+`driver` module. All are in DI-D-57.
+
+**Checked.** Both crates pass fmt, clippy over all targets, their tests and doctests, and rustdoc
+with warnings denied; every crate in the workspace builds all targets. The portable crate builds all
+targets for `x86_64-unknown-linux-gnu`, which is the first time anything showed it has no Windows
+dependency left; running its tests there is `DI-8.3`'s. The sabotage manifest was split by file, with
+formatting kept and three entries' targets moved or reworded for the moved code; the driver's runs
+its own crate, and the core's runs both, because the driver's tests also pin the core.
+
+The item as it stood at completion:
+
+- [ ] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
+  the driver, the Windows backend and file target, `ErrorCode`'s reading from an `io::Error`, the
+  readiness `Event`, the interrupt clock, the oracle's readiness check, and `DioringIds`' default
+  time type; `durable-ioring` left with no Windows dependency. CONTRACT.md's worked examples drive
+  the Windows driver, so they move in the same step, to `win-durable-ioring`'s documentation,
+  compiled there as doctests, and CONTRACT.md links them; its "Vocabulary ahead of the code" note is
+  removed. `IoBuf`, `IoBufMut` and `RegisteredSpan`, which `contract.rs` and the re-exports name,
+  come from `io-buffers`, not from `windows-ioring-sys`, so the portable crate has no Windows
+  dependency.

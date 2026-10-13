@@ -315,8 +315,13 @@ it records ring completions, and by provider answers. The waiter -- one per inst
 
 *(DI-2.15, [DI-D-24](DESIGN-NOTES.md#di-d-24).)* The contract is the trait `DurableRing`, generic
 only, with the registered-buffer operations in an extension, `RegisteredBufferRing`. dioring's
-implementation of both is `Dioring<B, E, C, R>`; construction stays on it (`Dioring::new(Setup)`),
-as it will on every implementation.
+implementation of both is `Dioring<B, E, C, R>`, in [win-durable-ioring](../win-durable-ioring/README.md)
+since the split ([DI-D-50](DESIGN-NOTES.md#di-d-50)), the portable crate holding the contract and
+the core; construction stays on it (`Dioring::new(Setup)`), as it will on every implementation.
+The spelling of the types below was written before the split and is not rewritten for it: where
+it differs, the crates' rustdoc is the spelling. One difference matters here: `DioringIds<E>` is
+`DioringIds<E, I>`, with the time type `I` its stamps are read in, which a driver names
+(`win-durable-ioring`'s `WindowsIds<E>`).
 
 - **Identity types are each implementation's.** `Lineage`, `OpId`, `FailureId` and the failure
   token are bundled, with the consumer's epoch-id type, in one trait, `Identities`, implemented by a
