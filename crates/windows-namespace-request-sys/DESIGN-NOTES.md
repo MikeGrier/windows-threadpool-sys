@@ -242,9 +242,21 @@ A self-relative descriptor must live in DWORD-aligned storage. A `Box<[u8]>`
 guarantees an alignment of 1, so this is a requirement the obvious
 representation silently fails. It is the second such requirement in the crate
 -- the directory-information classes need 8-byte alignment for the same
-underlying reason -- so it is met once, by an `AlignedBuffer` primitive whose
-alignment is stated at construction and preserved by `Clone`, rather than being
-solved twice by two different local tricks.
+underlying reason -- so it is met once, by an aligned-buffer primitive whose
+alignment is stated at construction, rather than being solved twice by two
+different local tricks.
+
+That primitive was this crate's own `AlignedBuffer`, and is now `AlignedBuf` from the [io-buffers](../io-buffers/README.md) crate, which the
+crate re-exports because the type appears in its public signatures (the query
+result and the captured security descriptor's storage). The move is a breaking
+change: the old type's constructors panicked on a bad alignment and aborted on
+allocation failure, and `AlignedBuf` returns an error for both. Every call site
+here passes a constant alignment, so each takes the error with `expect`, and the
+behaviour a caller sees on an unallocatable request is a panic where it was an
+abort. `SecurityDescriptor` keeps `Clone`, written by hand over
+`AlignedBuf::try_clone` because the buffer has no `Clone` of its own; it panics
+if the copy cannot be allocated, as `Vec::clone` aborts. Why the buffer is
+fallible and clone-less is [IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6).
 
 ## <a id="d-9"></a>D-9: Path preparation is duplicated from the enumeration crate, deliberately and temporarily
 

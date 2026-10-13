@@ -22,7 +22,12 @@ use super::{
     AclState, SELF_RELATIVE_ALIGNMENT, SecurityAttributes, SecurityCaptureFailure,
     SecurityDescriptor,
 };
-use crate::buffer::AlignedBuffer;
+use io_buffers::AlignedBuf;
+
+/// A zeroed buffer at `align`, for the descriptors and lists these tests build by hand.
+fn aligned_zeroed(len: usize, align: usize) -> AlignedBuf {
+    AlignedBuf::zeroed(len, align).expect("an aligned allocation")
+}
 
 /// The revision every descriptor built here declares.
 ///
@@ -48,8 +53,8 @@ const ONE_ACE_ACL_BYTES: u32 = 256;
 /// set of references to storage the caller owns.
 pub(crate) struct Absolute {
     descriptor: Box<SECURITY_DESCRIPTOR>,
-    _sid: AlignedBuffer,
-    _acl: Option<AlignedBuffer>,
+    _sid: AlignedBuf,
+    _acl: Option<AlignedBuf>,
 }
 
 impl Absolute {
@@ -149,7 +154,7 @@ impl Absolute {
     ///
     /// This is what a caller who already holds a self-relative descriptor looks
     /// like to capture.
-    fn to_self_relative(&self) -> AlignedBuffer {
+    fn to_self_relative(&self) -> AlignedBuf {
         let mut length: u32 = 0;
         // SAFETY: the null destination is the documented sizing call.
         let sized = unsafe {
@@ -157,7 +162,7 @@ impl Absolute {
         };
         assert_eq!(sized, FALSE, "the sizing call is expected to fail");
 
-        let mut blob = AlignedBuffer::zeroed(length as usize, SELF_RELATIVE_ALIGNMENT);
+        let mut blob = aligned_zeroed(length as usize, SELF_RELATIVE_ALIGNMENT);
         // SAFETY: blob is writable for exactly the reported length.
         let converted = unsafe {
             MakeSelfRelativeSD(
@@ -192,7 +197,7 @@ fn new_descriptor() -> Box<SECURITY_DESCRIPTOR> {
     descriptor
 }
 
-fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBuffer) {
+fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBuf) {
     // SAFETY: the descriptor is initialised, and sid holds a SID Windows wrote.
     let owner = unsafe {
         SetSecurityDescriptorOwner(
@@ -214,8 +219,8 @@ fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBu
     assert_ne!(group, FALSE, "set the group");
 }
 
-fn new_acl(bytes: u32) -> AlignedBuffer {
-    let mut acl = AlignedBuffer::zeroed(bytes as usize, ACL_ALIGNMENT);
+fn new_acl(bytes: u32) -> AlignedBuf {
+    let mut acl = aligned_zeroed(bytes as usize, ACL_ALIGNMENT);
 
     // SAFETY: acl is writable for exactly `bytes` bytes, which is what
     // InitializeAcl is told to use.
@@ -225,8 +230,8 @@ fn new_acl(bytes: u32) -> AlignedBuffer {
     acl
 }
 
-fn world_sid() -> AlignedBuffer {
-    let mut sid = AlignedBuffer::zeroed(SECURITY_MAX_SID_SIZE as usize, 8);
+fn world_sid() -> AlignedBuf {
+    let mut sid = aligned_zeroed(SECURITY_MAX_SID_SIZE as usize, 8);
     let mut length = SECURITY_MAX_SID_SIZE;
 
     // SAFETY: sid is writable for length bytes, which is the documented maximum
@@ -369,7 +374,7 @@ fn the_capture_survives_the_caller_dropping_everything_it_was_built_from() {
 
 #[test]
 fn a_malformed_descriptor_is_refused_at_capture() {
-    let zeroed = AlignedBuffer::zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
+    let zeroed = aligned_zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
 
     // SAFETY: the buffer outlives the call; its contents are not a valid
     // descriptor, which is what this asserts.
@@ -524,7 +529,7 @@ fn a_capture_failure_exposes_its_os_error_both_ways() {
     // out every constant the sweep tried, including the plausible-looking ones.
     use std::error::Error as _;
 
-    let zeroed = AlignedBuffer::zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
+    let zeroed = aligned_zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
 
     // SAFETY: the buffer outlives the call; its contents are not a valid
     // descriptor, which is what makes this fail.

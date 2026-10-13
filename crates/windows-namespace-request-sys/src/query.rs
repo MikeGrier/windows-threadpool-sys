@@ -28,7 +28,7 @@
 //!
 //! - It must be **8-byte aligned**. A `Vec<u8>` guarantees byte alignment and
 //!   nothing more, and a misaligned batch is not a subtle problem: the very
-//!   first query fails with `ERROR_NOACCESS`. [`AlignedBuffer`] states the
+//!   first query fails with `ERROR_NOACCESS`. [`AlignedBuf`] states the
 //!   alignment rather than arriving at it by luck.
 //! - The call **reports no written length**. A batch is walked by its own
 //!   next-entry offsets, so the whole buffer comes back and the consumer bounds
@@ -80,7 +80,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FileIdExtdDirectoryRestartInfo, FileIdInfo, GetFileInformationByHandleEx,
 };
 
-use crate::buffer::AlignedBuffer;
+use io_buffers::AlignedBuf;
+
 use crate::handle::{CapturedHandle, HandleCaptureError};
 use crate::outcome::{Outcome, perform_bool};
 
@@ -284,8 +285,13 @@ impl QueryFileInformation {
     /// Returns the raw Win32 code, unaltered. `ERROR_NO_MORE_FILES` ends a
     /// directory enumeration and `ERROR_MORE_DATA` means the buffer held no
     /// complete entry; both are the caller's to interpret.
-    pub fn perform(&self) -> Outcome<AlignedBuffer> {
-        let mut buffer = AlignedBuffer::zeroed(self.capacity, BATCH_ALIGNMENT);
+    ///
+    /// # Panics
+    ///
+    /// Panics if the capacity this query was built with cannot be allocated.
+    pub fn perform(&self) -> Outcome<AlignedBuf> {
+        let mut buffer = AlignedBuf::zeroed(self.capacity, BATCH_ALIGNMENT)
+            .expect("memory for the capacity this query was built with");
         let size = u32::try_from(self.capacity).unwrap_or(u32::MAX);
 
         perform_bool(|| {
@@ -308,9 +314,9 @@ impl QueryFileInformation {
 
 impl crate::request::Request for QueryFileInformation {
     type Error = crate::Win32Error;
-    type Output = AlignedBuffer;
+    type Output = AlignedBuf;
 
-    fn perform(&self) -> Outcome<AlignedBuffer> {
+    fn perform(&self) -> Outcome<AlignedBuf> {
         Self::perform(self)
     }
 }

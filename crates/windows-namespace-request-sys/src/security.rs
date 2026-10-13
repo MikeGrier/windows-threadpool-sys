@@ -23,7 +23,7 @@ use windows_sys::Win32::Security::{
     SE_SELF_RELATIVE, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR_CONTROL,
 };
 
-use crate::buffer::AlignedBuffer;
+use io_buffers::AlignedBuf;
 
 /// A self-relative security descriptor must be DWORD-aligned.
 ///
@@ -153,9 +153,24 @@ pub enum AclState {
 /// Whatever form the caller supplied, this holds the self-relative form in one
 /// contiguous, DWORD-aligned blob, so it names nothing outside itself and can
 /// be carried to another thread.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SecurityDescriptor {
-    blob: AlignedBuffer,
+    blob: AlignedBuf,
+}
+
+impl Clone for SecurityDescriptor {
+    /// # Panics
+    ///
+    /// Panics if the copy cannot be allocated, as `Vec::clone` aborts. A fallible
+    /// copy is [`AlignedBuf::try_clone`], which this type does not expose.
+    fn clone(&self) -> Self {
+        Self {
+            blob: self
+                .blob
+                .try_clone()
+                .expect("memory for a copy of a security descriptor"),
+        }
+    }
 }
 
 impl SecurityDescriptor {
@@ -218,12 +233,13 @@ impl SecurityDescriptor {
     /// # Safety
     ///
     /// `descriptor` must be a live, valid, self-relative descriptor.
-    unsafe fn copy_self_relative(descriptor: PSECURITY_DESCRIPTOR) -> AlignedBuffer {
+    unsafe fn copy_self_relative(descriptor: PSECURITY_DESCRIPTOR) -> AlignedBuf {
         // SAFETY: for a self-relative descriptor this reports the length of the
         // whole blob, which is exactly what must be copied.
         let length = unsafe { GetSecurityDescriptorLength(descriptor) } as usize;
 
-        let mut blob = AlignedBuffer::zeroed(length, SELF_RELATIVE_ALIGNMENT);
+        let mut blob = AlignedBuf::zeroed(length, SELF_RELATIVE_ALIGNMENT)
+            .expect("memory for a copy of a security descriptor");
         // SAFETY: the source is valid for `length` bytes by the contract above,
         // the destination was just allocated with that length, and the two
         // allocations cannot overlap.
@@ -240,7 +256,7 @@ impl SecurityDescriptor {
     /// everything it points at.
     unsafe fn convert_absolute(
         descriptor: PSECURITY_DESCRIPTOR,
-    ) -> Result<AlignedBuffer, SecurityCaptureError> {
+    ) -> Result<AlignedBuf, SecurityCaptureError> {
         let mut length: u32 = 0;
         // SAFETY: a null destination with a zero length is the documented way
         // to ask for the required size; it is expected to fail.
@@ -270,7 +286,8 @@ impl SecurityDescriptor {
             ));
         }
 
-        let mut blob = AlignedBuffer::zeroed(length as usize, SELF_RELATIVE_ALIGNMENT);
+        let mut blob = AlignedBuf::zeroed(length as usize, SELF_RELATIVE_ALIGNMENT)
+            .expect("memory for a self-relative security descriptor");
         // SAFETY: blob is writable for exactly the length Windows asked for.
         let converted = unsafe {
             MakeSelfRelativeSD(

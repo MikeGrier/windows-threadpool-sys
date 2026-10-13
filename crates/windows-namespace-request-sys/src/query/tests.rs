@@ -17,8 +17,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::{FileInformationClass, QueryFileInformation};
 use crate::CapturedHandle;
-use crate::buffer::AlignedBuffer;
 use crate::handle::tests::{Fixture, handle_allocation};
+use io_buffers::AlignedBuf;
 
 /// Small on purpose: large enough for a few entries, far too small to drain the
 /// fixture, so the enumeration cursor is left mid-directory.
@@ -41,7 +41,7 @@ fn query(file: &File, class: FileInformationClass) -> QueryFileInformation {
 ///
 /// The consumer's job, done here because the crate deliberately returns bytes
 /// and does not parse them.
-fn names_in(batch: &AlignedBuffer) -> Vec<String> {
+fn names_in(batch: &AlignedBuf) -> Vec<String> {
     let mut names = Vec::new();
     let mut offset = 0_usize;
 

@@ -234,6 +234,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 name = "windows-namespace-request-sys"
 version = "0.2.3"
 dependencies = [
+ "io-buffers",
  "windows-sys",
  "windows-thread-ambient-sys",
  "wtf-string",
