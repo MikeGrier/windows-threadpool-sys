@@ -2215,3 +2215,41 @@ on that commit. The assistant's choices are queued in `DI-9.7`. The item as it s
 **A blocking push -- proposed, awaiting the engineer's ruling** (DI-D-52 Q4): a driver policy above
 refusal that submits, waits on the notification and retries; never from inside a callback, and
 pumping for itself under pumped delivery. Removed if the engineer declines it.
+
+## Moved 2026-10-12 22:40:00 -04:00 -- DI-8.1: the core's tests made portable
+
+### <a id="di-81"></a>DI-8.1 -- The core's tests made portable, while still in one crate: a shared portable clock and fault in place of interrupt time and the Windows fault. *(completed 2026-10-12 22:40:00 -04:00)*
+
+Taken as the narrowing the assistant set out when the engineer asked whether the item was ready:
+its text was stale, since the core's, engine's and pump's tests already ran on a local clock that
+counts its readings. What was Windows' in the tests of the portable modules, and is now not:
+
+- **A shared `test_support` module** (test builds only) holds `Ticks`, the counting clock three
+  test modules each had a copy of, `ManualClock`, which a test moves by hand, and `fault`, which
+  builds an `IoFault` for an `io::Error` with a named test source in place of the Windows one. All
+  three modules now use the one `Ticks`, and the module has tests of its own.
+- **The durability state's tests** (`dioring/durability/tests*`) stamp in plain numbers, from a
+  `ManualClock`, and name their identities with an explicit time type, so none reads interrupt
+  time, borrows the driver's mock clock, or builds a Windows fault. The one test of the default
+  clock stamping with interrupt time was a test of the test helper's default and is not carried over:
+  the real instance's own test of it is in `dioring/tests/stamps.rs`.
+- **The oracle's tests** record stamps as plain numbers and build faults with `test_support`; the
+  three tests of the readiness check, which waits on a Windows event, are in a module of their own,
+  `oracle/tests/readiness.rs`, so the split takes them whole.
+- **`ids` and `types` tests** name the time type they use; the contract's test that runs a consumer's
+  generic code over a real `Dioring` is in the driver's tests, where it belongs.
+
+Checked by searching the tests of the portable modules for the Windows crates, interrupt time, the
+driver and its fault: nothing is left but the readiness module, which is Windows' by nature, and the
+durability events' own `Event` type, which is unrelated. The sabotages that bear on stamps, the
+oracle's stamp order and faults were re-run, and all behave as declared. **The fault seam's half is
+not here:** `fail_next_flush` and the ring's kernel seam are used by the driver's tests, which move
+with the driver, and a portable scripted fault is `DI-11.1`. **The production code of the portable
+modules still imports the Windows crates**; removing that is `DI-8.2`, and the item's text now says
+what is left for it. The assistant's choices are queued in `DI-9.7`.
+
+The item as it stood at completion:
+
+- [ ] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
+  interrupt time and Windows faults today, so they move to a portable mock clock and fault, which
+  the split needs: once `durable-ioring` has no Windows dependency, they could not build.

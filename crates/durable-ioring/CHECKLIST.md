@@ -17,9 +17,7 @@ convention.
 Per [DI-D-50](DESIGN-NOTES.md#di-d-50): `durable-ioring` portable, and `win-durable-ioring` for
 the driver, the Windows backend and its targets, registered for release.
 
-- [ ] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
-  interrupt time and Windows faults today, so they move to a portable mock clock and fault, which
-  the split needs: once `durable-ioring` has no Windows dependency, they could not build.
+- [x] **DI-8.1** -- The core's tests made portable, while still in one crate: a shared portable clock and fault in place of interrupt time and the Windows fault. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#di-81)
 
 - [ ] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
   the driver, the Windows backend and file target, `ErrorCode`'s reading from an `io::Error`, the
@@ -30,6 +28,13 @@ the driver, the Windows backend and its targets, registered for release.
   removed. `IoBuf`, `IoBufMut` and `RegisteredSpan`, which `contract.rs` and the re-exports name,
   come from `io-buffers`, not from `windows-ioring-sys`, so the portable crate has no Windows
   dependency.
+
+  `DI-8.1` made the tests of the portable modules free of Windows types; what is left is the
+  production code and the tests that are Windows' by nature. Those are `fake.rs` and
+  `oracle/tests/readiness.rs`, which move with the readiness check; the driver's `MockClock` and
+  the tests that drive a `Dioring`, `Win32FileTarget` or the fault seam, which move with the driver;
+  and the portable modules' own imports of `win-sync-sys`, `win-time-sys`, `windows-ioring-sys` and
+  `windows-threadpool-sys`, which this item removes.
 
   > **-> CROSS-COMPONENT PREREQUISITE:** `crates/io-buffers` -> `IB-1.1` and `IB-1.3` (the buffer
   > contract in a portable crate, and the ring crate's adoption of it) must land first. See
@@ -317,7 +322,11 @@ does is now that item's to absorb.
   route (a), that `windows-namespace-request-sys` takes the allocation error with `expect` at each
   site and that `SecurityDescriptor::clone` panics when the copy cannot be allocated, so an
   unallocatable request is a panic where it was an abort
-  ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)).
+  ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)); and from `DI-8.1`
+  that the core's tests share one portable clock and fault in `test_support`, that a stamp in them
+  is a plain `u64`, that the test of the driver's default clock stamping with interrupt time stays
+  only in the driver's own tests, and that the readiness-check tests, being over a Windows event,
+  sit in a module of their own for the split to take whole.
 
 ## DI-M7+ -- Delivery follow-ups
 
