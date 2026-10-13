@@ -19,6 +19,43 @@ implement, because the promise is the whole content of the trait. A ring crate t
 buffer for the operation's duration and hands it back at the completion, so no buffer the kernel may
 still be using is reachable from safe code.
 
+A buffer of your own implements the traits the same way the standard types do:
+
+```rust
+use io_buffers::{IoBuf, IoBufMut};
+
+/// A pooled buffer. A boxed slice keeps its bytes where they are when the value moves.
+struct Pooled(Box<[u8]>);
+
+// SAFETY: the bytes live in an owned boxed slice, so the address is stable across moves and the
+// length is fixed, and nothing else holds them.
+unsafe impl IoBuf for Pooled {
+    fn stable_ptr(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    fn bytes_len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+// SAFETY: unique ownership, and the same allocation `stable_ptr` reports.
+unsafe impl IoBufMut for Pooled {
+    fn stable_mut_ptr(&mut self) -> *mut u8 {
+        self.0.as_mut_ptr()
+    }
+}
+
+let mut buffer = Pooled(vec![0_u8; 4096].into_boxed_slice());
+let address = buffer.stable_ptr();
+assert_eq!(buffer.bytes_len(), 4096);
+assert_eq!(buffer.stable_mut_ptr().cast_const(), address);
+
+// Moving the value does not move the bytes, which is the whole promise.
+let moved = buffer;
+assert_eq!(moved.stable_ptr(), address);
+```
+
 ## What the crate is for
 
 - **The contract:** the two traits, the span type that names part of a registered buffer, and

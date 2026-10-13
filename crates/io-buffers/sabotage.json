@@ -1,0 +1,103 @@
+{
+  "package": "io-buffers",
+  "description": "Sabotages for io-buffers. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "RegisteredSpan is three public fields and has no logic to sabotage. The traits' obligations -- an address that does not change while the kernel holds the value -- cannot be observed from a test that returns before any kernel would use the address, so what these entries pin is that each implementation reports the allocation it owns and the length it holds, which is what the obligation rests on.",
+  "sabotages": [
+    {
+      "name": "IB-1.1: a Vec reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A null address is the one the kernel would be handed. Compared against the Vec's own pointer, not against another call to the same function, which a constant would satisfy.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a Vec reports its capacity as its length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "Bytes past the length are not initialized; an operation told it may use them reads or writes memory the owner never filled.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.capacity()\n"]
+    },
+    {
+      "name": "IB-1.1: a Vec's mutable address is not its shared one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The mutable trait's obligation is that its address equals the shared one, so the kernel writes where the owner reads.",
+      "find": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
+      "replace": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice reports half its length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A short length is the safe direction, and still a wrong answer: an operation would transfer fewer bytes than the owner handed over.",
+      "find": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len() / 2\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice's mutable address is not its shared one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
+      "replace": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a shared slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The case the ring crate's mutation testing found: comparing the function to itself passes even when it returns null, so the test names the allocation independently.",
+      "find": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a shared slice reports no length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A zero length makes every operation over it a no-op that reports success.",
+      "find": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        0\n"]
+    },
+    {
+      "name": "IB-1.1: a static slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a static mutable slice reports no mutable address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The one reference type that is a legal destination: its mutable address must be the slice's.",
+      "find": ["        <[u8]>::as_mut_ptr(self)\n"],
+      "replace": ["        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a static mutable slice reports its length plus one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A length past the allocation is the direction that lets the kernel write out of bounds.",
+      "find": ["        <[u8]>::len(self)\n"],
+      "replace": ["        <[u8]>::len(self) + 1\n"]
+    },
+    {
+      "name": "CONTROL: a Vec's address is read through its type rather than its method",
+      "file": "src/buf.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: Vec::as_ptr(self) is the same call spelled differently, on code every Vec test runs. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        Vec::as_ptr(self)\n"]
+    }
+  ]
+}

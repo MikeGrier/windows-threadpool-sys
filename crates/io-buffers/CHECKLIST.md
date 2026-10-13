@@ -8,14 +8,7 @@ Buffers for asynchronous I/O, portable. See [README.md](README.md) for what the 
 Sequenced before `durable-ioring`'s [DI-8.2](../durable-ioring/CHECKLIST.md), which needs the buffer
 contract in a portable crate. Items are in dependency order.
 
-- [ ] **IB-1.1** -- **The contract, moved from `windows-ioring-sys`** ([IB-D-2](DESIGN-NOTES.md#ib-d-2)):
-  `IoBuf`, `IoBufMut` and `RegisteredSpan`, with the implementations for `Vec<u8>`, `Box<[u8]>`,
-  `Arc<[u8]>` and the static slices, and their documentation and tests, moved by copy so the
-  obligations keep their text. The ring crate is untouched by this item: its own pair stays until
-  `IB-1.3` replaces it, so every commit builds. Tests are the ring crate's, moved, plus any the move
-  shows to be missing, and run in the `portable` CI job beside `wtf-string`. The sabotage manifest
-  entries that pinned the originals move with them. The commit carries `Release-As: 0.1.0`, since
-  release-please attributes a commit by the paths it touches and `Cargo.toml` says 0.1.0.
+- [x] **IB-1.1** -- The buffer contract in a portable crate: `IoBuf`, `IoBufMut`, `RegisteredSpan` and the standard-type implementations, copied from `windows-ioring-sys` with their tests. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-11)
 
 - [ ] **IB-1.2** -- **`NumaBuffer`'s buffer impls move to `win-numa-sys`**
   ([IB-D-4](DESIGN-NOTES.md#ib-d-4)): `win-numa-sys` depends on `io-buffers` and implements
