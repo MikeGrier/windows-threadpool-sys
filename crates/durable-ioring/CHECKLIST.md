@@ -311,7 +311,9 @@ does is now that item's to absorb.
   deliberately trait-free stance in that one respect
   ([IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1), [IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2),
   [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)); and that the ring crate re-exports the contract
-  from it at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)).
+  from it at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)); and from `IB-1.4`
+  that `AlignedBuf` is fallible to build, has no `Clone` and cannot grow
+  ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)).
 
 ## DI-M7+ -- Delivery follow-ups
 
