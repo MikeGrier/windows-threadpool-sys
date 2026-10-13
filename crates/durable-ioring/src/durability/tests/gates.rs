@@ -11,7 +11,7 @@ use super::{
     A, B, DEFAULT, FULL, Lineage, Ops, Seen, flush, flush_of, inconsistent, lineage, quiet, seen,
     submitted, target, tokens,
 };
-use crate::dioring::durability::{
+use crate::durability::{
     Accepted, DEFAULT_LINEAGE as D, Due, Gate, GateState, Key, Reach, Sealing, State,
 };
 use crate::ids::OpId;

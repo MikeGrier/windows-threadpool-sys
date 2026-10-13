@@ -60,10 +60,10 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::DomainId;
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
 use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink};
+use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, Lineage, OpId};
 use crate::types::{
     Entry, Epoch, Failed, FailureCause, FailureInfo, IoFault, IoTargetKey, Marking, MarkingKind,

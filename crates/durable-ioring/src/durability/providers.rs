@@ -14,7 +14,7 @@ use std::sync::Arc;
 use super::{DomainPart, Due, Durability, Key, MarkingKind, Reach, SealStage, Stage, V, Write};
 use crate::clock::{Instant, StampClock};
 use crate::contract::EpochId;
-use crate::dioring::DomainId;
+use crate::domains::DomainId;
 use crate::ids::OpId;
 use crate::types::{FailureCause, IoTargetKey};
 

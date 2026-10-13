@@ -5,8 +5,8 @@ use std::io;
 
 use super::Stamp;
 use super::{A, B, DEFAULT, FULL, Lineage, Ops, lineage, submitted, tokens};
-use crate::dioring::durability::files::FileHolds;
-use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach};
+use crate::durability::files::FileHolds;
+use crate::durability::{DEFAULT_LINEAGE, Key, Reach};
 use crate::types::{Epoch, FailureCause, ImportScope, IoTargetKey, Resolution};
 
 fn holds(lineage: &Lineage, file: IoTargetKey) -> FileHolds<u64, Stamp> {

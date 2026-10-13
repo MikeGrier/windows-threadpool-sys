@@ -8,7 +8,7 @@
 use super::{Actions, DurableIoCore, V};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
-use crate::dioring::durability::DEFAULT_LINEAGE;
+use crate::durability::DEFAULT_LINEAGE;
 use crate::ids::Lineage;
 use crate::types::{EndLineageRefusal, LineageInfo, RetireLineageRefusal};
 

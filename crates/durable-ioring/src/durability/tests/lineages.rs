@@ -9,7 +9,7 @@ use super::{
     A, B, DEFAULT, FULL, Lineage, Ops, Seen, failed, flush, flush_of, inconsistent, lineage,
     nullified, quiet, seen, submitted, tokens,
 };
-use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
+use crate::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
 use crate::types::{FailureCause, ImportScope, LineageBusy, Resolution};
 

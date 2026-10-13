@@ -45,10 +45,10 @@ use crate::backend::{
 use crate::clock::StampClock;
 use crate::contract::{EpochId, Identities};
 use crate::diagnostics::DiagnosticSink;
-use crate::dioring::durability::{
+use crate::domains::{DomainId, epoch_state, intern_all, routing};
+use crate::durability::{
     Accepted, DEFAULT_LINEAGE, Due, Durability, Gate, GateState, Key, Routing, Sealing, WriteEnd,
 };
-use crate::dioring::{DomainId, epoch_state, intern_all, routing};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::io_target::IoTargetDescription;
 use crate::provider::ProviderRequest;

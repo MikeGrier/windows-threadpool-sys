@@ -11,10 +11,8 @@ use super::{
     A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, inconsistent, lineage,
     quiet, seen, submitted,
 };
-use crate::dioring::DomainId;
-use crate::dioring::durability::{
-    DEFAULT_LINEAGE, DomainPart, Due, Key, ProviderCall, Reach, Routing, V,
-};
+use crate::domains::DomainId;
+use crate::durability::{DEFAULT_LINEAGE, DomainPart, Due, Key, ProviderCall, Reach, Routing, V};
 use crate::types::{FailureCause, FlushDomain, ImportScope, MarkingKind};
 
 /// A file only the provider answers for: every domain it declares is served.

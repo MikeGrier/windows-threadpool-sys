@@ -23,7 +23,6 @@
 //! in flight. An internal inconsistency is not looked for here: it is panicked on where it is found
 //! (DI-D-46).
 
-use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -38,9 +37,10 @@ use windows_ioring_sys::{
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 
 use crate::backend::{IoBackend, RegisteredRegion, SubmissionData};
-use crate::clock::{Instant, StampClock};
+use crate::clock::StampClock;
 use crate::contract::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
 use crate::diagnostics::{DiagnosticSink, NoDiagnostics};
+use crate::domains::first_repeat;
 use crate::engine::{Engine, EngineGuard};
 use crate::ids::{DioringIds, FailureId, FailureToken, Home, InstanceId, Lineage, LineageHandle};
 use crate::io_core::DurableIoCore;
@@ -64,11 +64,9 @@ use crate::windows_backend::{
 };
 
 mod delivery;
-pub(crate) mod durability;
 mod hub;
 
 use delivery::Delivery;
-use durability::{Reach, Routing, State};
 use hub::Hub;
 
 // `pub(crate)` so other modules' tests can build an instance with the helpers here.
@@ -196,25 +194,6 @@ impl<E: EpochId + 'static, R> std::fmt::Debug for SetupError<E, R> {
             .field("buffers", &self.buffers.as_ref().map(Vec::len))
             .field("provider", &self.provider)
             .finish()
-    }
-}
-
-/// A flush domain interned by this instance: a word-sized stand-in for its bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct DomainId(u32);
-
-/// Who answers for a file's writes (DI-D-27): the built-in default for a file with no declared
-/// domain or one the provider does not serve, and the provider for the domains it serves.
-pub(crate) fn routing(file: &[DomainId], served: &[DomainId]) -> Routing {
-    if file.is_empty() {
-        return Routing {
-            default: true,
-            provider: false,
-        };
-    }
-    Routing {
-        default: file.iter().any(|domain| !served.contains(domain)),
-        provider: file.iter().any(|domain| served.contains(domain)),
     }
 }
 
@@ -446,39 +425,6 @@ fn setups(targets: Vec<(IoTargetKey, Win32FileTarget)>) -> Vec<TargetSetup> {
         .into_iter()
         .map(|(key, target)| TargetSetup { key, target })
         .collect()
-}
-/// What an import reaches: the files, the one lineage it is confined to if any, and the domains it
-/// named that the instance has never been given.
-pub(crate) type ImportReach = (Reach, Option<u64>, Vec<FlushDomain>);
-
-/// The targets an imported failure reaches (DI-D-21), the one lineage it is confined to, if the
-/// scope names one, and the domains it names that the instance has never been given, in the order
-/// named (DI-D-46). A domain no target was declared with reaches only the targets declared with
-/// none. `live` says whether a lineage is the instance's own and live; `domains` is every domain
-/// the instance has interned.
-pub(crate) fn import_reach<E: EpochId + 'static, I: Instant>(
-    scope: &ImportScope<DioringIds<E, I>>,
-    domains: &HashMap<FlushDomain, DomainId>,
-    live: impl Fn(Lineage) -> bool,
-) -> Result<ImportReach, UnknownLineage<DioringIds<E, I>>> {
-    Ok(match scope {
-        ImportScope::All => (Reach::All, None, Vec::new()),
-        ImportScope::Lineage(lineage) if live(*lineage) => {
-            (Reach::All, Some(lineage.seq), Vec::new())
-        }
-        ImportScope::Lineage(lineage) => return Err(UnknownLineage(*lineage)),
-        ImportScope::Domains(names) => {
-            let mut known = Vec::with_capacity(names.len());
-            let mut unmatched = Vec::new();
-            for domain in names {
-                match domains.get(domain) {
-                    Some(&id) => known.push(id),
-                    None => unmatched.push(domain.clone()),
-                }
-            }
-            (Reach::Domains(known.into()), None, unmatched)
-        }
-    })
 }
 
 /// Where an instance's lineage handles report their release.
@@ -1029,19 +975,6 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Drop
         let _ = self.end();
     }
 }
-/// The contract's spelling of a lineage's epoch state.
-pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
-    state: State,
-) -> EpochState<DioringIds<E, I>> {
-    match state {
-        State::Open => EpochState::Open,
-        State::Pending => EpochState::Pending,
-        State::Blocked(by) => EpochState::Blocked(by),
-        State::Durable => EpochState::Durable,
-        State::Abandoned => EpochState::Abandoned,
-    }
-}
-
 /// Register `files` with `ring`, in order, and wait for the registration to complete. `None` for
 /// no files: an instance whose files are all added later makes no file registration.
 ///
@@ -1122,31 +1055,4 @@ fn registration_completion<B, S>(
             format!("the ring did not complete a registration within {bound:?}"),
         )),
     }
-}
-
-/// The first value `values` yields twice.
-pub(crate) fn first_repeat<T: Eq + std::hash::Hash + Clone>(
-    values: impl IntoIterator<Item = T>,
-) -> Option<T> {
-    let mut seen = HashSet::new();
-    values.into_iter().find(|value| !seen.insert(value.clone()))
-}
-
-/// Intern `domains`, returning their ids sorted and without repeats.
-pub(crate) fn intern_all(
-    table: &mut HashMap<FlushDomain, DomainId>,
-    domains: impl IntoIterator<Item = FlushDomain>,
-) -> Arc<[DomainId]> {
-    let mut ids: Vec<DomainId> = domains
-        .into_iter()
-        .map(|domain| {
-            let next = DomainId(
-                u32::try_from(table.len()).expect("fewer than 2^32 distinct flush domains"),
-            );
-            *table.entry(domain).or_insert(next)
-        })
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    ids.into()
 }

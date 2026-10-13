@@ -7,7 +7,7 @@
 use std::io;
 
 use super::{A, DEFAULT, Due, FULL, One, Ops, Stamp, StampClocked, lineage, submitted};
-use crate::dioring::durability::{Event, Reach};
+use crate::durability::{Event, Reach};
 use crate::ids::FailureToken;
 use crate::test_support::ManualClock;
 use crate::types::{FailureCause, ImportScope, Resolution};

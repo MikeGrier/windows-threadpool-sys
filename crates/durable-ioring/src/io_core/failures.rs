@@ -5,7 +5,7 @@
 use super::{Actions, DurableIoCore, V};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
-use crate::dioring::import_reach;
+use crate::domains::import_reach;
 use crate::ids::{FailureId, FailureToken};
 use crate::types::{
     FailureCause, FailureInfo, ImportScope, Imported, Resolution, ResolveError, UnknownLineage,

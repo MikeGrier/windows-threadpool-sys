@@ -9,8 +9,8 @@ use super::{
     A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, already, durable, flush, lineage, quiet,
     seen, submitted, tokens,
 };
-use crate::dioring::DomainId;
-use crate::dioring::durability::Reach;
+use crate::domains::DomainId;
+use crate::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
 use crate::types::{FailureCause, ImportScope, IoTargetKey, Resolution, ResolveRefusal};
 

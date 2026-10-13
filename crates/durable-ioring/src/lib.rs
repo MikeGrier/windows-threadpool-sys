@@ -16,6 +16,8 @@ mod contract;
 mod delivery;
 mod diagnostics;
 mod dioring;
+mod domains;
+mod durability;
 mod engine;
 mod error_code;
 #[cfg(test)]

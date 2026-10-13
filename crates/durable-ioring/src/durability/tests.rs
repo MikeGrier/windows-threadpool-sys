@@ -12,7 +12,7 @@ use super::{
 use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
 use crate::diagnostics::tests::Recording;
-use crate::dioring::DomainId;
+use crate::domains::DomainId;
 use crate::ids::{DioringIds, FailureId, FailureToken, InstanceId, OpId};
 use crate::test_support::{ManualClock, Ticks, fault};
 use crate::types::{FailureCause, IoFault, IoTargetKey, MarkingKind, SuspectWrite};

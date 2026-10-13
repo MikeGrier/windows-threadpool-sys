@@ -9,7 +9,7 @@ use super::{
     A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, Stamp, failed, flush, lineage, nullified,
     seen, submitted, tokens,
 };
-use crate::dioring::durability::Reach;
+use crate::durability::Reach;
 use crate::test_support::ManualClock;
 use crate::types::{FailureCause, ImportScope, MarkingKind, Resolution};
 

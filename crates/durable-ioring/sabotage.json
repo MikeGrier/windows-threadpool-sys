@@ -31,7 +31,7 @@
     },
     {
       "name": "DI-3.2.1: a domain repeated within one file counts twice",
-      "file": "src/dioring.rs",
+      "file": "src/domains.rs",
       "expect": "caught",
       "why": "A file's domains are a set; a repeat would make intersection and containment checks see a domain more than once.",
       "find": ["    ids.dedup();"],
@@ -215,7 +215,7 @@
     },
     {
       "name": "DI-3.2.3: a seal does not wait for its writes in flight",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Guarantee 5: a seal made before its writes complete would name no flush for them and report Durable before their completions. The durability unit tests catch it deterministically; the I/O test's oracle catches it when the kernel has not finished the writes by the seal.",
       "find": ["            if oldest_in_flight.is_some_and(|oldest| oldest <= through) {\n"],
@@ -223,7 +223,7 @@
     },
     {
       "name": "DI-3.2.3: a seal names no flush for its writes",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Durable means on stable media (guarantee 1); a seal that flushes nothing reports durability the device was never asked for. No I/O test can see a flush that was not issued, which is why the rule lives in the I/O-free core and is tested there.",
       "find": ["                if write.routing.default && !files.iter().any(|f| f.file == write.file) {\n"],
@@ -231,7 +231,7 @@
     },
     {
       "name": "DI-3.2.4: a seal whose flush failed counts as successful",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal takes effect at the first seal after it that finishes successfully (DI-D-12 (c)); a seal whose own flush failed has re-issued nothing safely. Caught by the unit test whose second seal fails after a heal.",
       "find": ["            *failed = true;\n"],
@@ -239,7 +239,7 @@
     },
     {
       "name": "DI-3.2.3: a later seal is reported past a pending one",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The prefix property (guarantee 2): Durable through 2 covers 1, so it must wait for 1. Caught by the I/O test whose first seal a provider holds, and by the unit tests.",
       "find": ["        while let Some(seal) = self.lineages.get(&lineage).and_then(|s| s.seals.front()) {\n            if !matches!(seal.stage, SealStage::Done { .. })\n                || self.blocking(lineage, seal.through).is_some()\n            {\n                break;\n            }\n            let through = seal.through;\n            let state = self.lineages.get_mut(&lineage).expect(\"found above\");\n            state.seals.pop_front();\n"],
@@ -247,7 +247,7 @@
     },
     {
       "name": "DI-3.2.3: a write a provider serves does not hold its seal",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: such a write is durable only when the provider says so. A seal that finishes on its flushes alone reports durable what nobody checked; the provider tests see Durable before any answer.",
       "find": ["            if files.iter().any(|f| !f.answered) || domains.iter().any(|d| !d.answered) {\n"],
@@ -255,7 +255,7 @@
     },
     {
       "name": "DI-3.2.3: an epoch below the high-water mark is not reported durable",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Guarantee 7: asking again about a sealed epoch reports its state, and a durable epoch reports Durable.",
       "find": ["            .is_some_and(|durable| epoch <= durable)\n"],
@@ -311,7 +311,7 @@
     },
     {
       "name": "DI-3.2.4: a suspect set ignores the failure's reach",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-21: a failure reaches only the files whose declared domains intersect its own, and unknown files. Ignoring that over-reports, and an abandon then abandons epochs nothing put at risk. Caught by the reach tests, unit and I/O.",
       "find": ["            .filter(|write| reach.reaches(&write.domains))\n"],
@@ -319,7 +319,7 @@
     },
     {
       "name": "DI-3.2.4: a write in flight is not suspected",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (b): suspicion is by push order, not completion; a write accepted before the failure can complete after it. Caught by the unit test with a write in flight at the failure.",
       "find": ["            .filter(|write| reach.reaches(&write.domains))\n"],
@@ -327,7 +327,7 @@
     },
     {
       "name": "DI-3.2.4: a covered write stays suspect",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "Guarantee 3: a later failure never reaches back past a write covered successfully. Caught by the finality unit test.",
       "find": ["        self.writes.retain(|_, write| !covered(write));\n"],
@@ -335,7 +335,7 @@
     },
     {
       "name": "DI-3.2.4: a heal takes effect at a seal made before it",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (c): only a seal made after the heal covers what was re-issued before it. Caught by the unit test whose seal predates the heal.",
       "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
@@ -343,7 +343,7 @@
     },
     {
       "name": "DI-3.2.4: abandoning does not abandon the failure's epochs",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch is abandoned if any failure containing it was. Reported Durable instead, the consumer would believe lost writes are on the media. Caught by the state assertions, unit, I/O and the worked examples.",
       "find": ["                            state.abandoned.extend(epochs.iter().copied());\n"],
@@ -351,7 +351,7 @@
     },
     {
       "name": "DI-3.2.4: no failure holds the high-water mark",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (f): an epoch passes only when every failure containing it is resolved. Caught everywhere a failure is expected to block, and by the oracle's Durable-through-failure rule.",
       "find": ["            return None;\n        }\n        let lower = durable.map_or(Bound::Unbounded, Bound::Excluded);\n"],
@@ -359,7 +359,7 @@
     },
     {
       "name": "DI-3.2.4: Blocked is never appended",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-13: a request whose flushes succeeded but which a failure holds is answered Blocked, never left silent. Caught by the Blocked tests, unit and I/O.",
       "find": ["                due.events.push(Event::Blocked {\n                    lineage,\n                    through,\n                    by,\n                });\n"],
@@ -367,7 +367,7 @@
     },
     {
       "name": "DI-3.2.4: a foreign token is resolved",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): another instance's token is refused, and the call hands every token back. Caught by the refusal tests; resolving it trips the debug assertion for a token with no failure.",
       "find": ["            .find(|id| id.instance != self.instance)\n"],
@@ -375,7 +375,7 @@
     },
     {
       "name": "DI-3.2.4: the inventory hands out a second live token",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-12 (d): at most one live token per failure. Caught by the token tests.",
       "find": ["            Standing::Open(live) if !live.load(Ordering::Acquire) => {\n"],
@@ -455,7 +455,7 @@
     },
     {
       "name": "WT-2.2.2: every failure is stamped with the first failure's reading, not the clock",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The stamp is the one thing the clock is held for. A core that never reads it reports a time that says nothing about when the failure was observed.",
       "find": ["        let observed = self.clock.now();\n"],
@@ -463,7 +463,7 @@
     },
     {
       "name": "WT-2.2.2: the inventory reports a reading taken when asked",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The second time fact: the inventory reports the stamp the Failed entry carried. Re-reading the clock would report when the consumer asked, which drifts from the entry and from every other record of the failure.",
       "find": ["                observed: failure.observed,\n"],
@@ -487,7 +487,7 @@
     },
     {
       "name": "DI-3.2.4.2: a suspect write that completes failed is not nullified",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The nullifier is the marking DI-D-36 exists for: without it a failure's record says nothing of a suspect write that did not happen, and reconciling the history after the fact is guesswork.",
       "find": ["                self.mark(op, MarkingKind::Nullified { fault }, &mut due);\n"],
@@ -495,7 +495,7 @@
     },
     {
       "name": "DI-3.2.4.2: a flush covers every write of its seal, not its own file's",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "Coverage is per file (DI-D-39): a seal that failed on one file has not committed that file's writes, so marking them covered -- and dropping them as covered -- is a wrong answer about what is on the device.",
       "find": ["                    || files.iter().any(|file| file.file == write.file && file.ok))\n"],
@@ -503,7 +503,7 @@
     },
     {
       "name": "DI-3.9.2: a covered marking cites the flush and the provider the wrong way round",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A covered marking cites who answered (DI-D-47): the default's flush, which dioring observed, or the provider, whose answer is its own warranty. Swapping them attributes a provider's warranty to an observed flush, which is exactly the misportrayed provenance the engineer ruled out.",
       "find": ["                    flushed: write.routing.default,\n                    provider: write.routing.provider,\n"],
@@ -511,7 +511,7 @@
     },
     {
       "name": "DI-3.9.2: a covered marking never cites the provider",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A write the provider covered must say so: information that came from a durability provider is cited as the provider's (DI-D-47). A marking that always reads as the default's flush hides that the warranty was the consumer's.",
       "find": ["                    provider: write.routing.provider,\n"],
@@ -519,7 +519,7 @@
     },
     {
       "name": "DI-3.9.2: a covered marking always cites a flush",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "A file only the provider serves had no flush of dioring's; a marking claiming one reports an observation dioring never made (DI-D-47).",
       "find": ["                    flushed: write.routing.default,\n"],
@@ -527,7 +527,7 @@
     },
     {
       "name": "DI-3.2.4.2: only the first failure suspecting a write is marked",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Failures and writes are many-to-many: a write two failures suspect belongs to both records, and each must say what happened to it.",
       "find": ["            due.events.push(Event::Marked {\n                failure: failure.id,\n                marking,\n            });\n        }\n"],
@@ -535,7 +535,7 @@
     },
     {
       "name": "DI-3.2.4.2: a marking finds only the first suspect write",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The lookup is what ties a completion to the failures suspecting it; one that sees only the first write of each set loses the rest.",
       "find": ["                .binary_search_by_key(&write.seq, |suspect| suspect.op.seq)\n                .is_ok_and(|at| failure.suspect.writes()[at].op == write);\n"],
@@ -543,7 +543,7 @@
     },
     {
       "name": "DI-3.2.4.2: a heal takes effect without its Healed entry",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "A heal's final record is the one DI-D-36 found missing: the failure leaves the inventory, and with no entry its record is lost.",
       "find": ["                let failure = self.failures.remove(at);\n                due.events.push(Event::Healed {\n                    failure: failure.id,\n                    suspect: failure.suspect,\n                    markings: failure.markings,\n                });\n"],
@@ -551,7 +551,7 @@
     },
     {
       "name": "DI-3.2.4.2: the inventory reports no markings",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "The inventory is where a consumer reads a live failure's record; reporting it without its markings hides what the stream already said.",
       "find": ["                markings: failure.markings.clone(),\n"],
@@ -623,7 +623,7 @@
     },
     {
       "name": "CONTROL: a covered write is recognised with its conditions reordered",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "survives",
       "why": "The manifest checking itself. The conditions are pure and independent, so their order changes no answer.",
       "find": ["            write.lineage == lineage\n                && write.stage == Stage::Named(seal)\n"],
@@ -631,7 +631,7 @@
     },
     {
       "name": "CONTROL: the clock is read before the token is minted",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "survives",
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
       "find": ["        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n        let observed = self.clock.now();\n"],
@@ -647,7 +647,7 @@
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: every epoch not yet durable is abandoned, and LineageEnded says through which. Caught by the core tests that end a lineage with sealed, written and in-flight epochs.",
       "find": ["        let abandoned_through = sealed.max(written);\n"],
@@ -655,7 +655,7 @@
     },
     {
       "name": "DI-3.2.5.1: an ended lineage stays live",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-42: an ended lineage is not live from the moment it ends, though it stays recorded while its writes in flight drain; answering for it then would report state the instance no longer keeps. Caught by the core tests that query a draining lineage.",
       "find": ["    fn live(&self, lineage: Key) -> Option<&LineageState<E>> {\n        self.lineages.get(&lineage).filter(|state| !state.ended)\n"],
@@ -663,7 +663,7 @@
     },
     {
       "name": "DI-3.2.5.1: a heal takes effect in every lineage at the first one's seal",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-41: each lineage's re-issued writes are committed only by its own next seal, so one lineage's seal ending the failure everywhere lets another's mark pass epochs it has not committed -- a wrong answer. Caught by the core and ring tests of a failure spanning two lineages, whose Healed must wait for the second seal.",
       "find": ["                        pending.remove(&lineage);\n"],
@@ -671,7 +671,7 @@
     },
     {
       "name": "DI-3.2.5.1: a heal never releases a lineage it reached",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-41: once a lineage's next seal succeeds after the heal, the failure stops holding that lineage, whose mark may pass it before the failure is healed everywhere. Caught by the tests whose first lineage reports Durable while the failure still holds the second.",
       "find": ["            Standing::Healing { pending } => pending.contains_key(&lineage).then_some(epochs),\n"],
@@ -679,7 +679,7 @@
     },
     {
       "name": "DI-3.2.5.1: ending a lineage does not release a heal waiting for it",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-42: a lineage that ends will never seal again, so a heal waiting for its seal would wait forever. Caught by the core and ring tests that end the lineage a heal still waits for.",
       "find": ["                pending.remove(&lineage);\n"],
@@ -687,7 +687,7 @@
     },
     {
       "name": "DI-3.2.5.1: a failure observed after the end suspects the ended lineage's writes",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-30: an ended lineage answers nothing more, and a failure belongs to every lineage it suspects -- one that has ended could never resolve its part. Caught by the core test that observes a failure after the end, and the oracle's rule.",
       "find": ["            .filter(|write| lineages.get(&write.lineage).is_some_and(|s| !s.ended))\n"],
@@ -695,7 +695,7 @@
     },
     {
       "name": "DI-3.2.5.1: an import scoped to a lineage is not confined to it",
-      "file": "src/dioring.rs",
+      "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-19: ImportScope::Lineage narrows a failure to that lineage's writes. Widened, it would hold other lineages' marks for a failure the consumer placed in one. Caught by the ring test that imports into each of two lineages.",
       "find": ["            (Reach::All, Some(lineage.seq), Vec::new())\n"],
@@ -703,7 +703,7 @@
     },
     {
       "name": "DI-3.2.5.1: retiring ignores a failure holding the lineage",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: retiring abandons nothing, so it must be refused while an unresolved failure holds the lineage, or that failure's epochs there would be dropped unresolved. Caught by the core test whose lineage is held by a failure alone.",
       "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
@@ -711,7 +711,7 @@
     },
     {
       "name": "DI-3.2.5.1: retiring ignores writes in flight",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: a lineage with writes in flight is not empty; retiring it would forget writes whose completions are still to come. Caught by the core test that retires with a write in flight.",
       "find": ["        if in_flight > 0 || held_for_gate > 0 || uncovered > 0 || !failures.is_empty() {\n"],
@@ -719,7 +719,7 @@
     },
     {
       "name": "DI-3.2.5.1: a flush answering after its lineage ended is reported",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-30: a flush that finishes after the end reports nothing. Answered, it finds the ended lineage's seals cleared and records an inconsistency. Caught by the core test whose flush answers while the lineage drains a write in flight.",
       "find": ["            Some(state) if !state.ended => state.answer(through, file, result.is_err()),\n"],
@@ -727,7 +727,7 @@
     },
     {
       "name": "DI-3.2.5.1: a lineage key is reused",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-19: a lineage is never reused, including after retirement, so a name a consumer kept never comes to mean another lineage. Caught by the core tests that mint twice.",
       "find": ["        self.next_lineage += 1;\n"],
@@ -759,7 +759,7 @@
     },
     {
       "name": "CONTROL: the abandoned-through bound takes its operands in the other order",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "survives",
       "why": "The manifest checking itself. The maximum of two values does not depend on their order.",
       "find": ["        let abandoned_through = sealed.max(written);\n"],
@@ -799,7 +799,7 @@
     },
     {
       "name": "DI-3.2.5.2: a gate not yet durable is taken as durable",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "Guarantee 9: a gated operation waits for its gate. Issued at once, it runs ahead of the durability it was gated on. Caught by the oracle's released-early rule in the ring tests, and by the core tests that expect a hold.",
       "find": ["            Some(_) => GateState::Waiting,\n"],
@@ -807,7 +807,7 @@
     },
     {
       "name": "DI-3.2.5.2: a gate reached releases nothing",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "Guarantee 9: a gated operation is released once its gate is durable. Never released, it waits forever. Caught by the core release tests and the ring tests waiting for the completion.",
       "find": ["            due.released.push(held.op);\n"],
@@ -815,7 +815,7 @@
     },
     {
       "name": "DI-3.2.5.2: operations released together go in gate order",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: operations released at once are pushed in push order, whatever epoch each waited for, so a release reorders nothing the consumer pushed. Caught by the core push-order test.",
       "find": ["        released.sort_unstable();\n"],
@@ -823,7 +823,7 @@
     },
     {
       "name": "DI-3.2.5.2: a seal does not wait for the held writes it covers",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Guarantee 5: Durable follows every write it covers, and a held write is one. A seal that passes it reports durable a write not yet written. Caught by the core and ring tests whose seal covers a held write, and by the oracle's Durable-before-completion rule.",
       "find": ["        let held = state.held_by_epoch.keys().next().copied();\n"],
@@ -831,7 +831,7 @@
     },
     {
       "name": "DI-3.2.5.2: an issued write is not recorded in flight",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "A released write is issued as any write is, and its completion must find it. Caught by the core and ring tests that complete a released write.",
       "find": ["                    self.in_flight(write, true);\n"],
@@ -839,7 +839,7 @@
     },
     {
       "name": "DI-3.2.5.2: a seal cycle is not looked for",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-43: a seal whose writes include one waiting, transitively, for the seal itself is refused. Accepted, nothing it covers can ever finish. Caught by the core and ring seal-cycle tests.",
       "find": ["        if let Some(cycle) = self.seal_cycle(lineage, through) {\n"],
@@ -847,7 +847,7 @@
     },
     {
       "name": "DI-3.2.5.2: the quick test is trusted as the answer",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: the search from every held write under a seal together can need the lowest of them without any being on a cycle, so a positive is confirmed write by write. Trusted, it refuses a seal that closes nothing. Caught by the core test of a seal the quick test suspects.",
       "find": ["            .find(|&(write, gate)| self.needs(vec![gate], write, extra))\n"],
@@ -855,7 +855,7 @@
     },
     {
       "name": "CONTROL: a seal is searched write by write without the quick test",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "survives",
       "why": "The manifest checking itself, and the claim that the quick test only filters: the searches it skips would each answer no, so skipping it changes no answer, only the cost.",
       "find": ["        if !self.needs(\n"],
@@ -863,7 +863,7 @@
     },
     {
       "name": "DI-3.2.5.2: a seal already made does not widen what reaching an epoch needs",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: the mark passes an epoch only with the first seal at or above it, which waits for every write it covers. Ignored, a gate on an epoch under a wide seal hides a cycle. Caught by the core test of a seal that widens a need, and by every seal-cycle test.",
       "find": ["        if let Some((_, through)) = seals.clone().find(|&(_, through)| through >= target.epoch) {\n"],
@@ -871,7 +871,7 @@
     },
     {
       "name": "DI-3.2.5.2: a pending heal does not widen what reaching an epoch needs",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-23, DI-D-41 and DI-D-46: a healing failure holds its epochs until the seal that releases it finishes, so reaching them waits for that seal however far it reaches. Caught by the core tests of the seal a pending heal waits for.",
       "find": ["            if holds\n                && let Some((_, through)) = seals\n"],
@@ -879,7 +879,7 @@
     },
     {
       "name": "DI-3.2.5.2: the seal being considered is left out",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-43: a seal is judged as though made, or the cycle it would close is not seen. Caught by the seal-cycle tests.",
       "find": ["            .filter(|seal| seal.lineage == target.lineage)\n"],
@@ -887,7 +887,7 @@
     },
     {
       "name": "DI-3.2.5.2: a held write's own abandoned epoch does not stop it",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-35 and DI-D-43: no write may join an abandoned epoch, so a held write whose own epoch is abandoned never issues. Caught by the core tests of that case.",
       "find": ["                    .filter(|&own| hit(own))\n"],
@@ -895,7 +895,7 @@
     },
     {
       "name": "DI-3.2.5.2: ending a lineage leaves its held operations held",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: an ended lineage's dependants end rather than wait, and a held write of its own can never issue. Caught by the core and ring tests of ending a lineage with held operations.",
       "find": ["        self.end_held(lineage, &mut due);\n"],
@@ -903,7 +903,7 @@
     },
     {
       "name": "DI-3.2.5.2: retiring ignores held operations",
-      "file": "src/dioring/durability/lineages.rs",
+      "file": "src/durability/lineages.rs",
       "expect": "caught",
       "why": "DI-D-30: a lineage with operations held in it or on it is not empty. Caught by the core retire test.",
       "find": ["        let held_for_gate = self.held_for_gate(lineage);\n"],
@@ -959,7 +959,7 @@
     },
     {
       "name": "DI-3.2.6: a provider's success covers nothing",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a domain's success covers exactly the writes named for it. Without it a provider-served write stays suspect after the provider made it durable.",
       "find": ["                    .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))\n"],
@@ -967,7 +967,7 @@
     },
     {
       "name": "DI-3.2.6: coverage ignores the provider's domains",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a write is covered only once every domain of its file has succeeded. A file both answer for would be covered by its flush alone, and a domain's success would cover writes in other domains.",
       "find": ["                    .all(|domain| domains.iter().any(|part| part.domain == *domain && part.ok))\n"],
@@ -975,7 +975,7 @@
     },
     {
       "name": "DI-3.2.6: a provider failure reaches every file",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: a failure of domain D reaches the files whose domains contain D and the unknown ones. Reaching every file suspects writes in other domains, which is a wrong answer about what is at risk.",
       "find": ["                let reach = Reach::Domains(Arc::from([domain]));\n"],
@@ -983,7 +983,7 @@
     },
     {
       "name": "DI-3.2.6: an answer for an ended lineage is applied",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-42 and DI-D-44: an ended lineage is not live, and a late answer for it reports nothing. Applying it observes a failure for a lineage the instance no longer answers for.",
       "find": ["        let Some(state) = self.lineages.get_mut(&lineage).filter(|state| !state.ended) else {\n"],
@@ -991,7 +991,7 @@
     },
     {
       "name": "DI-3.2.6: a second answer for a domain is applied",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: each domain is answered once. A second answer would change a recorded outcome, and observe a failure after a success was already acted on.",
       "find": ["                if part.answered {\n                    return Err(\"a provider answered a domain twice\");\n                }\n"],
@@ -999,7 +999,7 @@
     },
     {
       "name": "DI-3.2.6: a domain the provider does not serve is asked about",
-      "file": "src/dioring/durability/providers.rs",
+      "file": "src/durability/providers.rs",
       "expect": "caught",
       "why": "DI-D-27: the default answers for every domain the provider does not serve. Asking the provider about one makes the seal wait for an answer the provider owes nobody.",
       "find": ["    for &domain in domains.iter().filter(|domain| served.contains(domain)) {\n"],
@@ -1007,7 +1007,7 @@
     },
     {
       "name": "DI-3.2.6: a request's domains are not sorted",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-44: a request names its domains in the order of their interned ids. The request test pushes a file declared out of order, so the order of first appearance differs.",
       "find": ["            parts.sort_unstable_by_key(|part| part.domain);\n"],
@@ -1015,7 +1015,7 @@
     },
     {
       "name": "CONTROL: a request's domains are sorted stably",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "survives",
       "why": "The manifest checking itself. A seal's parts name each domain once, so a stable sort orders them as the unstable one does.",
       "find": ["            parts.sort_unstable_by_key(|part| part.domain);\n"],
@@ -1023,7 +1023,7 @@
     },
     {
       "name": "DI-3.2.6: a seal records no domain it asked about",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-27: the seal waits for every domain it asked about. Recording none lets it finish on its flushes, and refuses every answer as one it did not ask for.",
       "find": ["            let domains = parts\n"],
@@ -1087,7 +1087,7 @@
     },
     {
       "name": "DI-3.2.7: a failure does not hold its file",
-      "file": "src/dioring/durability/files.rs",
+      "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "API.md section 8: every write in an unresolved failure's suspect set holds its file, since healing it re-issues writes there.",
       "find": ["        self.uncovered == 0 && self.failures.is_empty()\n"],
@@ -1095,7 +1095,7 @@
     },
     {
       "name": "DI-3.2.7: a suspect write is also counted as uncovered",
-      "file": "src/dioring/durability/files.rs",
+      "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered is outside every failure's suspect set; a suspect write is reported through its failure, and counting it twice tells the consumer to seal what sealing cannot clear.",
       "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
@@ -1103,7 +1103,7 @@
     },
     {
       "name": "DI-3.2.7: a write in flight is also counted as uncovered",
-      "file": "src/dioring/durability/files.rs",
+      "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "A write in flight is the I/O core's to count; counting it here too reports it twice.",
       "find": ["            write.file == file && write.stage != Stage::InFlight && !suspect.contains(&write.op.seq)\n"],
@@ -1111,7 +1111,7 @@
     },
     {
       "name": "DI-3.2.7: the epoch to seal through is the lowest, not the highest",
-      "file": "src/dioring/durability/files.rs",
+      "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "IoTargetBusy.uncovered_through is what to seal through to clear every uncovered write; the lowest would clear only some.",
       "find": ["                .and_modify(|highest| *highest = (*highest).max(write.epoch))\n"],
@@ -1119,7 +1119,7 @@
     },
     {
       "name": "DI-3.2.7: every failure is said to hold every file",
-      "file": "src/dioring/durability/files.rs",
+      "file": "src/durability/files.rs",
       "expect": "caught",
       "why": "A failure holds a file only when its suspect set names a write to it; reporting the rest asks the consumer to resolve failures that do not concern the file.",
       "find": ["            for write in failure.suspect.writes().iter().filter(|w| w.target == file) {\n"],
@@ -1191,7 +1191,7 @@
     },
     {
       "name": "DI-3.9.1: a heal is released by a seal that stops short of the re-issue",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46: the releasing seal must reach the highest epoch pushed when the heal was made, or the mark passes the failed epoch while the re-issued writes are not committed.",
       "find": ["        seq >= self.after && self.through.is_none_or(|reach| through >= reach)\n"],
@@ -1199,7 +1199,7 @@
     },
     {
       "name": "DI-3.9.1: a write in flight is not part of the re-issue",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46: the re-issue is every write pushed before the heal. Without the pushed one, a seal short of it releases the heal.",
       "find": ["        state.pushed_through = state.pushed_through.max(Some(epoch));\n"],
@@ -1207,7 +1207,7 @@
     },
     {
       "name": "DI-3.9.1: a held write is not part of the re-issue",
-      "file": "src/dioring/durability/gates.rs",
+      "file": "src/durability/gates.rs",
       "expect": "caught",
       "why": "DI-D-46: a held write counts as pushed, so the releasing seal waits for it to be released and complete.",
       "find": ["            state.pushed_through = state.pushed_through.max(Some(write.epoch));\n"],
@@ -1215,7 +1215,7 @@
     },
     {
       "name": "DI-3.9.1: an unmatched import domain is not reported",
-      "file": "src/dioring.rs",
+      "file": "src/domains.rs",
       "expect": "caught",
       "why": "DI-D-46: a domain the instance was never given is reported, so a misspelling is not silent.",
       "find": ["                    None => unmatched.push(domain.clone()),\n"],
@@ -1223,7 +1223,7 @@
     },
     {
       "name": "DI-3.9.1: an inconsistency is not panicked on",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46: an inconsistency is panicked on where it is found, in every build; carrying on would report from bookkeeping known to be wrong.",
       "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
@@ -1231,7 +1231,7 @@
     },
     {
       "name": "DI-3.9.1: an inconsistency panics while unwinding",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-46 and the ring crate's D-79: a second panic while unwinding aborts the process and loses the first. The test binary aborts, which the harness counts as caught.",
       "find": ["    if !std::thread::panicking() {\n        panic!(\n"],
@@ -1239,7 +1239,7 @@
     },
     {
       "name": "DI-3.10.3.3: an inconsistency is not reported to the sink",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "DI-D-51 routes the inconsistency report through the consumer's sink; dropping it leaves a consumer who chose stderr, OutputDebugString or ETW with a panic and nothing in the place it watches.",
       "find": ["        diagnostics.report(&Diagnostic::Inconsistency {\n            instance: instance.number(),\n            what,\n            detail,\n        });\n"],
@@ -1247,7 +1247,7 @@
     },
     {
       "name": "DI-3.10.3.3: the core reports to a sink without asking whether it wants the event",
-      "file": "src/dioring/durability.rs",
+      "file": "src/durability.rs",
       "expect": "caught",
       "why": "Asking first is what makes a sink that wants nothing cost a branch (DI-D-51 T2); not asking hands every event to every sink.",
       "find": ["    if diagnostics.wants(DiagnosticKind::Inconsistency) {\n"],

@@ -297,7 +297,7 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
             targets,
             buffers,
         } = setup;
-        if let Some(key) = crate::dioring::first_repeat(targets.iter().map(|(key, _)| *key)) {
+        if let Some(key) = crate::domains::first_repeat(targets.iter().map(|(key, _)| *key)) {
             return Err(WindowsBackendError {
                 reason: WindowsBackendRefusal::DuplicateKey(key),
                 targets,

@@ -15,10 +15,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use win_sync_sys::Event;
 use windows_ioring_sys::{IoBuf, IoBufMut};
 
-use super::durability::inconsistent;
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::diagnostics::DiagnosticSink;
+use crate::durability::inconsistent;
 use crate::engine::lock;
 use crate::ids::{Home, InstanceId, Lineage};
 use crate::provider::{Answer, DomainCall, DomainOutcome};
