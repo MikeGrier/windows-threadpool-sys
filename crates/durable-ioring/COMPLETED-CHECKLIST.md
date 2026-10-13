@@ -2511,3 +2511,41 @@ drain when queued and unpopped submissions fill the completion queue, checking t
 submission's shape, then capacity; its notification is a count with `wait_past`; its faults name the
 source `"memory"` with no code; queue sizes are `NonZeroU32`; a commit copies bytes to
 `durable_contents`.
+
+## Moved 2026-10-13 17:02:00 -04:00 -- DI-9.5.5 and DI-9.5.6: the engineer ratifies the core on the trait and the Windows backend's mapping
+
+### <a id="di-955"></a>DI-9.5.5 -- The core on the backend trait. *(completed 2026-10-13 17:02:00 -04:00)*
+
+Ratified by the engineer: "ratified." A consumer operation takes the caller's push as a closure and
+is recorded only once the push accepts it; the core's own submissions come out in `CoreActions` and
+return through `refused`, re-emitted with the next actions or by `retry`; `CoreActions` is `submit`
+plus a `deliver` flag raised on the queue's empty-to-non-empty transition, `#[must_use]`; a seal
+returns its answer and actions as a pair; backend refusals reach the consumer as
+`PushRefusal::Backend(RefusalCause)`; a duplicate target hands back its description in
+`DuplicateTarget`; `new` takes a clock and an `Arc<dyn DiagnosticSink>` with no default; a completion
+with no record, a second completion, and a consumer operation handed back as refused are each an
+inconsistency ([DI-D-46](DESIGN-NOTES.md#di-d-46)); the module is `io_core` because `core` would
+shadow the `core` crate; `Event::into_entry` is the one event-to-entry conversion; a held operation
+spends its id when held and is emitted in the actions of the change that released it, kept and
+emitted again if refused; `write` and `read` take `WriteOptions` and `ReadOptions`; lineage calls
+take a plain `Lineage`, an ended or retired one refused as `Foreign`; the core holds no provider,
+`with_provider` takes the served domains and refuses a repeat as `DuplicateDomain`, requests come
+out as `ProviderRequest`s in `CoreActions::requests`, answers go back through `provided` with a
+public `DomainOutcome`; `import_reach` is the one function both paths share; `close` hands back the
+held operations, failures and lineages; `pushed` and `pushed_gated` take a `length` for every
+operation, a read's being its buffer and unchecked, and the short-write rule is exact (a write
+transferring more than its length is `WriteNotInFull`, as a shorter one is).
+
+### <a id="di-956"></a>DI-9.5.6 -- The Windows backend's mapping. *(completed 2026-10-13 17:02:00 -04:00)*
+
+Ratified by the engineer: "ratified." That closes the `DI-9.5` group. Each push is issued at once,
+the ring submitting a batch as it ends, and `submit` reissues what a failed submission left queued,
+so the trait says a push is issued no later than the next `submit`, and `submit` reports a
+`RefusalCause`; a full submission queue maps to `SubmitNeeded`, a full completion queue to
+`DrainNeeded`, a submission running to `Busy`, a corrupt ring to `Unusable`, any other ring condition
+to `Unknown` with the report, and the ring's `Unsupported` and `InvalidInput` to `Unsupported` and
+`Invalid`; a target's geometry is checked before the ring is asked; the notification is the ring's
+completion event, duplicated as an `OwnedHandle` and attached at construction; `fail_next_commit`
+joins `fail_next_flush` in the fault seam; the short-write rule lives in the backend as `transfer`;
+`register_files` takes handles rather than `TargetSetup`s; the backend and `Win32FileTarget` live in
+a public `windows_backend` module.
