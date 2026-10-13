@@ -23,13 +23,7 @@ frozen records and are left as they are.
 
 - [x] **IB-2+.2** -- `windows-overlapped-io-sys`' `PageBuffers` holds an `AlignedBuf`. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-2+2)
 
-- [ ] **IB-2+.3** -- **The ring crate's three test-local `Aligned` buffers become `AlignedBuf`.**
-  `handover.rs`, `flush_barrier.rs` and `flush_barrier_stress.rs` each over-allocate a `Vec<u8>` and
-  offset into it, with an `unsafe impl` of the traits and the reason in a comment: a hand-aligned
-  allocation cannot be freed under the right layout, which `AlignedBuf` does by allocating with the
-  layout. Test-only, and removes three `unsafe impl`s. Two need a fill byte, which `AlignedBuf`'s
-  `DerefMut` gives. `handover.rs` and `flush_barrier.rs` run by default; the stress file is
-  `#[ignore]`d and has to be run explicitly to be checked.
+- [x] **IB-2+.3** -- The ring crate's three test-local `Aligned` buffers become `AlignedBuf`. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-2+3)
 
 - [ ] **IB-2+.4** -- **Whether `windows-namespace-request-sys`' `AlignedBuffer` moves onto
   `AlignedBuf`, and by which route.** The engineer's decision, because the type is public API of a

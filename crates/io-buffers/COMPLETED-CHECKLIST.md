@@ -225,3 +225,30 @@ The item as it stood at completion:
   allocation failure that aborted through `handle_alloc_error` becomes a panic through the buffer's
   error. The page-aligned buffer is what `ReadFileScatter` and `WriteFileGather` need, and its tests
   are real unbuffered I/O.
+
+## Moved 2026-10-12 22:00:30 -04:00 -- IB-2+.3: the ring crate's test buffers on AlignedBuf
+
+### <a id="ib-2+3"></a>IB-2+.3 -- The ring crate's three test-local `Aligned` buffers become `AlignedBuf`. *(completed 2026-10-12 22:00:30 -04:00)*
+
+`handover.rs`, `flush_barrier.rs` and `flush_barrier_stress.rs` in `windows-ioring-sys`' `tests/`
+now build their unbuffered-I/O buffers with a small `aligned` helper over `AlignedBuf` at the
+4096-byte sector alignment, and the three hand-aligned structs and their `unsafe impl`s are gone.
+The two files that fill the buffer use `AlignedBuf`'s `DerefMut`. The stress file, which is
+`#[ignore]`d, was compiled by the all-targets gate and two of its instruments were run explicitly
+with `IORING_STRESS_TRIALS=5`; both passed. The spike under `design-sessions/spikes/` keeps its own
+copy, as a frozen record.
+
+A check made along the way: with the helpers' alignment lowered to one byte, the unbuffered tests
+still passed on this host, so on this machine they do not discriminate alignment. That was equally
+true of the structs they replaced, and is recorded here only so the tests are not read as pinning
+the alignment; `AlignedBuf`'s own tests do.
+
+The item as it stood at completion:
+
+- [x] **IB-2+.3** -- **The ring crate's three test-local `Aligned` buffers become `AlignedBuf`.**
+  `handover.rs`, `flush_barrier.rs` and `flush_barrier_stress.rs` each over-allocate a `Vec<u8>` and
+  offset into it, with an `unsafe impl` of the traits and the reason in a comment: a hand-aligned
+  allocation cannot be freed under the right layout, which `AlignedBuf` does by allocating with the
+  layout. Test-only, and removes three `unsafe impl`s. Two need a fill byte, which `AlignedBuf`'s
+  `DerefMut` gives. `handover.rs` and `flush_barrier.rs` run by default; the stress file is
+  `#[ignore]`d and has to be run explicitly to be checked.
