@@ -2375,3 +2375,14 @@ returns `(Dioring, LineageHandle)`, the default lineage's handle beside the inst
 checked in the order `Foreign`, `Default`, `Shared`, then `Busy`; `LineageBusy.in_flight` clears as
 completions arrive, not when popped; retiring reports no entry; `LineageEnded.abandoned_through` is
 the highest epoch above the lineage's mark that it sealed or wrote.
+
+## Moved 2026-10-13 16:40:00 -04:00 -- DI-9.2.1: the engineer accepts how a held write ends when its own epoch is abandoned
+
+### <a id="di-921"></a>DI-9.2.1 -- A held write whose own epoch is abandoned ends as `NeverIssued` naming that epoch. *(completed 2026-10-13 16:40:00 -04:00)*
+
+Accepted by the engineer: "yes", after the item was reworded to say what a held write is and to
+state the tie rule as the contract has it. A held write is one pushed with a gate: accepted by the
+core and kept, with nothing at the backend, until the gate's epoch is durable. If its own epoch is
+abandoned while it waits, it can never be issued, so it ends at once as `NeverIssued` naming its own
+epoch; when its gate is also abandoned, the gate is the one named. Recorded in
+[DI-D-43](DESIGN-NOTES.md#di-d-43); the rule is stated in [CONTRACT.md](CONTRACT.md), "Gates".

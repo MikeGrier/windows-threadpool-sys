@@ -46,14 +46,7 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
 
-- [ ] **DI-9.2.1** -- **DECIDE: a held write whose own epoch is abandoned ends as `NeverIssued`
-  naming that epoch.** A *held* write is a write pushed with a gate: the core has accepted it and
-  holds it, and nothing has reached the backend, until the gate's epoch (another lineage's, or the
-  same lineage's lower one) is durable ([CONTRACT.md](CONTRACT.md), "Gates"). Now: if the write's
-  own epoch is abandoned while it waits, it can never be issued, since no write may join an
-  abandoned epoch ([DI-D-35](DESIGN-NOTES.md#di-d-35)), so it ends at once as `NeverIssued` naming
-  its own epoch rather than waiting on the gate. When its gate is also abandoned, the gate is the one
-  named, as the contract says.
+- [x] **DI-9.2.1** -- A held write whose own epoch is abandoned ends as `NeverIssued` naming that epoch. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-921)
 
 - [ ] **DI-9.2.2** -- **DECIDE: a held write is outstanding for its lineage's seals, as one in
   flight is, and no failure suspects it until it is released.**
