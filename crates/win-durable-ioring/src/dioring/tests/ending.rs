@@ -16,7 +16,7 @@ use super::pushes::{ADDED, BOUND, GIVEN, Harness, Ring, given, instance, temp};
 use super::{FlushDomain, FlushRequest, V, domain, empty, file, keeper, setup};
 use crate::windows_backend::Win32FileTarget;
 use durable_ioring::backend::SubmissionData;
-use durable_ioring::driver::{Answer, DomainCall};
+use durable_ioring::driver::{Answer, DomainCall, Home};
 use durable_ioring::{DomainOutcome, DurabilityProvider};
 use durable_ioring::{
     DurabilityRequest, Entry, Epoch, Failed, IoTargetBusy, IoTargetKey, OpKind, PushRefusal,
@@ -460,5 +460,45 @@ fn an_answer_for_a_completion_never_made_panics_naming_it() {
             && text.contains("DI-D-46"),
         "{text}"
     );
+    drop(ring);
+}
+
+/// A lineage minted on `ring` and ended through its last handle, so that it is no longer live.
+fn ended_lineage(ring: &mut super::Ring) -> durable_ioring::Lineage {
+    let handle = ring.mint_lineage(None);
+    let lineage = handle.lineage();
+    ring.end_lineage(handle)
+        .expect("end the minted lineage through its last handle");
+    lineage
+}
+
+#[test]
+fn a_release_for_a_lineage_that_is_not_live_panics_naming_it() {
+    let mut ring = empty();
+    let lineage = ended_lineage(&mut ring);
+    let found = panic::catch_unwind(AssertUnwindSafe(|| {
+        Home::release(&*ring.hub, lineage);
+    }));
+    let text = message(
+        found
+            .expect_err("the hub panics where it finds it")
+            .as_ref(),
+    );
+    assert!(
+        text.contains("the lineage was not live")
+            && text.contains("Foreign")
+            && text.contains("DI-D-46"),
+        "{text}"
+    );
+    // Reported with the engine's lock released: the instance is still usable.
+    assert_eq!(ring.lineages().len(), 1);
+    drop(ring);
+}
+
+#[test]
+fn a_release_for_the_default_lineage_is_ignored() {
+    let ring = empty();
+    Home::release(&*ring.hub, ring.default_lineage().lineage());
+    assert_eq!(ring.lineages().len(), 1);
     drop(ring);
 }

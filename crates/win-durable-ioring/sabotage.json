@@ -230,6 +230,22 @@
       "replace": [""]
     },
     {
+      "name": "DI-9.6.3: a release of a lineage the core finds not live is ignored",
+      "file": "src/dioring/hub.rs",
+      "expect": "caught",
+      "why": "A handle releases only when no explicit end or retire disarmed it, so its lineage is live; a refusal means the bookkeeping is wrong, and ignoring it hides that. The explicit end reports the same state.",
+      "find": ["            None | Some(EndLineageRefusal::Default) => {}\n"],
+      "replace": ["            _ => {}\n"]
+    },
+    {
+      "name": "DI-9.6.3: a release of the default lineage is reported",
+      "file": "src/dioring/hub.rs",
+      "expect": "caught",
+      "why": "The default lineage never ends; its last handle is the instance's own, released as the instance ends, and the core refuses it as Default. Reporting that would panic every instance as it ends.",
+      "find": ["            None | Some(EndLineageRefusal::Default) => {}\n"],
+      "replace": ["            None => {}\n"]
+    },
+    {
       "name": "DI-3.10.3.5.5: a full submission queue is reported as needing a drain",
       "file": "src/windows_backend.rs",
       "expect": "caught",

@@ -18,6 +18,7 @@ use windows_ioring_sys::{IoBuf, IoBufMut};
 use crate::windows_backend::pool::{PoolEngine, Shared};
 use durable_ioring::DiagnosticSink;
 use durable_ioring::DomainOutcome;
+use durable_ioring::EndLineageRefusal;
 use durable_ioring::EpochId;
 use durable_ioring::Lineage;
 use durable_ioring::StampClock;
@@ -112,10 +113,11 @@ where
     }
 }
 
-/// Where a lineage's handles report the release of the last of them (DI-D-40). The core refuses a
-/// lineage it cannot end -- another instance's, one already ended or retired, or the default,
-/// whose last handle is the instance's own and is released as the instance ends -- and there is
-/// nothing to do for any of them.
+/// Where a lineage's handles report the release of the last of them (DI-D-40). The core refuses
+/// the default lineage, whose last handle is the instance's own and is released as the instance
+/// ends, and there is nothing to do for it. Any other refusal -- a lineage that is not live --
+/// is an inconsistency (DI-D-46): a handle releases only when no explicit end or retire disarmed
+/// it, so its lineage is live.
 impl<E, B, C, K, R> Home for Hub<E, B, C, K, R>
 where
     E: EpochId + Send + Sync + 'static,
@@ -125,10 +127,22 @@ where
     R: IoBufMut + Send + 'static,
 {
     fn release(&self, lineage: Lineage) {
+        let mut refused = None;
         self.reach(|engine| match engine.core.end_lineage(lineage) {
             Ok(actions) => engine.act(actions),
-            Err(_) => false,
+            Err(refusal) => {
+                refused = Some(refusal);
+                false
+            }
         });
+        // Reported with the engine's lock released, since the report panics.
+        match refused {
+            None | Some(EndLineageRefusal::Default) => {}
+            Some(refusal) => self.inconsistent(
+                "a lineage's last handle was released but the lineage was not live",
+                format_args!("lineage {lineage:?}, refused as {refusal:?}"),
+            ),
+        }
     }
 }
 
