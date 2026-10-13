@@ -74,35 +74,13 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
 
-- [ ] **DI-9.5.1** -- **DECIDE: registered buffers are given at construction only.** Now: they come
-  through `WindowsBackendSetup`, whose refusal hands everything back as `Setup`'s does; targets given
-  at construction are registered and addressed by index, and those attached later are addressed by
-  their `SharedHandle`.
+- [x] **DI-9.5.1** -- Registered buffers are given at construction only. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-951)
 
-- [ ] **DI-9.5.2** -- **DECIDE: what a Windows commit and a target claim by default.** Now: a commit
-  is an unordered flush in the default mode, as before; a `Win32FileTarget` defaults to
-  `BestEffort`, unaligned, with no capabilities, its class taken on declaration until `DI-3.10.4`;
-  and the in-memory backend ignores `WriteCaching`.
+- [x] **DI-9.5.2** -- What a Windows commit and a target claim by default. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-952)
 
-- [ ] **DI-9.5.3** -- **RATIFY: the backend trait's surface.** `IoBackend`, in a public `backend`
-  module with the in-memory backend in `memory`; `IoTarget`, `IoTargetDescription`, `WarrantyClass`,
-  `Geometry`, `GeometryError` and `Capabilities` at the crate root; the target module is `io_target`
-  because the root `.gitignore`'s `target` ignores any directory so named; `Geometry` holds three
-  alignments (offset, length, buffer address), each a power of two its constructors enforce, with
-  `admits` and `admits_buffer` the one statement of the rule; `Capabilities` names write-through
-  only, its fields private; `IoTarget` requires `Send`, `describe` provided; `SubmissionToken` a
-  public `u64`, `RegisteredRegion` three `u32`s, a completion's result a `u32` count or an `IoFault`,
-  a commit transferring zero; refusal causes `SubmitNeeded`, `DrainNeeded`, `SubmitAndDrainNeeded`,
-  `Busy`, `UnknownTarget`, `Unsupported`, `Invalid`, `Unusable(IoFault)`, `Unknown(IoFault)`,
-  non-exhaustive, with `needs_submit`, `needs_drain`, `is_retryable`; `submit`, `pop` and
-  `notification` report an `IoFault`; a submission for a detached target completes with a fault;
-  registration is a backend's construction concern.
+- [x] **DI-9.5.3** -- The backend trait's surface. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-953)
 
-- [ ] **DI-9.5.4** -- **RATIFY: the in-memory backend.** Buffers are `Vec<u8>`; it executes at
-  submit; it refuses a drain when queued and unpopped submissions fill the completion queue,
-  checking the target, then the submission's shape, then capacity; its notification is a count with
-  `wait_past`; its faults name the source `"memory"` with no code; queue sizes are `NonZeroU32`; a
-  commit copies bytes to `durable_contents`.
+- [x] **DI-9.5.4** -- The in-memory backend. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-954)
 
 - [ ] **DI-9.5.5** -- **RATIFY: the core on the trait.** A consumer operation takes the caller's
   push as a closure and is recorded only once the push accepts it; the core's own submissions come

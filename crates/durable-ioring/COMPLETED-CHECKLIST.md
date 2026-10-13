@@ -2473,3 +2473,41 @@ core; the inconsistency for a code-less failed write is gone, the code having be
 `what` and the formatted detail; the clock trait is `StampClock`, its reading bounded by a public
 `Instant` trait (`std::time::Instant` shares the name), the time type an associated type of
 `Identities`, with [DI-D-57](DESIGN-NOTES.md#di-d-57) amending how the driver names it.
+
+## Moved 2026-10-13 17:00:00 -04:00 -- DI-9.5.1 to DI-9.5.4: the engineer confirms the backend trait, the in-memory backend and two Windows defaults
+
+### <a id="di-951"></a>DI-9.5.1 -- Registered buffers are given at construction only. *(completed 2026-10-13 17:00:00 -04:00)*
+
+Accepted by the engineer: "yes." They come through `WindowsBackendSetup`, whose refusal hands
+everything back as `Setup`'s does; targets given at construction are registered and addressed by
+index, and those attached later are addressed by their `SharedHandle`.
+
+### <a id="di-952"></a>DI-9.5.2 -- What a Windows commit and a target claim by default. *(completed 2026-10-13 17:00:00 -04:00)*
+
+Accepted by the engineer: "yes." A commit is an unordered flush in the default mode, as before; a
+`Win32FileTarget` defaults to `BestEffort`, unaligned, with no capabilities, its class taken on
+declaration until `DI-3.10.4`; and the in-memory backend ignores `WriteCaching`.
+
+### <a id="di-953"></a>DI-9.5.3 -- The backend trait's surface. *(completed 2026-10-13 17:00:00 -04:00)*
+
+Ratified by the engineer: "ratified." `IoBackend`, in a public `backend` module with the in-memory
+backend in `memory`; `IoTarget`, `IoTargetDescription`, `WarrantyClass`, `Geometry`, `GeometryError`
+and `Capabilities` at the crate root; the target module is `io_target` because the root
+`.gitignore`'s `target` ignores any directory so named; `Geometry` holds three alignments (offset,
+length, buffer address), each a power of two its constructors enforce, with `admits` and
+`admits_buffer` the one statement of the rule; `Capabilities` names write-through only, its fields
+private; `IoTarget` requires `Send`, `describe` provided; `SubmissionToken` a public `u64`,
+`RegisteredRegion` three `u32`s, a completion's result a `u32` count or an `IoFault`, a commit
+transferring zero; refusal causes `SubmitNeeded`, `DrainNeeded`, `SubmitAndDrainNeeded`, `Busy`,
+`UnknownTarget`, `Unsupported`, `Invalid`, `Unusable(IoFault)`, `Unknown(IoFault)`, non-exhaustive,
+with `needs_submit`, `needs_drain`, `is_retryable`; `submit`, `pop` and `notification` report an
+`IoFault`; a submission for a detached target completes with a fault; registration is a backend's
+construction concern.
+
+### <a id="di-954"></a>DI-9.5.4 -- The in-memory backend. *(completed 2026-10-13 17:00:00 -04:00)*
+
+Ratified by the engineer: "ratified." Buffers are `Vec<u8>`; it executes at submit; it refuses a
+drain when queued and unpopped submissions fill the completion queue, checking the target, then the
+submission's shape, then capacity; its notification is a count with `wait_past`; its faults name the
+source `"memory"` with no code; queue sizes are `NonZeroU32`; a commit copies bytes to
+`durable_contents`.
