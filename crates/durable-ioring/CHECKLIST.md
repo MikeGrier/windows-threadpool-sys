@@ -42,14 +42,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.1.4** -- The oracle drops DI-D-39's tightening, and gains four rules for an ended lineage. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-914)
 
-- [ ] **DI-9.1.5** -- **RATIFY: the shapes.** `Tag<'_, V>` borrows the handle, never the instance;
-  construction returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance;
-  `durable_through`, `sealed_through`, `epoch_state` (no longer panicking) and `import_failure`
-  return `Result<_, UnknownLineage>`; `EndLineageRefusal` and `RetireLineageRefusal` hand the handle
-  back, checked in the order `Foreign`, `Default`, `Shared`, then `Busy`; `LineageBusy.in_flight`
-  clears as completions arrive, not when popped; retiring reports no entry;
-  `LineageEnded.abandoned_through` is the highest epoch above the lineage's mark that it sealed or
-  wrote.
+- [x] **DI-9.1.5** -- The lineage handles' shapes. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-915)
 
 ### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
 

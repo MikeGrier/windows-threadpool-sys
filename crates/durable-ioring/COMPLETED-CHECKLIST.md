@@ -2362,3 +2362,16 @@ break them. The engineer took the weaker rule rather than a per-lineage entry in
 entry is parked as `DI-6+.9` in [CHECKLIST.md](CHECKLIST.md) and the decision is recorded in
 [DI-D-42](DESIGN-NOTES.md#di-d-42). [CONTRACT.md](CONTRACT.md) was not changed: the rule it states
 for a heal is the core's, and is not what was weakened.
+
+## Moved 2026-10-13 15:58:00 -04:00 -- DI-9.1.5: the engineer ratifies the lineage handles' shapes
+
+### <a id="di-915"></a>DI-9.1.5 -- The lineage handles' shapes. *(completed 2026-10-13 15:58:00 -04:00)*
+
+Ratified by the engineer: "ratified." That closes [DI-D-42](DESIGN-NOTES.md#di-d-42) and the
+`DI-9.1` group. What was ratified: `Tag<'_, V>` borrows the handle, never the instance; construction
+returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance;
+`durable_through`, `sealed_through`, `epoch_state` (no longer panicking) and `import_failure` return
+`Result<_, UnknownLineage>`; `EndLineageRefusal` and `RetireLineageRefusal` hand the handle back,
+checked in the order `Foreign`, `Default`, `Shared`, then `Busy`; `LineageBusy.in_flight` clears as
+completions arrive, not when popped; retiring reports no entry; `LineageEnded.abandoned_through` is
+the highest epoch above the lineage's mark that it sealed or wrote.
