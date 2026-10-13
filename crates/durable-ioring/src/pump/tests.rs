@@ -8,7 +8,6 @@
 
 use std::io;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,12 +16,12 @@ use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, Submission, SubmissionData,
     SubmissionOp,
 };
-use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
 use crate::engine::{Engine, Slot, lock};
 use crate::io_core::DurableIoCore;
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
+use crate::test_support::Ticks;
 use crate::types::{Entry, Epoch, FlushDomain, IoFault, IoTargetKey, Outcome, WriteOptions};
 
 const ONE: IoTargetKey = IoTargetKey(1);
@@ -30,17 +29,6 @@ const TWO: IoTargetKey = IoTargetKey(2);
 
 /// Generous: each wait is for another thread or for a completion that is already there.
 const BOUND: Duration = Duration::from_secs(5);
-
-#[derive(Clone, Default)]
-struct Ticks(Arc<AtomicU64>);
-
-impl StampClock for Ticks {
-    type Instant = u64;
-
-    fn now(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed)
-    }
-}
 
 type Pump = PumpedDelivery<u64, MemoryBackend, u32, Ticks>;
 type ScriptedSlot = Slot<u64, Scripted, u32, Ticks>;

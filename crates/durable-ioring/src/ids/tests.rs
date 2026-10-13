@@ -70,7 +70,7 @@ fn a_token_names_its_failure() {
     };
     let (token, _) = FailureToken::mint(id);
     assert_eq!(token.id(), id);
-    assert_eq!(<DioringIds<u64> as Identities>::token_id(&token), id);
+    assert_eq!(<DioringIds<u64, u64> as Identities>::token_id(&token), id);
 }
 
 #[test]
@@ -95,11 +95,11 @@ struct Bare(u8);
 
 #[test]
 fn the_marker_is_copy_eq_and_hash_whatever_the_epoch_id() {
-    let a = DioringIds::<Bare>(std::marker::PhantomData);
+    let a = DioringIds::<Bare, u64>(std::marker::PhantomData);
     let b = a;
     assert_eq!(a, b);
     let set: HashSet<_> = [a, b].into_iter().collect();
     assert_eq!(set.len(), 1);
     assert_eq!(format!("{a:?}"), "DioringIds");
-    assert_eq!(size_of::<DioringIds<Bare>>(), 0);
+    assert_eq!(size_of::<DioringIds<Bare, u64>>(), 0);
 }

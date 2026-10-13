@@ -1,13 +1,10 @@
 // Copyright (c) 2026 Mike Grier
-//! Unit tests for the conformance oracle and the readiness check: each rule both refused when
-//! broken and accepted when kept, and the readiness check failing for an implementation that
-//! breaks either half of DI-D-28's rule.
+//! Unit tests for the conformance oracle: each rule both refused when broken and accepted when
+//! kept. The readiness check, which waits on a Windows event, has its own module below.
 
 use std::io;
-use std::time::Duration;
 
-use super::{ConformanceOracle, ReadinessFailure, Violation, check_readiness};
-use crate::fake::{Fake, Signals};
+use super::{ConformanceOracle, Violation};
 use crate::ids::{DioringIds, InstanceId, Lineage, OpId};
 use crate::types::{Entry, Epoch, OpCompletion, OpKind, Outcome};
 
@@ -19,18 +16,15 @@ mod markings;
 mod lineages;
 // The rules for gated operations: DI-3.2.5.2.
 mod gates;
+// The readiness check, over a signal that is a Windows event: DI-D-28.
+mod readiness;
 
-type V = DioringIds<u64>;
+type V = DioringIds<u64, u64>;
 
 /// The length every test push asks to transfer, and every write's completion transfers in full.
 const LEN: u32 = 4;
 type Oracle = ConformanceOracle<V, u32>;
 type TestEntry = Entry<V, Vec<u8>, u32>;
-
-/// Generous: the readiness check passing waits for one pool callback.
-const BOUND: Duration = Duration::from_secs(5);
-/// Spent in full by each failing readiness check, so short.
-const FAILING_BOUND: Duration = Duration::from_millis(200);
 
 fn op(instance: InstanceId, seq: u64) -> OpId {
     OpId { instance, seq }
@@ -116,7 +110,7 @@ fn a_write_in_full_a_failed_write_and_a_short_read_are_accepted() {
     oracle
         .pushed(empty, write_kind(instance, 1), 0, 3)
         .expect("an empty write");
-    let fault = crate::error_code::windows_fault(io::Error::from_raw_os_error(1117));
+    let fault = crate::test_support::fault(io::Error::from_raw_os_error(1117));
     let entries = [
         completion(full, write_kind(instance, 1), Outcome::Transferred(9), 0),
         completion(failed, write_kind(instance, 1), Outcome::Failed(fault), 1),
@@ -153,7 +147,7 @@ fn short_zero_and_failed_outcomes_are_completions() {
     let outcomes = [
         Outcome::Transferred(1),
         Outcome::Transferred(0),
-        Outcome::Failed(crate::error_code::windows_fault(io::Error::from(
+        Outcome::Failed(crate::test_support::fault(io::Error::from(
             io::ErrorKind::PermissionDenied,
         ))),
     ];
@@ -374,35 +368,4 @@ fn durable_before_a_covered_write_completes_is_a_violation_and_after_is_not() {
     oracle
         .observe(&durable)
         .expect("a write above the seal, or of another lineage, does not hold it");
-}
-
-#[test]
-fn the_readiness_check_passes_an_implementation_that_sets_on_every_transition() {
-    let mut fake = Fake::new(Signals::OnEveryTransition);
-    // A stale entry and a stale signal, which the check must clear before it starts.
-    fake.complete_one();
-    let entries = check_readiness(&mut fake, Fake::complete_one, BOUND).expect("the rule is kept");
-    assert_eq!(
-        entries.len(),
-        3,
-        "the stale entry and one for each push, handed back for the caller's oracle"
-    );
-}
-
-#[test]
-fn the_readiness_check_fails_an_implementation_that_never_sets() {
-    let mut fake = Fake::new(Signals::Never);
-    assert!(matches!(
-        check_readiness(&mut fake, Fake::complete_one, FAILING_BOUND),
-        Err(ReadinessFailure::NotSetForFirstEntry)
-    ));
-}
-
-#[test]
-fn the_readiness_check_fails_an_implementation_that_sets_only_once() {
-    let mut fake = Fake::new(Signals::OnceOnly);
-    assert!(matches!(
-        check_readiness(&mut fake, Fake::complete_one, FAILING_BOUND),
-        Err(ReadinessFailure::NotSetAgain)
-    ));
 }

@@ -6,12 +6,12 @@
 use std::io;
 use std::sync::Arc;
 
+use super::Stamp;
 use super::{
     A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, durable, flush, inconsistent, lineage,
     quiet, seen, submitted,
 };
 use crate::dioring::DomainId;
-use crate::dioring::WinInstant;
 use crate::dioring::durability::{
     DEFAULT_LINEAGE, DomainPart, Due, Key, ProviderCall, Reach, Routing, V,
 };
@@ -44,23 +44,23 @@ fn serve(lineage: &mut Lineage, ids: &[u32]) {
 }
 
 /// The single request a change asked of the provider.
-fn call<'a>(due: &'a Due<u64, &'static str, WinInstant>) -> &'a ProviderCall {
+fn call<'a>(due: &'a Due<u64, &'static str, Stamp>) -> &'a ProviderCall {
     assert_eq!(due.calls.len(), 1, "one request: {:?}", due.calls);
     &due.calls[0]
 }
 
-fn succeeded(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static str, WinInstant> {
+fn succeeded(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static str, Stamp> {
     lineage.provided(DEFAULT_LINEAGE, seal, DomainId(domain), Ok(()))
 }
 
-fn provider_failure(domain: u32) -> FailureCause<V<u64, WinInstant>> {
+fn provider_failure(domain: u32) -> FailureCause<V<u64, Stamp>> {
     FailureCause::Provider {
         domain: FlushDomain::new(domain.to_le_bytes()),
         error: Arc::new(io::Error::from_raw_os_error(1117)),
     }
 }
 
-fn failed(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static str, WinInstant> {
+fn failed(lineage: &mut Lineage, seal: u64, domain: u32) -> Due<u64, &'static str, Stamp> {
     lineage.provided(
         DEFAULT_LINEAGE,
         seal,

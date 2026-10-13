@@ -4,12 +4,12 @@
 use std::io;
 use std::sync::Arc;
 
+use super::Stamp;
 use super::{
     A, B, C, DEFAULT, FULL, Lineage, Ops, Seen, State, already, durable, flush, lineage, quiet,
     seen, submitted, tokens,
 };
 use crate::dioring::DomainId;
-use crate::dioring::WinInstant;
 use crate::dioring::durability::Reach;
 use crate::ids::{FailureId, FailureToken, InstanceId};
 use crate::types::{FailureCause, ImportScope, IoTargetKey, Resolution, ResolveRefusal};
@@ -31,7 +31,7 @@ fn domains(ids: &[u32]) -> Reach {
 fn import(
     lineage: &mut Lineage,
     reach: &Reach,
-) -> (FailureId, super::Due<u64, &'static str, WinInstant>) {
+) -> (FailureId, super::Due<u64, &'static str, Stamp>) {
     lineage.import(
         FailureCause::Imported {
             scope: ImportScope::All,
@@ -45,7 +45,7 @@ fn import_only(
     lineage: &mut Lineage,
     reach: &Reach,
     only: Option<u64>,
-) -> (FailureId, super::Due<u64, &'static str, WinInstant>) {
+) -> (FailureId, super::Due<u64, &'static str, Stamp>) {
     lineage.0.import(
         FailureCause::Imported {
             scope: ImportScope::All,

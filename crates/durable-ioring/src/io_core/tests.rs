@@ -5,20 +5,19 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{CoreActions, DurableIoCore};
 use crate::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
 };
-use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
 use crate::ids::{DioringIds, Lineage, OpId};
 use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
 use crate::oracle::ConformanceOracle;
 use crate::provider::ProviderRequest;
+use crate::test_support::Ticks;
 use crate::types::{
     DurabilityRequest, Entry, Epoch, EpochState, FailureCause, FlushDomain, IoTargetKey, OpKind,
     Outcome, PushError, PushRefusal, ReadOptions, RemoveTargetError, SealError, WriteOptions,
@@ -32,18 +31,6 @@ mod refusals;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);
-
-/// A clock that counts its readings, so the core's stamps are plain numbers.
-#[derive(Clone, Default)]
-struct Ticks(Arc<AtomicU64>);
-
-impl StampClock for Ticks {
-    type Instant = u64;
-
-    fn now(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed)
-    }
-}
 
 type Core = DurableIoCore<u64, Vec<u8>, &'static str, Ticks>;
 type V = DioringIds<u64, u64>;

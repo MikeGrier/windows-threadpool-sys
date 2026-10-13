@@ -6,15 +6,14 @@
 use std::io;
 
 use super::{
-    A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, failed, flush, lineage, nullified, seen,
-    submitted, tokens,
+    A, B, DEFAULT, Due, FULL, Lineage, One, Ops, Seen, Stamp, failed, flush, lineage, nullified,
+    seen, submitted, tokens,
 };
-use crate::dioring::WinInstant;
 use crate::dioring::durability::Reach;
-use crate::dioring::tests::MockClock;
+use crate::test_support::ManualClock;
 use crate::types::{FailureCause, ImportScope, MarkingKind, Resolution};
 
-fn import(lineage: &mut Lineage) -> Due<u64, &'static str, WinInstant> {
+fn import(lineage: &mut Lineage) -> Due<u64, &'static str, Stamp> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
@@ -103,7 +102,7 @@ fn a_flush_failure_on_one_file_leaves_the_writes_another_file_flushed_covered() 
 
 #[test]
 fn a_write_two_failures_suspect_marks_both_with_one_reading() {
-    let clock = MockClock::at(900);
+    let clock = ManualClock::at(900);
     let mut lineage = One::with_clock(clock.clone());
     let mut ops = Ops::new();
     let write = ops.push(&mut lineage, 1, A, DEFAULT);
@@ -124,7 +123,7 @@ fn a_write_two_failures_suspect_marks_both_with_one_reading() {
     let stamps: Vec<u64> = lineage
         .failures()
         .iter()
-        .map(|failure| failure.markings[0].observed.ticks())
+        .map(|failure| failure.markings[0].observed)
         .collect();
     assert_eq!(stamps, [1_000, 1_000]);
 }

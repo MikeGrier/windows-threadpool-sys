@@ -2,8 +2,6 @@
 //! The oracle's rules for gated operations (DI-3.2.5.2), each refused when broken and accepted when
 //! kept.
 
-use win_time_sys::TimePoint;
-
 use super::{LEN, Oracle, TestEntry, V, completion, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage, OpId};
@@ -51,7 +49,7 @@ fn failed(id: FailureId, writes: &[(OpId, Epoch<V>)]) -> TestEntry {
                 })
                 .collect(),
         ),
-        observed: TimePoint::from_ticks(0),
+        observed: 0,
     })
 }
 

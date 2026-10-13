@@ -6,7 +6,6 @@ use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, OpId};
 use crate::oracle::Violation;
 use crate::types::{Entry, Epoch, Failed, FailureCause, ImportScope, SuspectSet, SuspectWrite};
-use win_time_sys::TimePoint;
 
 fn failure(instance: InstanceId, seq: u64) -> FailureId {
     FailureId { instance, seq }
@@ -38,7 +37,7 @@ fn failed_at(id: FailureId, writes: &[(OpId, Epoch<V>)], ticks: u64) -> TestEntr
             scope: ImportScope::All,
         },
         suspect: suspect(writes),
-        observed: TimePoint::from_ticks(ticks),
+        observed: ticks,
     })
 }
 
@@ -128,7 +127,7 @@ fn failure_stamps_may_repeat_or_rise_but_never_fall() {
             previous,
         }) => {
             assert_eq!(named, failure(instance, 3));
-            assert_eq!((observed.ticks(), previous.ticks()), (8_999, 9_000));
+            assert_eq!((observed, previous), (8_999, 9_000));
         }
         other => panic!("expected StampWentBackwards, got {other:?}"),
     }

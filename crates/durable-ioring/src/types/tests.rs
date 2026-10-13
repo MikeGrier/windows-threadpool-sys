@@ -10,7 +10,7 @@ use crate::types::{
     WriteCaching, WriteOptions,
 };
 
-type V = DioringIds<u64>;
+type V = DioringIds<u64, u64>;
 
 fn lineage(instance: InstanceId, seq: u64) -> Lineage {
     Lineage { instance, seq }

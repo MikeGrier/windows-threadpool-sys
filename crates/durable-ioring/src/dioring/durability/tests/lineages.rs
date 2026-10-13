@@ -4,16 +4,16 @@
 //! flight; retiring one is refused while anything holds it; and a failure spanning lineages holds
 //! each, and heals in each separately.
 
+use super::Stamp;
 use super::{
     A, B, DEFAULT, FULL, Lineage, Ops, Seen, failed, flush, flush_of, inconsistent, lineage,
     nullified, quiet, seen, submitted, tokens,
 };
-use crate::dioring::WinInstant;
 use crate::dioring::durability::{DEFAULT_LINEAGE, Key, Reach, State};
 use crate::ids::FailureId;
 use crate::types::{FailureCause, ImportScope, LineageBusy, Resolution};
 
-fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str, WinInstant> {
+fn import(lineage: &mut Lineage, only: Option<Key>) -> super::Due<u64, &'static str, Stamp> {
     let cause = FailureCause::Imported {
         scope: ImportScope::All,
     };
@@ -33,7 +33,7 @@ fn recorded(lineage: &Lineage, key: Key) -> bool {
 }
 
 /// A refusal's busy report, by its counts and its failures' sequence numbers.
-fn busy(refusal: LineageBusy<crate::ids::DioringIds<u64>>) -> (usize, usize, usize, Vec<u64>) {
+fn busy(refusal: LineageBusy<super::Ids>) -> (usize, usize, usize, Vec<u64>) {
     (
         refusal.in_flight,
         refusal.held_for_gate,

@@ -27,6 +27,8 @@ pub mod memory;
 pub mod oracle;
 mod provider;
 mod pump;
+#[cfg(test)]
+mod test_support;
 mod types;
 pub mod windows_backend;
 

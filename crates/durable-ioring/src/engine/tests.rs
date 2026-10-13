@@ -4,11 +4,9 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::Engine;
 use crate::backend::{IoBackend, SubmissionData};
-use crate::clock::StampClock;
 use crate::diagnostics::NoDiagnostics;
 use crate::ids::DioringIds;
 use crate::io_core::DurableIoCore;
@@ -16,23 +14,13 @@ use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryTarget};
 use crate::oracle::ConformanceOracle;
 use crate::provider::DomainOutcome;
+use crate::test_support::Ticks;
 use crate::types::{
     DurabilityRequest, Entry, Epoch, FlushDomain, IoTargetKey, OpKind, ReadOptions, WriteOptions,
 };
 
 const ONE: IoTargetKey = IoTargetKey(1);
 const TWO: IoTargetKey = IoTargetKey(2);
-
-#[derive(Clone, Default)]
-struct Ticks(Arc<AtomicU64>);
-
-impl StampClock for Ticks {
-    type Instant = u64;
-
-    fn now(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed)
-    }
-}
 
 type V = DioringIds<u64, u64>;
 type Core = DurableIoCore<u64, Vec<u8>, u32, Ticks>;

@@ -6,7 +6,7 @@
 
 use super::empty;
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
-use crate::contract::DurableRing;
+use crate::contract::{DurableRing, Identities, Lin};
 use crate::ids::{FailureToken, LineageHandle};
 use crate::types::{
     DurabilityRequest, EndLineageRefusal, Entry, Epoch, EpochState, ImportScope, Resolution,
@@ -15,6 +15,19 @@ use crate::types::{
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
+
+/// Written against the trait, as a consumer would: it must compile for any implementation.
+fn default_is_listed<D: DurableRing>(ring: &D) -> bool {
+    let default: Lin<D> = D::Ids::handle_lineage(&ring.default_lineage());
+    ring.lineages()
+        .iter()
+        .any(|info| info.is_default && info.lineage == default)
+}
+
+#[test]
+fn a_consumer_written_against_the_trait_runs_over_dioring() {
+    assert!(default_is_listed(&empty()));
+}
 
 /// An instance with `GIVEN` and `ADDED`, and a lineage minted beside its default.
 fn two(given_temp: &super::TempFile, added_temp: &super::TempFile) -> (Harness, LineageHandle) {

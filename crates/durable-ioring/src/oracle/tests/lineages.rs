@@ -2,8 +2,6 @@
 //! The oracle's rules for an ended lineage (DI-3.2.5.1), each refused when broken and accepted when
 //! kept, and the lineage's neighbours left alone.
 
-use win_time_sys::TimePoint;
-
 use super::{LEN, Oracle, TestEntry, V, done, op};
 use crate::IoTargetKey;
 use crate::ids::{FailureId, FailureToken, InstanceId, Lineage};
@@ -48,7 +46,7 @@ fn failed(id: FailureId, writes: &[(crate::ids::OpId, Epoch<V>)]) -> TestEntry {
                 })
                 .collect(),
         ),
-        observed: TimePoint::from_ticks(0),
+        observed: 0,
     })
 }
 
@@ -158,7 +156,7 @@ fn no_failure_after_the_end_suspects_the_lineage_but_one_before_is_still_marked(
         failure: before,
         marking: Marking {
             write: w_gone.0,
-            observed: TimePoint::from_ticks(0),
+            observed: 0,
             kind: MarkingKind::Covered {
                 flushed: true,
                 provider: false,

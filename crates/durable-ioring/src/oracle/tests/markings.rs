@@ -4,8 +4,6 @@
 use std::io;
 use std::sync::{Arc, LazyLock};
 
-use win_time_sys::TimePoint;
-
 use super::{LEN, Oracle, TestEntry, V, completion, op, write_kind};
 use crate::IoTargetKey;
 use crate::error_code::ErrorCode;
@@ -23,7 +21,7 @@ static IO_DEVICE: LazyLock<IoFault> = LazyLock::new(|| fault(1117));
 /// A fault carrying `code`, with a report of its own.
 fn fault(code: u32) -> IoFault {
     IoFault {
-        source: "windows-ioring",
+        source: crate::test_support::SOURCE,
         code: Some(ErrorCode::from_win32(code)),
         error: Arc::new(io::Error::from_raw_os_error(code.cast_signed())),
     }
@@ -55,14 +53,14 @@ fn failed_at(instance: InstanceId, id: u64, writes: &[u64], ticks: u64) -> TestE
             scope: ImportScope::All,
         },
         suspect: suspect(instance, writes),
-        observed: TimePoint::from_ticks(ticks),
+        observed: ticks,
     })
 }
 
 fn marking(write: OpId, kind: MarkingKind, ticks: u64) -> Marking<V> {
     Marking {
         write,
-        observed: TimePoint::from_ticks(ticks),
+        observed: ticks,
         kind,
     }
 }
