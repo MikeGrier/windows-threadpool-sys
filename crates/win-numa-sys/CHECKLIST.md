@@ -39,6 +39,7 @@ plainly rather than counting the crate as done.
 
 - [ ] **M2+.1** -- **Publish.** The crate is a path dependency of `windows-ioring-sys`, which *is*
   published, so it has to reach crates.io before that crate's next release or the release fails. It
+  depends on `io-buffers`, which must reach crates.io first ([N-D-2](DESIGN-NOTES.md#n-d-2)), and
   is already registered in `release-please-config.json` and in the publish workflow's tag patterns
   -- both of which this repository has previously been bitten by omitting, silently -- so what
   remains is the decision to cut `0.1.0`, not the plumbing.

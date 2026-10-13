@@ -17,6 +17,13 @@ description = "Memory-safe Rust over the Windows NUMA APIs: a VirtualAllocExNuma
 # reasonably want tomorrow.
 
 [dependencies]
+# The buffer contract `NumaBuffer` implements (IB-1.2, IB-D-4 in io-buffers' DESIGN-NOTES.md). This
+# crate defines no buffer trait of its own; it implements the shared one, because the orphan rule
+# lets only the crate that owns the type or the trait do so, and io-buffers is portable. The
+# `version` is the one io-buffers' first release is fixed to (`Release-As: 0.1.0`), so it is not a
+# guess; until that release exists on crates.io this crate's own release must wait for it.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
 # `default-features = false` matches every other crate in the workspace.
 #
 # `Win32_System_Memory` is `VirtualAllocExNuma` and `VirtualFree`.
