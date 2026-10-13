@@ -47,8 +47,6 @@ mod blocking;
 mod config;
 
 #[cfg(windows)]
-mod buf;
-
 #[cfg(all(windows, feature = "device"))]
 mod device;
 
@@ -66,6 +64,8 @@ mod iocp;
 
 #[cfg(windows)]
 mod operation;
+#[cfg(all(test, any(feature = "socket", feature = "device")))]
+mod oversized_buffer;
 
 #[cfg(all(windows, feature = "socket"))]
 mod socket;
@@ -77,7 +77,9 @@ mod started;
 pub use blocking::{BlockingEndpoint, TryFromEndpointError};
 
 #[cfg(windows)]
-pub use buf::{IoBuf, IoBufMut};
+// Re-exported rather than defined here: the buffer contract is `io-buffers`', defined once in a
+// portable crate and shared with `windows-ioring-sys`, so a buffer type implements one trait for both.
+pub use io_buffers::{IoBuf, IoBufMut};
 
 #[cfg(windows)]
 pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};

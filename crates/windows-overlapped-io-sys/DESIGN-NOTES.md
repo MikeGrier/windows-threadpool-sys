@@ -236,7 +236,11 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	borrows and allocate nothing, because they do not return until the operation is over: an ordinary
 	borrow provably covers it. This is strictly cheaper than owning, so the two backends differ on purpose
 	rather than for want of a shared shape.
-- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** A type whose accessor
+- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** **They are no longer
+	defined in this crate: the pair is `io-buffers`', re-exported here at the same paths and shared with
+	`windows-ioring-sys`, which had duplicated it (2026-10-12, `IB-2+.1` in io-buffers' checklist); a type
+	implements one trait for both crates, and a type that had implemented both crates' traits now has two
+	implementations of one trait and must drop one.** A type whose accessor
 	returns a fresh address on each call, or that reallocates while an operation is in flight, is what makes
 	the kernel write into freed memory long after submission returned. That is unprovable by the compiler,
 	so implementing the traits is an assertion. `Send + 'static` come along because the leaked operation

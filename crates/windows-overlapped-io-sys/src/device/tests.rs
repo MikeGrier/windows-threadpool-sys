@@ -125,7 +125,7 @@ fn submitted_ioctl_rejects_an_oversized_output_buffer() {
         endpoint.ioctl(
             FSCTL_GET_COMPRESSION,
             Vec::new(),
-            crate::buf::OversizedBuffer,
+            crate::oversized_buffer::OversizedBuffer,
         )
     }
     .expect_err("an unrepresentable output length must be rejected");
