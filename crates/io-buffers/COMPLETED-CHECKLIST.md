@@ -198,3 +198,30 @@ The item as it stood at completion:
   ([IB-D-5](DESIGN-NOTES.md#ib-d-5)): re-export them at the same paths, as the ring crate does in
   `IB-1.3`. A type that today implements both crates' traits would then have two implementations of
   one trait, so this is a decision on that cost and not a mechanical step.
+
+## Moved 2026-10-12 21:55:30 -04:00 -- IB-2+.2: PageBuffers on AlignedBuf
+
+### <a id="ib-2+2"></a>IB-2+.2 -- `windows-overlapped-io-sys`' `PageBuffers` holds an `AlignedBuf`. *(completed 2026-10-12 21:55:30 -04:00)*
+
+`PageBuffers` is now a page count over an `AlignedBuf` of `pages * PAGE_SIZE` bytes at `PAGE_SIZE`
+alignment. Its own `alloc_zeroed` and `dealloc`, raw pointer, and manual `Send`, `Sync` and `Drop`
+are gone, and its `IoBuf` and `IoBufMut` impls delegate to the buffer. The public API is unchanged,
+so the commit is a `refactor`, not a breaking change. One behaviour moved: an allocation failure
+that aborted through `handle_alloc_error` is now a panic, which `new` already was for zero pages or
+an overflow.
+
+The type had almost no direct tests of its own (its only coverage was through the scatter and gather
+I/O tests), so the item added tests for the page arithmetic, alignment and zeroing across page
+counts, the segment array and its terminator, shared views, move stability, the two panics, and
+`Send`, `Sync` and `Debug`, with a sabotage manifest (`crates/windows-overlapped-io-sys/sabotage.json`)
+whose four sabotages are caught and whose control survives.
+
+The item as it stood at completion:
+
+- [x] **IB-2+.2** -- **`windows-overlapped-io-sys`' `PageBuffers` holds an `AlignedBuf`.** An internal
+  swap: it has its own `alloc_zeroed` and `dealloc` at `PAGE_SIZE`, its own `Send`/`Sync` and both
+  trait impls, and exposes only `pages`, `len`, `as_bytes`, `as_bytes_mut` and the segment array, none
+  of which changes. Not a breaking change: `new` still panics on zero pages or an overflow, and an
+  allocation failure that aborted through `handle_alloc_error` becomes a panic through the buffer's
+  error. The page-aligned buffer is what `ReadFileScatter` and `WriteFileGather` need, and its tests
+  are real unbuffered I/O.

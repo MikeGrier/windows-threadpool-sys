@@ -21,13 +21,7 @@ frozen records and are left as they are.
 
 - [x] **IB-2+.1** -- `windows-overlapped-io-sys` adopts the shared traits and re-exports them at the same paths. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-2+1)
 
-- [ ] **IB-2+.2** -- **`windows-overlapped-io-sys`' `PageBuffers` holds an `AlignedBuf`.** An internal
-  swap: it has its own `alloc_zeroed` and `dealloc` at `PAGE_SIZE`, its own `Send`/`Sync` and both
-  trait impls, and exposes only `pages`, `len`, `as_bytes`, `as_bytes_mut` and the segment array, none
-  of which changes. Not a breaking change: `new` still panics on zero pages or an overflow, and an
-  allocation failure that aborted through `handle_alloc_error` becomes a panic through the buffer's
-  error. The page-aligned buffer is what `ReadFileScatter` and `WriteFileGather` need, and its tests
-  are real unbuffered I/O.
+- [x] **IB-2+.2** -- `windows-overlapped-io-sys`' `PageBuffers` holds an `AlignedBuf`. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-2+2)
 
 - [ ] **IB-2+.3** -- **The ring crate's three test-local `Aligned` buffers become `AlignedBuf`.**
   `handover.rs`, `flush_barrier.rs` and `flush_barrier_stress.rs` each over-allocate a `Vec<u8>` and
