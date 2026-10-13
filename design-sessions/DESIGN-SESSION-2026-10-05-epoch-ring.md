@@ -3563,6 +3563,39 @@ error kind, so this crate's own check guards something no test can see. `QueueUs
 special APC needs no alertable wait, is queued as `WS-inf.4`, parked behind the question of how a
 routine that can interrupt a thread anywhere is expressed.
 
+## DI-8.1 asked about, and a buffer crate (2026-10-12)
+
+The engineer asked whether `DI-8.1` was ready. Reading the tree showed its text stale: the portable
+core's tests already used a local mock clock in three places, the Windows clock and fault seam were in
+the driver's own tests, which move with the driver, and a portable scripted fault is `DI-11.1`, after
+the split. The assistant proposed narrowing it and the engineer has not yet ruled on that.
+
+What the inventory turned up that mattered more was outside `DI-8.1`: the portable crate's contract is
+bounded by `IoBuf` and `IoBufMut`, which `windows-ioring-sys` defines and gates `cfg(windows)` as a
+whole, though the module names nothing Windows. The engineer asked whether abstract ring, buffer,
+signalling and time types were needed in new crates. The answer was no for three of the four, which
+the portable crate already abstracts -- the backend trait is the ring, readiness is an associated
+type, and the stamp clock is a trait -- and yes for buffers.
+
+Two facts changed the picture. The trait pair was already duplicated in `windows-ioring-sys` and
+`windows-overlapped-io-sys` under duplicate-then-decide, so a buffer crate is also the merge point
+and not a third copy. And the orphan rule moves `NumaBuffer`'s impls: they sit in the ring crate
+because it owns the trait, which stops being true when a neutral crate does, so they go to
+`win-numa-sys`, ending its trait-free stance in one respect. The engineer's first thought was a name
+that clearly targets NUMA or I/O buffers; the assistant read that as an I/O buffer crate with
+placement left to the platform crates, and offered a placement-aware crate as the alternative.
+
+Asked what the crate does, the assistant found the gap that argues for a concrete type: a target
+declares the alignment its buffer addresses need, unbuffered I/O needs sector alignment, and nothing in
+the workspace can promise an alignment through `IoBuf`, while three ad hoc copies of an aligned
+allocation had already grown. The engineer approved the plan -- the contract, then one aligned buffer,
+with platform memory staying in platform crates -- and asked for it written up with the crate outline
+built. That is `crates/io-buffers`: its checklist `IB-1.1` to `IB-1.4`, with the other merges parked
+as `IB-2+.1` and `IB-2+.2`, and `DI-8.2` now carrying a cross-component prerequisite on it. The
+name, `RegisteredSpan`'s inclusion and `NumaBuffer`'s move are the assistant's, queued in `DI-9.7`. A
+portable notion of placement is recorded as a working position and not scheduled, since a second
+platform's allocator does not exist to shape it.
+
 ## Open, not yet discussed
 
 - Where the crate's checklist and design notes live, and the `M33+.5` amendment.

@@ -27,7 +27,13 @@ the driver, the Windows backend and its targets, registered for release.
   time type; `durable-ioring` left with no Windows dependency. CONTRACT.md's worked examples drive
   the Windows driver, so they move in the same step, to `win-durable-ioring`'s documentation,
   compiled there as doctests, and CONTRACT.md links them; its "Vocabulary ahead of the code" note is
-  removed.
+  removed. `IoBuf`, `IoBufMut` and `RegisteredSpan`, which `contract.rs` and the re-exports name,
+  come from `io-buffers`, not from `windows-ioring-sys`, so the portable crate has no Windows
+  dependency.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** `crates/io-buffers` -> `IB-1.1` and `IB-1.3` (the buffer
+  > contract in a portable crate, and the ring crate's adoption of it) must land first. See
+  > [CHECKLIST.md](../io-buffers/CHECKLIST.md).
 
 - [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
   tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
@@ -299,7 +305,12 @@ does is now that item's to absorb.
   separate functions; the waits stay over `AsHandle` with no `Waitable` trait, which the item
   proposed; wait for any and wait for all are two functions with different results; a `Signalable`
   trait says what `SignalObjectAndWait` may signal; and `queue_user_apc` takes a Rust closure
-  ([WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8)).
+  ([WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8)). From `io-buffers`: the crate's name; that
+  `RegisteredSpan` moves into it with the contract; and that `NumaBuffer`'s buffer impls move from the
+  ring crate to `win-numa-sys`, which then implements a trait it does not define, ending its
+  deliberately trait-free stance in that one respect
+  ([IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1), [IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2),
+  [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)).
 
 ## DI-M7+ -- Delivery follow-ups
 
