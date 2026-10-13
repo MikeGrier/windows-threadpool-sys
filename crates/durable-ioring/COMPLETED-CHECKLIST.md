@@ -2549,3 +2549,17 @@ completion event, duplicated as an `OwnedHandle` and attached at construction; `
 joins `fail_next_flush` in the fault seam; the short-write rule lives in the backend as `transfer`;
 `register_files` takes handles rather than `TargetSetup`s; the backend and `Win32FileTarget` live in
 a public `windows_backend` module.
+
+## Moved 2026-10-13 17:14:00 -04:00 -- DI-9.6.1 and DI-9.6.2: the engineer confirms two driver-on-core choices
+
+### <a id="di-961"></a>DI-9.6.1 -- What the backend refuses for good, the core ends ([DI-D-54](DESIGN-NOTES.md#di-d-54)). *(completed 2026-10-13 17:14:00 -04:00)*
+
+Accepted by the engineer: "yes." A gated operation is put to `IoBackend::check` before it is held; a
+submission of the core's own that the backend refuses for a non-retryable cause completes with a
+`REFUSED` fault instead of being re-emitted; an `Unknown` cause counts as permanent. The alternative,
+re-emitting every refusal, is the hang the row records.
+
+### <a id="di-962"></a>DI-9.6.2 -- `Dioring` requires `R: Send + 'static`. *(completed 2026-10-13 17:14:00 -04:00)*
+
+Accepted by the engineer: "yes." The registration lives behind the engine's lock, which pool threads
+take, so the registered buffer type must be sendable and own its data.

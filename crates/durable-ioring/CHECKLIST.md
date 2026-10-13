@@ -88,18 +88,22 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.6 -- The driver on the core ([DI-3.10.3.5.6.1 to DI-3.10.3.5.6.2.6](COMPLETED-CHECKLIST.md))
 
-- [ ] **DI-9.6.1** -- **DECIDE: what the backend refuses for good, the core ends
-  ([DI-D-54](DESIGN-NOTES.md#di-d-54)).** Now: a gated operation is put to `IoBackend::check` before
-  it is held; a submission of the core's own that the backend refuses for a non-retryable cause
-  completes with a `REFUSED` fault instead of being re-emitted; an `Unknown` cause counts as
-  permanent. The alternative, re-emitting every refusal, is the hang the row records.
+- [x] **DI-9.6.1** -- What the backend refuses for good, the core ends ([DI-D-54](DESIGN-NOTES.md#di-d-54)). -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-961)
 
-- [ ] **DI-9.6.2** -- **DECIDE: `Dioring` requires `R: Send + 'static`.** Now: the registration
-  lives behind the engine's lock, which pool threads take.
+- [x] **DI-9.6.2** -- `Dioring` requires `R: Send + 'static`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-962)
 
-- [ ] **DI-9.6.3** -- **DECIDE: which refusals on the lineage paths are reported.** Now: a refusal
-  from the core when `end_lineage` ends a lineage by its last handle is an inconsistency reported
-  through the hub; a refusal of a handle's release is ignored, as the old relay ignored it.
+- [ ] **DI-9.6.3** -- **DECIDE: which core refusals of a lineage's end are reported, on the two
+  paths that end a lineage.** The core refuses `end_lineage` as `Foreign` (the lineage is not live)
+  or `Default` (the default lineage never ends). *Explicit end*, `Dioring::end_lineage` taking the
+  last handle: the default is refused by the driver first, and a core refusal can only mean the
+  lineage was already ended, so it is reported as an inconsistency (DI-D-46) -- now. *Release*, the
+  last copy of a handle dropped on any thread: every refusal is ignored -- now, as the old relay
+  ignored them. Recommended: on release, ignore `Default` (dropping the default lineage's handle is
+  legitimate and ends nothing) but report `Foreign` as an inconsistency, as the explicit end does,
+  since a release fires only when no explicit end or retire disarmed the handle, so the lineage is
+  live and `Foreign` would mean the bookkeeping is wrong. A report is safe in a drop: while the
+  thread is already unwinding it is reported only, never a second panic. Accepting this changes
+  `Hub::release` and adds a test and a sabotage entry.
 
 - [ ] **DI-9.6.4** -- **DECIDE: a declared geometry is now enforced on the driver's path.** Now: the
   backend's `check` and `push` refuse an operation that does not fit a target's declared geometry,
