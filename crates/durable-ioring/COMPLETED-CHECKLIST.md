@@ -2414,3 +2414,30 @@ registered-span push needs the registration and an owned push its buffer's bound
 operation carries as a function pointer; and the oracle gains "a gated operation completes only
 after its gate is reported durable", "`NeverIssued` comes only for one", and "no failure suspects a
 held write".
+
+## Moved 2026-10-13 16:50:00 -04:00 -- DI-9.3.1 to DI-9.3.3: the engineer confirms the provider choices
+
+### <a id="di-931"></a>DI-9.3.1 -- The provider is called only from the consumer's next call, with dioring's lock released. *(completed 2026-10-13 16:50:00 -04:00)*
+
+Accepted by the engineer: "yes." A seal's request is made by the consumer's next `pop`,
+`make_durable_through`, `resolve` or `end_lineage`, never by a completion callback on a pool thread.
+Two constraints force it: [DI-D-27](DESIGN-NOTES.md#di-d-27) lets a provider answer inside
+`make_durable`, and that answer takes the lock; and a provider panic can only propagate to a caller.
+Nothing is stranded, since a seal starts at its own call or at its last write's completion, which
+queues an entry the consumer pops. Recorded in [DI-D-44](DESIGN-NOTES.md#di-d-44).
+
+### <a id="di-932"></a>DI-9.3.2 -- Every provider request is built before any is handed over. *(completed 2026-10-13 16:50:00 -04:00)*
+
+Accepted by the engineer: "yes." A panic drops the rest, and each completion dropped unanswered is a
+failure of its domain, `Cause::ProviderAbandoned`. Recorded in
+[DI-D-44](DESIGN-NOTES.md#di-d-44).
+
+### <a id="di-933"></a>DI-9.3.3 -- The provider request's shape, and when a write is covered. *(completed 2026-10-13 16:50:00 -04:00)*
+
+Ratified by the engineer: "ratified." A request is one per seal, naming only the served domains the
+seal's writes touched, in interned-id order, each with its files and each file's writes in push
+order; a seal naming no served write asks nothing; a write is covered when its file's flush
+succeeded, if the default answers for the file, and every served domain of its file answered
+success; a failure of domain D is observed with `Reach::Domains([D])`, which is
+[DI-D-27](DESIGN-NOTES.md#di-d-27)'s rule, so needs no reach of its own. This closes
+[DI-D-44](DESIGN-NOTES.md#di-d-44), as amended by DI-D-46 and DI-D-50, and the `DI-9.3` group.

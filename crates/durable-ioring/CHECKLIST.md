@@ -56,24 +56,11 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
 
-- [ ] **DI-9.3.1** -- **DECIDE: the provider is called only from the consumer's next call, with
-  dioring's lock released.** Now: a seal's request is made by the consumer's next `pop`,
-  `make_durable_through`, `resolve` or `end_lineage`, never by a completion callback on a pool
-  thread. Two constraints force it: [DI-D-27](DESIGN-NOTES.md#di-d-27) lets a provider answer
-  inside `make_durable`, and that answer takes the lock; and a provider panic can only propagate to
-  a caller. Nothing is stranded, since a seal starts at its own call or at its last write's
-  completion, which queues an entry the consumer pops.
+- [x] **DI-9.3.1** -- The provider is called only from the consumer's next call, with dioring's lock released. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-931)
 
-- [ ] **DI-9.3.2** -- **DECIDE: every request is built before any is handed over.** Now: a panic
-  drops the rest, and each completion dropped unanswered is a failure of its domain,
-  `Cause::ProviderAbandoned`.
+- [x] **DI-9.3.2** -- Every provider request is built before any is handed over. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-932)
 
-- [ ] **DI-9.3.3** -- **RATIFY:** a request is one per seal, naming only the served domains the
-  seal's writes touched, in interned-id order, each with its files and each file's writes in push
-  order; a seal naming no served write asks nothing; a write is covered when its file's flush
-  succeeded, if the default answers for the file, and every served domain of its file answered
-  success; a failure of domain D is observed with `Reach::Domains([D])`, which is
-  [DI-D-27](DESIGN-NOTES.md#di-d-27)'s rule, so needs no reach of its own.
+- [x] **DI-9.3.3** -- The provider request's shape, and when a write is covered. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-933)
 
 ### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
 
