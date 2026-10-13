@@ -2386,3 +2386,17 @@ core and kept, with nothing at the backend, until the gate's epoch is durable. I
 abandoned while it waits, it can never be issued, so it ends at once as `NeverIssued` naming its own
 epoch; when its gate is also abandoned, the gate is the one named. Recorded in
 [DI-D-43](DESIGN-NOTES.md#di-d-43); the rule is stated in [CONTRACT.md](CONTRACT.md), "Gates".
+
+## Moved 2026-10-13 16:44:00 -04:00 -- DI-9.2.2 and DI-9.2.3: the engineer accepts two more of DI-D-43's choices
+
+### <a id="di-922"></a>DI-9.2.2 -- A held write is outstanding for its lineage's seals, and no failure suspects it until it is released. *(completed 2026-10-13 16:44:00 -04:00)*
+
+Accepted by the engineer: "yes." A seal at or above a held write's epoch waits for it as for a write
+in flight, so `Durable` still follows every write it covers; and since nothing was written until it
+is released, no failure suspects it before then. Recorded in
+[DI-D-43](DESIGN-NOTES.md#di-d-43); stated in [CONTRACT.md](CONTRACT.md), "Gates".
+
+### <a id="di-923"></a>DI-9.2.3 -- `make_durable_through` returns `SealError::{UnknownLineage, GateCycle}` in place of `io::Error`. *(completed 2026-10-13 16:44:00 -04:00)*
+
+Accepted by the engineer: "yes." A public API change for consumers, which now match on the cause
+instead of reading an `io::Error`. Recorded in [DI-D-43](DESIGN-NOTES.md#di-d-43).

@@ -48,11 +48,9 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.2.1** -- A held write whose own epoch is abandoned ends as `NeverIssued` naming that epoch. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-921)
 
-- [ ] **DI-9.2.2** -- **DECIDE: a held write is outstanding for its lineage's seals, as one in
-  flight is, and no failure suspects it until it is released.**
+- [x] **DI-9.2.2** -- A held write is outstanding for its lineage's seals, and no failure suspects it until it is released. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-922)
 
-- [ ] **DI-9.2.3** -- **DECIDE: `make_durable_through` returns `SealError::{UnknownLineage,
-  GateCycle}` in place of `io::Error`.** A public API change for consumers.
+- [x] **DI-9.2.3** -- `make_durable_through` returns `SealError::{UnknownLineage, GateCycle}` in place of `io::Error`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-923)
 
 - [ ] **DI-9.2.4** -- **RATIFY:** a gate naming an ended or retired lineage is refused as
   `UnknownLineage`; a cycle is listed as each held write's epoch followed by its gate; released
