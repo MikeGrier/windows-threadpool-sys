@@ -2346,3 +2346,19 @@ Accepted by the engineer: "agree, not live from the moment it ends." Recorded in
 Accepted by the engineer: "agreed, take effect as soon as nothing can delay them." Covers both
 halves of the item: ending a lineage a heal waits for releases the heal there, and a failure with an
 empty suspect set heals at once. Recorded in [DI-D-42](DESIGN-NOTES.md#di-d-42).
+
+## Moved 2026-10-13 15:56:00 -04:00 -- DI-9.1.4: the engineer accepts the oracle's weaker rule
+
+### <a id="di-914"></a>DI-9.1.4 -- The oracle drops DI-D-39's tightening, and gains four rules for an ended lineage. *(completed 2026-10-13 15:56:00 -04:00)*
+
+Accepted by the engineer: "just take the drop of the tightening as you suggest", after being told
+what it costs. A `Durable` may pass a failure once the consumer has healed it, so the oracle cannot
+tell a `Durable` from a seal that started after the heal from one that started before it and
+finished after; the core's own tests pin that timing, and the limit is already listed in
+[oracle.rs](src/oracle.rs) among what it cannot check. The four ended-lineage rules (reported ended
+once; no `Durable` or `Blocked` names it afterwards; no write into it is accepted; no later failure
+suspects a write of it) only add checks, and no sequence a correct driver produces is known to
+break them. The engineer took the weaker rule rather than a per-lineage entry in the stream; that
+entry is parked as `DI-6+.9` in [CHECKLIST.md](CHECKLIST.md) and the decision is recorded in
+[DI-D-42](DESIGN-NOTES.md#di-d-42). [CONTRACT.md](CONTRACT.md) was not changed: the rule it states
+for a heal is the core's, and is not what was weakened.

@@ -40,11 +40,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.1.3** -- Heals take effect as soon as nothing can delay them. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-913)
 
-- [ ] **DI-9.1.4** -- **DECIDE: the oracle drops [DI-D-39](DESIGN-NOTES.md#di-d-39)'s tightening.**
-  Now: a `Durable` may pass a failure once the consumer has healed it, because the stream cannot
-  show which lineage's seal made the heal effective. It gains four rules for an ended lineage: it is
-  reported ended once, no `Durable` or `Blocked` names it afterwards, no write into it is accepted,
-  and no later failure suspects a write of it.
+- [x] **DI-9.1.4** -- The oracle drops DI-D-39's tightening, and gains four rules for an ended lineage. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-914)
 
 - [ ] **DI-9.1.5** -- **RATIFY: the shapes.** `Tag<'_, V>` borrows the handle, never the instance;
   construction returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance;
@@ -524,3 +520,15 @@ implementation before it is answerable.
   serves shutdown already. When it is taken up, the accounting is that a cancelled write's outcome is
   indeterminate, so it joins the suspect set and its epoch cannot be reported durable until resolved.
   The v1 design must not foreclose adding it.
+
+- [ ] **DI-6+.9** -- **Let the oracle check when a heal takes effect, by a per-lineage entry in the
+  stream.** From `DI-9.1.4`, which accepted the oracle's weaker rule
+  ([DI-D-42](DESIGN-NOTES.md#di-d-42)). The stream records when a seal is accepted, not when it
+  starts, so the oracle cannot tell a `Durable` from a seal that started after a heal from one that
+  started before it and finished after; it accepts both, and the core's own tests are what pin the
+  timing. Working position, not a decision: an entry such as `HealEffective { failure, lineage }`,
+  reported when a heal takes effect in a lineage, would let the oracle require it before a `Durable`
+  passes that failure's epochs there. It adds a public entry kind that every consumer's `match` sees,
+  and it changes [CONTRACT.md](CONTRACT.md) and the shared oracle together. Gated on a driver or a
+  consumer whose own tests need the oracle to check this, since that is what would show what the
+  entry should carry.
