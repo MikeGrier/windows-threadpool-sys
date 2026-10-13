@@ -2586,3 +2586,45 @@ each direction, the first proving the instance is still usable after the report;
 that crate's [sabotage.json](../win-durable-ioring/sabotage.json), one for each direction. Before
 the change nothing tested a release of a lineage that is not live, so the first sabotage, which
 ignores such a release again, would have survived; with it both are caught.
+
+## Moved 2026-10-13 19:47:00 -04:00 -- DI-9.6.4 to DI-9.6.7: the engineer confirms the rest of the driver on the core
+
+### <a id="di-964"></a>DI-9.6.4 -- A declared geometry is now enforced on the driver's path. *(completed 2026-10-13 19:47:00 -04:00)*
+
+Accepted by the engineer: "yes." The backend's `check` and `push` refuse an operation that does not
+fit a target's declared geometry, which the old driver did not.
+
+### <a id="di-965"></a>DI-9.6.5 -- The driver's structure. *(completed 2026-10-13 19:47:00 -04:00)*
+
+Ratified by the engineer: "ratified!" A portable `Engine` is the one place `CoreActions` become
+backend pushes, with the drain every delivery shares; a drain runs until a pass pops nothing and does
+not call `retry`; pool delivery tells the driver through an `on_ready` closure called after the lock
+is released; `into_engine` stops delivery and returns the engine; one `Hub` holds the engine's slot,
+the readiness event and the count of unanswered provider completions, and is where a provider's
+answer and a handle's release arrive; the slot is an `Option` that ending empties; an answer is
+counted down before it reaches the engine, which is safe because ending empties the slot before it
+waits; the instance's own refusals of a duplicate key and of ending the default lineage stay in the
+driver, ahead of the core's; `pop` submits and pops but no longer retries refused submissions, the
+retry having been an equivalent mutant.
+
+### <a id="di-966"></a>DI-9.6.6 -- The trait and type shapes. *(completed 2026-10-13 19:47:00 -04:00)*
+
+Ratified by the engineer: "ratified." `Readiness` carries no bound, while `EntryDelivery` and
+`check_readiness` bind it to `Event`; the ring trait's `Target` is bounded by `IoTarget`;
+`add_target_with` goes with `FileOptions`, leaving one `add_target`; `AddTargetError` is generic,
+carrying the target; the test fake's target is `MemoryTarget`; `TargetSetup` carries the
+`Win32FileTarget` whole; two constructors, `new` for an `IoBufMut` buffer and `without_owned_reads`
+for one that may be only `IoBuf`, with a crate-private `enable_owned_reads`; the owned read's push is
+a function pointer, behind a `Via`; accessors are renamed `with_registered_buffer` and
+`with_registered_buffer_mut`, generic over the closure's return, so the trait is not object-safe, as
+it was not before ([DI-D-24](DESIGN-NOTES.md#di-d-24)); `Setup` has two lifetimes,
+`Setup<'env, 'pool, ..>`, because a callback environment is invariant behind `&mut`;
+`RefusalCause` implements `std::error::Error`; the ring crate gained a public `check_span` rather
+than dioring repeating the bounds.
+
+### <a id="di-967"></a>DI-9.6.7 -- The sabotage migration. *(completed 2026-10-13 19:47:00 -04:00)*
+
+Ratified by the engineer: "ratified." That closes the `DI-9.6` group. Thirty-three of the old path's
+sabotages were re-anchored where their rules now live and ten retired: nine sabotage the same
+predicate at the same site in the same way as an existing core or backend entry, and one was the
+relay's control, retired with the relay.

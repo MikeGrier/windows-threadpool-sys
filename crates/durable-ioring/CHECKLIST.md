@@ -94,38 +94,13 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.6.3** -- A lineage's last-handle release reports a core refusal as not live, and ignores the default lineage's. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-963)
 
-- [ ] **DI-9.6.4** -- **DECIDE: a declared geometry is now enforced on the driver's path.** Now: the
-  backend's `check` and `push` refuse an operation that does not fit a target's declared geometry,
-  which the old driver did not.
+- [x] **DI-9.6.4** -- A declared geometry is now enforced on the driver's path. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-964)
 
-- [ ] **DI-9.6.5** -- **RATIFY: the driver's structure.** A portable `Engine` is the one place
-  `CoreActions` become backend pushes, with the drain every delivery shares; a drain runs until a
-  pass pops nothing and does not call `retry`; pool delivery tells the driver through an `on_ready`
-  closure called after the lock is released; `into_engine` stops delivery and returns the engine;
-  one `Hub` holds the engine's slot, the readiness event and the count of unanswered provider
-  completions, and is where a provider's answer and a handle's release arrive; the slot is an
-  `Option` that ending empties; an answer is counted down before it reaches the engine, which is
-  safe because ending empties the slot before it waits; the instance's own refusals of a duplicate
-  key and of ending the default lineage stay in the driver, ahead of the core's; `pop` submits and
-  pops but no longer retries refused submissions, the retry having been an equivalent mutant.
+- [x] **DI-9.6.5** -- The driver's structure. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-965)
 
-- [ ] **DI-9.6.6** -- **RATIFY: the trait and type shapes.** `Readiness` carries no bound, while
-  `EntryDelivery` and `check_readiness` bind it to `Event`; the ring trait's `Target` is bounded by
-  `IoTarget`; `add_target_with` goes with `FileOptions`, leaving one `add_target`; `AddTargetError`
-  is generic, carrying the target; the test fake's target is `MemoryTarget`; `TargetSetup` carries
-  the `Win32FileTarget` whole; two constructors, `new` for an `IoBufMut` buffer and
-  `without_owned_reads` for one that may be only `IoBuf`, with a crate-private `enable_owned_reads`;
-  the owned read's push is a function pointer, behind a `Via`; accessors are renamed
-  `with_registered_buffer` and `with_registered_buffer_mut`, generic over the closure's return, so
-  the trait is not object-safe, as it was not before ([DI-D-24](DESIGN-NOTES.md#di-d-24)); `Setup`
-  has two lifetimes, `Setup<'env, 'pool, ..>`, because a callback environment is invariant behind
-  `&mut`; `RefusalCause` implements `std::error::Error`; the ring crate gained a public `check_span`
-  rather than dioring repeating the bounds.
+- [x] **DI-9.6.6** -- The trait and type shapes. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-966)
 
-- [ ] **DI-9.6.7** -- **RATIFY: the sabotage migration.** Thirty-three of the old path's sabotages
-  were re-anchored where their rules now live and ten retired: nine sabotage the same predicate at
-  the same site in the same way as an existing core or backend entry, and one was the relay's
-  control, retired with the relay.
+- [x] **DI-9.6.7** -- The sabotage migration. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-967)
 
 ### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
 
