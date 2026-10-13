@@ -33,6 +33,10 @@
             "package-name": "win-shared-os-owned-handle",
             "component": "win-shared-os-owned-handle"
         },
+        "crates/io-buffers": {
+            "package-name": "io-buffers",
+            "component": "io-buffers"
+        },
         "crates/win-sync-sys": {
             "package-name": "win-sync-sys",
             "component": "win-sync-sys"

@@ -3,6 +3,7 @@
 [workspace]
 members = [
 	"crates/durable-ioring",
+	"crates/io-buffers",
 	"crates/win-numa-sys",
 	"crates/win-shared-os-owned-handle",
 	"crates/win-sync-sys",
