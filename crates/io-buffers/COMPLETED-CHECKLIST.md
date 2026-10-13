@@ -252,3 +252,37 @@ The item as it stood at completion:
   layout. Test-only, and removes three `unsafe impl`s. Two need a fill byte, which `AlignedBuf`'s
   `DerefMut` gives. `handover.rs` and `flush_barrier.rs` run by default; the stress file is
   `#[ignore]`d and has to be run explicitly to be checked.
+
+## Moved 2026-10-12 22:20:00 -04:00 -- IB-2+.4: windows-namespace-request-sys replaces AlignedBuffer with AlignedBuf
+
+### <a id="ib-2+4"></a>IB-2+.4 -- `windows-namespace-request-sys`' `AlignedBuffer` is replaced by `AlignedBuf`, route (a), on the engineer's decision. *(completed 2026-10-12 22:20:00 -04:00)*
+
+The item was parked as the engineer's decision between replacing the type (a, breaking), wrapping it
+(b) and leaving it (c). The engineer chose (a): "replace the type and move to the new iobuffer
+crate". The crate's `AlignedBuffer` and its `buffer` module are gone, `io_buffers::AlignedBuf` is
+re-exported at the crate root because it appears in the query result and in the captured security
+descriptor, and the commit is marked breaking. Each call site passes a constant alignment and takes
+the allocation error with `expect`; `SecurityDescriptor` keeps `Clone`, written by hand over
+`try_clone`. The old type's tests were removed with it, since `AlignedBuf`'s cover the allocation.
+The assistant's choices in it are queued in `durable-ioring`'s `DI-9.7`; the decision is
+[IB-D-7](DESIGN-NOTES.md#ib-d-7).
+
+The item as it stood at completion:
+
+- [ ] **IB-2+.4** -- **Whether `windows-namespace-request-sys`' `AlignedBuffer` moves onto
+  `AlignedBuf`, and by which route.** The engineer's decision, because the type is public API of a
+  published crate (0.2.3): it appears in public return types (`Outcome<AlignedBuffer>`, the query and
+  security captures) and is re-exported. Its differences from `AlignedBuf` are
+  [IB-D-6](DESIGN-NOTES.md#ib-d-6)'s: constructors that panic on a bad alignment and abort on
+  allocation failure where `AlignedBuf` returns an error, and a `Clone` where `AlignedBuf` has
+  `try_clone`. Every call site passes a constant alignment, and none needs `IoBuf`, since the Win32
+  queries are synchronous, so the only gain is one copy of the unsafe allocation code, at the cost of
+  a dependency on this crate. Routes: **(a)** replace the type, which is breaking and changes every
+  signature that names it; **(b)** keep `AlignedBuffer` as a thin wrapper over `AlignedBuf` with the
+  same panicking constructors, `Clone` and equality, which is not breaking and removes the duplicate
+  allocation code but leaves two public types; **(c)** leave it. No work until a route is chosen.
+
+## <a id="ib-m2-complete"></a>IB-M2+ is complete, and so is the checklist
+
+`IB-2+.1` to `IB-2+.4` are archived above under their own anchors. Every item in
+[CHECKLIST.md](CHECKLIST.md) is done; the plan is recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md).

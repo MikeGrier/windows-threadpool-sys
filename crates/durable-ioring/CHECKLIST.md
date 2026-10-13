@@ -313,7 +313,11 @@ does is now that item's to absorb.
   [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)); and that the ring crate re-exports the contract
   from it at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)); and from `IB-1.4`
   that `AlignedBuf` is fallible to build, has no `Clone` and cannot grow
-  ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)).
+  ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)); and from `IB-2+.4`, which took the engineer's
+  route (a), that `windows-namespace-request-sys` takes the allocation error with `expect` at each
+  site and that `SecurityDescriptor::clone` panics when the copy cannot be allocated, so an
+  unallocatable request is a panic where it was an abort
+  ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)).
 
 ## DI-M7+ -- Delivery follow-ups
 
