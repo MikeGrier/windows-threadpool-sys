@@ -34,22 +34,11 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.1 -- Lineage handles ([DI-D-42](DESIGN-NOTES.md#di-d-42), from `DI-3.2.5.1`)
 
-- [ ] **DI-9.1.1** -- **DECIDE: a handle's release runs on whichever thread drops the last copy.**
-  Now: dropping the last copy of a `LineageHandle` ends the lineage on the dropping thread, taking
-  dioring's lock and then the ring's, as a completion callback does; a handle that outlives its
-  instance releases nothing. The alternative is a release queued and made at the consumer's next
-  call, as the provider's requests are, which would end a dropped handle's lineage late.
+- [x] **DI-9.1.1** -- A lineage handle's release runs on whichever thread drops the last copy. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-911)
 
-- [ ] **DI-9.1.2** -- **DECIDE: an ended lineage is not live from the moment it ends.** Now: its
-  name is answered as unknown at once, though it stays recorded until its writes in flight
-  complete; a flush of its that answers afterwards reports nothing; a write of its that completes
-  afterwards is let go, still marking a failure that had already suspected it. The alternative is a
-  lineage that stays answerable until its writes complete.
+- [x] **DI-9.1.2** -- An ended lineage is not live from the moment it ends. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-912)
 
-- [ ] **DI-9.1.3** -- **DECIDE: heals take effect as soon as nothing can delay them.** Now: ending a
-  lineage that a heal waits for releases the heal there, so `Healed` may follow `LineageEnded`
-  directly; and a failure whose suspect set is empty belongs to no lineage, so healing it takes
-  effect at once, where with one lineage it used to wait for the next seal.
+- [x] **DI-9.1.3** -- Heals take effect as soon as nothing can delay them. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-913)
 
 - [ ] **DI-9.1.4** -- **DECIDE: the oracle drops [DI-D-39](DESIGN-NOTES.md#di-d-39)'s tightening.**
   Now: a `Durable` may pass a failure once the consumer has healed it, because the stream cannot

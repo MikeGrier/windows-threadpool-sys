@@ -2327,3 +2327,22 @@ restructure: [DI-D-44](DESIGN-NOTES.md#di-d-44)'s "recorded as inconsistencies" 
 answer had been amended by DI-D-46 and the old item still said it, and `DI-D-42`'s dropped oracle
 tightening and the Windows default of `NoDiagnostics` had been buried in running text and are now
 items of their own (`DI-9.1.4`, `DI-9.4.1`).
+
+## Moved 2026-10-13 13:02:00 -04:00 -- DI-9.1.1 to DI-9.1.3: the engineer confirms three of DI-D-42's choices
+
+### <a id="di-911"></a>DI-9.1.1 -- A lineage handle's release runs on whichever thread drops the last copy. *(completed 2026-10-13 13:02:00 -04:00)*
+
+Accepted by the engineer: "agree, release on the same thread." Recorded in
+[DI-D-42](DESIGN-NOTES.md#di-d-42). The alternative put to the engineer, a release queued and made at
+the consumer's next call, is not taken.
+
+### <a id="di-912"></a>DI-9.1.2 -- An ended lineage is not live from the moment it ends. *(completed 2026-10-13 13:02:00 -04:00)*
+
+Accepted by the engineer: "agree, not live from the moment it ends." Recorded in
+[DI-D-42](DESIGN-NOTES.md#di-d-42).
+
+### <a id="di-913"></a>DI-9.1.3 -- Heals take effect as soon as nothing can delay them. *(completed 2026-10-13 13:02:00 -04:00)*
+
+Accepted by the engineer: "agreed, take effect as soon as nothing can delay them." Covers both
+halves of the item: ending a lineage a heal waits for releases the heal there, and a failure with an
+empty suspect set heals at once. Recorded in [DI-D-42](DESIGN-NOTES.md#di-d-42).
