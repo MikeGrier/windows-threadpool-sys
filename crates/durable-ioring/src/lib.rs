@@ -1,27 +1,25 @@
 // Copyright (c) 2026 Mike Grier
-//! A ring for Windows file I/O with durability scheduled into its work, built on
-//! `windows-ioring-sys`. What it is, and for whom, is in the crate's readme; what follows is its
-//! contract, the specification the code satisfies rather than defines.
+//! Epoch-based durability for a file-I/O ring, portable: the contract, the core that decides when
+//! writes are durable and what a failure puts at risk, the target and backend traits, an in-memory
+//! backend, and a conformance oracle. A driver supplies the platform; `win-durable-ioring` is the
+//! Windows one, built on `windows-ioring-sys`. What this is, and for whom, is in the crate's
+//! readme; what follows is its contract, the specification the code satisfies rather than defines.
 //!
 #![doc = include_str!("../CONTRACT.md")]
-#![cfg(windows)]
-// DI-D-4: no unsafe code, from the first commit. A Win32 call no lower crate wraps safely is added
-// to that crate, never written here.
+// DI-D-4: no unsafe code, from the first commit. A call no lower crate wraps safely is added to
+// that crate, never written here.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod backend;
 mod clock;
 mod contract;
-mod delivery;
 mod diagnostics;
-mod dioring;
 mod domains;
+pub mod driver;
 mod durability;
 mod engine;
 mod error_code;
-#[cfg(test)]
-mod fake;
 mod ids;
 mod io_core;
 mod io_target;
@@ -32,18 +30,15 @@ mod pump;
 #[cfg(test)]
 mod test_support;
 mod types;
-pub mod windows_backend;
 
 pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
     PushResult, RegisteredBufferRing, TokenOf,
 };
-pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticSink, FanOutDiagnostics, NoDiagnostics, StderrDiagnostics,
 };
-pub use dioring::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup, TimeBase};
 pub use error_code::ErrorCode;
 pub use ids::{DioringIds, FailureId, FailureToken, Lineage, LineageHandle, OpId};
 pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
@@ -64,9 +59,6 @@ pub use types::{
     RetireLineageRefusal, SealError, SuspectSet, SuspectWrite, Tag, UnknownLineage, WriteCaching,
     WriteOptions,
 };
-// The types the contract's signatures name from the crates it is built on, so a consumer needs no
-// direct dependency on them to call it.
-pub use win_shared_os_owned_handle::SharedHandle;
-pub use win_sync_sys::Event;
-pub use win_time_sys::{InterruptTime, TimePoint};
-pub use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
+// The types the contract's signatures name from the crate it is built on, so a consumer needs no
+// direct dependency on it to call it.
+pub use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};

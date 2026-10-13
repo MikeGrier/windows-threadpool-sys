@@ -1,34 +1,10 @@
 {
   "package": "durable-ioring",
-  "testArgs": ["-p", "durable-ioring", "--no-fail-fast"],
-  "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. CONTRACT.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
-  "description": "Sabotages for durable-ioring. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction; durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait failing, or ending as abandoned (windows_backend/wait.rs), is absent as well, and so is Dioring::pump reporting such a wait's error: the first needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and the second a mutex, and making either needs unsafe, which this crate forbids. win-sync-sys' tests reach both in the function it calls, and pump/tests.rs reaches a failing wait's report over the in-memory backend. Each has a survives entry named DI-7.3: blind spot. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's, and that a signalled instance's callback environment names the pool its callback runs on is a declared blind spot, as the pool's is.",
+  "testArgs": ["-p", "durable-ioring", "-p", "win-durable-ioring", "--no-fail-fast"],
+  "whyTestArgs": "Both packages, because the core's rules are pinned twice: by this crate's own tests of the core over the in-memory backend, and by the Windows driver's tests, which run a real core over a real ring, and a sabotage of the core that only the driver's tests catch would otherwise read as surviving. --no-fail-fast, so the doctests run even when the unit tests have already failed: the worked examples in win-durable-ioring's README.md are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
+  "description": "Sabotages for durable-ioring, the portable core (DI-8.2); the Windows driver's are in ../win-durable-ioring/sabotage.json. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "No test can produce these failures: durability.rs's two for states nothing produces (a completion never recorded as pushed, a flush for a seal not flushing); the durability core's debug assertions for a flush or a token it has no record of; and the oracle's AbandonedUnknown rule's lookup, which the oracle tests reach but no single-line patch can disable without also disabling the suspect-set comparison beside it. The Windows driver's own absences are in ../win-durable-ioring/sabotage.json.",
   "sabotages": [
-    {
-      "name": "DI-3.2.1: a duplicate file key is not refused",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "Two files under one key would make every report naming that key ambiguous, and the second would silently replace the first in the instance's records while the ring still holds both.",
-      "find": ["        if let Some(key) = first_repeat(files.iter().map(|f| f.key)) {"],
-      "replace": ["        if let Some(key) = first_repeat(std::iter::empty::<IoTargetKey>()) {"]
-    },
-    {
-      "name": "DI-3.2.1: a provider naming a domain twice is not refused",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-27 refuses it at construction, because a domain served twice would be answered twice for one seal.",
-      "find": ["        if let Some(domain) = first_repeat(provider_domains.iter().cloned()) {"],
-      "replace": ["        if let Some(domain) = first_repeat(std::iter::empty::<FlushDomain>()) {"]
-    },
-    {
-      "name": "DI-3.2.1: construction files are not registered",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A file given at construction must be held by the ring for its life (D-81); without the registration nothing holds it once the consumer's clone is gone.",
-      "find": ["    if handles.is_empty() {"],
-      "replace": ["    if handles.is_empty() || !handles.is_empty() {"]
-    },
     {
       "name": "DI-3.2.1: a domain repeated within one file counts twice",
       "file": "src/domains.rs",
@@ -62,36 +38,12 @@
       "replace": ["                drop::<Entry<V<E, K>, B, C>>(Entry::Op(OpCompletion {\n                    id,\n                    kind,\n                    outcome,\n                    buffer,\n                    context,\n                }));\n"]
     },
     {
-      "name": "DI-3.2.2.1: the readiness event is never set",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "DI-D-28: a waiter would sleep through every entry. Only the readiness check sees it -- the other tests poll -- which is why that check exists beside the oracle.",
-      "find": ["        let set = self.readiness.set();\n"],
-      "replace": ["        let set: io::Result<()> = Ok(());\n"]
-    },
-    {
       "name": "DI-3.2.2.1: the readiness event is set only when the queue was already non-empty",
       "file": "src/io_core.rs",
       "expect": "caught",
       "why": "The empty-to-non-empty transition is the one DI-D-28 requires: a single waiter that has popped to None sleeps until it. Caught by the readiness check's first push.",
       "find": ["            deliver: was_empty && !self.queue.is_empty(),\n"],
       "replace": ["            deliver: !was_empty && !self.queue.is_empty(),\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: a completion reports no bytes transferred",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The count is the ring's, and a read may come back short for the consumer to handle; reporting zero hides what happened.",
-      "find": ["                Ok(transferred)\n"],
-      "replace": ["                Ok(0)\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: a failed operation is reported as a transfer",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A write the kernel refused, reported as written, is a lost write the consumer cannot see. Caught by the read-only-handle test and by the caching test.",
-      "find": ["        Err(error) => Err(windows_fault(error)),\n"],
-      "replace": ["        Err(_) => Ok(0),\n"]
     },
     {
       "name": "DI-3.2.2.1: a write is recorded as a read",
@@ -116,30 +68,6 @@
       "why": "The refusal must hand back the buffer and the context; without it the push reaches a lookup that cannot succeed.",
       "find": ["        if !self.targets.contains_key(&target) {\n            return Err(PushRefusal::UnknownFile(target));\n"],
       "replace": ["        if false {\n            return Err(PushRefusal::UnknownFile(target));\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: a span operation without a registration is not refused",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A span operation with no registration is refused by the backend as Unsupported before it reaches the ring, handing the context back; without it the push reaches a registration that does not exist.",
-      "find": ["                if self.registered.is_none() {\n                    return Err(RefusalCause::Unsupported);\n"],
-      "replace": ["                if false {\n                    return Err(RefusalCause::Unsupported);\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: the write-through choice is dropped",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "DI-2.6: dioring hides no knob the platform offers. Caught because the platform answers differently: a write-through write fails on a cached handle, so a dropped flag turns that failure into a success.",
-      "find": ["        WriteCaching::WriteThrough => windows_ioring_sys::WriteCaching::WriteThrough,\n"],
-      "replace": ["        WriteCaching::WriteThrough => windows_ioring_sys::WriteCaching::Cached,\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: add_target accepts a key already in use",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "Two files under one key would make every report naming it ambiguous; the refusal hands the file back.",
-      "find": ["        if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {\n"],
-      "replace": ["        if false {\n"]
     },
     {
       "name": "DI-3.2.2.1: the oracle misses a second completion",
@@ -180,38 +108,6 @@
       "why": "A lost completion is invisible to every rule that looks at entries; only finish names it.",
       "find": ["        if self.outstanding.is_empty() {\n"],
       "replace": ["        if true {\n"]
-    },
-    {
-      "name": "DI-3.2.2.1: the readiness check does not require a second wake",
-      "file": "src/oracle.rs",
-      "expect": "caught",
-      "why": "The second half of DI-D-28's check: a signal set once and never again. Caught by the fake that sets only once.",
-      "find": ["            .map_err(|_| ReadinessFailure::NotSetAgain)?;\n"],
-      "replace": ["            .ok();\n"]
-    },
-    {
-      "name": "DI-3.2.2.2: the handover does not set the signal",
-      "file": "src/delivery.rs",
-      "expect": "caught",
-      "why": "DI-D-31's handover guarantee: entries queued before the front end took the instance, whose wake was already consumed, are stranded without it. Caught by the backlog test, which consumes that wake first.",
-      "find": ["        if let Err(error) = kick.set() {\n"],
-      "replace": ["        if let Err(error) = Ok::<(), std::io::Error>(()) {\n"]
-    },
-    {
-      "name": "DI-3.2.2.2: a wake delivers one entry and stops",
-      "file": "src/delivery.rs",
-      "expect": "caught",
-      "why": "DI-D-28: a waiter pops to None after every wake. Stopping early leaves entries that no later wake announces.",
-      "find": ["        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        (*handler)(entry, &inner.handle);\n        break;\n"]
-    },
-    {
-      "name": "DI-3.2.2.2: the handler runs with the instance's lock held",
-      "file": "src/delivery.rs",
-      "expect": "caught",
-      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop.",
-      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(entry, &inner.handle));\n"]
     },
     {
       "name": "DI-3.2.3: a seal does not wait for its writes in flight",
@@ -382,14 +278,6 @@
       "replace": ["            Standing::Open(_) => {\n"]
     },
     {
-      "name": "DI-3.2.4: a failed flush is reported as a success",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The flush's answer is the whole basis of durability. Caught by every test that arms the seam, which also shows the seam reaches dioring's decision rather than only the ring's.",
-      "find": ["            Kind::Commit => completion.result().map(|_| 0).map_err(windows_fault),\n"],
-      "replace": ["            Kind::Commit => Ok(0),\n"]
-    },
-    {
       "name": "DI-3.2.4: the oracle lets Durable pass an unresolved failure",
       "file": "src/oracle.rs",
       "expect": "caught",
@@ -444,14 +332,6 @@
       "why": "The oracle's statement of DI-D-35, which the I/O tests bind to.",
       "find": ["                .is_some_and(|ids| ids.contains(&epoch.id))\n"],
       "replace": ["                .is_some_and(|_| false)\n"]
-    },
-    {
-      "name": "CONTROL: the registration timeout's message is reworded",
-      "file": "src/dioring.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself. The tests assert on the bound the message names (DI-7.2) and not on the wording around it, so a rewording that keeps the bound must survive; if it comes back caught, something is matching incidental text.",
-      "find": ["            format!(\"the ring did not complete a registration within {bound:?}\"),"],
-      "replace": ["            format!(\"no registration completion arrived within {bound:?}\"),"]
     },
     {
       "name": "WT-2.2.2: every failure is stamped with the first failure's reading, not the clock",
@@ -558,44 +438,12 @@
       "replace": ["                markings: Vec::new(),\n"]
     },
     {
-      "name": "DI-3.9.2: a kernel failure's code is lost on the way to the core",
-      "file": "src/error_code.rs",
-      "expect": "caught",
-      "why": "The ring reports every failure with its code, and the Windows path relays it in each IoFault (DI-D-47, DI-D-50); dropping it records that an operation failed but not how. The Windows backend's unit tests and the ring test reading a failed commit's code both see it missing.",
-      "find": ["        code: ErrorCode::of(&error),\n"],
-      "replace": ["        code: None,\n"]
-    },
-    {
       "name": "DI-3.10.3.2: the oracle accepts a nullifier with any fault",
       "file": "src/oracle.rs",
       "expect": "caught",
       "why": "A nullifier relays the one report its write's completion carried (DI-D-50); an oracle comparing kinds and not faults lets a wrong code, or another report, through.",
       "find": ["            (MarkingKind::Nullified { fault }, Some(Ended::Failed(ended))) => fault == ended,\n"],
       "replace": ["            (MarkingKind::Nullified { .. }, Some(Ended::Failed(_))) => true,\n"]
-    },
-    {
-      "name": "DI-3.10.3.2: a short write is reported as transferred",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A target completes a write in full or with a fault (DI-D-50); passing a short count through as a transfer lets the core cover bytes that were never written.",
-      "find": ["            if write && transferred < requested {\n"],
-      "replace": ["            if write && transferred > requested {\n"]
-    },
-    {
-      "name": "DI-3.10.3.2: a full write is reported as a fault",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The other direction of the same guard: a write that transferred every byte it asked for completed, and turning it into a fault would nullify every write.",
-      "find": ["            if write && transferred < requested {\n"],
-      "replace": ["            if write && transferred <= requested {\n"]
-    },
-    {
-      "name": "DI-3.10.3.2: a short read is reported as a fault",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The obligation is a write's: a read may come back short, and the consumer handles its count.",
-      "find": ["            if write && transferred < requested {\n"],
-      "replace": ["            if transferred < requested {\n"]
     },
     {
       "name": "DI-3.2.5.1: the oracle holds Durable for a healed failure until its Healed entry",
@@ -636,14 +484,6 @@
       "why": "The manifest checking itself. Minting the token and freezing the suspect set read no clock and cannot move one, and all of it happens inside the one transition under the lock, so reading the clock first changes no stamp.",
       "find": ["        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n        let observed = self.clock.now();\n"],
       "replace": ["        let observed = self.clock.now();\n        let (token, live) = FailureToken::mint(id);\n        let suspect = SuspectSet::new(suspect);\n"]
-    },
-    {
-      "name": "DI-3.2.5.1: releasing a lineage's last handle does not end it",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "DI-D-40: the last handle's release is how a holder that will not finish a lineage ends it. Ignored, the lineage would live on with nothing able to seal it, its epochs neither durable nor abandoned. Caught by the ring test that drops the last copy and waits for LineageEnded.",
-      "find": ["        self.reach(|engine| match engine.core.end_lineage(lineage) {\n"],
-      "replace": ["        self.reach(|engine| match Some(lineage)\n            .filter(|_| false)\n            .map_or(Err(()), |lineage| engine.core.end_lineage(lineage).map_err(|_| ()))\n        {\n"]
     },
     {
       "name": "DI-3.2.5.1: ending a lineage abandons nothing",
@@ -732,22 +572,6 @@
       "why": "DI-D-19: a lineage is never reused, including after retirement, so a name a consumer kept never comes to mean another lineage. Caught by the core tests that mint twice.",
       "find": ["        self.next_lineage += 1;\n"],
       "replace": [""]
-    },
-    {
-      "name": "DI-3.2.5.1: the default lineage can be ended",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-40: the default lineage cannot be ended, and the refusal says why. Without the check the instance's own copy makes the handle shared, so the refusal names the wrong reason. Caught by the ring test of end_lineage's refusals.",
-      "find": ["        } else if lineage == self.default.lineage() {\n            EndLineageRefusal::Default\n"],
-      "replace": ["        } else if false {\n            EndLineageRefusal::Default\n"]
-    },
-    {
-      "name": "DI-3.2.5.1: a shared handle is retired",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-40: retire succeeds only through the lineage's last handle, so no surviving copy names a retired lineage. Caught by the ring test that offers a copy.",
-      "find": ["        } else if !handle.is_last() {\n            RetireLineageRefusal::Shared\n"],
-      "replace": ["        } else if false {\n            RetireLineageRefusal::Shared\n"]
     },
     {
       "name": "DI-3.2.5.1: a handle consumed by end_lineage stays armed",
@@ -1038,30 +862,6 @@
       "replace": [""]
     },
     {
-      "name": "DI-3.2.6: the provider's answer is never recorded",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "DI-D-27: an answer records the outcome. Dropping it leaves every provider-served seal pending.",
-      "find": ["        self.reach(|engine| {\n            let actions = engine\n                .core\n                .provided(call.lineage, call.seal, &call.name, outcome);\n            engine.act(actions)\n        });\n"],
-      "replace": ["        let _ = outcome;\n"]
-    },
-    {
-      "name": "DI-3.2.6: the provider is never called",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-27: one request per seal. A request queued and never made leaves its seal pending with no answer ever coming.",
-      "find": ["            provider.make_durable(request);\n"],
-      "replace": ["            std::mem::forget(request);\n"]
-    },
-    {
-      "name": "DI-3.2.6: the provider is called with the lock held",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-44: the provider may answer inside its call, and the answer takes the engine's lock. Calling it with the lock held -- reached through the slot pool delivery shares, the one path the borrow checker does not refuse -- deadlocks the synchronous answer test, which a timeout counts as caught.",
-      "find": ["        for request in requests {\n            provider.make_durable(request);\n"],
-      "replace": ["        let shared = self.delivery.as_ref().expect(\"live\").shared();\n        let _held = crate::windows_backend::pool::lock(&shared);\n        for request in requests {\n            provider.make_durable(request);\n"]
-    },
-    {
       "name": "DI-3.2.7: a file with operations held for a gate is removed",
       "file": "src/io_core.rs",
       "expect": "caught",
@@ -1150,43 +950,11 @@
       "replace": ["        let failures = Vec::new();\n        let lineages"]
     },
     {
-      "name": "DI-3.2.7: ending does not wait for the provider",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-25: ending waits for every provider call in flight, which may still be using what the instance owns.",
-      "find": ["        self.hub.wait_for_answers();\n"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-3.2.7: ending keeps the provider while it waits",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-45: a provider that keeps completions in itself answers them only when dropped, so a wait before the drop never ends. The test closes on another thread and calls a missed bound a hang.",
-      "find": ["        self.provider = None;\n"],
-      "replace": [""]
-    },
-    {
       "name": "DI-3.2.7: a completion is not counted when made",
       "file": "src/provider.rs",
       "expect": "caught",
       "why": "DI-D-45: ending waits until the count is zero, so an uncounted completion is not waited for, and its answer is recorded as an inconsistency.",
       "find": ["        if let Some(home) = home.upgrade() {\n            home.issued();\n        }\n"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-3.2.7: an answer does not count its completion down",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "DI-D-45: every answer counts down, after the end included. Without it ending waits forever.",
-      "find": ["            *unanswered = left;\n"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-3.2.7: the last answer wakes no one",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "The wait sleeps until notified; an answer that reaches zero without notifying leaves ending asleep.",
-      "find": ["                self.answered.notify_all();\n"],
       "replace": [""]
     },
     {
@@ -1622,78 +1390,6 @@
       "replace": [""]
     },
     {
-      "name": "DI-3.10.3.5.5: a full submission queue is reported as needing a drain",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "DI-D-52: the cause is what lets the caller act without probing; a full submission queue is cleared by a submit.",
-      "find": ["        Some(RingCondition::SubmissionQueueFull) => RefusalCause::SubmitNeeded,\n"],
-      "replace": ["        Some(RingCondition::SubmissionQueueFull) => RefusalCause::DrainNeeded,\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: a full completion queue is reported as needing a submit",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "DI-D-52: a full completion queue is cleared by draining completions, not by submitting more.",
-      "find": ["        Some(RingCondition::CompletionQueueTooFull) => RefusalCause::DrainNeeded,\n"],
-      "replace": ["        Some(RingCondition::CompletionQueueTooFull) => RefusalCause::SubmitNeeded,\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: a corrupt ring is reported as of unknown cause",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "DI-D-52: a corrupt ring takes no more submissions, ever; saying so stops a caller retrying.",
-      "find": ["        Some(RingCondition::Corrupt) => RefusalCause::Unusable(windows_fault(error)),\n"],
-      "replace": ["        Some(RingCondition::Corrupt) => RefusalCause::Unknown(windows_fault(error)),\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: a malformed submission is reported as of unknown cause",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "DI-D-52: a malformed submission is Invalid, which retrying never clears; Unknown hides that.",
-      "find": ["            io::ErrorKind::InvalidInput => RefusalCause::Invalid,\n"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-3.10.3.5.5: a target's geometry is not enforced",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A target states the alignment its operations need (DI-D-50 P2); the backend refuses what it does not admit rather than let the kernel fail it.",
-      "find": ["        if admitted {\n            Ok(())\n"],
-      "replace": ["        if true || admitted {\n            Ok(())\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: an armed commit failure lands on another target",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The fault seam fails the named target's next commit and nothing else.",
-      "find": ["                .position(|(target, _)| *target == sidecar.target)\n"],
-      "replace": ["                .position(|(target, _)| *target != sidecar.target)\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: detach does not hand the target back",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A detached target goes back to its owner, as a refused attach hands it back.",
-      "find": ["        self.targets.remove(&key).map(|slot| slot.target)\n"],
-      "replace": ["        self.targets.remove(&key).and(None)\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.5: the backend reports no registered buffers",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A registered region names a buffer by position; the count is how a caller knows which positions exist.",
-      "find": ["        self.registered.as_ref().map_or(0, RegisteredBuffers::len)\n"],
-      "replace": ["        0\n"]
-    },
-    {
-      "name": "CONTROL: the Windows backend tests its submit flag by comparison",
-      "file": "src/windows_backend.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself on the backend: negating a bool and comparing it with false are the same test. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["        if !self.unsubmitted {\n"],
-      "replace": ["        if self.unsubmitted == false {\n"]
-    },
-    {
       "name": "DI-3.10.3.5.6.1: a submission the backend refuses is dropped",
       "file": "src/engine.rs",
       "expect": "caught",
@@ -1724,22 +1420,6 @@
       "why": "DI-D-28: entries made poppable by a drain must be told, or a consumer waiting on readiness waits forever.",
       "find": ["                deliver |= self.act(actions);\n"],
       "replace": ["                self.act(actions);\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.1: pool delivery never tells the driver",
-      "file": "src/windows_backend/pool.rs",
-      "expect": "caught",
-      "why": "DI-D-28: a drain that made entries poppable tells the driver, after releasing the engine's lock.",
-      "find": ["            if deliver {\n"],
-      "replace": ["            if false {\n"]
-    },
-    {
-      "name": "DECLARED BLIND SPOT: the backend's wake ignores its pool",
-      "file": "src/windows_backend.rs",
-      "expect": "survives",
-      "why": "DI-D-52: an optional callback environment binds pool delivery to a pool, a NUMA node's for one; dropping it puts delivery on the default pool, which no test of behaviour can see: either pool runs the drain, and a single-thread pool's repeated thread proves nothing the default pool might not also do. The callback-environment test proves only that delivery works when one is given.",
-      "find": ["        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)\n"],
-      "replace": ["        let _ = env;\n        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, None)\n"]
     },
     {
       "name": "CONTROL: the engine tests a pass's pops by comparison",
@@ -1806,22 +1486,6 @@
       "replace": ["        let _ = (target, op);\n        Ok(())\n    }\n"]
     },
     {
-      "name": "DI-3.10.3.5.6.2.1: the Windows backend's check does not ask the registration",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A push leaves a region's bounds to the ring; check must ask the ring's own span check, or a gated region outside the registration is held and fails only once released.",
-      "find": ["            Some(registered) => registered.check_span(span(region)).map_err(refusal_cause),\n"],
-      "replace": ["            Some(_) => Ok(()),\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.1: the Windows backend's check skips its pre-ring refusals",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "check is the push's refusals before the ring is asked, then the ring's span check; skipping the first admits an unknown target or a misaligned operation.",
-      "find": ["        self.admits(target, op)?;\n"],
-      "replace": ["        let _ = self.admits(target, op);\n"]
-    },
-    {
       "name": "CONTROL: the engine folds readiness by a longer spelling",
       "file": "src/engine.rs",
       "expect": "survives",
@@ -1830,245 +1494,12 @@
       "replace": ["            deliver = deliver || ready;\n"]
     },
     {
-      "name": "DI-3.10.3.5.6.2.4: the backend's trait impl demands IoBufMut",
-      "file": "src/windows_backend.rs",
-      "expect": "refused-by-build",
-      "buildError": "the trait bound `B: IoBufMut` is not satisfied",
-      "why": "DI-D-17: owned writes keep write-only buffer types. The library itself refuses the narrower bound: pool delivery is declared over B: IoBuf and drains the backend as an IoBackend, so the build fails there, before the tests' Arc<[u8]> backend -- which pins the same bound from the consumer's side -- is compiled.",
-      "find": ["impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {\n"],
-      "replace": ["impl<B: IoBufMut, R: IoBufMut> IoBackend for WindowsBackend<B, R> {\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.4: an owned read without a read push is not refused",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A backend built without owned reads must refuse one as Unsupported, at check and at push, rather than reach a push it does not have.",
-      "find": ["        if self.owned_read.is_none()\n"],
-      "replace": ["        if false && self.owned_read.is_none()\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.4: new makes no owned-read push",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "new is the constructor for a buffer type that is IoBufMut; without the push it makes, every owned read is refused.",
-      "find": ["        backend.enable_owned_reads();\n"],
-      "replace": ["        let _ = &mut backend;\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.5: a registered buffer is lent without asking the registration",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The accessor lends the registration's own bytes, and only when the registration admits it: refused, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer(i).map(f)\n"],
-      "replace": ["        Ok(f(&[]))\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.5: a registered buffer is lent mutably without asking the registration",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "As for the shared accessor: refused while in use, out of range, or with no registration, f is not called.",
-      "find": ["        self.engine().backend.registered_buffer_mut(i).map(f)\n"],
-      "replace": ["        Ok(f(&mut []))\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.6: an answer to a completion never made is counted down",
-      "file": "src/dioring/hub.rs",
-      "expect": "caught",
-      "why": "DI-D-45: every completion made is counted, and an answer beyond them is the provider breaking its contract, reported as an inconsistency. Counted down instead, it vanishes, and a later ending can stop waiting while a real completion is still unanswered.",
-      "find": ["            let Some(left) = unanswered.checked_sub(1) else {\n"],
-      "replace": ["            let Some(left) = Some(unanswered.saturating_sub(1)) else {\n"]
-    },
-    {
-      "name": "DI-3.10.3.5.6.2.6: a pop makes no provider request",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "DI-D-44: a request a drain makes -- a seal's, once the writes it waited for complete -- waits for the consumer's next call. A consumer waiting on Durable only pops, so a pop that does not make it leaves the seal pending forever.",
-      "find": ["        self.call_provider();\n        popped\n"],
-      "replace": ["        popped\n"]
-    },
-    {
-      "name": "DI-7.1: a pop hides a failed submit",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A failed submission is reported by the pop that finds no entry to return instead, with its cause, so the consumer is not left polling for work that was never issued. Reached through the ring crate's safe submit-fault responder registered for the instance's ring (its D-85 and M37.1), which fails the submits pool threads make as well as the consumer's. Caught by the test that pops while submits fail and recovers the cause from the error.",
-      "find": ["                (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
-      "replace": ["                (None, Err(_)) => Ok(None),\n"]
-    },
-    {
-      "name": "DI-7.1: a pop's report wins over an entry",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "An entry is progress, and a pop that has one returns it even when the submit it also made failed: the failure is reported only when there is nothing to return instead. Reporting it first drops the entry the pop had already taken, so the consumer loses a completion. Caught by the drain test, which needs the first read's entry to arrive while submits fail.",
-      "find": ["                (Some(entry), _) => Ok(Some(entry)),"],
-      "replace": ["                (Some(_), Err(cause)) => Err(io::Error::other(cause)),", "                (Some(entry), Ok(())) => Ok(Some(entry)),"]
-    },
-    {
       "name": "DI-7.1: a pool drain does not submit first",
       "file": "src/engine.rs",
       "expect": "caught",
       "why": "Each pass of a drain begins by submitting what a failed submit left queued, so a consumer that has stopped popping still gets its work issued. Without it a drain runs and never asks the ring. Caught by the drain test, which requires a failed submit on a thread other than its own.",
       "find": ["            let _ = self.backend.submit();"],
       "replace": [""]
-    },
-    {
-      "name": "DI-7.1: a failed submit after an accepted push is not remembered",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A push whose own submit failed leaves its entry queued in the ring, and the backend owes a submit. Forgotten, the owed submit is never asked for, and the entry stays queued until some other submit happens to run it. Caught at once by the backend test that expects the owed submit to fail.",
-      "find": ["                self.unsubmitted |= batch.submit().is_err();"],
-      "replace": ["                let _ = batch.submit();"]
-    },
-    {
-      "name": "DI-7.1: a successful reissue leaves the submit owed",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "Once a reissue succeeds nothing is owed, and the ring is not asked again. Left owed, every later submit asks the ring for nothing, and fails when the ring's submits fail.",
-      "find": ["                self.unsubmitted = false;"],
-      "replace": [""]
-    },
-    {
-      "name": "DI-7.1: a failed reissue forgets what is owed",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A reissue that fails leaves the entries queued, so the submit is still owed. Forgotten, the next submit returns success without asking the ring, and the work is never issued: the consumer waits for a completion that cannot come.",
-      "find": ["            Err(error) => Err(refusal_cause(error)),"],
-      "replace": ["            Err(error) => {", "                self.unsubmitted = false;", "                Err(refusal_cause(error))", "            }"]
-    },
-    {
-      "name": "DI-7.1: a failed reissue is reported as a success",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The consumer's only way to learn its work was not issued is the failure a reissue reports.",
-      "find": ["            Err(error) => Err(refusal_cause(error)),"],
-      "replace": ["            Err(_) => Ok(()),"]
-    },
-    {
-      "name": "DI-7.1: a failed reissue loses its cause",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "A reissue's failure is reported as the cause the ring gave, mapped as every other refusal is, so the caller can act on it without probing.",
-      "find": ["            Err(error) => Err(refusal_cause(error)),"],
-      "replace": ["            Err(_) => Err(RefusalCause::Invalid),"]
-    },
-    {
-      "name": "DI-7.2: a refused file-registration build loses its cause",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A registration the ring refuses to build ends construction as the ring's own error, so a consumer can act on the cause rather than a placeholder.",
-      "find": ["        .map_err(PushRefused::into_error)?;"],
-      "replace": ["        .map_err(|_| io::Error::from(io::ErrorKind::Other))?;"]
-    },
-    {
-      "name": "DI-7.2: a file registration's failed submit is swallowed",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A registration that was not submitted can never complete: the failure is the answer, and swallowing it turns it into a wait for the bound.",
-      "find": ["    batch.submit()?;"],
-      "replace": ["    let _ = batch.submit();"]
-    },
-    {
-      "name": "DI-7.2: a failed file-registration completion is taken for success",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A registration the kernel failed is not a registration made: reporting success hands the engine files the ring does not hold.",
-      "find": ["        Ok(result) => result.map(Some),"],
-      "replace": ["        Ok(_) => Ok(None),"]
-    },
-    {
-      "name": "DI-7.2: a refused buffer-registration build keeps the buffers",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A build the ring refused never gave the kernel the buffers, so they go back to the caller; dropping them loses what the caller handed in.",
-      "find": ["        .map_err(|refused| (refused.error, refused.payload))?;"],
-      "replace": ["        .map_err(|refused| (refused.error, None))?;"]
-    },
-    {
-      "name": "DI-7.2: a failed buffer-registration completion is taken for success",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "As for files: a buffer registration the kernel failed is not one made.",
-      "find": ["        Ok(result) => result.map(Some).map_err(|error| (error, None)),"],
-      "replace": ["        Ok(_) => Ok(None),"]
-    },
-    {
-      "name": "DI-7.2: a registration waits the default bound, not the one construction was given",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The bound is a property of the construction, so a test can shorten one wait rather than the constant for every test. Ignoring it makes the stalled-registration tests wait the default 30s, and the stall ends first.",
-      "find": ["    match ring.pop_within(bound)? {"],
-      "replace": ["    match ring.pop_within(REGISTRATION_BOUND)? {"]
-    },
-    {
-      "name": "DI-7.2: a registration that times out is not reported as a timeout",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "A completion that did not arrive is a timeout, and says so.",
-      "find": ["            io::ErrorKind::TimedOut,"],
-      "replace": ["            io::ErrorKind::Other,"]
-    },
-    {
-      "name": "DI-7.2: a registration's timeout does not name the bound it waited",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The message states what construction waited, so a reader is not told 30s of a 50ms wait.",
-      "find": ["            format!(\"the ring did not complete a registration within {bound:?}\"),"],
-      "replace": ["            \"the ring did not complete a registration within 30s\".to_string(),"]
-    },
-    {
-      "name": "DI-7.2: a construction failure loses the ring's error",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The instance's refusal carries the ring's own error, with its HRESULT, not just a kind.",
-      "find": ["                    WindowsBackendRefusal::Ring(error) => SetupRefusal::Ring(error),"],
-      "replace": ["                    WindowsBackendRefusal::Ring(error) => SetupRefusal::Ring(io::Error::from(error.kind())),"]
-    },
-    {
-      "name": "DI-7.2: a construction failure does not hand the buffers back",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "What the backend hands back, the instance hands back: the buffers while the kernel was not given them.",
-      "find": ["                    files: setups(targets),", "                    buffers,", "                    provider,"],
-      "replace": ["                    files: setups(targets),", "                    buffers: None,", "                    provider,"]
-    },
-    {
-      "name": "DI-7.2: the files' registration waits the default bound",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "Construction's bound reaches the files' registration.",
-      "find": ["        let files = match register_files(&mut ring, handles, registration_bound) {"],
-      "replace": ["        let files = match register_files(&mut ring, handles, crate::dioring::REGISTRATION_BOUND) {"]
-    },
-    {
-      "name": "DI-7.2: the buffers' registration waits the default bound",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "Construction's bound reaches the buffers' registration too, which only a stall with no files to register first can show.",
-      "find": ["        let registered = match register_buffers(&mut ring, buffers, registration_bound) {"],
-      "replace": ["        let registered = match register_buffers(&mut ring, buffers, crate::dioring::REGISTRATION_BOUND) {"]
-    },
-    {
-      "name": "DI-7.2: a failed completion-event attach loses the targets",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "Whatever fails, the targets come back: they were the caller's.",
-      "find": ["            Err(error) => return Err(fail(error, targets, None)),"],
-      "replace": ["            Err(error) => return Err(fail(error, Vec::new(), None)),"]
-    },
-    {
-      "name": "DI-7.2: the construction hook runs after the files are registered",
-      "file": "src/windows_backend.rs",
-      "expect": "caught",
-      "why": "The hook is the only moment a responder can answer the registration calls: called after the first of them it has missed it, and a refused file-registration build is never seen.",
-      "find": ["        #[cfg(test)]", "        if let Some(on_ring) = on_ring {", "            on_ring(&ring);", "        }", "        let handles = targets", "            .iter()", "            .map(|(_, target)| target.handle().clone())", "            .collect();", "        let files = match register_files(&mut ring, handles, registration_bound) {", "            Ok(files) => files,", "            Err(error) => return Err(fail(error, targets, Some(buffers))),", "        };"],
-      "replace": ["        let handles = targets", "            .iter()", "            .map(|(_, target)| target.handle().clone())", "            .collect();", "        let files = match register_files(&mut ring, handles, registration_bound) {", "            Ok(files) => files,", "            Err(error) => return Err(fail(error, targets, Some(buffers))),", "        };", "        #[cfg(test)]", "        if let Some(on_ring) = on_ring {", "            on_ring(&ring);", "        }"]
-    },
-    {
-      "name": "CONTROL: DI-7.2: the construction hook is called through an identity",
-      "file": "src/windows_backend.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself on construction: a reborrow changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
-      "find": ["            on_ring(&ring);"],
-      "replace": ["            on_ring(&*&ring);"]
     },
     {
       "name": "DI-7.3: a pump drains before it waits",
@@ -2159,78 +1590,6 @@
       "replace": ["        let raised = count >= self.seen;"]
     },
     {
-      "name": "DI-7.3: a signalled ring event is reported as not raised",
-      "file": "src/windows_backend/wait.rs",
-      "expect": "caught",
-      "why": "The ring's completion event is the Windows backend's notification: its being set is the raising.",
-      "find": ["            WaitOutcome::Signalled => Ok(true),"],
-      "replace": ["            WaitOutcome::Signalled => Ok(false),"]
-    },
-    {
-      "name": "DI-7.3: a timed-out ring event wait is reported as raised",
-      "file": "src/windows_backend/wait.rs",
-      "expect": "caught",
-      "why": "The other direction: a wait that timed out saw nothing raised.",
-      "find": ["            WaitOutcome::TimedOut => Ok(false),"],
-      "replace": ["            WaitOutcome::TimedOut => Ok(true),"]
-    },
-    {
-      "name": "DI-7.3: blind spot: a wait on the ring's event that fails is taken for a timeout",
-      "file": "src/windows_backend/wait.rs",
-      "expect": "survives",
-      "why": "Declared, not caught: no test here can make the wait fail. It needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and making one otherwise needs unsafe, which this crate forbids. win-sync-sys' tests reach the failing wait in the function this calls.",
-      "find": ["        match wait_for_single_object(&*self, timeout)? {"],
-      "replace": ["        match wait_for_single_object(&*self, timeout).unwrap_or(WaitOutcome::TimedOut) {"]
-    },
-    {
-      "name": "DI-7.3: blind spot: an abandoned ending of the ring's event wait is taken for a timeout",
-      "file": "src/windows_backend/wait.rs",
-      "expect": "survives",
-      "why": "Declared, not caught: only a mutex is abandoned, an event never is, and a test would need a mutex, which needs unsafe to make. win-sync-sys' tests reach the abandoned ending in the function this calls.",
-      "find": ["            WaitOutcome::TimedOut => Ok(false),"],
-      "replace": ["            WaitOutcome::TimedOut | WaitOutcome::Abandoned => Ok(false),"]
-    },
-    {
-      "name": "DI-7.3: pumping an instance built with a pool is not refused as unsupported",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The pool drains the instance, and a consumer that pumps it has misread how it was built; the refusal says so by its kind.",
-      "find": ["                    io::ErrorKind::Unsupported,"],
-      "replace": ["                    io::ErrorKind::Other,"]
-    },
-    {
-      "name": "DI-7.3: a pump does not settle what it drained",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The pump is the consumer call after which the readiness event is set and the provider's requests are made, as for every other path that makes entries poppable.",
-      "find": ["        self.settled(pumped.ready);"],
-      "replace": ["        let _ = pumped.ready;"]
-    },
-    {
-      "name": "DI-7.3: blind spot: a pump's failed wait is reported as success",
-      "file": "src/dioring.rs",
-      "expect": "survives",
-      "why": "Declared, not caught: no test through the driver can make the Windows notification's wait fail. The delivery's reporting of a failed wait is caught over the in-memory backend, in pump/tests.rs.",
-      "find": ["        pumped.waited.map(|_| pumped.ready)"],
-      "replace": ["        Ok(pumped.ready)"]
-    },
-    {
-      "name": "DI-7.3: an instance set up for pumping is built with a pool",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The delivery chosen at construction is the one the instance has: a pool drains an instance nothing is meant to drain.",
-      "find": ["            DeliveryMode::Pumped => PumpedDelivery::new(engine).map(Delivery::Pumped),"],
-      "replace": ["            DeliveryMode::Pumped => PoolDelivery::new(engine, on_ready, None).map(Delivery::Pool),"]
-    },
-    {
-      "name": "DI-7.3: an instance set up with a pool is built for pumping",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The other direction: an instance given a pool that nothing drains delivers nothing, to every consumer that waits for its readiness.",
-      "find": ["                PoolDelivery::new(engine, on_ready, environment).map(Delivery::Pool)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
-    },
-    {
       "name": "CONTROL: DI-7.3: a pump asks whether the drain made entries poppable another way",
       "file": "src/pump.rs",
       "expect": "survives",
@@ -2253,102 +1612,6 @@
       "why": "A first drain that delivered returns that it did, which sets the readiness event and tells the consumer to pop.",
       "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
       "replace": ["        if !lock(&self.engine).as_mut().is_some_and(Engine::drain) {"]
-    },
-    {
-      "name": "DI-7.5: the pool's callback sets nothing",
-      "file": "src/windows_backend/signalled.rs",
-      "expect": "caught",
-      "why": "The wake exists to set the consumer's event; a callback that does not leaves a consumer waiting beside its other handles for a completion nothing tells it of.",
-      "find": ["            let set = waker.set();"],
-      "replace": ["            let set: io::Result<()> = Ok(());"]
-    },
-    {
-      "name": "DI-7.5: each call for the signal makes a new event",
-      "file": "src/windows_backend/signalled.rs",
-      "expect": "caught",
-      "why": "Every duplicate is a handle to the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
-      "find": ["        self.signal.try_clone()"],
-      "replace": ["        Event::new(ResetMode::Auto, false)"]
-    },
-    {
-      "name": "DI-7.5: the signal is made manual-reset",
-      "file": "src/windows_backend/signalled.rs",
-      "expect": "caught",
-      "why": "Auto-reset, so a wait takes the signal and a consumer's loop does not spin: manual-reset stays set until someone resets it, and a pump's wait on it returns at once for ever.",
-      "find": ["        let made = Event::new(ResetMode::Auto, false).and_then(|signal| {"],
-      "replace": ["        let made = Event::new(ResetMode::Manual, false).and_then(|signal| {"]
-    },
-    {
-      "name": "DI-7.5: a signalled instance is built pumped",
-      "file": "src/dioring.rs",
-      "expect": "caught",
-      "why": "The delivery chosen at construction is the one the instance has: a pumped instance has no pool wake, so nothing sets a signal for the consumer.",
-      "find": ["                SignalledDelivery::new(engine, environment).map(Delivery::Signalled)"],
-      "replace": ["                PumpedDelivery::new(engine).map(Delivery::Pumped)"]
-    },
-    {
-      "name": "DI-7.5: a signalled instance has no completion signal",
-      "file": "src/dioring/delivery.rs",
-      "expect": "caught",
-      "why": "The signal is the mode's point: the consumer reaches it through the instance.",
-      "find": ["            Self::Signalled(signalled) => Some(signalled.signal()),"],
-      "replace": ["            Self::Signalled(_) => None,"]
-    },
-    {
-      "name": "DI-7.5: a signalled instance cannot be pumped",
-      "file": "src/dioring/delivery.rs",
-      "expect": "caught",
-      "why": "Nothing else drains a signalled instance: a consumer woken by the signal drains it with pump.",
-      "find": ["            Self::Signalled(signalled) => Some(signalled.pump(timeout)),"],
-      "replace": ["            Self::Signalled(_) => None,"]
-    },
-    {
-      "name": "CONTROL: DI-7.5: the wake is dropped at the end of into_engine instead of its start",
-      "file": "src/windows_backend/signalled.rs",
-      "expect": "survives",
-      "why": "The manifest checking itself on the new module: the wake's callback holds only a duplicate of the event and never the engine, so when it stops relative to the engine's coming out of its slot changes nothing observable; if this comes back caught, something is matching incidental text.",
-      "find": ["        drop(wake);"],
-      "replace": ["        let _later = &wake;"]
-    },
-    {
-      "name": "DI-7.4: the blocking push retries a refusal that cannot clear",
-      "file": "examples/blocking_push/main.rs",
-      "expect": "caught",
-      "why": "Only a refusal waiting clears is waited out; the rest -- no such file, a sealed epoch -- is returned at once with the buffer, so a caller is not held for its patience over a push that can never succeed.",
-      "find": ["        if !clears || refused.buffer.is_none() {"],
-      "replace": ["        if refused.buffer.is_none() {"]
-    },
-    {
-      "name": "DI-7.4: the blocking push never gives up",
-      "file": "examples/blocking_push/main.rs",
-      "expect": "caught",
-      "why": "The patience is the helper's whole bound; without it a ring that never makes room blocks its caller for ever.",
-      "find": ["        if left.is_zero() {"],
-      "replace": ["        if false {"]
-    },
-    {
-      "name": "DI-7.4: the blocking push's patience is counted in the wrong unit",
-      "file": "examples/blocking_push/main.rs",
-      "expect": "caught",
-      "why": "A push that gives up must have waited the patience it was given, not a thousandth of it.",
-      "find": ["    let deadline = Instant::now() + patience;"],
-      "replace": ["    let deadline = Instant::now() + patience / 1000;"]
-    },
-    {
-      "name": "DI-7.4: the blocking push swallows a failure to make room",
-      "file": "examples/blocking_push/main.rs",
-      "expect": "caught",
-      "why": "A make_room that fails is reported with the push handed back, rather than retried until the patience is spent and reported as a timeout, which names the wrong cause.",
-      "find": ["        if let Err(error) = make_room(ring, left.min(SLICE)) {"],
-      "replace": ["        if let Err(error) = make_room(ring, left.min(SLICE)).or(Ok::<(), io::Error>(())) {"]
-    },
-    {
-      "name": "DI-7.4: making room for a pumped instance does not pump it",
-      "file": "examples/blocking_push/main.rs",
-      "expect": "caught",
-      "why": "Nothing else drains a pumped or signalled instance, so a blocking push that does not pump waits for room that never comes.",
-      "find": ["            Self::Pumped | Self::Signalled => ring.pump(Some(slice)).map(|_| ()),"],
-      "replace": ["            Self::Pumped | Self::Signalled => Ok(()),"]
     }
   ]
 }

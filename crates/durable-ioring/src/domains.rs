@@ -77,7 +77,7 @@ pub(crate) fn epoch_state<E: EpochId + 'static, I: Instant>(
 }
 
 /// The first value `values` yields twice.
-pub(crate) fn first_repeat<T: Eq + std::hash::Hash + Clone>(
+pub fn first_repeat<T: Eq + std::hash::Hash + Clone>(
     values: impl IntoIterator<Item = T>,
 ) -> Option<T> {
     let mut seen = HashSet::new();

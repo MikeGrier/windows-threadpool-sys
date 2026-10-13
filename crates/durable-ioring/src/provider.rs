@@ -94,7 +94,7 @@ pub struct DomainCompletion {
 
 impl DomainCompletion {
     /// A completion answering `call` through `home`, which counts it as unanswered from now.
-    pub(crate) fn new(home: Weak<dyn Answer>, call: DomainCall) -> Self {
+    pub fn new(home: Weak<dyn Answer>, call: DomainCall) -> Self {
         if let Some(home) = home.upgrade() {
             home.issued();
         }
@@ -141,13 +141,13 @@ impl Debug for DomainCompletion {
 
 /// Which part of which seal a completion answers, as the core's `provided` names it.
 #[derive(Clone, Debug)]
-pub(crate) struct DomainCall {
+pub struct DomainCall {
     /// The seal's lineage.
-    pub(crate) lineage: Lineage,
+    pub lineage: Lineage,
     /// The seal's sequence number within its lineage.
-    pub(crate) seal: u64,
+    pub seal: u64,
     /// The domain.
-    pub(crate) name: FlushDomain,
+    pub name: FlushDomain,
 }
 
 /// How a provider answered one domain of one request.
@@ -163,10 +163,7 @@ pub enum DomainOutcome {
 
 impl DomainOutcome {
     /// The outcome as the durability core records it: success, or the cause of `domain`'s failure.
-    pub(crate) fn into_result<V: Identities>(
-        self,
-        domain: &FlushDomain,
-    ) -> Result<(), FailureCause<V>> {
+    pub fn into_result<V: Identities>(self, domain: &FlushDomain) -> Result<(), FailureCause<V>> {
         match self {
             DomainOutcome::Succeeded => Ok(()),
             DomainOutcome::Failed(error) => Err(FailureCause::Provider {
@@ -181,7 +178,7 @@ impl DomainOutcome {
 }
 
 /// Where a completion's answer goes: the instance that made the request.
-pub(crate) trait Answer: Send + Sync {
+pub trait Answer: Send + Sync {
     /// A completion was made: it is unanswered until [`answer`](Self::answer) is called for it,
     /// which its drop does if nothing else has.
     fn issued(&self);

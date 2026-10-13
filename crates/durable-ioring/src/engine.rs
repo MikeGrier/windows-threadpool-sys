@@ -43,17 +43,19 @@ type Sealed<E, K> = Result<(DurabilityRequest<V<E, K>>, bool), SealError<V<E, K>
 
 /// A core and its backend, acted on together (DI-D-53). `E` is the epoch-id type, `Bk` the
 /// backend, `C` the consumer's per-operation context, and `K` the clock failures are stamped with.
-pub(crate) struct Engine<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> {
-    pub(crate) core: DurableIoCore<E, Bk::Buffer, C, K>,
-    pub(crate) backend: Bk,
+pub struct Engine<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> {
+    /// The core, which decides.
+    pub core: DurableIoCore<E, Bk::Buffer, C, K>,
+    /// The backend, which runs the I/O the core asks for.
+    pub backend: Bk,
     /// Requests for the consumer's provider the core has made, in order, for the driver to make
     /// with its lock released.
-    pub(crate) requests: Vec<ProviderRequest<V<E, K>>>,
+    pub requests: Vec<ProviderRequest<V<E, K>>>,
 }
 
 impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> {
     /// A core and its backend, with no request outstanding.
-    pub(crate) fn new(core: DurableIoCore<E, Bk::Buffer, C, K>, backend: Bk) -> Self {
+    pub fn new(core: DurableIoCore<E, Bk::Buffer, C, K>, backend: Bk) -> Self {
         Self {
             core,
             backend,
@@ -66,7 +68,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// and keep each provider request, in the order made. Whether entries became poppable.
     ///
     /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
-    pub(crate) fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
+    pub fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
         let mut deliver = false;
         let mut pending = VecDeque::from([actions]);
         while let Some(CoreActions {
@@ -94,7 +96,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// actions of every completion, so the pop that makes room is the one that re-pushes it.
     /// A backend that cannot read its completions ends the drain; they stay where they are, for
     /// the next.
-    pub(crate) fn drain(&mut self) -> bool {
+    pub fn drain(&mut self) -> bool {
         let mut deliver = false;
         loop {
             // A failed submission leaves its entries queued, and its cause is acted on by popping,
@@ -117,7 +119,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// # Errors
     ///
     /// As [`DurableIoCore::write`].
-    pub(crate) fn write(
+    pub fn write(
         &mut self,
         target: IoTargetKey,
         offset: u64,
@@ -142,7 +144,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// # Errors
     ///
     /// As [`DurableIoCore::read`].
-    pub(crate) fn read(
+    pub fn read(
         &mut self,
         target: IoTargetKey,
         offset: u64,
@@ -160,31 +162,36 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
     /// # Errors
     ///
     /// As [`DurableIoCore::make_durable_through`].
-    pub(crate) fn make_durable_through(&mut self, through: Epoch<V<E, K>>) -> Sealed<E, K> {
+    pub fn make_durable_through(&mut self, through: Epoch<V<E, K>>) -> Sealed<E, K> {
         let (answer, actions) = self.core.make_durable_through(through)?;
         Ok((answer, self.act(actions)))
     }
 
     /// The provider requests made so far, in order, taken for the driver to make.
-    pub(crate) fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
+    pub fn take_requests(&mut self) -> Vec<ProviderRequest<V<E, K>>> {
         std::mem::take(&mut self.requests)
     }
 }
 
 /// The slot an engine sits in, shared between its delivery and whatever else of the driver's
 /// reaches it; empty once delivery has stopped.
-pub(crate) type Slot<E, Bk, C, K> = Arc<Mutex<Option<Engine<E, Bk, C, K>>>>;
+pub type Slot<E, Bk, C, K> = Arc<Mutex<Option<Engine<E, Bk, C, K>>>>;
 
 /// Lock the engine's slot. A panic while it was held is an inconsistency the core already reported
 /// and panicked on (DI-D-46); the state is left as that panic found it.
-pub(crate) fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
+pub fn lock<T>(engine: &Mutex<T>) -> MutexGuard<'_, T> {
     engine.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The engine, locked, while delivery runs: its slot is full until delivery stops.
-pub(crate) struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
+pub struct EngineGuard<'a, T>(MutexGuard<'a, Option<T>>);
 
-pub(crate) fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
+/// The engine in a locked slot.
+///
+/// # Panics
+///
+/// If the slot is empty: it is taken only as delivery stops, and nothing locks it after.
+pub fn present<T>(guard: MutexGuard<'_, Option<T>>) -> EngineGuard<'_, T> {
     assert!(
         guard.is_some(),
         "the engine is taken only as delivery stops"

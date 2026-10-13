@@ -43,21 +43,21 @@ pub trait Waitable {
 
 /// What a pump did.
 #[derive(Debug)]
-pub(crate) struct Pumped {
+pub struct Pumped {
     /// Whether the drain made entries poppable where there were none.
-    pub(crate) ready: bool,
+    pub ready: bool,
     /// How the wait went: whether it saw the notification raised, which is `false` when no wait
     /// was made because the first drain delivered. The drain after a wait happens whatever the
     /// wait's outcome: a delivery that cannot wait still delivers what has completed.
-    pub(crate) waited: io::Result<bool>,
+    pub waited: io::Result<bool>,
 }
 
 /// A failed construction: why, and the engine it was given.
-pub(crate) type PumpedSetup<E, Bk, C, K> =
+pub type PumpedSetup<E, Bk, C, K> =
     Result<PumpedDelivery<E, Bk, C, K>, (io::Error, Box<Engine<E, Bk, C, K>>)>;
 
 /// The engine, drained by the consumer's own thread when it calls [`pump`](Self::pump).
-pub(crate) struct PumpedDelivery<E, Bk, C, K>
+pub struct PumpedDelivery<E, Bk, C, K>
 where
     E: EpochId + 'static,
     Bk: IoBackend,
@@ -80,7 +80,7 @@ where
     /// # Errors
     ///
     /// The backend's, with the engine handed back: it could not make its notification.
-    pub(crate) fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
+    pub fn new(engine: Engine<E, Bk, C, K>) -> PumpedSetup<E, Bk, C, K> {
         match engine.backend.notification() {
             Ok(notification) => Ok(Self::with_notification(engine, notification)),
             Err(fault) => Err((fault_error(fault), Box::new(engine))),
@@ -89,10 +89,7 @@ where
 
     /// Deliver `engine`, waiting on `notification` -- not the backend's own -- when a pump waits.
     /// For a delivery whose waker is something else, which signals `notification` itself.
-    pub(crate) fn with_notification(
-        engine: Engine<E, Bk, C, K>,
-        notification: Bk::Notification,
-    ) -> Self {
+    pub fn with_notification(engine: Engine<E, Bk, C, K>, notification: Bk::Notification) -> Self {
         Self {
             notification,
             engine: Arc::new(Mutex::new(Some(engine))),
@@ -111,7 +108,7 @@ where
     /// Returning does not promise entries: the wait may have been satisfied by a raising whose
     /// completions an earlier drain took, or by the setup signal the ring crate raises once
     /// ([D-20](../../windows-ioring-sys/DESIGN-NOTES.md#d-20)).
-    pub(crate) fn pump(&mut self, timeout: Option<Duration>) -> Pumped {
+    pub fn pump(&mut self, timeout: Option<Duration>) -> Pumped {
         if lock(&self.engine).as_mut().is_some_and(Engine::drain) {
             return Pumped {
                 ready: true,
@@ -131,18 +128,18 @@ where
     K: StampClock,
 {
     /// The engine, locked: what a consumer call acts through.
-    pub(crate) fn engine(&self) -> EngineGuard<'_, Engine<E, Bk, C, K>> {
+    pub fn engine(&self) -> EngineGuard<'_, Engine<E, Bk, C, K>> {
         present(lock(&self.engine))
     }
 
     /// The engine's slot, for a path of the driver's own that reaches it on another thread.
-    pub(crate) fn shared(&self) -> Slot<E, Bk, C, K> {
+    pub fn shared(&self) -> Slot<E, Bk, C, K> {
         Arc::clone(&self.engine)
     }
 
     /// Stop delivering, handing the engine back: it is taken out of its slot, so a shared path
     /// finds it empty.
-    pub(crate) fn into_engine(self) -> Engine<E, Bk, C, K> {
+    pub fn into_engine(self) -> Engine<E, Bk, C, K> {
         let Self { engine, .. } = self;
         lock(&engine)
             .take()

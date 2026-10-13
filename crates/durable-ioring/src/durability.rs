@@ -579,7 +579,7 @@ impl<E: EpochId + 'static, T, I: Instant, K> Durability<E, T, I, K> {
 /// then leaves the state as it found it.
 #[cold]
 #[track_caller]
-pub(crate) fn inconsistent(
+pub fn inconsistent(
     instance: InstanceId,
     diagnostics: &dyn DiagnosticSink,
     what: &'static str,

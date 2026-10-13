@@ -37,6 +37,10 @@
             "package-name": "io-buffers",
             "component": "io-buffers"
         },
+        "crates/win-durable-ioring": {
+            "package-name": "win-durable-ioring",
+            "component": "win-durable-ioring"
+        },
         "crates/win-sync-sys": {
             "package-name": "win-sync-sys",
             "component": "win-sync-sys"

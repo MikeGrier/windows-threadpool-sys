@@ -8,8 +8,6 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Weak};
 
-use win_time_sys::{InterruptTime, TimePoint};
-
 use crate::clock::Instant;
 use crate::contract::{EpochId, Identities};
 use crate::types::Tag;
@@ -17,20 +15,23 @@ use crate::types::Tag;
 #[cfg(test)]
 mod tests;
 
-/// Which instance minted a value. Private: it exists so foreign values can be refused.
+/// Which instance minted a value: it exists so foreign values can be refused. A driver takes one
+/// for each instance it builds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct InstanceId(u64);
+pub struct InstanceId(u64);
 
 impl InstanceId {
     /// A value no other instance in this process has had. Instances are counted, never reused,
     /// so a value an instance minted is never mistaken for one a later instance minted.
-    pub(crate) fn next() -> Self {
+    #[must_use]
+    pub fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, AtomicOrdering::Relaxed))
     }
 
     /// The number it was minted with, for a diagnostic to name it by.
-    pub(crate) const fn number(self) -> u64 {
+    #[must_use]
+    pub const fn number(self) -> u64 {
         self.0
     }
 }
@@ -39,21 +40,21 @@ impl InstanceId {
 /// instance, so another instance's lineage is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Lineage {
-    pub(crate) instance: InstanceId,
-    pub(crate) seq: u64,
+    /// The instance that minted it.
+    pub instance: InstanceId,
+    /// Its place in that instance's lineages: the default lineage is 0.
+    pub seq: u64,
 }
 
 /// What a lineage's handle reaches when its last copy is released: the instance that minted it.
-pub(crate) trait Home: Send + Sync {
+pub trait Home: Send + Sync {
     /// The last handle of `lineage` was released: end the lineage (DI-D-30, DI-D-40).
     fn release(&self, lineage: Lineage);
 }
 
 /// A home that never exists, for a handle whose instance keeps nothing to end.
-#[cfg(test)]
 struct Nowhere;
 
-#[cfg(test)]
 impl Home for Nowhere {
     fn release(&self, _: Lineage) {}
 }
@@ -91,7 +92,7 @@ pub struct LineageHandle(Arc<Held>);
 
 impl LineageHandle {
     /// A handle to `lineage`, whose last release ends it through `home`.
-    pub(crate) fn mint(lineage: Lineage, home: Weak<dyn Home>) -> Self {
+    pub fn mint(lineage: Lineage, home: Weak<dyn Home>) -> Self {
         Self(Arc::new(Held {
             lineage,
             home,
@@ -99,9 +100,9 @@ impl LineageHandle {
         }))
     }
 
-    /// A handle to `lineage` that ends nothing when released.
-    #[cfg(test)]
-    pub(crate) fn detached(lineage: Lineage) -> Self {
+    /// A handle to `lineage` that ends nothing when released: for a lineage whose instance keeps
+    /// nothing to end, such as a fake's one lineage.
+    pub fn detached(lineage: Lineage) -> Self {
         Self::mint(lineage, Weak::<Nowhere>::new())
     }
 
@@ -111,18 +112,19 @@ impl LineageHandle {
     }
 
     /// Epoch `id` of this lineage, as a write or a seal takes it.
-    pub fn at<E: EpochId + 'static>(&self, id: E) -> Tag<'_, DioringIds<E>> {
+    pub fn at<E: EpochId + 'static, I: Instant>(&self, id: E) -> Tag<'_, DioringIds<E, I>> {
         Tag::new(self, id)
     }
 
     /// Whether this is the lineage's only remaining copy.
-    pub(crate) fn is_last(&self) -> bool {
+    #[must_use]
+    pub fn is_last(&self) -> bool {
         Arc::strong_count(&self.0) == 1
     }
 
     /// Consume the lineage's last handle without ending the lineage through it, because the caller
     /// is ending or retiring it explicitly. Hands the handle back if another copy exists.
-    pub(crate) fn take_last(self) -> Result<Lineage, Self> {
+    pub fn take_last(self) -> Result<Lineage, Self> {
         match Arc::try_unwrap(self.0) {
             Ok(mut held) => {
                 held.armed = false;
@@ -145,8 +147,10 @@ impl Debug for LineageHandle {
 /// identities from two instances are incomparable (`partial_cmp` is `None`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OpId {
-    pub(crate) instance: InstanceId,
-    pub(crate) seq: u64,
+    /// The instance that pushed it.
+    pub instance: InstanceId,
+    /// Its place in that instance's push order.
+    pub seq: u64,
 }
 
 impl PartialOrd for OpId {
@@ -204,9 +208,10 @@ impl Drop for FailureToken {
 }
 
 /// dioring's identities, with the consumer's epoch-id type `E` and the time type `I` its stamps
-/// are read in (DI-D-50) -- interrupt time unless the core was given another clock. Zero-sized; it
-/// exists only to name them, so its comparison and hashing traits hold for every `E` and `I`.
-pub struct DioringIds<E, I = TimePoint<InterruptTime>>(PhantomData<fn() -> (E, I)>);
+/// are read in (DI-D-50): the clock the core was given decides it, and each driver names its own
+/// (`win-durable-ioring`'s is `WindowsIds`). Zero-sized; it exists only to name them, so its
+/// comparison and hashing traits hold for every `E` and `I`.
+pub struct DioringIds<E, I>(PhantomData<fn() -> (E, I)>);
 
 impl<E, I> Clone for DioringIds<E, I> {
     fn clone(&self) -> Self {

@@ -1,26 +1,8 @@
 // Copyright (c) 2026 Mike Grier
-//! An error's code, read without the ring crate (DI-D-39), and the faults the Windows path
-//! reports with it (DI-D-50).
+//! A fault's code, as the layer that reported it numbers it (DI-D-39, DI-D-50). Reading one out of
+//! an `io::Error` is the reporting layer's: `win-durable-ioring` reads a Windows backend's.
 
 use std::fmt;
-use std::io;
-use std::sync::Arc;
-
-use windows_ioring_sys::IoRingErrorExt;
-
-use crate::types::IoFault;
-
-/// The source every fault the Windows path reports names: the I/O ring beneath it.
-pub(crate) const WINDOWS_IORING: &str = "windows-ioring";
-
-/// A fault the Windows path reports for `error`: the I/O ring's, with the code it carries.
-pub(crate) fn windows_fault(error: io::Error) -> IoFault {
-    IoFault {
-        source: WINDOWS_IORING,
-        code: ErrorCode::of(&error),
-        error: Arc::new(error),
-    }
-}
 
 #[cfg(test)]
 mod tests;
@@ -34,19 +16,20 @@ const SEVERITY_AND_FACILITY: u32 = 0xFFFF_0000;
 /// The Win32 code within an `HRESULT` that wraps one.
 const WIN32_CODE: u32 = 0x0000_FFFF;
 
-/// A fault's code, as the layer that reported it numbers it: its meaning is the [`IoFault`]'s
+/// A fault's code, as the layer that reported it numbers it: its meaning is the [`IoFault`](crate::IoFault)'s
 /// source's (DI-D-50). The Windows backend's are `HRESULT`s, the form the I/O ring reports every
 /// failure in, a Win32 code being one wrapped by `HRESULT_FROM_WIN32`; the helpers below read
 /// and build that form.
 ///
-/// Read from an error with [`ErrorCode::of`], and carried by every [`IoFault`] the Windows path
-/// reports, so a consumer reads a code without the ring crate's `IoRingErrorExt`.
+/// Carried by every [`IoFault`](crate::IoFault) a layer reports with one, so a consumer reads a
+/// code without that layer's own error types. The Windows backend's are read from an `io::Error`
+/// by `win-durable-ioring`'s `error_code_of`.
 ///
 /// ```
 /// use durable_ioring::ErrorCode;
 ///
-/// // ERROR_IO_DEVICE, as std reports a Win32 error.
-/// let code = ErrorCode::of(&std::io::Error::from_raw_os_error(1117)).unwrap();
+/// // ERROR_IO_DEVICE, as a Win32 error is numbered.
+/// let code = ErrorCode::from_win32(1117);
 /// assert_eq!(code.win32(), Some(1117));
 /// assert_eq!(code.hresult().cast_unsigned(), 0x8007_045D);
 /// ```
@@ -86,24 +69,6 @@ impl ErrorCode {
         } else {
             None
         }
-    }
-
-    /// The code `error` carries, if it carries one.
-    ///
-    /// Every failure the I/O ring reports answers `Some`, because the ring reports each as an
-    /// `HRESULT`; the Windows path reads it so into each [`IoFault`] it relays. An error carrying a
-    /// Win32 code, as `io::Error::from_raw_os_error` makes, answers it wrapped as
-    /// `HRESULT_FROM_WIN32` wraps it. An error with neither, such as one a consumer's provider made
-    /// from a message, answers `None`. A code read from a `FailureCause::Provider` error is the
-    /// provider's own, relayed, not one dioring captured (DI-D-47).
-    #[must_use]
-    pub fn of(error: &io::Error) -> Option<Self> {
-        if let Some(ring) = error.as_ioring_error() {
-            return Some(Self(ring.code()));
-        }
-        error
-            .raw_os_error()
-            .map(|code| Self::from_win32(code.cast_unsigned()))
     }
 }
 

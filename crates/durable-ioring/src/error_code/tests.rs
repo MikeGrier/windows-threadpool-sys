@@ -1,7 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! `ErrorCode`'s arithmetic, and what it reads out of an `io::Error`.
-
-use std::io;
+//! `ErrorCode`'s arithmetic. What it reads out of an `io::Error` is `win-durable-ioring`'s.
 
 use super::ErrorCode;
 
@@ -69,27 +67,6 @@ fn an_hresult_wrapping_no_win32_code_names_none() {
         None
     );
     assert_eq!(ErrorCode::from_hresult(0).win32(), None, "S_OK is no error");
-}
-
-#[test]
-fn an_error_carrying_a_win32_code_reads_as_that_code() {
-    let error = io::Error::from_raw_os_error(IO_DEVICE.cast_signed());
-    assert_eq!(
-        ErrorCode::of(&error),
-        Some(ErrorCode::from_win32(IO_DEVICE))
-    );
-}
-
-#[test]
-fn an_error_carrying_no_code_reads_as_none() {
-    assert_eq!(
-        ErrorCode::of(&io::Error::other("a provider's message")),
-        None
-    );
-    assert_eq!(
-        ErrorCode::of(&io::Error::from(io::ErrorKind::PermissionDenied)),
-        None
-    );
 }
 
 #[test]

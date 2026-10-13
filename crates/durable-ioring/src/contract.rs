@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::io;
 
-use windows_ioring_sys::{IoBuf, IoBufMut, RegisteredSpan};
+use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 
 use crate::io_target::IoTarget;
 use crate::types::{
@@ -78,13 +78,13 @@ pub trait DurableRing {
     /// The consumer's per-operation context, handed back with each completion.
     type Context;
     /// The implementation's readiness signal (DI-D-28, DI-D-52 Q6): what a consumer waits on, in
-    /// whatever form the platform waits. dioring's is an auto-reset [`Event`](crate::Event): an
-    /// event rather than a bare handle, so a front end can give it to a thread-pool wait without
-    /// `unsafe`, since an `Event` is guaranteed to be an event, never a mutex.
+    /// whatever form the platform waits. The Windows driver's is an auto-reset `Event`: an event
+    /// rather than a bare handle, so a front end can give it to a thread-pool wait without `unsafe`,
+    /// since an `Event` is guaranteed to be an event, never a mutex.
     type Readiness;
     /// The implementation's targets (DI-D-48, DI-D-50): what a write or a read addresses and a
-    /// commit makes durable, each stating what it is through [`IoTarget`]. dioring's is a
-    /// `Win32FileTarget`.
+    /// commit makes durable, each stating what it is through [`IoTarget`]. The Windows driver's is
+    /// a `Win32FileTarget`.
     type Target: IoTarget;
 
     /// A duplicate of the readiness signal (DI-D-28): one the instance owns, set after an entry

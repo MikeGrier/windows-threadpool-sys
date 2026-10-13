@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 //! Unit tests for the conformance oracle: each rule both refused when broken and accepted when
-//! kept. The readiness check, which waits on a Windows event, has its own module below.
+//! kept.
 
 use std::io;
 
@@ -16,8 +16,6 @@ mod markings;
 mod lineages;
 // The rules for gated operations: DI-3.2.5.2.
 mod gates;
-// The readiness check, over a signal that is a Windows event: DI-D-28.
-mod readiness;
 
 type V = DioringIds<u64, u64>;
 
