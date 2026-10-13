@@ -1,0 +1,48 @@
+{
+  "package": "windows-overlapped-io-sys",
+  "description": "Sabotages for windows-overlapped-io-sys's PageBuffers, which holds its pages in an io_buffers::AlignedBuf (IB-2+.2). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Only PageBuffers (the fs feature) has entries: this manifest was added with that type's move onto AlignedBuf. The completion-port and operation machinery is not covered.",
+  "testArgs": ["-p", "windows-overlapped-io-sys", "--all-features", "--lib", "--locked"],
+  "sabotages": [
+    {
+      "name": "IB-2+.2: the pages are allocated at byte alignment",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Page alignment is what the scatter and gather calls require of every segment. The alignment tests read it back from the buffer's own address for several page counts.",
+      "find": ["AlignedBuf::zeroed(size, PAGE_SIZE)"],
+      "replace": ["AlignedBuf::zeroed(size, 1)"]
+    },
+    {
+      "name": "IB-2+.2: each segment starts eight bytes after the last, not a page",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Every segment must name its own page; overlapping segments would read or write the same bytes twice.",
+      "find": ["self.buffer.as_ptr().cast_mut().add(i * PAGE_SIZE)"],
+      "replace": ["self.buffer.as_ptr().cast_mut().add(i * 8)"]
+    },
+    {
+      "name": "IB-2+.2: the segment array has no terminator",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The kernel reads segments until it meets a zeroed element, so a missing one runs it off the end of the array.",
+      "find": ["        segments.push(FILE_SEGMENT_ELEMENT { Alignment: 0 });\n"],
+      "replace": ["        // (sabotaged) no terminator\n"]
+    },
+    {
+      "name": "IB-2+.2: the length is half a page short",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A short length transfers fewer bytes than the buffer holds.",
+      "find": ["        self.pages * PAGE_SIZE\n    }\n\n    /// Always"],
+      "replace": ["        self.pages * PAGE_SIZE - PAGE_SIZE / 2\n    }\n\n    /// Always"]
+    },
+    {
+      "name": "IB-2+.2: CONTROL: the page count is read through an identity addition",
+      "file": "src/fs.rs",
+      "expect": "survives",
+      "why": "Behaviour is unchanged, so a sweep that reports this caught is not discriminating.",
+      "find": ["    pub fn pages(&self) -> usize {\n        self.pages\n"],
+      "replace": ["    pub fn pages(&self) -> usize {\n        self.pages + 0\n"]
+    }
+  ]
+}

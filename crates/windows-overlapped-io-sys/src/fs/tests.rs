@@ -388,3 +388,103 @@ fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
     drop(port);
     let _ = std::fs::remove_file(&path);
 }
+
+// `PageBuffers` holds an `io_buffers::AlignedBuf` (IB-2+.2); these pin what it promises on top of
+// that buffer's own tests: its page arithmetic, the segment array the scatter and gather calls read,
+// and that it is page-aligned and zeroed whatever the page count.
+
+#[test]
+fn page_buffers_report_their_pages_and_length() {
+    for pages in [1_usize, 2, 3, 7, 16] {
+        let buffers = PageBuffers::new(pages);
+        assert_eq!(buffers.pages(), pages);
+        assert_eq!(buffers.len(), pages * PAGE_SIZE);
+        assert_eq!(buffers.as_bytes().len(), pages * PAGE_SIZE);
+        assert!(!buffers.is_empty());
+    }
+}
+
+#[test]
+fn page_buffers_are_zeroed_and_page_aligned_for_every_page_count() {
+    use crate::IoBuf;
+    for pages in [1_usize, 2, 3, 16, 33] {
+        let buffers = PageBuffers::new(pages);
+        assert_eq!(buffers.stable_ptr().addr() % PAGE_SIZE, 0, "{pages} pages");
+        assert!(
+            buffers.as_bytes().iter().all(|&byte| byte == 0),
+            "{pages} pages"
+        );
+    }
+}
+
+#[test]
+fn the_segment_array_names_each_page_in_order_and_ends_with_a_terminator() {
+    use crate::IoBuf;
+    for pages in [1_usize, 2, 5] {
+        let buffers = PageBuffers::new(pages);
+        let base = buffers.stable_ptr().addr();
+        let segments = buffers.segment_array();
+        assert_eq!(segments.len(), pages + 1, "a terminator after the pages");
+        for (index, segment) in segments[..pages].iter().enumerate() {
+            // SAFETY: every element before the terminator was written through `Buffer`.
+            let address = unsafe { segment.Buffer }.addr();
+            assert_eq!(address, base + index * PAGE_SIZE, "page {index} of {pages}");
+            assert_eq!(address % PAGE_SIZE, 0);
+        }
+        // SAFETY: the terminator is a zeroed element, read through `Alignment`.
+        assert_eq!(unsafe { segments[pages].Alignment }, 0);
+    }
+}
+
+#[test]
+fn bytes_written_through_the_mutable_view_are_read_through_every_other_view() {
+    use crate::{IoBuf, IoBufMut};
+    let mut buffers = PageBuffers::new(2);
+    buffers.as_bytes_mut()[0] = 0xAB;
+    buffers.as_bytes_mut()[PAGE_SIZE + 5] = 0xCD;
+    assert_eq!(buffers.as_bytes()[0], 0xAB);
+    assert_eq!(buffers.as_bytes()[PAGE_SIZE + 5], 0xCD);
+    assert_eq!(buffers.as_bytes()[1], 0, "bytes not written are still zero");
+
+    let shared = buffers.stable_ptr();
+    assert_eq!(buffers.stable_mut_ptr().cast_const(), shared);
+    assert_eq!(buffers.bytes_len(), 2 * PAGE_SIZE);
+    // SAFETY: the pointer is this buffer's own allocation of `bytes_len` initialised bytes.
+    assert_eq!(unsafe { *shared }, 0xAB);
+}
+
+#[test]
+fn page_buffers_keep_their_address_when_moved() {
+    use crate::IoBuf;
+    let buffers = PageBuffers::new(3);
+    let before = buffers.stable_ptr();
+    let moved = Box::new(buffers);
+    assert_eq!(moved.stable_ptr(), before);
+}
+
+#[test]
+#[should_panic(expected = "at least one page")]
+fn zero_pages_is_refused() {
+    let _ = PageBuffers::new(0);
+}
+
+#[test]
+#[should_panic(expected = "overflow")]
+fn a_page_count_whose_length_overflows_is_refused() {
+    let _ = PageBuffers::new(usize::MAX / PAGE_SIZE + 1);
+}
+
+#[test]
+fn page_buffers_are_send_and_sync_and_debug_shows_no_contents() {
+    fn assert_send_and_sync<T: Send + Sync>() {}
+    assert_send_and_sync::<PageBuffers>();
+
+    let mut buffers = PageBuffers::new(1);
+    buffers.as_bytes_mut().fill(0x5A);
+    let text = format!("{buffers:?}");
+    assert!(
+        text.contains("PageBuffers") && text.contains("pages: 1"),
+        "{text}"
+    );
+    assert!(!text.contains("90"), "no byte values in {text}");
+}
