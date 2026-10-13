@@ -38,3 +38,39 @@ The item as it stood at completion:
   `portable` CI job beside `wtf-string`. The sabotage manifest entries that pinned the originals
   move with them. The commit carries `Release-As: 0.1.0`, since release-please attributes a commit
   by the paths it touches and `Cargo.toml` says 0.1.0.
+
+## Moved 2026-10-12 21:06:14 -04:00 -- IB-1.2: NumaBuffer's buffer impls, in win-numa-sys
+
+### <a id="ib-12"></a>IB-1.2 -- `NumaBuffer` implements `io-buffers`' `IoBuf` and `IoBufMut`, in `win-numa-sys`, with the ring crate's tests and safety argument. *(completed 2026-10-12 21:06:14 -04:00)*
+
+Per [IB-D-4](DESIGN-NOTES.md#ib-d-4) and `win-numa-sys`'s
+[N-D-2](../win-numa-sys/DESIGN-NOTES.md#n-d-2). Built by copying the ring crate's
+`numa_buffer_io.rs` and its tests into `win-numa-sys` as `io_buf.rs`, with the two implementations'
+safety comments unchanged and the module documentation rewritten to say why they are here: a trait
+may be implemented only by the crate that owns it or the crate that owns the type, `io-buffers` is
+portable and cannot depend on a Windows allocator, so the type's crate does. The ring crate is
+untouched and still implements its own trait for `NumaBuffer`, so every commit builds. `win-numa-sys`
+gained a dependency on `io-buffers`, written as `path` with `version = "0.1.0"`, which `IB-1.1`'s
+`Release-As` makes a fact and not a guess. The crate's README, its type documentation and its crate
+documentation, which said it implements no buffer trait, now say what it does. One test was added to
+the moved four, showing a `NumaBuffer` satisfies the traits as a generic bound, which is how a ring
+takes it.
+
+**The item's plan changed in one respect:** it said `IB-1.3` would use a path-only dependency
+"deliberately", as `durable-ioring` does. That reasoning does not carry over: `durable-ioring` has no
+fixed first version to write, and this crate's is fixed. `IB-1.3`'s text now says so.
+
+`win-numa-sys` had no sabotage manifest; it has one now, covering only these implementations. Three
+entries are caught and a control survives. Two are scored as a process abort, since the test that
+reads through the pointer builds a slice from a null one and Rust's precondition check aborts, which
+hides the deterministic catch: the correspondence test fails an assertion by itself. The manifest says
+so at each.
+
+The item as it stood at completion:
+
+- [x] **IB-1.2** -- **`NumaBuffer`'s buffer impls move to `win-numa-sys`**
+  ([IB-D-4](DESIGN-NOTES.md#ib-d-4)): `win-numa-sys` depends on `io-buffers` and implements
+  `io_buffers::IoBuf` and `IoBufMut` for `NumaBuffer`, with the safety argument the ring crate's
+  `numa_buffer_io.rs` carries. Additive, so it builds beside the ring crate's own implementation of
+  its own trait. The allocator crate's README, which says it defines no buffer trait, says what it
+  now does instead.
