@@ -2312,3 +2312,18 @@ The item as it stood at completion:
 
 `DI-8.1` to `DI-8.3` are archived above under their own anchors. The milestone heading and its stubs
 left [CHECKLIST.md](CHECKLIST.md) with this item, which finished it.
+
+## Moved 2026-10-13 12:57:00 -04:00 -- DI-M9 restructured into tagged, single-choice items
+
+### <a id="di-m9-restructured"></a>DI-M9 -- each review item was one paragraph holding many choices, with no statement of what the engineer was to do; it is now one item per choice, tagged DECIDE, RATIFY or MINE. *(restructured 2026-10-13 12:57:00 -04:00)*
+
+The engineer's complaint, on reading `DI-9.1` to `DI-9.7`, was that the action was not visible. The
+groups keep their IDs, so every earlier citation of `DI-9.n` still names the same subject (the table
+above that maps `DI-3.9.x` to them stands); each choice inside a group now has a decimal ID
+(`DI-9.n.m`) and a tag in [CHECKLIST.md](CHECKLIST.md). Choices whose rows are wholly the engineer's
+own, or already decided, were not listed before and are not now. The old wording, which the new items
+condense, is in git at `2be4a962`, in this file's sibling `CHECKLIST.md`. Two findings of the
+restructure: [DI-D-44](DESIGN-NOTES.md#di-d-44)'s "recorded as inconsistencies" for an unasked-for
+answer had been amended by DI-D-46 and the old item still said it, and `DI-D-42`'s dropped oracle
+tightening and the Windows default of `NoDiagnostics` had been buried in running text and are now
+items of their own (`DI-9.1.4`, `DI-9.4.1`).

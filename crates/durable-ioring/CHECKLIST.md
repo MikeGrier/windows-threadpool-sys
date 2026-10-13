@@ -14,293 +14,333 @@ convention.
 
 ## DI-M9 -- Reviews: the engineer confirms or amends the assistant's choices (ungated; gates nothing)
 
-The code binds to each choice already, because the steps could not be built without choosing; what
-is open is the review. Each item reviews only what its decision row marks as the assistant's: where
-the engineer had already decided part of a row, that part is not reopened. A rejected point is
-reworked as an item of the milestone current when it is rejected, with its decision row amended.
-These reviews gate no other work, because the engineer is not to be the blocking factor (the
-engineer, 2026-10-10: "I cannot be the blocking factor"); they were placed ahead of the scripted
-backend, now `DI-11.1`, so that a rework could not change the trait it implements, and a rework that
-does is now that item's to absorb.
+Each item is one choice the assistant made while building and the engineer has not yet confirmed.
+The code binds to each already, because the steps could not be built without choosing; what is open
+is the review. These reviews gate no other work (the engineer, 2026-10-10: "I cannot be the blocking
+factor"). Where the engineer had already decided part of a row, that part is not here. A rejected
+point is reworked as an item of the milestone current when it is rejected, with its decision row
+amended. Every item carries one of three tags, which say what is asked:
 
-- [ ] **DI-9.1** -- **[DI-D-42](DESIGN-NOTES.md#di-d-42)**, from `DI-3.2.5.1`: `Tag` borrowing the
-  handle, never the instance; construction returning the default lineage's handle beside the
-  instance; `Result<_, UnknownLineage>` for a name the instance cannot answer for; the end and
-  retire refusals, handing the handle back; an ended lineage not live from the moment it ends;
-  `LineageEnded.abandoned_through`; ending a lineage releasing a heal that waits on it; the oracle's
-  rules for an ended lineage; and a handle's release running on whichever thread drops the last
-  copy.
+- **DECIDE** -- the choice changes what a consumer can do or must avoid, or trades against a real
+  alternative. The action is to accept it or amend it; "accept 9.1.1" is a complete answer. Each says
+  what the code does now.
+- **RATIFY** -- a name, a placement, an internal shape or a test method. It stands unless the
+  engineer objects; "ratify 9.3.3" closes it.
+- **MINE** -- not a choice: a gap or check the assistant owes. Nothing is asked of the engineer.
 
-- [ ] **DI-9.2** -- **[DI-D-43](DESIGN-NOTES.md#di-d-43)**'s assistant-chosen part, from
-  `DI-3.2.5.2` -- the refusal of a seal that closes a cycle is the engineer's own: a gate naming an
-  ended or retired lineage refused as `UnknownLineage`; a held write whose own epoch is abandoned
-  ending as `NeverIssued` naming that epoch; a held write outstanding for its lineage's seals and
-  suspected by no failure until released; `SealError` in place of `io::Error`; a cycle listed as
-  each held write's epoch followed by its gate; and released operations pushed at the consumer's
-  next call.
+A group may be answered whole ("accept all DECIDE in 9.1"). The wording of each choice as first
+written, which these items condense, is in git at the revision before the one that restructured this
+milestone; the decision rows named below carry the reasons.
 
-- [ ] **DI-9.3** -- **[DI-D-44](DESIGN-NOTES.md#di-d-44)**, from `DI-3.2.6`: the provider called
-  from the consumer's next call with dioring's lock released; every request built before any is
-  made; what a request names, and in what order; when a write is covered; a domain's failure
-  observed with `Reach::Domains` of that one domain; and answers no request asked for recorded as
-  inconsistencies. The restatement of what a request names, which this waited for, has landed, so
-  the shapes are read as they stand.
+### DI-9.1 -- Lineage handles ([DI-D-42](DESIGN-NOTES.md#di-d-42), from `DI-3.2.5.1`)
 
-- [ ] **DI-9.4** -- **The assistant's choices in `DI-3.10.3.1` to `DI-3.10.3.4`**: From
-  `DI-3.10.3.1`: `SuspectWrite::file` and `IoTargetBusy::file` renamed `target`, and `IoTargetBusy`
-  displaying "target". From `DI-3.10.3.2`: two `IoFault`s are equal when they name the same source
-  and code and share the one report (`Arc` identity), so a nullifier agrees with its write's
-  completion only if it relays that very report; the Windows path's fault for a short write carries
-  no code and the message "the write completed short: n of N bytes"; a write's requested length
-  rides in its sidecar for that check and no longer in the core; the inconsistency for a code-less
-  failed write is gone, P8 having made the code optional; and the oracle's no-short-write rule is
-  queued to `DI-3.10.3.5`. From `DI-3.10.3.3`: `DiagnosticKind` and `Diagnostic` are non-exhaustive
-  enums, `Inconsistency` carrying the instance's number, `what` and the formatted detail; a sink is
-  called with dioring's lock held, so it must return promptly and never call back into the instance;
-  `Setup.diagnostics` is an `Option<Arc<dyn DiagnosticSink>>`, `None` meaning the driver's default;
-  `StderrDiagnostics` prefixes each line `dioring:`; and the Windows driver's default is
-  `NoDiagnostics` until `DI-3.6`. From `DI-3.10.3.4`: the clock trait is `StampClock`, its reading
-  type bounded by a public `Instant` trait (a name `std::time::Instant` shares); the time type is an
-  associated type of `Identities` and a second, defaulted parameter of `DioringIds`; and the core's
-  types take it as a parameter, the Windows code naming it through a `WinInstant` alias.
+- [ ] **DI-9.1.1** -- **DECIDE: a handle's release runs on whichever thread drops the last copy.**
+  Now: dropping the last copy of a `LineageHandle` ends the lineage on the dropping thread, taking
+  dioring's lock and then the ring's, as a completion callback does; a handle that outlives its
+  instance releases nothing. The alternative is a release queued and made at the consumer's next
+  call, as the provider's requests are, which would end a dropped handle's lineage late.
 
-- [ ] **DI-9.5** -- **The assistant's choices in `DI-3.10.3.5.1` to `DI-3.10.3.5.5`**: From
-  `DI-3.10.3.5.1`: the backend trait is `IoBackend`; its types live in a public `backend` module and
-  the in-memory backend in a public `memory` module, while `IoTarget`, `IoTargetDescription`,
-  `WarrantyClass`, `Geometry`, `GeometryError` and `Capabilities` are at the crate root; the target
-  module is `io_target`, since the root `.gitignore`'s `target` ignores any directory so named; a
-  `Geometry` holds three alignments -- offset, length, buffer address -- each a power of two its
-  constructors enforce, with `admits` and `admits_buffer` the one statement of the rule;
-  `Capabilities` names write-through only, its fields private; `IoTarget` requires `Send`, and
-  `describe` is a provided method; `SubmissionToken` is a public `u64`, a `RegisteredRegion` three
-  `u32`s, a completion's result a `u32` count or an `IoFault`, and a commit transfers zero; the
-  refusal causes are `SubmitNeeded`, `DrainNeeded`, `SubmitAndDrainNeeded`, `Busy`, `UnknownTarget`,
-  `Unsupported`, `Invalid`, `Unusable(IoFault)` and `Unknown(IoFault)`, non-exhaustive, with
-  `needs_submit`, `needs_drain` and `is_retryable`, an unknown cause not retryable; `submit`, `pop`
-  and `notification` report an `IoFault`; a submission for a target detached before it ran completes
-  with a fault; registration is a backend's construction concern, `registered_buffers` counting it.
-  The in-memory backend's buffers are `Vec<u8>`; it executes at submit; it refuses a drain when
-  queued and unpopped submissions fill the completion queue, checking the target, then the
-  submission's shape, then capacity; its notification is a count with `wait_past`; its faults name
-  the source `"memory"` with no code; its queue sizes are `NonZeroU32`; a commit copies the bytes to
-  `durable_contents`; and it ignores `WriteCaching`. From `DI-3.10.3.5.2`: a consumer operation
-  takes the caller's push as a closure and is recorded only once the push accepts it, which is how a
-  refused one is undone with nothing to roll back, while the core's own submissions -- commits --
-  come out in `CoreActions` and go back through `refused`, re-emitted with the next actions or by
-  `retry`; `CoreActions` is `submit` and a `deliver` flag raised on the queue's transition from
-  empty, and is `#[must_use]`; a seal returns its answer and its actions as a pair; the core's write
-  takes an `Epoch`, not a `Tag`, handles staying the driver's, and a `WriteCaching` rather than
-  `WriteOptions` until gates arrive in `DI-3.10.3.5.3`; geometry and registration are the backend's
-  to check, their refusals reaching the consumer as a new `PushRefusal::Backend(RefusalCause)`,
-  beside `Ring` until `DI-3.10.3.5.6`; a duplicate target hands back its description in a
-  `DuplicateTarget`, and removing one returns it; `new` takes a clock and an `Arc<dyn
-  DiagnosticSink>`, with no default; a completion with no record, a second completion, and a
-  consumer operation handed back as refused are each an inconsistency (DI-D-46); until
-  `DI-3.10.3.5.3`, every target routes to the built-in default, `IoTargetBusy::held_for_gate` is
-  zero, and a gate release, a provider request or a never-issued operation reaching the core is an
-  inconsistency; the module is `io_core`, as `core` would shadow the `core` crate; and the
-  event-to-entry conversion is one method, `Event::into_entry`, which the relay now uses too. From
-  `DI-3.10.3.5.3`: a held operation spends its id when held, and once released is emitted in the
-  actions of the change that released it, recorded as issued at emission, and kept and emitted again
-  if refused, as a commit is; `write` and `read` take `WriteOptions` and `ReadOptions`, replacing
-  the plain `WriteCaching`; lineage calls take a plain `Lineage`, an ended or retired one refused as
-  `Foreign`, whose doc on both refusal enums now says so, rather than a new variant; the core holds
-  no provider -- `with_provider` takes the served domains and refuses a repeat as `DuplicateDomain`,
-  a seal's request comes out as a `ProviderRequest` of `ProviderPart`s in `CoreActions::requests`,
-  which makes `CoreActions` generic over the identities, and each answer goes back through
-  `provided` with a now-public `DomainOutcome`, whose one conversion to a cause the relay uses too;
-  an answer naming another core's lineage or an unserved domain is an inconsistency;
-  `IoTargetWrites` loses its `file` on both paths (DI-D-50 P6), the driver's test no longer checking
-  a lent handle; an import's reach is one function, `import_reach`, both paths share; `close` hands
-  back the held operations, the failures and the lineages, leaving what is in flight to the backend;
-  and `io_core` is a facade with `lineages`, `failures` and `provider` parts. From `DI-3.10.3.5.4`:
-  `pushed` and `pushed_gated` take a `length` after the kind, for every operation -- a read's is its
-  buffer and is not checked, since a read may complete short; the rule is exact, so a write
-  transferring more than its length is `WriteNotInFull` as a shorter one is; and the core's test rig
-  reports each accepted push, each seal answered `Submitted` and each heal, and observes every entry
-  it pops. From `DI-3.10.3.5.5`: the Windows backend issues each push at once, its ring submitting a
-  batch as it ends (the ring crate's D-5), and `submit` reissues what a failed submission left
-  queued -- so the backend trait now says a push is issued no later than the next `submit`, and
-  `submit` reports a `RefusalCause` where it reported an `IoFault`; a full submission queue maps to
-  `SubmitNeeded`, a full completion queue to `DrainNeeded`, a submission running to `Busy`, a
-  corrupt ring to `Unusable`, any other ring condition to `Unknown` with the report, and the ring's
-  own `Unsupported` and `InvalidInput` rejections to `Unsupported` and `Invalid`; a target's
-  geometry is checked before the ring is asked -- offset, length, and an owned buffer's address, a
-  registered region's address being the registration's; targets given at construction are registered
-  and addressed by index, those attached later by their `SharedHandle`, and registered buffers are
-  given at construction only, through a `WindowsBackendSetup` whose refusal hands everything back as
-  today's `Setup` does; the notification is the ring's completion event, duplicated as an
-  `OwnedHandle` and attached at construction; a `Win32FileTarget` defaults to `BestEffort`,
-  unaligned and no capabilities, its class taken on declaration until `DI-3.10.4`; a commit is an
-  unordered flush in the default mode, as today; the fault seam gains `fail_next_commit` on the
-  backend, queued with `fail_next_flush` under `DI-3.11`; the short-write rule moved into the
-  backend as `transfer`, which the relay's `op_outcome` now calls; `register_files` takes handles
-  rather than `TargetSetup`s; and the backend lives in a public `windows_backend` module,
-  `Win32FileTarget` with it rather than at the crate root.
+- [ ] **DI-9.1.2** -- **DECIDE: an ended lineage is not live from the moment it ends.** Now: its
+  name is answered as unknown at once, though it stays recorded until its writes in flight
+  complete; a flush of its that answers afterwards reports nothing; a write of its that completes
+  afterwards is let go, still marking a failure that had already suspected it. The alternative is a
+  lineage that stays answerable until its writes complete.
 
-- [ ] **DI-9.6** -- **The assistant's choices in `DI-3.10.3.5.6.1` to `DI-3.10.3.5.6.2.6`**, the
-  driver moved onto the core: From `DI-3.10.3.5.6.1`: the driver's core and backend sit together in
-  a portable, crate-private `Engine`, the one place `CoreActions` become backend pushes -- refusals
-  back to the core, provider requests kept for the driver -- and the drain every delivery shares, so
-  pumped delivery reuses it; a drain runs until a pass pops nothing and does not call `retry`, since
-  the core re-emits what was refused with every completion's actions; pool delivery tells the driver
-  through an `on_ready` closure, called after the engine's lock is released, rather than setting an
-  `Event` itself, so the driver chooses the signal; the backend lends its ring through a
-  crate-private `WindowsBackend::wake`; a failed construction hands the engine back boxed;
-  `into_engine` stops delivery and returns it; the engine, the pool delivery and `wake` carry
-  `expect(dead_code)` outside tests until the driver moves onto them, so the build fails when they
-  are used and the expectations go; and that the callback environment is honoured is a declared
-  blind spot, no behaviour test being able to tell which pool ran a drain. From `DI-3.10.3.5.6.2.1`:
-  [DI-D-54](DESIGN-NOTES.md#di-d-54) itself -- `check` asked only for an operation the core will
-  hold, and after the core's own checks; `Unknown` treated as permanent; and the ended submission
-  completed as the backend would have with a fault rather than through a new outcome; `check` a
-  required trait method, with no default, so a backend cannot forget it; the core's `write` and
-  `read` take the backend, `&mut impl IoBackend`, where they took a push closure; `refused` returns
-  actions, and the engine works through them first in, first out; the fault's source `REFUSED`
-  (`"refused"`), its error the `RefusalCause` boxed so it is recovered by downcasting, its kind
-  `NotFound`, `Unsupported` or `InvalidInput` where the cause has one; `RefusalCause` implementing
-  `std::error::Error`, its source the backend's report; the ring crate gaining a public `check_span`
-  (its M34.1) rather than dioring repeating the bounds; and the Windows push still leaving spans to
-  the ring, so only `check` asks first. From `DI-3.10.3.5.6.2.2`: `Readiness` carries no bound, so
-  the trait says nothing about how a signal is waited on; `EntryDelivery` and the oracle's
-  `check_readiness`, which both wait through a thread-pool wait, bind `Readiness = Event` rather
-  than a waitable trait of their own, so a driver with another signal needs its own front end and
-  check -- the pumped delivery of `DI-3.10.3.5.7` is where that is met. From `DI-3.10.3.5.6.2.3`:
-  the ring trait's `Target` is bounded by `IoTarget`, so a consumer can always read what a target
-  states; `add_target_with` goes with `FileOptions`, leaving one `add_target` with no defaulted
-  form; `AddTargetError` keeps its name and becomes generic, carrying the target, rather than the
-  contract reusing the backend module's `DuplicateTarget`; the test fake's target is `MemoryTarget`;
-  `TargetSetup` carries the `Win32FileTarget` whole; and until the swap, today's driver reads only a
-  target's file and flush domains, so a declared geometry is not enforced on its path -- the
-  backend's `check` and `push` enforce it once the swap (`DI-3.10.3.5.6.2.6`) lands. From
-  `DI-3.10.3.5.6.2.4`: two constructors where there was one -- `new` for a buffer type that is
-  `IoBufMut`, reading into owned buffers, and `without_owned_reads` for one that may be only `IoBuf`
-  -- rather than one constructor and a separate switch, so a direct user of the backend cannot
-  forget to enable reads; a crate-private `enable_owned_reads`, for the driver to call where its
-  read's `IoBufMut` bound holds; the owned read's push a function pointer, as today's driver carries
-  one, with the registered and shared forms of a target behind a `Via`; and an owned read without
-  that push refused as `Unsupported` at `check` and at `push` alike. From `DI-3.10.3.5.6.2.5`: the
-  accessors renamed `with_registered_buffer` and `with_registered_buffer_mut`, the names
-  `DeliveryHandle` already used, and generic over the closure's return, so the trait is not
-  object-safe -- it was not before either, being "generic only" (DI-D-24); kept on `&mut self`, as
-  the borrow forms were; and the Windows backend's own borrow-returning accessors left as they are,
-  since whoever owns a backend holds it `&mut`. From `DI-3.10.3.5.6.2.6`: what the driver's paths
-  off the consumer's thread share is one `Hub` -- the engine's slot, the readiness event, and the
-  count of unanswered provider completions -- and the hub is where a provider's answer and a lineage
-  handle's release arrive; the engine's slot an `Option` that ending empties, so a late answer or
-  release finds nothing to act on rather than an ended instance; an answer counted down before it
-  reaches the engine, which is safe because ending empties the slot before it waits; `Setup` with
-  two lifetimes, `Setup<'env, 'pool, ..>`, because a callback environment is invariant behind `&mut`
-  and one lifetime would tie the caller's borrow to the pool's; `R: Send + 'static` now required on
-  `Dioring`, since the registration lives behind the engine's lock, which pool threads take; `pop`
-  submits and pops but no longer retries the core's refused submissions -- a retryable cause always
-  leaves completions to come, whose actions the pool drain re-emits them with, so the retry was an
-  equivalent mutant -- and still makes the provider's requests, as a drain's request waits for a
-  consumer call; geometry now enforced on the driver's path, by the backend; the instance's own
-  refusals of a duplicate key and of the default lineage's end kept in the driver, ahead of the
-  core's, so their reasons stay exact; a refusal from the core when `end_lineage` ends a lineage by
-  its last handle reported as an inconsistency through the hub, as the old core reported a second
-  end, rather than ignored -- the swap first ignored it, and the full sweep caught that as a
-  survivor; while a refusal of a handle's release is still ignored, as the old relay ignored it; and
-  of the old path's sabotages, 33 re-anchored where their rules now live and 10 retired -- nine that
-  sabotage the same predicate, at the same site and in the same way, as an existing core or backend
-  entry, now that the driver's copy is gone, and the relay's control with the relay.
+- [ ] **DI-9.1.3** -- **DECIDE: heals take effect as soon as nothing can delay them.** Now: ending a
+  lineage that a heal waits for releases the heal there, so `Healed` may follow `LineageEnded`
+  directly; and a failure whose suspect set is empty belongs to no lineage, so healing it takes
+  effect at once, where with one lineage it used to wait for the next seal.
 
-- [ ] **DI-9.7** -- **The assistant's choices from DI-M7 on**, each step adding its own here as it
-  lands. From `DI-7.1`: the responder that fails submits is asked of the ring crate, as a safe
-  `sys::submit_faults` (its `M37.1`), rather than implemented here behind an `expect(unsafe_code)`
-  or reached through a macro that hides the `unsafe` -- [DI-D-4](DESIGN-NOTES.md#di-d-4) says to add
-  the safe wrapper to the lower crate, and either alternative is the lint relaxed by another name.
-  Also from `DI-7.1`: the tests that need the ring reach it through a `cfg(test)`
-  `WindowsBackend::submit_faults`, which registers the responder and returns only its control, so
-  the ring's private sidecar type stays out of the signature, once per backend; `windows-ioring-sys`
-  is a dev-dependency beside the normal one, enabling `kernel-seam` for test builds; the pool-thread
-  test holds the engine's lock across both pushes, so the drain that fails is a guaranteed one
-  rather than a race; and the failure armed is `ERROR_IO_DEVICE`, which no ring condition names, so
-  it surfaces as a `RefusalCause::Unknown` carrying its code, that `pop` reports as an error
-  downcasting to the `RefusalCause`. From `DI-7.2`: construction's two knobs, the test-only hook and
-  the registration bound, travel together in one crate-private `Construction`, handed from
-  `Dioring::with_construction` to `WindowsBackend::construct`, rather than the constant being made
-  shorter under `cfg(test)`, which would change every test's wait and could fail a slow machine's
-  registration, or the hook being a thread-local or a global; `without_owned_reads` and
-  `Dioring::with_clock` keep their signatures and pass the production default; `Sidecar`, the
-  backend's per-operation record, becomes crate-visible, and the hook has a `RingHook` alias, so the
-  hook can name the ring's type; the construction tests are two sibling modules, the backend's
-  because its `tests.rs` is already over 32 KiB, and `TempFile::is_held` is made crate-visible for
-  them; a stalled registration is tested with a 50ms bound against a 600ms stall, which asserts on
-  the bound the error names and on the ring running down after the stall, rather than on elapsed
-  time; and the ring crate's `M38.1`, which this step asked for, is the stalled submit rather than
-  withheld completions, for the reason its [D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87) gives.
-  From `DI-7.3`: pumped delivery needed a blocking wait on a handle, which this crate cannot write,
-  so `win-sync-sys` gained `wait_for_single_object` as the first slice of its parked wait functions
-  ([WS-D-6](../win-sync-sys/DESIGN-NOTES.md#ws-d-6)), rather than the wait being written in the ring
-  crate; `Waitable` is a public one-method trait, so a backend of another crate can implement it;
-  `Setup`'s `environment` became `delivery: DeliveryMode`, which touched every construction site and
-  `CONTRACT.md`'s three worked examples, rather than a flag or a second constructor; `Dioring::pump`
-  returns `io::Result<bool>`, whether entries became poppable, rather than a struct of what woke it
-  and what it drained; a pump whose wait failed drains anyway and then reports the failure, and one
-  whose wait timed out drains too; `pump` on an instance built with a pool is a runtime
-  `Unsupported`, not a type error, which the crate split revisits; the readiness event is still set
-  under pumped delivery; the engine's slot helpers moved from `pool.rs` to `engine.rs`, being
-  generic already; the delivery enum is in `dioring/delivery.rs`, so `dioring.rs`, already over
-  32 KiB, grows by little; `MemoryNotification` gained a per-handle record of the raisings its own
-  waits have seen, beginning at none, so a raising before the first wait is seen; the Windows
-  notification's failing wait and an abandoned one are declared blind spots in the sabotage
-  manifest, since reaching them needs `unsafe`; and waiting beside other handles was raised as
-  `DI-7.5` rather than built, because handing out the event touches
-  [DI-D-10](DESIGN-NOTES.md#di-d-10). From `DI-7.5`: the mode is named `Signalled` and takes the
-  callback environment; the signal is auto-reset, since a manual-reset one would stay set and a
-  pump's wait on it would return at once for ever; `completion_signal` hands out a full-access
-  duplicate of one event, the event being the consumer's own and not the ring's; a pump in either
-  pumped mode drains before it waits and returns at once if that delivered, which changed `Pumped`'s
-  behaviour and tests from `DI-7.3`, its `waited` now `false` when no wait was made; a pump on a
-  signalled instance waits on the signal, so a consumer who waits on it too and then pumps with a
-  limit works, because of the drain first; `SignalledDelivery` is in `windows_backend/signalled.rs`
-  beside the pool's, and `PumpedDelivery` gained `with_notification`; the wait-only duplicate of the
-  ring's own event is not built and stays available, needing a duplicate-with-access in
-  `win-sync-sys`; and the signalled mode's construction failures and its callback environment are
-  declared in the sabotage manifest as not covered, as the pool's are. From `DI-7.4`: it was built
-  as an example, `examples/blocking_push/`, on the engineer's ruling, not as an API of the crate
-  ([DI-D-56](DESIGN-NOTES.md#di-d-56)); `push_blocking` takes the buffer and the context by value
-  and the push as a closure given them each time, so a refused push's buffer is never copied, and
-  what "make room" means is the caller's, per delivery mode; the pooled form backs off in sleeps of
-  at most a millisecond, the instance offering no signal that a drain ran; a push of a registered
-  span is outside it, having no buffer to hand back; the example's tests run with the crate's,
-  through `test = true`, and its sabotages are in this crate's manifest under `examples/`; and it
-  found a defect in the ring crate's rundown, fixed there as its `M39.1`
-  ([D-88](../windows-ioring-sys/DESIGN-NOTES.md#d-88)) rather than worked round here. From `WS-1+.5`:
-  the handle with chosen access is `win-sync-sys`' `duplicate_handle_with_access` over any handle,
-  with a typed `Access` mask, and `Event::try_clone_wait_only` gives a `WaitOnlyEvent` with no `set`
-  or `reset`, a type and not an `Event` that fails at run time
-  ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)); Windows does not confine a duplicate to the
-  source's access, so a wait-only handle guards against misuse and is not a boundary against a
-  holder that duplicates it wider. From `WS-1+.1`: alertability is an `Alertable` argument and not
-  separate functions; the waits stay over `AsHandle` with no `Waitable` trait, which the item
-  proposed; wait for any and wait for all are two functions with different results; a `Signalable`
-  trait says what `SignalObjectAndWait` may signal; and `queue_user_apc` takes a Rust closure
-  ([WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8)). From `io-buffers`: the crate's name; that
-  `RegisteredSpan` moves into it with the contract; and that `NumaBuffer`'s buffer impls move from the
-  ring crate to `win-numa-sys`, which then implements a trait it does not define, ending its
-  deliberately trait-free stance in that one respect
-  ([IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1), [IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2),
-  [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)); and that the ring crate re-exports the contract
-  from it at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)); and from `IB-1.4`
-  that `AlignedBuf` is fallible to build, has no `Clone` and cannot grow
-  ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)); and from `IB-2+.4`, which took the engineer's
-  route (a), that `windows-namespace-request-sys` takes the allocation error with `expect` at each
-  site and that `SecurityDescriptor::clone` panics when the copy cannot be allocated, so an
-  unallocatable request is a panic where it was an abort
-  ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)); and from `DI-8.1`
-  that the core's tests share one portable clock and fault in `test_support`, that a stamp in them
-  is a plain `u64`, that the test of the driver's default clock stamping with interrupt time stays
-  only in the driver's own tests, and that the readiness-check tests, being over a Windows event,
-  sit in a module of their own for the split to take whole; and from `DI-8.2`, in
-  [DI-D-57](DESIGN-NOTES.md#di-d-57), that the driver's clock is a `StampClock` and not a
-  `win-time-sys` clock, with `InterruptStamps` as the default and `FromClock` as the adapter, that
-  the notification is `CompletionEvent`, that `ErrorCode::of` is `error_code_of`, that
-  `DioringIds` has no default time type and the driver names it `WindowsIds`, that the portable crate
-  has a public `driver` module and `Lineage` and `OpId` have public fields, and that the Windows crate
-  re-exports the portable crate's API.
+- [ ] **DI-9.1.4** -- **DECIDE: the oracle drops [DI-D-39](DESIGN-NOTES.md#di-d-39)'s tightening.**
+  Now: a `Durable` may pass a failure once the consumer has healed it, because the stream cannot
+  show which lineage's seal made the heal effective. It gains four rules for an ended lineage: it is
+  reported ended once, no `Durable` or `Blocked` names it afterwards, no write into it is accepted,
+  and no later failure suspects a write of it.
+
+- [ ] **DI-9.1.5** -- **RATIFY: the shapes.** `Tag<'_, V>` borrows the handle, never the instance;
+  construction returns `(Dioring, LineageHandle)`, the default lineage's handle beside the instance;
+  `durable_through`, `sealed_through`, `epoch_state` (no longer panicking) and `import_failure`
+  return `Result<_, UnknownLineage>`; `EndLineageRefusal` and `RetireLineageRefusal` hand the handle
+  back, checked in the order `Foreign`, `Default`, `Shared`, then `Busy`; `LineageBusy.in_flight`
+  clears as completions arrive, not when popped; retiring reports no entry;
+  `LineageEnded.abandoned_through` is the highest epoch above the lineage's mark that it sealed or
+  wrote.
+
+### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
+
+- [ ] **DI-9.2.1** -- **DECIDE: a held write whose own epoch is abandoned ends as `NeverIssued`
+  naming that epoch.** Now: no write may join an abandoned epoch ([DI-D-35](DESIGN-NOTES.md#di-d-35)),
+  so this wins over the gate, which is named only when both apply.
+
+- [ ] **DI-9.2.2** -- **DECIDE: a held write is outstanding for its lineage's seals, as one in
+  flight is, and no failure suspects it until it is released.**
+
+- [ ] **DI-9.2.3** -- **DECIDE: `make_durable_through` returns `SealError::{UnknownLineage,
+  GateCycle}` in place of `io::Error`.** A public API change for consumers.
+
+- [ ] **DI-9.2.4** -- **RATIFY:** a gate naming an ended or retired lineage is refused as
+  `UnknownLineage`; a cycle is listed as each held write's epoch followed by its gate; released
+  operations are pushed at the consumer's next call on the instance, normally the `pop` that returns
+  the `Durable` releasing them, because a registered-span push needs the registration and an owned
+  push its buffer's bound, which a held owned operation carries as a function pointer; the oracle
+  gains "a gated operation completes only after its gate is reported durable", "`NeverIssued` comes
+  only for one", and "no failure suspects a held write".
+
+### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
+
+- [ ] **DI-9.3.1** -- **DECIDE: the provider is called only from the consumer's next call, with
+  dioring's lock released.** Now: a seal's request is made by the consumer's next `pop`,
+  `make_durable_through`, `resolve` or `end_lineage`, never by a completion callback on a pool
+  thread. Two constraints force it: [DI-D-27](DESIGN-NOTES.md#di-d-27) lets a provider answer
+  inside `make_durable`, and that answer takes the lock; and a provider panic can only propagate to
+  a caller. Nothing is stranded, since a seal starts at its own call or at its last write's
+  completion, which queues an entry the consumer pops.
+
+- [ ] **DI-9.3.2** -- **DECIDE: every request is built before any is handed over.** Now: a panic
+  drops the rest, and each completion dropped unanswered is a failure of its domain,
+  `Cause::ProviderAbandoned`.
+
+- [ ] **DI-9.3.3** -- **RATIFY:** a request is one per seal, naming only the served domains the
+  seal's writes touched, in interned-id order, each with its files and each file's writes in push
+  order; a seal naming no served write asks nothing; a write is covered when its file's flush
+  succeeded, if the default answers for the file, and every served domain of its file answered
+  success; a failure of domain D is observed with `Reach::Domains([D])`, which is
+  [DI-D-27](DESIGN-NOTES.md#di-d-27)'s rule, so needs no reach of its own.
+
+### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
+
+- [ ] **DI-9.4.1** -- **DECIDE: on Windows the default diagnostic sink is `NoDiagnostics`, until
+  `DI-12.1`.** Now: `Setup.diagnostics` is an `Option<Arc<dyn DiagnosticSink>>`, `None` meaning the
+  driver's default, so an inconsistency the core finds is reported nowhere unless the consumer
+  supplies a sink. `StderrDiagnostics` exists for one who does, prefixing each line `dioring:`.
+
+- [ ] **DI-9.4.2** -- **DECIDE: a sink is called with dioring's lock held.** It must return promptly
+  and must never call back into the instance; one that does deadlocks, and one that is slow holds up
+  every other path.
+
+- [ ] **DI-9.4.3** -- **DECIDE: two `IoFault`s are equal when they name the same source and code and
+  share the one report (`Arc` identity).** So a nullifier agrees with its write's completion only if
+  it relays that very report, and a fault rebuilt from the same words is not equal.
+
+- [ ] **DI-9.4.4** -- **RATIFY:** `SuspectWrite::file` and `IoTargetBusy::file` are renamed `target`,
+  and `IoTargetBusy` displays "target"; the Windows path's fault for a short write carries no code
+  and the message "the write completed short: n of N bytes"; a write's requested length rides in its
+  sidecar and no longer in the core; the inconsistency for a code-less failed write is gone, the
+  code having become optional; `DiagnosticKind` and `Diagnostic` are non-exhaustive, `Inconsistency`
+  carrying the instance's number, `what` and the formatted detail; the clock trait is `StampClock`,
+  its reading bounded by a public `Instant` trait (`std::time::Instant` shares the name), the time
+  type an associated type of `Identities` -- with [DI-D-57](DESIGN-NOTES.md#di-d-57) amending how the
+  driver names it.
+
+### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
+
+- [ ] **DI-9.5.1** -- **DECIDE: registered buffers are given at construction only.** Now: they come
+  through `WindowsBackendSetup`, whose refusal hands everything back as `Setup`'s does; targets given
+  at construction are registered and addressed by index, and those attached later are addressed by
+  their `SharedHandle`.
+
+- [ ] **DI-9.5.2** -- **DECIDE: what a Windows commit and a target claim by default.** Now: a commit
+  is an unordered flush in the default mode, as before; a `Win32FileTarget` defaults to
+  `BestEffort`, unaligned, with no capabilities, its class taken on declaration until `DI-3.10.4`;
+  and the in-memory backend ignores `WriteCaching`.
+
+- [ ] **DI-9.5.3** -- **RATIFY: the backend trait's surface.** `IoBackend`, in a public `backend`
+  module with the in-memory backend in `memory`; `IoTarget`, `IoTargetDescription`, `WarrantyClass`,
+  `Geometry`, `GeometryError` and `Capabilities` at the crate root; the target module is `io_target`
+  because the root `.gitignore`'s `target` ignores any directory so named; `Geometry` holds three
+  alignments (offset, length, buffer address), each a power of two its constructors enforce, with
+  `admits` and `admits_buffer` the one statement of the rule; `Capabilities` names write-through
+  only, its fields private; `IoTarget` requires `Send`, `describe` provided; `SubmissionToken` a
+  public `u64`, `RegisteredRegion` three `u32`s, a completion's result a `u32` count or an `IoFault`,
+  a commit transferring zero; refusal causes `SubmitNeeded`, `DrainNeeded`, `SubmitAndDrainNeeded`,
+  `Busy`, `UnknownTarget`, `Unsupported`, `Invalid`, `Unusable(IoFault)`, `Unknown(IoFault)`,
+  non-exhaustive, with `needs_submit`, `needs_drain`, `is_retryable`; `submit`, `pop` and
+  `notification` report an `IoFault`; a submission for a detached target completes with a fault;
+  registration is a backend's construction concern.
+
+- [ ] **DI-9.5.4** -- **RATIFY: the in-memory backend.** Buffers are `Vec<u8>`; it executes at
+  submit; it refuses a drain when queued and unpopped submissions fill the completion queue,
+  checking the target, then the submission's shape, then capacity; its notification is a count with
+  `wait_past`; its faults name the source `"memory"` with no code; queue sizes are `NonZeroU32`; a
+  commit copies bytes to `durable_contents`.
+
+- [ ] **DI-9.5.5** -- **RATIFY: the core on the trait.** A consumer operation takes the caller's
+  push as a closure and is recorded only once the push accepts it; the core's own submissions come
+  out in `CoreActions` and return through `refused`, re-emitted with the next actions or by `retry`;
+  `CoreActions` is `submit` plus a `deliver` flag raised on the queue's empty-to-non-empty
+  transition, `#[must_use]`; a seal returns its answer and actions as a pair; backend refusals reach
+  the consumer as `PushRefusal::Backend(RefusalCause)`; a duplicate target hands back its
+  description in `DuplicateTarget`; `new` takes a clock and an `Arc<dyn DiagnosticSink>` with no
+  default; a completion with no record, a second completion, and a consumer operation handed back
+  as refused are each an inconsistency ([DI-D-46](DESIGN-NOTES.md#di-d-46)); the module is `io_core`
+  because `core` would shadow the `core` crate; `Event::into_entry` is the one event-to-entry
+  conversion; a held operation spends its id when held and is emitted in the actions of the change
+  that released it, kept and emitted again if refused; `write` and `read` take `WriteOptions` and
+  `ReadOptions`; lineage calls take a plain `Lineage`, an ended or retired one refused as `Foreign`;
+  the core holds no provider, `with_provider` takes the served domains and refuses a repeat as
+  `DuplicateDomain`, requests come out as `ProviderRequest`s in `CoreActions::requests`, answers go
+  back through `provided` with a public `DomainOutcome`; `import_reach` is the one function both
+  paths share; `close` hands back the held operations, failures and lineages; `pushed` and
+  `pushed_gated` take a `length` for every operation, a read's being its buffer and unchecked, and
+  the short-write rule is exact (a write transferring more than its length is `WriteNotInFull`, as a
+  shorter one is).
+
+- [ ] **DI-9.5.6** -- **RATIFY: the Windows backend's mapping.** Each push is issued at once, the
+  ring submitting a batch as it ends, and `submit` reissues what a failed submission left queued, so
+  the trait says a push is issued no later than the next `submit`, and `submit` reports a
+  `RefusalCause`; a full submission queue maps to `SubmitNeeded`, a full completion queue to
+  `DrainNeeded`, a submission running to `Busy`, a corrupt ring to `Unusable`, any other ring
+  condition to `Unknown` with the report, and the ring's `Unsupported` and `InvalidInput` to
+  `Unsupported` and `Invalid`; a target's geometry is checked before the ring is asked; the
+  notification is the ring's completion event, duplicated as an `OwnedHandle` and attached at
+  construction; `fail_next_commit` joins `fail_next_flush` in the fault seam; the short-write rule
+  lives in the backend as `transfer`; `register_files` takes handles rather than `TargetSetup`s; the
+  backend and `Win32FileTarget` live in a public `windows_backend` module.
+
+### DI-9.6 -- The driver on the core ([DI-3.10.3.5.6.1 to DI-3.10.3.5.6.2.6](COMPLETED-CHECKLIST.md))
+
+- [ ] **DI-9.6.1** -- **DECIDE: what the backend refuses for good, the core ends
+  ([DI-D-54](DESIGN-NOTES.md#di-d-54)).** Now: a gated operation is put to `IoBackend::check` before
+  it is held; a submission of the core's own that the backend refuses for a non-retryable cause
+  completes with a `REFUSED` fault instead of being re-emitted; an `Unknown` cause counts as
+  permanent. The alternative, re-emitting every refusal, is the hang the row records.
+
+- [ ] **DI-9.6.2** -- **DECIDE: `Dioring` requires `R: Send + 'static`.** Now: the registration
+  lives behind the engine's lock, which pool threads take.
+
+- [ ] **DI-9.6.3** -- **DECIDE: which refusals on the lineage paths are reported.** Now: a refusal
+  from the core when `end_lineage` ends a lineage by its last handle is an inconsistency reported
+  through the hub; a refusal of a handle's release is ignored, as the old relay ignored it.
+
+- [ ] **DI-9.6.4** -- **DECIDE: a declared geometry is now enforced on the driver's path.** Now: the
+  backend's `check` and `push` refuse an operation that does not fit a target's declared geometry,
+  which the old driver did not.
+
+- [ ] **DI-9.6.5** -- **RATIFY: the driver's structure.** A portable `Engine` is the one place
+  `CoreActions` become backend pushes, with the drain every delivery shares; a drain runs until a
+  pass pops nothing and does not call `retry`; pool delivery tells the driver through an `on_ready`
+  closure called after the lock is released; `into_engine` stops delivery and returns the engine;
+  one `Hub` holds the engine's slot, the readiness event and the count of unanswered provider
+  completions, and is where a provider's answer and a handle's release arrive; the slot is an
+  `Option` that ending empties; an answer is counted down before it reaches the engine, which is
+  safe because ending empties the slot before it waits; the instance's own refusals of a duplicate
+  key and of ending the default lineage stay in the driver, ahead of the core's; `pop` submits and
+  pops but no longer retries refused submissions, the retry having been an equivalent mutant.
+
+- [ ] **DI-9.6.6** -- **RATIFY: the trait and type shapes.** `Readiness` carries no bound, while
+  `EntryDelivery` and `check_readiness` bind it to `Event`; the ring trait's `Target` is bounded by
+  `IoTarget`; `add_target_with` goes with `FileOptions`, leaving one `add_target`; `AddTargetError`
+  is generic, carrying the target; the test fake's target is `MemoryTarget`; `TargetSetup` carries
+  the `Win32FileTarget` whole; two constructors, `new` for an `IoBufMut` buffer and
+  `without_owned_reads` for one that may be only `IoBuf`, with a crate-private `enable_owned_reads`;
+  the owned read's push is a function pointer, behind a `Via`; accessors are renamed
+  `with_registered_buffer` and `with_registered_buffer_mut`, generic over the closure's return, so
+  the trait is not object-safe, as it was not before ([DI-D-24](DESIGN-NOTES.md#di-d-24)); `Setup`
+  has two lifetimes, `Setup<'env, 'pool, ..>`, because a callback environment is invariant behind
+  `&mut`; `RefusalCause` implements `std::error::Error`; the ring crate gained a public `check_span`
+  rather than dioring repeating the bounds.
+
+- [ ] **DI-9.6.7** -- **RATIFY: the sabotage migration.** Thirty-three of the old path's sabotages
+  were re-anchored where their rules now live and ten retired: nine sabotage the same predicate at
+  the same site in the same way as an existing core or backend entry, and one was the relay's
+  control, retired with the relay.
+
+### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
+
+- [ ] **DI-9.7.1** -- **DECIDE: `pump` on a pool-built instance is a runtime `Unsupported`, not a
+  type error ([DI-D-55](DESIGN-NOTES.md#di-d-55)).** Now: a pump that waited would be a second waiter
+  on the ring's event, which the ring crate's [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21)
+  forbids, so it refuses; the crate split kept it as it was. The alternatives, a type parameter on
+  `Dioring` or a type per delivery mode, were rejected as churn through every bound.
+
+- [ ] **DI-9.7.2** -- **DECIDE: `completion_signal` hands out a full-access duplicate of dioring's
+  own auto-reset event.** Now: the consumer may wait on it, set it or reset it, and the worst that
+  costs is its own wakeup, since a pump drains before it waits. `Event::try_clone_wait_only`
+  ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)) has since given a duplicate with no `set` or
+  `reset`; whether to hand that instead is open. A wait-only duplicate of the ring's own event is
+  `DI-7+.1`, below.
+
+- [ ] **DI-9.7.3** -- **DECIDE: an unallocatable request is a panic where it was an abort.** Now:
+  from `IB-2+.4`, which took the engineer's route (a), `windows-namespace-request-sys` takes the
+  allocation error with `expect` at each site, and `SecurityDescriptor::clone` panics when the copy
+  cannot be allocated ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)).
+
+- [ ] **DI-9.7.4** -- **DECIDE: `NumaBuffer`'s buffer impls move from the ring crate to
+  `win-numa-sys`**, which then implements a trait it does not define, ending its deliberately
+  trait-free stance in that one respect ([IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)).
+
+- [ ] **DI-9.7.5** -- **DECIDE: the portable crate's public surface for other drivers.** Now: a
+  public `driver` module re-exporting `Engine`, `EngineGuard`, `Slot`, `lock`, `present`, the pump
+  types, `Home`, `Answer`, `DomainCall`, `InstanceId`, `first_repeat` and `inconsistent`; `Lineage`
+  and `OpId` with public fields; `LineageHandle::detached` and `mint` public; `Waitable` a public
+  one-method trait so a backend of another crate can implement it; and the Windows crate
+  re-exporting the portable crate's API with `pub use durable_ioring::*`.
+
+- [ ] **DI-9.7.6** -- **RATIFY: the renames the split forced
+  ([DI-D-57](DESIGN-NOTES.md#di-d-57)).** The driver's clock is a `StampClock`, not a `win-time-sys`
+  clock, with `InterruptStamps` the default and `FromClock` the adapter; the notification is
+  `CompletionEvent`; `ErrorCode::of` is `error_code_of`; `DioringIds` has no default time type and
+  the driver names it `WindowsIds`.
+
+- [ ] **DI-9.7.7** -- **RATIFY: delivery modes.** `Setup`'s `environment` became `delivery:
+  DeliveryMode` (`Pool`, `Pumped`, `Signalled`), touching every construction site and
+  `CONTRACT.md`'s three worked examples, over a flag or a second constructor; `Dioring::pump` returns
+  `io::Result<bool>`, whether entries became poppable; a pump in either pumped mode drains before it
+  waits and returns at once if that delivered, so `waited` is `false` when no wait was made; a wait
+  that failed or timed out drains too, and a failed one then reports; the readiness event is still
+  set under pumped delivery; the signalled mode's event is auto-reset, since a manual-reset one would
+  stay set and a pump's wait would return at once for ever; the blocking wait is
+  `win-sync-sys::wait_for_single_object`, its first slice of the parked waits
+  ([WS-D-6](../win-sync-sys/DESIGN-NOTES.md#ws-d-6)); the engine's slot helpers moved to
+  `engine.rs`; the delivery enum is in `dioring/delivery.rs` and `SignalledDelivery` in
+  `windows_backend/signalled.rs`; `MemoryNotification` keeps a per-handle record of the raisings its
+  own waits have seen, beginning at none.
+
+- [ ] **DI-9.7.8** -- **RATIFY: construction, the fault responder, and their tests.** The responder
+  that fails submits is asked of the ring crate as a safe `sys::submit_faults` (its `M37.1`) rather
+  than implemented behind `expect(unsafe_code)` or a macro, per
+  [DI-D-4](DESIGN-NOTES.md#di-d-4); tests reach it through a `cfg(test)`
+  `WindowsBackend::submit_faults`, `windows-ioring-sys` being a dev-dependency enabling
+  `kernel-seam`; the pool-thread test holds the engine's lock across both pushes so the failing
+  drain is guaranteed; the failure armed is `ERROR_IO_DEVICE`, surfacing as
+  `RefusalCause::Unknown`; construction's two knobs travel in one crate-private `Construction`
+  rather than a shortened constant under `cfg(test)` or a thread-local; a `RingHook` alias names the
+  hook's type; the construction tests are two sibling modules; a stalled registration is tested with
+  a 50ms bound against a 600ms stall, asserting on the bound the error names and on the ring running
+  down, not on elapsed time; the ring crate's `M38.1` is the stalled submit
+  ([D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87)).
+
+- [ ] **DI-9.7.9** -- **RATIFY: the example and the sibling crates.** `blocking_push` is an example,
+  not an API ([DI-D-56](DESIGN-NOTES.md#di-d-56)): it takes the buffer and context by value and the
+  push as a closure, backs off in sleeps of at most a millisecond under the pool, excludes a
+  registered-span push, runs its tests with the crate's, and has its sabotages in this crate's
+  manifest. `win-sync-sys`: `duplicate_handle_with_access` over any handle with a typed `Access`
+  mask; `WaitOnlyEvent` is a type, not an `Event` that fails at run time, and guards against misuse
+  without being a boundary against a holder that duplicates it wider; alertability is an `Alertable`
+  argument; the waits stay over `AsHandle` with no `Waitable` trait, which the item had proposed;
+  wait for any and wait for all are two functions; a `Signalable` trait says what
+  `SignalObjectAndWait` may signal; `queue_user_apc` takes a Rust closure
+  ([WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8)).
+
+- [ ] **DI-9.7.10** -- **RATIFY: the buffer crate and the core's tests.** The crate's name,
+  `io-buffers`; `RegisteredSpan` moves into it with the contract; the ring crate re-exports the
+  contract at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)); `AlignedBuf` is
+  fallible to build, has no `Clone` and cannot grow ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)).
+  From `DI-8.1`: the core's tests share one portable clock and fault in `test_support`; a stamp in
+  them is a plain `u64`; the test of the driver's default clock stamping with interrupt time stays in
+  the driver's own tests; the readiness-check tests, being over a Windows event, sit in a module of
+  their own.
+
+### DI-9.8 -- Owed by the assistant
+
+- [ ] **DI-9.8.1** -- **MINE: close or restate each declared blind spot.** The sabotage manifests
+  declare as not covered: that a pool's callback environment is honoured, since no behaviour test
+  can tell which pool ran a drain; the Windows notification's failing wait and an abandoned one,
+  since reaching them needs `unsafe`; and the signalled and pool modes' construction failures. Each
+  is to be covered, or recorded with what would cover it.
+
+- [ ] **DI-9.8.2** -- **MINE: read the portable job's first CI run.** The crate's tests have not run
+  on a non-Windows host. Blocked on a push, which is the engineer's call.
 
 ## DI-M7+ -- Delivery follow-ups
 
