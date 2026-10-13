@@ -74,3 +74,39 @@ The item as it stood at completion:
   `numa_buffer_io.rs` carries. Additive, so it builds beside the ring crate's own implementation of
   its own trait. The allocator crate's README, which says it defines no buffer trait, says what it
   now does instead.
+
+## Moved 2026-10-12 21:15:48 -04:00 -- IB-1.3: windows-ioring-sys takes the contract
+
+### <a id="ib-13"></a>IB-1.3 -- `windows-ioring-sys` takes the buffer contract from `io-buffers` and re-exports it at the same paths. *(completed 2026-10-12 21:15:48 -04:00)*
+
+Per the ring crate's [D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89). The ring crate depends on
+`io-buffers` (`path` with `version = "0.1.0"`, which `IB-1.1`'s `Release-As` makes a fact), its `buf`
+module, its `RegisteredSpan` definition and its `numa_buffer_io` module are deleted with their tests,
+and `lib.rs` re-exports `IoBuf`, `IoBufMut` and `RegisteredSpan` from `io-buffers`, so every path a
+consumer bound to still resolves. `batch.rs` imports them from the new crate. The ring crate's unit
+and integration tests, its doctests and `durable-ioring`'s all pass, with all features; clippy and
+rustdoc `-D warnings` are clean. Its sabotage manifest named nothing in the deleted code, so nothing
+needed re-anchoring. The ring crate's decisions `D-1` and `D-11`, which describe the duplication and
+the registration extension, carry a marker pointing at where the contract lives now, and `D-89`
+records the move.
+
+**Not a breaking change**, which the work was checked against rather than assumed: the types are
+reached by the same paths, an `unsafe impl` of the trait for a consumer's own type compiles as it did
+(the tests of `durable-ioring`, which have several, are the check), and the one real consequence is a
+new dependency. The commit is therefore `refactor`, which release-please does not count as a feature.
+
+The ring crate's `MUTATION-SURVIVORS.md` still names `buf.rs` lines, which is an old report of a
+sweep that no longer applies to this file; it is left as the record it is.
+
+The item as it stood at completion:
+
+- [x] **IB-1.3** -- **`windows-ioring-sys` takes the contract from `io-buffers`**: its `buf` module and
+  `RegisteredSpan` definition are deleted, `IoBuf`, `IoBufMut` and `RegisteredSpan` are re-exported
+  at the same paths so no consumer's import changes, and `numa_buffer_io.rs` is deleted, its
+  implementations having moved in `IB-1.2`. The ring crate's tests and sabotages stay green, with
+  those that pinned the deleted code re-anchored or retired. **The dependency is `path` with
+  `version = "0.1.0"`**, which is not a guess: `IB-1.1`'s commit fixes this crate's first release
+  to 0.1.0 with `Release-As`. This crate must be published before the ring crate's next release,
+  which the publish workflow's wait for workspace siblings exists for. (`durable-ioring`'s
+  path-only dependencies are different: it has no `Release-As` to rely on, and `DI-12.4` is where
+  it pins them.)

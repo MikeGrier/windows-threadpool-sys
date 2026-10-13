@@ -15,16 +15,7 @@ contract in a portable crate. Items are in dependency order.
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-ioring-sys` ->
   > `IB-1.3`.
 
-- [ ] **IB-1.3** -- **`windows-ioring-sys` takes the contract from `io-buffers`**: its `buf` module and
-  `RegisteredSpan` definition are deleted, `IoBuf`, `IoBufMut` and `RegisteredSpan` are re-exported
-  at the same paths so no consumer's import changes, and `numa_buffer_io.rs` is deleted, its
-  implementations having moved in `IB-1.2`. The ring crate's tests and sabotages stay green, with
-  those that pinned the deleted code re-anchored or retired. **The dependency is `path` with
-  `version = "0.1.0"`**, which is not a guess: `IB-1.1`'s commit fixes this crate's first release
-  to 0.1.0 with `Release-As`. This crate must be published before the ring crate's next release,
-  which the publish workflow's wait for workspace siblings exists for. (`durable-ioring`'s
-  path-only dependencies are different: it has no `Release-As` to rely on, and `DI-12.4` is where
-  it pins them.)
+- [x] **IB-1.3** -- `windows-ioring-sys` takes the buffer contract from `io-buffers` and re-exports it at the same paths. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-13)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` ->
   > `DI-8.2` (the split), which needs this item. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

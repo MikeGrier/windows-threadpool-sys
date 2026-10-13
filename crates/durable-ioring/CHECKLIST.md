@@ -310,7 +310,8 @@ does is now that item's to absorb.
   ring crate to `win-numa-sys`, which then implements a trait it does not define, ending its
   deliberately trait-free stance in that one respect
   ([IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1), [IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2),
-  [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)).
+  [IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)); and that the ring crate re-exports the contract
+  from it at the old paths ([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)).
 
 ## DI-M7+ -- Delivery follow-ups
 
