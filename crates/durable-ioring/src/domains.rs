@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Split from dioring.rs at 60ebadb1.
+// Split from dioring.rs at f13cd814.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Split from oracle.rs at a8947da8.
+// Split from oracle.rs at 4fbcb343.
 //! The readiness signal's harness check (DI-D-28), for a signal that is a Windows [`Event`]: push
 //! into an empty queue and require the signal set, drain, and again. The portable oracle sees
 //! entries, not wakes, so this runs beside it.

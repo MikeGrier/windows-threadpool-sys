@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Copied from windows-ioring-sys src/buf/tests.rs at 49dd0689.
+// Copied from windows-ioring-sys src/buf/tests.rs at b365a2b1.
 //! Unit tests for the owned-buffer traits.
 //!
 //! The property under test is the one the compiler cannot check and the one

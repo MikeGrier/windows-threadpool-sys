@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Copied from windows-ioring-sys src/numa_buffer_io.rs at ea5d17d1.
+// Copied from windows-ioring-sys src/numa_buffer_io.rs at b6ba19e5.
 //! `io-buffers`' I/O buffer traits, implemented for [`NumaBuffer`].
 //!
 //! # Why the impls are here

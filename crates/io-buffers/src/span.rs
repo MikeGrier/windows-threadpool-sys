@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Copied from windows-ioring-sys src/batch.rs at 49dd0689.
+// Copied from windows-ioring-sys src/batch.rs at b365a2b1.
 //! The part of a registered buffer an operation reads or writes.
 
 /// Which bytes of one registered buffer an operation reads or writes: bundled into one value so a

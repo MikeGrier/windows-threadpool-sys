@@ -2322,7 +2322,7 @@ groups keep their IDs, so every earlier citation of `DI-9.n` still names the sam
 above that maps `DI-3.9.x` to them stands); each choice inside a group now has a decimal ID
 (`DI-9.n.m`) and a tag in [CHECKLIST.md](CHECKLIST.md). Choices whose rows are wholly the engineer's
 own, or already decided, were not listed before and are not now. The old wording, which the new items
-condense, is in git at `2be4a962`, in this file's sibling `CHECKLIST.md`. Two findings of the
+condense, is in git at `939ad00a`, in this file's sibling `CHECKLIST.md`. Two findings of the
 restructure: [DI-D-44](DESIGN-NOTES.md#di-d-44)'s "recorded as inconsistencies" for an unasked-for
 answer had been amended by DI-D-46 and the old item still said it, and `DI-D-42`'s dropped oracle
 tightening and the Windows default of `NoDiagnostics` had been buried in running text and are now

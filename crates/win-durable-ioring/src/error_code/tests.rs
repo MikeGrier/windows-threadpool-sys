@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Split from error_code/tests.rs at a8947da8.
+// Split from error_code/tests.rs at 4fbcb343.
 //! What `error_code_of` reads out of an `io::Error`, and the fault the Windows path builds from it.
 
 use std::io;

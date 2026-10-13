@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Split from error_code.rs at a8947da8.
+// Split from error_code.rs at 4fbcb343.
 //! An error's code, read without the ring crate (DI-D-39), and the faults the Windows path
 //! reports with it (DI-D-50).
 

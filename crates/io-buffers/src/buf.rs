@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-// Copied from windows-ioring-sys src/buf.rs at 49dd0689.
+// Copied from windows-ioring-sys src/buf.rs at b365a2b1.
 //! Owned buffers an operation (or a buffer registration) can hold.
 //!
 //! # The contract covers registration

@@ -1,4 +1,4 @@
-<!-- Split from ../durable-ioring/CONTRACT.md at a8947da8: the worked examples at its end. -->
+<!-- Split from ../durable-ioring/CONTRACT.md at 4fbcb343: the worked examples at its end. -->
 # win-durable-ioring
 
 A ring for Windows file I/O with **durability scheduled into its work**: the Windows driver for
