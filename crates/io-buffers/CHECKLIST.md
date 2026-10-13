@@ -10,10 +10,7 @@ Parked behind the milestone they name, per the workspace's `M{n}+` convention: e
 the engineer makes with the shared crate proven, under duplicate-then-decide, and each is tracked so
 the duplication does not become permanent by being forgotten.
 
-- [ ] **IB-2+.1** -- **Whether `windows-overlapped-io-sys` adopts the shared traits**
-  ([IB-D-5](DESIGN-NOTES.md#ib-d-5)): re-export them at the same paths, as the ring crate does in
-  `IB-1.3`. A type that today implements both crates' traits would then have two implementations of
-  one trait, so this is a decision on that cost and not a mechanical step.
+- [x] **IB-2+.1** -- `windows-overlapped-io-sys` adopts the shared traits and re-exports them at the same paths. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ib-2+1)
 
 - [ ] **IB-2+.2** -- **Whether the other aligned-buffer copies move onto `IB-1.4`'s buffer:**
   `windows-namespace-request-sys`' `AlignedBuffer`, the aligned allocation in

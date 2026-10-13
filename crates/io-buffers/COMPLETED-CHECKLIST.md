@@ -158,3 +158,43 @@ left [CHECKLIST.md](CHECKLIST.md) with this item, which finished it. The cross-c
 stubs carried -- to `windows-ioring-sys`' `IB-1.3` after `IB-1.2`, and to `durable-ioring`'s `DI-8.2`
 after `IB-1.3` -- are discharged by the items they named, and `DI-8.2`'s own prerequisite note stays in
 [its checklist](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 21:31:29 -04:00 -- IB-2+.1: windows-overlapped-io-sys adopts the shared traits
+
+### <a id="ib-2+1"></a>IB-2+.1 -- `windows-overlapped-io-sys` adopts the shared traits and re-exports them at the same paths. *(completed 2026-10-12 21:31:29 -04:00)*
+
+Per [IB-D-5](DESIGN-NOTES.md#ib-d-5). The item was parked as a decision for the engineer; "implement
+ib-2+.1" is taken as that decision to adopt. The overlapped crate depends on `io-buffers` (`path` with
+`version = "0.1.0"`), its `buf` module -- the two traits, the standard-type implementations and their
+tests -- is deleted, and `lib.rs` re-exports `IoBuf` and `IoBufMut` from `io-buffers`, so every
+`windows_overlapped_io_sys::IoBuf` a consumer bound to still resolves. What was in `buf.rs` besides the
+traits was `OversizedBuffer`, a test buffer reporting a length no `u32` can express; it kept its text in
+a test-only `oversized_buffer` module, and the two tests that use it name the new path. The overlapped
+crate's own tests of the standard-type implementations are `io-buffers`' now, which carries the same
+set copied from the ring crate.
+
+**The cost the item named was checked, not assumed:** a type implementing both crates' traits would
+have two implementations of one trait. Every dependent was compiled with all features and all targets
+-- the ring crate, `windows-file-watcher`, `windows-threadpool-sys` -- and none did. It is still a
+break for a downstream crate that does, which is why the commit is marked breaking.
+
+**The check that the two crates now name one trait** is
+`windows-ioring-sys/tests/shared_buffer_contract.rs`: a type implementing only `io-buffers`' traits
+satisfies both crates' bounds, and so do the shared aligned buffer and `Vec<u8>`. It is a claim about
+a trait being the same trait, so it is made for the compiler -- if either crate defined its own again
+the test would stop compiling, which is a stronger rung than an assertion. It sits in the ring crate
+because that crate already has the overlapped crate as a dev-dependency. The assistant did not run the
+test against the pre-change tree to see it fail; that it would is by construction, since a type
+implementing only the shared traits could not satisfy a crate-local bound.
+
+The overlapped crate's all-features unit, integration and doc tests pass, its clippy and rustdoc
+`-D warnings` are clean, and the ring crate's whole suite passes. Its `DESIGN-NOTES.md` says the traits
+moved, the ring crate's `D-1` and `D-89` say the duplication is resolved, and `IB-D-5` is rewritten
+from a deferral to a record of the decision.
+
+The item as it stood at completion:
+
+- [x] **IB-2+.1** -- **Whether `windows-overlapped-io-sys` adopts the shared traits**
+  ([IB-D-5](DESIGN-NOTES.md#ib-d-5)): re-export them at the same paths, as the ring crate does in
+  `IB-1.3`. A type that today implements both crates' traits would then have two implementations of
+  one trait, so this is a decision on that cost and not a mechanical step.
