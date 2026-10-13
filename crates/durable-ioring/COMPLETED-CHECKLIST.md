@@ -2400,3 +2400,17 @@ is released, no failure suspects it before then. Recorded in
 
 Accepted by the engineer: "yes." A public API change for consumers, which now match on the cause
 instead of reading an `io::Error`. Recorded in [DI-D-43](DESIGN-NOTES.md#di-d-43).
+
+## Moved 2026-10-13 16:46:00 -04:00 -- DI-9.2.4: the engineer ratifies the gate and seal shapes
+
+### <a id="di-924"></a>DI-9.2.4 -- The gate and seal shapes, and the oracle's gate rules. *(completed 2026-10-13 16:46:00 -04:00)*
+
+Ratified by the engineer: "di-9.2.4: ratified" (first sent as `di-9.3.4`, corrected a minute later).
+That closes [DI-D-43](DESIGN-NOTES.md#di-d-43) and the `DI-9.2` group. What was ratified: a gate
+naming an ended or retired lineage is refused as `UnknownLineage`; a cycle is listed as each held
+write's epoch followed by its gate; released operations are pushed at the consumer's next call on
+the instance, normally the `pop` that returns the `Durable` releasing them, because a
+registered-span push needs the registration and an owned push its buffer's bound, which a held owned
+operation carries as a function pointer; and the oracle gains "a gated operation completes only
+after its gate is reported durable", "`NeverIssued` comes only for one", and "no failure suspects a
+held write".

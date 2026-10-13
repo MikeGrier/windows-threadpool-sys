@@ -52,13 +52,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.2.3** -- `make_durable_through` returns `SealError::{UnknownLineage, GateCycle}` in place of `io::Error`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-923)
 
-- [ ] **DI-9.2.4** -- **RATIFY:** a gate naming an ended or retired lineage is refused as
-  `UnknownLineage`; a cycle is listed as each held write's epoch followed by its gate; released
-  operations are pushed at the consumer's next call on the instance, normally the `pop` that returns
-  the `Durable` releasing them, because a registered-span push needs the registration and an owned
-  push its buffer's bound, which a held owned operation carries as a function pointer; the oracle
-  gains "a gated operation completes only after its gate is reported durable", "`NeverIssued` comes
-  only for one", and "no failure suspects a held write".
+- [x] **DI-9.2.4** -- The gate and seal shapes, and the oracle's gate rules. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-924)
 
 ### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
 
