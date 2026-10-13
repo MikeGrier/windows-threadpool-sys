@@ -2441,3 +2441,35 @@ succeeded, if the default answers for the file, and every served domain of its f
 success; a failure of domain D is observed with `Reach::Domains([D])`, which is
 [DI-D-27](DESIGN-NOTES.md#di-d-27)'s rule, so needs no reach of its own. This closes
 [DI-D-44](DESIGN-NOTES.md#di-d-44), as amended by DI-D-46 and DI-D-50, and the `DI-9.3` group.
+
+## Moved 2026-10-13 16:55:00 -04:00 -- DI-9.4.1 to DI-9.4.4: the engineer confirms the fault, diagnostic and clock choices
+
+### <a id="di-941"></a>DI-9.4.1 -- On Windows the default diagnostic sink is `NoDiagnostics`, until `DI-12.1`. *(completed 2026-10-13 16:55:00 -04:00)*
+
+Accepted by the engineer: "yes." `Setup.diagnostics` is an `Option<Arc<dyn DiagnosticSink>>`, `None`
+meaning the driver's default, so an inconsistency the core finds is reported nowhere unless the
+consumer supplies a sink. `StderrDiagnostics` exists for one who does, prefixing each line
+`dioring:`. `DI-12.1` replaces the default with the ETW sink
+([DI-D-51](DESIGN-NOTES.md#di-d-51)).
+
+### <a id="di-942"></a>DI-9.4.2 -- A diagnostic sink is called with dioring's lock held. *(completed 2026-10-13 16:55:00 -04:00)*
+
+Accepted by the engineer: "yes." A sink must return promptly and must never call back into the
+instance; one that does deadlocks, and one that is slow holds up every other path.
+
+### <a id="di-943"></a>DI-9.4.3 -- Two `IoFault`s are equal when they name the same source and code and share the one report. *(completed 2026-10-13 16:55:00 -04:00)*
+
+Accepted by the engineer: "yes." Sharing is `Arc` identity, so a nullifier agrees with its write's
+completion only if it relays that very report, and a fault rebuilt from the same words is not equal.
+
+### <a id="di-944"></a>DI-9.4.4 -- The fault, diagnostic and clock renames and shapes. *(completed 2026-10-13 16:55:00 -04:00)*
+
+Ratified by the engineer: "ratified." That closes the `DI-9.4` group. What was ratified:
+`SuspectWrite::file` and `IoTargetBusy::file` are renamed `target`, and `IoTargetBusy` displays
+"target"; the Windows path's fault for a short write carries no code and the message "the write
+completed short: n of N bytes"; a write's requested length rides in its sidecar and no longer in the
+core; the inconsistency for a code-less failed write is gone, the code having become optional;
+`DiagnosticKind` and `Diagnostic` are non-exhaustive, `Inconsistency` carrying the instance's number,
+`what` and the formatted detail; the clock trait is `StampClock`, its reading bounded by a public
+`Instant` trait (`std::time::Instant` shares the name), the time type an associated type of
+`Identities`, with [DI-D-57](DESIGN-NOTES.md#di-d-57) amending how the driver names it.

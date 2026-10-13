@@ -64,28 +64,13 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
 
-- [ ] **DI-9.4.1** -- **DECIDE: on Windows the default diagnostic sink is `NoDiagnostics`, until
-  `DI-12.1`.** Now: `Setup.diagnostics` is an `Option<Arc<dyn DiagnosticSink>>`, `None` meaning the
-  driver's default, so an inconsistency the core finds is reported nowhere unless the consumer
-  supplies a sink. `StderrDiagnostics` exists for one who does, prefixing each line `dioring:`.
+- [x] **DI-9.4.1** -- On Windows the default diagnostic sink is `NoDiagnostics`, until `DI-12.1`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-941)
 
-- [ ] **DI-9.4.2** -- **DECIDE: a sink is called with dioring's lock held.** It must return promptly
-  and must never call back into the instance; one that does deadlocks, and one that is slow holds up
-  every other path.
+- [x] **DI-9.4.2** -- A diagnostic sink is called with dioring's lock held. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-942)
 
-- [ ] **DI-9.4.3** -- **DECIDE: two `IoFault`s are equal when they name the same source and code and
-  share the one report (`Arc` identity).** So a nullifier agrees with its write's completion only if
-  it relays that very report, and a fault rebuilt from the same words is not equal.
+- [x] **DI-9.4.3** -- Two `IoFault`s are equal when they name the same source and code and share the one report. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-943)
 
-- [ ] **DI-9.4.4** -- **RATIFY:** `SuspectWrite::file` and `IoTargetBusy::file` are renamed `target`,
-  and `IoTargetBusy` displays "target"; the Windows path's fault for a short write carries no code
-  and the message "the write completed short: n of N bytes"; a write's requested length rides in its
-  sidecar and no longer in the core; the inconsistency for a code-less failed write is gone, the
-  code having become optional; `DiagnosticKind` and `Diagnostic` are non-exhaustive, `Inconsistency`
-  carrying the instance's number, `what` and the formatted detail; the clock trait is `StampClock`,
-  its reading bounded by a public `Instant` trait (`std::time::Instant` shares the name), the time
-  type an associated type of `Identities` -- with [DI-D-57](DESIGN-NOTES.md#di-d-57) amending how the
-  driver names it.
+- [x] **DI-9.4.4** -- The fault, diagnostic and clock renames and shapes. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-944)
 
 ### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
 
