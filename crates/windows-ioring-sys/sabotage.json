@@ -1809,6 +1809,18 @@
       "replace": [
         "            if self.is_quiescent() {"
       ]
+    },
+    {
+      "name": "D-90: a batch left queued submits as it drops",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "leave_queued is the caller's choice to own the doorbell: it marks the batch as already submitted so the drop does not. Without the mark the drop submits, and the read the test left queued is issued and completes before the later submit, which the test's wait for quiet sees.",
+      "find": [
+        "    pub fn leave_queued(mut self) {\n        self.submitted = true;\n    }"
+      ],
+      "replace": [
+        "    pub fn leave_queued(mut self) {\n        let _ = &mut self;\n    }"
+      ]
     }
   ]
 }

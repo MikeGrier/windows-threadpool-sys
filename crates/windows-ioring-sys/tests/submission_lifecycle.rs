@@ -257,6 +257,51 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
 }
 
 #[test]
+fn a_batch_left_queued_issues_nothing_until_a_later_submit() {
+    let path = temp_file("left-queued");
+    let content = vec![9_u8; 64];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
+    let buffer = vec![0_u8; content.len()];
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test.
+    let user_data = unsafe { batch.read_raw_owned(handle, buffer, (), 0, PushOptions::new()) }
+        .expect("queue read")
+        .user_data();
+    batch.leave_queued();
+
+    // A read of 64 bytes completes at once if it was issued, so a ring that has seen none within
+    // this wait was never submitted: the drop did not do it. `try_pop` and not `pop_within`, whose
+    // own wait is a submit.
+    let waited = std::time::Instant::now();
+    while waited.elapsed() < std::time::Duration::from_millis(300) {
+        assert!(
+            ring.try_pop().expect("pop").is_none(),
+            "a batch left queued issued its read"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    Batch::new(&mut ring)
+        .submit_and_wait(1, 5_000)
+        .expect("submit and wait");
+    let (completion, held) = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("the later submit issued it");
+    assert_eq!(completion.user_data(), user_data);
+    assert_eq!(completion.result().expect("read succeeded"), content.len());
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
+}
+
+#[test]
 fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_completion() {
     let path = temp_file("cancel-not-found");
     std::fs::write(&path, b"").expect("create fixture file");

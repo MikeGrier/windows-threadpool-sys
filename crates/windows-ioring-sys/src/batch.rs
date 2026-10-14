@@ -1319,6 +1319,20 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         self.submit_and_wait(0, 0)
     }
 
+    /// Close the batch **without submitting** what it queued: the entries stay in the submission
+    /// queue, held by the ring with their buffers, until a later [`Batch::submit`] -- over a batch
+    /// that queues nothing, if need be -- issues them ([D-90](../DESIGN-NOTES.md#d-90)).
+    ///
+    /// A batch submits as it drops by default ([D-5](../DESIGN-NOTES.md#d-5)), so that nothing is
+    /// left queued for a later, unrelated submit to discover. This is the caller's explicit choice to
+    /// own the doorbell instead, to ring it once for several pushes, or to learn that it failed:
+    /// the drop's own submit reports nothing. It is the state a failed [`Batch::submit`] leaves,
+    /// reached on purpose. **Until the submit, the kernel has not seen the entries**, so none will
+    /// complete.
+    pub fn leave_queued(mut self) {
+        self.submitted = true;
+    }
+
     /// Submit everything queued so far, then block until at least
     /// `wait_operations` of them have completed or `timeout_ms` elapses
     /// (D-3's Model B primitive: the fused submit-and-wait *is* the event
