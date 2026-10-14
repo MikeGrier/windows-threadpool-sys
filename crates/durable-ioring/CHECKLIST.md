@@ -126,11 +126,7 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.8 -- Owed by the assistant
 
-- [ ] **DI-9.8.1** -- **MINE: close or restate each declared blind spot.** The sabotage manifests
-  declare as not covered: that a pool's callback environment is honoured, since no behaviour test
-  can tell which pool ran a drain; the Windows notification's failing wait and an abandoned one,
-  since reaching them needs `unsafe`; and the signalled and pool modes' construction failures. Each
-  is to be covered, or recorded with what would cover it.
+- [x] **DI-9.8.1** -- Each declared blind spot is covered, or records what would cover it. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-981)
 
 - [ ] **DI-9.8.2** -- **MINE: read the portable job's first CI run.** The crate's tests have not run
   on a non-Windows host. Blocked on a push, which is the engineer's call.
@@ -340,3 +336,13 @@ implementation before it is answerable.
   and it changes [CONTRACT.md](CONTRACT.md) and the shared oracle together. Gated on a driver or a
   consumer whose own tests need the oracle to check this, since that is what would show what the
   entry should carry.
+
+- [ ] **DI-6+.10** -- **Fault seams in `win-sync-sys` and `windows-threadpool-sys`, and a safe `Mutex`, so
+  the Windows driver's remaining declared gaps can be tested.** From `DI-9.8.1`. Creating the readiness
+  event, the pool and signalled deliveries' thread-pool waits and events, and duplicating the notification
+  fail only when the process runs out of handles or memory, which a test cannot cause without breaking its
+  own harness; the ring crate has a seam for such failures (its `kernel-seam`) and neither of these crates
+  does. The notification's wait ending abandoned needs a `Mutex` to abandon, which is
+  [WS-1+.3](../win-sync-sys/CHECKLIST.md). Working position, not a decision: each is a change to a crate that
+  is not this one, and what the seam should look like is shaped by the first failure it has to produce.
+  Gated on a consumer, or this crate's own review, wanting those paths tested.

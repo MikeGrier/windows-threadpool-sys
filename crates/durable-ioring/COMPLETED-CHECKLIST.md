@@ -2751,3 +2751,28 @@ and fault in `test_support`; a stamp in them is a plain `u64`; the test of the d
 with interrupt time stays in the driver's own tests; the readiness-check tests, being over a Windows event, sit
 in a module of their own. Recorded in `io-buffers`' [IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1) and
 [IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2).
+
+## Moved 2026-10-13 21:12:00 -04:00 -- DI-9.8.1: the declared blind spots are covered, or say what would cover them
+
+### <a id="di-981"></a>DI-9.8.1 -- Each declared blind spot is covered, or records what would cover it. *(completed 2026-10-13 21:12:00 -04:00)*
+
+Done by the assistant, as the item was its own. Of the gaps the Windows driver's sabotage manifest declared:
+
+- **Which pool a delivery's callback runs on** was declared unseeable because either pool runs the drain.
+  It is covered for pool delivery and for signalled delivery: a test holds the only thread of the pool a
+  callback environment names, so a delivery bound to that pool must wait and one on the default pool does
+  not. The earlier reasoning, that a single-thread pool's repeated thread proves nothing, was about
+  repetition; a thread held is a different observation. Three sabotages, at the backend's wake and at each
+  delivery's call to it, are now caught.
+- **The notification's wait failing, and `Dioring::pump` reporting it** were declared unreachable because
+  a handle without `SYNCHRONIZE` access needed `unsafe`. `win-sync-sys`' `duplicate_handle_with_access`,
+  which did not exist when `DI-7.3` declared it, makes one safely, so both are tested: the notification's
+  own wait, and an instance given such a notification. The pump drains before it waits, so the error shows
+  only when the drain delivers nothing, and the second test says so. Two sabotages are now caught.
+- **Not covered, with what would cover them:** the wait ending *abandoned* needs a mutex to abandon, which
+  is [WS-1+.3](../win-sync-sys/CHECKLIST.md); and the creation failures (events, thread-pool waits,
+  duplicating the notification) need a fault seam in `win-sync-sys` and `windows-threadpool-sys`. Both are
+  parked as [DI-6+.10](CHECKLIST.md), and the manifest's `notCoveredHere` says each.
+
+Changed in `win-durable-ioring`: a test-only [held_pool.rs](../win-durable-ioring/src/held_pool.rs), four
+tests, and the manifest.
