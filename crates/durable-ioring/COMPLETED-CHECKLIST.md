@@ -2838,3 +2838,19 @@ of [DI-D-46](DESIGN-NOTES.md#di-d-46): a panic is for a programming error, never
   panics; no test can reach it, since making one needs `unsafe`, so the manifest's `notCoveredHere` says so.
 - The manifest's `notCoveredHere` no longer says a failing pop and a full submission queue are
   untestable: a failing pop is reached through the ring crate's call responder, and a push no longer submits.
+### <a id="di-7+4"></a>DI-7+.4 -- Model A's handler is told when the instance's pop fails, and the in-memory backend refuses what it cannot hold. *(completed 2026-10-14 18:04:18 -04:00)*
+
+From the second round of the review of [PR 126](https://github.com/MikeGrier/windows-threadpool-sys/pull/126).
+
+- **Model A.** `EntryDelivery`'s deliverer collapsed a failed `pop` into an empty queue. After
+  [DI-D-58](DESIGN-NOTES.md#di-d-58) a failed pop is how a doorbell that failed, or a ring that could not be
+  read, reaches the consumer, and the wake that took the readiness edge is the only thing that told it, so the
+  report was lost. The handler now receives a `DeliveryEvent`, an entry or a failure, which is told once
+  per wake; delivery goes on. The type forces a handler to choose what to do with one. Tested with a fake
+  whose pop fails, and two sabotage entries.
+- **The in-memory backend.** A write ending past `isize::MAX`, which a `Vec` cannot hold, is refused as
+  malformed at check and push; a write the target cannot find memory for completes with a fault and its
+  buffer, as every allocation that can fail is reported here and not aborted on; and `with_registered`
+  panics if an operation is queued or a completion is waiting, since replacing the buffers would
+  invalidate a region it names, a caller's programming error ([DI-D-59](DESIGN-NOTES.md#di-d-59)). Three
+  sabotage entries.

@@ -142,6 +142,8 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-7+.3** -- The Windows backend's ring is an owned one: its pop has no case of a completion the ring held nothing for, and the panic and error rule is recorded. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-7+3)
 
+- [x] **DI-7+.4** -- Model A's handler is told when the instance's pop fails, and the in-memory backend refuses what it cannot hold. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-7+4)
+
 ## DI-M10 -- Target backings
 
 - [ ] **DI-10.1** -- **The Win32 file object as a target backing** -- the separate concern DI-D-48
