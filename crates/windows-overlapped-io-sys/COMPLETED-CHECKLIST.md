@@ -431,3 +431,11 @@ turned out to be a design fork the engineer has now settled.
   rather than per-family, and why (the endpoint owns the capability, the submission seam depends on it, and
   `assume_overlapped`'s contract requires it); and supersede M12.2's note explaining the `socket` feature's
   widening, which M13.1 makes obsolete.
+
+## Moved 2026-10-14 19:25:01 -04:00 -- M15.1: owned versus shared endpoint handles
+
+### <a id="m151"></a>M15.1 -- Investigated owned versus shared endpoint handles; the engineer chose observers. *(completed 2026-10-14 19:25:01 -04:00)*
+
+The findings and the decision are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Decision -- observers
+share the handle; only the endpoint does I/O (M15.1)". Requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10).

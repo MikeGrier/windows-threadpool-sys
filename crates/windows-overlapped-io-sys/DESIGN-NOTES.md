@@ -116,6 +116,50 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	will end up using it, so no family gate can be the right one. `Win32_Storage_FileSystem` moved into the
 	always-on `windows-sys` dependency features accordingly.
 
+### Decision -- observers share the handle; only the endpoint does I/O (M15.1)
+
+*The engineer, 2026-10-14, on M15.1's investigation, requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10).*
+
+**An endpoint's handle may be shared with *observers*: holders that keep the handle open and run a fixed
+set of safe queries on it, and that can never become a second endpoint.** The endpoint stays the only
+route to association, submission, and the blocking backend, and stays not `Clone`.
+
+- **What exclusivity protects is one endpoint per handle, not one holder per handle.** Association is
+  per handle for its whole life; `BlockingEndpoint` waits on the handle's own event, which any I/O
+  completing on that handle signals; and each endpoint's submissions classify "will a packet arrive" from
+  the notification modes it alone recorded. Two endpoints over one handle can therefore return another
+  operation's result while the kernel still writes its buffers, or count a synchronous success as pending
+  forever. A holder that issues no overlapped I/O touches none of this: a length query completes nothing.
+- **The endpoint stores its handle behind shared ownership** (a private `SharedHandle` from
+  [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), and the backends keep that storage, so an
+  observer stays valid after the endpoint, or its backend, is gone. The handle closes when its last holder
+  drops.
+- **An observer implements neither `AsHandle` nor `AsRawHandle`.** That is what makes "never a second
+  endpoint" structural: safe code holding an observer cannot borrow, duplicate, or wrap the handle, so it
+  cannot reach any constructor that associates or submits. What it offers instead is a curated list of
+  safe queries -- the file's length first -- plus an `unsafe` borrow whose contract is that no overlapped
+  I/O is issued through it.
+- **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
+  before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
+  hold it; nothing reaches that association, because only the endpoint ever submitted through it.
+- **`assume_overlapped`'s safety contract does not change.** It still takes an exclusively owned
+  `OwnedHandle`; the endpoint introduces the sharing itself, so every holder of the handle is either the
+  endpoint or one of its observers, and none can come from outside.
+- **`into_handle` can no longer be infallible**, since observers may still hold the handle. That makes
+  the change breaking.
+
+**Alternatives considered.** A type parameter over the handle's storage (`UnassociatedEndpoint<H =
+OwnedHandle>` with owned and shared variants) was workable, but needed an `unsafe` constructor from an
+arbitrary `SharedHandle`, whose clones could become second endpoints, and a parallel generic surface on
+every backend including `windows-threadpool-sys`' `ThreadpoolIo`. Two separate type families would
+duplicate identical invariants and teardown paths. A second, non-overlapped handle per file for queries
+gives isolation by the kernel rather than by types, at the cost of a second open and a second kernel
+object per file; the engineer chose the observer, "a small user mode allocation beats a second kernel
+mode allocation".
+
+The work is M15.2 onward in [CHECKLIST.md](CHECKLIST.md).
+
 ## Operation storage and identity
 
 - Each in-flight request owns pinned, stable storage holding its `OVERLAPPED`, its typed payload, any descriptor
