@@ -104,24 +104,13 @@ milestone; the decision rows named below carry the reasons.
 
 ### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
 
-- [ ] **DI-9.7.1** -- **DECIDE: `pump` on a pool-built instance is a runtime `Unsupported`, not a
-  type error ([DI-D-55](DESIGN-NOTES.md#di-d-55)).** Now: a pump that waited would be a second waiter
-  on the ring's event, which the ring crate's [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21)
-  forbids, so it refuses; the crate split kept it as it was. The alternatives, a type parameter on
-  `Dioring` or a type per delivery mode, were rejected as churn through every bound.
+- [x] **DI-9.7.1** -- `pump` on a pool-built instance is a runtime `Unsupported`, not a type error. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-971)
 
-- [ ] **DI-9.7.2** -- **DECIDE: `completion_signal` hands out a full-access duplicate of dioring's
-  own auto-reset event.** Now: the consumer may wait on it, set it or reset it, and the worst that
-  costs is its own wakeup, since a pump drains before it waits. `Event::try_clone_wait_only`
-  ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)) has since given a duplicate with no `set` or
-  `reset`; whether to hand that instead is open. A wait-only duplicate of the ring's own event is
-  `DI-7+.1`, below.
+- [x] **DI-9.7.2** -- `completion_signal` hands out a full-access duplicate of dioring's own auto-reset event. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-972)
 
 - [x] **DI-9.7.3** -- An allocation that fails is an error the caller receives, not a panic or an abort. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-973)
 
-- [ ] **DI-9.7.4** -- **DECIDE: `NumaBuffer`'s buffer impls move from the ring crate to
-  `win-numa-sys`**, which then implements a trait it does not define, ending its deliberately
-  trait-free stance in that one respect ([IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)).
+- [x] **DI-9.7.4** -- `NumaBuffer`'s buffer impls move from the ring crate to `win-numa-sys`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-974)
 
 - [ ] **DI-9.7.5** -- **DECIDE: the portable crate's public surface for other drivers.** Now: a
   public `driver` module re-exporting `Engine`, `EngineGuard`, `Slot`, `lock`, `present`, the pump

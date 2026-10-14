@@ -2647,3 +2647,26 @@ did not mention. Both are fixed: every allocation of an `AlignedBuf` outside tes
 `windows-overlapped-io-sys`'s notes. Both are breaking changes to published crates:
 `SecurityDescriptor` and `SecurityAttributes` lose `Clone` for `try_clone`, and `PageBuffers::new` returns an
 `io::Result`.
+
+## Moved 2026-10-13 20:41:00 -04:00 -- DI-9.7.1, DI-9.7.2 and DI-9.7.4: the engineer approves three choices from DI-M7 on
+
+### <a id="di-971"></a>DI-9.7.1 -- `pump` on a pool-built instance is a runtime `Unsupported`, not a type error. *(completed 2026-10-13 20:41:00 -04:00)*
+
+Approved by the engineer. A pump that waited would be a second waiter on the ring's event, which the ring
+crate's [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21) forbids, so the call refuses; the crate split kept it
+as it was. The alternatives, a type parameter on `Dioring` or a type per delivery mode, were rejected as churn
+through every bound. Recorded in [DI-D-55](DESIGN-NOTES.md#di-d-55).
+
+### <a id="di-972"></a>DI-9.7.2 -- `completion_signal` hands out a full-access duplicate of dioring's own auto-reset event. *(completed 2026-10-13 20:41:00 -04:00)*
+
+Approved by the engineer. The consumer may wait on it, set it or reset it, and the worst that costs is its own
+wakeup, since a pump drains before it waits. The wait-only duplicate that `win-sync-sys`' `Event::try_clone_wait_only`
+([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)) now makes possible is therefore not handed out here; it
+remains available to `DI-7+.1`, which is about the ring's own event and is unchanged. Recorded in
+[DI-D-55](DESIGN-NOTES.md#di-d-55).
+
+### <a id="di-974"></a>DI-9.7.4 -- `NumaBuffer`'s buffer impls move from the ring crate to `win-numa-sys`. *(completed 2026-10-13 20:41:00 -04:00)*
+
+Approved by the engineer. `win-numa-sys` then implements a trait it does not define, ending its deliberately
+trait-free stance in that one respect ([IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)). Recorded in `win-numa-sys`'
+[N-D-2](../win-numa-sys/DESIGN-NOTES.md#n-d-2).
