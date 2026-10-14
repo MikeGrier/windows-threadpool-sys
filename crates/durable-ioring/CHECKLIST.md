@@ -114,11 +114,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.7.5** -- The portable crate's public surface for other drivers. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-975)
 
-- [ ] **DI-9.7.6** -- **RATIFY: the renames the split forced
-  ([DI-D-57](DESIGN-NOTES.md#di-d-57)).** The driver's clock is a `StampClock`, not a `win-time-sys`
-  clock, with `InterruptStamps` the default and `FromClock` the adapter; the notification is
-  `CompletionEvent`; `ErrorCode::of` is `error_code_of`; `DioringIds` has no default time type and
-  the driver names it `WindowsIds`.
+- [x] **DI-9.7.6** -- The renames the split forced, and the clock's bounds. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-976)
 
 - [ ] **DI-9.7.7** -- **RATIFY: delivery modes.** `Setup`'s `environment` became `delivery:
   DeliveryMode` (`Pool`, `Pumped`, `Signalled`), touching every construction site and

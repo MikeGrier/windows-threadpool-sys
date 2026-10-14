@@ -2680,3 +2680,17 @@ Approved by the engineer. A public `driver` module re-exports `Engine`, `EngineG
 `Lineage` and `OpId` have public fields; `LineageHandle::detached` and `mint` are public; `Waitable` is a
 public one-method trait so a backend of another crate can implement it; and the Windows crate re-exports the
 portable crate's API with `pub use durable_ioring::*`. Recorded in [DI-D-57](DESIGN-NOTES.md#di-d-57).
+
+## Moved 2026-10-13 20:47:00 -04:00 -- DI-9.7.6: the engineer ratifies the split's renames, and the clock's bounds are recorded
+
+### <a id="di-976"></a>DI-9.7.6 -- The renames the split forced, and the clock's bounds. *(completed 2026-10-13 20:47:00 -04:00)*
+
+Ratified by the engineer, who also asked that the analysis of the clock's bounds be documented. The renames:
+the driver's clock is a `StampClock`, not a `win-time-sys` clock, with `InterruptStamps` the default and
+`FromClock` the adapter; the notification is `CompletionEvent`; `ErrorCode::of` is `error_code_of`;
+`DioringIds` has no default time type and the driver names it `WindowsIds`. The analysis, asked as whether
+`StampClock` needs bounds beyond itself: it does not. No marker for "never decreases" is possible or useful;
+the one unenforced guarantee is that the core does not check a reading did not go backwards, and the option of
+clamping it is recorded as a working position, not a decision, scheduling nothing. Both are in
+[DI-D-57](DESIGN-NOTES.md#di-d-57), and the not-checked fact is now in
+[`StampClock`'s documentation](src/clock.rs).

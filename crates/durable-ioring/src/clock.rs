@@ -11,6 +11,10 @@ pub trait Instant: Copy + Ord + Debug + Send + Sync + 'static {}
 impl<T: Copy + Ord + Debug + Send + Sync + 'static> Instant for T {}
 
 /// A clock whose readings never decrease, read once per stamped transition.
+///
+/// Implementing it is the implementor's statement of that promise; the core does not check it. A
+/// clock that goes backwards yields stamps out of order, which the conformance oracle reports when
+/// a test gives it the entries.
 pub trait StampClock: Send + 'static {
     /// What a reading is.
     type Instant: Instant;
