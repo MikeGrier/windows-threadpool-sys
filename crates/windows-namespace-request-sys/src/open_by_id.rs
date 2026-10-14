@@ -244,18 +244,29 @@ impl OpenFileByIdentifier {
     /// Copies the request, duplicating the volume-hint handle.
     ///
     /// Not `Clone`, for the same reason [`crate::open::OpenFile::try_clone`] is
-    /// not: this request always owns a handle, and duplicating one is fallible.
+    /// not: this request always owns a handle, and duplicating one is fallible, as is copying
+    /// the security attributes it may own.
     ///
     /// # Errors
     ///
-    /// Returns the handle-capture failure when the hint cannot be duplicated.
+    /// Returns the handle-capture failure when the hint cannot be duplicated, or
+    /// [`crate::HandleCaptureFailure::CopySecurity`] when the memory for the security attributes
+    /// cannot be allocated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
+        let volume_hint = self.volume_hint.try_clone()?;
+        let security = self
+            .security
+            .as_ref()
+            .map(SecurityAttributes::try_clone)
+            .transpose()
+            .map_err(|error| HandleCaptureError::copying_security(error.into_source()))?;
+
         Ok(Self {
-            volume_hint: self.volume_hint.try_clone()?,
+            volume_hint,
             identifier: self.identifier,
             desired_access: self.desired_access,
             share_mode: self.share_mode,
-            security: self.security.clone(),
+            security,
             flags_and_attributes: self.flags_and_attributes,
         })
     }

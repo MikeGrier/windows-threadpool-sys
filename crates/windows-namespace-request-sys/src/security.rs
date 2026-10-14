@@ -16,7 +16,9 @@ use std::fmt;
 use std::io;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, FALSE, TRUE};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_ENOUGH_MEMORY, FALSE, TRUE,
+};
 use windows_sys::Win32::Security::{
     ACL, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorLength,
     GetSecurityDescriptorSacl, IsValidSecurityDescriptor, MakeSelfRelativeSD, PSECURITY_DESCRIPTOR,
@@ -31,6 +33,10 @@ use io_buffers::AlignedBuf;
 /// descriptor lives in, not as a property of any one field, which is why it is
 /// enforced on the whole blob.
 const SELF_RELATIVE_ALIGNMENT: usize = align_of::<u32>();
+
+// `AlignedBuf` refuses an alignment that is not a power of two, and `allocate` turns every refusal
+// into an allocation failure, so this is checked where it cannot be mistaken for one.
+const _: () = assert!(SELF_RELATIVE_ALIGNMENT.is_power_of_two());
 
 /// Why a caller's security attributes could not be captured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +60,11 @@ pub enum SecurityCaptureFailure {
     InvalidCopy,
     /// Windows could not report the descriptor's DACL or SACL.
     ReadAcl,
+    /// The memory for the owned copy could not be allocated.
+    ///
+    /// The error's code is `ERROR_NOT_ENOUGH_MEMORY`, which this crate supplies; no Win32 call
+    /// produced it.
+    Allocate,
 }
 
 /// A synchronous failure while capturing a caller's security attributes.
@@ -70,6 +81,22 @@ impl SecurityCaptureError {
 
     fn last_os(failure: SecurityCaptureFailure) -> Self {
         Self::new(failure, io::Error::last_os_error())
+    }
+
+    /// The memory for an owned copy could not be allocated.
+    fn allocation() -> Self {
+        Self::new(
+            SecurityCaptureFailure::Allocate,
+            io::Error::from_raw_os_error(
+                i32::try_from(ERROR_NOT_ENOUGH_MEMORY)
+                    .expect("ERROR_NOT_ENOUGH_MEMORY fits in i32"),
+            ),
+        )
+    }
+
+    /// The underlying error, for a caller that reports the same failure under its own kind.
+    pub(crate) fn into_source(self) -> io::Error {
+        self.source
     }
 
     /// Why the capture failed.
@@ -94,6 +121,7 @@ impl fmt::Display for SecurityCaptureError {
             SecurityCaptureFailure::MakeSelfRelative => "MakeSelfRelativeSD",
             SecurityCaptureFailure::InvalidCopy => "IsValidSecurityDescriptor (captured copy)",
             SecurityCaptureFailure::ReadAcl => "GetSecurityDescriptorDacl",
+            SecurityCaptureFailure::Allocate => "allocating the descriptor copy",
         };
 
         write!(f, "{stage}: {}", self.source)
@@ -158,22 +186,32 @@ pub struct SecurityDescriptor {
     blob: AlignedBuf,
 }
 
-impl Clone for SecurityDescriptor {
-    /// # Panics
-    ///
-    /// Panics if the copy cannot be allocated, as `Vec::clone` aborts. A fallible
-    /// copy is [`AlignedBuf::try_clone`], which this type does not expose.
-    fn clone(&self) -> Self {
-        Self {
-            blob: self
-                .blob
-                .try_clone()
-                .expect("memory for a copy of a security descriptor"),
-        }
-    }
+/// Memory for `length` zeroed bytes of self-relative descriptor.
+///
+/// Every refusal of the allocation is reported as [`SecurityCaptureFailure::Allocate`]: the
+/// alignment is a constant checked at build time, so what remains is a length the machine
+/// cannot supply.
+fn allocate(length: usize) -> Result<AlignedBuf, SecurityCaptureError> {
+    AlignedBuf::zeroed(length, SELF_RELATIVE_ALIGNMENT)
+        .map_err(|_| SecurityCaptureError::allocation())
 }
 
 impl SecurityDescriptor {
+    /// Copies the descriptor.
+    ///
+    /// Not `Clone`, because the copy allocates and the allocation can fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityCaptureFailure::Allocate`] when the memory for the copy cannot be
+    /// allocated.
+    pub fn try_clone(&self) -> Result<Self, SecurityCaptureError> {
+        self.blob
+            .try_clone()
+            .map(|blob| Self { blob })
+            .map_err(|_| SecurityCaptureError::allocation())
+    }
+
     /// Captures the descriptor at `descriptor`.
     ///
     /// An absolute descriptor is converted to self-relative form; a
@@ -183,7 +221,8 @@ impl SecurityDescriptor {
     /// # Errors
     ///
     /// Returns a [`SecurityCaptureError`] when Windows rejects the descriptor
-    /// as malformed, or when the conversion fails.
+    /// as malformed, when the conversion fails, or, as
+    /// [`SecurityCaptureFailure::Allocate`], when the memory for the copy cannot be allocated.
     ///
     /// # Safety
     ///
@@ -214,7 +253,7 @@ impl SecurityDescriptor {
         let blob = if control & SE_SELF_RELATIVE == 0 {
             unsafe { Self::convert_absolute(descriptor) }?
         } else {
-            unsafe { Self::copy_self_relative(descriptor) }
+            unsafe { Self::copy_self_relative(descriptor) }?
         };
 
         let captured = Self { blob };
@@ -233,13 +272,14 @@ impl SecurityDescriptor {
     /// # Safety
     ///
     /// `descriptor` must be a live, valid, self-relative descriptor.
-    unsafe fn copy_self_relative(descriptor: PSECURITY_DESCRIPTOR) -> AlignedBuf {
+    unsafe fn copy_self_relative(
+        descriptor: PSECURITY_DESCRIPTOR,
+    ) -> Result<AlignedBuf, SecurityCaptureError> {
         // SAFETY: for a self-relative descriptor this reports the length of the
         // whole blob, which is exactly what must be copied.
         let length = unsafe { GetSecurityDescriptorLength(descriptor) } as usize;
 
-        let mut blob = AlignedBuf::zeroed(length, SELF_RELATIVE_ALIGNMENT)
-            .expect("memory for a copy of a security descriptor");
+        let mut blob = allocate(length)?;
         // SAFETY: the source is valid for `length` bytes by the contract above,
         // the destination was just allocated with that length, and the two
         // allocations cannot overlap.
@@ -247,7 +287,7 @@ impl SecurityDescriptor {
             ptr::copy_nonoverlapping(descriptor.cast::<u8>(), blob.as_mut_ptr(), length);
         }
 
-        blob
+        Ok(blob)
     }
 
     /// # Safety
@@ -286,8 +326,7 @@ impl SecurityDescriptor {
             ));
         }
 
-        let mut blob = AlignedBuf::zeroed(length as usize, SELF_RELATIVE_ALIGNMENT)
-            .expect("memory for a self-relative security descriptor");
+        let mut blob = allocate(length as usize)?;
         // SAFETY: blob is writable for exactly the length Windows asked for.
         let converted = unsafe {
             MakeSelfRelativeSD(
@@ -445,7 +484,7 @@ impl SecurityDescriptor {
 /// let none: Option<SecurityAttributes> = None;
 /// assert!(none.is_none());
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SecurityAttributes {
     descriptor: Option<SecurityDescriptor>,
     inherit_handle: bool,
@@ -460,6 +499,25 @@ impl SecurityAttributes {
             descriptor,
             inherit_handle,
         }
+    }
+
+    /// Copies the attributes.
+    ///
+    /// Not `Clone`, because copying the descriptor allocates and the allocation can fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityCaptureFailure::Allocate`] when the memory for the copy cannot be
+    /// allocated.
+    pub fn try_clone(&self) -> Result<Self, SecurityCaptureError> {
+        Ok(Self {
+            descriptor: self
+                .descriptor
+                .as_ref()
+                .map(SecurityDescriptor::try_clone)
+                .transpose()?,
+            inherit_handle: self.inherit_handle,
+        })
     }
 
     /// Captures the `SECURITY_ATTRIBUTES` at `attributes`.

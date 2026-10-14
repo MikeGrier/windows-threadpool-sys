@@ -10,7 +10,7 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{FALSE, GENERIC_ALL, TRUE};
+use windows_sys::Win32::Foundation::{ERROR_NOT_ENOUGH_MEMORY, FALSE, GENERIC_ALL, TRUE};
 use windows_sys::Win32::Security::{
     ACL, ACL_REVISION, AddAccessAllowedAce, CreateWellKnownSid, InitializeAcl,
     InitializeSecurityDescriptor, MakeSelfRelativeSD, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
@@ -20,8 +20,9 @@ use windows_sys::Win32::Security::{
 
 use super::{
     AclState, SELF_RELATIVE_ALIGNMENT, SecurityAttributes, SecurityCaptureFailure,
-    SecurityDescriptor,
+    SecurityDescriptor, allocate,
 };
+use crate::{HandleCaptureError, HandleCaptureFailure};
 use io_buffers::AlignedBuf;
 
 /// A zeroed buffer at `align`, for the descriptors and lists these tests build by hand.
@@ -389,15 +390,74 @@ fn a_malformed_descriptor_is_refused_at_capture() {
 }
 
 #[test]
-fn a_clone_equals_its_original_and_is_independent() {
+fn a_copy_equals_its_original_and_is_independent() {
     let captured = capture(&Absolute::with_populated_dacl());
 
-    let clone = captured.clone();
+    let copy = captured.try_clone().expect("copy the descriptor");
 
-    assert_eq!(clone, captured);
-    assert_ne!(clone.as_ptr(), captured.as_ptr());
+    assert_eq!(copy, captured);
+    assert_ne!(copy.as_ptr(), captured.as_ptr());
     drop(captured);
-    assert_eq!(clone.dacl().expect("read the DACL"), AclState::Populated(1));
+    assert_eq!(copy.dacl().expect("read the DACL"), AclState::Populated(1));
+}
+
+#[test]
+fn attributes_copy_with_and_without_a_descriptor() {
+    let with = SecurityAttributes::new(Some(capture(&Absolute::with_populated_dacl())), true);
+    let copy = with.try_clone().expect("copy the attributes");
+
+    assert_eq!(copy, with);
+    assert_ne!(
+        copy.descriptor()
+            .expect("the copy keeps its descriptor")
+            .as_ptr(),
+        with.descriptor().expect("the original has one").as_ptr(),
+        "the copy owns its own blob"
+    );
+
+    let without = SecurityAttributes::new(None, false);
+    assert_eq!(without.try_clone().expect("copy the attributes"), without);
+}
+
+#[test]
+fn a_blob_the_machine_cannot_supply_is_an_allocation_failure() {
+    // The seam every allocation of a descriptor goes through: the OS names the length, so no
+    // descriptor can be made to ask for this much, but the function can.
+    let error = allocate(usize::MAX / 2).expect_err("no machine has this");
+
+    assert_eq!(error.failure(), SecurityCaptureFailure::Allocate);
+    assert_eq!(
+        error.raw_os_error(),
+        Some(i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"))
+    );
+    assert!(
+        error.to_string().contains("allocating"),
+        "unexpected message: {error}"
+    );
+}
+
+#[test]
+fn a_blob_the_machine_can_supply_is_zeroed_and_aligned() {
+    let blob = allocate(64).expect("a small blob");
+
+    assert_eq!(blob.len(), 64);
+    assert!(blob.iter().all(|&byte| byte == 0));
+    assert_eq!(blob.as_ptr() as usize % SELF_RELATIVE_ALIGNMENT, 0);
+}
+
+#[test]
+fn a_failed_security_copy_is_reported_by_a_request_under_its_own_failure() {
+    let source = allocate(usize::MAX / 2)
+        .expect_err("no machine has this")
+        .into_source();
+
+    let error = HandleCaptureError::copying_security(source);
+
+    assert_eq!(error.failure(), HandleCaptureFailure::CopySecurity);
+    assert_eq!(
+        error.raw_os_error(),
+        Some(i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"))
+    );
 }
 
 #[test]

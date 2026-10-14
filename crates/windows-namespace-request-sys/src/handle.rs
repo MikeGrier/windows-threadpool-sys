@@ -66,6 +66,11 @@ pub enum HandleCaptureFailure {
     /// A handle that has already been closed fails here, with
     /// `ERROR_INVALID_HANDLE`.
     DuplicateHandle,
+    /// The security attributes a request owns could not be copied, because the memory for the
+    /// copy could not be allocated.
+    ///
+    /// Reported by a request's `try_clone`, which copies them along with any handle it owns.
+    CopySecurity,
 }
 
 /// A synchronous failure while capturing a caller's handle.
@@ -84,6 +89,11 @@ pub struct HandleCaptureError {
 impl HandleCaptureError {
     fn new(failure: HandleCaptureFailure, source: io::Error) -> Self {
         Self { failure, source }
+    }
+
+    /// A request's security attributes could not be copied; `source` says why.
+    pub(crate) fn copying_security(source: io::Error) -> Self {
+        Self::new(HandleCaptureFailure::CopySecurity, source)
     }
 
     fn invalid_handle(failure: HandleCaptureFailure) -> Self {
@@ -115,6 +125,7 @@ impl fmt::Display for HandleCaptureError {
             HandleCaptureFailure::InvalidHandleValue => "INVALID_HANDLE_VALUE source handle",
             HandleCaptureFailure::PseudoHandle => "pseudo-handle source handle",
             HandleCaptureFailure::DuplicateHandle => "DuplicateHandle",
+            HandleCaptureFailure::CopySecurity => "copying the security attributes",
         };
 
         write!(f, "{stage}: {}", self.source)

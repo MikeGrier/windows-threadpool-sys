@@ -83,7 +83,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use io_buffers::AlignedBuf;
 
 use crate::handle::{CapturedHandle, HandleCaptureError};
-use crate::outcome::{Outcome, perform_bool};
+use crate::outcome::{Outcome, Win32Error, perform_bool};
 
 /// The alignment a directory-information batch requires.
 ///
@@ -91,6 +91,10 @@ use crate::outcome::{Outcome, perform_bool};
 /// record in a batch on an 8-byte boundary -- but only if the batch itself
 /// starts on one. Changing this value is a breaking change.
 const BATCH_ALIGNMENT: usize = align_of::<u64>();
+
+// `AlignedBuf` refuses an alignment that is not a power of two, and `perform` turns every refusal
+// into an out-of-memory report, so this is checked where it cannot be mistaken for one.
+const _: () = assert!(BATCH_ALIGNMENT.is_power_of_two());
 
 /// Which information the query asks for.
 ///
@@ -286,12 +290,13 @@ impl QueryFileInformation {
     /// directory enumeration and `ERROR_MORE_DATA` means the buffer held no
     /// complete entry; both are the caller's to interpret.
     ///
-    /// # Panics
-    ///
-    /// Panics if the capacity this query was built with cannot be allocated.
+    /// The one code the call did not produce is `ERROR_NOT_ENOUGH_MEMORY`, returned when the
+    /// buffer for the capacity this query was built with cannot be allocated -- too large for
+    /// the machine, or refused by the allocator. The call was not made, and a smaller capacity
+    /// can be tried.
     pub fn perform(&self) -> Outcome<AlignedBuf> {
         let mut buffer = AlignedBuf::zeroed(self.capacity, BATCH_ALIGNMENT)
-            .expect("memory for the capacity this query was built with");
+            .map_err(|_| Win32Error::out_of_memory())?;
         let size = u32::try_from(self.capacity).unwrap_or(u32::MAX);
 
         perform_bool(|| {
