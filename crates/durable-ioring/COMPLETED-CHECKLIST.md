@@ -2791,3 +2791,33 @@ ring's one-waiter rule are in [DI-D-55](DESIGN-NOTES.md#di-d-55).
 - **Declared blind spot:** widening the access mask survives the sweep, because setting an event is
   `unsafe` and this crate forbids it; `win-sync-sys` asserts the kernel's refusal for the same function.
 - Four sabotage entries: three caught, the blind spot declared.
+
+### <a id="di-7+2"></a>DI-7+.2 -- The engine rings the doorbell, a backend's push only queues, and a failed doorbell or an unreadable ring reaches the consumer once, with no timer. *(completed 2026-10-13 23:35:50 -04:00)*
+
+From the review of [PR 126](https://github.com/MikeGrier/windows-threadpool-sys/pull/126), three findings that
+were one gap, decided by the engineer in the session that followed; the decision and its reasons are
+[DI-D-58](DESIGN-NOTES.md#di-d-58), and this records what was built.
+
+- **The ring crate** gained `Batch::leave_queued` ([M40.1](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m401),
+  [D-90](../windows-ioring-sys/DESIGN-NOTES.md#d-90)), because a batch submits as it drops.
+- **The engine** rings the doorbell once at the end of `act`, and after a consumer's own write or read; a
+  push refused for want of room is rung for and pushed once more. A doorbell that fails, in `act`, in
+  `drain` or after a consumer's push, is reported as something to deliver, and `Engine::take_attention`
+  tells the driver of a consumer's push. A drain whose backend cannot read its completions ends and keeps
+  the first fault (`Engine::take_fault`), until a later read works.
+- **The Windows backend's push** only queues, in a batch left queued, whether it is accepted or refused;
+  `submit` issues what was queued. `Dioring` raises the readiness signal once for a consumer's push whose
+  doorbell failed, and `pop` reports a fault the ring could not be read with, once, as an `IoFault`, which
+  is now an `Error`. A pop's cause is reported only when it has no entry to return.
+- **Contracts**: `IoBackend` says a push only queues and the engine rings; `detach` no longer promises a
+  fault for a submission a backend cannot take back, which completes as pushed, exactly once.
+  [DI-D-28](DESIGN-NOTES.md#di-d-28) allows the signal for a pop with a failure to report.
+- **What a pool instance cannot do**: read a ring that could not be read. The ring's event is an edge, the
+  wake that could not read took it, and the completion it left keeps the queue from going from empty to
+  non-empty again; a pumped instance's next pump reads. A test records each.
+- **Tests**: the engine's, over a scripted backend, in
+  [doorbell.rs](src/engine/tests/doorbell.rs); the Windows backend's; and the driver's in
+  [submits.rs](../win-durable-ioring/src/dioring/tests/submits.rs), over real files with the ring crate's submit
+  and call responders. Sabotage entries for the engine, the driver and the backend, all caught; one engine
+  entry removes both of two redundant clearing sites at once, which `why` says. Entries that named the old
+  eager push were rewritten, and one whose pattern had stopped being unique since `DI-7+.1` was fixed.

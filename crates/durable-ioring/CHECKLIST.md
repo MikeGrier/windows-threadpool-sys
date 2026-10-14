@@ -138,28 +138,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-7+.1** -- A wait-only handle on the ring's own completion event, offered by a pumped instance as `Dioring::completion_event`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-7+1)
 
-- [ ] **DI-7+.2** -- **Who retries a submission that failed, when no completion is coming to ask them to; and
-  what `detach` does with an operation the ring still holds unsubmitted.** From the review of
-  [PR 126](https://github.com/MikeGrier/windows-threadpool-sys/pull/126), three findings that are one gap.
-  [DI-7.1](COMPLETED-CHECKLIST.md#di-71) settled that a failed submission leaves its entry queued and the
-  next push or pop submits it again, which is a rule for a consumer that polls. Pool delivery (and
-  signalled) wakes on a completion edge, and an entry whose submission failed with nothing else in flight
-  has no completion to raise one, so a consumer waiting on readiness is not woken: (1)
-  `WindowsBackend::push` accepts the operation and keeps the failure to itself; (2) `Engine::drain` drops
-  the failure of its own submit and of a pop, and the wake that carried it is spent; (3)
-  `WindowsBackend::detach` removes the target's slot while the ring still holds a queued entry and its file
-  guard for it, which a later submit issues, against the contract of
-  [`IoBackend::detach`](src/backend.rs) -- not reachable through `Dioring`, whose core
-  refuses to remove a target with an operation outstanding, but reachable by a user of the public backend.
-  **The blocker is a decision, and a lower layer.** What retries, and how often, is a policy: re-raising
-  the completion event after a failed submit retries at once and without bound against a cause that does
-  not clear (an unusable ring), while a delay needs a timer this crate does not have; and the cause says
-  which it is (`SubmitNeeded` and `DrainNeeded` clear as completions arrive, `Busy` clears by itself,
-  `Unusable` does not). Detaching needs the ring crate to withdraw a queued entry, or to refuse the
-  detach, and it has neither ([windows-ioring-sys](../windows-ioring-sys/DESIGN-NOTES.md)). Raise with the
-  engineer before building: the options for the first are readiness raised after a failed submit so the
-  consumer's pop retries and reports it, a retry the driver schedules, or an error the push returns for a
-  submission it could not issue; this is not decided.
+- [x] **DI-7+.2** -- The engine rings the doorbell, a backend's push only queues, and a failed doorbell or an unreadable ring reaches the consumer once, with no timer. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-7+2)
 
 ## DI-M10 -- Target backings
 

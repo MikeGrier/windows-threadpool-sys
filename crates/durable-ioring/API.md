@@ -309,7 +309,8 @@ answers leaves its seal pending, visible through the ETW provider-boundary event
 *([DI-D-28](DESIGN-NOTES.md#di-d-28).)* `readiness()` hands back a duplicate of an auto-reset event
 the instance owns, set after an entry becomes poppable -- by dioring's `EventDelivery` callback as
 it records ring completions, and by provider answers. The waiter -- one per instance -- pops until
-`None` after every wake before waiting again; a wake with nothing to pop is normal.
+`None` after every wake before waiting again; a wake with nothing to pop is normal, and one
+may be a `pop` with a failure to report ([DI-D-58](DESIGN-NOTES.md#di-d-58)).
 
 ### 17. The contract as a trait
 
@@ -449,8 +450,8 @@ pub trait DurableRing {
 
     /// A duplicate of the readiness signal (DI-D-28): an auto-reset event the instance owns, set
     /// after an entry becomes poppable and at least whenever the queue goes from empty to
-    /// non-empty. One waiter; pop until `None` after every wake; a wake with nothing to pop is
-    /// normal.
+    /// non-empty, and when a `pop` has a failure to report (DI-D-58). One waiter; pop until `None`
+    /// after every wake; a wake with nothing to pop is normal.
     fn readiness(&mut self) -> io::Result<OwnedHandle>;
 
     /// `add_file_with` with default options: no declared flush domains.
