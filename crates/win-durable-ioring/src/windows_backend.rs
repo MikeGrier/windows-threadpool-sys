@@ -478,7 +478,10 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         let admitted = match data {
             SubmissionData::Owned(buffer) => {
                 let length = u64::try_from(buffer.bytes_len()).unwrap_or(u64::MAX);
-                geometry.admits(offset, length)
+                // The ring's own limit, which a push would refuse beyond only after the operation
+                // had been held for its gate: asked here, it is refused at the call that gave it.
+                u32::try_from(length).is_ok()
+                    && geometry.admits(offset, length)
                     && geometry.admits_buffer(buffer.stable_ptr() as usize)
             }
             SubmissionData::Registered(region) => {

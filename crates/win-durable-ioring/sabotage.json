@@ -687,6 +687,22 @@
       "replace": ["        duplicate_handle_with_access(&self.event, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)\n"]
     },
     {
+      "name": "PR-126: a buffer longer than a u32 is admitted by check",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "DECLARED BLIND SPOT. The ring carries a length of u32 and no more, and check refuses beyond it so a gated operation is refused at the call that gave it. The test that shows it needs a buffer of more than 4 GiB, which a machine without that commit available cannot make, so it is #[ignore]d and run on request (a_buffer_the_ring_cannot_carry_is_refused_by_check_and_by_push); this sweep does not run it. Shown by hand: without the length check that test fails at its check assertion. A buffer type of the test's own that reports a length without having it needs unsafe, which this crate forbids.",
+      "find": ["                u32::try_from(length).is_ok()\n                    && geometry.admits(offset, length)"],
+      "replace": ["                geometry.admits(offset, length)"]
+    },
+    {
+      "name": "PR-126: any handle is made into a completion event by safe code",
+      "file": "src/windows_backend/wait.rs",
+      "expect": "caught",
+      "why": "A mutex handle made into a CompletionEvent would be acquired by its wait and never released. The doctest on the type pins E0624 for the call from outside the crate.",
+      "find": ["    pub(crate) fn new(handle: OwnedHandle) -> Self {"],
+      "replace": ["    pub fn new(handle: OwnedHandle) -> Self {"]
+    },
+    {
       "name": "DI-9.8.1: a pump's failed wait is reported as success",
       "file": "src/dioring.rs",
       "expect": "caught",

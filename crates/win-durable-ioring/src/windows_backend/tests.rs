@@ -357,6 +357,31 @@ fn the_targets_geometry_is_enforced_before_the_ring_is_asked() {
     run(&mut backend, write(2, IoTargetKey(3), 512, &[0; 512]));
 }
 
+/// Allocates a buffer of more than 4 GiB, which a machine without that commit available cannot, so
+/// it is run on request: `cargo test -- --ignored a_buffer_the_ring_cannot_carry`.
+#[test]
+#[ignore = "allocates a buffer of more than 4 GiB"]
+fn a_buffer_the_ring_cannot_carry_is_refused_by_check_and_by_push() {
+    let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
+    let mut backend = backend(&given, &added);
+    let length = usize::try_from(u64::from(u32::MAX) + 1).expect("a 64-bit target");
+    let submission = Submission {
+        token: SubmissionToken(1),
+        target: ADDED,
+        op: SubmissionOp::Write {
+            offset: 0,
+            data: SubmissionData::Owned(vec![0; length]),
+            caching: WriteCaching::Cached,
+        },
+    };
+    assert_eq!(
+        backend.check(submission.target, &submission.op),
+        Err(RefusalCause::Invalid)
+    );
+    let refused = backend.push(submission).expect_err("beyond a u32");
+    assert_eq!(refused.cause, RefusalCause::Invalid);
+}
+
 #[test]
 fn check_answers_what_push_does() {
     // Both directions over a real ring, case by case: every submission `check` admits a push

@@ -17,13 +17,28 @@ mod tests;
 /// Windows backend hands out. A type of this crate and not a bare `OwnedHandle`, because
 /// [`Waitable`] is the portable crate's trait and a handle is the standard library's, so neither
 /// side could implement one for the other.
+///
+/// One is only made from the ring's own event, by this crate; no safe constructor takes an
+/// arbitrary handle, which could be a mutex the wait would acquire and never release:
+///
+/// ```compile_fail,E0624
+/// use std::os::windows::io::OwnedHandle;
+/// use win_durable_ioring::windows_backend::CompletionEvent;
+///
+/// fn any_handle(handle: OwnedHandle) -> CompletionEvent {
+///     CompletionEvent::new(handle)
+/// }
+/// ```
 #[derive(Debug)]
 pub struct CompletionEvent(OwnedHandle);
 
 impl CompletionEvent {
-    /// The event, taking the handle it is waited on through.
+    /// The event, taking the handle it is waited on through. Not public: the handle must be an
+    /// event the ring's own completion edge is, with `SYNCHRONIZE` access, which this crate's
+    /// callers make and an arbitrary `OwnedHandle` -- a mutex, say, which a wait would acquire and
+    /// never release -- does not promise.
     #[must_use]
-    pub fn new(handle: OwnedHandle) -> Self {
+    pub(crate) fn new(handle: OwnedHandle) -> Self {
         Self(handle)
     }
 
@@ -31,12 +46,6 @@ impl CompletionEvent {
     #[must_use]
     pub fn into_handle(self) -> OwnedHandle {
         self.0
-    }
-}
-
-impl From<OwnedHandle> for CompletionEvent {
-    fn from(handle: OwnedHandle) -> Self {
-        Self(handle)
     }
 }
 
@@ -57,11 +66,11 @@ impl Waitable for CompletionEvent {
         match wait_for_single_object(&self.0, timeout)? {
             WaitOutcome::Signalled => Ok(true),
             WaitOutcome::TimedOut => Ok(false),
-            // An event is never abandoned, which only a mutex can be. Not reached by a test here:
-            // this takes any `OwnedHandle`, but making a mutex needs `unsafe`, which this crate
-            // forbids. `win-sync-sys`' tests reach the ending in the function this calls. (A wait
-            // failing is reached, with a duplicate that has no `SYNCHRONIZE` access.) The ending
-            // is reported, not taken for a signal.
+            // An event is never abandoned, which only a mutex can be, and only an event is made
+            // into one of these. Not reached by a test here: making a mutex needs `unsafe`, which
+            // this crate forbids. `win-sync-sys`' tests reach the ending in the function this
+            // calls. (A wait failing is reached, with a duplicate that has no `SYNCHRONIZE`
+            // access.) The ending is reported, not taken for a signal.
             other => Err(io::Error::other(format!(
                 "the notification's wait ended as {other:?}"
             ))),
