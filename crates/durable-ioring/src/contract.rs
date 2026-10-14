@@ -88,8 +88,9 @@ pub trait DurableRing {
     type Target: IoTarget;
 
     /// A duplicate of the readiness signal (DI-D-28): one the instance owns, set after an entry
-    /// becomes poppable and at least whenever the queue goes from empty to non-empty. One waiter;
-    /// pop until `None` after every wake; a wake with nothing to pop is normal.
+    /// becomes poppable and at least whenever the queue goes from empty to non-empty, and when a
+    /// [`pop`](Self::pop) has a failure to report (DI-D-58). One waiter; pop until `None` after
+    /// every wake; a wake with nothing to pop is normal.
     ///
     /// # Errors
     ///
@@ -247,9 +248,12 @@ pub trait DurableRing {
     ///
     /// # Errors
     ///
-    /// An implementation's own failure to make progress, reported where the consumer will see it.
-    /// dioring's is a submission it retried and the kernel refused again: the operations stay
-    /// queued, and the next push or pop retries.
+    /// An implementation's own failure to make progress, reported where the consumer will see it,
+    /// and only when there is no entry to return instead. dioring's are a submission it rang for
+    /// again and the kernel refused again, the operations staying queued and the next pop ringing
+    /// again; and a ring it could not read the completions of, reported once (DI-D-58). Nothing
+    /// retries unprompted, so a cause that stays is the consumer's to answer by dropping the
+    /// instance.
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>>;
 
     /// Seal every epoch of `through`'s lineage at or below its epoch, and ask for them to be made

@@ -4,7 +4,8 @@
 //!
 //! The in-memory backend executes a submission when it is submitted and raises its notification
 //! then, so a push alone raises nothing: a test that waits with no limit must have another thread
-//! submit. The Windows backend, whose ring submits at every push, is `dioring/tests/pumped.rs`.
+//! submit. A push through the engine is rung for by the engine's doorbell (DI-7+.2); the Windows
+//! backend is `dioring/tests/pumped.rs`.
 
 use std::io;
 use std::num::NonZeroU32;

@@ -226,6 +226,20 @@ impl PartialEq for IoFault {
 
 impl Eq for IoFault {}
 
+impl fmt::Display for IoFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} reported: {}", self.source, self.error)
+    }
+}
+
+/// So a driver can hand a fault to a consumer as the `source` of an [`io::Error`] that downcasts
+/// back to it, as a [`RefusalCause`] does.
+impl std::error::Error for IoFault {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.error)
+    }
+}
+
 /// Why a failure exists, citing where it came from (DI-D-47, DI-D-50). A failed *write* is never a
 /// cause (DI-D-12 (a)). The lineages a failure belongs to are those of the writes in its suspect
 /// set.

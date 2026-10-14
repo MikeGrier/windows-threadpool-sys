@@ -1422,6 +1422,85 @@
       "replace": ["                self.act(actions);\n"]
     },
     {
+      "name": "DI-7+.2: act rings no doorbell",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A backend only queues what it is pushed, so the engine's act is what issues a batch. Without the doorbell nothing is issued until a completion drives a drain, and with none in flight, never.",
+      "find": ["        deliver | self.ring()\n"],
+      "replace": ["        deliver\n"]
+    },
+    {
+      "name": "DI-7+.2: a push rings the doorbell for itself as well as the batch",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The doorbell is rung once for a batch, which is what a ring is for: a push that rings its own makes one submission per push.",
+      "find": ["        match self.backend.push(submission) {\n            Err(refused) if"],
+      "replace": ["        let _ = self.backend.submit();\n        match self.backend.push(submission) {\n            Err(refused) if"]
+    },
+    {
+      "name": "DI-7+.2: a failed doorbell is not told",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A doorbell that fails leaves what was pushed queued, with nothing in flight to drive a drain. Not told, the consumer waits for a completion that cannot come.",
+      "find": ["        self.backend.submit().is_err()\n"],
+      "replace": ["        let _ = self.backend.submit();\n        false\n"]
+    },
+    {
+      "name": "DI-7+.2: a refusal for want of room is not rung and tried once more",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A queue that is full is cleared by the doorbell, which the engine can ring at once; without the retry the push waits for a completion to re-emit it.",
+      "find": ["            Err(refused) if refused.cause.needs_submit() && self.backend.submit().is_ok() => {\n"],
+      "replace": ["            Err(refused) if false => {\n"]
+    },
+    {
+      "name": "DI-7+.2: a consumer's push does not note its failed doorbell",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The driver tells the consumer, once, that a push is queued and its doorbell failed, so the consumer's pop rings it again and reports a cause that stays.",
+      "find": ["            self.attention |= self.ring();\n"],
+      "replace": ["            let _ = self.ring();\n"]
+    },
+    {
+      "name": "DI-7+.2: the note of a failed doorbell is not cleared when taken",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "Told once: a note that is not cleared tells the consumer on every push after.",
+      "find": ["        std::mem::take(&mut self.attention)\n"],
+      "replace": ["        self.attention\n"]
+    },
+    {
+      "name": "DI-7+.2: a failed read of completions is forgotten",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The drain that could not read its completions ends, and the consumer's pop reports why; forgotten, the consumer is not told its ring cannot be read.",
+      "find": ["                        self.fault.get_or_insert(fault);\n"],
+      "replace": ["                        let _ = fault;\n"]
+    },
+    {
+      "name": "DI-7+.2: the last fault is kept in place of the first",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The first fault is the one that explains the rest, and a second drain failing the same way must not replace it.",
+      "find": ["                        self.fault.get_or_insert(fault);\n"],
+      "replace": ["                        self.fault = Some(fault);\n"]
+    },
+    {
+      "name": "DI-7+.2: a drain that could not read goes on",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A backend that cannot read its completions ends the drain, and the consumer is told; going on reports nothing.",
+      "find": ["                        self.fault.get_or_insert(fault);\n                        return true;\n"],
+      "replace": ["                        self.fault.get_or_insert(fault);\n                        break;\n"]
+    },
+    {
+      "name": "DI-7+.2: a fault a later read got past is still reported",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A read that works after a failed one makes the fault stale, which the consumer is not told. Both clearing sites are removed together: either alone leaves the other clearing it, so each is equivalent by itself.",
+      "find": ["                    Ok(Some(completion)) => {\n                        self.fault = None;\n                        popped = true;\n                        let actions = self.core.complete(completion);\n                        deliver |= self.act(actions);\n                    }\n                    Ok(None) => {\n                        self.fault = None;\n                        break;\n                    }\n"],
+      "replace": ["                    Ok(Some(completion)) => {\n                        popped = true;\n                        let actions = self.core.complete(completion);\n                        deliver |= self.act(actions);\n                    }\n                    Ok(None) => break,\n"]
+    },    {
       "name": "CONTROL: the engine tests a pass's pops by comparison",
       "file": "src/engine.rs",
       "expect": "survives",

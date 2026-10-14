@@ -19,6 +19,8 @@ use crate::types::{
     DurabilityRequest, Entry, Epoch, FlushDomain, IoTargetKey, OpKind, ReadOptions, WriteOptions,
 };
 
+mod doorbell;
+
 const ONE: IoTargetKey = IoTargetKey(1);
 const TWO: IoTargetKey = IoTargetKey(2);
 
@@ -129,8 +131,9 @@ fn a_drain_with_nothing_to_pop_delivers_nothing() {
 
 #[test]
 fn a_commit_the_backend_refuses_is_kept_and_issued_by_a_later_drain() {
-    // A one-entry submission queue: the second target's commit cannot be queued beside the first.
-    let mut engine = plain(1, 16);
+    // A one-entry completion queue: the second target's commit cannot be queued beside the first,
+    // and ringing the doorbell makes no room for it, which only a pop does.
+    let mut engine = plain(8, 1);
     let mut oracle = ConformanceOracle::new();
     write(&mut engine, &mut oracle, ONE, b"one");
     engine.drain();
@@ -141,7 +144,8 @@ fn a_commit_the_backend_refuses_is_kept_and_issued_by_a_later_drain() {
         .make_durable_through(at(&engine, 1))
         .expect("the default lineage");
     oracle.sealed(at(&engine, 1));
-    assert_eq!(engine.backend.queued(), 1, "only one commit fit");
+    assert_eq!(engine.backend.queued(), 0, "the doorbell was rung");
+    assert_eq!(engine.backend.completed(), 1, "only one commit fit");
     assert!(engine.drain());
     let entries = entries(&mut engine, &mut oracle);
     assert!(

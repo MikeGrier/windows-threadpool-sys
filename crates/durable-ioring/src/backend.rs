@@ -3,9 +3,11 @@
 //!
 //! A backend is a ring: [`IoBackend::push`] queues a [`Submission`], [`IoBackend::submit`] is the
 //! doorbell, [`IoBackend::pop`] takes a [`Completion`], and the backend's notification is raised
-//! on every transition of its completions from none to some. A backend may issue a submission
-//! before the doorbell -- the Windows backend's ring submits at every push -- but never later. It has no threads of its own: who
-//! waits on the notification and drains is the driver's delivery (DI-D-52).
+//! on every transition of its completions from none to some. A push only queues: what is queued
+//! is issued by the doorbell, which the engine rings after every push it makes, once for a batch,
+//! so that nothing waits for a completion to be issued (DI-7+.2). A backend may issue a submission
+//! earlier, but never later than the doorbell. It has no threads of its own: who waits on the
+//! notification and drains is the driver's delivery (DI-D-52).
 //!
 //! The submission is the core's shape, not the backend's: a write, a read or a commit naming a
 //! target by its [`IoTargetKey`], which the backend maps to whatever it holds for that target.
@@ -244,7 +246,10 @@ pub trait IoBackend {
     ) -> Result<(), DuplicateTarget<Self::Target>>;
 
     /// Stop running I/O for the target under `key`, handing it back; `None` if there is none. A
-    /// submission for it queued but not yet submitted completes with a fault.
+    /// submission for it queued but not yet submitted still completes exactly once, through
+    /// [`pop`](Self::pop): with a fault, or, for a backend that cannot take a queued submission
+    /// back, issued as it would have been, to the file it was pushed for. The core detaches a
+    /// target only with no operation outstanding, so a driver does not meet either.
     fn detach(&mut self, key: IoTargetKey) -> Option<Self::Target>;
 
     /// How many registered buffers it has; a [`RegisteredRegion`] names one by its position.
@@ -265,7 +270,8 @@ pub trait IoBackend {
         op: &SubmissionOp<Self::Buffer>,
     ) -> Result<(), RefusalCause>;
 
-    /// Queue `submission`, to be issued no later than the next [`submit`](Self::submit).
+    /// Queue `submission`, to be issued no later than the next [`submit`](Self::submit). It is
+    /// the backend's from here until it completes: only a refusal hands it back.
     ///
     /// # Errors
     ///

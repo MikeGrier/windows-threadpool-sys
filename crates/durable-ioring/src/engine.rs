@@ -19,14 +19,14 @@ use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::backend::{IoBackend, SubmissionData};
+use crate::backend::{IoBackend, Refused, Submission, SubmissionData};
 use crate::clock::StampClock;
 use crate::contract::EpochId;
 use crate::ids::{DioringIds, OpId};
 use crate::io_core::{CoreActions, DurableIoCore};
 use crate::provider::ProviderRequest;
 use crate::types::{
-    DurabilityRequest, Epoch, IoTargetKey, PushError, ReadOptions, SealError, WriteOptions,
+    DurabilityRequest, Epoch, IoFault, IoTargetKey, PushError, ReadOptions, SealError, WriteOptions,
 };
 
 #[cfg(test)]
@@ -51,6 +51,12 @@ pub struct Engine<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> {
     /// Requests for the consumer's provider the core has made, in order, for the driver to make
     /// with its lock released.
     pub requests: Vec<ProviderRequest<V<E, K>>>,
+    /// A fault the backend gave when its completions were read, kept for a consumer's pop to report
+    /// once (DI-7+.2).
+    fault: Option<IoFault>,
+    /// Whether a doorbell a consumer's push rang failed, so that the driver tells the consumer, who
+    /// pops, which rings it again and reports a cause that stays (DI-7+.2).
+    attention: bool,
 }
 
 impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> {
@@ -60,12 +66,20 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
             core,
             backend,
             requests: Vec::new(),
+            fault: None,
+            attention: false,
         }
     }
 
     /// Act on what the core asked for: push each submission, handing a refused one back to the
     /// core, which keeps it or ends it (DI-D-54) and says what that made due, acted on in turn;
-    /// and keep each provider request, in the order made. Whether entries became poppable.
+    /// keep each provider request, in the order made; and ring the doorbell once for everything
+    /// pushed. Whether entries became poppable, or the doorbell failed, which a consumer's pop
+    /// rings again and reports (DI-7+.2).
+    ///
+    /// A backend only queues what it is pushed, so the doorbell is the engine's to ring, once for a
+    /// batch. A push refused because the queue is full is made once more after the doorbell has
+    /// made room: the one condition that retry is for.
     ///
     /// It ends: a refusal either is kept, making nothing due, or ends one submission for good.
     pub fn act(&mut self, actions: CoreActions<V<E, K>, Bk::Buffer>) -> bool {
@@ -80,33 +94,62 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
             deliver |= ready;
             self.requests.extend(requests);
             for submission in submit {
-                if let Err(refused) = self.backend.push(submission) {
+                if let Err(refused) = self.push(submission) {
                     pending.push_back(self.core.refused(refused));
                 }
             }
         }
-        deliver
+        deliver | self.ring()
+    }
+
+    /// Push `submission`, and, if the backend's queue was full, once more after the doorbell has
+    /// made room.
+    fn push(&mut self, submission: Submission<Bk::Buffer>) -> Result<(), Refused<Bk::Buffer>> {
+        match self.backend.push(submission) {
+            Err(refused) if refused.cause.needs_submit() && self.backend.submit().is_ok() => {
+                self.backend.push(refused.submission)
+            }
+            pushed => pushed,
+        }
+    }
+
+    /// Ring the backend's doorbell, issuing what was pushed. Whether it failed: what was pushed
+    /// stays queued, and nothing else will issue it if nothing is in flight.
+    fn ring(&mut self) -> bool {
+        self.backend.submit().is_err()
     }
 
     /// Drain the backend to empty, feeding each completion to the core and acting on what it makes
     /// due, until a pass pops nothing; each pass first issues what is queued. Whether entries
-    /// became poppable.
+    /// became poppable, or a doorbell failed or the completions could not be read, which a
+    /// consumer's pop reports (DI-7+.2).
     ///
     /// What the backend refused before needs no step of its own: the core re-emits it with the
     /// actions of every completion, so the pop that makes room is the one that re-pushes it.
-    /// A backend that cannot read its completions ends the drain; they stay where they are, for
-    /// the next.
+    /// A backend that cannot read its completions ends the drain: they stay where they are, for
+    /// the next, and the fault is kept for [`take_fault`](Self::take_fault).
     pub fn drain(&mut self) -> bool {
         let mut deliver = false;
         loop {
-            // A failed submission leaves its entries queued, and its cause is acted on by popping,
-            // which is what follows.
-            let _ = self.backend.submit();
+            deliver |= self.ring();
             let mut popped = false;
-            while let Ok(Some(completion)) = self.backend.pop() {
-                popped = true;
-                let actions = self.core.complete(completion);
-                deliver |= self.act(actions);
+            loop {
+                match self.backend.pop() {
+                    Ok(Some(completion)) => {
+                        self.fault = None;
+                        popped = true;
+                        let actions = self.core.complete(completion);
+                        deliver |= self.act(actions);
+                    }
+                    Ok(None) => {
+                        self.fault = None;
+                        break;
+                    }
+                    Err(fault) => {
+                        self.fault.get_or_insert(fault);
+                        return true;
+                    }
+                }
             }
             if !popped {
                 return deliver;
@@ -114,6 +157,19 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         }
     }
 
+    /// The fault the backend gave when a drain tried to read its completions, once: the first
+    /// since it was last taken, unless a later read has worked, which makes it stale. A backend
+    /// that cannot read its completions is not one to go on with, and the consumer's remedy is to
+    /// drop the instance.
+    pub fn take_fault(&mut self) -> Option<IoFault> {
+        self.fault.take()
+    }
+
+    /// Whether a doorbell rung for a consumer's push failed since this was last asked, so the
+    /// driver is to tell the consumer, whose pop rings it again.
+    pub fn take_attention(&mut self) -> bool {
+        std::mem::take(&mut self.attention)
+    }
     /// Write `data` to `target` at `offset`, tagged `epoch`, through the backend.
     ///
     /// # Errors
@@ -128,7 +184,7 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         context: C,
         options: WriteOptions<V<E, K>>,
     ) -> Pushed<E, Bk, C, K> {
-        self.core.write(
+        let pushed = self.core.write(
             target,
             offset,
             data,
@@ -136,7 +192,8 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
             context,
             options,
             &mut self.backend,
-        )
+        );
+        self.rung(pushed)
     }
 
     /// Read from `target` at `offset` into `data`, through the backend.
@@ -152,8 +209,19 @@ impl<E: EpochId + 'static, Bk: IoBackend, C, K: StampClock> Engine<E, Bk, C, K> 
         context: C,
         options: ReadOptions<V<E, K>>,
     ) -> Pushed<E, Bk, C, K> {
-        self.core
-            .read(target, offset, data, context, options, &mut self.backend)
+        let pushed = self
+            .core
+            .read(target, offset, data, context, options, &mut self.backend);
+        self.rung(pushed)
+    }
+
+    /// Ring the doorbell for an accepted push, and note a failure for the driver to tell the
+    /// consumer of.
+    fn rung(&mut self, pushed: Pushed<E, Bk, C, K>) -> Pushed<E, Bk, C, K> {
+        if pushed.is_ok() {
+            self.attention |= self.ring();
+        }
+        pushed
     }
 
     /// Seal through `through`, acting on what it made due: the answer, and whether entries became
