@@ -117,10 +117,7 @@ milestone; the decision rows named below carry the reasons.
   `reset`; whether to hand that instead is open. A wait-only duplicate of the ring's own event is
   `DI-7+.1`, below.
 
-- [ ] **DI-9.7.3** -- **DECIDE: an unallocatable request is a panic where it was an abort.** Now:
-  from `IB-2+.4`, which took the engineer's route (a), `windows-namespace-request-sys` takes the
-  allocation error with `expect` at each site, and `SecurityDescriptor::clone` panics when the copy
-  cannot be allocated ([that crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8)).
+- [x] **DI-9.7.3** -- An allocation that fails is an error the caller receives, not a panic or an abort. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-973)
 
 - [ ] **DI-9.7.4** -- **DECIDE: `NumaBuffer`'s buffer impls move from the ring crate to
   `win-numa-sys`**, which then implements a trait it does not define, ending its deliberately

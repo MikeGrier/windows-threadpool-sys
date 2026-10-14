@@ -2628,3 +2628,22 @@ Ratified by the engineer: "ratified." That closes the `DI-9.6` group. Thirty-thr
 sabotages were re-anchored where their rules now live and ten retired: nine sabotage the same
 predicate at the same site in the same way as an existing core or backend entry, and one was the
 relay's control, retired with the relay.
+
+## Moved 2026-10-13 20:30:00 -04:00 -- DI-9.7.3: the engineer rejects a panic and an abort for an allocation that fails
+
+### <a id="di-973"></a>DI-9.7.3 -- An allocation that fails is an error the caller receives, not a panic or an abort. *(completed 2026-10-13 20:30:00 -04:00)*
+
+The item as the assistant wrote it asked whether "an unallocatable request is a panic where it was an
+abort" -- the effect of `IB-2+.4`'s route (a), which took `AlignedBuf`'s allocation error with `expect` in
+`windows-namespace-request-sys`. The engineer's answer was that neither is acceptable: "I do not find
+either acceptable", after being told what a panic and an abort are and that the one site where a caller picks
+the size is where a recoverable error matters most. This was **not** that crate's recorded policy; it was a
+side effect of the move, and a wider one than the item named. A survey found the same shape in a second place,
+`PageBuffers::new` in `windows-overlapped-io-sys`, whose `IB-2+.2` move had added a panic its `# Panics` list
+did not mention. Both are fixed: every allocation of an `AlignedBuf` outside tests returns its failure.
+[NR-3.1](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-31) and
+[M15.1](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m151) record the changes; the decision is in
+`windows-namespace-request-sys`'s [D-8](../windows-namespace-request-sys/DESIGN-NOTES.md#d-8) and
+`windows-overlapped-io-sys`'s notes. Both are breaking changes to published crates:
+`SecurityDescriptor` and `SecurityAttributes` lose `Clone` for `try_clone`, and `PageBuffers::new` returns an
+`io::Result`.
