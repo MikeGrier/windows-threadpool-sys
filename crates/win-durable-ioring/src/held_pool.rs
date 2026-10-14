@@ -33,7 +33,7 @@ type Gate = Arc<(Mutex<bool>, Condvar)>;
 /// delivery waiting for that thread.
 pub(crate) struct Held {
     gate: Gate,
-    _work: ThreadpoolWork,
+    work: ThreadpoolWork,
 }
 
 impl Held {
@@ -58,7 +58,7 @@ impl Held {
         started
             .recv_timeout(BOUND)
             .expect("the pool's thread took the work item");
-        Self { gate, _work: work }
+        Self { gate, work }
     }
 
     /// Let the held thread go.
@@ -72,5 +72,8 @@ impl Held {
 impl Drop for Held {
     fn drop(&mut self) {
         self.release();
+        // Drained here, where the thread was just released: `fail-fast` panics on a drop that
+        // leaves the drain owed.
+        self.work.stop_and_drain();
     }
 }
