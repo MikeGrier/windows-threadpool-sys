@@ -59,6 +59,11 @@ version = "0.61.2"
 default-features = false
 features = ["Win32_Foundation", "Win32_System_IO", "Win32_Storage_FileSystem"]
 
+# An endpoint keeps its handle shared so observers can hold it too (M15).
+[dependencies.win-shared-os-owned-handle]
+version = "0.1.0"
+path = "../win-shared-os-owned-handle"
+
 # Extra windows-sys features used only by tests that issue real overlapped I/O.
 # These stay out of the published crate's feature set for downstream consumers.
 [dev-dependencies.windows-sys]

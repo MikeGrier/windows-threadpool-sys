@@ -5,12 +5,20 @@
 //! but not yet associated with a completion backend. Association is a later,
 //! consuming transition; this module models only ownership and the provenance
 //! that must hold before an endpoint may be trusted for safe completion routing.
+//!
+//! An endpoint may share its handle with [`EndpointObserver`]s, which keep it
+//! open but can never become a second endpoint. See [DESIGN-NOTES.md] ->
+//! "observers share the handle; only the endpoint does I/O".
+//!
+//! [DESIGN-NOTES.md]: https://docs.rs/crate/windows-overlapped-io-sys/latest/source/DESIGN-NOTES.md
 
 use std::fs::OpenOptions;
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle, RawHandle};
 use std::path::Path;
+
+use win_shared_os_owned_handle::SharedHandle;
 
 /// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
@@ -70,13 +78,14 @@ pub struct NotificationModes {
 /// An overlapped-capable endpoint that has not yet been associated with a
 /// completion backend.
 ///
-/// The endpoint owns its handle and closes it on drop. It is intentionally not
-/// `Clone`: a second owner could route completions through a duplicate handle
-/// and break the single-association invariant that the completion backends rely
-/// on.
+/// The endpoint is intentionally not `Clone`: a second endpoint over the same
+/// handle could route completions through it and break the single-association
+/// invariant that the completion backends rely on. It may share its handle with
+/// [`EndpointObserver`]s, which cannot issue I/O; the handle closes when the
+/// last of the endpoint, the backend it moves into, and its observers drops.
 #[derive(Debug)]
 pub struct UnassociatedEndpoint {
-    handle: OwnedHandle,
+    handle: SharedHandle,
     /// What [`UnassociatedEndpoint::set_notification_modes`] has established on
     /// the handle. Carried with the endpoint, and onward into association,
     /// because the submission seam has to answer "will a completion packet
@@ -141,8 +150,19 @@ impl UnassociatedEndpoint {
     #[must_use]
     pub unsafe fn assume_overlapped(handle: OwnedHandle) -> Self {
         Self {
-            handle,
+            handle: SharedHandle::new(handle),
             modes: NotificationModes::default(),
+        }
+    }
+
+    /// A new observer of this endpoint's handle.
+    ///
+    /// The observer keeps the handle open after this endpoint, or the backend it
+    /// moves into, is gone.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        EndpointObserver {
+            handle: self.handle.clone(),
         }
     }
 
@@ -161,15 +181,36 @@ impl UnassociatedEndpoint {
         self.modes
     }
 
-    /// Consume the endpoint and recover the owned handle.
+    /// Consume the endpoint and recover the owned handle, if no observer still
+    /// holds it.
     ///
     /// This abandons the overlapped-endpoint invariants; the recovered handle is
     /// an ordinary [`OwnedHandle`] again. Any notification mode set on it stays
     /// set -- Win32 offers no way to clear one -- so a handle rewrapped later
     /// must re-declare it.
-    #[must_use]
-    pub fn into_handle(self) -> OwnedHandle {
+    ///
+    /// # Errors
+    ///
+    /// While any [`EndpointObserver`] of this endpoint is alive, returns the
+    /// endpoint unchanged, notification modes included.
+    pub fn into_handle(self) -> Result<OwnedHandle, Self> {
+        let modes = self.modes;
         self.handle
+            .try_into_owned()
+            .map_err(|handle| Self { handle, modes })
+    }
+
+    /// Consume the endpoint into the handle a completion backend holds.
+    ///
+    /// For backends outside this crate, such as `windows-threadpool-sys`'
+    /// `ThreadpoolIo`. Observers already taken stay valid. Read
+    /// [`notification_modes`](Self::notification_modes) first if the backend
+    /// needs them: they are not carried across.
+    #[must_use]
+    pub fn into_endpoint_handle(self) -> EndpointHandle {
+        EndpointHandle {
+            handle: self.handle,
+        }
     }
 
     /// Set this endpoint's completion-notification modes before it is
@@ -204,8 +245,6 @@ impl UnassociatedEndpoint {
     /// reports `ERROR_INVALID_PARAMETER` for a handle whose device does not
     /// support the requested mode.
     pub fn set_notification_modes(&mut self, modes: NotificationModes) -> io::Result<()> {
-        use std::os::windows::io::AsRawHandle;
-
         let mut flags = 0_u8;
         if modes.skip_completion_port_on_success {
             flags |= notification_flags::SKIP_COMPLETION_PORT_ON_SUCCESS;
@@ -230,6 +269,67 @@ impl UnassociatedEndpoint {
         self.modes.skip_completion_port_on_success |= modes.skip_completion_port_on_success;
         self.modes.skip_set_event_on_handle |= modes.skip_set_event_on_handle;
         Ok(())
+    }
+}
+
+/// A query-only holder of an endpoint's handle.
+///
+/// An observer keeps the handle open and can never become a second endpoint: it
+/// implements neither `AsHandle` nor `AsRawHandle`, so safe code holding one
+/// cannot borrow, duplicate, or wrap the handle, and so cannot reach any
+/// constructor that associates it or issues I/O through it.
+///
+/// Obtained from an endpoint, or from the backend that endpoint moved into, with
+/// `observer()`. Cloning shares the same handle.
+#[derive(Clone, Debug)]
+pub struct EndpointObserver {
+    handle: SharedHandle,
+}
+
+impl EndpointObserver {
+    /// Whether `self` and `other` observe the same handle.
+    #[must_use]
+    pub fn same_handle(&self, other: &Self) -> bool {
+        self.handle.same_handle(&other.handle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raw_for_test(&self) -> RawHandle {
+        self.handle.as_raw_handle()
+    }
+}
+
+/// An endpoint's handle, as held by a completion backend.
+///
+/// Obtained only by consuming an endpoint
+/// ([`UnassociatedEndpoint::into_endpoint_handle`]) and not `Clone`, so it
+/// carries the endpoint's one-backend guarantee with it. It lends the handle
+/// for native calls and hands out observers; it never yields an owned handle.
+/// The handle closes when this and every observer have dropped.
+#[derive(Debug)]
+pub struct EndpointHandle {
+    handle: SharedHandle,
+}
+
+impl EndpointHandle {
+    /// A new observer of this handle.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        EndpointObserver {
+            handle: self.handle.clone(),
+        }
+    }
+}
+
+impl AsHandle for EndpointHandle {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+impl AsRawHandle for EndpointHandle {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.handle.as_raw_handle()
     }
 }
 

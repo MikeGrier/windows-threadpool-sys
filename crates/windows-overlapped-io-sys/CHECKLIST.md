@@ -34,27 +34,19 @@ endpoint does I/O"). Independent of M14; it may be taken first.
 
 - [x] **M15.1** -- Investigated owned versus shared endpoint handles; the engineer chose observers. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m151)
 
-- [ ] **M15.2** -- **Endpoints keep their handle in shared storage, and hand out observers.** The endpoint
-  wraps the handle it is given in a private `SharedHandle`; `AssociatedEndpoint` and `BlockingEndpoint`
-  keep that storage rather than an `OwnedHandle`. Add the observer type (`Clone`, `Send`, `Sync`, holding
-  the handle open, implementing neither `AsHandle` nor `AsRawHandle`) and a method on the endpoint that
-  returns one. Make `into_handle` fallible while observers hold the handle. Breaking change.
-  ([DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handle; only the endpoint does I/O")
+- [x] **M15.2** -- Endpoints keep their handle in shared storage and hand out observers. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m152)
 
 - [ ] **M15.3** -- **The observer's queries.** The file's current length (`GetFileInformationByHandleEx`,
   `FileStandardInfo`) behind the `fs` feature, and an `unsafe` borrow whose contract is that no overlapped
   I/O is issued through it.
 
-- [ ] **M15.4** -- **`windows-threadpool-sys`' `ThreadpoolIo` keeps the endpoint's shared storage** rather
-  than extracting an `OwnedHandle`, so observers outlive it; restate its `Drop` comment ("because this object
-  owns the handle") as "because only this object submits through the handle". Coupled to M15.2: neither
-  compiles without the other, so they land together.
+- [x] **M15.4** -- `ThreadpoolIo` keeps the endpoint's shared storage; landed with M15.2. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m154)
 
 - [ ] **M15.5** -- **Tests.** Compile-fail doctests that an observer offers no `AsHandle`/`AsRawHandle` and
   cannot reach `associate`, `ThreadpoolIo::new` or `BlockingEndpoint::new`; an observer outliving its
-  endpoint and each backend still reads the length; the handle closes only when the last holder drops;
-  `into_handle` fails while an observer lives and succeeds after; cancellation and rundown on each backend
-  with observers alive.
+  endpoint and each backend still reads the length (M15.3); cancellation and rundown on each backend with
+  observers alive. (Landed with M15.2: the handle closing only when its last holder drops, across every
+  backend, and `into_handle` refused while an observer lives.)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-multi-file-tail-watcher`
   > -> `M1` -> `TW-1.2` (open each file as an endpoint and probe through an observer). See

@@ -8,12 +8,12 @@
 //! synchronously, so it needs neither ownership transfer nor rundown.
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
-use crate::{Operation, OperationState, UnassociatedEndpoint};
+use crate::{EndpointHandle, EndpointObserver, Operation, OperationState, UnassociatedEndpoint};
 
 #[cfg(test)]
 mod tests;
@@ -41,7 +41,7 @@ mod tests;
 /// feature provides, so they compile in every configuration that has it.
 #[derive(Debug)]
 pub struct BlockingEndpoint {
-    handle: OwnedHandle,
+    handle: EndpointHandle,
 }
 
 impl BlockingEndpoint {
@@ -66,7 +66,7 @@ impl BlockingEndpoint {
             return Err(TryFromEndpointError { endpoint });
         }
         Ok(Self {
-            handle: endpoint.into_handle(),
+            handle: endpoint.into_endpoint_handle(),
         })
     }
 
@@ -74,6 +74,15 @@ impl BlockingEndpoint {
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+
+    /// A new observer of this endpoint's handle.
+    ///
+    /// An observer cannot issue I/O, so it cannot signal the handle's event and
+    /// disturb the one-at-a-time wait this type depends on.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        self.handle.observer()
     }
 
     /// Issue one overlapped operation and block until it completes, returning the

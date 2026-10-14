@@ -439,3 +439,23 @@ turned out to be a design fork the engineer has now settled.
 The findings and the decision are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Decision -- observers
 share the handle; only the endpoint does I/O (M15.1)". Requested by
 [win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10).
+
+## Moved 2026-10-14 19:45:28 -04:00 -- M15.2 and M15.4: endpoints share their handle with observers
+
+M15.4 could not land separately: `ThreadpoolIo::new` called the infallible `into_handle` that M15.2 made
+fallible, so neither compiled without the other.
+
+### <a id="m152"></a>M15.2 -- Endpoints keep their handle in shared storage and hand out observers. *(completed 2026-10-14 19:45:28 -04:00)*
+
+`UnassociatedEndpoint` stores its handle in a private `SharedHandle`; `AssociatedEndpoint` and
+`BlockingEndpoint` hold the new `EndpointHandle` (the storage as it leaves an endpoint, not `Clone`, never
+yields an `OwnedHandle`). `EndpointObserver` is `Clone`, `Send` and `Sync`, keeps the handle open, and
+implements neither `AsHandle` nor `AsRawHandle`; every endpoint type has `observer()`. `into_handle` now
+returns `Result<OwnedHandle, Self>`, refusing while an observer lives. Breaking change. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handle; only the endpoint does I/O".
+
+### <a id="m154"></a>M15.4 -- `ThreadpoolIo` keeps the endpoint's shared storage; landed with M15.2. *(completed 2026-10-14 19:45:28 -04:00)*
+
+`windows-threadpool-sys`' `ThreadpoolIo` holds an `EndpointHandle` taken with `into_endpoint_handle`, so an
+observer taken before binding outlives it; its `Drop` comments now say the guarantee rests on only this object
+submitting through the handle, and that dropping releases its hold rather than closing the handle.

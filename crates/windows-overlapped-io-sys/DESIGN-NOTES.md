@@ -135,6 +135,10 @@ route to association, submission, and the blocking backend, and stays not `Clone
   [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), and the backends keep that storage, so an
   observer stays valid after the endpoint, or its backend, is gone. The handle closes when its last holder
   drops.
+- **Backends hold an `EndpointHandle`** (M15.2): the storage as it leaves an endpoint, obtained only by
+  consuming one (`UnassociatedEndpoint::into_endpoint_handle`). It is not `Clone`, lends the handle for
+  native calls and hands out observers, and never yields an `OwnedHandle`. It is public because a backend
+  outside this crate -- `windows-threadpool-sys`' `ThreadpoolIo` -- has to hold it too.
 - **An observer implements neither `AsHandle` nor `AsRawHandle`.** That is what makes "never a second
   endpoint" structural: safe code holding an observer cannot borrow, duplicate, or wrap the handle, so it
   cannot reach any constructor that associates or submits. What it offers instead is a curated list of
@@ -557,7 +561,7 @@ operation is recovered with `Operation::from_overlapped` when the payload type i
 a typed completion) or with the free `reclaim_overlapped` when it is not (rundown, where a backend frees
 operations of mixed payload types). Endpoints reach a backend by consuming an `UnassociatedEndpoint`:
 `CompletionPort::associate` for IOCP, `BlockingEndpoint::new` for the blocking backend, and, in the thread-pool
-crate, `CreateThreadpoolIo` over the handle taken with `UnassociatedEndpoint::into_handle`.
+crate, `CreateThreadpoolIo` over the handle taken with `UnassociatedEndpoint::into_endpoint_handle`.
 
 The raw IOCP backend is implemented on top of these primitives, which validates that the seam is sufficient for
 a real backend. `TP_IO` reuses them unchanged and adds only its own concerns: `StartThreadpoolIo` before each

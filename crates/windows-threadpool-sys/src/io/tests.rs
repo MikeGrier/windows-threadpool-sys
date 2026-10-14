@@ -57,6 +57,33 @@ fn new_with_default_env_succeeds() {
 }
 
 #[test]
+fn an_observer_taken_before_binding_outlives_the_object() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let path = temp_file_with(b"payload", "observer-outlives");
+    // Opening with no sharing fails while any handle to the file is open.
+    let no_handle_is_open = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .is_ok()
+    };
+    let endpoint = read_endpoint(&path);
+    let observer = endpoint.observer();
+    let tp = ThreadpoolIo::new(endpoint, |_| {}, None).expect("create TP_IO");
+
+    drop(tp);
+    assert!(
+        !no_handle_is_open(),
+        "the observer must keep the handle open"
+    );
+    drop(observer);
+    assert!(no_handle_is_open(), "the last holder must close the handle");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn new_object_starts_with_no_outstanding_operations() {
     let path = temp_file_with(b"payload", "new-outstanding");
     let tp = ThreadpoolIo::new(read_endpoint(&path), |_| {}, None).expect("create TP_IO");
