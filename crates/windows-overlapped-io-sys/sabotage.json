@@ -37,6 +37,39 @@
       "replace": ["        self.pages * PAGE_SIZE - PAGE_SIZE / 2\n    }\n\n    /// Always"]
     },
     {
+      "name": "NR-3: zero pages is not refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A buffer with no pages has nothing for a scatter or gather call to name; the constructor refuses it as invalid input, at the caller's own call site.",
+      "find": ["        if pages == 0 {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3: a page count whose length overflows wraps instead of being refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A wrapped length is a small, valid allocation for a count that asked for far more: the buffer would be short of its own page count.",
+      "find": ["        let size = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {\n            io::Error::new(io::ErrorKind::InvalidInput, \"page buffer size overflow\")\n        })?;\n"],
+      "replace": ["        let size = pages.wrapping_mul(PAGE_SIZE);\n"]
+    },
+    {
+      "name": "NR-3: an allocation the machine cannot supply is reported as invalid input",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The count is the caller's and a failed allocation is out of memory, which a caller answers by asking for fewer pages; invalid input would read as a bug in the count's shape.",
+      "find": ["            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;\n"],
+      "replace": ["            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;\n"]
+    },
+    {
+      "name": "NR-3: a page size that is not a power of two is refused by the build",
+      "file": "src/fs.rs",
+      "expect": "refused-by-build",
+      "buildError": "PAGE_SIZE.is_power_of_two()",
+      "why": "AlignedBuf refuses such an alignment and `PageBuffers::new` reports every refusal of the allocation as out of memory, so a bad constant would read as out of memory on every call. It is asserted where it is defined.",
+      "find": ["pub const PAGE_SIZE: usize = 4096;\n"],
+      "replace": ["pub const PAGE_SIZE: usize = 4095;\n"]
+    },
+    {
       "name": "IB-2+.2: CONTROL: the page count is read through an identity addition",
       "file": "src/fs.rs",
       "expect": "survives",
