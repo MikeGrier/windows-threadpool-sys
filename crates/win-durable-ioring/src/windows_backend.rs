@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use win_sync_sys::{Access, duplicate_handle_with_access};
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId, Owned,
     PushOptions, PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
     SharedHandle,
 };
@@ -233,7 +233,7 @@ impl<R> std::fmt::Debug for WindowsBackendError<R> {
 pub struct WindowsBackend<B: IoBuf, R: IoBufMut = Vec<u8>> {
     /// Declared before `registered`: dropping the ring runs down every operation, so it ends before
     /// the buffers the kernel may still be using.
-    ring: IoRing<B, Sidecar>,
+    ring: IoRing<B, Sidecar, Owned>,
     registered: Option<RegisteredBuffers<R>>,
     targets: HashMap<IoTargetKey, Slot>,
     /// How an owned read is pushed, made where `B: IoBufMut` holds; `None` refuses owned reads.
@@ -339,6 +339,15 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
             Ok(event) => event,
             Err(error) => return Err(fail(error, targets, None)),
         };
+        // Registrations were the last operations queued that the ring holds nothing for, and each
+        // was waited on, so none is in flight. If one is, this crate left it: an inconsistency, not
+        // an outcome to report (DI-D-59).
+        let ring = ring.into_owned().unwrap_or_else(|_| {
+            panic!(
+                "a registration was left in flight on the backend's ring: it cannot be sealed \
+                 against operations the ring holds nothing for"
+            )
+        });
         let slots = targets
             .into_iter()
             .enumerate()
@@ -576,7 +585,7 @@ enum Via<'a> {
 /// An owned read's push, made where `B: IoBufMut` holds and carried by a backend whose `B` may be
 /// only `IoBuf` (DI-D-17).
 type OwnedRead<B> = for<'r, 'v> fn(
-    &mut Batch<'r, B, Sidecar>,
+    &mut Batch<'r, B, Sidecar, Owned>,
     Via<'v>,
     B,
     Sidecar,
@@ -585,7 +594,7 @@ type OwnedRead<B> = for<'r, 'v> fn(
 
 /// Push an owned read: the push [`WindowsBackend::new`] makes.
 fn push_owned_read<B: IoBufMut>(
-    batch: &mut Batch<'_, B, Sidecar>,
+    batch: &mut Batch<'_, B, Sidecar, Owned>,
     via: Via<'_>,
     buffer: B,
     sidecar: Sidecar,
@@ -838,18 +847,11 @@ impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
     }
 
     fn pop(&mut self) -> Result<Option<Completion<B>>, IoFault> {
-        let Some((completion, held)) = self.ring.try_pop().map_err(windows_fault)? else {
+        // The ring is an owned one, so it never hands back a completion it held nothing for: there
+        // is no such case to report (DI-D-59).
+        let Some((completion, buffer, sidecar)) = self.ring.try_pop().map_err(windows_fault)?
+        else {
             return Ok(None);
-        };
-        let Some((buffer, sidecar)) = held else {
-            // Unreachable: every push this backend makes stows an entry.
-            return Err(IoFault {
-                source: WINDOWS_IORING,
-                code: None,
-                error: Arc::new(io::Error::other(
-                    "a completion for an operation the backend did not push",
-                )),
-            });
         };
         #[cfg(feature = "fault-injection")]
         let completion = match sidecar.kind {
