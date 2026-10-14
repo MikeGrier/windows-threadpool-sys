@@ -16,7 +16,7 @@ mod held_pool;
 pub mod readiness;
 pub mod windows_backend;
 
-pub use delivery::{DeliveryHandle, DeliverySetupError, EntryDelivery};
+pub use delivery::{DeliveryEvent, DeliveryHandle, DeliverySetupError, EntryDelivery};
 pub use dioring::{
     DeliveryMode, Dioring, FromClock, InterruptStamps, Setup, SetupError, SetupRefusal,
     TargetSetup, TimeBase, WinInstant, WindowsIds,

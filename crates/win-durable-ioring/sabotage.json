@@ -734,6 +734,21 @@
       "find": ["                batch.leave_queued();\n                let PushRefused"],
       "replace": ["                drop(batch);\n                let PushRefused"]
     },    {
+      "name": "DI-7+.4: a Model A handler is not told of a failed pop",
+      "file": "src/delivery.rs",
+      "expect": "caught",
+      "why": "The wake that took the readiness edge is the only thing that told the consumer of a failure of the instance's pop (DI-D-58); collapsed into an empty queue, an accepted operation can stay queued with neither an entry nor an error reaching the handler. Caught by the test whose fake pop fails.",
+      "find": ["                (*handler)(DeliveryEvent::Failure(error), &inner.handle);\n"],
+      "replace": ["                let _ = (&mut *handler, error);\n"]
+    },
+    {
+      "name": "DI-7+.4: a Model A wake loops on a failed pop",
+      "file": "src/delivery.rs",
+      "expect": "caught",
+      "why": "A failure is told once per wake: the pop that failed would fail again, with nothing to stop the loop, so the wake ends. Caught by the test that expects the failure once and then quiet (or by the suite hanging, which the sweep reads as caught).",
+      "find": ["                (*handler)(DeliveryEvent::Failure(error), &inner.handle);\n                break;\n"],
+      "replace": ["                (*handler)(DeliveryEvent::Failure(error), &inner.handle);\n                continue;\n"]
+    },    {
       "name": "DI-9.8.1: a pump's failed wait is reported as success",
       "file": "src/dioring.rs",
       "expect": "caught",

@@ -33,8 +33,24 @@ use durable_ioring::{
 #[cfg(test)]
 mod tests;
 
+/// What the deliverer hands its handler: an entry, or why it could not pop one.
+///
+/// A failure is the instance's own pop failing -- a submission its doorbell could not issue, or a
+/// ring it could not read ([DI-D-58](../../durable-ioring/DESIGN-NOTES.md#di-d-58)). It is reported
+/// once per wake, and the delivery goes on: the next wake delivers what can be, and a cause that
+/// stays is reported again. The handler's remedy for one that stays is to stop and drop the
+/// delivery, which hands the instance back (into_inner) or closes it (close).
+#[derive(Debug)]
+pub enum DeliveryEvent<E> {
+    /// The next entry, in queue order.
+    Entry(E),
+    /// The instance's `pop` failed. The error says why, and downcasts to the cause the instance
+    /// reported, as an instance's own `pop` error does.
+    Failure(io::Error),
+}
+
 /// The handler, as the deliverer holds it.
-type Handler<D> = dyn FnMut(EntryOf<D>, &DeliveryHandle<D>) + Send;
+type Handler<D> = dyn FnMut(DeliveryEvent<EntryOf<D>>, &DeliveryHandle<D>) + Send;
 
 /// What the deliverer and the owner share. The handler is last, so a front end built with one
 /// handler type can be held as the trait object.
@@ -414,7 +430,9 @@ impl<D, F> fmt::Debug for DeliverySetupError<D, F> {
 ///
 /// # The handler
 ///
-/// Called on a pool thread, never twice at once, with the instance's lock released. It must not
+/// Called with a [`DeliveryEvent`]: each entry, in queue order, and a failure of the instance's
+/// `pop` when it has one to report, which a handler that ignores is a delivery that stalls
+/// without saying so. Called on a pool thread, never twice at once, with the instance's lock released. It must not
 /// panic -- a panic unwinds into the thread pool's callback and aborts the process -- and while it
 /// runs no further entry is delivered, so a handler that blocks holds up delivery, and holds up
 /// [`into_inner`](Self::into_inner) and drop, which wait for it.
@@ -451,7 +469,7 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> Result<Self, DeliverySetupError<D, F>>
     where
-        F: FnMut(EntryOf<D>, &DeliveryHandle<D>) + Send + 'static,
+        F: FnMut(DeliveryEvent<EntryOf<D>>, &DeliveryHandle<D>) + Send + 'static,
     {
         let duplicates = ring
             .readiness()
@@ -539,16 +557,23 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> Drop for EntryDelivery<
 /// this one drains finds the signal set once it is re-armed, and starts only after this one has
 /// made its last handler call.
 ///
-/// A failed `pop` ends the wake as `None` does. dioring's is a retried submission refused again,
-/// with nothing to pop; its next push or pop retries it.
+/// A failed `pop` is the handler's to be told, once, and ends the wake: dioring's is a submission
+/// its doorbell could not issue, or a ring it could not read, with nothing to pop, and the readiness
+/// edge this wake took is the only thing that told the consumer (DI-D-58). Looping again would
+/// repeat a cause that stays, with nothing to stop it.
 fn deliver<D: DurableRing>(inner: &Inner<D, Handler<D>>, activation: &WaitActivation<'_>) {
     loop {
-        let entry = inner.handle.with(|ring| ring.pop());
-        let Ok(Some(entry)) = entry else {
-            break;
+        let event = match inner.handle.with(|ring| ring.pop()) {
+            Ok(Some(entry)) => DeliveryEvent::Entry(entry),
+            Ok(None) => break,
+            Err(error) => {
+                let mut handler = lock(&inner.handler);
+                (*handler)(DeliveryEvent::Failure(error), &inner.handle);
+                break;
+            }
         };
         let mut handler = lock(&inner.handler);
-        (*handler)(entry, &inner.handle);
+        (*handler)(event, &inner.handle);
     }
     activation.rearm(None);
 }

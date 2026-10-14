@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use windows_ioring_sys::RegisteredSpan;
 
-use super::EntryDelivery;
+use super::{DeliveryEvent, EntryDelivery};
 use crate::dioring::tests::TempFile;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::fake::{Fake, Signals};
@@ -56,15 +56,25 @@ fn forwarding(ring: Ring) -> (EntryDelivery<Ring>, mpsc::Receiver<RingEntry>) {
     let (tx, rx) = mpsc::channel();
     let delivery = EntryDelivery::new(
         ring,
-        move |entry, _| {
+        entries_only(move |entry, _| {
             let _ = tx.send(entry);
-        },
+        }),
         None,
     )
     .expect("start delivery");
     (delivery, rx)
 }
 
+/// A handler of entries alone, for a test that has no failure to expect: one is a failed test.
+fn entries_only<D: DurableRing>(
+    mut on_entry: impl FnMut(durable_ioring::EntryOf<D>, &super::DeliveryHandle<D>) + Send + 'static,
+) -> impl FnMut(DeliveryEvent<durable_ioring::EntryOf<D>>, &super::DeliveryHandle<D>) + Send + 'static
+{
+    move |event, handle| match event {
+        DeliveryEvent::Entry(entry) => on_entry(entry, handle),
+        DeliveryEvent::Failure(error) => panic!("the delivery reported a failure: {error}"),
+    }
+}
 fn context(entry: &RingEntry) -> u32 {
     match entry {
         Entry::Op(completion) => completion.context,
@@ -84,9 +94,9 @@ fn entries_queued_before_the_handover_are_delivered_in_queue_order() {
     let (tx, rx) = mpsc::channel();
     let delivery = EntryDelivery::new(
         fake,
-        move |entry, _| {
+        entries_only(move |entry, _| {
             let _ = tx.send(context(&entry));
-        },
+        }),
         None,
     )
     .expect("start delivery");
@@ -105,9 +115,9 @@ fn a_failed_setup_hands_back_the_instance_and_the_handler() {
     let held = Arc::clone(&marker);
     let error = match EntryDelivery::new(
         fake,
-        move |_, _| {
+        entries_only(move |_, _| {
             let _ = &held;
-        },
+        }),
         None,
     ) {
         Ok(_) => panic!("the fake refuses its signal"),
@@ -156,7 +166,7 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
     let (tx, rx) = mpsc::channel();
     let delivery = EntryDelivery::new(
         instance(&temp, Vec::new()),
-        move |entry: RingEntry, handle| {
+        entries_only::<Ring>(move |entry: RingEntry, handle| {
             if let Entry::Op(completion) = &entry {
                 let default = handle.default_lineage();
                 let answer = handle
@@ -165,7 +175,7 @@ fn a_seal_made_through_the_handle_is_delivered_as_durable() {
                 assert_eq!(answer, DurabilityRequest::Submitted, "{:?}", completion.id);
             }
             let _ = tx.send(entry);
-        },
+        }),
         None,
     )
     .expect("start delivery");
@@ -194,7 +204,7 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
     let (tx, rx) = mpsc::channel();
     let delivery = EntryDelivery::new(
         ring,
-        move |entry: RingEntry, handle| {
+        entries_only(move |entry: RingEntry, handle| {
             // No panic here: it would be on a pool thread. The outcome is sent instead.
             let seen = match entry {
                 Entry::Op(_) => "op",
@@ -209,7 +219,7 @@ fn a_failure_resolved_through_the_handle_is_delivered_with_what_follows_it() {
                 _ => "something else",
             };
             let _ = tx.send(seen);
-        },
+        }),
         None,
     )
     .expect("start delivery");
@@ -237,7 +247,7 @@ fn the_handler_can_push_through_the_handle_it_is_given() {
     let (tx, rx) = mpsc::channel();
     let delivery = EntryDelivery::new(
         instance(&temp, Vec::new()),
-        move |entry: RingEntry, handle| {
+        entries_only::<Ring>(move |entry: RingEntry, handle| {
             let context = context(&entry);
             if context == 0 {
                 handle
@@ -245,7 +255,7 @@ fn the_handler_can_push_through_the_handle_it_is_given() {
                     .expect("push from inside the handler");
             }
             let _ = tx.send(context);
-        },
+        }),
         None,
     )
     .expect("start delivery");
@@ -268,14 +278,14 @@ fn handler_calls_never_overlap_while_threads_push_concurrently() {
     let (in_handler, most) = (Arc::clone(&active), Arc::clone(&widest));
     let delivery = EntryDelivery::new(
         instance(&temp, Vec::new()),
-        move |entry: RingEntry, _| {
+        entries_only::<Ring>(move |entry: RingEntry, _| {
             let now = in_handler.fetch_add(1, Ordering::SeqCst) + 1;
             most.fetch_max(now, Ordering::SeqCst);
             // Long enough for an overlapping call, were one possible, to land inside this one.
             std::thread::sleep(Duration::from_micros(200));
             in_handler.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(context(&entry));
-        },
+        }),
         None,
     )
     .expect("start delivery");
@@ -475,4 +485,34 @@ fn a_file_is_removed_through_the_handle() {
             2
         )))
     ));
+}
+
+#[test]
+fn a_failed_pop_is_reported_to_the_handler_once_and_delivery_goes_on() {
+    // DI-D-58: the wake that took the readiness edge is the only thing that told the consumer, so
+    // the handler is told why it could not pop, once, and not looped on.
+    let mut fake = Fake::new(Signals::OnEveryTransition);
+    fake.pop_fails = true;
+    let (tx, rx) = mpsc::channel();
+    let delivery = EntryDelivery::new(
+        fake,
+        move |event: DeliveryEvent<RingEntry>, _| {
+            let _ = tx.send(match event {
+                DeliveryEvent::Entry(entry) => format!("entry {}", context(&entry)),
+                DeliveryEvent::Failure(error) => format!("failure: {error}"),
+            });
+        },
+        None,
+    )
+    .expect("start delivery");
+    // Setting the signal at the handover is the wake: the first pop fails.
+    assert_eq!(
+        rx.recv_timeout(BOUND).expect("the failure is reported"),
+        "failure: the fake's pop was told to fail"
+    );
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "once, not again until something wakes the delivery"
+    );
+    drop(delivery);
 }

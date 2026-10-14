@@ -44,6 +44,8 @@ pub(crate) struct Fake {
     transitions: u32,
     /// `readiness()` fails, as duplicating a handle can.
     pub(crate) readiness_fails: bool,
+    /// `pop` fails, as an instance's does when its doorbell cannot issue or its ring cannot be read.
+    pub(crate) pop_fails: bool,
 }
 
 impl Fake {
@@ -58,6 +60,7 @@ impl Fake {
             next: 0,
             transitions: 0,
             readiness_fails: false,
+            pop_fails: false,
         }
     }
 
@@ -168,6 +171,9 @@ impl DurableRing for Fake {
     }
 
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
+        if self.pop_fails {
+            return Err(io::Error::other("the fake's pop was told to fail"));
+        }
         Ok(self.queue.pop_front())
     }
 
