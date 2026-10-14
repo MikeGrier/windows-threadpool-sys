@@ -184,6 +184,7 @@ fn completions_carry_their_tokens() {
             .push(write(token, GIVEN, token, b"t"))
             .expect("accepted");
     }
+    backend.submit().expect("submitted");
     let mut tokens: Vec<u64> = (0..3).map(|_| next(&mut backend).token.0).collect();
     tokens.sort_unstable();
     assert_eq!(tokens, [3, 7, 9]);
@@ -582,7 +583,7 @@ fn device() -> InjectedFailure {
 }
 
 #[test]
-fn a_submit_that_fails_after_an_accepted_push_is_reported_and_reissued() {
+fn a_submit_that_fails_leaves_what_was_pushed_queued_and_is_reported_and_reissued() {
     let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
     let mut backend = backend(&given, &added);
     let faults = backend.submit_faults();
@@ -590,14 +591,16 @@ fn a_submit_that_fails_after_an_accepted_push_is_reported_and_reissued() {
 
     backend
         .push(write(1, GIVEN, 0, b"queued"))
-        .expect("a push is accepted though its own submit failed");
+        .expect("a push only queues, so a failing submit does not refuse it");
+    assert!(
+        faults.failures().is_empty(),
+        "a push does not ask the ring to submit"
+    );
     assert!(
         backend.pop().expect("pop").is_none(),
-        "the ring never submitted it, so nothing completed"
+        "nothing was submitted, so nothing completed"
     );
-    let RefusalCause::Unknown(fault) = backend
-        .submit()
-        .expect_err("the submit is owed, and fails again")
+    let RefusalCause::Unknown(fault) = backend.submit().expect_err("the submit is owed, and fails")
     else {
         panic!("an error no ring condition names is of unknown cause");
     };
@@ -605,7 +608,7 @@ fn a_submit_that_fails_after_an_accepted_push_is_reported_and_reissued() {
     assert_eq!(fault.code.and_then(crate::ErrorCode::win32), Some(1117));
     assert!(
         backend.pop().expect("pop").is_none(),
-        "a failed reissue leaves it queued"
+        "a failed submit leaves it queued"
     );
 
     faults.clear();
@@ -620,9 +623,55 @@ fn a_submit_that_fails_after_an_accepted_push_is_reported_and_reissued() {
     );
     assert_eq!(
         faults.failures().len(),
-        2,
-        "the push's own submit, and the first reissue"
+        1,
+        "the one submit asked while it failed"
     );
+}
+
+#[test]
+fn a_push_the_ring_refuses_does_not_submit_what_an_earlier_push_queued() {
+    // A drop of the batch a refused push opened would submit the earlier entry, in the push that
+    // could not be the one to report it.
+    let given = TempFile::new("wb-given");
+    let mut backend = Backend::new(setup(
+        vec![(GIVEN, Win32FileTarget::new(given.open()))],
+        vec![vec![0; 8]],
+    ))
+    .expect("build");
+    let faults = backend.submit_faults();
+
+    backend
+        .push(write(1, GIVEN, 0, b"queued"))
+        .expect("accepted");
+    // Armed, so that a submit the ring is asked for shows as a failure.
+    faults.fail_until_cleared(device());
+    let outside = Submission {
+        token: SubmissionToken(2),
+        target: GIVEN,
+        op: SubmissionOp::Write {
+            offset: 0,
+            data: SubmissionData::Registered(RegisteredRegion {
+                index: 0,
+                offset: 4,
+                length: 5,
+            }),
+            caching: WriteCaching::Cached,
+        },
+    };
+    let refused = backend.push(outside).expect_err("outside the registration");
+    assert_eq!(refused.cause, RefusalCause::Invalid);
+    assert!(
+        faults.failures().is_empty(),
+        "the ring was not asked to submit"
+    );
+    assert!(
+        backend.pop().expect("pop").is_none(),
+        "and the earlier entry is queued still"
+    );
+
+    faults.clear();
+    backend.submit().expect("the doorbell");
+    next(&mut backend);
 }
 
 #[test]
@@ -637,11 +686,10 @@ fn the_ring_is_asked_to_submit_only_while_a_submit_is_owed() {
         .expect("nothing is owed, so the ring is not asked");
     assert!(faults.failures().is_empty());
 
-    backend
-        .push(write(1, GIVEN, 0, b"owed"))
-        .expect("accepted, its submit failing");
+    backend.push(write(1, GIVEN, 0, b"owed")).expect("accepted");
+    assert!(faults.failures().is_empty(), "a push does not ask the ring");
     backend.submit().expect_err("owed, so asked, and fails");
-    assert_eq!(faults.failures().len(), 2);
+    assert_eq!(faults.failures().len(), 1);
 
     faults.clear();
     backend.submit().expect("the reissue succeeds");
@@ -653,7 +701,7 @@ fn the_ring_is_asked_to_submit_only_while_a_submit_is_owed() {
         .expect("the reissue cleared what was owed, so the ring is not asked");
     assert_eq!(
         faults.failures().len(),
-        2,
+        1,
         "no further failure: nothing was asked"
     );
     faults.clear();
@@ -678,9 +726,7 @@ fn a_failed_submit_reports_its_cause_as_the_action_that_clears_it() {
         let mut backend = backend(&given, &added);
         let faults = backend.submit_faults();
         faults.fail_until_cleared(InjectedFailure::Ring(condition));
-        backend
-            .push(write(1, GIVEN, 0, b"x"))
-            .expect("accepted, its submit failing");
+        backend.push(write(1, GIVEN, 0, b"x")).expect("accepted");
 
         assert_eq!(
             backend.submit().expect_err("owed, and failing"),

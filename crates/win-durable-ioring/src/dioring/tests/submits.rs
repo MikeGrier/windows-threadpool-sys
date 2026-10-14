@@ -14,8 +14,10 @@
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::InjectedFailure;
+use windows_ioring_sys::sys::Call;
 
 use super::gates::expect_durable;
+use super::pumped::{next as pumped_next, pumped, readiness_set};
 use super::pushes::{BOUND, GIVEN, Harness, RingEntry, given, instance, temp};
 use durable_ioring::DurableRing;
 use durable_ioring::backend::{RefusalCause, SubmissionData};
@@ -195,5 +197,127 @@ fn a_seal_whose_commit_submit_fails_is_made_durable_once_submits_succeed() {
     let one = harness.epoch(1);
     expect_durable(&mut harness, one);
     assert_eq!(harness.durable(), Some(1));
+    harness.finish();
+}
+
+/// The fault a pop reported, recovered from its error.
+fn fault_of(error: &std::io::Error) -> &crate::IoFault {
+    error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<crate::IoFault>())
+        .expect("a pop's unreadable ring is reported as its IoFault")
+}
+
+/// Long enough for a wake's two drains to have run, one before the ring's wait is armed again and
+/// one after.
+const SETTLED: Duration = Duration::from_millis(250);
+
+#[test]
+fn a_write_whose_doorbell_fails_sets_the_readiness_signal_once_and_the_pop_reports_the_cause() {
+    // DI-7+.2. Pumped, so nothing but the failed doorbell can have set the signal. The consumer
+    // waits on the signal and pops, which rings the doorbell again and says why it cannot.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let faults = harness.ring.engine().backend.submit_faults();
+    assert!(!readiness_set(&mut harness), "nothing has set it");
+
+    faults.fail_until_cleared(device());
+    let id = harness.write(GIVEN, 0, b"queued", 1, 7);
+    assert!(
+        readiness_set(&mut harness),
+        "the failed doorbell told the consumer"
+    );
+    assert!(!readiness_set(&mut harness), "once");
+    let error = harness.ring.pop().expect_err("the doorbell fails again");
+    assert!(is_the_armed_failure(cause_of(&error)));
+
+    faults.clear();
+    assert!(
+        harness.ring.pop().expect("the doorbell works").is_none(),
+        "the pop's own retry issued it, and nothing has completed yet"
+    );
+    let Entry::Op(done) = pumped_next(&mut harness) else {
+        panic!("the write's completion");
+    };
+    assert_eq!(done.id, id);
+    harness.finish();
+}
+
+#[test]
+fn a_ring_that_cannot_be_read_sets_the_readiness_signal_and_the_pop_reports_it_once() {
+    // DI-7+.2. Both of a wake's drains fail, and the first fault is the one kept.
+    let temp = temp(&[0; 64]);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
+    let faults = harness.ring.engine().backend.call_faults();
+    faults.fail_until_cleared(Call::Pop, device());
+
+    harness.write(GIVEN, 0, b"queued", 1, 7);
+    std::thread::sleep(SETTLED);
+    assert!(
+        readiness_set(&mut harness),
+        "the drain that could not read told the consumer"
+    );
+    let error = harness.ring.pop().expect_err("nothing to return, and why");
+    assert_eq!(
+        fault_of(&error).code.and_then(crate::ErrorCode::win32),
+        Some(1117)
+    );
+    assert!(
+        harness.ring.pop().expect("nothing more to say").is_none(),
+        "reported once"
+    );
+
+    // A pool instance has no next wake to read it: the ring's event is an edge, taken by the wake
+    // that could not read, and the completion it left keeps the queue from going from empty to
+    // non-empty again. The consumer's remedy is to drop the instance, which is what ends this test.
+    faults.clear();
+}
+
+#[test]
+fn a_pumped_instance_whose_ring_could_not_be_read_reads_it_at_the_next_pump() {
+    // DI-7+.2. A pump drains before it waits, so what a failed read left is there for the next.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let faults = harness.ring.engine().backend.call_faults();
+    let id = harness.write(GIVEN, 0, b"queued", 1, 7);
+    std::thread::sleep(SETTLED);
+    faults.fail_next(Call::Pop, 1, device());
+
+    assert!(
+        harness.ring.pump(Some(BOUND)).expect("pump"),
+        "told, so the consumer pops"
+    );
+    let error = harness
+        .ring
+        .pop()
+        .expect_err("the unreadable ring, reported");
+    assert_eq!(
+        fault_of(&error).code.and_then(crate::ErrorCode::win32),
+        Some(1117)
+    );
+    let Entry::Op(done) = pumped_next(&mut harness) else {
+        panic!("the write's completion");
+    };
+    assert_eq!(done.id, id, "read once the ring could be");
+    harness.finish();
+}
+#[test]
+fn a_fault_the_next_read_got_past_is_not_reported_to_the_consumer() {
+    // DI-7+.2. The first of a wake's drains fails and the second, after the wait is armed again,
+    // reads: the fault is stale by the time the consumer pops, which returns the entry and then
+    // nothing, not the fault.
+    let temp = temp(&[0; 64]);
+    let mut harness = Harness::new(instance(vec![given(GIVEN, &temp)], Vec::new()));
+    let faults = harness.ring.engine().backend.call_faults();
+    faults.fail_next(Call::Pop, 1, device());
+
+    let id = harness.write(GIVEN, 0, b"queued", 1, 7);
+    std::thread::sleep(SETTLED);
+    let done = harness.next();
+    assert_eq!(done.id, id);
+    assert!(
+        harness.ring.pop().expect("no stale report").is_none(),
+        "nothing left, and no fault"
+    );
     harness.finish();
 }

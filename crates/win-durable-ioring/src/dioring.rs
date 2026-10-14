@@ -528,14 +528,20 @@ where
     where
         B: IoBuf,
     {
-        self.engine().write(
-            file,
-            offset,
-            SubmissionData::Owned(buffer),
-            tag.epoch(),
-            context,
-            options,
-        )
+        let (pushed, attention) = {
+            let mut engine = self.engine();
+            let pushed = engine.write(
+                file,
+                offset,
+                SubmissionData::Owned(buffer),
+                tag.epoch(),
+                context,
+                options,
+            );
+            (pushed, engine.take_attention())
+        };
+        self.attend(attention);
+        pushed
     }
 
     fn read_with(
@@ -549,23 +555,31 @@ where
     where
         B: IoBufMut,
     {
-        let mut engine = self.engine();
-        // Here, where `B: IoBufMut` holds, the backend is given the push an owned read needs
-        // (DI-D-17).
-        engine.backend.enable_owned_reads();
-        engine.read(
-            file,
-            offset,
-            SubmissionData::Owned(buffer),
-            context,
-            options,
-        )
+        let (pushed, attention) = {
+            let mut engine = self.engine();
+            // Here, where `B: IoBufMut` holds, the backend is given the push an owned read needs
+            // (DI-D-17).
+            engine.backend.enable_owned_reads();
+            let pushed = engine.read(
+                file,
+                offset,
+                SubmissionData::Owned(buffer),
+                context,
+                options,
+            );
+            (pushed, engine.take_attention())
+        };
+        self.attend(attention);
+        pushed
     }
 
     fn pop(&mut self) -> io::Result<Option<EntryOf<Self>>> {
-        // A push submits as it goes, so what is left to submit here is what a failed submission
-        // left queued. It is reported only when there is no entry to return instead: an entry is
-        // progress, and the submission is tried again at the next pop.
+        // A push is submitted as it is made, by the engine's doorbell, so what is left to submit
+        // here is what a failed one left queued, and the driver told the consumer so (DI-7+.2). It
+        // is reported only when there is no entry to return instead: an entry is progress, and
+        // the submission is tried again at the next pop. A fault the backend gave when its
+        // completions were read is reported the same way, once: the consumer's remedy for either
+        // that stays is to drop the instance.
         //
         // A submission of the core's own the backend refused needs nothing here: its cause is
         // cleared by a submit or a drain, and either way completions are still to come, whose
@@ -576,10 +590,13 @@ where
         let popped = {
             let mut engine = self.engine();
             let submitted = engine.backend.submit();
-            match (engine.core.pop(), submitted) {
-                (Some(entry), _) => Ok(Some(entry)),
-                (None, Err(cause)) => Err(io::Error::other(cause)),
-                (None, Ok(())) => Ok(None),
+            match engine.core.pop() {
+                Some(entry) => Ok(Some(entry)),
+                None => match (engine.take_fault(), submitted) {
+                    (Some(fault), _) => Err(io::Error::other(fault)),
+                    (None, Err(cause)) => Err(io::Error::other(cause)),
+                    (None, Ok(())) => Ok(None),
+                },
             }
         };
         // What a drain asked of the provider waits for a consumer call, and a pop is one (DI-D-44).
@@ -851,6 +868,15 @@ where
                      completion event; a signalled one offers completion_signal",
                 ))
             })
+    }
+
+    /// A consumer's push whose doorbell failed: set the readiness event, once, so the consumer pops,
+    /// which rings it again and reports a cause that stays (DI-7+.2). With the engine's lock
+    /// released.
+    fn attend(&self, attention: bool) {
+        if attention {
+            self.hub.signal();
+        }
     }
 
     /// After a consumer call, with the engine's lock released: set the readiness event if the call

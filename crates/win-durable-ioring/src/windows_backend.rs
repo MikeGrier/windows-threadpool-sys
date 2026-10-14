@@ -5,9 +5,11 @@
 //! **Threadless.** The backend has no threads of its own. Its notification is the ring's
 //! completion event; who waits on it and drains is the driver's delivery (DI-D-52).
 //!
-//! **Issued at push.** The ring submits whatever a batch queued when the batch ends (its D-5), so
-//! each push is issued at once; [`IoBackend::submit`] reissues what a failed submission left
-//! queued, and reports why it failed.
+//! **Queued at push, issued at the doorbell.** A push leaves its entry in the ring's submission
+//! queue (a batch left queued, the ring crate's D-90, not submitted as it drops, its D-5), and
+//! [`IoBackend::submit`] issues what is queued and reports why it could not: the engine rings it
+//! once after the pushes it makes, so a batch of pushes is one submission and a failure to submit
+//! is seen where the doorbell is rung (DI-7+.2).
 //!
 //! **Targets.** A target given at construction is registered with the ring, which holds it for the
 //! ring's life (`windows-ioring-sys` D-81) and addresses it by index; one attached later is
@@ -238,8 +240,8 @@ pub struct WindowsBackend<B: IoBuf, R: IoBufMut = Vec<u8>> {
     owned_read: Option<OwnedRead<B>>,
     /// The ring's completion event, duplicated for each notification handed out.
     event: OwnedHandle,
-    /// A submission failed, so what it would have issued is still queued.
-    unsubmitted: bool,
+    /// Something is queued that no submit has issued: pushed since the last one that succeeded.
+    queued: bool,
     /// Failures armed by the fault seam: the next commit of the target to complete reports the
     /// Win32 error instead of what the kernel did.
     #[cfg(feature = "fault-injection")]
@@ -360,7 +362,7 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
             targets: slots,
             owned_read: None,
             event,
-            unsubmitted: false,
+            queued: false,
             #[cfg(feature = "fault-injection")]
             injected: Vec::new(),
         })
@@ -401,6 +403,16 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
     #[cfg(test)]
     pub(crate) fn submit_faults(&self) -> windows_ioring_sys::sys::SubmitFaultControl {
         let (faults, control) = windows_ioring_sys::sys::submit_faults();
+        let _ = windows_ioring_sys::sys::register(&self.ring, Box::new(faults));
+        control
+    }
+
+    /// Fail any call of this backend's ring's the ring crate's seam carries, on demand (DI-7+.2):
+    /// a pop that fails, for one. A ring has one responder, so this is instead of
+    /// [`submit_faults`](Self::submit_faults) and not beside it.
+    #[cfg(test)]
+    pub(crate) fn call_faults(&self) -> windows_ioring_sys::sys::CallFaultControl {
+        let (faults, control) = windows_ioring_sys::sys::call_faults();
         let _ = windows_ioring_sys::sys::register(&self.ring, Box::new(faults));
         control
     }
@@ -793,12 +805,16 @@ impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
         };
         match pushed {
             Ok(_) => {
-                // A failed submission leaves the entry queued; `submit` reissues it.
-                self.unsubmitted |= batch.submit().is_err();
+                // Queued, not submitted: the doorbell is `submit`'s, rung by the engine, so a
+                // failure of it is seen by the caller that rings it and not lost in a drop.
+                batch.leave_queued();
+                self.queued = true;
                 Ok(())
             }
             Err(refused) => {
-                drop(batch);
+                // Nothing of this push is queued, but an earlier one may be, which a drop would
+                // submit and not report on.
+                batch.leave_queued();
                 let PushRefused { error, payload, .. } = refused;
                 Err(Refused {
                     cause: refusal_cause(error),
@@ -809,12 +825,12 @@ impl<B: IoBuf, R: IoBufMut> IoBackend for WindowsBackend<B, R> {
     }
 
     fn submit(&mut self) -> Result<(), RefusalCause> {
-        if !self.unsubmitted {
+        if !self.queued {
             return Ok(());
         }
         match Batch::new(&mut self.ring).submit() {
             Ok(_) => {
-                self.unsubmitted = false;
+                self.queued = false;
                 Ok(())
             }
             Err(error) => Err(refusal_cause(error)),

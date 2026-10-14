@@ -30,7 +30,7 @@ use durable_ioring::{DurabilityRequest, Entry, EpochState};
 const QUIET: Duration = Duration::from_millis(150);
 
 /// A pumped instance over `files`.
-fn pumped(files: Vec<crate::dioring::TargetSetup>) -> Harness {
+pub(super) fn pumped(files: Vec<crate::dioring::TargetSetup>) -> Harness {
     pumped_with(Setup {
         delivery: DeliveryMode::Pumped,
         ..setup(files, Vec::new(), None)

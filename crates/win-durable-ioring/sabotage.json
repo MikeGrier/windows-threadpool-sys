@@ -427,31 +427,31 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "A failed submission is reported by the pop that finds no entry to return instead, with its cause, so the consumer is not left polling for work that was never issued. Reached through the ring crate's safe submit-fault responder registered for the instance's ring (its D-85 and M37.1), which fails the submits pool threads make as well as the consumer's. Caught by the test that pops while submits fail and recovers the cause from the error.",
-      "find": ["                (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
-      "replace": ["                (None, Err(_)) => Ok(None),\n"]
+      "find": ["                    (None, Err(cause)) => Err(io::Error::other(cause)),\n"],
+      "replace": ["                    (None, Err(_)) => Ok(None),\n"]
     },
     {
       "name": "DI-7.1: a pop's report wins over an entry",
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "An entry is progress, and a pop that has one returns it even when the submit it also made failed: the failure is reported only when there is nothing to return instead. Reporting it first drops the entry the pop had already taken, so the consumer loses a completion. Caught by the drain test, which needs the first read's entry to arrive while submits fail.",
-      "find": ["                (Some(entry), _) => Ok(Some(entry)),"],
-      "replace": ["                (Some(_), Err(cause)) => Err(io::Error::other(cause)),", "                (Some(entry), Ok(())) => Ok(Some(entry)),"]
+      "find": ["                Some(entry) => Ok(Some(entry)),"],
+      "replace": ["                Some(_) if submitted.is_err() => Err(io::Error::other(submitted.expect_err(\"checked\"))),", "                Some(entry) => Ok(Some(entry)),"]
     },
     {
-      "name": "DI-7.1: a failed submit after an accepted push is not remembered",
+      "name": "DI-7+.2: a push does not remember that it queued",
       "file": "src/windows_backend.rs",
       "expect": "caught",
-      "why": "A push whose own submit failed leaves its entry queued in the ring, and the backend owes a submit. Forgotten, the owed submit is never asked for, and the entry stays queued until some other submit happens to run it. Caught at once by the backend test that expects the owed submit to fail.",
-      "find": ["                self.unsubmitted |= batch.submit().is_err();"],
-      "replace": ["                let _ = batch.submit();"]
+      "why": "A push leaves its entry queued in the ring and the backend owes a submit. Forgotten, the doorbell is never asked of the ring, and the entry stays queued: nothing is ever issued. Caught at once by every backend test that pushes and submits.",
+      "find": ["                self.queued = true;"],
+      "replace": [""]
     },
     {
       "name": "DI-7.1: a successful reissue leaves the submit owed",
       "file": "src/windows_backend.rs",
       "expect": "caught",
       "why": "Once a reissue succeeds nothing is owed, and the ring is not asked again. Left owed, every later submit asks the ring for nothing, and fails when the ring's submits fail.",
-      "find": ["                self.unsubmitted = false;"],
+      "find": ["                self.queued = false;"],
       "replace": [""]
     },
     {
@@ -460,7 +460,7 @@
       "expect": "caught",
       "why": "A reissue that fails leaves the entries queued, so the submit is still owed. Forgotten, the next submit returns success without asking the ring, and the work is never issued: the consumer waits for a completion that cannot come.",
       "find": ["            Err(error) => Err(refusal_cause(error)),"],
-      "replace": ["            Err(error) => {", "                self.unsubmitted = false;", "                Err(refusal_cause(error))", "            }"]
+      "replace": ["            Err(error) => {", "                self.queued = false;", "                Err(refusal_cause(error))", "            }"]
     },
     {
       "name": "DI-7.1: a failed reissue is reported as a success",
@@ -643,8 +643,8 @@
       "file": "src/dioring.rs",
       "expect": "caught",
       "why": "The pool drains the instance, and a consumer that pumps it has misread how it was built; the refusal says so by its kind.",
-      "find": ["                    io::ErrorKind::Unsupported,"],
-      "replace": ["                    io::ErrorKind::Other,"]
+      "find": ["            return Err(io::Error::new(\n                io::ErrorKind::Unsupported,\n                \"the instance was built with pool delivery"],
+      "replace": ["            return Err(io::Error::new(\n                io::ErrorKind::Other,\n                \"the instance was built with pool delivery"]
     },
     {
       "name": "DI-7.3: a pump does not settle what it drained",
@@ -703,6 +703,37 @@
       "replace": ["    pub fn new(handle: OwnedHandle) -> Self {"]
     },
     {
+      "name": "DI-7+.2: a consumer's push whose doorbell failed does not wake it",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A push whose doorbell failed leaves work queued with nothing in flight, so no completion will raise the readiness signal: the driver raises it once, and the consumer's pop rings the doorbell again and reports the cause.",
+      "find": ["        if attention {\n            self.hub.signal();\n        }\n"],
+      "replace": ["        let _ = attention;\n"]
+    },
+    {
+      "name": "DI-7+.2: a pop does not report a fault the ring could not be read with",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A ring that cannot be read is told to the consumer by the pop that finds nothing to return, so the consumer is not left waiting for completions that cannot be read.",
+      "find": ["                    (Some(fault), _) => Err(io::Error::other(fault)),\n"],
+      "replace": ["                    (Some(_), _) => Ok(None),\n"]
+    },
+    {
+      "name": "DI-7+.2: a push submits as its batch drops",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A push only queues; the doorbell is the engine's to ring, once for a batch, and a failure of it is seen by the one who rang it. A batch dropped submits, and reports nothing.",
+      "find": ["                batch.leave_queued();\n                self.queued = true;\n"],
+      "replace": ["                drop(batch);\n                self.queued = true;\n"]
+    },
+    {
+      "name": "DI-7+.2: a refused push submits what an earlier push queued",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A refused push queued nothing, but its batch dropped submits whatever an earlier push left, in a call that cannot report on it.",
+      "find": ["                batch.leave_queued();\n                let PushRefused"],
+      "replace": ["                drop(batch);\n                let PushRefused"]
+    },    {
       "name": "DI-9.8.1: a pump's failed wait is reported as success",
       "file": "src/dioring.rs",
       "expect": "caught",
