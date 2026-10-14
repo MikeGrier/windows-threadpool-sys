@@ -6530,3 +6530,22 @@ as a failed `Batch::submit` leaves them. Tested in
 [submission_lifecycle.rs](tests/submission_lifecycle.rs): a read left queued does not complete, polled
 with `try_pop` since `pop_within`'s own wait is a submit, until a later submit issues it. One sabotage
 entry, caught: without the mark the drop submits.
+
+## Moved 2026-10-14 17:17:20 -04:00 -- M41.1: a ring typed by whether it can hold nothing for an operation
+
+### <a id="m411"></a>M41.1 -- `IoRing<T, X, K>` with `K` `Open` or `Owned`, and `IoRing::into_owned`: a ring that cannot have an operation in flight it holds nothing for. *(completed 2026-10-14 17:17:20 -04:00)*
+
+Decision [D-91](DESIGN-NOTES.md#d-91). A registration, the `_raw` flush and cancel and `push_raw` queue an
+operation the ring holds nothing for, so a pop can return a completion with no entry -- legitimate for a
+caller who chose it, and a branch every other caller wrote and could not reach. A ring now has a kind, and
+an `Owned` one has no call that queues such an operation and pops what it held without the case of nothing.
+
+- **Built**: [kind.rs](src/ring/kind.rs) (`Open`, `Owned`, the sealed `RingKind` with its `Popped` type,
+  and `AllowsRaw`); the kind parameter on `IoRing` and `Batch`, defaulted so `IoRing<T, X>` is still the
+  open ring; `where K: AllowsRaw` on the five `Batch` methods and `push_raw`; `into_owned`, which refuses
+  while `outstanding()` exceeds `held()` and hands the ring back; `CompletionWake::new` and the responder
+  registrations take either kind.
+- **Tested** in [owned_ring.rs](tests/owned_ring.rs) and by `compile_fail` doctests on `AllowsRaw` whose
+  pinned codes were checked under `RUSTC_BOOTSTRAP=1`; the sabotage entries are caught, and the panic an owned
+  ring makes for a completion it held nothing for is a declared blind spot.
+- **Borrow-surface audit**: `Batch::new` and `CompletionWake::new` re-asked, unchanged.

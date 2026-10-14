@@ -176,6 +176,13 @@ Opened 2026-10-13 from durable-ioring's `DI-7+.2`.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.2` (the engine rings the doorbell; the Windows backend's push only queues). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
+## M41 -- A ring typed by whether it can hold nothing for an operation
+
+Opened 2026-10-14 from durable-ioring's `DI-7+.3`.
+
+- [x] **M41.1** -- `IoRing<T, X, K>` with `K` `Open` or `Owned`, and `IoRing::into_owned`: a ring that cannot have an operation in flight it holds nothing for. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m411)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.3` (the Windows backend's ring is sealed, and its unreachable branch is gone). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.
