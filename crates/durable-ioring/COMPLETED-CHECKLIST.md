@@ -2854,3 +2854,8 @@ From the second round of the review of [PR 126](https://github.com/MikeGrier/win
   panics if an operation is queued or a completion is waiting, since replacing the buffers would
   invalidate a region it names, a caller's programming error ([DI-D-59](DESIGN-NOTES.md#di-d-59)). Three
   sabotage entries.
+## Moved 2026-10-14 19:26:34 -04:00 -- DI-9.8.2: the portable job's first CI run
+
+### <a id="di-982"></a>DI-9.8.2 -- The portable CI job's first run is read: the crate's tests run on Linux and macOS. *(completed 2026-10-14 19:26:34 -04:00)*
+
+Draft PR 126 gave the branch a pull request, which is what [ci.yml](../../.github/workflows/ci.yml)'s trigger waits for. Its `portable` job builds, tests and lints `wtf-string`, `io-buffers` and `durable-ioring` on `ubuntu-latest` and `macos-latest`, and both runs passed; the checks are listed on the pull request as `wtf-string (non-Windows)`, a name the job shares with its first crate. Nothing in the crate needed to change for a non-Windows host.

@@ -128,11 +128,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.8.1** -- Each declared blind spot is covered, or records what would cover it. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-981)
 
-- [ ] **DI-9.8.2** -- **MINE: read the portable job's first CI run.** The crate's tests have not run
-  on a non-Windows host. The branch was pushed at the end of `DI-M9`, but [ci.yml](../../.github/workflows/ci.yml)
-  runs on a pull request or a push to `main`, and the branch has neither, so this is blocked on a pull
-  request, which is the engineer's call: it shows 60-odd commits, two of them breaking changes to published
-  crates, to everyone watching the repository.
+- [x] **DI-9.8.2** -- The portable CI job's first run is read: the crate's tests run on Linux and macOS. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-982)
 
 ## DI-M7+ -- Delivery follow-ups
 
