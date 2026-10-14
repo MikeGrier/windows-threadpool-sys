@@ -168,6 +168,14 @@ refuse.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
+## M40 -- A batch left queued, for a caller that owns the doorbell
+
+Opened 2026-10-13 from durable-ioring's `DI-7+.2`.
+
+- [x] **M40.1** -- `Batch::leave_queued`: close a batch without submitting what it queued. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#m401)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.2` (the engine rings the doorbell; the Windows backend's push only queues). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 ## M31+ -- ETW for the ring's own lock (withdrawn)
 
 Opened and withdrawn 2026-10-06 in the durable-ioring design session.

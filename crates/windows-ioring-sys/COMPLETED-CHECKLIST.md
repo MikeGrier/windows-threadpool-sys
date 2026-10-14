@@ -6517,3 +6517,16 @@ still queued runs down, runs down within a bound, and drops cleanly, all three f
 change. A first attempt, which reaped before the quiescence check, broke four unit tests over the
 null-handle ring and was moved. One sabotage is added, and the existing `M26.8` entry re-anchored,
 its pattern now occurring twice.
+
+## Moved 2026-10-13 23:22:30 -04:00 -- M40.1: a batch left queued
+
+### <a id="m401"></a>M40.1 -- `Batch::leave_queued`: close a batch without submitting what it queued. *(completed 2026-10-13 23:22:30 -04:00)*
+
+Decision [D-90](DESIGN-NOTES.md#d-90). A batch submits on drop ([D-5](DESIGN-NOTES.md#d-5)), which reports
+nothing and submits once per batch; durable-ioring's threadless backend wants to queue what it is
+pushed, ring the doorbell once for a batch, and see a failure of it. `leave_queued` marks the batch as
+already submitted so the drop does not, leaving the entries queued with their buffers held by the ring,
+as a failed `Batch::submit` leaves them. Tested in
+[submission_lifecycle.rs](tests/submission_lifecycle.rs): a read left queued does not complete, polled
+with `try_pop` since `pop_within`'s own wait is a submit, until a later submit issues it. One sabotage
+entry, caught: without the mark the drop submits.
