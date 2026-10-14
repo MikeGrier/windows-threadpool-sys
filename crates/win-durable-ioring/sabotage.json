@@ -3,7 +3,7 @@
   "testArgs": ["-p", "win-durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. README.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for win-durable-ioring, the Windows driver (DI-8.2); the portable core's are in ../durable-ioring/sabotage.json. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait failing, or ending as abandoned (windows_backend/wait.rs), is absent as well, and so is Dioring::pump reporting such a wait's error: the first needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and the second a mutex, and making either needs unsafe, which this crate forbids. win-sync-sys' tests reach both in the function it calls, and durable-ioring's pump/tests.rs reaches a failing wait's report over the in-memory backend. Each has a survives entry named DI-7.3: blind spot. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's, and that a signalled instance's callback environment names the pool its callback runs on is a declared blind spot, as the pool's is.",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. What would cover these creation failures, here and below, is a fault seam in win-sync-sys and windows-threadpool-sys of the kind the ring crate has (its kernel-seam), which neither has: the failure is the process running out of handles or memory, which a test cannot cause without breaking its own harness. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a push refused for a full submission queue, since each push submits at once (the ring crate's D-5); a pop that fails, and a completion carrying no record; a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait ending as abandoned (windows_backend/wait.rs) is absent: only a mutex is abandoned, and making one needs unsafe, which this crate forbids; what would cover it is a safe Mutex in win-sync-sys (its WS-1+.3). Its survives entry is named DI-7.3: blind spot. The notification's wait failing, and Dioring::pump reporting that error, are covered, by a duplicate of an event with no SYNCHRONIZE access, which win-sync-sys makes without unsafe. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's. Which pool a delivery's callback runs on is covered, for the pool's delivery and the signalled one's, by holding the named pool's only thread (held_pool.rs).",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -326,12 +326,28 @@
       "replace": ["            if false {\n"]
     },
     {
-      "name": "DECLARED BLIND SPOT: the backend's wake ignores its pool",
+      "name": "DI-9.8.1: the backend's wake ignores its pool",
       "file": "src/windows_backend.rs",
-      "expect": "survives",
-      "why": "DI-D-52: an optional callback environment binds pool delivery to a pool, a NUMA node's for one; dropping it puts delivery on the default pool, which no test of behaviour can see: either pool runs the drain, and a single-thread pool's repeated thread proves nothing the default pool might not also do. The callback-environment test proves only that delivery works when one is given.",
+      "expect": "caught",
+      "why": "DI-D-52: an optional callback environment binds pool delivery to a pool, a NUMA node's for one; dropping it puts delivery on the default pool. Which pool ran a callback is not visible from the callback, so this was a declared blind spot until the tests held the named pool's only thread: a delivery bound to it must wait, and one on the default pool does not.",
       "find": ["        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)\n"],
       "replace": ["        let _ = env;\n        windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, None)\n"]
+    },
+    {
+      "name": "DI-9.8.1: pool delivery does not pass its environment to the wake",
+      "file": "src/windows_backend/pool.rs",
+      "expect": "caught",
+      "why": "The pool delivery's own path to the same binding: only the test of pool delivery sees it, because the signalled delivery reaches the wake by its own call.",
+      "find": ["backend.wake(on_wake, env);"],
+      "replace": ["backend.wake(on_wake, { let _ = env; None });"]
+    },
+    {
+      "name": "DI-9.8.1: signalled delivery does not pass its environment to the wake",
+      "file": "src/windows_backend/signalled.rs",
+      "expect": "caught",
+      "why": "Signalled delivery's own path to the binding: the signal is set from the wake's callback, so only the test that holds the named pool's thread sees which pool ran it.",
+      "find": ["engine.backend.wake(on_wake, env)"],
+      "replace": ["engine.backend.wake(on_wake, { let _ = env; None })"]
     },
     {
       "name": "DI-3.10.3.5.6.2.1: the Windows backend's check does not ask the registration",
@@ -599,10 +615,10 @@
       "replace": ["            WaitOutcome::TimedOut => Ok(true),"]
     },
     {
-      "name": "DI-7.3: blind spot: a wait on the ring's event that fails is taken for a timeout",
+      "name": "DI-9.8.1: a wait on the ring's event that fails is taken for a timeout",
       "file": "src/windows_backend/wait.rs",
-      "expect": "survives",
-      "why": "Declared, not caught: no test here can make the wait fail. It needs a handle without SYNCHRONIZE access, which CreateFile never gives a file, and making one otherwise needs unsafe, which this crate forbids. win-sync-sys' tests reach the failing wait in the function this calls.",
+      "expect": "caught",
+      "why": "A notification that cannot be waited on stops an instance delivering, so the failure is the wait's error and not a timeout the caller retries for ever. This was a declared blind spot (DI-7.3) until win-sync-sys' duplicate_handle_with_access made a handle without SYNCHRONIZE access without unsafe.",
       "find": ["        match wait_for_single_object(&self.0, timeout)? {"],
       "replace": ["        match wait_for_single_object(&self.0, timeout).unwrap_or(WaitOutcome::TimedOut) {"]
     },
@@ -618,7 +634,7 @@
       "name": "DI-7.3: blind spot: an abandoned ending of the ring's event wait is taken for a timeout",
       "file": "src/windows_backend/wait.rs",
       "expect": "survives",
-      "why": "Declared, not caught: only a mutex is abandoned, an event never is, and a test would need a mutex, which needs unsafe to make. win-sync-sys' tests reach the abandoned ending in the function this calls.",
+      "why": "Declared, not caught: only a mutex is abandoned, an event never is, and a test would need a mutex, which needs unsafe to make. What would cover it is a safe Mutex in win-sync-sys (its WS-1+.3), whose wait can end abandoned: a thread that ends holding one, then this wait on it. win-sync-sys' tests reach the abandoned ending in the function this calls.",
       "find": ["            WaitOutcome::TimedOut => Ok(false),"],
       "replace": ["            WaitOutcome::TimedOut | WaitOutcome::Abandoned => Ok(false),"]
     },
@@ -639,10 +655,10 @@
       "replace": ["        let _ = pumped.ready;"]
     },
     {
-      "name": "DI-7.3: blind spot: a pump's failed wait is reported as success",
+      "name": "DI-9.8.1: a pump's failed wait is reported as success",
       "file": "src/dioring.rs",
-      "expect": "survives",
-      "why": "Declared, not caught: no test through the driver can make the Windows notification's wait fail. The delivery's reporting of a failed wait is caught over the in-memory backend, in pump/tests.rs.",
+      "expect": "caught",
+      "why": "The pump says why the wait could not be made. This was a declared blind spot (DI-7.3) until the test gave an instance a notification that cannot be waited on, a duplicate of an event that may only set and reset. The delivery's reporting of a failed wait is also caught over the in-memory backend, in pump/tests.rs.",
       "find": ["        pumped.waited.map(|_| pumped.ready)"],
       "replace": ["        Ok(pumped.ready)"]
     },

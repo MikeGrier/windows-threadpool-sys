@@ -11,6 +11,8 @@ mod dioring;
 mod error_code;
 #[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod held_pool;
 pub mod readiness;
 pub mod windows_backend;
 

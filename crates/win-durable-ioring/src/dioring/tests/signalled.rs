@@ -18,6 +18,7 @@ use super::pumped::{next, readiness_set};
 use super::pushes::{BOUND, GIVEN, Harness, Ring, given, temp};
 use super::setup;
 use crate::dioring::{DeliveryMode, Setup};
+use crate::held_pool::{Held, one_thread_pool};
 use durable_ioring::DurableRing;
 use durable_ioring::Entry;
 
@@ -195,8 +196,8 @@ fn only_a_signalled_instance_has_a_signal_and_each_call_is_the_same_event() {
 
 #[test]
 fn a_signalled_instance_delivers_on_the_pool_its_environment_names() {
-    // That the pool named is the one the callback runs on is a declared blind spot, as pool
-    // delivery's is; this pins that an instance built with an environment delivers at all.
+    // This pins that an instance built with an environment delivers at all; that the pool named is
+    // the one the callback runs on is pinned by the test below, which holds its only thread.
     use windows_threadpool_sys::callback_env::CallbackEnviron;
     use windows_threadpool_sys::pool::ThreadpoolPool;
 
@@ -220,6 +221,40 @@ fn a_signalled_instance_delivers_on_the_pool_its_environment_names() {
     );
     assert!(matches!(next(&mut harness), Entry::Op(_)));
     // The instance ends first, then `env`, then the pool it names -- the reverse of declaration.
+    harness.finish();
+}
+
+#[test]
+fn a_signalled_instance_waits_for_the_thread_of_the_pool_its_environment_names() {
+    // Which pool ran the callback is not visible from the callback, so this holds the named pool's
+    // only thread: the signal must wait, and one set from the default pool would not.
+    use windows_threadpool_sys::callback_env::CallbackEnviron;
+
+    let threads = one_thread_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&threads);
+    let file = temp(&[0; 16]);
+    let ring = Ring::new(Setup {
+        delivery: DeliveryMode::Signalled(Some(&mut env)),
+        ..setup(vec![given(GIVEN, &file)], Vec::new(), None)
+    })
+    .expect("build")
+    .0;
+    let mut harness = Harness::new(ring);
+    let signal = harness.ring.completion_signal().expect("the signal");
+    settle(&signal);
+    let held = Held::start(&mut env);
+    harness.write(GIVEN, 0, b"held", 1, 1);
+    assert!(
+        !set_within(&signal, QUIET),
+        "the named pool's only thread is held, so the signal was not set"
+    );
+    held.release();
+    assert!(
+        set_within(&signal, BOUND),
+        "released, the named pool's callback set the signal"
+    );
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
     harness.finish();
 }
 

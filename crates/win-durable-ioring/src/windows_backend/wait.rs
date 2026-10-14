@@ -59,9 +59,9 @@ impl Waitable for CompletionEvent {
             WaitOutcome::TimedOut => Ok(false),
             // An event is never abandoned, which only a mutex can be. Not reached by a test here:
             // this takes any `OwnedHandle`, but making a mutex needs `unsafe`, which this crate
-            // forbids, and the wait failing needs a handle without `SYNCHRONIZE` access, which
-            // `CreateFile` never gives a file. `win-sync-sys`' tests reach both in the function this
-            // calls. The ending is reported, not taken for a signal.
+            // forbids. `win-sync-sys`' tests reach the ending in the function this calls. (A wait
+            // failing is reached, with a duplicate that has no `SYNCHRONIZE` access.) The ending
+            // is reported, not taken for a signal.
             other => Err(io::Error::other(format!(
                 "the notification's wait ended as {other:?}"
             ))),

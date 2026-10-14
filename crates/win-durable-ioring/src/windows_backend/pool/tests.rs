@@ -13,6 +13,7 @@ use windows_threadpool_sys::pool::ThreadpoolPool;
 
 use super::PoolDelivery;
 use crate::dioring::tests::TempFile;
+use crate::held_pool::{Held, one_thread_pool};
 use crate::windows_backend::{Win32FileTarget, WindowsBackend, WindowsBackendSetup};
 use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
@@ -25,6 +26,8 @@ use durable_ioring::{DurabilityRequest, Entry, Epoch, IoTargetKey, OpKind, Write
 const KEY: IoTargetKey = IoTargetKey(1);
 /// Generous: each wait is for real completions and a pool callback.
 const BOUND: Duration = Duration::from_secs(5);
+/// How long a test looks for a delivery that must not come.
+const QUIET: Duration = Duration::from_millis(100);
 
 type V = crate::WindowsIds<u64>;
 type Eng = Engine<u64, WindowsBackend<Vec<u8>>, u32, InterruptStamps>;
@@ -180,6 +183,31 @@ fn a_callback_environment_binds_delivery_to_its_pool() {
     collect(&pool, &ready, &mut oracle, durable);
     // The delivery goes first, then `env`, then the pool it names -- the reverse of declaration.
     drop(pool);
+    oracle.finish().expect("every operation completed");
+}
+
+#[test]
+fn delivery_waits_for_the_thread_of_the_pool_its_environment_names() {
+    // Which pool ran a drain is not visible from the drain, so this holds the named pool's only
+    // thread: a delivery bound to it must wait, and one on the default pool would not.
+    let file = TempFile::new("pool-env-held");
+    let threads = one_thread_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&threads);
+    let (pool, ready) = delivered(engine(&file), Some(&mut env));
+    // Setup signals once as it attaches; take what it has told before the thread is held.
+    while ready.recv_timeout(QUIET).is_ok() {}
+    let held = Held::start(&mut env);
+    let mut oracle = ConformanceOracle::new();
+    write(&mut pool.engine(), &mut oracle, 1, b"held");
+    assert!(
+        ready.recv_timeout(QUIET).is_err(),
+        "the named pool's only thread is held, so nothing was delivered"
+    );
+    held.release();
+    collect(&pool, &ready, &mut oracle, |entry| {
+        matches!(entry, Entry::Op(_))
+    });
     oracle.finish().expect("every operation completed");
 }
 

@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use win_sync_sys::{Event, ResetMode};
+use win_sync_sys::{Access, Event, ResetMode, duplicate_handle_with_access};
 
 use super::CompletionEvent;
 use durable_ioring::Waitable;
@@ -49,6 +49,26 @@ fn a_zero_timeout_asks_and_does_not_wait() {
     assert!(
         handle.wait(Some(Duration::ZERO)).expect("a poll"),
         "no timing window decides this"
+    );
+}
+
+#[test]
+fn a_wait_that_fails_is_reported_and_not_taken_for_a_timeout() {
+    // A handle without `SYNCHRONIZE` access cannot be waited on, and `win-sync-sys` makes one
+    // without `unsafe`: a duplicate that may only set and reset.
+    let event = Event::new(ResetMode::Auto, true).expect("an event");
+    let blind = duplicate_handle_with_access(&event, Access::EVENT_MODIFY_STATE)
+        .expect("a duplicate that cannot be waited on");
+    let mut handle = CompletionEvent::new(blind);
+
+    let error = handle
+        .wait(Some(Duration::ZERO))
+        .expect_err("the wait cannot be made, so it is not a timeout");
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{error}"
     );
 }
 

@@ -12,12 +12,17 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use win_sync_sys::{WaitOutcome, wait_for_single_object};
+use win_sync_sys::{
+    Access, Event, ResetMode, WaitOutcome, duplicate_handle_with_access, wait_for_single_object,
+};
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, RingEntry, given, temp};
 use super::{keeper, setup};
+use crate::dioring::delivery::Delivery;
 use crate::dioring::{DeliveryMode, Setup};
+use crate::windows_backend::CompletionEvent;
 use durable_ioring::DurableRing;
+use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::{DurabilityRequest, Entry, EpochState};
 
 /// How long a test looks for an entry that must not arrive.
@@ -104,6 +109,54 @@ fn a_pumped_instance_delivers_nothing_until_it_is_pumped() {
         readiness_set(&mut harness),
         "the pump that drained it set the signal"
     );
+    harness.finish();
+}
+
+#[test]
+fn a_pump_reports_the_error_of_a_wait_that_fails_and_drains_all_the_same() {
+    // The ring's own event always allows a wait, so the instance is given a notification that does
+    // not: a duplicate of an event that may only set and reset, which `win-sync-sys` makes without
+    // `unsafe`. The drain is made all the same, as the pump's documentation says.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let engine = harness.ring.delivery.take().expect("live").into_engine();
+    let event = Event::new(ResetMode::Auto, false).expect("an event");
+    let blind = CompletionEvent::new(
+        duplicate_handle_with_access(&event, Access::EVENT_MODIFY_STATE)
+            .expect("a duplicate that cannot be waited on"),
+    );
+    harness.ring.delivery = Some(Delivery::Pumped(PumpedDelivery::with_notification(
+        engine, blind,
+    )));
+
+    // Nothing in flight, so the drain delivers nothing and the pump waits: the failed wait is the
+    // pump's error, neither a timeout nor a success.
+    let error = harness
+        .ring
+        .pump(Some(Duration::ZERO))
+        .expect_err("the wait cannot be made, so the pump says so");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+
+    // A pump that finds completions drains first and does not wait, so a notification that cannot
+    // be waited on does not stop what has completed from being delivered. A pump the completion
+    // beat to the wait reports the failure; either way the entry is there.
+    harness.write(GIVEN, 0, b"blind", 1, 1);
+    let started = Instant::now();
+    let entry = loop {
+        if let Err(error) = harness.ring.pump(Some(Duration::ZERO)) {
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        }
+        if let Some(entry) = harness.ring.pop().expect("pop") {
+            break entry;
+        }
+        assert!(started.elapsed() < BOUND, "the drain never delivered");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(matches!(entry, Entry::Op(_)), "drained all the same");
+    harness
+        .oracle
+        .observe(&entry)
+        .expect("the oracle accepts the entry");
     harness.finish();
 }
 

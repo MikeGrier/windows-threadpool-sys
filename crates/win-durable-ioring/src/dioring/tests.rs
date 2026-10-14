@@ -388,8 +388,8 @@ fn an_instance_is_built_with_any_epoch_id_and_context_type() {
 
 #[test]
 fn an_instance_delivers_on_the_pool_its_environment_names() {
-    // That the pool named is the one a drain runs on is the declared blind spot of pool delivery's
-    // own tests; this pins that an instance built with an environment delivers at all.
+    // This pins that an instance built with an environment delivers at all; that the pool named is
+    // the one a drain runs on is pinned by holding its only thread, in pool delivery's own tests.
     use windows_threadpool_sys::callback_env::CallbackEnviron;
     use windows_threadpool_sys::pool::ThreadpoolPool;
 
