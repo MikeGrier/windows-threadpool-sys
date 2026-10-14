@@ -324,3 +324,50 @@ function Get-HostPressureReport {
     # comma-wrapped return made `@(...)` a one-element array of arrays.
     return $lines.ToArray()
 }
+
+# Builds win-job-launcher, the job-object launcher the sabotage harness runs
+# every phase through, and returns the path of its executable.
+#
+# Built from THIS checkout's crates/win-job-launcher -- found from this file,
+# never from the repository being swept -- because the launcher is the
+# harness's own machinery. A sweep of a fixture repository has no launcher crate
+# at all, and a sweep of the launcher's own manifest patches a COPY of it; in
+# both cases the supervisor must be the unsabotaged build. Throws on a failed
+# build, with cargo's output, so each caller decides how to report it.
+function Build-JobLauncher {
+    param([Parameter(Mandatory = $true)][string] $TargetDirectory)
+    $manifest = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\crates\win-job-launcher\Cargo.toml'))
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        throw "No launcher crate at $manifest."
+    }
+    $output = @(Invoke-Native { cargo build --quiet --manifest-path $manifest --target-dir $TargetDirectory })
+    if ($LASTEXITCODE -ne 0) {
+        throw ((@("Could not build win-job-launcher (cargo exit $(Format-ExitCode $LASTEXITCODE)):") + $output) -join "`n")
+    }
+    return Join-Path $TargetDirectory 'debug\win-job-launcher.exe'
+}
+
+# One argument, quoted for a command line the way the MSVC runtime -- and
+# Rust's std, which the launcher parses with -- splits it back apart.
+# Start-Process passes -ArgumentList through as text, so without this a path
+# containing a space arrives as two arguments.
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string] $Value)
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $text = New-Object System.Text.StringBuilder
+    [void]$text.Append('"')
+    $backslashes = 0
+    foreach ($c in $Value.ToCharArray()) {
+        if ($c -eq [char]'\') { $backslashes++; continue }
+        # Backslashes are literal except before a quote, where each must be
+        # doubled and the quote itself escaped.
+        if ($c -eq [char]'"') { [void]$text.Append([char]'\', 2 * $backslashes + 1) }
+        elseif ($backslashes -gt 0) { [void]$text.Append([char]'\', $backslashes) }
+        [void]$text.Append($c)
+        $backslashes = 0
+    }
+    # Trailing backslashes precede the closing quote, so they double too.
+    if ($backslashes -gt 0) { [void]$text.Append([char]'\', 2 * $backslashes) }
+    [void]$text.Append('"')
+    return $text.ToString()
+}

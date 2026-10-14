@@ -331,6 +331,51 @@ Test-Case 'the host pressure report produces lines rather than throwing' {
     if ($lines.Count -lt 2) { throw "expected several lines, got $($lines.Count)" }
 }
 
+# --- ConvertTo-NativeArgument: one argument, quoted for a command line --------
+
+Test-Case 'a plain argument is left unquoted' {
+    Assert-Equal 'abc' (ConvertTo-NativeArgument 'abc') 'plain'
+    Assert-Equal '--flag=value' (ConvertTo-NativeArgument '--flag=value') 'flag'
+    Assert-Equal 'C:\a\b' (ConvertTo-NativeArgument 'C:\a\b') 'backslashes not before a quote'
+}
+
+Test-Case 'an empty argument is an empty pair of quotes' {
+    Assert-Equal '""' (ConvertTo-NativeArgument '') 'empty'
+}
+
+Test-Case 'whitespace and quotes are quoted and escaped' {
+    Assert-Equal '"a b"' (ConvertTo-NativeArgument 'a b') 'space'
+    Assert-Equal "`"a`tb`"" (ConvertTo-NativeArgument "a`tb") 'tab'
+    Assert-Equal '"a\"b"' (ConvertTo-NativeArgument 'a"b') 'embedded quote'
+    Assert-Equal '"a\\\"b"' (ConvertTo-NativeArgument 'a\"b') 'backslash before a quote'
+    Assert-Equal '"C:\a b\\"' (ConvertTo-NativeArgument 'C:\a b\') 'trailing backslash'
+    Assert-Equal '"C:\a b\\\\"' (ConvertTo-NativeArgument 'C:\a b\\') 'two trailing backslashes'
+}
+
+# The property that matters is the round trip, so it goes through a real host.
+Test-Case 'arguments with spaces, quotes and trailing backslashes survive Start-Process whole' {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) "native arg $PID"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    try {
+        $script = Join-Path $dir 'echo args.ps1'
+        [System.IO.File]::WriteAllText($script, '$args | ForEach-Object { "[$_]" }' + "`r`n")
+        $values = @('plain', 'with space', 'a"b', 'C:\dir with space\', 'two  spaces', '')
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $out = Join-Path $dir 'out.txt'
+        $arguments = @('-NoProfile', '-File', $script) + $values |
+            ForEach-Object { ConvertTo-NativeArgument ([string]$_) }
+        $process = Start-Process -FilePath $shell -ArgumentList $arguments -PassThru -NoNewWindow `
+            -RedirectStandardOutput $out -Wait
+        $null = $process.Handle
+        $got = @(Get-Content -LiteralPath $out)
+        Assert-Equal ($values.Count) $got.Count "argument count, got: $($got -join ' ')"
+        for ($i = 0; $i -lt $values.Count; $i++) {
+            Assert-Equal "[$($values[$i])]" $got[$i] "argument $i"
+        }
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 if (-not $SingleHost) {
     # The other host, which is the claim this file exists to make.
     $isSeven = $PSVersionTable.PSVersion.Major -ge 6

@@ -53,12 +53,108 @@
       "replace": ["        [System.IO.File]::Copy($realTarget, $target, $true)"]
     },
     {
-      "name": "a hung run is abandoned instead of killed",
+      "name": "the launcher's timeout is scored as a pass",
       "file": "tools/run-sabotage.ps1",
       "expect": "caught",
-      "why": "Removing the kill leaves the outcome correct -- the phase still reports as hung -- while the process tree survives the sweep. A tool that detects hangs by walking away from them accumulates one orphaned test binary per hang, each holding build locks and CPU.",
-      "find": ["    Stop-Tree -ProcessId $process.Id"],
+      "why": "The launcher kills a hung tree and says so; reading that as a pass turns every lost-wakeup sabotage into a survivor, and a red sweep into a list of false gaps.",
+      "find": ["        return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }"],
+      "replace": ["        return [pscustomobject]@{ Outcome = 'passed'; Code = $null; Seconds = $elapsed }"]
+    },
+    {
+      "name": "a launcher that could not confirm the tree gone is scored as the command's own result",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "An unconfirmed termination beside a 'caught' is the false positive the whole launcher exists to prevent: the kill did not take, and the harness credits the suite anyway. The same field on an exit gates a 'passed' or 'failed' next to a tree that may still be running.",
+      "find": ["        ($null -eq $confirmed -or $confirmed.Value -ne $true)) {"],
+      "replace": ["        $false) {"]
+    },
+    {
+      "name": "the faux stub reads a plan it cannot understand as a failing run",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "A typo in a plan would then be scored as a catch, indistinguishable from a real finding. The stub exits with the process-start code instead, which the harness reports as INFRASTRUCTURE.",
+      "find": ["exit /b -1073741502"],
+      "replace": ["exit /b 101"]
+    },
+    {
+      "name": "the faux stub reads a directive from any file, not only *.faux",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "Documentation or a manifest quoting a directive would then be read as a plan. The stub reads *.faux only.",
+      "find": ["(for /r %%f in (*.faux) do @more \"%%f\") > \"%FAUX_LINES%\" 2>nul"],
+      "replace": ["(for /r %%f in (*) do @more \"%%f\") > \"%FAUX_LINES%\" 2>nul"]
+    },
+    {
+      "name": "the faux stub accepts a valid verb followed by more words",
+      "file": "tools/faux/faux-cargo.cmd",
+      "expect": "caught",
+      "why": "A typo after a real verb would then be scored as that verb's result -- a pass or a catch -- indistinguishable from a finding. The stub validates the whole line.",
+      "find": ["/C:\"// faux: pass *$\""],
+      "replace": ["/C:\"// faux: pass\""]
+    },
+    {
+      "name": "a launcher result that is a one-element array of objects is read as the object",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "ConvertFrom-Json unrolls an array, so [{...}] comes back as its element and looks like a result. Only the text check, that the file opens with a brace, tells the two apart.",
+      "find": ["        if ($text.TrimStart() -notmatch '^\\{') { return $null }"],
+      "replace": ["        if ($false) { return $null }"]
+    },
+    {
+      "name": "EQUIVALENT: the launcher result's type check is dropped beside the brace check",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "survives",
+      "why": "Text that opens with a brace and parses at all parses to an object, so the type check can never fire once the brace check has passed. Recorded as surviving because it is equivalent, not because a test is missing; if it ever comes back caught, the two checks have stopped overlapping and this entry should be revisited.",
+      "find": ["    if ($parsed -isnot [pscustomobject]) { return $null }"],
+      "replace": ["    if ($false) { return $null }"]
+    },
+    {
+      "name": "the faux driver counts only a positive exit code as a failure",
+      "file": "tools/faux/run-faux-plan.ps1",
+      "expect": "caught",
+      "why": "A crashed or killed shard has a negative exit code on Windows. Counted as a pass, the run is reported clean with a shard missing from it.",
+      "find": ["        if ($code -ne 0) { $failures += $code }"],
+      "replace": ["        if ($code -gt 0) { $failures += $code }"]
+    },
+    {
+      "name": "an unknown stray count is not reported by the harness",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A null stray count means the launcher could not list the job's processes. The note is the only place the harness shows it; without it the result reads the same as a clean exit.",
+      "find": ["        if ($null -ne $strays -and $null -eq $strays.Value) {"],
+      "replace": ["        if ($false) {"]
+    },
+    {
+      "name": "a launcher that wrote no result is scored as a failed suite",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A launcher that failed ran nothing the harness can see. Scoring it 'failed' would credit the suite with a catch, the one wrong answer this tool exists to make impossible.",
+      "find": ["        $outcome = 'launcher-failed'"],
+      "replace": ["        $outcome = 'failed'"]
+    },
+    {
+      "name": "arguments reach the launcher unquoted",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "Start-Process passes its argument list through as text, so without quoting a transcript path containing a space reaches the launcher as two arguments, and the launcher refuses the command line.",
+      "find": ["    $commandLine = @($launcherArgs | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '"],
+      "replace": ["    $commandLine = @($launcherArgs) -join ' '"]
+    },
+    {
+      "name": "-TraceLaunches is never forwarded, so a launch is never narrated",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The narration is the only evidence a stalled CI job leaves of where it stalled, and losing it changes no outcome -- so nothing but a test of the narration itself would notice.",
+      "find": ["    if ($script:TraceLaunches) { $launcherArgs += $flag.Trace }"],
       "replace": [""]
+    },
+    {
+      "name": "every launch is narrated, whether or not -TraceLaunches asked",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The other direction. The narration is opt-in so a local sweep's report stays the table a reader scans; a guard that only checked the narration appears would pass a harness that printed it always.",
+      "find": ["$script:TraceLaunches = $TraceLaunches.IsPresent"],
+      "replace": ["$script:TraceLaunches = $true"]
     },
     {
       "name": "CONTROL: a progress message nothing asserts on is reworded",

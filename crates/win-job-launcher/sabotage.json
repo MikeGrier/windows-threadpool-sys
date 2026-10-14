@@ -1,0 +1,87 @@
+{
+  "package": "win-job-launcher",
+  "description": "Sabotages for the job-object launcher the sabotage harness runs every phase through. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "Three properties are deliberately ABSENT, because no test can observe them deterministically. (1) That a failed TerminateJobObject, or a job that never empties, is reported with confirmed:false rather than true: nothing here can make the OS refuse the call or keep a process alive through it, so `terminated && emptied` degrading to `emptied` leaves every test green. The harness side of the same property -- an unconfirmed outcome is no verdict -- IS covered, in tools/test-run-sabotage.ps1, by a fake launcher that writes the unconfirmed result. (2) Terminating strays explicitly when the command exits, and waiting for the job to empty, makes the tree gone BEFORE the launcher exits; dropping the wait leaves every test green, because the job is kill-on-close and the launcher's own exit takes the strays down a moment later -- the difference is ordering, which a test reading after the launcher exits cannot see. (3) That the three standard handles are the ONLY ones inherited is covered by tests/inheritance.rs, but only against a handle that is inheritable when the launcher spawns; a launcher that inherited every inheritable handle AND had none to leak would pass. Recording any of these with expect:'survives' would assert it is harmless, which is false.",
+  "sabotages": [
+    {
+      "name": "the command is never put in the job",
+      "file": "src/process.rs",
+      "expect": "caught",
+      "why": "The launcher's whole reason to exist. Without the extended startup information the job list is never read, so the command is created outside the job: terminating the job kills nothing, and the descendants the harness needs dead outlive the bound -- while the launcher still reports a timeout.",
+      "find": ["            EXTENDED_STARTUPINFO_PRESENT,"],
+      "replace": ["            0,"]
+    },
+    {
+      "name": "a batch file's trailing backslash is not doubled",
+      "file": "src/process.rs",
+      "expect": "caught",
+      "why": "A script that forwards \"%~1\" hands its program a backslash-escaped closing quote, so the argument swallows the one after it. The C runtime's reading of the command line is the contract, and the forwarding test shows the merge.",
+      "find": ["    out.extend(std::iter::repeat_n(BACKSLASH, trailing));"],
+      "replace": ["    out.extend(std::iter::repeat_n(BACKSLASH, 0 * trailing));"]
+    },
+    {
+      "name": "an empty PATH entry is searched",
+      "file": "src/process.rs",
+      "expect": "caught",
+      "why": "Joined onto a program name, an empty entry is a bare relative path, looked for in the current directory -- for the harness a mutable working copy, where a same-named executable could stand in for the real one.",
+      "find": ["        .filter(|directory| !directory.as_os_str().is_empty())"],
+      "replace": ["        .filter(|_| true)"]
+    },
+    {
+      "name": "the command itself is counted as a stray",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "The job still lists the command for a moment after its handle is signalled, so counting every listed process reports a command that left nothing behind as having left one. It showed up as a rare failure on CI, never locally; the count is judged here on the ids, where the race does not reach.",
+      "find": ["    u32::try_from(ids.iter().filter(|&&id| id != command).count())"],
+      "replace": ["    u32::try_from(ids.iter().filter(|&&id| id != 0).count())"]
+    },
+    {
+      "name": "an unknown stray count is cleaned up as if there were none",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "With the job's process list unreadable the count is not zero, it is not known; reading it as zero skips the termination and confirmation and reports confirmed:true for a tree nothing looked at.",
+      "find": ["    strays != Some(0)"],
+      "replace": ["    strays.unwrap_or(0) != 0"]
+    },
+    {
+      "name": "the bound is never enforced",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "Waiting INFINITE turns the bound into no bound: a hung command hangs the launcher, which is the failure the launcher was written to end.",
+      "find": ["    let waited = unsafe { WaitForSingleObject(child.as_raw_handle(), bound) };"],
+      "replace": ["    let waited = unsafe { WaitForSingleObject(child.as_raw_handle(), u32::MAX) };"]
+    },
+    {
+      "name": "the job is not kill-on-close",
+      "file": "src/job.rs",
+      "expect": "caught",
+      "why": "Kill-on-close is what takes the tree down when the launcher itself is killed -- the harness's backstop when the launcher overruns. Without it, killing the launcher orphans everything it started.",
+      "find": ["        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;"],
+      "replace": ["        limits.BasicLimitInformation.LimitFlags = 0;"]
+    },
+    {
+      "name": "strays left by an exiting command are not counted",
+      "file": "src/launch.rs",
+      "expect": "caught",
+      "why": "A command that exits while its descendants run is reported as a clean exit with no sign of them. The count is the only evidence the harness gets that a suite left processes behind.",
+      "find": ["    let strays = other_processes(job, child.id(), n);"],
+      "replace": ["    let strays = other_processes(job, child.id(), n).map(|_| 0);"]
+    },
+    {
+      "name": "non-ASCII text is written raw into the result",
+      "file": "src/outcome.rs",
+      "expect": "caught",
+      "why": "Windows PowerShell 5.1 reads an unmarked file in the ANSI code page, so a raw UTF-8 error message from a localised Windows would reach the harness mangled.",
+      "find": ["            ' '..='~' => out.push(c),"],
+      "replace": ["            ' '..='~' | '\\u{80}'.. => out.push(c),"]
+    },
+    {
+      "name": "CONTROL: the stray-termination trace is reworded",
+      "file": "src/launch.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader of a trace sees and nothing a test claims, so it MUST survive -- if it comes back caught, the tests are matching on incidental wording rather than on behaviour.",
+      "find": ["                \"terminating {count} stray process(es) still in the job\""],
+      "replace": ["                \"killing {count} process(es) left in the job\""]
+    }
+  ]
+}

@@ -4,6 +4,7 @@
 members = [
 	"crates/durable-ioring",
 	"crates/io-buffers",
+	"crates/win-job-launcher",
 	"crates/win-numa-sys",
 	"crates/win-durable-ioring",
 	"crates/win-shared-os-owned-handle",

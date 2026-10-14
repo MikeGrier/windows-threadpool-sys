@@ -129,6 +129,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-job-launcher"
+version = "0.0.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "win-numa-sys"
 version = "0.1.0"
 dependencies = [

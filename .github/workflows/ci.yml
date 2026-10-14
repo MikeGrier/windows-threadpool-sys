@@ -87,9 +87,10 @@ jobs:
 
   # The sabotage harness's own tests. NOT a sabotage sweep -- a sweep rebuilds a
   # crate per entry and is deliberately an occasional instrument. These are the
-  # harness's unit tests: they stub cargo out entirely and run in about two
-  # minutes, so the tool that measures whether a suite would notice a defect is
-  # itself held to that standard.
+  # harness's unit tests: they stub out the cargo under test, so the tool that
+  # measures whether a suite would notice a defect is itself held to that
+  # standard on every push. The one build they need is win-job-launcher, the
+  # supervisor every phase runs through, built once per suite run.
   #
   # This job is the ratchet. The harness accumulated fixes over eleven review
   # rounds and thirteen of the later defects were introduced by earlier fixes,
@@ -101,6 +102,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # For win-job-launcher. `rust-toolchain.toml` then decides which toolchain
+      # cargo runs, as in every other job here.
+      - uses: dtolnay/rust-toolchain@stable
       # The shared native-command guard, before the suites that depend on it: a
       # failure here explains a failure below rather than being diagnosed twice.
       # This one step covers both hosts on its own -- it re-invokes itself under
