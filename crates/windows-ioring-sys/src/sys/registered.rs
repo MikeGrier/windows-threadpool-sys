@@ -161,7 +161,10 @@ pub(crate) fn ring_dropped(ring: RingId) {
 /// # Panics
 ///
 /// If `ring` already has a responder registered.
-pub fn register<T, X>(ring: &IoRing<T, X>, responder: Box<dyn Responses + Send>) -> Registration {
+pub fn register<T, X, K>(
+    ring: &IoRing<T, X, K>,
+    responder: Box<dyn Responses + Send>,
+) -> Registration {
     register_id(ring.ring_id(), responder)
 }
 

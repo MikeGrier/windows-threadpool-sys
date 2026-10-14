@@ -28,7 +28,7 @@ macro_rules! refuse {
     };
 }
 
-impl<'ring, T, X> Batch<'ring, T, X> {
+impl<'ring, T, X, K> Batch<'ring, T, X, K> {
     /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`,
     /// whose buffer the **ring** holds (`D-71`, `D-73`).
     ///
@@ -330,7 +330,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         file: impl Into<FileRef>,
         coverage: FlushCoverage,
         mode: FlushMode,
-    ) -> io::Result<usize> {
+    ) -> io::Result<usize>
+    where
+        K: AllowsRaw,
+    {
         self.require(Op::Flush)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let user_data = self.ring.reserve_user_data()?;
@@ -565,7 +568,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         &mut self,
         file: impl Into<FileRef>,
         target: usize,
-    ) -> io::Result<usize> {
+    ) -> io::Result<usize>
+    where
+        K: AllowsRaw,
+    {
         self.require(Op::Cancel)?;
         let handle = handle_ref(file.into(), self.ring.ring_id())?;
         let user_data = self.ring.reserve_user_data()?;
@@ -646,7 +652,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     pub unsafe fn register_files(
         &mut self,
         handles: &[HANDLE],
-    ) -> io::Result<PendingFileRegistration> {
+    ) -> io::Result<PendingFileRegistration>
+    where
+        K: AllowsRaw,
+    {
         self.require(Op::RegisterFiles)?;
         if self.ring.registered_file_count() > 0 {
             return Err(io::Error::new(
@@ -721,7 +730,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     pub fn register_shared_files(
         &mut self,
         files: Vec<SharedHandle>,
-    ) -> Result<PendingFileRegistration, PushRefused<Vec<SharedHandle>, ()>> {
+    ) -> Result<PendingFileRegistration, PushRefused<Vec<SharedHandle>, ()>>
+    where
+        K: AllowsRaw,
+    {
         let handles: Vec<HANDLE> = files.iter().map(SharedHandle::as_raw_handle).collect();
         // SAFETY: every handle belongs to a `SharedHandle` in `files`, which the
         // ring takes below and holds until `Drop` has closed the ring -- or
@@ -772,7 +784,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     pub fn register_buffers<B: IoBufMut>(
         &mut self,
         mut buffers: Vec<B>,
-    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>> {
+    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>>
+    where
+        K: AllowsRaw,
+    {
         refuse!(self.require(Op::RegisterBuffers), Some(buffers), ());
         if self.ring.registered_buffer_count() > 0 {
             return Err(PushRefused::new(

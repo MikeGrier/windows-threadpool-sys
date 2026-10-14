@@ -229,7 +229,8 @@ pub use event_delivery::{EventDelivery, RingScope};
 pub use ring::InjectedFailure;
 #[cfg(windows)]
 pub use ring::{
-    Completion, CompletionWait, HeldCompletion, IoRing, Op, RingInfo, RingWait, SubmitWait,
+    AllowsRaw, Completion, CompletionWait, HeldCompletion, IoRing, Op, Open, Owned, RingInfo,
+    RingKind, RingWait, SubmitWait,
 };
 #[cfg(windows)]
 pub use token::OperationId;

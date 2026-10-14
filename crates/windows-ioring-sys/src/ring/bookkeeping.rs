@@ -9,7 +9,7 @@
 
 use super::*;
 
-impl<T, X> IoRing<T, X> {
+impl<T, X, K> IoRing<T, X, K> {
     /// The version this ring was created at.
     #[must_use]
     pub fn version(&self) -> RingVersion {
@@ -561,7 +561,10 @@ impl<T, X> IoRing<T, X> {
     pub unsafe fn push_raw(
         &mut self,
         build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
-    ) -> io::Result<usize> {
+    ) -> io::Result<usize>
+    where
+        K: AllowsRaw,
+    {
         let user_data = self.reserve_user_data()?;
         let hr = build(self.handle, user_data);
         if let Err(error) = check(hr) {

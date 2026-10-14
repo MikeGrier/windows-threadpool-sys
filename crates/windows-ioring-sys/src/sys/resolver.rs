@@ -427,7 +427,7 @@ impl Resolver {
     /// # Panics
     ///
     /// If `ring` already has a responder registered.
-    pub fn register<T, X>(self, ring: &IoRing<T, X>) -> ResolverWatch {
+    pub fn register<T, X, K>(self, ring: &IoRing<T, X, K>) -> ResolverWatch {
         let watch = self.watch();
         // `Registration` ends nothing when dropped; the ring's drop ends it.
         let _ = super::register(ring, Box::new(self));

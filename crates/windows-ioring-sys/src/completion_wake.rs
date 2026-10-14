@@ -65,8 +65,8 @@ impl CompletionWake {
     /// `IORING_FEATURE_SET_COMPLETION_EVENT`; this crate does not substitute a polling thread.
     /// Also any error from attaching the ring's completion event, from `ThreadpoolWait::new`, or
     /// from raising the setup signal.
-    pub fn new<T, X, F>(
-        ring: &mut IoRing<T, X>,
+    pub fn new<T, X, K, F>(
+        ring: &mut IoRing<T, X, K>,
         on_wake: F,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>

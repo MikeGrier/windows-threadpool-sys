@@ -18,7 +18,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::error::{PushRefused, check};
-use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
+use crate::ring::{AllowsRaw, Completion, Entry, Held, IoRing, Op, Open, RingId};
 use crate::token::OperationId;
 use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 use win_shared_os_owned_handle::SharedHandle;
@@ -1209,14 +1209,15 @@ impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
 /// queues its SQE the instant it succeeds -- there is no rewind -- so
 /// `Batch` submits on [`Drop`] rather than leaving queued SQEs for some
 /// later, unrelated submit to discover (D-5).
-pub struct Batch<'ring, T = (), X = ()> {
-    ring: &'ring mut IoRing<T, X>,
+pub struct Batch<'ring, T = (), X = (), K = Open> {
+    ring: &'ring mut IoRing<T, X, K>,
     submitted: bool,
 }
 
-impl<'ring, T, X> Batch<'ring, T, X> {
-    /// Open a batch over `ring`.
-    pub fn new(ring: &'ring mut IoRing<T, X>) -> Self {
+impl<'ring, T, X, K> Batch<'ring, T, X, K> {
+    /// Open a batch over `ring`. The batch has the ring's kind: over an [`Owned`](crate::Owned) ring it has
+    /// no call that queues an operation the ring holds nothing for ([D-91](../DESIGN-NOTES.md#d-91)).
+    pub fn new(ring: &'ring mut IoRing<T, X, K>) -> Self {
         Self {
             ring,
             submitted: false,
@@ -1396,7 +1397,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         Ok(submitted)
     }
 }
-impl<T, X> Drop for Batch<'_, T, X> {
+impl<T, X, K> Drop for Batch<'_, T, X, K> {
     fn drop(&mut self) {
         if !self.submitted {
             // Best-effort: Drop cannot propagate an error, and a batch that

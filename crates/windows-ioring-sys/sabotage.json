@@ -1821,6 +1821,46 @@
       "replace": [
         "    pub fn leave_queued(mut self) {\n        let _ = &mut self;\n    }"
       ]
+    },
+    {
+      "name": "D-91: a ring is sealed with an operation in flight that it holds nothing for",
+      "file": "src/ring/inventory.rs",
+      "expect": "caught",
+      "why": "An owned ring promises it never has such an operation in flight, and the seal is where that is checked: outstanding exceeds held by exactly the operations the ring holds nothing for. Without the check a registration in flight goes in, and its completion later reaches a pop that cannot represent it.",
+      "find": ["        if self.outstanding() != self.held() {\n            return Err(self);\n        }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "D-91: an owned ring may queue what an open one may",
+      "file": "src/ring/kind.rs",
+      "expect": "caught",
+      "why": "The registrations and the raw flush and cancel are bounded by AllowsRaw, which only Open has, and that is what makes them not exist for an owned ring. Caught by the compile_fail doctests on AllowsRaw, which stop failing to compile.",
+      "find": ["impl AllowsRaw for Open {}\n"],
+      "replace": ["impl AllowsRaw for Open {}\n\nimpl AllowsRaw for Owned {}\n"]
+    },
+    {
+      "name": "D-91: a registration build loses its bound",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "register_buffers on an owned ring is the case the bound exists for: its completion is one the ring holds nothing for. Caught by the compile_fail doctest that calls it on one.",
+      "find": ["    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>>\n    where\n        K: AllowsRaw,\n    {"],
+      "replace": ["    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>> {"]
+    },
+    {
+      "name": "D-91: an open ring pop loses what the ring held",
+      "file": "src/ring/kind.rs",
+      "expect": "caught",
+      "why": "An open ring says what it held for a completion, or that it held nothing; the shape is passed through untouched.",
+      "find": ["        Ok((completion, held))\n"],
+      "replace": ["        let _ = held;\n        Ok((completion, None))\n"]
+    },
+    {
+      "name": "D-91: BLIND SPOT: an owned ring that held nothing for a completion returns an error instead of panicking",
+      "file": "src/ring/kind.rs",
+      "expect": "survives",
+      "why": "DECLARED BLIND SPOT. The branch is unreachable by construction: nothing can queue an operation an owned ring holds nothing for, and the seal refused while one was in flight, so no test can make a completion arrive for one without unsafe code that defeats the type. What stays unchecked is that reaching it panics, outside an unwind, as a defect (D-79).",
+      "find": ["            None => panic!(\n                \"an owned ring held nothing for the completion of operation {}: nothing can \\\n                 queue an operation it does not hold, so the ring's bookkeeping is inconsistent \\\n                 (D-91)\",\n                completion.user_data()\n            ),"],
+      "replace": ["            None => Err(io::Error::other(\"an owned ring held nothing for a completion\")),"]
     }
   ]
 }
