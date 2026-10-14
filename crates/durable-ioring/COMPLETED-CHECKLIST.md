@@ -2725,3 +2725,29 @@ construction tests are two sibling modules; a stalled registration is tested wit
 stall, asserting on the bound the error names and on the ring running down, not on elapsed time; the ring
 crate's `M38.1` is the stalled submit ([D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87)). Recorded in the ring
 crate's [D-86](../windows-ioring-sys/DESIGN-NOTES.md#d-86) and D-87, which this confirms.
+
+## Moved 2026-10-13 21:00:00 -04:00 -- DI-9.7.9 and DI-9.7.10: the engineer ratifies the example, the sibling crates and the buffer crate
+
+### <a id="di-979"></a>DI-9.7.9 -- The example and the sibling crates. *(completed 2026-10-13 21:00:00 -04:00)*
+
+Ratified by the engineer. `blocking_push` is an example, not an API ([DI-D-56](DESIGN-NOTES.md#di-d-56)): it takes
+the buffer and context by value and the push as a closure, backs off in sleeps of at most a millisecond under
+the pool, excludes a registered-span push, runs its tests with the crate's, and has its sabotages in this crate's
+manifest. `win-sync-sys`: `duplicate_handle_with_access` over any handle with a typed `Access` mask;
+`WaitOnlyEvent` is a type, not an `Event` that fails at run time, and guards against misuse without being a
+boundary against a holder that duplicates it wider; alertability is an `Alertable` argument; the waits stay over
+`AsHandle` with no `Waitable` trait, which the item had proposed; wait for any and wait for all are two
+functions; a `Signalable` trait says what `SignalObjectAndWait` may signal; `queue_user_apc` takes a Rust closure.
+Recorded in `win-sync-sys`' [WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7) and
+[WS-D-8](../win-sync-sys/DESIGN-NOTES.md#ws-d-8).
+
+### <a id="di-9710"></a>DI-9.7.10 -- The buffer crate and the core's tests. *(completed 2026-10-13 21:00:00 -04:00)*
+
+Ratified by the engineer. That closes the `DI-9.7` group. The crate's name, `io-buffers`; `RegisteredSpan` moves
+into it with the contract; the ring crate re-exports the contract at the old paths
+([D-89](../windows-ioring-sys/DESIGN-NOTES.md#d-89)); `AlignedBuf` is fallible to build, has no `Clone` and cannot
+grow ([IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6)). From `DI-8.1`: the core's tests share one portable clock
+and fault in `test_support`; a stamp in them is a plain `u64`; the test of the driver's default clock stamping
+with interrupt time stays in the driver's own tests; the readiness-check tests, being over a Windows event, sit
+in a module of their own. Recorded in `io-buffers`' [IB-D-1](../io-buffers/DESIGN-NOTES.md#ib-d-1) and
+[IB-D-2](../io-buffers/DESIGN-NOTES.md#ib-d-2).
