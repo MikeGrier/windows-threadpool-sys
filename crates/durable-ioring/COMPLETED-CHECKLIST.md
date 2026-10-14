@@ -2694,3 +2694,34 @@ the one unenforced guarantee is that the core does not check a reading did not g
 clamping it is recorded as a working position, not a decision, scheduling nothing. Both are in
 [DI-D-57](DESIGN-NOTES.md#di-d-57), and the not-checked fact is now in
 [`StampClock`'s documentation](src/clock.rs).
+
+## Moved 2026-10-13 20:51:00 -04:00 -- DI-9.7.7 and DI-9.7.8: the engineer ratifies the delivery modes and construction
+
+### <a id="di-977"></a>DI-9.7.7 -- Delivery modes. *(completed 2026-10-13 20:51:00 -04:00)*
+
+Ratified by the engineer. `Setup`'s `environment` became `delivery: DeliveryMode` (`Pool`, `Pumped`,
+`Signalled`), touching every construction site and `CONTRACT.md`'s three worked examples, over a flag or a
+second constructor; `Dioring::pump` returns `io::Result<bool>`, whether entries became poppable; a pump in
+either pumped mode drains before it waits and returns at once if that delivered, so `waited` is `false` when no
+wait was made; a wait that failed or timed out drains too, and a failed one then reports; the readiness event
+is still set under pumped delivery; the signalled mode's event is auto-reset, since a manual-reset one would
+stay set and a pump's wait would return at once for ever; the blocking wait is `win-sync-sys`'
+`wait_for_single_object`, its first slice of the parked waits
+([WS-D-6](../win-sync-sys/DESIGN-NOTES.md#ws-d-6)); the engine's slot helpers moved to `engine.rs`; the delivery
+enum is in `dioring/delivery.rs` and `SignalledDelivery` in `windows_backend/signalled.rs`; `MemoryNotification`
+keeps a per-handle record of the raisings its own waits have seen, beginning at none. Recorded in
+[DI-D-55](DESIGN-NOTES.md#di-d-55), which this confirms whole.
+
+### <a id="di-978"></a>DI-9.7.8 -- Construction, the fault responder, and their tests. *(completed 2026-10-13 20:51:00 -04:00)*
+
+Ratified by the engineer. The responder that fails submits is asked of the ring crate as a safe
+`sys::submit_faults` (its `M37.1`) rather than implemented behind `expect(unsafe_code)` or a macro, per
+[DI-D-4](DESIGN-NOTES.md#di-d-4); tests reach it through a `cfg(test)` `WindowsBackend::submit_faults`,
+`windows-ioring-sys` being a dev-dependency enabling `kernel-seam`; the pool-thread test holds the engine's
+lock across both pushes so the failing drain is guaranteed; the failure armed is `ERROR_IO_DEVICE`, surfacing
+as `RefusalCause::Unknown`; construction's two knobs travel in one crate-private `Construction` rather than a
+shortened constant under `cfg(test)` or a thread-local; a `RingHook` alias names the hook's type; the
+construction tests are two sibling modules; a stalled registration is tested with a 50ms bound against a 600ms
+stall, asserting on the bound the error names and on the ring running down, not on elapsed time; the ring
+crate's `M38.1` is the stalled submit ([D-87](../windows-ioring-sys/DESIGN-NOTES.md#d-87)). Recorded in the ring
+crate's [D-86](../windows-ioring-sys/DESIGN-NOTES.md#d-86) and D-87, which this confirms.
