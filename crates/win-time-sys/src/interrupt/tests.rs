@@ -68,21 +68,29 @@ fn plain_lags_precise_by_at_most_a_tick<T: Timeline>(
     );
 }
 
-/// The precise clock's measure of an interval, nested inside `Instant`'s measure of it.
+/// How far the clock's measure may be outside `Instant`'s: the two read different counters, whose
+/// rates need not be identical.
+const RATE_SLACK: Duration = Duration::from_millis(2);
+
+/// The precise clock's measure of an interval, between two of `Instant`'s: one inside it and one
+/// around it. That holds whatever the scheduler does in the gaps, so it needs no limit on how long
+/// they take.
 fn agrees_with_instant<C: Clock>(clock: C) {
     let outer_start = Instant::now();
     let start = clock.now();
+    let inner_start = Instant::now();
     thread::sleep(Duration::from_millis(100));
+    let inner = inner_start.elapsed();
     let end = clock.now();
     let outer = outer_start.elapsed();
-    let inner = (end - start).to_duration().expect("forwards");
+    let measured = (end - start).to_duration().expect("forwards");
     assert!(
-        inner <= outer + Duration::from_millis(2),
-        "{inner:?} inside {outer:?}"
+        inner <= measured + RATE_SLACK,
+        "{measured:?} is shorter than {inner:?} inside it"
     );
     assert!(
-        outer - inner.min(outer) < Duration::from_millis(25),
-        "{inner:?} inside {outer:?}"
+        measured <= outer + RATE_SLACK,
+        "{measured:?} is longer than {outer:?} around it"
     );
 }
 

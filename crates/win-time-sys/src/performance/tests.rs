@@ -62,20 +62,26 @@ fn the_period_is_the_frequency_windows_reports() {
 
 #[test]
 fn an_interval_measures_what_instant_measures() {
-    // `Instant` reads the same counter, so this checks the period as much as the reading.
+    // `Instant` reads the same counter, so this checks the period as much as the reading. The
+    // clock's interval sits between two `Instant` intervals, one inside it and one around it, so
+    // it holds whatever the scheduler does in the gaps and needs no limit on how long they take.
     let outer_start = Instant::now();
     let start = PerformanceClock.now();
+    let inner_start = Instant::now();
     thread::sleep(Duration::from_millis(100));
+    let inner = inner_start.elapsed();
     let end = PerformanceClock.now();
     let outer = outer_start.elapsed();
-    let inner = (end - start).to_duration().expect("forwards");
-    assert!(inner <= outer, "{inner:?} inside {outer:?}");
+    let measured = (end - start).to_duration().expect("forwards");
     assert!(
-        outer - inner < Duration::from_millis(25),
-        "{inner:?} inside {outer:?}"
+        inner <= measured,
+        "{measured:?} is shorter than {inner:?} inside it"
+    );
+    assert!(
+        measured <= outer,
+        "{measured:?} is longer than {outer:?} around it"
     );
 }
-
 #[test]
 fn the_clock_is_a_zero_sized_value() {
     assert_eq!(size_of::<PerformanceClock>(), 0);

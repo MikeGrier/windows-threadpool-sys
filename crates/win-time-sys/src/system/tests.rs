@@ -77,19 +77,24 @@ fn the_coarse_clock_advances_across_a_tick() {
 
 #[test]
 fn an_interval_measures_what_instant_measures() {
+    // Between two of `Instant`'s intervals, one inside it and one around it, so it holds whatever
+    // the scheduler does in the gaps. The slack is for the two reading different counters.
+    const RATE_SLACK: Duration = Duration::from_millis(2);
     let outer_start = Instant::now();
     let start = PreciseSystemClock.now();
+    let inner_start = Instant::now();
     thread::sleep(Duration::from_millis(100));
+    let inner = inner_start.elapsed();
     let end = PreciseSystemClock.now();
     let outer = outer_start.elapsed();
-    let inner = (end - start).to_duration().expect("forwards");
+    let measured = (end - start).to_duration().expect("forwards");
     assert!(
-        inner <= outer + Duration::from_millis(2),
-        "{inner:?} inside {outer:?}"
+        inner <= measured + RATE_SLACK,
+        "{measured:?} is shorter than {inner:?} inside it"
     );
     assert!(
-        outer - inner.min(outer) < Duration::from_millis(25),
-        "{inner:?} inside {outer:?}"
+        measured <= outer + RATE_SLACK,
+        "{measured:?} is longer than {outer:?} around it"
     );
 }
 
