@@ -2670,3 +2670,13 @@ remains available to `DI-7+.1`, which is about the ring's own event and is uncha
 Approved by the engineer. `win-numa-sys` then implements a trait it does not define, ending its deliberately
 trait-free stance in that one respect ([IB-D-4](../io-buffers/DESIGN-NOTES.md#ib-d-4)). Recorded in `win-numa-sys`'
 [N-D-2](../win-numa-sys/DESIGN-NOTES.md#n-d-2).
+
+## Moved 2026-10-13 20:43:00 -04:00 -- DI-9.7.5: the engineer approves the portable crate's public surface for other drivers
+
+### <a id="di-975"></a>DI-9.7.5 -- The portable crate's public surface for other drivers. *(completed 2026-10-13 20:43:00 -04:00)*
+
+Approved by the engineer. A public `driver` module re-exports `Engine`, `EngineGuard`, `Slot`, `lock`,
+`present`, the pump types, `Home`, `Answer`, `DomainCall`, `InstanceId`, `first_repeat` and `inconsistent`;
+`Lineage` and `OpId` have public fields; `LineageHandle::detached` and `mint` are public; `Waitable` is a
+public one-method trait so a backend of another crate can implement it; and the Windows crate re-exports the
+portable crate's API with `pub use durable_ioring::*`. Recorded in [DI-D-57](DESIGN-NOTES.md#di-d-57).

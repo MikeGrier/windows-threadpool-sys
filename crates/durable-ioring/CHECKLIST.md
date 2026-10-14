@@ -112,12 +112,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.7.4** -- `NumaBuffer`'s buffer impls move from the ring crate to `win-numa-sys`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-974)
 
-- [ ] **DI-9.7.5** -- **DECIDE: the portable crate's public surface for other drivers.** Now: a
-  public `driver` module re-exporting `Engine`, `EngineGuard`, `Slot`, `lock`, `present`, the pump
-  types, `Home`, `Answer`, `DomainCall`, `InstanceId`, `first_repeat` and `inconsistent`; `Lineage`
-  and `OpId` with public fields; `LineageHandle::detached` and `mint` public; `Waitable` a public
-  one-method trait so a backend of another crate can implement it; and the Windows crate
-  re-exporting the portable crate's API with `pub use durable_ioring::*`.
+- [x] **DI-9.7.5** -- The portable crate's public surface for other drivers. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-975)
 
 - [ ] **DI-9.7.6** -- **RATIFY: the renames the split forced
   ([DI-D-57](DESIGN-NOTES.md#di-d-57)).** The driver's clock is a `StampClock`, not a `win-time-sys`
