@@ -33,7 +33,6 @@ unsafe impl IoBufMut for Pooled {
 }
 
 fn through_the_ring_crate<B: windows_ioring_sys::IoBufMut>(mut buffer: B) -> (usize, *const u8) {
-    use windows_ioring_sys::IoBuf;
     let shared = buffer.stable_ptr();
     assert_eq!(buffer.stable_mut_ptr().cast_const(), shared);
     (buffer.bytes_len(), shared)
@@ -42,7 +41,6 @@ fn through_the_ring_crate<B: windows_ioring_sys::IoBufMut>(mut buffer: B) -> (us
 fn through_the_overlapped_crate<B: windows_overlapped_io_sys::IoBufMut>(
     mut buffer: B,
 ) -> (usize, *const u8) {
-    use windows_overlapped_io_sys::IoBuf;
     let shared = buffer.stable_ptr();
     assert_eq!(buffer.stable_mut_ptr().cast_const(), shared);
     (buffer.bytes_len(), shared)
