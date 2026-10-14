@@ -2776,3 +2776,18 @@ Done by the assistant, as the item was its own. Of the gaps the Windows driver's
 
 Changed in `win-durable-ioring`: a test-only [held_pool.rs](../win-durable-ioring/src/held_pool.rs), four
 tests, and the manifest.
+
+### <a id="di-7+1"></a>DI-7+.1 -- A wait-only handle on the ring's own completion event, offered by a pumped instance as `Dioring::completion_event`. *(completed 2026-10-13 21:45:20 -04:00)*
+
+Built as a second accessor, `Pumped` only, beside `completion_signal`; a fourth `DeliveryMode` or an option
+on `Pumped` was rejected because either would configure nothing. The handle is a duplicate of the ring's
+event with `SYNCHRONIZE` access alone, made by `win-sync-sys`' `duplicate_handle_with_access`
+([WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5)), and is an `OwnedHandle` rather than a
+`WaitOnlyEvent` because a bare handle cannot be shown to be an event
+([WS-D-4](../win-sync-sys/DESIGN-NOTES.md#ws-d-4)). Pool and signalled instances refuse it as
+`Unsupported`. The decision, its edge-sharing hazard (wait and pump from one thread) and the bend of the
+ring's one-waiter rule are in [DI-D-55](DESIGN-NOTES.md#di-d-55).
+
+- **Declared blind spot:** widening the access mask survives the sweep, because setting an event is
+  `unsafe` and this crate forbids it; `win-sync-sys` asserts the kernel's refusal for the same function.
+- Four sabotage entries: three caught, the blind spot declared.

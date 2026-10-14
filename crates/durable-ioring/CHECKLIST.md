@@ -136,20 +136,7 @@ milestone; the decision rows named below carry the reasons.
 
 ## DI-M7+ -- Delivery follow-ups
 
-- [ ] **DI-7+.1** -- **A wait-only handle on the ring's own completion event, for a consumer who
-  wants no callback.** From `DI-7.5`: [DI-D-55](DESIGN-NOTES.md#di-d-55)'s `Signalled` tees the
-  event through a thread-pool wait, which a consumer who would rather wait on the ring's event
-  directly pays for with a callback. A duplicate with `SYNCHRONIZE` access alone gives the consumer
-  a handle that cannot set or reset the event, but not one that cannot be duplicated wider by a
-  consumer that sets out to ([WS-D-7](../win-sync-sys/DESIGN-NOTES.md#ws-d-7)), and it does not
-  remove the shared edge ([D-19](../windows-ioring-sys/DESIGN-NOTES.md#d-19)); since a pump drains
-  before it waits, a consumer taking the edge costs only its own wakeup. The primitive,
-  [WS-1+.5](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-1+5), is built in `win-sync-sys`:
-  `duplicate_handle_with_access`, which returns an `OwnedHandle` this crate can lend without
-  `unsafe`. The shape here is not decided: a fourth `DeliveryMode`, an option on `Pumped`, or a second accessor
-  beside `completion_signal`. Note that the ring crate's
-  [D-21](../windows-ioring-sys/DESIGN-NOTES.md#d-21) allows one waiter per ring, which the shared
-  edge bends for the consumer's waiter and the pump's.
+- [x] **DI-7+.1** -- A wait-only handle on the ring's own completion event, offered by a pumped instance as `Dioring::completion_event`. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-7+1)
 
 ## DI-M10 -- Target backings
 

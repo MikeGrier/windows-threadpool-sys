@@ -102,7 +102,7 @@ The item as it stood at completion:
 - [x] **WS-1+.5** -- **Duplicate a handle with chosen access.** `DuplicateHandle` with an explicit
   access mask rather than the same access, on `Event` and on an `OwnedHandle`, so a holder can be
   given a duplicate that can wait but not set or reset (`SYNCHRONIZE` alone). The first consumer is
-  [DI-7+.1](../durable-ioring/CHECKLIST.md), a read-only duplicate of the ring's own completion
+  [DI-7+.1](../durable-ioring/COMPLETED-CHECKLIST.md#di-7+1), a read-only duplicate of the ring's own completion
   event; the primitive is not specific to it. The open design question is the type: a duplicate
   that cannot signal should not offer `set` or `reset`, so it is probably a distinct wait-only type
   rather than an `Event` that fails at run time.
