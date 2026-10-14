@@ -2821,3 +2821,20 @@ were one gap, decided by the engineer in the session that followed; the decision
   and call responders. Sabotage entries for the engine, the driver and the backend, all caught; one engine
   entry removes both of two redundant clearing sites at once, which `why` says. Entries that named the old
   eager push were rewritten, and one whose pattern had stopped being unique since `DI-7+.1` was fixed.
+
+### <a id="di-7+3"></a>DI-7+.3 -- The Windows backend's ring is an owned one: its pop has no case of a completion the ring held nothing for, and the panic and error rule is recorded. *(completed 2026-10-14 17:17:20 -04:00)*
+
+Raised by the engineer's question of whether `WindowsBackend::pop`'s "a completion for an operation the
+backend did not push" was a fault in the backend or in what it is layered on: it was the backend's, since
+the ring reports a completion it held nothing for as a legitimate outcome for a caller who queues one, and
+this crate queues none after construction. Decided in [DI-D-59](DESIGN-NOTES.md#di-d-59), with the converse
+of [DI-D-46](DESIGN-NOTES.md#di-d-46): a panic is for a programming error, never for normal error reporting.
+
+- The ring crate's `M41.1` ([D-91](../windows-ioring-sys/DESIGN-NOTES.md#d-91)) types a ring by whether it can
+  have such an operation in flight.
+- `WindowsBackend::new` seals its ring with `into_owned` once its registrations are made and waited on, the
+  field is `IoRing<_, _, Owned>`, and `pop` takes the flat `(completion, buffer, sidecar)`: the branch that
+  returned an error is deleted. A registration still in flight at the seal is an inconsistency and
+  panics; no test can reach it, since making one needs `unsafe`, so the manifest's `notCoveredHere` says so.
+- The manifest's `notCoveredHere` no longer says a failing pop and a full submission queue are
+  untestable: a failing pop is reached through the ring crate's call responder, and a push no longer submits.

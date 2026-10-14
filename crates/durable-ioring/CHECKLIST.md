@@ -140,6 +140,8 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-7+.2** -- The engine rings the doorbell, a backend's push only queues, and a failed doorbell or an unreadable ring reaches the consumer once, with no timer. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-7+2)
 
+- [x] **DI-7+.3** -- The Windows backend's ring is an owned one: its pop has no case of a completion the ring held nothing for, and the panic and error rule is recorded. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-7+3)
+
 ## DI-M10 -- Target backings
 
 - [ ] **DI-10.1** -- **The Win32 file object as a target backing** -- the separate concern DI-D-48
