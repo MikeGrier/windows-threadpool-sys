@@ -396,6 +396,14 @@
       "replace": ["        if unsafe { SetEvent(self.handle.as_raw_handle()) } == 0 {\n"]
     },
     {
+      "name": "WS-D-9: a thread of another process is queued to",
+      "file": "src/apc.rs",
+      "expect": "caught",
+      "why": "The routine is an address and a closure in this process; queued to a thread of another, it would run whatever is at that address there. Caught by the test that queues to a suspended child's main thread.",
+      "find": ["    require_this_process(thread)?;\n"],
+      "replace": [""]
+    },
+    {
       "name": "CONTROL: the timeout is rounded up by adding before dividing",
       "file": "src/wait.rs",
       "expect": "survives",

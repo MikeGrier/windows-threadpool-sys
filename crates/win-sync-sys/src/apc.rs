@@ -5,7 +5,9 @@ use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, RawHandle};
 use std::ptr;
 
-use windows_sys::Win32::System::Threading::{GetCurrentThread, QueueUserAPC};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcessId, GetCurrentThread, GetProcessIdOfThread, QueueUserAPC,
+};
 
 /// What is queued: a routine to run once, on the thread the APC is queued to.
 type Routine = Box<dyn FnOnce() + Send + 'static>;
@@ -18,8 +20,14 @@ type Routine = Box<dyn FnOnce() + Send + 'static>;
 /// thread that never waits alertably never runs it. APCs queued to a thread run in the order they
 /// were queued.
 ///
-/// `thread` is any handle that lends itself, and must carry `THREAD_SET_CONTEXT` access: a
-/// [`std::thread::JoinHandle`] does.
+/// `thread` is any handle that lends itself, and must carry `THREAD_SET_CONTEXT` access, to queue,
+/// and `THREAD_QUERY_LIMITED_INFORMATION`, to ask which process it belongs to: a
+/// [`std::thread::JoinHandle`] carries both.
+///
+/// **It must be a thread of this process.** The routine is an address and a closure in this
+/// process, which mean nothing in another, where delivering it would run whatever is at that
+/// address. A thread of another process is refused, as [`io::ErrorKind::InvalidInput`], before
+/// anything is queued.
 ///
 /// **A thread that has not finished starting runs it as it starts.** Windows delivers an APC queued
 /// to a new thread when the thread begins, before it reaches the Rust runtime that
@@ -38,13 +46,35 @@ type Routine = Box<dyn FnOnce() + Send + 'static>;
 ///
 /// # Errors
 ///
-/// The error from `QueueUserAPC`: invalid handle for one that is not a thread, access denied for a
-/// thread handle without `THREAD_SET_CONTEXT`. The routine is dropped, unrun, when the call fails.
+/// Invalid handle for one that is not a thread, access denied for a thread handle without
+/// `THREAD_QUERY_LIMITED_INFORMATION` or `THREAD_SET_CONTEXT`, [`io::ErrorKind::InvalidInput`] for a
+/// thread of another process, and otherwise the error from `QueueUserAPC`. The routine is dropped,
+/// unrun, when the call fails.
 pub fn queue_user_apc(
     thread: impl AsHandle,
     routine: impl FnOnce() + Send + 'static,
 ) -> io::Result<()> {
-    queue(thread.as_handle().as_raw_handle(), Box::new(routine))
+    let thread = thread.as_handle().as_raw_handle();
+    require_this_process(thread)?;
+    queue(thread, Box::new(routine))
+}
+
+/// Refuse a thread that is not this process's: a routine's address is only meaningful here.
+fn require_this_process(thread: RawHandle) -> io::Result<()> {
+    // SAFETY: `thread` is open for the call, borrowed by the caller; a handle that is not a thread
+    // makes the call fail, reported below.
+    let owner = unsafe { GetProcessIdOfThread(thread) };
+    if owner == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `GetCurrentProcessId` takes no arguments.
+    if owner != unsafe { GetCurrentProcessId() } {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the thread belongs to another process, where this process's routine means nothing",
+        ));
+    }
+    Ok(())
 }
 
 /// [`queue_user_apc`] to the calling thread.

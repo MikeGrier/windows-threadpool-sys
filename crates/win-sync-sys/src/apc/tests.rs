@@ -1,12 +1,17 @@
 // Copyright (c) 2026 Mike Grier
 //! Unit tests for `queue_user_apc` and `queue_user_apc_to_current_thread`.
 
+use std::io;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, ThreadId};
 
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE};
-use windows_sys::Win32::System::Threading::THREAD_SET_CONTEXT;
+use windows_sys::Win32::System::Threading::{
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+    THREAD_QUERY_LIMITED_INFORMATION, THREAD_SET_CONTEXT, TerminateProcess,
+};
 
 use crate::test_support::{BOUND, DropCount, manual};
 use crate::{
@@ -152,6 +157,61 @@ fn a_handle_that_is_not_a_thread_is_refused_and_the_routine_is_dropped_unrun() {
 }
 
 #[test]
+fn a_thread_of_another_process_is_refused_and_the_routine_is_dropped_unrun() {
+    // A suspended child, whose main thread handle carries every access and belongs to another
+    // process: delivering this process's routine there would run whatever is at its address.
+    let mut command: Vec<u16> = "cmd.exe /c exit\0".encode_utf16().collect();
+    // SAFETY: all-zero is a valid STARTUPINFOW and PROCESS_INFORMATION before they are filled in.
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = u32::try_from(size_of::<STARTUPINFOW>()).expect("a small struct");
+    let mut child: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `command` is writable and NUL-terminated, the pointers that may be null are, and
+    // `startup` and `child` are live for the call.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut child,
+        )
+    };
+    assert_ne!(
+        created,
+        0,
+        "start a suspended child: {}",
+        io::Error::last_os_error()
+    );
+    // SAFETY: the call succeeded, so both handles are open and ours alone.
+    let (thread, process) = unsafe {
+        (
+            OwnedHandle::from_raw_handle(child.hThread),
+            OwnedHandle::from_raw_handle(child.hProcess),
+        )
+    };
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (flag, guard) = (Arc::clone(&ran), DropCount(Arc::clone(&drops)));
+    let result = queue_user_apc(&thread, move || {
+        let _guard = &guard;
+        flag.store(true, Ordering::SeqCst);
+    });
+    // SAFETY: `process` is the child's own handle, open until it drops below.
+    unsafe { TerminateProcess(process.as_raw_handle(), 1) };
+
+    let error = result.expect_err("a thread of another process");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(drops.load(Ordering::SeqCst), 1, "dropped, not leaked");
+    assert!(!ran.load(Ordering::SeqCst));
+}
+
+#[test]
 fn a_thread_handle_without_set_context_access_is_refused_and_one_with_it_is_not() {
     let (release, hold) = mpsc::channel::<()>();
     let worker = spawn_running(move || {
@@ -177,7 +237,8 @@ fn a_thread_handle_without_set_context_access_is_refused_and_one_with_it_is_not(
 
     let with = duplicate_handle_with_access(
         &worker,
-        Access::from_bits(THREAD_SET_CONTEXT) | Access::SYNCHRONIZE,
+        Access::from_bits(THREAD_SET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION)
+            | Access::SYNCHRONIZE,
     )
     .expect("duplicate");
     let flag = Arc::clone(&ran);
