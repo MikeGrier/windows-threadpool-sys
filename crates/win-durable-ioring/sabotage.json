@@ -867,6 +867,14 @@
       "why": "Nothing else drains a pumped or signalled instance, so a blocking push that does not pump waits for room that never comes.",
       "find": ["            Self::Pumped | Self::Signalled => ring.pump(Some(slice)).map(|_| ()),"],
       "replace": ["            Self::Pumped | Self::Signalled => Ok(()),"]
+    },
+    {
+      "name": "PR-126: a handle the instance did not mint is taken for its own",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "A handle for a live lineage that something else made has a count of one, so ending or retiring through it abandons epochs while the genuine handles are live, and the genuine last release then finds the lineage gone.",
+      "find": ["        handle.is_homed_at(&self.hub)"],
+      "replace": ["        handle.lineage().instance == self.default.lineage().instance"]
     }
   ]
 }

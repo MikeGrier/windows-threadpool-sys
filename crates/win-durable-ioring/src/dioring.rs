@@ -47,11 +47,11 @@ use durable_ioring::DurableIoCore;
 use durable_ioring::IoTarget;
 use durable_ioring::StampClock;
 use durable_ioring::backend::{IoBackend, RegisteredRegion, SubmissionData};
+use durable_ioring::driver::Home;
 use durable_ioring::driver::PumpedDelivery;
 use durable_ioring::driver::first_repeat;
 use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
-use durable_ioring::driver::{Home, InstanceId};
 use durable_ioring::{
     AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
     FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
@@ -644,7 +644,7 @@ where
 
     fn end_lineage(&mut self, handle: LineageHandle) -> Result<(), EndLineageError<Self::Ids>> {
         let lineage = handle.lineage();
-        let reason = if lineage.instance != self.instance() {
+        let reason = if !self.owns(&handle) {
             EndLineageRefusal::Foreign(lineage)
         } else if lineage == self.default.lineage() {
             EndLineageRefusal::Default
@@ -683,7 +683,7 @@ where
         handle: LineageHandle,
     ) -> Result<(), RetireLineageError<Self::Ids>> {
         let lineage = handle.lineage();
-        let reason = if lineage.instance != self.instance() {
+        let reason = if !self.owns(&handle) {
             RetireLineageRefusal::Foreign(lineage)
         } else if lineage == self.default.lineage() {
             RetireLineageRefusal::Default
@@ -921,9 +921,13 @@ impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E
             .engine()
     }
 
-    /// The instance, as its lineages name it.
-    fn instance(&self) -> InstanceId {
-        self.default.lineage().instance
+    /// Whether `handle` is one this instance minted. The lineage a handle names and its instance
+    /// are fields anyone can fill in, through [`LineageHandle::detached`], so a fabricated handle
+    /// for a real lineage would hold a reference count of its own and let an end or a retire go
+    /// ahead while the genuine handles are live; the home a handle reports to is the instance's
+    /// own, and is the proof.
+    fn owns(&self, handle: &LineageHandle) -> bool {
+        handle.is_homed_at(&self.hub)
     }
 
     /// End the instance, as the module's "Ending" says, returning what is left; `None` if it has

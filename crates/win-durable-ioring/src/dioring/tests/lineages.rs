@@ -6,12 +6,14 @@
 
 use super::empty;
 use super::pushes::{ADDED, GIVEN, Harness, given, instance, temp};
+use durable_ioring::driver::Home;
 use durable_ioring::{
     DurabilityRequest, EndLineageRefusal, Entry, Epoch, EpochState, ImportScope, Resolution,
     RetireLineageRefusal, UnknownLineage,
 };
 use durable_ioring::{DurableRing, Identities, Lin};
 use durable_ioring::{FailureToken, LineageHandle};
+use std::sync::{Arc, Weak};
 
 /// `ERROR_IO_DEVICE`, the failure the seam is armed with.
 const IO_DEVICE: u32 = 1117;
@@ -144,6 +146,59 @@ fn end_lineage_ends_through_the_last_handle_and_hands_back_any_other() {
 
     harness.ring.end_lineage(minted).expect("the last handle");
     assert_eq!(expect_ended(&mut harness, lineage), None);
+    assert!(harness.ring.pop().expect("pop").is_none(), "ended once");
+    harness.finish();
+}
+
+/// A home that is not the instance's: what a caller can fabricate a handle for.
+struct Stranger;
+
+impl Home for Stranger {
+    fn release(&self, _: durable_ioring::Lineage) {}
+}
+
+#[test]
+fn a_handle_the_instance_did_not_mint_is_refused_and_disturbs_nothing() {
+    let (a, b) = (temp(&[0; 64]), temp(&[0; 64]));
+    let (mut harness, minted) = two(&a, &b);
+    let lineage = minted.lineage();
+    harness.write_in(&minted, GIVEN, 0, b"pending", 3, 1);
+    harness.next();
+
+    // The two ways to make one: one that reports to nothing, and one that reports to a home of the
+    // caller's. Each names a live lineage of this instance, and each has a count of one.
+    let stranger = Arc::new(Stranger);
+    let weak: Weak<Stranger> = Arc::downgrade(&stranger);
+    let home: Weak<dyn Home> = weak;
+    let forgeries = |lineage| {
+        [
+            LineageHandle::detached(lineage),
+            LineageHandle::mint(lineage, home.clone()),
+        ]
+    };
+    for forged in forgeries(lineage) {
+        let error = harness.ring.end_lineage(forged).expect_err("end, forged");
+        assert!(matches!(error.reason, EndLineageRefusal::Foreign(named) if named == lineage));
+        assert_eq!(error.handle.lineage(), lineage, "handed back");
+    }
+    for forged in forgeries(lineage) {
+        let error = harness
+            .ring
+            .retire_lineage(forged)
+            .expect_err("retire, forged");
+        assert!(matches!(error.reason, RetireLineageRefusal::Foreign(named) if named == lineage));
+    }
+    for forged in forgeries(harness.lineage()) {
+        let error = harness.ring.end_lineage(forged).expect_err("the default");
+        assert!(matches!(error.reason, EndLineageRefusal::Foreign(_)));
+    }
+
+    assert!(harness.ring.pop().expect("pop").is_none(), "nothing ended");
+    assert_eq!(harness.ring.lineages().len(), 2);
+    assert_eq!(harness.ring.sealed_through(lineage), Ok(None));
+    // The genuine handle still ends it, once, and its release is not a second end.
+    harness.ring.end_lineage(minted).expect("the genuine one");
+    assert_eq!(expect_ended(&mut harness, lineage), Some(3));
     assert!(harness.ring.pop().expect("pop").is_none(), "ended once");
     harness.finish();
 }

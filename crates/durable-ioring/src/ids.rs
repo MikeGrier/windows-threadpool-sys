@@ -116,6 +116,15 @@ impl LineageHandle {
         Tag::new(self, id)
     }
 
+    /// Whether this handle reports its release to `home`. The lineage a handle names and its
+    /// instance are inputs to [`mint`](Self::mint) and [`detached`](Self::detached), so they prove
+    /// nothing about where the handle came from; the home does, because a caller holding no
+    /// reference to the instance's own cannot name it.
+    #[must_use]
+    pub fn is_homed_at<T: ?Sized>(&self, home: &Arc<T>) -> bool {
+        std::ptr::addr_eq(self.0.home.as_ptr(), Arc::as_ptr(home))
+    }
+
     /// Whether this is the lineage's only remaining copy.
     #[must_use]
     pub fn is_last(&self) -> bool {
