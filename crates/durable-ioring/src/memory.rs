@@ -11,7 +11,7 @@
 //! not yet popped as the completion queue holds -- so a completion always has room -- and with
 //! [`RefusalCause::SubmitAndDrainNeeded`] when both hold.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, TryReserveError, VecDeque};
 use std::io;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, RegisteredRegion, Submission,
-    SubmissionData, SubmissionOp,
+    SubmissionData, SubmissionOp, SubmissionToken,
 };
 use crate::io_target::{Capabilities, Geometry, IoTarget, WarrantyClass};
 use crate::pump::Waitable;
@@ -114,12 +114,19 @@ impl MemoryTarget {
     }
 
     /// Write `bytes` at `offset`, extending with zeros as needed.
-    fn write(&mut self, offset: usize, bytes: &[u8]) {
+    ///
+    /// # Errors
+    ///
+    /// The target cannot grow to hold it: the allocation is refused, which is reported and not
+    /// aborted on, as every allocation that can fail is here.
+    fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<(), TryReserveError> {
         let end = offset + bytes.len();
         if self.contents.len() < end {
+            self.contents.try_reserve(end - self.contents.len())?;
             self.contents.resize(end, 0);
         }
         self.contents[offset..end].copy_from_slice(bytes);
+        Ok(())
     }
 
     /// Read into `into` from `offset`; the count read, short past the end.
@@ -237,9 +244,20 @@ impl MemoryBackend {
         }
     }
 
-    /// Register `buffers`, in order, replacing any registered before.
+    /// Register `buffers`, in order, replacing any registered before: a backend's buffers are
+    /// registered as it is built, before anything is pushed.
+    ///
+    /// # Panics
+    ///
+    /// If a submission is queued or a completion is waiting. A queued or finished operation may
+    /// name a registered region, which replacing the buffers would invalidate; asking for it is
+    /// a caller's programming error.
     #[must_use]
     pub fn with_registered(mut self, buffers: Vec<Vec<u8>>) -> Self {
+        assert!(
+            self.queued.is_empty() && self.completed.is_empty(),
+            "registered buffers are set before anything is pushed: an operation outstanding may name one"
+        );
         self.registered = buffers;
         self
     }
@@ -316,8 +334,14 @@ impl MemoryBackend {
                 }
             };
             let geometry = target.geometry;
+            // The end is bounded by `isize::MAX`, the most a `Vec` can hold, so an admitted write
+            // is one the target can at least try to grow for.
             let fits = u32::try_from(length).is_ok()
-                && usize::try_from(offset).is_ok_and(|start| start.checked_add(length).is_some());
+                && usize::try_from(offset).is_ok_and(|start| {
+                    start
+                        .checked_add(length)
+                        .is_some_and(|end| isize::try_from(end).is_ok())
+                });
             if !fits || !geometry.admits(offset, length as u64) || !geometry.admits_buffer(address)
             {
                 return Err(RefusalCause::Invalid);
@@ -359,14 +383,18 @@ impl MemoryBackend {
                 let offset = position_u64(offset);
                 match data {
                     SubmissionData::Owned(buffer) => {
-                        target.write(offset, &buffer);
+                        if target.write(offset, &buffer).is_err() {
+                            return could_not_grow(token, Some(buffer));
+                        }
                         (buffer.len(), Some(buffer))
                     }
                     SubmissionData::Registered(region) => {
                         let start = position(region.offset);
                         let bytes = &self.registered[position(region.index)]
                             [start..start + position(region.length)];
-                        target.write(offset, bytes);
+                        if target.write(offset, bytes).is_err() {
+                            return could_not_grow(token, None);
+                        }
                         (bytes.len(), None)
                     }
                 }
@@ -395,6 +423,15 @@ impl MemoryBackend {
             result: Ok(u32::try_from(result).expect("push refused any length beyond a u32")),
             buffer,
         }
+    }
+}
+
+/// The completion of a write the target could not grow to hold, with the buffer it carried.
+fn could_not_grow(token: SubmissionToken, buffer: Option<Vec<u8>>) -> Completion<Vec<u8>> {
+    Completion {
+        token,
+        result: Err(memory_fault("the target could not grow to hold the write")),
+        buffer,
     }
 }
 

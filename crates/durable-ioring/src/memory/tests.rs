@@ -602,3 +602,66 @@ fn a_wait_with_nothing_raised_times_out_with_the_count() {
     let notification = backend.notification().expect("a handle");
     assert_eq!(notification.wait_past(0, Duration::from_millis(1)), 0);
 }
+
+#[test]
+fn a_write_ending_beyond_what_a_vec_can_hold_is_refused_by_check_and_push() {
+    // `isize::MAX` is the most a `Vec` holds, so a write that ends past it could only panic the
+    // target; it is refused as malformed, at the call and not at the doorbell.
+    let mut backend = backend();
+    let submission = write(1, isize::MAX as u64, b"x");
+    assert_eq!(
+        backend.check(submission.target, &submission.op),
+        Err(RefusalCause::Invalid)
+    );
+    assert_eq!(refusal(&mut backend, submission), RefusalCause::Invalid);
+    // One byte earlier it ends at the bound, which is admitted.
+    let submission = write(2, isize::MAX as u64 - 1, b"x");
+    assert_eq!(backend.check(submission.target, &submission.op), Ok(()));
+}
+
+#[test]
+fn a_write_the_target_cannot_grow_to_hold_completes_with_a_fault_and_its_buffer() {
+    // Admitted, because it ends at the bound; the target cannot find that much memory, which is
+    // reported as a fault on the write and not aborted on.
+    let mut backend = backend();
+    let done = run(&mut backend, vec![write(1, isize::MAX as u64 - 1, b"x")]);
+    let [done] = done.as_slice() else {
+        panic!("one completion: {done:?}");
+    };
+    assert_eq!(done.token, SubmissionToken(1));
+    assert_eq!(done.buffer.as_deref(), Some(b"x".as_slice()));
+    let fault = done.result.clone().expect_err("the target could not grow");
+    assert_eq!(fault.source, MEMORY);
+    assert!(contents(&backend).is_empty(), "nothing was written");
+}
+
+#[test]
+#[should_panic(expected = "registered buffers are set before anything is pushed")]
+fn registered_buffers_cannot_be_replaced_while_an_operation_is_queued() {
+    let mut backend = backend().with_registered(vec![vec![0; 8]]);
+    let region = RegisteredRegion {
+        index: 0,
+        offset: 0,
+        length: 4,
+    };
+    backend
+        .push(registered(1, true, region))
+        .expect("an operation naming a registered region");
+    let _ = backend.with_registered(Vec::new());
+}
+
+#[test]
+#[should_panic(expected = "registered buffers are set before anything is pushed")]
+fn registered_buffers_cannot_be_replaced_while_a_completion_is_waiting() {
+    let mut backend = backend().with_registered(vec![vec![0; 8]]);
+    let region = RegisteredRegion {
+        index: 0,
+        offset: 0,
+        length: 4,
+    };
+    backend
+        .push(registered(1, false, region))
+        .expect("an operation naming a registered region");
+    backend.submit().expect("submitted");
+    let _ = backend.with_registered(Vec::new());
+}

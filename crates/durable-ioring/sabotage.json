@@ -1501,6 +1501,29 @@
       "find": ["                    Ok(Some(completion)) => {\n                        self.fault = None;\n                        popped = true;\n                        let actions = self.core.complete(completion);\n                        deliver |= self.act(actions);\n                    }\n                    Ok(None) => {\n                        self.fault = None;\n                        break;\n                    }\n"],
       "replace": ["                    Ok(Some(completion)) => {\n                        popped = true;\n                        let actions = self.core.complete(completion);\n                        deliver |= self.act(actions);\n                    }\n                    Ok(None) => break,\n"]
     },    {
+      "name": "PR-126: a write ending past isize::MAX is admitted",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A Vec holds at most isize::MAX bytes, so a write ending past it can only panic the target; check and push refuse it as malformed. Caught by the boundary test, one byte either side of the bound.",
+      "find": ["                        .is_some_and(|end| isize::try_from(end).is_ok())\n"],
+      "replace": ["                        .is_some()\n"]
+    },
+    {
+      "name": "PR-126: a target that cannot grow aborts instead of reporting it",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A write the target cannot find memory for completes with a fault and hands its buffer back, as every allocation that can fail is reported and not aborted on. Without the try_reserve the resize aborts the process, which the sweep sees as the suite dying: a weaker detection than an assertion, and the test that names the behaviour is the one that dies.",
+      "find": ["            self.contents.try_reserve(end - self.contents.len())?;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "PR-126: registered buffers are replaced while an operation is outstanding",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A queued or finished operation may name a registered region, which replacing the buffers invalidates; the builder refuses it as a caller's programming error. Caught by the two should_panic tests, one with an operation queued and one with a completion waiting.",
+      "find": ["            self.queued.is_empty() && self.completed.is_empty(),\n"],
+      "replace": ["            true,\n"]
+    },    {
       "name": "CONTROL: the engine tests a pass's pops by comparison",
       "file": "src/engine.rs",
       "expect": "survives",
