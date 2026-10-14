@@ -225,6 +225,19 @@ fn a_signalled_instance_delivers_on_the_pool_its_environment_names() {
 }
 
 #[test]
+fn a_signalled_instance_does_not_offer_the_rings_own_event() {
+    // The ring's event belongs to the wake that tees it; a wait of the consumer's would take wakes.
+    let temp = temp(&[0; 64]);
+    let harness = signalled(vec![given(GIVEN, &temp)]);
+    let error = harness
+        .ring
+        .completion_event()
+        .expect_err("the wake owns the ring's event");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    harness.finish();
+}
+
+#[test]
 fn a_signalled_instance_waits_for_the_thread_of_the_pool_its_environment_names() {
     // Which pool ran the callback is not visible from the callback, so this holds the named pool's
     // only thread: the signal must wait, and one set from the default pool would not.

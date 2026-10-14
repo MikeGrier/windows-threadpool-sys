@@ -24,6 +24,7 @@
 //! (DI-D-46).
 
 use std::io;
+use std::os::windows::io::OwnedHandle;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -158,7 +159,8 @@ pub enum DeliveryMode<'env, 'pool> {
     Pool(Option<&'env mut CallbackEnviron<'pool>>),
     /// Drained by the consumer's own thread, which calls [`Dioring::pump`]: no thread of the
     /// instance's own, and none of the pool's. Nothing is drained until it does. Its pump waits on
-    /// the ring's own completion event.
+    /// the ring's own completion event, a handle to which [`Dioring::completion_event`] offers
+    /// the consumer, to wait on beside its own handles before it pumps.
     Pumped,
     /// Drained by the consumer's own thread, as [`Pumped`](Self::Pumped), which the thread pool
     /// tells: it sets an event of the instance's own, [`Dioring::completion_signal`], whenever
@@ -810,6 +812,43 @@ where
                 Err(io::Error::new(
                     io::ErrorKind::Unsupported,
                     "only an instance built with DeliveryMode::Signalled has a completion signal",
+                ))
+            })
+    }
+
+    /// A handle to the ring's own completion event, for the consumer to wait on beside its own
+    /// handles, and then to [`pump`](Self::pump), with no thread-pool callback in between
+    /// ([DI-D-55](../../durable-ioring/DESIGN-NOTES.md#di-d-55)). Each call makes another
+    /// duplicate of the one event.
+    ///
+    /// The handle carries `SYNCHRONIZE` access alone, so it can wait and nothing else: the kernel
+    /// refuses a set or a reset of the ring's event through it. A holder that duplicates it asking
+    /// for more access can still get it, which Windows allows, so this guards against a handle used
+    /// for what it was not handed out for and is not a boundary within the process.
+    ///
+    /// **It is the ring's event, not a copy of it.** The event is auto-reset, so a wait through this
+    /// handle takes the signal, and the pump's own wait does not see it; the pump drains before it
+    /// waits, so a consumer that waits here and then pumps on the same thread loses nothing. A
+    /// second thread blocked in [`pump`](Self::pump) with no limit while another waits here can be
+    /// left waiting for a signal the other took, so wait and pump from one thread. The ring signals
+    /// the event once as it is attached, so a first wait may return with nothing to drain.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] unless the instance was built with [`DeliveryMode::Pumped`]:
+    /// the other modes give the event to a wake of their own, which a wait of the consumer's would
+    /// take wakes from ([`completion_signal`](Self::completion_signal) is the event a signalled
+    /// instance offers). Otherwise the duplication's: the process cannot get another handle.
+    pub fn completion_event(&self) -> io::Result<OwnedHandle> {
+        self.delivery
+            .as_ref()
+            .expect("an instance is live until it ends")
+            .completion_event()
+            .unwrap_or_else(|| {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "only an instance built with DeliveryMode::Pumped offers the ring's own \
+                     completion event; a signalled one offers completion_signal",
                 ))
             })
     }

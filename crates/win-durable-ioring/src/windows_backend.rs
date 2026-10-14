@@ -24,6 +24,7 @@ use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
 use std::time::Duration;
 
+use win_sync_sys::{Access, duplicate_handle_with_access};
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId,
     PushOptions, PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
@@ -381,6 +382,17 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         env: Option<&mut windows_threadpool_sys::callback_env::CallbackEnviron<'_>>,
     ) -> io::Result<windows_ioring_sys::CompletionWake> {
         windows_ioring_sys::CompletionWake::new(&mut self.ring, on_wake, env)
+    }
+
+    /// A handle to the ring's completion event that can wait on it and do nothing else: a
+    /// duplicate with `SYNCHRONIZE` access alone, so the kernel refuses a set or a reset of it
+    /// (DI-7+.1).
+    ///
+    /// # Errors
+    ///
+    /// The duplication's: the process cannot get another handle.
+    pub(crate) fn completion_wait_handle(&self) -> io::Result<OwnedHandle> {
+        duplicate_handle_with_access(&self.event, Access::SYNCHRONIZE)
     }
 
     /// Fail this backend's ring's submits on demand, whichever thread makes them (DI-7.1): a

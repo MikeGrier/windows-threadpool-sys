@@ -655,6 +655,38 @@
       "replace": ["        let _ = pumped.ready;"]
     },
     {
+      "name": "DI-7+.1: a signalled instance offers the ring's own event",
+      "file": "src/dioring/delivery.rs",
+      "expect": "caught",
+      "why": "The ring's event belongs to the wake that tees it in a signalled instance; a consumer's wait on it would take wakes the wake needs, which the ring crate's D-21 forbids.",
+      "find": ["            Self::Pool(_) | Self::Signalled(_) => None,\n"],
+      "replace": ["            Self::Pool(_) => None,\n            Self::Signalled(signalled) => Some(signalled.engine().backend.completion_wait_handle()),\n"]
+    },
+    {
+      "name": "DI-7+.1: a pool-built instance offers the ring's own event",
+      "file": "src/dioring/delivery.rs",
+      "expect": "caught",
+      "why": "As for a signalled instance: the pool's wake owns the ring's event.",
+      "find": ["            Self::Pool(_) | Self::Signalled(_) => None,\n"],
+      "replace": ["            Self::Signalled(_) => None,\n            Self::Pool(pool) => Some(pool.engine().backend.completion_wait_handle()),\n"]
+    },
+    {
+      "name": "DI-7+.1: the refusal of an instance that does not offer the event is another kind",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Unsupported is how every accessor of a mode the instance was not built with refuses, and what a consumer matches on.",
+      "find": ["                    io::ErrorKind::Unsupported,\n                    \"only an instance built with DeliveryMode::Pumped offers"],
+      "replace": ["                    io::ErrorKind::InvalidInput,\n                    \"only an instance built with DeliveryMode::Pumped offers"]
+    },
+    {
+      "name": "DI-7+.1: BLIND SPOT: the handle offered can also set and reset the ring's event",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "Declared blind spot, not a control. The handle is meant to carry SYNCHRONIZE access alone, so the kernel refuses a set or a reset through it, and no test here can show that: setting an event is unsafe, which this crate forbids. win-sync-sys tests the same function with the same access, where the kernel's refusal is asserted. What would cover it here is a safe way to set an event given only a handle, which win-sync-sys does not offer and, by its WS-D-4, deliberately does not.",
+      "find": ["        duplicate_handle_with_access(&self.event, Access::SYNCHRONIZE)\n"],
+      "replace": ["        duplicate_handle_with_access(&self.event, Access::SYNCHRONIZE | Access::EVENT_MODIFY_STATE)\n"]
+    },
+    {
       "name": "DI-9.8.1: a pump's failed wait is reported as success",
       "file": "src/dioring.rs",
       "expect": "caught",

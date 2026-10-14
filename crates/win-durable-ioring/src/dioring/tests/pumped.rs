@@ -10,6 +10,7 @@
 //! timing window decides: the same instance, pumped, delivers.
 
 use std::io;
+use std::os::windows::io::OwnedHandle;
 use std::time::{Duration, Instant};
 
 use win_sync_sys::{
@@ -322,10 +323,125 @@ fn pumping_an_instance_built_with_a_pool_is_refused() {
         .completion_signal()
         .expect_err("only a signalled instance has one");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let error = harness
+        .ring
+        .completion_event()
+        .expect_err("the pool's wake owns the ring's event");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     // And it is untouched: it still delivers, on the pool.
     harness.write(GIVEN, 0, b"pool", 1, 1);
     harness.next();
     harness.finish();
+}
+
+/// Whether `event` is raised, waiting up to `timeout` for it. A wait takes what it sees.
+fn raised_within(event: &OwnedHandle, timeout: Duration) -> bool {
+    match wait_for_single_object(event, Some(timeout)).expect("a wait") {
+        WaitOutcome::Signalled => true,
+        WaitOutcome::TimedOut => false,
+        other => panic!("an event ended a wait as {other:?}"),
+    }
+}
+
+/// Take what the ring has raised so far, until it is quiet: it raises the event once as it is
+/// attached.
+fn settle(event: &OwnedHandle) {
+    for _ in 0..50 {
+        if !raised_within(event, QUIET) {
+            return;
+        }
+    }
+    panic!("the event never went quiet");
+}
+
+#[test]
+fn a_pumped_instance_offers_the_rings_own_event_to_wait_on_before_it_pumps() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let event = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    settle(&event);
+
+    let id = harness.write(GIVEN, 0, b"event", 1, 3);
+
+    // No thread-pool callback is involved: the ring raises its own event and the consumer's wait
+    // sees it, and nothing has been drained.
+    assert!(
+        raised_within(&event, BOUND),
+        "the ring raised the event as the write completed"
+    );
+    assert!(
+        harness.ring.pop().expect("pop").is_none(),
+        "nothing is drained yet"
+    );
+    assert!(
+        harness.ring.pump(Some(Duration::ZERO)).expect("pump"),
+        "and a pump delivers what the wait announced"
+    );
+    let entry = harness
+        .ring
+        .pop()
+        .expect("pop")
+        .expect("the entry the pump made");
+    harness
+        .oracle
+        .observe(&entry)
+        .expect("the oracle accepts the entry");
+    match entry {
+        Entry::Op(done) => assert_eq!(done.id, id),
+        other => panic!("expected the write's completion, got {other:?}"),
+    }
+    harness.finish();
+}
+
+#[test]
+fn a_pump_after_the_consumers_own_wait_took_the_signal_does_not_wait_for_it() {
+    // The event is the ring's, auto-reset: the consumer's wait takes the edge the pump's own wait
+    // would have seen. The pump drains before it waits, so it still delivers, and at once.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let event = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    settle(&event);
+    harness.write(GIVEN, 0, b"edge", 1, 1);
+    assert!(raised_within(&event, BOUND), "the consumer took the edge");
+
+    let started = Instant::now();
+    let ready = harness.ring.pump(Some(BOUND)).expect("pump");
+
+    assert!(ready, "delivered all the same");
+    assert!(
+        started.elapsed() < BOUND / 2,
+        "the pump waited for an edge the consumer had taken: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
+    harness.finish();
+}
+
+#[test]
+fn each_call_makes_another_duplicate_and_one_outlives_the_instance() {
+    use std::os::windows::io::AsRawHandle;
+
+    let temp = temp(&[0; 64]);
+    let harness = pumped(vec![given(GIVEN, &temp)]);
+    let first = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    let second = harness.ring.completion_event().expect("another duplicate");
+    assert_ne!(first.as_raw_handle(), second.as_raw_handle());
+
+    harness.finish();
+
+    // A handle the consumer kept is a handle to an event like any other: still valid, and nothing
+    // raises it any more.
+    let _ = raised_within(&first, Duration::ZERO);
+    let _ = raised_within(&second, Duration::ZERO);
 }
 
 #[test]

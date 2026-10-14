@@ -5,6 +5,7 @@
 //! ending -- reaches it the same way under any, through the slot it sits in.
 
 use std::io;
+use std::os::windows::io::OwnedHandle;
 use std::time::Duration;
 
 use win_sync_sys::Event;
@@ -85,6 +86,15 @@ where
         match self {
             Self::Signalled(signalled) => Some(signalled.signal()),
             Self::Pool(_) | Self::Pumped(_) => None,
+        }
+    }
+
+    /// A wait-only handle to the ring's own completion event, if the instance is pumped and so
+    /// has no wake of its own on it: `None` otherwise.
+    pub(crate) fn completion_event(&self) -> Option<io::Result<OwnedHandle>> {
+        match self {
+            Self::Pumped(pumped) => Some(pumped.engine().backend.completion_wait_handle()),
+            Self::Pool(_) | Self::Signalled(_) => None,
         }
     }
 
