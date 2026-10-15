@@ -142,23 +142,15 @@ milestone; the decision rows named below carry the reasons.
 
 ## DI-M10 -- Target backings
 
-- [ ] **DI-10.1** -- **The Win32 file object as a target backing** -- the separate concern DI-D-48
-  names: what such a target warrants by buffering class, and what dioring can read from the handle
-  rather than take on declaration. **Ruled 2026-10-14: no `Nt*` call, so the buffering class is
-  declared.** An open handle's no-buffering and write-through modes are reported only by
-  `NtQueryInformationFile(FileModeInformation)`, which this repository may not call
-  ([copilot-instructions.md](../../.github/copilot-instructions.md), "DOCUMENTED APIS ONLY"); no
-  documented `GetFileInformationByHandleEx` class reports them. What remains to build, to be
-  confirmed against documented routes only: the target's geometry from `FileStorageInfo`'s logical
-  sector size, and a refusal to let a remote handle (`FileRemoteProtocolInfo`, or the volume's
-  drive type through `GetFinalPathNameByHandleW`) be declared above `BestEffort`. The Win32 queries
-  need a home that allows `unsafe`, which is the engineer's call: a new crate, or an existing one.
+- [x] **DI-10.1** -- A Win32 file target is made from a file this crate opened, so its class, alignment and write-through follow from how it was opened and not from a declaration. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-101)
 
 - [ ] **DI-10.2** -- **A raw partition as a target backing** (the engineer, 2026-10-09: "ok"): one
   volume handle with regions in it, one commit per volume, failure sharing found from the volume's
   disks (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), and optionally the volume lock
   (`FSCTL_LOCK_VOLUME`); implemented to the interface. How
   [D-44](../windows-ioring-sys/DESIGN-NOTES.md#d-44) applies is open under DI-D-48.
+
+- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more.
 
 ## DI-M11 -- The core driven by script
 

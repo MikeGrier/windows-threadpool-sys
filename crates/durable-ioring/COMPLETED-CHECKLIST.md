@@ -2865,3 +2865,9 @@ Draft PR 126 gave the branch a pull request, which is what [ci.yml](../../.githu
 ### <a id="di-124"></a>DI-12.4 -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. *(completed 2026-10-14 21:11:41 -04:00)*
 
 The item was meant to land before the first release PR merged, and did not: the release merged first, `publish-crate` refused `win-durable-ioring` 0.1.0 for a dependency with no version, and its tag points at that commit. The pins landed afterwards: `durable-ioring`, `windows-ioring-sys`, `win-sync-sys`, `windows-threadpool-sys` and `win-time-sys`, each at the version release-please published or was asked to. `win-time-sys` had not been released at all, which stalled every crate waiting on it, so it was published by the `workflow_dispatch` escape hatch at the version its manifest declares. `win-durable-ioring` 0.1.0 cannot publish from its tag, so it is published by the same dispatch from the commit that carries the pins.
+
+## Moved 2026-10-14 22:38:28 -04:00 -- DI-10.1: the Win32 file object as a target backing
+
+### <a id="di-101"></a>DI-10.1 -- A Win32 file target is made from a file this crate opened, so its class, alignment and write-through follow from how it was opened and not from a declaration. *(completed 2026-10-14 22:38:28 -04:00)*
+
+The authoritative text is [DI-D-60](DESIGN-NOTES.md#di-d-60). The item asked what a Win32 file target warrants by buffering class and whether dioring reads the class from the handle; the engineer ruled that no `Nt*` call may be made from this repository, which removed the only call that reports a handle's open mode, and that provenance be structural, so `OpenedFile<Cached>` and `OpenedFile<Unbuffered>` are opened by this crate and a `Win32FileTarget` is made from nothing else. Foreign handles are queued as `DI-10.3`.

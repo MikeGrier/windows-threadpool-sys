@@ -222,7 +222,9 @@ claim no more than the weakest target it rests on, and relays what they report, 
 own terms, as its own faults.
 
 How a backing meets the obligations is its own concern. A Win32 file target takes its handle in an
-owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)). Every target is named in
+owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)), and is made from a file the
+Windows driver opened itself, so the warranty class above follows from how the file was opened
+rather than from a declaration ([DI-D-60](DESIGN-NOTES.md#di-d-60)). Every target is named in
 failure reports by the key the consumer gave it, so a report stays usable after the target is gone
 ([DI-D-11](DESIGN-NOTES.md#di-d-11)).
 
