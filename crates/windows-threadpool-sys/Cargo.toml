@@ -97,8 +97,9 @@ features = [
 [dev-dependencies.windows-overlapped-io-sys]
 version = "0.1.3"
 path = "../windows-overlapped-io-sys"
-# For the observer's `file_len`, which the TP_IO tests read through an observer.
-features = ["fs"]
+# For the observer's queries, which the TP_IO tests issue through an observer:
+# `fs` holds them, and `test-util` lists every one (M16.10).
+features = ["fs", "test-util"]
 
 [dev-dependencies.windows-sys]
 version = "0.61.2"

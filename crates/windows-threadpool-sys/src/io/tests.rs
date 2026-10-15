@@ -325,9 +325,12 @@ mod observers {
     use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
     use std::sync::{Arc, Mutex};
 
-    use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
+    use windows_overlapped_io_sys::test_util::{OBSERVER_QUERIES, run_every_query};
+    use windows_overlapped_io_sys::{
+        EndpointObserver, Issued, Operation, Submitted, UnassociatedEndpoint,
+    };
     use windows_sys::Win32::Foundation::{
-        ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE,
+        ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE, NO_ERROR,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile,
@@ -513,5 +516,67 @@ mod observers {
             !server_is_open(&mut client),
             "the last holder must close the handle"
         );
+    }
+
+    /// Issue every observer query `rounds` times, checking each round issued them all.
+    fn query_repeatedly(observer: &EndpointObserver, rounds: usize) {
+        for _ in 0..rounds {
+            assert_eq!(
+                run_every_query(observer).len(),
+                OBSERVER_QUERIES.len(),
+                "a round issues every query"
+            );
+        }
+    }
+
+    #[test]
+    fn every_query_while_a_read_pends_leaves_it_to_complete() {
+        let (endpoint, mut client) = pending_pipe("every-query-complete");
+        let (tp, results) = recording_object(endpoint);
+        let observer = tp.observer();
+
+        let mut buffer = [0_u8; 8];
+        let buf_ptr = buffer.as_mut_ptr();
+        // SAFETY: one read on a pipe carrying no data, so it pends; `buffer`
+        // outlives it because run_down below waits for its callback.
+        let submitted =
+            unsafe { tp.submit(Operation::new(()), |h, ov| issue_read(h, ov, buf_ptr, 8)) };
+        assert!(matches!(submitted, Submitted::Pending(_)));
+        query_repeatedly(&observer, 4);
+        assert_eq!(tp.outstanding(), 1);
+        assert!(
+            results.lock().expect("results").is_empty(),
+            "the queries completed nothing"
+        );
+
+        client.write_all(b"data").expect("client write");
+        tp.run_down();
+        assert_eq!(*results.lock().expect("results"), [NO_ERROR]);
+        assert_eq!(&buffer[..4], b"data");
+        query_repeatedly(&observer, 1);
+    }
+
+    #[test]
+    fn every_query_while_a_read_pends_leaves_it_to_cancel() {
+        let (endpoint, _client) = pending_pipe("every-query-cancel");
+        let (tp, results) = recording_object(endpoint);
+        let observer = tp.observer();
+
+        let mut buffer = [0_u8; 8];
+        let buf_ptr = buffer.as_mut_ptr();
+        // SAFETY: one read on a pipe carrying no data, so it pends; `buffer`
+        // outlives it because run_down below waits for its callback.
+        let submitted =
+            unsafe { tp.submit(Operation::new(()), |h, ov| issue_read(h, ov, buf_ptr, 8)) };
+        let Submitted::Pending(id) = submitted else {
+            panic!("expected a pending read, got {submitted:?}");
+        };
+        query_repeatedly(&observer, 4);
+        assert_eq!(tp.outstanding(), 1);
+
+        tp.cancel(id).expect("cancel");
+        tp.run_down();
+        assert_eq!(*results.lock().expect("results"), [ERROR_OPERATION_ABORTED]);
+        query_repeatedly(&observer, 1);
     }
 }

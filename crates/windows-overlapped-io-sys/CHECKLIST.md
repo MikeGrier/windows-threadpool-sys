@@ -23,33 +23,3 @@ exists to keep visible.
   stated contract holds under the condition its caller actually uses it in. `outstanding()` is the obvious
   candidate -- its meaning already changed once (a dequeued-but-held completion no longer counts), and
   `run_down` is a reliability gate that reads it.
-
-## M16 -- More observer queries
-
-M15 shipped the observer with one query, `file_len`. This milestone widens it to the other read-only
-handle queries ([DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handle", the bullet on what
-qualifies as an observer query). Each query is behind `fs`, returns a structured result rather than one
-method per field, and lands with tests of its own result. Independent of M14; it may be taken first.
-
-- [x] **M16.1** -- `standard_info()` reads the whole `FileStandardInfo`; `file_len()` is its shortcut. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m161)
-
-- [x] **M16.2** -- `file_id()` reads the volume serial and 128-bit file ID. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m162)
-
-- [x] **M16.3** -- `file_type()` classifies any handle, in the core rather than behind `fs`. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m163)
-
-- [x] **M16.4** -- `storage_info()` and `alignment_info()` read the sector geometry and buffer alignment. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m164)
-
-- [x] **M16.5** -- The page size is asked of the OS, and `PageBuffers` aligns to what the device reports. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m165)
-
-- [x] **M16.6** -- `remote_protocol_info()` reads the remote protocol, version, flags and SMB2 capabilities. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m166)
-
-- [x] **M16.7** -- `basic_info()` reads the four times and the attributes, measured current through the handle. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m167)
-
-- [x] **M16.8** -- `final_path()` and `final_path_as()` read the current path as `Wtf16String`, in every volume and name form. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m168)
-
-- [x] **M16.9** -- `volume_info()` reads the label, serial, component limit, file-system flags and name. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m169)
-
-- [ ] **M16.10** -- **Every query against every backend, with an operation pending.** One table of the
-  queries M16.1-M16.9 added, run through an observer while an operation pends on `AssociatedEndpoint`,
-  `ThreadpoolIo` and `BlockingEndpoint`, as M15.5 did for `file_len`; each pending operation must still
-  complete or cancel as it would without the queries.

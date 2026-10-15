@@ -663,3 +663,32 @@ sparse succeeds exactly when the volume reports `FILE_SUPPORTS_SPARSE_FILES`. Me
 ReFS (`Q:`): the 32-bit serial is the low half of `file_id()`'s 64-bit serial (tested on the temp volume),
 and every reported flag bit is a named one. The NUL device is refused with `ERROR_INVALID_FUNCTION`,
 tested. Eight sabotages added to [sabotage.json](sabotage.json), one a control; the sweep behaves as declared.
+
+## Moved 2026-10-15 12:40:14 -04:00 -- M16.10, completing M16: more observer queries
+
+Every M16 item is now archived in this file under its own heading, and the milestone has left
+[CHECKLIST.md](CHECKLIST.md).
+
+### <a id="m1610"></a>M16.10 -- Every observer query, issued while an operation pends on each backend, leaves it to complete or cancel. *(completed 2026-10-15 12:40:14 -04:00)*
+
+`test_util::OBSERVER_QUERIES` is the one table: every query `EndpointObserver` offers, `final_path_as` in
+each of its eight forms, with `run_every_query` to issue them. It lives in this crate behind a new
+off-by-default `test-util` feature (implying `fs`), so windows-threadpool-sys' `ThreadpoolIo` tests bind to
+it rather than to a copy; this crate's own tests see it without the feature. Its own tests check the names
+are distinct, that on a local file every query answers but the remote one, and that on a named pipe only
+the two opened-form path rows answer -- the place the `final_path_as` rows differ, so each is shown to pass
+its own arguments. It is a hand census (an impl's methods cannot be enumerated), and a comment on
+`EndpointObserver` asks that a new query be added to it -- recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+On each backend the table runs repeatedly while an operation pends: on `AssociatedEndpoint` a
+`ConnectNamedPipe` then completes when a client connects, or is cancelled and reports
+`ERROR_OPERATION_ABORTED`, with exactly one completion and nothing dequeued before; on `BlockingEndpoint`
+(which has no cancellation) a read completes with the data written after the queries; on `ThreadpoolIo` a
+read completes with its data or is cancelled, each recorded once. Sabotage aimed at the claim rather than a
+symptom: a `CancelIoEx` injected into `volume_info`, and separately into `final_path_as` -- queries only
+the table issues while an operation pends, unlike the M15.5 `file_len` path -- is caught by the new tests on
+every backend. The threadpool-sys manifest's entry for it is caught by the sweep before reaching the
+`ThreadpoolIo` tests, because that manifest's `testArgs` run the whole workspace and cargo stops at the first
+failing binary; the `ThreadpoolIo` half was confirmed by applying the patch and running those tests alone,
+and the entry says so. The end-of-milestone workspace build, debug and release, is clean.

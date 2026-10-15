@@ -346,6 +346,17 @@
       "replace": [
         "        wrapped.iter().chain(oldest_first.iter())"
       ]
+    },
+    {
+      "name": "an observer's volume query cancels the handle's I/O",
+      "file": "../windows-overlapped-io-sys/src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "M16.10: every observer query, issued from windows-overlapped-io-sys' shared table while a TP_IO read pends, must leave that read to complete. The volume query is one only that table issues while an operation pends. Patched in the sibling crate because that is where the query lives. CAUTION on what a catch here shows: this manifest's testArgs run the whole workspace, and cargo stops at the first failing test binary, which is windows-overlapped-io-sys' own -- so the sweep reports this caught without reaching the TP_IO tests. That those tests catch it too was verified by applying this patch and running `io::tests::observers::every_query` alone (both failed, 2026-10-15); this entry re-checks the claim, not that half of it.",
+      "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
+      "replace": [
+        "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.as_raw_handle(), std::ptr::null()) };"
+      ]
     }
   ]
 }
