@@ -130,10 +130,11 @@ a considered omission is distinguishable from an unexamined one.
 ## Storage-locality entries
 
 Added after round one, for [durable-ioring](../durable-ioring/CHECKLIST.md)'s flush domains,
-which need to know where storage is. Each is one `DeviceIoControl` call, made through one
-overlapped-safe helper, so it is the same call on a handle opened overlapped or not and posts
-nothing to a completion port the handle belongs to. The checklist's `NR-2` milestone lists the
-entries still to come.
+which need to know where storage is. Each is one call. The `DeviceIoControl` ones are made through
+one overlapped-safe helper, so each is the same call on a handle opened overlapped or not and
+posts nothing to a completion port the handle belongs to; `GetStorageDependencyInformation` is a
+virtdisk call that takes its own path and returns its status directly. The checklist's `NR-2`
+milestone lists the entries still to come.
 
 | Win32 call | Type |
 |---|---|
@@ -142,6 +143,7 @@ entries still to come.
 | `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceUniqueIdProperty`) | `QueryStorageDeviceUniqueId` |
 | `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceNumaProperty`) | `QueryStorageDeviceNumaNode` |
 | `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (any property, reply as bytes) | `QueryStorageProperty` |
+| `GetStorageDependencyInformation` (virtdisk) | `QueryStorageDependencyInformation` |
 
 ## Testing your own code against these entries
 

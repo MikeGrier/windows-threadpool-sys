@@ -121,6 +121,7 @@ pub mod path;
 pub mod query;
 pub mod request;
 pub mod security;
+pub mod storage_dependency;
 pub mod storage_numa;
 pub mod storage_property;
 pub mod storage_query;
@@ -153,6 +154,10 @@ mod tests;
 
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
+};
+pub use storage_dependency::{
+    QueryStorageDependencyInformation, StorageDependency, StorageDependencyError,
+    StorageDependencyFlags, StorageDependencyInfo, StorageDependencyVersion,
 };
 pub use storage_numa::{QueryStorageDeviceNumaNode, StorageDeviceNuma};
 pub use storage_property::StoragePropertyError;
