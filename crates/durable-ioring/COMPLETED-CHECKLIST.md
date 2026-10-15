@@ -2883,3 +2883,9 @@ The authoritative text is [DI-D-61](DESIGN-NOTES.md#di-d-61). The item asked for
 ### <a id="di-104"></a>DI-10.4 -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. *(completed 2026-10-15 12:22:00 -04:00)*
 
 The authoritative text is [DI-D-62](DESIGN-NOTES.md#di-d-62). The engineer asked for the raw-volume work to be repeated against the disk itself rather than a partition on it; it was not a numbered item, so it is recorded here. `OpenedDisk<B>` is opened from a `DiskPath` and `Win32FileTarget::from_disk` takes it and nothing else. The elevated tests run against an unpartitioned scratch VHDX whose disk number is taken only from `diskpart`'s report of the file the helper made.
+
+## Moved 2026-10-15 14:07:15 -04:00 -- DI-13.2: a file is opened through windows-namespace-request-sys
+
+### <a id="di-132"></a>DI-13.2 -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. *(completed 2026-10-15 14:07:15 -04:00)*
+
+The authoritative text is [DI-D-63](DESIGN-NOTES.md#di-d-63). The item was written as "name the unsafe home for opening"; the workspace already had a memory-safe, un-narrowed wrapper for the open calls in `windows-namespace-request-sys`, so the engineer chose to depend on it instead of building a second one, and asked for two checks (a synchronous `perform` is acceptable, and the handle is plain and unassociated), which DI-D-63 records. What the item left over, a `SecurityDescriptor` from SDDL and a `ReOpenFile` entry that the request crate lacks, became `DI-13.5` and `DI-13.6`, and the request crate's `NR-3`.

@@ -165,7 +165,8 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [ ] **DI-13.1** -- **The surface, written down before any of it is built.** One decision in
   [DESIGN-NOTES.md](DESIGN-NOTES.md), with a table over every parameter of the documented open
-  calls -- `CreateFile2` and its extended parameters, `OpenFileById`, `ReOpenFile` -- saying for each
+  calls -- `CreateFileW`, which the open goes through ([DI-D-63](DESIGN-NOTES.md#di-d-63)), and
+  `CreateFile2`, which has the same parameters, `OpenFileById`, `ReOpenFile` -- saying for each
   whether it is exposed (and as which type) or excluded (and the analytic reason, per the option
   integrity rule: it computes the wrong answer, not that no consumer is in sight). Each row also says
   what the option does to a target's claims: class, alignment, write-through, offsets. Rows ruled by
@@ -181,13 +182,7 @@ option recorded by construction. The rule throughout is documented APIs only
   warranty would mean nothing), `hTemplateFile`, and directory handles by
   `FILE_FLAG_BACKUP_SEMANTICS` (the ring moves file data).
 
-- [ ] **DI-13.2** -- **The unsafe home for opening, and one wrapper over the documented open call.**
-  The crate that holds the `unsafe` is the engineer's to name: a new `-sys` crate for opening, or
-  [win-volume-sys](../win-volume-sys/README.md) widened, whose name says volumes. Either way the
-  wrapper takes typed parameters and no raw flag word, returns an owned handle, and is the only
-  place the crate calls `CreateFile2`, so `std::fs::OpenOptions` stops being the opener and its gaps
-  (no security attributes on stable, no template, no by-ID) stop being ours. `OpenedFile::open`
-  moves onto it with no change a caller can see; `DI-13.1`'s table is its specification.
+- [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
 - [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the
   documented file access rights the table in `DI-13.1` exposes (data read and write; attributes;
@@ -199,7 +194,24 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
   exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
   violation is a typed error that names which side conflicted where the kernel says. Tests with two
-  opens: each combination the table lists is accepted or refused as `CreateFile2` documents.
+  opens: each combination the table lists is accepted or refused as `CreateFileW` documents.
+
+- [ ] **DI-13.5** -- **`SecurityDescriptor` from SDDL, taken from `windows-namespace-request-sys`.**
+  That crate has no constructor from text; [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md)
+  adds one. This item is done when this crate depends on the release that carries it. `DI-14.3`
+  needs it.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
+  > -> `NR-3` -> `NR-3.1` (`SecurityDescriptor` from SDDL). See
+  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
+
+- [ ] **DI-13.6** -- **A `ReOpenFile` entry, taken from `windows-namespace-request-sys`.** That crate
+  has no entry for it; [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) adds one. This item is
+  done when this crate depends on the release that carries it. `DI-15.4` needs it.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
+  > -> `NR-3` -> `NR-3.2` (`ReOpenFile` entry). See
+  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
@@ -219,8 +231,8 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [ ] **DI-14.3** -- **Creation attributes, security descriptor, inheritance.** The file attributes a
   new file can be created with (hidden, read-only, temporary, encrypted and the others the table
-  lists), as a typed set. A security descriptor built from SDDL by a documented conversion call,
-  owned and freed by the wrapper, so a caller never holds a raw pointer. Handles are never
+  lists), as a typed set. A security descriptor built from SDDL through the constructor `DI-13.5`
+  brings, owned and freed by it, so a caller never holds a raw pointer. Handles are never
   inheritable in v1 (the engineer's ruling, `DI-13.1`): an inheritable handle reaches child processes
   that can write through it, so there is no option to set. Security quality-of-service flags where
   the table keeps them. Tests: a created file carries the attributes and the descriptor asked for,
@@ -263,7 +275,7 @@ option recorded by construction. The rule throughout is documented APIs only
   not a finding. If it holds, the decision records it and names the substitute: list the directory,
   take the child's ID, open it by ID (`DI-15.2`). If a documented route exists, it is an item here.
 
-- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`.** A new `OpenedFile<B2>` from an
+- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2>` from an
   owned one, changing access, sharing and flags: cached to unbuffered and back, a read-only handle for
   a scrubber beside the writer. The target's alignment is recomputed for the new mode, and going
   unbuffered runs the remote check. `ReOpenFile` documents that the new access and sharing cannot
