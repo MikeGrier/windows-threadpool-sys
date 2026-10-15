@@ -26,15 +26,13 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.2** -- `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` on a volume handle, with the helper's input buffer and its first real pending control. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-22)
 
-- [ ] **NR-2.3** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty`** on a
-  disk handle (the helper's input buffer is there from `NR-2.2`; check first that this code behaves
-  through it, as `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` did, before building on it): the device's `STORAGE_DEVICE_UNIQUE_IDENTIFIER`, its stable identity, variable-sized.
-  This, not the disk number, is what a flush-domain key is derived from: a disk number can be
-  reused by a different device after hot removal within one process.
+- [x] **NR-2.3** -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty` on a disk handle, through a shared `storage_property` module. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-23)
 
 - [ ] **NR-2.4** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty`** on a disk
   handle: the device's NUMA node, or the documented unknown value. Per disk, so a volume spanning
-  disks on different nodes reports each rather than one false answer (the spike's question 6).
+  disks on different nodes reports each rather than one false answer (the spike's question 6). The
+  query structure and the learn-the-size loop are `storage_property`'s, from `NR-2.3`
+  ([D-22](DESIGN-NOTES.md#d-22)); this item is the property's own typed reply.
 
 - [ ] **NR-2.5** -- **`GetStorageDependencyInformation`** (`virtdisk`) on a virtual disk or volume
   handle: the backing file a VHD or VHDX depends on, so the helper can follow it to its own flush

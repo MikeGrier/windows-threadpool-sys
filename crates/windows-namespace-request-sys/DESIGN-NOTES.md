@@ -898,3 +898,61 @@ a fake device built to answer that way. The fake's one measured behaviour is the
 same retry, over its own `control()`. It is covered by `NR-2.6` with the helper's.
 
 **Scheduled work:** none beyond `NR-2.6`.
+
+## <a id="d-22"></a>D-22: Storage properties are one call with a typed entry each, and a reply is reported as bytes the device gave
+
+**Status: decided and implemented** by `NR-2.3` (`src/storage_property.rs`, the shared mechanics, and
+`src/storage_unique_id.rs`, the first entry). `NR-2.4` is the second.
+
+**What is decided.**
+
+- **One Win32 call, an entry per property.** `IOCTL_STORAGE_QUERY_PROPERTY` returns a different structure
+  for each property id, so each property is its own entry with its own typed reply, which is how
+  [D-3](#d-3) reads "one entry per Win32 call" for a call whose meaning is chosen by an argument. What the
+  entries share is private: the query structure and learning the size of the reply. The one public item
+  there is [`StoragePropertyError`](src/storage_property.rs), shared because the failures are the same.
+- **The reply starts with its own size.** Every reply begins with a `STORAGE_DESCRIPTOR_HEADER` (a version
+  and the size of the whole reply). The entry asks once with a buffer it expects to suffice
+  (512 bytes, chosen because the one reply measured was 112) and again at the size the header names, in a
+  bounded loop that ends in `Unstable`. The reply returned is exactly the bytes the header says it has,
+  not the padding of a larger buffer.
+- **A reply that is not what it says is `Malformed`, not read**, as in [D-21](#d-21): a size smaller than
+  the header, a call that claims more bytes than the buffer has or fewer than a header, a reply shorter
+  than the size it names in a buffer that had room for it, and a request for more room that names a size
+  already given.
+- **The unique identifier's sections are reported as bytes, not parsed.** The reply is a five-`u32` header
+  (`storduid.h`, which `windows-sys` does not carry, so it is laid out here from the documentation) and up
+  to three sections its offsets point to: the device ID descriptor, the device descriptor and the drive
+  layout signature. Each begins with its own version and size, which is how a section is delimited, and
+  each is checked to lie within the reply. An offset of zero means the section is absent.
+- **The identifier is not interpreted.** What an identifier inside a descriptor is, and which of them a
+  key for a disk is made from, is the consumer's, as the reply's own documentation is.
+
+**Working position, not a decision:** typed accessors for the identifiers *inside* the descriptors
+(`STORAGE_IDENTIFIER` entries) are not provided. Whether they belong in this crate or in the locality helper
+that derives the key (root `M39`) is not yet settled, and nothing binds to the present answer. No work is
+scheduled for it.
+
+**Measured on 2026-10-15**, Windows 11, one disk, a handle opened with no access:
+
+- The control works through the helper ([D-20](#d-20)), on a plain and an overlapped handle alike, and an
+  ordinary file and the `NUL` device fail with the device's own code.
+- A buffer of exactly the header's size is answered with the header alone; one between that and the reply is
+  `ERROR_MORE_DATA` with the header written; one smaller than the header, and an input smaller than the
+  query structure, are `ERROR_BAD_LENGTH`. The `ERROR_MORE_DATA` half is therefore reachable on a machine of
+  one disk, unlike [D-21](#d-21)'s, and the loop is tested against the real disk for every first-buffer
+  size.
+- The disk reports its device ID descriptor and neither of the other two sections (their offsets are zero).
+  The descriptor's own size is exactly what remains of the reply.
+
+**What was not observed.** A disk that reports a device descriptor or a drive layout signature, one on
+another bus (NVMe, USB, a virtual disk), and a reply larger than the first buffer. Those shapes are tested
+against constructed replies of the documented layout and a fake device that answers as the real one was
+measured to. That an offset of zero means "absent" is a reading of the measurement and of the fact that
+zero is where the header is; the documentation does not say.
+
+**Documented, with a caveat.** The control code and the property id are documented, and the documentation
+marks the property as intended for driver use. The reply structure is documented in the driver kit, not the
+Win32 SDK headers; it is the documented route to the structure, which is what this crate's rule asks.
+
+**Scheduled work:** `NR-2.4` reuses `storage_property`; the decision about `win-volume-sys` is `NR-2.6`.

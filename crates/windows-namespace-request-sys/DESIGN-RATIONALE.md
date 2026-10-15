@@ -377,3 +377,44 @@ new one is proven, so the decision is `NR-2.6`. Capping the count the device rep
 allocation: a cap is a number this crate would have to choose and defend, the count comes from the volume driver,
 and the failure is already an error the caller receives; not decided against for ever, but nothing shows it is
 needed.
+
+## D-22: storage properties
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-22`. This is how it was reached.
+
+**The `NR-2.3` "check first" was the first question, and it was cheap.** The checklist said to check that an
+`IOCTL_STORAGE_*` code behaves through the helper before building on it, because `FSCTL_PIPE_LISTEN` had not.
+A throwaway test opened the disk with no access and asked for the property with output buffers of 0, 4, 7, 8,
+16, 20, 24, 64 and 4096 bytes and with inputs shorter than the structure. That one run gave the whole size
+protocol (7: bad length; 8: the header alone; 9 up: more data with the header written; 4096: the reply) and
+the reply's shape, and a second probe printing only numeric fields showed the descriptor's own size equals what
+remains of the reply. Nothing in the reply was recorded beyond those facts: it holds the device's identifiers,
+which identify the machine.
+
+**What was weighed for the reply type.**
+
+- *Parsed, with typed identifiers inside the descriptors.* Rejected for now as a working position, not a
+  decision, for the gradient reason: which identifiers a key uses is the locality helper's question, which has
+  not been asked yet, and a typed surface here would be an answer to it.
+- *Raw bytes of the whole reply only.* A consumer would redo the offset checks every time, and the checks are
+  where a damaged reply becomes an out-of-bounds read; so the sections are delimited and bounds-checked here and
+  handed back as slices.
+- *One generic entry that takes a property id and returns bytes.* Not built, and not foreclosed: nothing argues
+  it has no value, and it would let a consumer reach a property this crate has no entry for. It is raised with
+  the engineer rather than added unasked, and the shared `storage_property` module is the shape it would take.
+
+**Why the zeroed-buffer and `u32` reader moved.** The second entry to size a buffer from a reply needed the
+same two helpers `volume_extents` had written privately; the mono-repo rule is to fix the layer, so they are now
+in the helper's module and `volume_extents` uses them. Its sabotage entry for the allocation moved with the
+function.
+
+**The sweep and the redundant check.** The first sweep caught all twenty-one entries, but only after a pass over
+the survivors a mutant could hide behind: a length guard in `decode` was refused anyway by the first offset read
+that fell outside the header, so mutating it changed no outcome, and it was deleted rather than defended; and the
+tests for a call that claims more bytes than it was given room for would have passed with the claim check
+removed, because the header the fake wrote was empty, so they now write a valid one, and the test for a reply
+shorter than its header asserts the number of calls, which is what distinguishes refusing it from asking again.
+
+**A name collision, and what it showed.** The oplock test in `device_control` had its own `u32_at` that panicked
+on a short buffer; the shared one returns `None`. The test now uses the shared one, so the one reader every entry
+relies on is the one the earliest tests exercise.

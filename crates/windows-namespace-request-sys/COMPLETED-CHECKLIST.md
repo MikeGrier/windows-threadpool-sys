@@ -113,3 +113,23 @@ to. Thirteen sabotages pin it, in [sabotage.json](sabotage.json), all caught. Th
 control needed the input buffer was wrong (`NR-2.3` and `NR-2.4` do); the buffer was added here regardless, as
 scheduled. What this left to do is `NR-2.6`, which now covers two duplicates in `win-volume-sys`, and the
 `IOCTL_STORAGE_*` codes of `NR-2.3` and `NR-2.4`, which have not been checked to work through the helper.
+
+## Moved 2026-10-15 17:58:20 -04:00 -- NR-2.3: a disk's device unique identifier
+
+### <a id="nr-23"></a>NR-2.3 -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty` on a disk handle, through a shared `storage_property` module. *(completed 2026-10-15 17:58:20 -04:00)*
+
+`QueryStorageDeviceUniqueId` reports a disk's device unique identifier, which names the device and not the slot
+it is in, as the bytes the device gave: the header, and the device ID descriptor, device descriptor and drive
+layout signature it points to, each delimited from its own header and bounds-checked, none parsed. The query
+structure and the learn-the-size loop are in `storage_property`, which `NR-2.4` reuses. The decision is
+[D-22](DESIGN-NOTES.md#d-22) and how it was reached is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code
+is `29a02f6e`.
+
+Measured here: the control works through the helper; a buffer of exactly the header gets the header alone, one
+between that and the reply gets `ERROR_MORE_DATA` with the header written, and a buffer or input shorter than its
+structure is `ERROR_BAD_LENGTH`. The disk reports its device ID descriptor and neither other section. Unlike the
+disk-extents entry, the `ERROR_MORE_DATA` half is reachable here, so the loop is tested against the real disk for
+every first-buffer size. Twenty-one sabotages pin it, in [sabotage.json](sabotage.json), all caught. Not observed:
+a disk that reports the other two sections, and one on another bus. What this left to do is `NR-2.4`, and the
+question whether the identifiers inside the descriptors belong in this crate, which `D-22` records as a working
+position and not a decision.
