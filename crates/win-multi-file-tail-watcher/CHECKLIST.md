@@ -29,9 +29,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.6.2** -- The watcher reports typed diagnostic events to a sink the caller supplies through `Watcher::with_diagnostics`, in the shape of durable-ioring's `DiagnosticSink`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-262)
 
-- [ ] **TW-2.6.3** -- **The terminal SQ entry.** A third `SqEntry` kind carrying a clone of `T`, the
-  Win32 code as a `u32`, and the last length reported; `SqEntry` becomes `#[non_exhaustive]`.
-  ([TW-D-13](DESIGN-NOTES.md#tw-d-13), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+- [x] **TW-2.6.3** -- `SqEntry::Terminal` is a third entry kind carrying a clone of `T`, the Win32 code and the last length reported, and `SqEntry` is `#[non_exhaustive]`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-263)
 
 - [ ] **TW-2.6.4** -- **A terminal state on a roster entry**, which the snapshot skips and which is
   set only by the report pass once the terminal entry is written.

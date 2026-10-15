@@ -9,11 +9,40 @@ use windows_waitable_queues::{CapacityError, PushError, slotwise_mpsc};
 #[cfg(test)]
 mod tests;
 
-/// One entry of the SQ.
+/// One entry of the SQ. Open to further kinds, so match it with a wildcard arm:
+///
+/// ```
+/// # use win_multi_file_tail_watcher::SqEntry;
+/// fn kind<T>(entry: &SqEntry<T>) -> &'static str {
+///     match entry {
+///         SqEntry::Attention(_) => "attention",
+///         SqEntry::Terminal(_) => "terminal",
+///         SqEntry::PollDone => "poll done",
+///         _ => "a kind this version does not know",
+///     }
+/// }
+/// # assert_eq!(kind(&SqEntry::<u8>::PollDone), "poll done");
+/// ```
+///
+/// Without the wildcard arm it does not compile:
+///
+/// ```compile_fail,E0004
+/// # use win_multi_file_tail_watcher::SqEntry;
+/// fn kind<T>(entry: &SqEntry<T>) -> &'static str {
+///     match entry {
+///         SqEntry::Attention(_) => "attention",
+///         SqEntry::Terminal(_) => "terminal",
+///         SqEntry::PollDone => "poll done",
+///     }
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SqEntry<T> {
     /// A registration's length changed.
     Attention(Attention<T>),
+    /// A registration can no longer be probed, and no longer will be (TW-D-13).
+    Terminal(Terminal<T>),
     /// A poll has written everything it had for this beat.
     PollDone,
 }
@@ -30,6 +59,18 @@ pub struct Attention<T> {
     pub last_known: u64,
     /// The length now.
     pub current: u64,
+}
+
+/// A report that a registration can never be probed again: the handle it holds answered with a
+/// code that means it never will. The registration stays until it is dropped, and is reported once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Terminal<T> {
+    /// A clone of the value the registration was made with.
+    pub value: T,
+    /// The Win32 code the failed probe carried.
+    pub win32_code: u32,
+    /// The length last reported for the registration.
+    pub last_known: u64,
 }
 
 /// A capacity the SQ cannot have.

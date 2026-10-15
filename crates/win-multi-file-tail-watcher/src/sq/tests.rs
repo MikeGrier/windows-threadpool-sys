@@ -2,7 +2,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{Attention, SqCapacityError, SqEntry, SqPushError, queue};
+use super::{Attention, SqCapacityError, SqEntry, SqPushError, Terminal, queue};
 use crate::{CreateError, Watcher};
 
 fn attention(value: u32, last_known: u64, current: u64) -> SqEntry<u32> {
@@ -267,4 +267,98 @@ fn entries_compare_by_kind_and_content() {
     assert_ne!(attention(1, 2, 3), attention(1, 3, 3));
     assert_ne!(attention(1, 2, 3), attention(2, 2, 3));
     assert_ne!(attention(0, 0, 0), SqEntry::PollDone);
+}
+
+fn terminal(value: u32, win32_code: u32, last_known: u64) -> SqEntry<u32> {
+    SqEntry::Terminal(Terminal {
+        value,
+        win32_code,
+        last_known,
+    })
+}
+
+#[test]
+fn a_terminal_entry_carries_the_value_the_code_and_the_last_length() {
+    let SqEntry::Terminal(entry) = terminal(7, 6, 1234) else {
+        panic!("a terminal entry");
+    };
+    assert_eq!(
+        (entry.value, entry.win32_code, entry.last_known),
+        (7, 6, 1234)
+    );
+}
+
+#[test]
+fn terminal_entries_compare_by_every_field_and_by_kind() {
+    assert_eq!(terminal(1, 6, 10), terminal(1, 6, 10));
+    assert_ne!(terminal(1, 6, 10), terminal(2, 6, 10));
+    assert_ne!(terminal(1, 6, 10), terminal(1, 1006, 10));
+    assert_ne!(terminal(1, 6, 10), terminal(1, 6, 11));
+    assert_ne!(terminal(1, 6, 10), attention(1, 6, 10));
+    assert_ne!(terminal(1, 6, 10), SqEntry::PollDone);
+    assert_eq!(terminal(1, 6, 10).clone(), terminal(1, 6, 10));
+}
+
+#[test]
+fn the_three_kinds_come_out_in_the_order_they_went_in() {
+    let (writer, reader) = queue(8).expect("queue");
+    let written = [
+        attention(1, 0, 10),
+        terminal(2, 6, 4),
+        SqEntry::PollDone,
+        terminal(3, 1006, 0),
+        attention(4, 10, 11),
+    ];
+    for entry in written.clone() {
+        writer.push(entry).expect("room");
+    }
+    let read: Vec<_> = std::iter::from_fn(|| reader.pop()).collect();
+    assert_eq!(read, written);
+}
+
+#[test]
+fn a_full_queue_hands_a_terminal_entry_back_intact() {
+    let (writer, _reader) = queue(2).expect("queue");
+    writer.push(attention(0, 0, 1)).expect("room");
+    writer.push(attention(1, 0, 1)).expect("room");
+    let refused = writer.push(terminal(9, 6, 77)).expect_err("full");
+    assert_eq!(refused, SqPushError::Full(terminal(9, 6, 77)));
+}
+
+#[test]
+fn a_closed_queue_hands_a_terminal_entry_back_intact() {
+    let (writer, reader) = queue(4).expect("queue");
+    drop(reader);
+    let refused = writer.push(terminal(9, 1006, 5)).expect_err("closed");
+    assert_eq!(refused, SqPushError::Closed(terminal(9, 1006, 5)));
+}
+
+#[test]
+fn a_terminal_entry_is_drained_by_the_caller_among_the_others() {
+    let watcher = Watcher::new(8).expect("watcher");
+    let writer = watcher.sq_writer();
+    writer.push(attention(1, 0, 5)).expect("room");
+    writer.push(terminal(2, 6, 5)).expect("room");
+    writer.push(SqEntry::PollDone).expect("room");
+    let drained: Vec<_> = watcher.drain().collect();
+    assert_eq!(
+        drained,
+        [attention(1, 0, 5), terminal(2, 6, 5), SqEntry::PollDone]
+    );
+}
+
+#[test]
+fn a_terminal_entry_owns_its_value_independently_of_the_registration() {
+    let tag = Arc::new(());
+    let (writer, reader) = queue(4).expect("queue");
+    writer
+        .push(SqEntry::Terminal(Terminal {
+            value: Arc::clone(&tag),
+            win32_code: 6,
+            last_known: 3,
+        }))
+        .expect("room");
+    assert_eq!(Arc::strong_count(&tag), 2);
+    drop(reader.pop().expect("entry"));
+    assert_eq!(Arc::strong_count(&tag), 1);
 }

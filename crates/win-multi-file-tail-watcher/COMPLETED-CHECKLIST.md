@@ -376,3 +376,32 @@ constructors; a registration's id unique, ordered and never reused, and equal to
 snapshot copies; and `Send + Sync`. The sabotage manifest gains a sink that is not asked, an event
 built before the question, an event built and dropped, a sink replaced by the default, an id of zero,
 and a text that drops the code; the question written as an early return survives as the control.
+
+## Moved 2026-10-15 19:38:28 -04:00 -- TW-2.6.3: the terminal SQ entry
+
+### <a id="tw-263"></a>TW-2.6.3 -- `SqEntry::Terminal` is a third entry kind carrying a clone of `T`, the Win32 code and the last length reported, and `SqEntry` is `#[non_exhaustive]`. *(completed 2026-10-15 19:38:28 -04:00)*
+
+`src/sq.rs`. Public: `SqEntry::Terminal` and `Terminal { value, win32_code, last_known }`.
+([TW-D-13](DESIGN-NOTES.md#tw-d-13), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+
+- **`Terminal<T>`** has a clone of the registration's `T`, the Win32 code as a `u32` (not an
+  `Option`: the predicate only calls a failure terminal when it carries a listed code), and the
+  length last reported, so a caller knows where it stood. Like the others it is `Clone` and
+  comparable, and it owns its value independently of the registration.
+- **Nothing writes one yet.** The report pass (TW-2.7) does, under the same `expect(dead_code)` as
+  the writer, and marks the roster entry terminal once it is written (TW-2.6.4).
+- **`SqEntry` is `#[non_exhaustive]`**, so this kind and any later one is not a break for a caller.
+  Two documentation examples pin it: a match with a wildcard arm compiles, and one without does not
+  (`compile_fail,E0004`). Only code outside the crate can see the attribute, which is what a
+  doctest is.
+
+Tested: the fields; equality by every field and by kind, and `Clone`; the three kinds coming out in
+the order they went in; a full queue and a closed one each handing a terminal entry back intact; one
+drained by the caller among the others; and the value owned independently of the registration.
+
+Sabotage: a new manifest, [sabotage-doctests.json](sabotage-doctests.json), because only a doctest
+sees the attribute. It has `SqEntry` losing `#[non_exhaustive]` (caught) and the variants declared
+in another order (survives, as the control). Its `testArgs` has no `--lib`: the harness cannot
+pre-build doctests, so that manifest runs the whole suite per entry and is kept to what only a
+doctest can catch. The first version of the control did not survive: moving a variant without its
+documentation left the other undocumented, and the crate denies missing documentation.
