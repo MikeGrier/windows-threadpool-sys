@@ -321,6 +321,11 @@ IDs keep their M2 numbers, for the reason given under M4.
   Whether the old measurements are kept as history is the crate's own decision under its
   three-tier scheme; they are not true of the new design.
 
-  > **-> CROSS-COMPONENT PREREQUISITE:** waits on `NR-3.3` to `NR-3.6` in
-  > `crates/windows-namespace-request-sys` ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)),
-  > since the probe cannot call a `prepare` that no longer exists.
+  > **-> CROSS-COMPONENT PREREQUISITE:** waits on the coupled commit of `NR-3.4` to `NR-3.6` in
+  > `crates/windows-namespace-request-sys` ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)).
+  > That commit removes `prepare`, which this probe reaches through a path dependency, so it also
+  > adapts the probe just enough to build and keep measuring what it measured; this item is the
+  > rewrite that follows, and does not wait for a release.
+
+  **Next:** nothing further in this crate. The order across the crates is at the top of
+  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).

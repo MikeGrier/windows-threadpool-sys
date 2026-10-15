@@ -12,6 +12,40 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) and the reviews (DI-M9) run alongside and gate nothing. Headings marked `+` are parked behind the milestone they name, per the workspace's `M{n}+`
 convention.
 
+## Where the open-surface work goes next (read this first when picking the work back up)
+
+The open surface of a file ([DI-M13](#di-m13----opening-a-file-the-surface-and-its-home) to
+[DI-M15](#di-m15----opening-by-identity-and-reopening)) cannot be done in this crate alone: it
+changes four others. This is the order across all of them. **No status is kept here**, because each
+item's own checkbox is the status and a copy would go stale; this list is only the order and the
+links. Each item below also ends with a `Next:` line pointing at the step after it.
+
+1. [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the captured root and the
+   graft, as one internal type. Additive; nothing breaks.
+2. [NR-3.4](../windows-namespace-request-sys/CHECKLIST.md),
+   [NR-3.5](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.6](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: **one coupled breaking
+   commit.** `OpenFile` and `WatchDirectory` take a `Wtf16String`, an interior NUL is refused,
+   `prepare` is retired. `win-durable-ioring` and `windows-platform-probes` call `prepare` through
+   path dependencies, so **the same commit adapts both just enough to build**, and the request
+   crate's own tests and docs; a commit that leaves the workspace unbuilt is the worse outcome.
+3. [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the SDDL constructor and
+   the `ReOpenFile` entry. Additive, independent of steps 1 and 2; may be done first.
+4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
+   so a new minor. This is a release action and not a checklist item.
+5. After step 2, in any order: [DI-13.1's parked questions](#di-131-open-questions) are yours to
+   rule on (no code waits on you to ask them, but [DI-13.7](#di-137-rework) and `DI-13.3` onward
+   wait on the answers); [M6.1](../windows-platform-probes/CHECKLIST.md), the probe rewrite.
+6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
+   consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
+   [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
+   crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
+7. Then, here: `DI-13.7`, `DI-13.1`, `DI-13.3`, `DI-13.4`, `DI-M14`, `DI-M15`, and `DI-10.3` last.
+
+If you remember only one thing: **the request crate comes first, and its breaking commit moves three
+crates at once.**
+
 ## DI-M9 -- Reviews: the engineer confirms or amends the assistant's choices (ungated; gates nothing)
 
 Each item is one choice the assistant made while building and the engineer has not yet confirmed.
@@ -194,7 +228,7 @@ option recorded by construction. The rule throughout is documented APIs only
   `CreateFileW` has, `CREATE_ALWAYS` included. None of the "not in v1" rulings schedules work;
   a consumer or a measurement reopens each, not this checklist.
 
-  **Open, parked 2026-10-15 while the path contract is settled in
+  <a id="di-131-open-questions"></a>**Open, parked 2026-10-15 while the path contract is settled in
   [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)** (the engineer: "I want to work through
   this before we continue on to subsequent items"). These are questions, not decisions, and the
   table waits on them. (a) The public signature for a path: `&Wtf16Str` only, or anything that
@@ -220,7 +254,7 @@ option recorded by construction. The rule throughout is documented APIs only
   rulings and still to be reworked:** commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63)
   made the open match std (create plus truncate as `OPEN_ALWAYS` and an emptying, an automatic
   `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, long paths made verbatim, std's combination checks);
-  none of that is Win32's, so the rework is written once the questions above settle.
+  none of that is Win32's, so the rework is `DI-13.7`, which waits on the questions above.
 
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
@@ -239,7 +273,7 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-13.5** -- **`SecurityDescriptor` from SDDL, taken from `windows-namespace-request-sys`.**
   That crate has no constructor from text; [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md)
   adds one. This item is done when this crate depends on the release that carries it. `DI-14.3`
-  needs it.
+  needs it. **Next:** `DI-13.6`.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
   > -> `NR-3` -> `NR-3.1` (`SecurityDescriptor` from SDDL). See
@@ -248,10 +282,27 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-13.6** -- **A `ReOpenFile` entry, taken from `windows-namespace-request-sys`.** That crate
   has no entry for it; [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) adds one. This item is
   done when this crate depends on the release that carries it. `DI-15.4` needs it.
+  **Next:** `DI-13.7`, then `DI-13.1`.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
   > -> `NR-3` -> `NR-3.2` (`ReOpenFile` entry). See
   > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
+
+- [ ] **DI-13.7** -- **Rework `OpenedFile::open` to reflect Win32, and amend `DI-D-63`.** <a id="di-137-rework"></a>
+  Commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63) made the open match `std::fs::OpenOptions`
+  (create plus truncate as `OPEN_ALWAYS` and an emptying, an automatic
+  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, a path longer than `MAX_PATH` made verbatim, std's
+  combination checks, and the std-shaped `create`, `create_new` and `truncate`). The engineer's ruling
+  is that this crate reflects Win32 and not std, so all of that goes: the path is handed to `OpenFile`
+  as the caller gave it, a `Wtf16String`, with no conversion here (the request crate grafts or passes
+  it, [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)); the disposition is Win32's own, as a
+  Rust enum, in place of the booleans; combinations the kernel accepts or refuses are the kernel's
+  to answer; `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. Four of the five sabotage entries
+  added with `DI-13.2` pin the std behaviours and are replaced; `DI-D-63`'s "a caller sees no
+  difference" principle is amended and its list of differences rewritten. Waits on the request
+  crate's coupled commit (step 2 of the order at the top of this file), which adapts this crate only
+  enough to build, and on the answers to the parked questions in `DI-13.1` (a), (e) and (f).
+  **Next:** `DI-13.1` (the table is written from the answers), then `DI-13.3`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

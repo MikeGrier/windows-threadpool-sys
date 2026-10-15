@@ -29,6 +29,10 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
   > released. This item is done when the older copy is deleted, and the request crate's `NR-3.8` and
   > the workspace's `M26+.3` are done with it.
 
+  **Next:** `REVIEW-1` below is re-read against the new contract. After that nothing further in this
+  crate; the order across the crates is at the top of
+  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+
 ## M-inf -- Horizon (ungated)
 
 - [ ] **REVIEW-1** -- Review the request path contract against a traversal layer, before one is built.
