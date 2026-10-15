@@ -23,6 +23,16 @@ milestones when the next of these is taken up.
 
 - [x] **WS-1+.5** -- A handle duplicated with a chosen access, and a wait-only event built on it. -> [completed 2026-10-12](COMPLETED-CHECKLIST.md#ws-1+5)
 
+- [ ] **WS-1+.6** -- **Reach 0.1.0 at the next release, and re-pin the dependents with it.** The
+  first release was 0.0.2, not the 0.1.0 the crate declared: the manifest was seeded at 0.0.1 and
+  `bump-patch-for-minor-pre-major` turns a feature into a patch. Cargo reads `^0.0.2` as exactly that
+  version, so the next release forces `windows-threadpool-sys` and `win-durable-ioring` to re-pin
+  either way, and 0.1.0 is the number the crate meant to carry. The next commit that touches this
+  crate and should release carries a `Release-As: 0.1.0` footer, and the same change sets the version
+  requirement in those two dependents' manifests, which the dependency-version check
+  (`.github/release/check-dependency-versions.cjs`) does not cover, since it asks only that a version
+  exist. Gated on this crate's next release.
+
 ## M-inf -- Parked
 
 - [ ] **WS-inf.1** -- **The in-process primitives**: SRW locks with condition variables (including
