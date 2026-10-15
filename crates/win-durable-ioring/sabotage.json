@@ -1107,6 +1107,46 @@
       "why": "Disk 0 is the one a machine starts from; a scratch disk is never it, whatever diskpart prints.",
       "find": ["        Ok(0) => Err(\"the associated disk is disk 0, which is never a scratch disk\".to_owned()),\n"],
       "replace": ["        Ok(0) => Ok(0),\n"]
+    },
+    {
+      "name": "DI-13.2: a created-and-truncated file is not emptied",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "With CREATE_ALWAYS avoided, OPEN_ALWAYS plus an emptying call is the whole of create-and-truncate; without the call an existing file keeps its content.",
+      "find": ["            (true, true, false) => (OPEN_ALWAYS, true),\n"],
+      "replace": ["            (true, true, false) => (OPEN_ALWAYS, false),\n"]
+    },
+    {
+      "name": "DI-13.2: a new file is created through a link that is already there",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "std added FILE_FLAG_OPEN_REPARSE_POINT for a new file, so CREATE_NEW does not follow a link; the open moved off std and keeps that.",
+      "find": ["        let reparse = if self.create_new {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
+      "replace": ["        let reparse = if self.create_new {\n            0\n"]
+    },
+    {
+      "name": "DI-13.2: the emptying step is skipped",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The emptying happens after the open, so it is tried on the call itself and not only on the parameters that ask for it.",
+      "find": ["    if !parameters.truncate_after {\n"],
+      "replace": ["    if true {\n"]
+    },
+    {
+      "name": "DI-13.2: a path longer than an ordinary one is handed over as it was",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The request crate refuses a path past MAX_PATH by design, and std did not, so the verbatim form is what keeps a long path opening.",
+      "find": ["    Ok(verbatim(&absolute))\n"],
+      "replace": ["    Ok(path.to_path_buf())\n"]
+    },
+    {
+      "name": "DI-13.2: a file is no longer shared for deletion",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "std shared every file for reading, writing and deletion, and the share mode is the open's own to state now that std no longer does.",
+      "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
+      "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
     }
   ]
 }

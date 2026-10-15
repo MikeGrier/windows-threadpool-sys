@@ -127,7 +127,10 @@ dependencies = [
  "win-time-sys",
  "win-volume-sys",
  "windows-ioring-sys",
+ "windows-namespace-request-sys",
+ "windows-sys",
  "windows-threadpool-sys",
+ "wtf-string",
 ]
 
 [[package]]

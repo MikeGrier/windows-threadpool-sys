@@ -14,16 +14,21 @@
 //! `OpenedFile<Unbuffered>` in its own signature, and a cached file cannot be passed.
 
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+};
 
 use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
+
+mod open_request;
 
 #[cfg(test)]
 mod tests;
@@ -169,16 +174,57 @@ impl FileOptions {
         self
     }
 
-    fn open_options(self) -> OpenOptions {
-        let mut options = OpenOptions::new();
-        options
-            .read(self.read)
-            .write(self.write)
-            .create(self.create)
-            .create_new(self.create_new)
-            .truncate(self.truncate);
-        options
+    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or the same
+    /// refusal `std::fs::OpenOptions` gave for a combination that cannot mean anything: no
+    /// access, or creating or truncating without write access.
+    fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
+        let access = match (self.read, self.write) {
+            (true, false) => GENERIC_READ,
+            (false, true) => GENERIC_WRITE,
+            (true, true) => GENERIC_READ | GENERIC_WRITE,
+            (false, false) => {
+                return Err(invalid_input(if self.creates_or_truncates() {
+                    "creating or truncating a file requires write access"
+                } else {
+                    "must specify at least one of read or write access"
+                }));
+            }
+        };
+        if !self.write && self.creates_or_truncates() {
+            return Err(invalid_input(
+                "creating or truncating a file requires write access",
+            ));
+        }
+        // `CREATE_ALWAYS` is not used: a created-and-truncated file is opened with `OPEN_ALWAYS`
+        // and emptied once open, as std does.
+        let (disposition, truncate_after) = match (self.create, self.truncate, self.create_new) {
+            (false, false, false) => (OPEN_EXISTING, false),
+            (true, false, false) => (OPEN_ALWAYS, false),
+            (false, true, false) => (TRUNCATE_EXISTING, false),
+            (true, true, false) => (OPEN_ALWAYS, true),
+            (_, _, true) => (CREATE_NEW, false),
+        };
+        // A new file is never created through a link that is already there.
+        let reparse = if self.create_new {
+            FILE_FLAG_OPEN_REPARSE_POINT
+        } else {
+            0
+        };
+        Ok(open_request::Parameters {
+            access,
+            disposition,
+            flags: flags | reparse,
+            truncate_after,
+        })
     }
+
+    fn creates_or_truncates(self) -> bool {
+        self.create || self.create_new || self.truncate
+    }
+}
+
+fn invalid_input(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
 /// An unbuffered file was asked for on a device of another machine, which cannot keep the claim
@@ -245,9 +291,9 @@ impl<B: Buffering> OpenedFile<B> {
                 ));
             }
         }
-        let file = options.open_options().custom_flags(B::FLAGS).open(path)?;
+        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;
         Ok(Self {
-            handle: SharedHandle::from(file),
+            handle: SharedHandle::from(handle),
             geometry: B::geometry(),
             buffering: PhantomData,
         })

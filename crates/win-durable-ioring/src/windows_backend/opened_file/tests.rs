@@ -7,9 +7,14 @@ use std::path::{Path, PathBuf};
 
 use io_buffers::AlignedBuf;
 
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+};
+
 use super::{
     Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
-    final_location, names_a_remote_device,
+    final_location, names_a_remote_device, open_request,
 };
 use crate::dioring::tests::TempFile;
 use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
@@ -260,4 +265,150 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
 
     OpenedFile::<Cached>::open(&remote, read_write())
         .expect("a cached file on a share claims only best effort, and is allowed");
+}
+
+// --- What an open asks of CreateFileW -------------------------------------------------------
+//
+// Opening went from `std::fs::OpenOptions` to `windows-namespace-request-sys`'s `OpenFile`, and
+// a caller must see no difference, so what std asked of the kernel is pinned here.
+
+fn parameters_of(options: FileOptions) -> open_request::Parameters {
+    options.parameters(0).expect("a valid combination")
+}
+
+fn parameters(
+    access: u32,
+    disposition: u32,
+    flags: u32,
+    truncate_after: bool,
+) -> open_request::Parameters {
+    open_request::Parameters {
+        access,
+        disposition,
+        flags,
+        truncate_after,
+    }
+}
+
+#[test]
+fn the_options_map_to_the_access_and_disposition_std_asked_for() {
+    assert_eq!(
+        parameters_of(FileOptions::new().read(true)),
+        parameters(GENERIC_READ, OPEN_EXISTING, 0, false)
+    );
+    assert_eq!(
+        parameters_of(FileOptions::new().write(true)),
+        parameters(GENERIC_WRITE, OPEN_EXISTING, 0, false)
+    );
+    assert_eq!(
+        parameters_of(read_write()),
+        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING, 0, false)
+    );
+    assert_eq!(
+        parameters_of(read_write().create(true)),
+        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS, 0, false)
+    );
+    assert_eq!(
+        parameters_of(read_write().truncate(true)),
+        parameters(GENERIC_READ | GENERIC_WRITE, TRUNCATE_EXISTING, 0, false)
+    );
+}
+
+#[test]
+fn a_created_and_truncated_file_is_opened_always_and_emptied_afterwards() {
+    // Not `CREATE_ALWAYS`, whose semantics std avoids the same way (rust-lang/rust#115745).
+    assert_eq!(
+        parameters_of(read_write().create(true).truncate(true)),
+        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS, 0, true)
+    );
+}
+
+#[test]
+fn a_new_file_is_created_without_following_a_link_and_whatever_else_is_asked() {
+    let expected = parameters(
+        GENERIC_READ | GENERIC_WRITE,
+        CREATE_NEW,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        false,
+    );
+    assert_eq!(parameters_of(read_write().create_new(true)), expected);
+    // `create_new` wins over `create` and `truncate`, as it does in std.
+    assert_eq!(
+        parameters_of(read_write().create_new(true).create(true).truncate(true)),
+        expected
+    );
+}
+
+#[test]
+fn the_buffering_flags_are_added_to_what_the_options_imply() {
+    let flags = read_write()
+        .create_new(true)
+        .parameters(FILE_FLAG_NO_BUFFERING)
+        .expect("valid")
+        .flags;
+    assert_eq!(flags, FILE_FLAG_NO_BUFFERING | FILE_FLAG_OPEN_REPARSE_POINT);
+    assert_eq!(
+        read_write()
+            .parameters(FILE_FLAG_NO_BUFFERING)
+            .expect("valid")
+            .flags,
+        FILE_FLAG_NO_BUFFERING
+    );
+}
+
+#[test]
+fn a_combination_that_cannot_mean_anything_is_invalid_input() {
+    for (label, options) in [
+        ("nothing", FileOptions::new()),
+        ("create only", FileOptions::new().create(true)),
+        ("create_new only", FileOptions::new().create_new(true)),
+        ("truncate only", FileOptions::new().truncate(true)),
+        (
+            "read and create",
+            FileOptions::new().read(true).create(true),
+        ),
+        (
+            "read and create_new",
+            FileOptions::new().read(true).create_new(true),
+        ),
+        (
+            "read and truncate",
+            FileOptions::new().read(true).truncate(true),
+        ),
+    ] {
+        let error = options.parameters(0).expect_err(label);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{label}");
+    }
+}
+
+#[test]
+fn creating_and_truncating_empties_an_existing_file_on_either_buffering_mode() {
+    // The emptying is a call made after the open, so it is tried on an unbuffered handle too.
+    let temp = TempFile::new("of-truncate");
+    let options = read_write().create(true).truncate(true);
+
+    fs::write(&temp.0, b"content").expect("fill");
+    drop(OpenedFile::<Cached>::open(&temp.0, options).expect("cached"));
+    assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
+
+    fs::write(&temp.0, b"content").expect("fill");
+    drop(OpenedFile::<Unbuffered>::open(&temp.0, options).expect("unbuffered"));
+    assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
+
+    // And where there is nothing to empty, the file is created.
+    let fresh = temp.0.with_extension("fresh");
+    drop(OpenedFile::<Cached>::open(&fresh, options).expect("created"));
+    assert_eq!(fs::metadata(&fresh).expect("metadata").len(), 0);
+    fs::remove_file(&fresh).expect("remove");
+}
+
+#[test]
+fn an_opened_file_is_shared_for_reading_writing_and_deletion_as_std_opened_one() {
+    let temp = TempFile::new("of-share");
+    let held = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("first");
+    let second = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("a second open");
+    drop(second);
+    // Deleting a file that is open needs the delete share, which std's default gave.
+    fs::remove_file(&temp.0).expect("a file opened shared for deletion can be deleted");
+    drop(held);
 }
