@@ -224,7 +224,9 @@ own terms, as its own faults.
 How a backing meets the obligations is its own concern. A Win32 file target takes its handle in an
 owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)), and is made from a file the
 Windows driver opened itself, so the warranty class above follows from how the file was opened
-rather than from a declaration ([DI-D-60](DESIGN-NOTES.md#di-d-60)). Every target is named in
+rather than from a declaration ([DI-D-60](DESIGN-NOTES.md#di-d-60)). A raw volume is the same, and
+its flush domains are found from its disks by the driver ([DI-D-61](DESIGN-NOTES.md#di-d-61)); it
+claims `SharedDevice`, since a handle cannot show that nothing else writes the disks. Every target is named in
 failure reports by the key the consumer gave it, so a report stays usable after the target is gone
 ([DI-D-11](DESIGN-NOTES.md#di-d-11)).
 

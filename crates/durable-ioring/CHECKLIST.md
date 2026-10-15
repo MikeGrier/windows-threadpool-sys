@@ -144,13 +144,9 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.1** -- A Win32 file target is made from a file this crate opened, so its class, alignment and write-through follow from how it was opened and not from a declaration. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-101)
 
-- [ ] **DI-10.2** -- **A raw partition as a target backing** (the engineer, 2026-10-09: "ok"): one
-  volume handle with regions in it, one commit per volume, failure sharing found from the volume's
-  disks (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), and optionally the volume lock
-  (`FSCTL_LOCK_VOLUME`); implemented to the interface. How
-  [D-44](../windows-ioring-sys/DESIGN-NOTES.md#d-44) applies is open under DI-D-48.
+- [x] **DI-10.2** -- A raw volume is a file target made from a volume this crate opened, with its disks found and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-102)
 
-- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more.
+- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could.
 
 ## DI-M11 -- The core driven by script
 

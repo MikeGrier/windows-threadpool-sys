@@ -2871,3 +2871,9 @@ The item was meant to land before the first release PR merged, and did not: the 
 ### <a id="di-101"></a>DI-10.1 -- A Win32 file target is made from a file this crate opened, so its class, alignment and write-through follow from how it was opened and not from a declaration. *(completed 2026-10-14 22:38:28 -04:00)*
 
 The authoritative text is [DI-D-60](DESIGN-NOTES.md#di-d-60). The item asked what a Win32 file target warrants by buffering class and whether dioring reads the class from the handle; the engineer ruled that no `Nt*` call may be made from this repository, which removed the only call that reports a handle's open mode, and that provenance be structural, so `OpenedFile<Cached>` and `OpenedFile<Unbuffered>` are opened by this crate and a `Win32FileTarget` is made from nothing else. Foreign handles are queued as `DI-10.3`.
+
+## Moved 2026-10-15 12:00:26 -04:00 -- DI-10.2: a raw partition as a target backing
+
+### <a id="di-102"></a>DI-10.2 -- A raw volume is a file target made from a volume this crate opened, with its disks found and never `Complete`. *(completed 2026-10-15 12:00:26 -04:00)*
+
+The authoritative text is [DI-D-61](DESIGN-NOTES.md#di-d-61). The item asked for one volume handle with regions in it, one commit per volume, failure sharing found from the volume's disks and optionally the volume lock; the engineer ruled that the target is the whole volume and regions are the consumer's offsets, and that the unsafe device controls live in a new crate, `win-volume-sys`, whose own checklist and notes are in [crates/win-volume-sys/](../win-volume-sys/CHECKLIST.md).
