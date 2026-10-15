@@ -26,7 +26,8 @@ read through the held handle.
 
   > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-overlapped-io-sys` -> `M15` -> `M15.5`
   > (endpoints share their handle with observers, with the observer's length query and tests) must
-  > land first. See [CHECKLIST.md](../windows-overlapped-io-sys/CHECKLIST.md).
+  > land first. Landed; see that crate's
+  > [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m155).
 
 - [ ] **TW-1.3** -- **Read the current length through an observer.** ([TW-D-2](DESIGN-NOTES.md#tw-d-2))
 

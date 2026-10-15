@@ -184,8 +184,8 @@ windows-overlapped-io-sys replaced that with observers, below.
   what lets it probe with no lock held ([TW-D-7](#tw-d-7)) while registration and unregistration
   proceed ([TW-D-8](#tw-d-8)). The handle closes when the last holder drops.
 - **This makes windows-overlapped-io-sys' M15 a prerequisite of iteration 1**, not only of reads: the
-  observer and its length query come from M15.2 and M15.3 in its
-  [CHECKLIST.md](../windows-overlapped-io-sys/CHECKLIST.md). The decision and its alternatives are in
+  observer and its length query come from M15.2 and M15.3, archived in its
+  [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m152). The decision and its alternatives are in
   that crate's [DESIGN-NOTES.md](../windows-overlapped-io-sys/DESIGN-NOTES.md) -> "observers share the
   handle; only the endpoint does I/O".
 

@@ -84,7 +84,7 @@ Raw IOCP backend (implemented here):
 Event / `GetOverlappedResult` backend (implemented here):
 
 - For overlapped endpoints that are not associated with any port. Uses `OVERLAPPED.hEvent` plus
-	`WaitForSingleObject` and `GetOverlappedResult` / `GetOverlappedResultEx`.
+	`GetOverlappedResult`, with an event the endpoint creates and owns rather than the handle's own (M15.6).
 - Naturally serializes to the operations an event can distinguish; it is the fallback when port association is
 	unavailable or undesired.
 
@@ -126,14 +126,13 @@ set of safe queries on it, and that can never become a second endpoint.** The en
 route to association, submission, and the blocking backend, and stays not `Clone`.
 
 - **What exclusivity protects is one endpoint per handle, not one holder per handle.** Association is
-  per handle for its whole life; `BlockingEndpoint` waits on the handle's own event, which any I/O
-  completing on that handle signals; and each endpoint's submissions classify "will a packet arrive" from
+  per handle for its whole life; `BlockingEndpoint`'s one event is signalled by whichever of its
+  operations completes; and each endpoint's submissions classify "will a packet arrive" from
   the notification modes it alone recorded. Two endpoints over one handle can therefore return another
   operation's result while the kernel still writes its buffers, or count a synchronous success as pending
   forever. A holder that issues no overlapped I/O completes nothing and touches neither the association
-  nor the modes. **It does reset the file object's event**: measured 2026-10-14, a synchronous length
-  query leaves a signalled handle unsignalled, and `BlockingEndpoint` waits on that event. Open as
-  M15.6 in [CHECKLIST.md](CHECKLIST.md).
+  nor the modes. It does reset the file object's event, which is why no backend waits on that event
+  (M15.6, below).
 - **The endpoint stores its handle behind shared ownership** (a private `SharedHandle` from
   [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), and the backends keep that storage, so an
   observer stays valid after the endpoint, or its backend, is gone. The handle closes when its last holder
@@ -167,6 +166,31 @@ object per file; the engineer chose the observer, "a small user mode allocation 
 mode allocation".
 
 The work is M15.2 onward in [CHECKLIST.md](CHECKLIST.md).
+
+### Decision -- `BlockingEndpoint` waits on an event of its own (M15.6)
+
+*The engineer, 2026-10-14, choosing among the options M15.5's testing raised.*
+
+**`BlockingEndpoint` creates one manual-reset event and lends it to each operation's
+`OVERLAPPED.hEvent` for the length of `run`, so `GetOverlappedResult` waits on that event rather than
+the handle's.** Measured 2026-10-14: after an overlapped read completes, the handle is signalled, and one
+synchronous length query through an observer leaves it unsignalled -- a query resets the file object's
+event. A wait on that event could therefore be stranded by an observer's query landing between an
+operation completing and the wait beginning. The test `an_observer_query_resets_the_handles_own_event`
+pins the measurement.
+
+- **One event per endpoint, not per observer or per operation.** It is reset before each `run`, because
+  `run`'s `issue` closure is arbitrary and need not be a call that resets `hEvent` itself.
+- **`run` takes the event back on every exit**, so an `Operation` reused on another backend carries no
+  event with it: on IOCP, a stray `hEvent` would also be signalled by that backend's completions.
+- **`skip_set_event_on_handle` is no longer refused.** It suppresses only the handle's event, and an
+  event supplied in the `OVERLAPPED` is still signalled, so the incompatibility the refusal guarded is
+  gone. `BlockingEndpoint::new` now fails only if it cannot create its event; `TryFromEndpointError`
+  still carries the endpoint back.
+
+**Alternatives considered.** Making observers and the blocking backend exclusive (refuse `new` while an
+observer lives, drop `BlockingEndpoint::observer`) removes a capability and still leaves observers taken
+before `new`. Documenting "do not query while an operation is in flight" leaves a safe API able to hang.
 
 ## Operation storage and identity
 
@@ -269,9 +293,10 @@ The work is M15.2 onward in [CHECKLIST.md](CHECKLIST.md).
 	`fs::classify_issued` and `device::classify_issued` did in M10.5. This was not a separable follow-up: a
 	setter without it would ship the wedge, and the count it needs comes from `WSARecv`/`WSASend`'s
 	`lpNumberOfBytesTransferred`, which the adapters had previously been passing as null.
-- **`FILE_SKIP_SET_EVENT_ON_HANDLE` is unsafe to combine with the blocking backend**, which waits on precisely
-	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
-	because the two are independently useful and the endpoint does not know its future backend.
+- **Superseded by [`BlockingEndpoint` waits on an event of its own (M15.6)](#decision----blockingendpoint-waits-on-an-event-of-its-own-m156).**
+	**`FILE_SKIP_SET_EVENT_ON_HANDLE` was unsafe to combine with the blocking backend** while that backend
+	waited on precisely the handle event the flag suppresses. Recorded on the flag's own documentation rather
+	than prevented, because the two are independently useful and the endpoint does not know its future backend.
 
 ## Caller-supplied owned buffers (M11)
 
@@ -517,12 +542,14 @@ not pay for):
 - Core (always on): `Win32_Foundation` and `Win32_System_IO`, which supply `OVERLAPPED`, `OVERLAPPED_ENTRY`,
 	`CreateIoCompletionPort`, `GetQueuedCompletionStatus`, `GetQueuedCompletionStatusEx`,
 	`PostQueuedCompletionStatus`, `CancelIoEx`, and `GetOverlappedResult` / `GetOverlappedResultEx`.
-- The event backend additionally needs `WaitForSingleObject`, which lives under `Win32_System_Threading`.
+- The event backend additionally needs `CreateEventW` and `ResetEvent`, which live under
+	`Win32_System_Threading`, and `CreateEventW`'s `SECURITY_ATTRIBUTES` parameter, under `Win32_Security`;
+	both features are core too, since the blocking backend is (M15.6).
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
 	(`custom_flags(FILE_FLAG_OVERLAPPED | ...)`), so the core completion machinery needs no operation-family
-	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
-	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
+	`windows-sys` bindings for that -- but the core dependency features also include
+	**`Win32_Storage_FileSystem`**, because
 	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
 	operation-family gated (M13.1; see "Endpoint ownership and provenance" above). A default build therefore
 	compiles one more `windows-sys` binding than the minimal completion machinery strictly reads, in exchange

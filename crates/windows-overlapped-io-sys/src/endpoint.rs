@@ -66,12 +66,9 @@ pub struct NotificationModes {
     /// success, or that returns `ERROR_IO_PENDING` from an asynchronous call.
     ///
     /// Independent of the completion port: it concerns the handle's internal
-    /// event, which completion-port-driven code does not wait on. An event
-    /// supplied explicitly in the `OVERLAPPED` is still signalled.
-    ///
-    /// **Do not set this on an endpoint destined for
-    /// [`crate::BlockingEndpoint`]**, which waits on exactly that internal
-    /// event: suppressing it leaves the wait with nothing to wake it.
+    /// event, which no backend in this crate waits on. An event supplied
+    /// explicitly in the `OVERLAPPED` is still signalled, which is what
+    /// [`crate::BlockingEndpoint`] waits on.
     pub skip_set_event_on_handle: bool,
 }
 

@@ -484,3 +484,20 @@ its backend drops; on `AssociatedEndpoint` and `ThreadpoolIo`, cancelling, runni
 an operation pending and an observer alive all drain, and the handle stays open until the last observer
 drops. Removing `AssociatedEndpoint::drop`'s explicit cancel made the drop test hang. `BlockingEndpoint`
 has no cancellation or rundown; what testing it surfaced is M15.6.
+
+## Moved 2026-10-14 20:46:21 -04:00 -- M15.6, completing M15: owned versus shared handles on endpoints
+
+Every M15 item is now archived in this file under its own heading, and the milestone has left
+[CHECKLIST.md](CHECKLIST.md). Requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10); its TW-1.2
+prerequisite is met.
+
+### <a id="m156"></a>M15.6 -- `BlockingEndpoint` waits on an event of its own, so an observer's query cannot strand it. *(completed 2026-10-14 20:46:21 -04:00)*
+
+The engineer chose option 1 of three. `BlockingEndpoint` creates one manual-reset event and lends it to
+each operation's `OVERLAPPED.hEvent` for one `run`, taking it back on every exit; `skip_set_event_on_handle`
+is no longer refused. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "`BlockingEndpoint` waits on an
+event of its own (M15.6)". Tests pin the measured reset, complete a genuinely pending read with the
+handle's event suppressed and with observer queries running, and check the event is lent only for the
+call. Sabotage: leaving `hEvent` null made the suppressed-event read hang; dropping the take-back failed
+the lend test.

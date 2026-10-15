@@ -29,9 +29,9 @@ targets = ["x86_64-pc-windows-msvc"]
 [features]
 # The default build carries only the core completion machinery: the raw IOCP
 # backend, the blocking backend, owned endpoints, and pinned operations. That
-# needs Win32_Foundation + Win32_System_IO + Win32_Storage_FileSystem (declared
-# as direct dependency features below), so the published default feature set
-# stays empty.
+# needs Win32_Foundation + Win32_System_IO + Win32_Storage_FileSystem +
+# Win32_System_Threading + Win32_Security (declared as direct dependency features
+# below), so the published default feature set stays empty.
 #
 # Win32_Storage_FileSystem is core, not an `fs`-family add-on, because
 # `UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`)
@@ -57,7 +57,15 @@ operation-backtrace = []
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_System_IO", "Win32_Storage_FileSystem"]
+# Win32_System_Threading: the event BlockingEndpoint waits on (M15.6); its
+# CreateEventW takes a SECURITY_ATTRIBUTES, which is gated on Win32_Security.
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_IO",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Threading",
+]
 
 # An endpoint keeps its handle shared so observers can hold it too (M15).
 [dependencies.win-shared-os-owned-handle]
