@@ -47,6 +47,38 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
   domains. Check which `windows-sys` feature carries it. Creating a virtual disk in a test needs
   elevation, so state what the tests can and cannot reach on an unelevated run.
 
+## NR-3 -- What durable-ioring's open surface needs of this crate
+
+Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
+`OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
+consumer are the ones this crate can carry, and two are missing. Both are policy-free, like the rest
+of this crate: durable-ioring decides which of them a consumer may use.
+
+> **-> CROSS-COMPONENT PREREQUISITE:** [DI-13.5](../durable-ioring/CHECKLIST.md) and
+> [DI-13.6](../durable-ioring/CHECKLIST.md) in `crates/durable-ioring` wait on `NR-3.1` and `NR-3.2`;
+> `DI-14.3` needs the first and `DI-15.4` the second.
+
+- [ ] **NR-3.1** -- **A `SecurityDescriptor` from an SDDL string.** This crate owns self-relative
+  descriptors, captured from raw pointers, and has no way to make one from text, so a caller wanting
+  to create a file with a given security has to build the descriptor itself. A constructor over the
+  documented `ConvertStringSecurityDescriptorToSecurityDescriptorW`, freeing what it returns with
+  `LocalFree`, giving this crate's own owned type with no raw pointer in the caller's hands. Tests: a
+  descriptor from a string reads back the same DACL; an invalid string is the Win32 error, unaltered;
+  a descriptor from a string is what `OpenFile::with_security` creates a file with, read back with a
+  documented query. A `feat`, released on its own.
+
+- [ ] **NR-3.2** -- **A `ReOpenFile` entry**, beside `OpenFile` and `OpenFileByIdentifier`, one entry
+  for one call ([D-3](DESIGN-NOTES.md#d-3)): an owned duplicate of the original handle, as this crate
+  does for every handle a request names, with access, share mode and flags, all caller-supplied and
+  none defaulted. `perform` returns the new handle and the raw Win32 outcome. Documented to fail on
+  an access or sharing that conflicts with a previous open still open, which is the kernel's error
+  and passes through. Tests: each documented conflict; a reopen with `FILE_FLAG_NO_BUFFERING` added to
+  a handle opened without it. A `feat`, released on its own.
+
+  > **-> CROSS-COMPONENT HANDOFF:** when both are released, the next work is in component
+  > `crates/durable-ioring` -> `DI-M13` -> `DI-13.5` and `DI-13.6` (take the version that carries
+  > them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
 ## NR-M-inf -- The horizon (ungated)
 
 - [ ] **NR-inf.1** -- **A request shares the caller's handle as a `SharedHandle`
