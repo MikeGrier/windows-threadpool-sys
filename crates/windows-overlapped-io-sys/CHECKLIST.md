@@ -40,12 +40,21 @@ endpoint does I/O"). Independent of M14; it may be taken first.
 
 - [x] **M15.4** -- `ThreadpoolIo` keeps the endpoint's shared storage; landed with M15.2. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m154)
 
-- [ ] **M15.5** -- **Tests.** Compile-fail doctests that an observer offers no `AsHandle`/`AsRawHandle` and
-  cannot reach `associate`, `ThreadpoolIo::new` or `BlockingEndpoint::new`; an observer outliving its
-  endpoint and each backend still reads the length (M15.3); cancellation and rundown on each backend with
-  observers alive. (Landed with M15.2: the handle closing only when its last holder drops, across every
-  backend, and `into_handle` refused while an observer lives.)
+- [x] **M15.5** -- Tests: compile-fail doctests, observers across every backend, and cancellation and rundown with observers alive. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m155)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-multi-file-tail-watcher`
   > -> `M1` -> `TW-1.2` (open each file as an endpoint and probe through an observer). See
-  > [CHECKLIST.md](../win-multi-file-tail-watcher/CHECKLIST.md).
+  > [CHECKLIST.md](../win-multi-file-tail-watcher/CHECKLIST.md). M15.6 below does not gate it: the
+  > watcher's endpoints are unassociated, then (M4+) `ThreadpoolIo`, neither of which waits on the
+  > handle's event.
+
+- [ ] **M15.6** -- **An observer's query must not strand `BlockingEndpoint`'s wait.** Measured
+  2026-10-14: after an overlapped read completes on a file handle, the handle is signalled; one
+  `file_len()` through an observer leaves it unsignalled (`WaitForSingleObject` -> `WAIT_TIMEOUT`).
+  A synchronous query on the file object resets its event. `BlockingEndpoint::run` passes a null
+  `hEvent`, so `GetOverlappedResult` waits on exactly that event: a query landing between the
+  operation completing and the waiter blocking leaves it waiting forever. `EndpointObserver::handle`'s
+  `# Safety` section invites the same queries. `BlockingEndpoint::observer`'s rustdoc and
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handle" now state the hazard; revise
+  both with the fix. **Design decision pending with the engineer.** Pin the measured reset in a test
+  whichever way it goes.

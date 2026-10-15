@@ -285,6 +285,61 @@ impl UnassociatedEndpoint {
 ///
 /// Obtained from an endpoint, or from the backend that endpoint moved into, with
 /// `observer()`. Cloning shares the same handle.
+///
+/// Neither trait is implemented, so neither borrow compiles:
+///
+/// ```compile_fail,E0599
+/// # use windows_overlapped_io_sys::EndpointObserver;
+/// use std::os::windows::io::AsHandle;
+/// fn borrow(observer: &EndpointObserver) {
+///     let _ = observer.as_handle();
+/// }
+/// ```
+///
+/// ```compile_fail,E0599
+/// # use windows_overlapped_io_sys::EndpointObserver;
+/// use std::os::windows::io::AsRawHandle;
+/// fn borrow(observer: &EndpointObserver) {
+///     let _ = observer.as_raw_handle();
+/// }
+/// ```
+///
+/// Nor does it pass for an endpoint, to a completion port or the blocking
+/// backend (`windows-threadpool-sys`' `ThreadpoolIo::new` is checked there):
+///
+/// ```compile_fail,E0308
+/// # use windows_overlapped_io_sys::{CompletionPort, EndpointObserver};
+/// fn associate(port: &CompletionPort, observer: EndpointObserver) {
+///     let _ = port.associate(observer, 0);
+/// }
+/// ```
+///
+/// ```compile_fail,E0308
+/// # use windows_overlapped_io_sys::{BlockingEndpoint, EndpointObserver};
+/// fn block(observer: EndpointObserver) {
+///     let _ = BlockingEndpoint::new(observer);
+/// }
+/// ```
+///
+/// What those reject is the observer: the same borrows compile on a backend's
+/// [`EndpointHandle`], and the same calls with an endpoint.
+///
+/// ```
+/// # use windows_overlapped_io_sys::{
+/// #     BlockingEndpoint, CompletionPort, EndpointHandle, UnassociatedEndpoint,
+/// # };
+/// use std::os::windows::io::{AsHandle, AsRawHandle};
+/// fn borrow(held: &EndpointHandle) {
+///     let _ = held.as_handle();
+///     let _ = held.as_raw_handle();
+/// }
+/// fn associate(port: &CompletionPort, endpoint: UnassociatedEndpoint) {
+///     let _ = port.associate(endpoint, 0);
+/// }
+/// fn block(endpoint: UnassociatedEndpoint) {
+///     let _ = BlockingEndpoint::new(endpoint);
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct EndpointObserver {
     handle: SharedHandle,

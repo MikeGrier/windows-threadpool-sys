@@ -470,3 +470,17 @@ handle, past 4 GiB on a sparse file, and with write-only access. Sabotage confir
 `AllocationSize`, or truncating to 32 bits, each fails. Its error arm is reached by no test -- files, the
 NUL device and an unconnected named-pipe server all answer -- and says so at the definition.
 `EndpointObserver::handle` is the `unsafe` borrow; its `# Safety` section is the contract.
+
+## Moved 2026-10-14 20:29:52 -04:00 -- M15.5: tests for observers across every backend
+
+### <a id="m155"></a>M15.5 -- Tests: compile-fail doctests, observers across every backend, and cancellation and rundown with observers alive. *(completed 2026-10-14 20:29:52 -04:00)*
+
+Compile-fail doctests on `EndpointObserver` (no `as_handle`, no `as_raw_handle`, not accepted by
+`CompletionPort::associate` or `BlockingEndpoint::new`) and on windows-threadpool-sys'
+`ThreadpoolIo::observer` (not accepted by `ThreadpoolIo::new`), each with a compiling positive control;
+giving the observer both traits turned the two trait doctests red. `ThreadpoolIo` lacked `observer()`,
+which M15.4 had missed, so it was added. Runtime tests: every backend's observer reads the length after
+its backend drops; on `AssociatedEndpoint` and `ThreadpoolIo`, cancelling, running down and dropping with
+an operation pending and an observer alive all drain, and the handle stays open until the last observer
+drops. Removing `AssociatedEndpoint::drop`'s explicit cancel made the drop test hang. `BlockingEndpoint`
+has no cancellation or rundown; what testing it surfaced is M15.6.

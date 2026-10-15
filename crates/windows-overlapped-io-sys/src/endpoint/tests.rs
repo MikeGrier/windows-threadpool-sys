@@ -318,6 +318,212 @@ mod observer_queries {
     }
 }
 
+#[cfg(feature = "fs")]
+mod observers_across_backends {
+    use super::super::UnassociatedEndpoint;
+    use crate::{AssociatedEndpoint, BlockingEndpoint, CompletionPort, Issued, Operation};
+    use crate::{OperationId, Submitted};
+    use std::io::{self, Write};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{
+        ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+    };
+    use windows_sys::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
+
+    fn pipe_name(tag: &str) -> Vec<u16> {
+        format!(
+            r"\\.\pipe\windows-overlapped-io-sys-observer-{tag}-{}",
+            std::process::id()
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect()
+    }
+
+    /// Create an overlapped pipe server instance, refused while another instance of the name exists.
+    fn pipe_server(name: &[u16]) -> io::Result<OwnedHandle> {
+        // SAFETY: a NUL-terminated name and no security attributes.
+        let raw = unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_WAIT,
+                1,
+                4096,
+                4096,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a fresh handle nobody else owns.
+        Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+    }
+
+    fn pipe_endpoint(name: &[u16]) -> UnassociatedEndpoint {
+        let handle = pipe_server(name).expect("create pipe");
+        // SAFETY: a fresh overlapped pipe, unassociated, unduplicated, moved in exclusively.
+        unsafe { UnassociatedEndpoint::assume_overlapped(handle) }
+    }
+
+    /// Whether a handle to the pipe instance is still open, judged by whether a first instance can be made.
+    fn pipe_is_held(name: &[u16]) -> bool {
+        pipe_server(name).is_err()
+    }
+
+    /// Submit a `ConnectNamedPipe`, which stays pending because no client ever connects.
+    fn pending_connect(endpoint: &AssociatedEndpoint<'_>) -> OperationId {
+        // SAFETY: one overlapped ConnectNamedPipe through the given OVERLAPPED,
+        // classified by whether a packet will arrive.
+        let submitted = unsafe {
+            endpoint.submit(Operation::new(()), |handle, overlapped| {
+                if ConnectNamedPipe(handle.as_raw_handle(), overlapped) != 0 {
+                    return Ok(Issued::Pending);
+                }
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+                    Ok(Issued::Pending)
+                } else {
+                    Err(error)
+                }
+            })
+        };
+        let Submitted::Pending(id) = submitted else {
+            panic!("with no client the connect must pend");
+        };
+        id
+    }
+
+    #[test]
+    fn every_backends_observer_reads_the_length_after_the_backend_drops() {
+        let path = std::env::temp_dir().join(format!(
+            "windows-overlapped-io-sys-observer-backends-{}.tmp",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"0123456789").expect("write temp file");
+        let open = || UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+
+        let endpoint = open();
+        let from_endpoint = endpoint.observer();
+        drop(endpoint);
+
+        let blocking = BlockingEndpoint::new(open()).expect("blocking endpoint");
+        let from_blocking = blocking.observer();
+        drop(blocking);
+
+        let port = CompletionPort::new(1).expect("create port");
+        let associated = port.associate(open(), 7).expect("associate");
+        let from_associated = associated.observer();
+        drop(associated);
+        drop(port);
+
+        let observers = [from_endpoint, from_blocking, from_associated];
+        for observer in &observers {
+            assert_eq!(observer.file_len().expect("file_len"), 10);
+        }
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open for append")
+            .write_all(b"ab")
+            .expect("append");
+        for observer in &observers {
+            assert_eq!(observer.file_len().expect("file_len"), 12);
+        }
+
+        drop(observers);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cancelling_with_an_observer_alive_delivers_the_aborted_completion() {
+        let name = pipe_name("cancel");
+        let port = CompletionPort::new(1).expect("create port");
+        let endpoint = pipe_endpoint(&name);
+        let observer = endpoint.observer();
+        let endpoint = port.associate(endpoint, 1).expect("associate");
+
+        let id = pending_connect(&endpoint);
+        observer
+            .file_len()
+            .expect("a query while the connect pends");
+        assert_eq!(endpoint.outstanding(), 1);
+
+        endpoint.cancel(id).expect("cancel");
+        let completion = port
+            .get(5_000)
+            .expect("get")
+            .expect("a completion after cancellation");
+        assert_eq!(completion.overlapped_ptr(), id.as_ptr());
+        assert_eq!(
+            completion.error().and_then(io::Error::raw_os_error),
+            Some(ERROR_OPERATION_ABORTED as i32)
+        );
+        // SAFETY: the completion of the Operation<()> submitted above, claimed once.
+        let _operation = unsafe { completion.claim::<()>() };
+        assert_eq!(endpoint.outstanding(), 0);
+        observer.file_len().expect("a query after cancellation");
+    }
+
+    #[test]
+    fn run_down_with_an_observer_alive_drains_and_leaves_the_handle_open() {
+        let name = pipe_name("rundown");
+        let port = CompletionPort::new(1).expect("create port");
+        let endpoint = pipe_endpoint(&name);
+        let observer = endpoint.observer();
+        let endpoint = port.associate(endpoint, 1).expect("associate");
+
+        pending_connect(&endpoint);
+        endpoint.cancel_all().expect("cancel_all");
+        port.run_down().expect("run_down");
+        assert_eq!(port.outstanding(), 0);
+
+        drop(endpoint);
+        assert!(
+            pipe_is_held(&name),
+            "the observer must keep the handle open"
+        );
+        observer.file_len().expect("a query after rundown");
+        drop(observer);
+        assert!(
+            !pipe_is_held(&name),
+            "the last holder must close the handle"
+        );
+    }
+
+    #[test]
+    fn dropping_an_endpoint_with_an_operation_pending_drains_it_while_an_observer_lives() {
+        let name = pipe_name("drop");
+        let port = CompletionPort::new(1).expect("create port");
+        let endpoint = pipe_endpoint(&name);
+        let observer = endpoint.observer();
+        let endpoint = port.associate(endpoint, 1).expect("associate");
+
+        pending_connect(&endpoint);
+        assert_eq!(port.outstanding(), 1);
+        // Drop cancels explicitly: with the observer holding the handle, nothing closes it.
+        drop(endpoint);
+        assert_eq!(port.outstanding(), 0);
+
+        assert!(
+            pipe_is_held(&name),
+            "the observer must keep the handle open"
+        );
+        drop(observer);
+        assert!(
+            !pipe_is_held(&name),
+            "the last holder must close the handle"
+        );
+    }
+}
+
 #[test]
 fn open_creates_an_overlapped_endpoint() {
     let path = std::env::temp_dir().join(format!(

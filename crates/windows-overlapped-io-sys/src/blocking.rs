@@ -78,8 +78,10 @@ impl BlockingEndpoint {
 
     /// A new observer of this endpoint's handle.
     ///
-    /// An observer cannot issue I/O, so it cannot signal the handle's event and
-    /// disturb the one-at-a-time wait this type depends on.
+    /// An observer cannot issue I/O, but its queries reset the handle's own
+    /// event, which [`run`](Self::run) waits on: a query landing between an
+    /// operation completing and `run` beginning its wait leaves `run` blocked.
+    /// Do not query through an observer while an operation is in flight here.
     #[must_use]
     pub fn observer(&self) -> EndpointObserver {
         self.handle.observer()

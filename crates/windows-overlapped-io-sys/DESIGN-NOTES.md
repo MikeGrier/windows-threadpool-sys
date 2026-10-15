@@ -130,7 +130,10 @@ route to association, submission, and the blocking backend, and stays not `Clone
   completing on that handle signals; and each endpoint's submissions classify "will a packet arrive" from
   the notification modes it alone recorded. Two endpoints over one handle can therefore return another
   operation's result while the kernel still writes its buffers, or count a synchronous success as pending
-  forever. A holder that issues no overlapped I/O touches none of this: a length query completes nothing.
+  forever. A holder that issues no overlapped I/O completes nothing and touches neither the association
+  nor the modes. **It does reset the file object's event**: measured 2026-10-14, a synchronous length
+  query leaves a signalled handle unsignalled, and `BlockingEndpoint` waits on that event. Open as
+  M15.6 in [CHECKLIST.md](CHECKLIST.md).
 - **The endpoint stores its handle behind shared ownership** (a private `SharedHandle` from
   [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), and the backends keep that storage, so an
   observer stays valid after the endpoint, or its backend, is gone. The handle closes when its last holder
