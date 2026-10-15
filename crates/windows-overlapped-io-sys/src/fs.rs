@@ -7,12 +7,11 @@
 //! family's realization of the per-family safe-adapter decision; other families
 //! follow the same shape.
 
-use std::alloc::{self, Layout};
 use std::fmt;
 use std::io;
 use std::os::windows::io::AsRawHandle;
-use std::ptr::NonNull;
-use std::slice;
+
+use io_buffers::AlignedBuf;
 
 use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -414,6 +413,10 @@ impl<B: IoBuf> FileIo<B> {
 /// sector alignment `FILE_FLAG_NO_BUFFERING` requires.
 pub const PAGE_SIZE: usize = 4096;
 
+// `AlignedBuf` refuses an alignment that is not a power of two, and `PageBuffers::new` reports every
+// refusal as out of memory, so this is checked where it cannot be mistaken for one.
+const _: () = assert!(PAGE_SIZE.is_power_of_two());
+
 /// The Win32 `FILE_FLAG_NO_BUFFERING` flag.
 ///
 /// The scatter/gather adapters require the endpoint be opened with this flag (in
@@ -429,33 +432,34 @@ pub const FILE_FLAG_NO_BUFFERING: u32 =
 /// viewed as a byte slice. Its page-aligned segments are what `ReadFileScatter`
 /// and `WriteFileGather` require.
 pub struct PageBuffers {
-    ptr: NonNull<u8>,
+    buffer: AlignedBuf,
     pages: usize,
 }
-
-// SAFETY: `PageBuffers` uniquely owns its heap allocation; moving it between
-// threads moves that ownership, and it hands out aliasing access only through
-// `&`/`&mut self`, so it is as `Send`/`Sync` as an owned `Box<[u8]>`.
-unsafe impl Send for PageBuffers {}
-unsafe impl Sync for PageBuffers {}
 
 impl PageBuffers {
     /// Allocate `pages` zeroed, page-aligned memory pages.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `pages` is zero or `pages * PAGE_SIZE` overflows.
-    #[must_use]
-    pub fn new(pages: usize) -> Self {
-        assert!(pages > 0, "PageBuffers requires at least one page");
-        let size = pages
-            .checked_mul(PAGE_SIZE)
-            .expect("page buffer size overflow");
-        let layout = Layout::from_size_align(size, PAGE_SIZE).expect("valid page layout");
-        // SAFETY: `layout` has non-zero size.
-        let raw = unsafe { alloc::alloc_zeroed(layout) };
-        let ptr = NonNull::new(raw).unwrap_or_else(|| alloc::handle_alloc_error(layout));
-        Self { ptr, pages }
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or `pages * PAGE_SIZE`
+    /// overflows, and [`io::ErrorKind::OutOfMemory`] if the memory cannot be allocated -- too
+    /// large for the machine, or refused by the allocator. The count is the caller's, so a
+    /// caller can recover by asking for fewer pages.
+    pub fn new(pages: usize) -> io::Result<Self> {
+        if pages == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "PageBuffers requires at least one page",
+            ));
+        }
+        let size = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "page buffer size overflow")
+        })?;
+        // `PAGE_SIZE` is a power of two, checked where it is defined, so the only refusals left
+        // are of the length.
+        let buffer = AlignedBuf::zeroed(size, PAGE_SIZE)
+            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+        Ok(Self { buffer, pages })
     }
 
     /// The number of pages.
@@ -479,15 +483,13 @@ impl PageBuffers {
     /// View the pages as a shared byte slice.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `ptr` owns `len()` initialized bytes for the shared borrow.
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len()) }
+        self.buffer.as_slice()
     }
 
     /// View the pages as a mutable byte slice.
     #[must_use]
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        // SAFETY: exclusive borrow of `len()` bytes this owns.
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len()) }
+        self.buffer.as_mut_slice()
     }
 
     /// Build the `NULL`-terminated `FILE_SEGMENT_ELEMENT` array over these pages.
@@ -495,8 +497,11 @@ impl PageBuffers {
         let mut segments = Vec::with_capacity(self.pages + 1);
         for i in 0..self.pages {
             // SAFETY: `i < pages`, so the offset stays within the allocation, and
-            // each page start is page-aligned because the base is.
-            let page = unsafe { self.ptr.as_ptr().add(i * PAGE_SIZE) };
+            // each page start is page-aligned because the base is. The pointer is
+            // the allocation's own, made const by `as_ptr`, so making it mutable
+            // again is giving back what it was; the kernel writes through it only
+            // for a scatter read, which holds the pages by `&mut`.
+            let page = unsafe { self.buffer.as_ptr().cast_mut().add(i * PAGE_SIZE) };
             segments.push(FILE_SEGMENT_ELEMENT {
                 Buffer: page.cast(),
             });
@@ -515,20 +520,13 @@ impl fmt::Debug for PageBuffers {
     }
 }
 
-impl Drop for PageBuffers {
-    fn drop(&mut self) {
-        let layout = Layout::from_size_align(self.len(), PAGE_SIZE).expect("valid page layout");
-        // SAFETY: `ptr` came from `alloc_zeroed` with this exact layout.
-        unsafe { alloc::dealloc(self.ptr.as_ptr(), layout) };
-    }
-}
-
-// SAFETY: the bytes live in a page-aligned heap allocation `PageBuffers` owns
-// outright, so moving the value moves the pointer and not the bytes, and the
-// page count is fixed at construction. `alloc_zeroed` initializes all of them.
+// SAFETY: the bytes live in a page-aligned heap allocation the `AlignedBuf` this
+// holds owns outright, so moving the value moves the pointer and not the bytes,
+// and the page count is fixed at construction. The buffer is zeroed, so all of
+// them are initialized.
 unsafe impl crate::IoBuf for PageBuffers {
     fn stable_ptr(&self) -> *const u8 {
-        self.ptr.as_ptr()
+        self.buffer.stable_ptr()
     }
 
     fn bytes_len(&self) -> usize {
@@ -540,7 +538,7 @@ unsafe impl crate::IoBuf for PageBuffers {
 // access to the same allocation `stable_ptr` reports.
 unsafe impl crate::IoBufMut for PageBuffers {
     fn stable_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr.as_ptr()
+        self.buffer.stable_mut_ptr()
     }
 }
 

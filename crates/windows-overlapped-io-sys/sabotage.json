@@ -1,0 +1,81 @@
+{
+  "package": "windows-overlapped-io-sys",
+  "description": "Sabotages for windows-overlapped-io-sys's PageBuffers, which holds its pages in an io_buffers::AlignedBuf (IB-2+.2). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Only PageBuffers (the fs feature) has entries: this manifest was added with that type's move onto AlignedBuf. The completion-port and operation machinery is not covered.",
+  "testArgs": ["-p", "windows-overlapped-io-sys", "--all-features", "--lib", "--locked"],
+  "sabotages": [
+    {
+      "name": "IB-2+.2: the pages are allocated at byte alignment",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Page alignment is what the scatter and gather calls require of every segment. The alignment tests read it back from the buffer's own address for several page counts.",
+      "find": ["AlignedBuf::zeroed(size, PAGE_SIZE)"],
+      "replace": ["AlignedBuf::zeroed(size, 1)"]
+    },
+    {
+      "name": "IB-2+.2: each segment starts eight bytes after the last, not a page",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Every segment must name its own page; overlapping segments would read or write the same bytes twice.",
+      "find": ["self.buffer.as_ptr().cast_mut().add(i * PAGE_SIZE)"],
+      "replace": ["self.buffer.as_ptr().cast_mut().add(i * 8)"]
+    },
+    {
+      "name": "IB-2+.2: the segment array has no terminator",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The kernel reads segments until it meets a zeroed element, so a missing one runs it off the end of the array.",
+      "find": ["        segments.push(FILE_SEGMENT_ELEMENT { Alignment: 0 });\n"],
+      "replace": ["        // (sabotaged) no terminator\n"]
+    },
+    {
+      "name": "IB-2+.2: the length is half a page short",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A short length transfers fewer bytes than the buffer holds.",
+      "find": ["        self.pages * PAGE_SIZE\n    }\n\n    /// Always"],
+      "replace": ["        self.pages * PAGE_SIZE - PAGE_SIZE / 2\n    }\n\n    /// Always"]
+    },
+    {
+      "name": "NR-3: zero pages is not refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A buffer with no pages has nothing for a scatter or gather call to name; the constructor refuses it as invalid input, at the caller's own call site.",
+      "find": ["        if pages == 0 {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3: a page count whose length overflows wraps instead of being refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A wrapped length is a small, valid allocation for a count that asked for far more: the buffer would be short of its own page count.",
+      "find": ["        let size = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {\n            io::Error::new(io::ErrorKind::InvalidInput, \"page buffer size overflow\")\n        })?;\n"],
+      "replace": ["        let size = pages.wrapping_mul(PAGE_SIZE);\n"]
+    },
+    {
+      "name": "NR-3: an allocation the machine cannot supply is reported as invalid input",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The count is the caller's and a failed allocation is out of memory, which a caller answers by asking for fewer pages; invalid input would read as a bug in the count's shape.",
+      "find": ["            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;\n"],
+      "replace": ["            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;\n"]
+    },
+    {
+      "name": "NR-3: a page size that is not a power of two is refused by the build",
+      "file": "src/fs.rs",
+      "expect": "refused-by-build",
+      "buildError": "PAGE_SIZE.is_power_of_two()",
+      "why": "AlignedBuf refuses such an alignment and `PageBuffers::new` reports every refusal of the allocation as out of memory, so a bad constant would read as out of memory on every call. It is asserted where it is defined.",
+      "find": ["pub const PAGE_SIZE: usize = 4096;\n"],
+      "replace": ["pub const PAGE_SIZE: usize = 4095;\n"]
+    },
+    {
+      "name": "IB-2+.2: CONTROL: the page count is read through an identity addition",
+      "file": "src/fs.rs",
+      "expect": "survives",
+      "why": "Behaviour is unchanged, so a sweep that reports this caught is not discriminating.",
+      "find": ["    pub fn pages(&self) -> usize {\n        self.pages\n"],
+      "replace": ["    pub fn pages(&self) -> usize {\n        self.pages + 0\n"]
+    }
+  ]
+}

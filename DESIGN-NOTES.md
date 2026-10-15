@@ -354,10 +354,14 @@ and close routines. The new crate inherits an established concept rather than in
 **"Ring" was considered and is wrong for the family.** It is accurate for the array shapes and
 false for the intrusive-linked one, which is genuinely not a ring. `queues` covers both.
 
-## <a id="new-crates-take-the-win-prefix"></a>New crates take the `win-` prefix, not `windows-`
+## <a id="new-crates-take-the-win-prefix"></a>New crates that layer directly over Windows APIs take the `win-` prefix, not `windows-`
+
+**Scope clarified by the engineer, 2026-10-05: the rule covers crates that layer safe abstractions
+more or less directly over Windows APIs. A crate providing a new facility is outside it.**
 
 **The engineer's decision, 2026-09-23, taken when `win-numa-sys` was proposed.** Crates created
-from now on use a `win-` prefix. The reason is namespace collision: `windows` is Microsoft's, and
+from now on that layer a safe abstraction more or less directly over a Windows API use a `win-`
+prefix. The reason is namespace collision: `windows` is Microsoft's, and
 a crate published as `windows-numa-sys` today is a name Microsoft may reasonably want tomorrow.
 Abdicating the prefix costs nothing and removes the risk entirely.
 
@@ -367,7 +371,28 @@ memory-safe over an existing API, adding no policy, per
 A `win-*` crate that decides something on a consumer's behalf drops the suffix exactly as a
 `windows-*` one would.
 
-**The existing fourteen migrate eventually, and the cost is not uniform.** Eleven of them are
+**What the prefix marks, and what falls outside it.** The prefix says "this is Windows, made
+safe": a crate whose job is to raise a Windows API into safe Rust, adding as little as it can.
+`windows-ioring-sys` is intended as that kind of crate, though how much heavier than a direct
+wrapper it has become is debatable. **A crate that provides a completely new facility -- built on
+such layers rather than being one -- does not fit the mold and does not take the prefix**; it is
+named for the facility it provides. `durable-ioring` is the case that prompted the clarification:
+a durability layer over `IoRing` is new behaviour, not a Windows API made safe
+([DI-D-2](crates/durable-ioring/DESIGN-NOTES.md#di-d-2)), and its core is decided to be portable
+([DI-D-49](crates/durable-ioring/DESIGN-NOTES.md#di-d-49)). Whether a given
+crate is a direct layer or a new facility is a judgement made when the crate is named, and the
+reasoning belongs in that crate's naming decision.
+
+**A recorded exception: `win-durable-ioring`.** The Windows-specific half of `durable-ioring` --
+its threaded driver, Windows backend, and file and volume targets -- is a new facility, not a
+Windows API made safe, and takes the `win-` prefix anyway. The engineer's decision, 2026-10-09:
+"possibly as a separate 'win-' crate since it *is* windows specific", then, offered amending this
+rule or recording an exception, "record this as an exception". The rule is not amended: a facility
+with no portable half still takes its own name. See
+[DI-D-50](crates/durable-ioring/DESIGN-NOTES.md#di-d-50).
+
+**The existing `windows-*` crates migrate eventually -- those that are direct layers, under the
+clarified scope -- and the cost is not uniform.** Eleven of them are
 published to crates.io, and a published name cannot be renamed -- a rename is a *new* crate plus a
 final release of the old name, and the old name persists forever. Three are unpublished
 (`windows-guard-alloc`, `windows-placement-probe`, `windows-platform-probes`) and are nearly free to
@@ -376,8 +401,11 @@ that crate either diverges the two or drags the repository rename along with it.
 
 The migration is therefore queued at the horizon rather than scheduled, as `M-inf.3` in
 [CHECKLIST.md](CHECKLIST.md). **This decision schedules no rename now**; what it settles is the
-prefix every *new* crate uses, so the divergence stops growing while the question of the existing
-ones stays open.
+prefix every *new* direct-layer crate uses, so the divergence stops growing while the question of
+the existing ones stays open. The clarified scope adds a question to that migration: some existing
+`windows-*` crates are facilities rather than direct layers, and for those the answer may be a
+name with no platform prefix rather than `win-`. The rationale for the clarification is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-the-win-prefix-is-scoped-to-direct-layers).
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
@@ -1125,10 +1153,13 @@ the panic reports the violation, it must not cause one.
 **Reachability is a question this crate could not otherwise ask.** The path runs
 only when `CreateThreadpoolWork` fails, which means the process is out of
 memory, so the error edge would have been written and never executed. A
-test-only `FORCE_REPAIR_FAILURE_FOR` makes it reachable, **keyed to one pool
+test-only `ForcedRepairFailure` guard makes it reachable, **keyed to pools
 rather than switched on globally** -- these tests run as threads in one process
 against a process-wide registry, and a boolean there failed an unrelated test's
-registration on the first run.
+registration on the first run. **It holds a list of keys, not one slot:** a
+single slot kept unrelated tests out but let the tests that force a failure
+undo each other, which made them fail intermittently (see the thread pool's
+[RESOLVED-TEST-FAILURES.md](crates/windows-threadpool-sys/RESOLVED-TEST-FAILURES.md)).
 
 ### The cancelling release is a separate method
 

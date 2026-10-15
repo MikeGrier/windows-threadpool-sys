@@ -118,12 +118,17 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # event. Optional behind the default-on `threadpool` feature (D-22); nothing
 # else in the crate references it.
 windows-threadpool-sys = { version = "0.2.0", path = "../windows-threadpool-sys", optional = true }
+# The buffer contract: `IoBuf`, `IoBufMut` and `RegisteredSpan`, defined once in a portable crate and
+# re-exported here at the paths they always had (IB-1.3 in io-buffers' CHECKLIST.md). The version is
+# the one io-buffers' first release is fixed to (`Release-As: 0.1.0`), so it is not a guess; that
+# crate must be on crates.io before this one's next release.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
 # NumaBuffer moved here in M22.3 and out again when win-numa-sys was created:
 # the buffer has nothing to do with a ring, and windows-placement-probe had
 # independently written the same VirtualAllocExNuma call. This crate keeps
 # re-exporting the type, so windows_ioring_sys::NumaBuffer still resolves for
-# anyone who bound to it, and supplies the IoBuf/IoBufMut impls that the
-# allocator crate deliberately does not define.
+# anyone who bound to it. Its IoBuf/IoBufMut impls are the allocator crate's own,
+# of io-buffers' traits (IB-1.2).
 win-numa-sys = { version = "0.1.0", path = "../win-numa-sys" }
 # A file pushed through the ring is a `SharedHandle`, the workspace's one shared owner of a
 # handle, in place of this crate's former `SharedFile` (D-82). Re-exported, so a caller can name it

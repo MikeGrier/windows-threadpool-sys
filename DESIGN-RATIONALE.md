@@ -856,3 +856,29 @@ every fence pinned, and the new check named the blind spot.
 - The sabotage harness runs without `RUSTC_BOOTSTRAP`, so a sabotage that makes a `compile_fail`
   example fail for the wrong reason survives a sweep. windows-ioring-sys records that as a declared
   blind spot; the CI job is where the defect is caught instead.
+
+## <a id="why-the-win-prefix-is-scoped-to-direct-layers"></a>Why the `win-` prefix is scoped to direct layers
+
+Tier 2 for [New crates that layer directly over Windows APIs take the `win-` prefix](DESIGN-NOTES.md#new-crates-take-the-win-prefix).
+
+The decision of 2026-09-23 was worded "crates created from now on use a `win-` prefix", and read
+literally it covered every new crate. It was tested on 2026-10-05, when the durability crate was
+being given a home: the engineer had named it `durable-ioring`, after the decision, and the
+assistant flagged the conflict rather than resolving it either way. The engineer's answer was that
+the literal reading was never the intent:
+
+> The "win-" naming rule applies for crates that provide more-or-less direct layering of safe
+> abstractions on the Windows APIs. We can debate whether the windows-ioring-sys abstraction is
+> "heavier" than a direct safe abstraction but that is the intent.
+>
+> Since durable-ioring is a completely new facility, it does not fit the mold.
+
+What the clarification preserves: the namespace-collision reason, which concerns names that claim
+to be a Windows API made safe -- exactly the names Microsoft may want. What it removes: a reading
+under which every new facility, however far from a Windows API, would carry a platform prefix that
+describes where it runs rather than what it is.
+
+The test it leaves is a judgement, not a rule a tool could apply: *is this crate a Windows API made
+safe, or something new built on such crates?* The decision says that judgement is recorded in the
+crate's own naming decision, so each answer can be argued with. The design session that raised it
+is [DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).

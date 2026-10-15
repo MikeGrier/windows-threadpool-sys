@@ -10,7 +10,7 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{FALSE, GENERIC_ALL, TRUE};
+use windows_sys::Win32::Foundation::{ERROR_NOT_ENOUGH_MEMORY, FALSE, GENERIC_ALL, TRUE};
 use windows_sys::Win32::Security::{
     ACL, ACL_REVISION, AddAccessAllowedAce, CreateWellKnownSid, InitializeAcl,
     InitializeSecurityDescriptor, MakeSelfRelativeSD, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
@@ -20,9 +20,15 @@ use windows_sys::Win32::Security::{
 
 use super::{
     AclState, SELF_RELATIVE_ALIGNMENT, SecurityAttributes, SecurityCaptureFailure,
-    SecurityDescriptor,
+    SecurityDescriptor, allocate,
 };
-use crate::buffer::AlignedBuffer;
+use crate::{HandleCaptureError, HandleCaptureFailure};
+use io_buffers::AlignedBuf;
+
+/// A zeroed buffer at `align`, for the descriptors and lists these tests build by hand.
+fn aligned_zeroed(len: usize, align: usize) -> AlignedBuf {
+    AlignedBuf::zeroed(len, align).expect("an aligned allocation")
+}
 
 /// The revision every descriptor built here declares.
 ///
@@ -48,8 +54,8 @@ const ONE_ACE_ACL_BYTES: u32 = 256;
 /// set of references to storage the caller owns.
 pub(crate) struct Absolute {
     descriptor: Box<SECURITY_DESCRIPTOR>,
-    _sid: AlignedBuffer,
-    _acl: Option<AlignedBuffer>,
+    _sid: AlignedBuf,
+    _acl: Option<AlignedBuf>,
 }
 
 impl Absolute {
@@ -149,7 +155,7 @@ impl Absolute {
     ///
     /// This is what a caller who already holds a self-relative descriptor looks
     /// like to capture.
-    fn to_self_relative(&self) -> AlignedBuffer {
+    fn to_self_relative(&self) -> AlignedBuf {
         let mut length: u32 = 0;
         // SAFETY: the null destination is the documented sizing call.
         let sized = unsafe {
@@ -157,7 +163,7 @@ impl Absolute {
         };
         assert_eq!(sized, FALSE, "the sizing call is expected to fail");
 
-        let mut blob = AlignedBuffer::zeroed(length as usize, SELF_RELATIVE_ALIGNMENT);
+        let mut blob = aligned_zeroed(length as usize, SELF_RELATIVE_ALIGNMENT);
         // SAFETY: blob is writable for exactly the reported length.
         let converted = unsafe {
             MakeSelfRelativeSD(
@@ -192,7 +198,7 @@ fn new_descriptor() -> Box<SECURITY_DESCRIPTOR> {
     descriptor
 }
 
-fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBuffer) {
+fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBuf) {
     // SAFETY: the descriptor is initialised, and sid holds a SID Windows wrote.
     let owner = unsafe {
         SetSecurityDescriptorOwner(
@@ -214,8 +220,8 @@ fn set_owner_and_group(descriptor: &mut SECURITY_DESCRIPTOR, sid: &mut AlignedBu
     assert_ne!(group, FALSE, "set the group");
 }
 
-fn new_acl(bytes: u32) -> AlignedBuffer {
-    let mut acl = AlignedBuffer::zeroed(bytes as usize, ACL_ALIGNMENT);
+fn new_acl(bytes: u32) -> AlignedBuf {
+    let mut acl = aligned_zeroed(bytes as usize, ACL_ALIGNMENT);
 
     // SAFETY: acl is writable for exactly `bytes` bytes, which is what
     // InitializeAcl is told to use.
@@ -225,8 +231,8 @@ fn new_acl(bytes: u32) -> AlignedBuffer {
     acl
 }
 
-fn world_sid() -> AlignedBuffer {
-    let mut sid = AlignedBuffer::zeroed(SECURITY_MAX_SID_SIZE as usize, 8);
+fn world_sid() -> AlignedBuf {
+    let mut sid = aligned_zeroed(SECURITY_MAX_SID_SIZE as usize, 8);
     let mut length = SECURITY_MAX_SID_SIZE;
 
     // SAFETY: sid is writable for length bytes, which is the documented maximum
@@ -369,7 +375,7 @@ fn the_capture_survives_the_caller_dropping_everything_it_was_built_from() {
 
 #[test]
 fn a_malformed_descriptor_is_refused_at_capture() {
-    let zeroed = AlignedBuffer::zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
+    let zeroed = aligned_zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
 
     // SAFETY: the buffer outlives the call; its contents are not a valid
     // descriptor, which is what this asserts.
@@ -384,15 +390,74 @@ fn a_malformed_descriptor_is_refused_at_capture() {
 }
 
 #[test]
-fn a_clone_equals_its_original_and_is_independent() {
+fn a_copy_equals_its_original_and_is_independent() {
     let captured = capture(&Absolute::with_populated_dacl());
 
-    let clone = captured.clone();
+    let copy = captured.try_clone().expect("copy the descriptor");
 
-    assert_eq!(clone, captured);
-    assert_ne!(clone.as_ptr(), captured.as_ptr());
+    assert_eq!(copy, captured);
+    assert_ne!(copy.as_ptr(), captured.as_ptr());
     drop(captured);
-    assert_eq!(clone.dacl().expect("read the DACL"), AclState::Populated(1));
+    assert_eq!(copy.dacl().expect("read the DACL"), AclState::Populated(1));
+}
+
+#[test]
+fn attributes_copy_with_and_without_a_descriptor() {
+    let with = SecurityAttributes::new(Some(capture(&Absolute::with_populated_dacl())), true);
+    let copy = with.try_clone().expect("copy the attributes");
+
+    assert_eq!(copy, with);
+    assert_ne!(
+        copy.descriptor()
+            .expect("the copy keeps its descriptor")
+            .as_ptr(),
+        with.descriptor().expect("the original has one").as_ptr(),
+        "the copy owns its own blob"
+    );
+
+    let without = SecurityAttributes::new(None, false);
+    assert_eq!(without.try_clone().expect("copy the attributes"), without);
+}
+
+#[test]
+fn a_blob_the_machine_cannot_supply_is_an_allocation_failure() {
+    // The seam every allocation of a descriptor goes through: the OS names the length, so no
+    // descriptor can be made to ask for this much, but the function can.
+    let error = allocate(usize::MAX / 2).expect_err("no machine has this");
+
+    assert_eq!(error.failure(), SecurityCaptureFailure::Allocate);
+    assert_eq!(
+        error.raw_os_error(),
+        Some(i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"))
+    );
+    assert!(
+        error.to_string().contains("allocating"),
+        "unexpected message: {error}"
+    );
+}
+
+#[test]
+fn a_blob_the_machine_can_supply_is_zeroed_and_aligned() {
+    let blob = allocate(64).expect("a small blob");
+
+    assert_eq!(blob.len(), 64);
+    assert!(blob.iter().all(|&byte| byte == 0));
+    assert_eq!(blob.as_ptr() as usize % SELF_RELATIVE_ALIGNMENT, 0);
+}
+
+#[test]
+fn a_failed_security_copy_is_reported_by_a_request_under_its_own_failure() {
+    let source = allocate(usize::MAX / 2)
+        .expect_err("no machine has this")
+        .into_source();
+
+    let error = HandleCaptureError::copying_security(source);
+
+    assert_eq!(error.failure(), HandleCaptureFailure::CopySecurity);
+    assert_eq!(
+        error.raw_os_error(),
+        Some(i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"))
+    );
 }
 
 #[test]
@@ -524,7 +589,7 @@ fn a_capture_failure_exposes_its_os_error_both_ways() {
     // out every constant the sweep tried, including the plausible-looking ones.
     use std::error::Error as _;
 
-    let zeroed = AlignedBuffer::zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
+    let zeroed = aligned_zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
 
     // SAFETY: the buffer outlives the call; its contents are not a valid
     // descriptor, which is what makes this fail.

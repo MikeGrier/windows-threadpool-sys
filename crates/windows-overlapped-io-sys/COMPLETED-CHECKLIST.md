@@ -431,3 +431,16 @@ turned out to be a design fork the engineer has now settled.
   rather than per-family, and why (the endpoint owns the capability, the submission seam depends on it, and
   `assume_overlapped`'s contract requires it); and supersede M12.2's note explaining the `socket` feature's
   widening, which M13.1 makes obsolete.
+
+## Moved 2026-10-13 20:30:00 -04:00 -- M15: `PageBuffers::new` reports an allocation that fails
+
+### <a id="m151"></a>M15.1 -- `PageBuffers::new` returns an `io::Result` and never panics. *(completed 2026-10-13 20:30:00 -04:00)*
+
+Raised by the engineer's review of [durable-ioring's DI-9.7.3](../durable-ioring/COMPLETED-CHECKLIST.md#di-973):
+the move of `PageBuffers` onto `io_buffers::AlignedBuf` (`IB-2+.2`) had added a panic on allocation failure that
+its `# Panics` list did not mention, and the engineer rejected a panic or an abort for an allocation that fails.
+`PageBuffers::new` now returns `InvalidInput` for zero pages or a length that overflows, and `OutOfMemory` for a
+count the machine cannot allocate. The two panics it already had, for zero pages and for overflow, are now the
+same kind of error, as the rest of this crate's argument checks are. A breaking change to the published crate.
+Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) beside the `M11` note about where a degenerate count is
+rejected; four sabotages in [sabotage.json](sabotage.json), one of them refused by the build.

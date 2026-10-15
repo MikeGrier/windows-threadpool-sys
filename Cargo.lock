@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "durable-ioring"
+version = "0.1.0"
+dependencies = [
+ "io-buffers",
+]
+
+[[package]]
+name = "io-buffers"
+version = "0.1.0"
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -105,6 +116,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
+name = "win-durable-ioring"
+version = "0.1.0"
+dependencies = [
+ "durable-ioring",
+ "win-durable-ioring",
+ "win-shared-os-owned-handle",
+ "win-sync-sys",
+ "win-time-sys",
+ "windows-ioring-sys",
+ "windows-threadpool-sys",
+]
+
+[[package]]
 name = "win-job-launcher"
 version = "0.0.0"
 dependencies = [
@@ -115,12 +139,27 @@ dependencies = [
 name = "win-numa-sys"
 version = "0.1.0"
 dependencies = [
+ "io-buffers",
  "windows-sys",
 ]
 
 [[package]]
 name = "win-shared-os-owned-handle"
 version = "0.1.0"
+
+[[package]]
+name = "win-sync-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "win-time-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
 
 [[package]]
 name = "windows-core"
@@ -183,6 +222,7 @@ dependencies = [
 name = "windows-ioring-sys"
 version = "0.7.0"
 dependencies = [
+ "io-buffers",
  "serde_json",
  "win-numa-sys",
  "win-shared-os-owned-handle",
@@ -209,6 +249,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 name = "windows-namespace-request-sys"
 version = "0.2.3"
 dependencies = [
+ "io-buffers",
  "windows-sys",
  "windows-thread-ambient-sys",
  "wtf-string",
@@ -218,6 +259,7 @@ dependencies = [
 name = "windows-overlapped-io-sys"
 version = "0.1.3"
 dependencies = [
+ "io-buffers",
  "windows-sys",
 ]
 
@@ -287,6 +329,8 @@ dependencies = [
 name = "windows-threadpool-sys"
 version = "0.2.0"
 dependencies = [
+ "win-sync-sys",
+ "win-time-sys",
  "windows-overlapped-io-sys",
  "windows-sys",
 ]

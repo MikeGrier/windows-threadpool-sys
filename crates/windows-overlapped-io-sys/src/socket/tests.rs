@@ -127,7 +127,7 @@ fn submitted_recv_rejects_an_oversized_length() {
     let socket = port.associate_socket(client, 0).expect("associate socket");
 
     let error = socket
-        .recv(crate::buf::OversizedBuffer)
+        .recv(crate::oversized_buffer::OversizedBuffer)
         .expect_err("an unrepresentable length must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(

@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "durable-ioring"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Epoch-based durability for a file-I/O ring, portable: the contract, the core that decides when writes are durable and what a failure puts at risk, the target and backend traits, an in-memory backend, and a conformance oracle. Drivers supply the platform; win-durable-ioring is the Windows one. No unsafe code."
+readme = "COMPONENT.md"
+
+[dependencies]
+# The buffer contract the core's signatures name (`IoBuf`, `IoBufMut`, `RegisteredSpan`), which is
+# portable, so this crate has no platform dependency (DI-D-50). The version is the one io-buffers'
+# first release is fixed to (`Release-As: 0.1.0`), so it is not a guess.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }

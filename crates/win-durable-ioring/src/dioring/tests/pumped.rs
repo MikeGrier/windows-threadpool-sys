@@ -1,0 +1,463 @@
+// Copyright (c) 2026 Mike Grier
+//! Pumped delivery through the driver (DI-7.3, DI-D-55): an instance built with
+//! [`DeliveryMode::Pumped`] has no thread draining it, so what it delivers it delivers from the
+//! consumer's own calls to [`Dioring::pump`](crate::Dioring::pump), over a real ring and real
+//! files. The delivery layer's own rules, over the in-memory backend, are `pump/tests.rs`.
+//!
+//! The thing to show is what is *absent*: nothing here relies on a thread pool, and an instance
+//! nothing pumps delivers nothing. The negative half is a bounded look for something that must not
+//! happen -- evidence, as its length is chosen -- so it is paired with the positive half, which no
+//! timing window decides: the same instance, pumped, delivers.
+
+use std::io;
+use std::os::windows::io::OwnedHandle;
+use std::time::{Duration, Instant};
+
+use win_sync_sys::{
+    Access, Event, ResetMode, WaitOutcome, duplicate_handle_with_access, wait_for_single_object,
+};
+
+use super::pushes::{BOUND, GIVEN, Harness, Ring, RingEntry, given, temp};
+use super::{keeper, setup};
+use crate::dioring::delivery::Delivery;
+use crate::dioring::{DeliveryMode, Setup};
+use crate::windows_backend::CompletionEvent;
+use durable_ioring::DurableRing;
+use durable_ioring::driver::PumpedDelivery;
+use durable_ioring::{DurabilityRequest, Entry, EpochState};
+
+/// How long a test looks for an entry that must not arrive.
+const QUIET: Duration = Duration::from_millis(150);
+
+/// A pumped instance over `files`.
+pub(super) fn pumped(files: Vec<crate::dioring::TargetSetup>) -> Harness {
+    pumped_with(Setup {
+        delivery: DeliveryMode::Pumped,
+        ..setup(files, Vec::new(), None)
+    })
+}
+
+fn pumped_with(setup: Setup<'static, 'static, u64, Vec<u8>>) -> Harness {
+    let ring = Ring::new(setup).expect("build a pumped instance").0;
+    assert!(
+        ring.delivery.as_ref().expect("live").is_pumped(),
+        "built as the setup said"
+    );
+    Harness::new(ring)
+}
+
+/// The next entry, pumping for it, within the bound.
+pub(super) fn next(harness: &mut Harness) -> RingEntry {
+    let started = Instant::now();
+    loop {
+        if let Some(entry) = harness.ring.pop().expect("pop") {
+            harness
+                .oracle
+                .observe(&entry)
+                .expect("the oracle accepts the entry");
+            return entry;
+        }
+        assert!(
+            started.elapsed() < BOUND,
+            "no entry within {BOUND:?}; {} outstanding",
+            harness.oracle.outstanding()
+        );
+        harness
+            .ring
+            .pump(Some(Duration::from_millis(50)))
+            .expect("pump");
+    }
+}
+
+/// Whether the readiness event is set now. Taking it resets it, as the instance's consumer does.
+pub(super) fn readiness_set(harness: &mut Harness) -> bool {
+    let event = harness.ring.readiness().expect("the readiness event");
+    match wait_for_single_object(&event, Some(Duration::ZERO)).expect("a poll") {
+        WaitOutcome::Signalled => true,
+        WaitOutcome::TimedOut => false,
+        other => panic!("an event ended a wait as {other:?}"),
+    }
+}
+
+#[test]
+fn a_pumped_instance_delivers_nothing_until_it_is_pumped() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let id = harness.write(GIVEN, 0, b"pumped", 1, 7);
+
+    // Nothing drains it: no entry arrives, and nothing tells the consumer one might.
+    let started = Instant::now();
+    while started.elapsed() < QUIET {
+        assert!(harness.ring.pop().expect("pop").is_none());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!readiness_set(&mut harness), "no drain has set the signal");
+
+    // The same instance, pumped, delivers it, and says so.
+    let done = match next(&mut harness) {
+        Entry::Op(done) => done,
+        other => panic!("expected the write's completion, got {other:?}"),
+    };
+    assert_eq!(done.id, id);
+    assert_eq!(done.context, 7);
+    assert_eq!(super::pushes::transferred(&done), 6);
+    assert_eq!(
+        std::fs::read(&temp.0).expect("read the file")[..6],
+        *b"pumped",
+        "and it reached the file"
+    );
+    assert!(
+        readiness_set(&mut harness),
+        "the pump that drained it set the signal"
+    );
+    harness.finish();
+}
+
+#[test]
+fn a_pump_reports_the_error_of_a_wait_that_fails_and_drains_all_the_same() {
+    // The ring's own event always allows a wait, so the instance is given a notification that does
+    // not: a duplicate of an event that may only set and reset, which `win-sync-sys` makes without
+    // `unsafe`. The drain is made all the same, as the pump's documentation says.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let engine = harness.ring.delivery.take().expect("live").into_engine();
+    let event = Event::new(ResetMode::Auto, false).expect("an event");
+    let blind = CompletionEvent::new(
+        duplicate_handle_with_access(&event, Access::EVENT_MODIFY_STATE)
+            .expect("a duplicate that cannot be waited on"),
+    );
+    harness.ring.delivery = Some(Delivery::Pumped(PumpedDelivery::with_notification(
+        engine, blind,
+    )));
+
+    // Nothing in flight, so the drain delivers nothing and the pump waits: the failed wait is the
+    // pump's error, neither a timeout nor a success.
+    let error = harness
+        .ring
+        .pump(Some(Duration::ZERO))
+        .expect_err("the wait cannot be made, so the pump says so");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+
+    // A pump that finds completions drains first and does not wait, so a notification that cannot
+    // be waited on does not stop what has completed from being delivered. A pump the completion
+    // beat to the wait reports the failure; either way the entry is there.
+    harness.write(GIVEN, 0, b"blind", 1, 1);
+    let started = Instant::now();
+    let entry = loop {
+        if let Err(error) = harness.ring.pump(Some(Duration::ZERO)) {
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        }
+        if let Some(entry) = harness.ring.pop().expect("pop") {
+            break entry;
+        }
+        assert!(started.elapsed() < BOUND, "the drain never delivered");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(matches!(entry, Entry::Op(_)), "drained all the same");
+    harness
+        .oracle
+        .observe(&entry)
+        .expect("the oracle accepts the entry");
+    harness.finish();
+}
+
+#[test]
+fn a_pump_that_took_completions_reports_entries_and_one_that_did_not_reports_none() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    harness.write(GIVEN, 0, b"x", 1, 1);
+    let started = Instant::now();
+    let mut ready = false;
+    while !ready {
+        assert!(started.elapsed() < BOUND, "no pump took the completion");
+        ready = harness
+            .ring
+            .pump(Some(Duration::from_millis(50)))
+            .expect("pump");
+    }
+    harness.next();
+    // Nothing left in flight: the next pump takes nothing, whatever woke it.
+    assert!(
+        !harness
+            .ring
+            .pump(Some(Duration::from_millis(20)))
+            .expect("pump")
+    );
+    harness.finish();
+}
+
+#[test]
+fn a_pump_drains_every_completion_the_ring_has() {
+    let temp = temp(&[0; 256]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let mut pushed = Vec::new();
+    for i in 0..12_u8 {
+        pushed.push(harness.write(GIVEN, u64::from(i) * 8, &[i; 8], 1, u32::from(i)));
+    }
+    let mut seen = Vec::new();
+    for _ in 0..pushed.len() {
+        match next(&mut harness) {
+            Entry::Op(done) => seen.push(done.id),
+            other => panic!("expected a completion, got {other:?}"),
+        }
+    }
+    seen.sort_by_key(|id| format!("{id:?}"));
+    pushed.sort_by_key(|id| format!("{id:?}"));
+    assert_eq!(seen, pushed, "each once");
+    harness.finish();
+}
+
+#[test]
+fn a_seal_is_made_durable_through_pumps_alone() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    harness.write(GIVEN, 0, b"log", 1, 1);
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+    match next(&mut harness) {
+        Entry::Durable { through } => assert_eq!(through, harness.epoch(1)),
+        other => panic!("expected Durable, got {other:?}"),
+    }
+    assert_eq!(harness.state(1), EpochState::Durable);
+    assert_eq!(harness.durable(), Some(1));
+    harness.finish();
+}
+
+#[test]
+fn the_provider_is_called_from_the_pump_and_not_only_from_a_pop() {
+    // Sealed with its write in flight, so the write's completion is drained, and the seal's request
+    // made, by a pump. Under pool delivery the drain is off the consumer's thread and the request
+    // waits for a consumer call; here the pump is that call, so the request is made at once.
+    let temp = temp(&[0; 16]);
+    let (provider, kept) = keeper(&["log"]);
+    let mut harness = pumped_with(Setup {
+        delivery: DeliveryMode::Pumped,
+        ..setup(
+            vec![super::file(GIVEN.0, &temp, &["log"])],
+            Vec::new(),
+            provider,
+        )
+    });
+    harness.write(GIVEN, 0, b"log", 1, 1);
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+
+    let started = Instant::now();
+    let request = loop {
+        let asked = std::mem::take(&mut *kept.lock().expect("the requests")).pop();
+        if let Some(request) = asked {
+            break request;
+        }
+        assert!(started.elapsed() < BOUND, "no pump made the request");
+        harness
+            .ring
+            .pump(Some(Duration::from_millis(50)))
+            .expect("pump");
+    };
+    for part in request.domains {
+        part.completion.succeed();
+    }
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
+    match next(&mut harness) {
+        Entry::Durable { through } => assert_eq!(through, harness.epoch(1)),
+        other => panic!("expected Durable, got {other:?}"),
+    }
+    harness.finish();
+}
+
+#[test]
+fn an_answer_from_another_thread_reaches_a_pumped_instance() {
+    // A provider's answer takes the engine's lock on whatever thread gives it, and sets the
+    // readiness signal itself, so a pumped instance needs no pump to learn of it.
+    let temp = temp(&[0; 16]);
+    let (provider, kept) = keeper(&["log"]);
+    let mut harness = pumped_with(Setup {
+        delivery: DeliveryMode::Pumped,
+        ..setup(
+            vec![super::file(GIVEN.0, &temp, &["log"])],
+            Vec::new(),
+            provider,
+        )
+    });
+    harness.write(GIVEN, 0, b"log", 1, 1);
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+    let request = loop {
+        if let Some(request) = std::mem::take(&mut *kept.lock().expect("the requests")).pop() {
+            break request;
+        }
+        harness.ring.pop().expect("pop");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // The pumps above set it, and nothing has taken it: take it, so a set now is the answer's.
+    let _ = readiness_set(&mut harness);
+    assert!(!readiness_set(&mut harness));
+    std::thread::spawn(move || {
+        for part in request.domains {
+            part.completion.succeed();
+        }
+    })
+    .join()
+    .expect("the answering thread");
+    assert!(readiness_set(&mut harness), "the answer set the signal");
+    match harness.ring.pop().expect("pop") {
+        Some(Entry::Durable { through }) => assert_eq!(through, harness.epoch(1)),
+        other => panic!("expected Durable with no pump, got {other:?}"),
+    }
+}
+
+#[test]
+fn pumping_an_instance_built_with_a_pool_is_refused() {
+    let temp = temp(&[0; 16]);
+    let mut harness = Harness::new(super::pushes::instance(
+        vec![given(GIVEN, &temp)],
+        Vec::new(),
+    ));
+    assert!(!harness.ring.delivery.as_ref().expect("live").is_pumped());
+    let error = harness
+        .ring
+        .pump(Some(Duration::ZERO))
+        .expect_err("the pool drains it");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let error = harness
+        .ring
+        .completion_signal()
+        .expect_err("only a signalled instance has one");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let error = harness
+        .ring
+        .completion_event()
+        .expect_err("the pool's wake owns the ring's event");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    // And it is untouched: it still delivers, on the pool.
+    harness.write(GIVEN, 0, b"pool", 1, 1);
+    harness.next();
+    harness.finish();
+}
+
+/// Whether `event` is raised, waiting up to `timeout` for it. A wait takes what it sees.
+fn raised_within(event: &OwnedHandle, timeout: Duration) -> bool {
+    match wait_for_single_object(event, Some(timeout)).expect("a wait") {
+        WaitOutcome::Signalled => true,
+        WaitOutcome::TimedOut => false,
+        other => panic!("an event ended a wait as {other:?}"),
+    }
+}
+
+/// Take what the ring has raised so far, until it is quiet: it raises the event once as it is
+/// attached.
+fn settle(event: &OwnedHandle) {
+    for _ in 0..50 {
+        if !raised_within(event, QUIET) {
+            return;
+        }
+    }
+    panic!("the event never went quiet");
+}
+
+#[test]
+fn a_pumped_instance_offers_the_rings_own_event_to_wait_on_before_it_pumps() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let event = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    settle(&event);
+
+    let id = harness.write(GIVEN, 0, b"event", 1, 3);
+
+    // No thread-pool callback is involved: the ring raises its own event and the consumer's wait
+    // sees it, and nothing has been drained.
+    assert!(
+        raised_within(&event, BOUND),
+        "the ring raised the event as the write completed"
+    );
+    assert!(
+        harness.ring.pop().expect("pop").is_none(),
+        "nothing is drained yet"
+    );
+    assert!(
+        harness.ring.pump(Some(Duration::ZERO)).expect("pump"),
+        "and a pump delivers what the wait announced"
+    );
+    let entry = harness
+        .ring
+        .pop()
+        .expect("pop")
+        .expect("the entry the pump made");
+    harness
+        .oracle
+        .observe(&entry)
+        .expect("the oracle accepts the entry");
+    match entry {
+        Entry::Op(done) => assert_eq!(done.id, id),
+        other => panic!("expected the write's completion, got {other:?}"),
+    }
+    harness.finish();
+}
+
+#[test]
+fn a_pump_after_the_consumers_own_wait_took_the_signal_does_not_wait_for_it() {
+    // The event is the ring's, auto-reset: the consumer's wait takes the edge the pump's own wait
+    // would have seen. The pump drains before it waits, so it still delivers, and at once.
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    let event = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    settle(&event);
+    harness.write(GIVEN, 0, b"edge", 1, 1);
+    assert!(raised_within(&event, BOUND), "the consumer took the edge");
+
+    let started = Instant::now();
+    let ready = harness.ring.pump(Some(BOUND)).expect("pump");
+
+    assert!(ready, "delivered all the same");
+    assert!(
+        started.elapsed() < BOUND / 2,
+        "the pump waited for an edge the consumer had taken: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(next(&mut harness), Entry::Op(_)));
+    harness.finish();
+}
+
+#[test]
+fn each_call_makes_another_duplicate_and_one_outlives_the_instance() {
+    use std::os::windows::io::AsRawHandle;
+
+    let temp = temp(&[0; 64]);
+    let harness = pumped(vec![given(GIVEN, &temp)]);
+    let first = harness
+        .ring
+        .completion_event()
+        .expect("the ring's own event");
+    let second = harness.ring.completion_event().expect("another duplicate");
+    assert_ne!(first.as_raw_handle(), second.as_raw_handle());
+
+    harness.finish();
+
+    // A handle the consumer kept is a handle to an event like any other: still valid, and nothing
+    // raises it any more.
+    let _ = raised_within(&first, Duration::ZERO);
+    let _ = raised_within(&second, Duration::ZERO);
+}
+
+#[test]
+fn a_pumped_instance_ends_with_work_outstanding() {
+    let temp = temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    harness.write(GIVEN, 0, b"closing", 1, 1);
+    let leftovers = harness.ring.close();
+    assert!(
+        leftovers.held.is_empty() && leftovers.failures.is_empty(),
+        "nothing was gated, and nothing failed"
+    );
+    // Dropped instead of closed, with the same work outstanding, which the ring runs down.
+    let temp = super::pushes::temp(&[0; 64]);
+    let mut harness = pumped(vec![given(GIVEN, &temp)]);
+    harness.write(GIVEN, 0, b"dropping", 1, 1);
+    drop(harness);
+    assert!(!temp.is_held(), "the ring let go of the file");
+}

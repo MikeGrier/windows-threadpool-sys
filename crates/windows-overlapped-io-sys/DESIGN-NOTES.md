@@ -236,7 +236,11 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	borrows and allocate nothing, because they do not return until the operation is over: an ordinary
 	borrow provably covers it. This is strictly cheaper than owning, so the two backends differ on purpose
 	rather than for want of a shared shape.
-- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** A type whose accessor
+- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** **They are no longer
+	defined in this crate: the pair is `io-buffers`', re-exported here at the same paths and shared with
+	`windows-ioring-sys`, which had duplicated it (2026-10-12, `IB-2+.1` in io-buffers' checklist); a type
+	implements one trait for both crates, and a type that had implemented both crates' traits now has two
+	implementations of one trait and must drop one.** A type whose accessor
 	returns a fresh address on each call, or that reallocates while an operation is in flight, is what makes
 	the kernel write into freed memory long after submission returned. That is unprovable by the compiler,
 	so implementing the traits is an assertion. `Send + 'static` come along because the leaked operation
@@ -256,7 +260,10 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	pays nothing. Hiding it would put a cost on the exact path the crate exists to keep cheap.
 - **`scatter_gather_len` was removed with M11.** Both scatter paths now validate a `PageBuffers` that
 	already exists, so there is no caller-supplied page count left to overflow-check; `PageBuffers::new` is
-	where a degenerate count is rejected, at the caller's own call site.
+	where a degenerate count is rejected, at the caller's own call site -- as an `InvalidInput` error for a
+	zero count or one whose length overflows, and as an `OutOfMemory` error for one the machine cannot
+	allocate, never a panic or an abort (the engineer, 2026-10-13: an allocation that fails is an error the
+	caller receives). `PageBuffers::new` returned `Self` and panicked before that ruling.
 - **`&'static mut [u8]` implements *both* traits, and is the one reference type that does (M12.1).** The
 	split above is about aliasing, not about references: `Arc<[u8]>` and `&'static [u8]` are excluded from
 	`IoBufMut` because they are *shared*, so handing the kernel a writable pointer would alias bytes another

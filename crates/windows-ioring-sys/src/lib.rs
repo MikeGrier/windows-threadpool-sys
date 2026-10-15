@@ -39,18 +39,22 @@
 //! There are two coherent high-performance shapes for consuming completions,
 //! and picking the wrong one costs more than any API detail in this crate.
 //!
-//! **Model A -- shared queue, kernel load-balances.** A pool of threads waits;
+//! **Model A, threadless dispatch -- shared queue, kernel load-balances.** A
+//! pool of threads waits;
 //! work is handed to whichever thread the system picks next. This is
 //! `EventDelivery`: the ring's completion event wired to a thread-pool wait,
 //! so no thread of yours ever blocks on I/O. Load balancing is automatic and
-//! locality is incidental -- start here. It lives behind the default-on
-//! `threadpool` feature, so a Model B consumer can drop the thread-pool
+//! locality is incidental -- start here. A caller that keeps its ring behind
+//! its own lock takes `CompletionWake` instead, which only tells it when to
+//! drain; `EventDelivery` is built on it (D-84). Both live behind the
+//! default-on `threadpool` feature, so a Model B consumer can drop the thread-pool
 //! dependency entirely with `default-features = false` (D-22); it is named
 //! here rather than linked because a link would dangle in that
 //! configuration. See `examples/model_a_delivery.rs` for a full worked
 //! example (M6.2).
 //!
-//! **Model B -- shared-nothing execution domains.** One pinned thread per
+//! **Model B, dedicated domain thread -- shared-nothing execution domains.**
+//! One pinned thread per
 //! domain, owning its ring, its buffer pool, and its shard of the
 //! application's state, with no cross-thread synchronization on the data
 //! path -- a pinned thread parked directly in [`Batch::submit_and_wait`] *is*
@@ -167,9 +171,9 @@ mod accounting;
 #[cfg(windows)]
 mod batch;
 #[cfg(windows)]
-mod buf;
-#[cfg(windows)]
 mod capability;
+#[cfg(all(windows, feature = "threadpool"))]
+mod completion_wake;
 /// This crate's conservation rules, made executable (M16.1).
 ///
 /// A `pub mod` rather than a re-export, because the module documentation *is*
@@ -181,8 +185,6 @@ pub mod contract;
 mod error;
 #[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
-#[cfg(windows)]
-mod numa_buffer_io;
 // M23.3 SPIKE -- exported so a real consumer can be converted, which is the
 // only way to validate whether one type fits the twelve hand-rolled shapes.
 // Whether it stays public is the decision M23.3 has not yet taken.
@@ -193,8 +195,13 @@ mod ring;
 /// Private without the `kernel-seam` feature, where it is nothing but
 /// `#[inline(always)]` forwards to the same `windows-sys` calls this crate
 /// made before. With the feature on it additionally publishes
-/// `sys::Responses` and `sys::install`, so a test can answer the calls
+/// `sys::Responses` and `sys::register` -- a responder for one ring, on any
+/// thread ([D-85](../DESIGN-NOTES.md#d-85)) -- so a test can answer the calls
 /// that carry an operation instead of the kernel.
+/// With `fault-injection` as well it publishes `sys::call_faults` and
+/// `sys::submit_faults`, a safe responder that fails a ring's calls,
+/// completions and submits on demand ([D-86](../DESIGN-NOTES.md#d-86)), for a
+/// consumer that forbids `unsafe`.
 #[cfg(windows)]
 pub mod sys;
 #[cfg(windows)]
@@ -204,14 +211,14 @@ mod token;
 pub use batch::{
     Batch, FileRef, FileTarget, FlushCoverage, FlushMode, PendingBufferRegistration,
     PendingFileRegistration, PushOptions, RegisteredBuffers, RegisteredFile, RegisteredFiles,
-    RegisteredSpan, RegisteredUse, WriteCaching,
+    RegisteredUse, WriteCaching,
 };
 #[cfg(windows)]
-pub use buf::{IoBuf, IoBufMut};
-#[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
+#[cfg(all(windows, feature = "threadpool"))]
+pub use completion_wake::CompletionWake;
 #[cfg(windows)]
-pub use error::{IoRingError, IoRingErrorExt, RingCondition};
+pub use error::{IoRingError, IoRingErrorExt, PushRefused, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
@@ -222,7 +229,8 @@ pub use event_delivery::{EventDelivery, RingScope};
 pub use ring::InjectedFailure;
 #[cfg(windows)]
 pub use ring::{
-    Completion, CompletionWait, HeldCompletion, IoRing, Op, RingInfo, RingWait, SubmitWait,
+    AllowsRaw, Completion, CompletionWait, HeldCompletion, IoRing, Op, Open, Owned, RingInfo,
+    RingKind, RingWait, SubmitWait,
 };
 #[cfg(windows)]
 pub use token::OperationId;
@@ -231,10 +239,14 @@ pub use token::OperationId;
 /// crate. It replaced this crate's own `SharedFile` (D-82).
 #[cfg(windows)]
 pub use win_shared_os_owned_handle::SharedHandle;
-// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
-// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
-// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
-// `numa_buffer_io`, which explains there why they are separated from the type.
+// Re-exported rather than defined here: the buffer contract is `io-buffers`', defined once in a
+// portable crate, and re-exporting keeps `windows_ioring_sys::IoBuf`, `IoBufMut` and
+// `RegisteredSpan` resolving for anyone who already bound to them (IB-1.3).
+#[cfg(windows)]
+pub use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`, and re-exporting
+// keeps `windows_ioring_sys::NumaBuffer` resolving for anyone who already bound to it. Its
+// `IoBuf`/`IoBufMut` impls are that crate's own, of `io-buffers`' traits.
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
 

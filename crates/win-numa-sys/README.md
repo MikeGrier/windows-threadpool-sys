@@ -48,13 +48,12 @@ follow, both of which have already caught someone in this workspace:
 Observing where pages actually landed needs `QueryWorkingSetEx`, which lives in
 `windows-placement-probe` today; whether it moves here is [CHECKLIST.md](CHECKLIST.md) `N-1.2`.
 
-## Buffer traits live with whoever owns them
+## Buffer traits
 
-`NumaBuffer` implements no I/O buffer trait, because this crate defines none. `windows-ioring-sys`
-and `windows-overlapped-io-sys` each already have their own `IoBuf`/`IoBufMut` pair, and a third
-copy here would have made that duplication harder to resolve rather than easier.
+`NumaBuffer` implements `io-buffers`' `IoBuf` and `IoBufMut`, so a ring takes it as a buffer as it
+is. This crate defines no buffer trait of its own: the traits belong to `io-buffers`, which is
+portable and so cannot depend on a Windows allocator, and the orphan rule lets only the crate that
+owns the trait or the type implement it, which is why the implementations are here.
 
-A consumer that owns such a trait implements it for `NumaBuffer` -- the orphan rule permits exactly
-that, since the trait is theirs -- over the inherent `as_ptr`, `as_mut_ptr` and `len`.
-`windows-ioring-sys` does so, and keeps re-exporting `NumaBuffer` so `windows_ioring_sys::NumaBuffer`
-still resolves.
+A crate that owns a buffer trait of its own implements it for `NumaBuffer` the same way, over the
+inherent `as_ptr`, `as_mut_ptr` and `len`. See [DESIGN-NOTES.md](DESIGN-NOTES.md) `N-D-2`.

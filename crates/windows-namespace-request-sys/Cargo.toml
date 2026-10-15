@@ -31,6 +31,11 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# The aligned buffer the query results and captured security descriptors are held in,
+# re-exported as `AlignedBuf` because it appears in public signatures (IB-2+.4 in
+# io-buffers' COMPLETED-CHECKLIST.md). The version is the one io-buffers' first release is fixed to.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
 # A *dev* dependency only. The crate itself deliberately does not depend on the
 # ambient-context crate (see DESIGN-NOTES.md, D-1); the acceptance test pairs
 # the two at a submission site, which is precisely the relationship being

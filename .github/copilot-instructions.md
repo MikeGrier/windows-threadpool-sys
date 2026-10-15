@@ -252,11 +252,14 @@ directory, which may select the wrong manifest or fail to find a toolchain. Pass
 absolute workspace-root path on every call; the server rejects a directory from which
 no `Cargo.toml` can be found by walking upward.
 
-**This is a Windows-only workspace, so there is no cross-platform exception.** The
-cargo-mcp server drives the **host** (Windows) toolchain, which is the only toolchain
-these crates target; every item is behind `cfg(windows)` and CI builds, tests, and
-lints exclusively on Windows. Every cargo invocation therefore goes through the
-`cargo_*` MCP tools with no WSL/Linux carve-out.
+**This is primarily a Windows workspace, and there is no WSL/Linux carve-out for
+cargo.** The cargo-mcp server drives the **host** (Windows) toolchain. Windows crates
+keep their platform-specific items behind `cfg(windows)`, and CI builds, tests, and
+lints them on Windows. A crate with a portable core is the exception, per
+[DEVELOPMENT.md](../DEVELOPMENT.md): CI's `portable` job additionally builds, tests,
+and lints it on Linux and macOS, and that job -- not a local WSL or Linux shell -- is
+where its non-Windows support is verified. Every local cargo invocation therefore
+still goes through the `cargo_*` MCP tools.
 
 | MCP tool | Replaces |
 |---|---|

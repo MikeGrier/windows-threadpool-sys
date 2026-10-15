@@ -463,7 +463,16 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   waits cost the dispatch hop rather than a thread per 64). **Default-off and at the edge** -- a domain
   waits on three handles and never approaches the limit, so the dependency belongs to whoever multiplexes.
 
-- [ ] **M33+.5** -- The durability layer as its own crate: **composition with shared vocabulary, not
+- [x] **M33+.5** -- **Transferred 2026-10-05 to
+  [crates/durable-ioring/CHECKLIST.md](crates/durable-ioring/CHECKLIST.md), with its shape changed**
+  -- the crate is built on `IoRing` directly rather than containing a domain, so it no longer waits
+  on M32 or the domain runtime; see
+  [DI-D-1](crates/durable-ioring/DESIGN-NOTES.md#di-d-1). Checked because nothing remains to do *here*;
+  the work continues there. The original text and the flush-equivalence handover below are kept in
+  place because `DI-6+.2` links to them. (`DI-6+.2` has since graduated to durable-ioring's
+  `DI-2.10`, caller-declared flush regimes, which links here.)
+
+  *Original text:* The durability layer as its own crate: **composition with shared vocabulary, not
   derivation.** It contains a domain and submits through it; it re-exports `Op` and `Completion` where the
   concept is genuinely the same, and defines `Epoch` and its own commit types where it adds meaning.
   Carry one constraint from the start: the flush barrier stops at the ring's edge, so **an epoch is

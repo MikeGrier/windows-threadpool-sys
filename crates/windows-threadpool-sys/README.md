@@ -89,9 +89,9 @@ the caller to remember:
 - **Waits own a handle of proven provenance.** The pool supports only some kinds
   of handle — a mutex handle, for instance, makes the native behaviour undefined
   with no error returned — so `ThreadpoolWait` takes a `WaitableHandle` rather
-  than any `OwnedHandle`. It offers safe constructors for the handle kinds this
-  crate creates itself and one narrow `unsafe` seam for handles obtained
-  elsewhere, which keeps unsupported handles out of the safe API instead of
+  than any `OwnedHandle`. It converts safely from an `Event` of the
+  `win-sync-sys` crate -- an event is never a mutex -- and offers one narrow
+  `unsafe` seam for handles obtained elsewhere, which keeps unsupported handles out of the safe API instead of
   documenting a rule the caller must remember. The wait then owns the handle and
   hands it back only as a borrow, so it cannot be closed underneath a pending
   wait.

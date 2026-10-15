@@ -40,7 +40,7 @@ use std::fmt;
 use std::io;
 
 use windows_sys::Win32::Foundation::{
-    FALSE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR,
+    ERROR_NOT_ENOUGH_MEMORY, FALSE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR,
 };
 
 /// A raw Win32 error code, exactly as Windows produced it.
@@ -82,6 +82,13 @@ impl Win32Error {
     fn last() -> Self {
         // SAFETY: GetLastError only reads the calling thread's own error slot.
         Self(unsafe { GetLastError() })
+    }
+
+    /// This crate's own report that it could not allocate memory for a call, which was then
+    /// not made: `ERROR_NOT_ENOUGH_MEMORY`. It is the one code here that the call did not
+    /// produce.
+    pub(crate) fn out_of_memory() -> Self {
+        Self(ERROR_NOT_ENOUGH_MEMORY)
     }
 
     /// The raw code, unaltered.

@@ -54,6 +54,14 @@ device = ["windows-sys/Win32_System_Ioctl"]
 # capture itself honors RUST_BACKTRACE / RUST_LIB_BACKTRACE at run time.
 operation-backtrace = []
 
+# The buffer contract: `IoBuf` and `IoBufMut`, defined once in a portable crate and re-exported
+# here at the paths they always had (IB-2+.1 in io-buffers' CHECKLIST.md). The version is the one
+# io-buffers' first release is fixed to (`Release-As: 0.1.0`), so it is not a guess; that crate
+# must be on crates.io before this one's next release.
+[dependencies.io-buffers]
+version = "0.1.0"
+path = "../io-buffers"
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

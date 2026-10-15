@@ -84,7 +84,7 @@ fn iocp_scatter_gather_via_token() {
         )
         .expect("associate");
 
-    let mut src = PageBuffers::new(2);
+    let mut src = PageBuffers::new(2).expect("page buffers");
     for (i, byte) in src.as_bytes_mut().iter_mut().enumerate() {
         *byte = (i % 251) as u8;
     }
@@ -105,7 +105,7 @@ fn iocp_scatter_gather_via_token() {
 
     // Scatter-read the same pages back.
     let read_token = endpoint
-        .read_scatter(PageBuffers::new(2), 0)
+        .read_scatter(PageBuffers::new(2).expect("page buffers"), 0)
         .expect("submit read_scatter")
         .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");
@@ -137,7 +137,7 @@ fn blocking_scatter_gather_round_trips() {
     )
     .expect("no incompatible notification mode");
 
-    let mut src = PageBuffers::new(2);
+    let mut src = PageBuffers::new(2).expect("page buffers");
     for (i, byte) in src.as_bytes_mut().iter_mut().enumerate() {
         *byte = (i % 251) as u8;
     }
@@ -145,7 +145,7 @@ fn blocking_scatter_gather_round_trips() {
     let written = endpoint.write_gather(&src, 0).expect("write_gather");
     assert_eq!(written, src.len());
 
-    let mut dst = PageBuffers::new(2);
+    let mut dst = PageBuffers::new(2).expect("page buffers");
     let read = endpoint.read_scatter(&mut dst, 0).expect("read_scatter");
     assert_eq!(read, src.len());
     assert_eq!(dst.as_bytes(), src.as_bytes());
@@ -369,7 +369,7 @@ fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
     let port = CompletionPort::new(0).expect("create port");
     let (endpoint, path) = iocp_endpoint(&port, &content, "pages");
 
-    let buffers = PageBuffers::new(1);
+    let buffers = PageBuffers::new(1).expect("page buffers");
     let expected_ptr = buffers.stable_ptr();
 
     let token = endpoint
@@ -387,4 +387,115 @@ fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
     drop(endpoint);
     drop(port);
     let _ = std::fs::remove_file(&path);
+}
+
+// `PageBuffers` holds an `io_buffers::AlignedBuf` (IB-2+.2); these pin what it promises on top of
+// that buffer's own tests: its page arithmetic, the segment array the scatter and gather calls read,
+// and that it is page-aligned and zeroed whatever the page count.
+
+#[test]
+fn page_buffers_report_their_pages_and_length() {
+    for pages in [1_usize, 2, 3, 7, 16] {
+        let buffers = PageBuffers::new(pages).expect("page buffers");
+        assert_eq!(buffers.pages(), pages);
+        assert_eq!(buffers.len(), pages * PAGE_SIZE);
+        assert_eq!(buffers.as_bytes().len(), pages * PAGE_SIZE);
+        assert!(!buffers.is_empty());
+    }
+}
+
+#[test]
+fn page_buffers_are_zeroed_and_page_aligned_for_every_page_count() {
+    use crate::IoBuf;
+    for pages in [1_usize, 2, 3, 16, 33] {
+        let buffers = PageBuffers::new(pages).expect("page buffers");
+        assert_eq!(buffers.stable_ptr().addr() % PAGE_SIZE, 0, "{pages} pages");
+        assert!(
+            buffers.as_bytes().iter().all(|&byte| byte == 0),
+            "{pages} pages"
+        );
+    }
+}
+
+#[test]
+fn the_segment_array_names_each_page_in_order_and_ends_with_a_terminator() {
+    use crate::IoBuf;
+    for pages in [1_usize, 2, 5] {
+        let buffers = PageBuffers::new(pages).expect("page buffers");
+        let base = buffers.stable_ptr().addr();
+        let segments = buffers.segment_array();
+        assert_eq!(segments.len(), pages + 1, "a terminator after the pages");
+        for (index, segment) in segments[..pages].iter().enumerate() {
+            // SAFETY: every element before the terminator was written through `Buffer`.
+            let address = unsafe { segment.Buffer }.addr();
+            assert_eq!(address, base + index * PAGE_SIZE, "page {index} of {pages}");
+            assert_eq!(address % PAGE_SIZE, 0);
+        }
+        // SAFETY: the terminator is a zeroed element, read through `Alignment`.
+        assert_eq!(unsafe { segments[pages].Alignment }, 0);
+    }
+}
+
+#[test]
+fn bytes_written_through_the_mutable_view_are_read_through_every_other_view() {
+    use crate::{IoBuf, IoBufMut};
+    let mut buffers = PageBuffers::new(2).expect("page buffers");
+    buffers.as_bytes_mut()[0] = 0xAB;
+    buffers.as_bytes_mut()[PAGE_SIZE + 5] = 0xCD;
+    assert_eq!(buffers.as_bytes()[0], 0xAB);
+    assert_eq!(buffers.as_bytes()[PAGE_SIZE + 5], 0xCD);
+    assert_eq!(buffers.as_bytes()[1], 0, "bytes not written are still zero");
+
+    let shared = buffers.stable_ptr();
+    assert_eq!(buffers.stable_mut_ptr().cast_const(), shared);
+    assert_eq!(buffers.bytes_len(), 2 * PAGE_SIZE);
+    // SAFETY: the pointer is this buffer's own allocation of `bytes_len` initialised bytes.
+    assert_eq!(unsafe { *shared }, 0xAB);
+}
+
+#[test]
+fn page_buffers_keep_their_address_when_moved() {
+    use crate::IoBuf;
+    let buffers = PageBuffers::new(3).expect("page buffers");
+    let before = buffers.stable_ptr();
+    let moved = Box::new(buffers);
+    assert_eq!(moved.stable_ptr(), before);
+}
+
+#[test]
+fn zero_pages_is_refused_as_invalid_input() {
+    let error = PageBuffers::new(0).expect_err("zero pages");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("at least one page"), "{error}");
+}
+
+#[test]
+fn a_page_count_whose_length_overflows_is_refused_as_invalid_input() {
+    let error = PageBuffers::new(usize::MAX / PAGE_SIZE + 1).expect_err("the length overflows");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("overflow"), "{error}");
+}
+
+#[test]
+fn a_page_count_the_machine_cannot_supply_is_refused_as_out_of_memory() {
+    // The count is the caller's, so this is a failure a caller can meet and recover from by asking
+    // for fewer pages: not a panic, and not an abort. The length does not overflow, but no
+    // allocation could be that large.
+    let error = PageBuffers::new(usize::MAX / PAGE_SIZE).expect_err("no machine has this");
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}
+
+#[test]
+fn page_buffers_are_send_and_sync_and_debug_shows_no_contents() {
+    fn assert_send_and_sync<T: Send + Sync>() {}
+    assert_send_and_sync::<PageBuffers>();
+
+    let mut buffers = PageBuffers::new(1).expect("page buffers");
+    buffers.as_bytes_mut().fill(0x5A);
+    let text = format!("{buffers:?}");
+    assert!(
+        text.contains("PageBuffers") && text.contains("pages: 1"),
+        "{text}"
+    );
+    assert!(!text.contains("90"), "no byte values in {text}");
 }

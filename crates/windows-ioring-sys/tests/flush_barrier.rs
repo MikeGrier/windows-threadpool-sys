@@ -57,9 +57,8 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 
-use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, WriteCaching,
-};
+use io_buffers::AlignedBuf;
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, WriteCaching};
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED,
@@ -87,44 +86,13 @@ const PHASE_B_BASE: usize = PHASE_OPS * BIG_LEN;
 /// Generous: this is tens of MiB of unbuffered device I/O per case.
 const WAIT_MS: u32 = 120_000;
 
-/// A heap buffer whose first byte is `ALIGN`-aligned.
+/// A buffer of `len` bytes, each `fill`, whose first byte is `ALIGN`-aligned.
 ///
-/// `Vec<u8>` gives no alignment guarantee beyond `u8`'s, so this over-allocates
-/// and offsets into the allocation. The heap block itself does not move when
-/// the `Aligned` value is moved, which is what [`IoBuf`] requires.
-struct Aligned {
-    storage: Vec<u8>,
-    offset: usize,
-    len: usize,
-}
-
-impl Aligned {
-    fn new(len: usize, fill: u8) -> Self {
-        let storage = vec![fill; len + ALIGN];
-        let base = storage.as_ptr() as usize;
-        let offset = (ALIGN - (base % ALIGN)) % ALIGN;
-        Self {
-            storage,
-            offset,
-            len,
-        }
-    }
-}
-
-// SAFETY: `storage` is a heap allocation that is never reallocated or resized
-// while this value exists, so the address it reports is stable across moves and
-// for the value's whole life; `offset` is within the over-allocation by
-// construction, and `len` bytes from there are initialized and stay allocated.
-// `len` is fixed at construction.
-unsafe impl IoBuf for Aligned {
-    fn stable_ptr(&self) -> *const u8 {
-        // SAFETY: `offset <= ALIGN` and the allocation is `len + ALIGN` bytes.
-        unsafe { self.storage.as_ptr().add(self.offset) }
-    }
-
-    fn bytes_len(&self) -> usize {
-        self.len
-    }
+/// An [`AlignedBuf`], which allocates under the layout it frees under.
+fn aligned(len: usize, fill: u8) -> AlignedBuf {
+    let mut buffer = AlignedBuf::zeroed(len, ALIGN).expect("an aligned allocation");
+    buffer.fill(fill);
+    buffer
 }
 
 mod common;
@@ -195,7 +163,7 @@ impl Observed {
 /// as the sidecar. `Option<usize>` rather than `usize` because the flush has
 /// no expected length -- it transfers nothing -- and saying so in the type is
 /// what lets the drain below tell a write from a flush without a second map.
-type BarrierRing = IoRing<Aligned, Option<usize>>;
+type BarrierRing = IoRing<AlignedBuf, Option<usize>>;
 
 /// Push phase A, then one flush with `coverage`, then phase B; submit as one
 /// batch and report the order in which the completions arrived.
@@ -209,7 +177,7 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
     {
         let mut batch = Batch::new(ring);
         for index in 0..PHASE_OPS {
-            let buffer = Aligned::new(BIG_LEN, index as u8);
+            let buffer = aligned(BIG_LEN, index as u8);
             let offset = (index * BIG_LEN) as u64;
             // SAFETY: `file` stays open for the whole test, and the buffer is
             // no longer this test's to keep alive -- `write_raw_owned` moves it
@@ -241,7 +209,7 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
             .user_data();
 
         for index in 0..PHASE_OPS {
-            let buffer = Aligned::new(SMALL_LEN, index as u8);
+            let buffer = aligned(SMALL_LEN, index as u8);
             let offset = (PHASE_B_BASE + index * SMALL_LEN) as u64;
             // SAFETY: as above.
             let id = unsafe {

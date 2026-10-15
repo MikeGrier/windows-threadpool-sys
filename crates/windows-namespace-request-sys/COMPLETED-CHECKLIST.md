@@ -57,3 +57,18 @@ Append-only. Newest groups at the bottom.
   accepts any base, including the process directory, and an accepted entry is
   used verbatim so the result need not be on that drive at all. It is now
   `a_drive_relative_path_carries_its_component_and_the_current_drive_uses_the_process_directory`.)*
+
+## Moved 2026-10-13 20:30:00 -04:00 -- NR-3: an allocation that fails is an error the caller receives
+
+### <a id="nr-31"></a>NR-3.1 -- Every allocation of an `AlignedBuf` returns its failure, and `SecurityDescriptor` and `SecurityAttributes` stop being `Clone`. *(completed 2026-10-13 20:30:00 -04:00)*
+
+Raised by the engineer's review of [durable-ioring's DI-9.7.3](../durable-ioring/COMPLETED-CHECKLIST.md#di-973),
+which found the first move onto `io_buffers::AlignedBuf` (`IB-2+.4`) had left a panic where there had been an
+abort; the engineer rejected both ("I do not find either acceptable"). Done as one change, recorded here as
+finished work: `QueryFileInformation::perform` returns `ERROR_NOT_ENOUGH_MEMORY`; `SecurityDescriptor::capture`
+has a `SecurityCaptureFailure::Allocate`; `try_clone` replaces `Clone` on `SecurityDescriptor` and
+`SecurityAttributes`; a request's `try_clone` reports `HandleCaptureFailure::CopySecurity`. A breaking change to
+the published crate. The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) under `D-8`; the sabotages that
+pin it, and the one blind spot, are in [sabotage.json](sabotage.json), a manifest this change introduced.
+Two of those sabotages -- a copy of an open request that forgets its security attributes -- would have survived
+before: nothing tested that a copy kept them, so this change added the tests.

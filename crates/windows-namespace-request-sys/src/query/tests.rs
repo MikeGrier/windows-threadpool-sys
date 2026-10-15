@@ -10,15 +10,17 @@
 use std::fs::File;
 use std::os::windows::io::AsHandle;
 
-use windows_sys::Win32::Foundation::{ERROR_BAD_LENGTH, ERROR_NO_MORE_FILES};
+use windows_sys::Win32::Foundation::{
+    ERROR_BAD_LENGTH, ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_BASIC_INFO, FILE_ID_EXTD_DIR_INFO, FILE_ID_INFO, FileStandardInfo,
 };
 
 use super::{FileInformationClass, QueryFileInformation};
 use crate::CapturedHandle;
-use crate::buffer::AlignedBuffer;
 use crate::handle::tests::{Fixture, handle_allocation};
+use io_buffers::AlignedBuf;
 
 /// Small on purpose: large enough for a few entries, far too small to drain the
 /// fixture, so the enumeration cursor is left mid-directory.
@@ -41,7 +43,7 @@ fn query(file: &File, class: FileInformationClass) -> QueryFileInformation {
 ///
 /// The consumer's job, done here because the crate deliberately returns bytes
 /// and does not parse them.
-fn names_in(batch: &AlignedBuffer) -> Vec<String> {
+fn names_in(batch: &AlignedBuf) -> Vec<String> {
     let mut names = Vec::new();
     let mut offset = 0_usize;
 
@@ -96,6 +98,24 @@ fn a_fixed_size_class_returns_the_whole_buffer() {
         size_of::<FILE_BASIC_INFO>(),
         "the whole buffer comes back; the call reports no written length"
     );
+}
+
+#[test]
+fn a_capacity_the_machine_cannot_supply_is_reported_as_out_of_memory() {
+    // The capacity is the caller's, so this is a failure a caller can meet and recover from by
+    // asking for less -- not a panic, and not an abort.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("query-capacity");
+    let file = fixture.open_file();
+
+    let error = query(&file, FileInformationClass::BASIC)
+        .with_capacity(usize::MAX / 2)
+        .perform()
+        .expect_err("no machine has this");
+
+    assert_eq!(error.code(), ERROR_NOT_ENOUGH_MEMORY);
 }
 
 #[test]

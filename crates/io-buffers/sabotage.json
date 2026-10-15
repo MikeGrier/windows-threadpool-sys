@@ -1,0 +1,223 @@
+{
+  "package": "io-buffers",
+  "description": "Sabotages for io-buffers. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "RegisteredSpan is three public fields and has no logic to sabotage. The traits' obligations -- an address that does not change while the kernel holds the value -- cannot be observed from a test that returns before any kernel would use the address, so what these entries pin is that each implementation reports the allocation it owns and the length it holds, which is what the obligation rests on. The aligned buffer's allocator-failure arm is reached by asking for the largest length that fits an isize, which no machine can provide; a failure of a request that ordinarily succeeds is not reachable on demand.",
+  "sabotages": [
+    {
+      "name": "IB-1.1: a Vec reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A null address is the one the kernel would be handed. Compared against the Vec's own pointer, not against another call to the same function, which a constant would satisfy.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a Vec reports its capacity as its length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "Bytes past the length are not initialized; an operation told it may use them reads or writes memory the owner never filled.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.capacity()\n"]
+    },
+    {
+      "name": "IB-1.1: a Vec's mutable address is not its shared one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The mutable trait's obligation is that its address equals the shared one, so the kernel writes where the owner reads.",
+      "find": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
+      "replace": ["unsafe impl IoBufMut for Vec<u8> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice reports half its length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A short length is the safe direction, and still a wrong answer: an operation would transfer fewer bytes than the owner handed over.",
+      "find": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Box<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len() / 2\n"]
+    },
+    {
+      "name": "IB-1.1: a boxed slice's mutable address is not its shared one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
+      "replace": ["unsafe impl IoBufMut for Box<[u8]> {\n    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a shared slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The case the ring crate's mutation testing found: comparing the function to itself passes even when it returns null, so the test names the allocation independently.",
+      "find": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a shared slice reports no length",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A zero length makes every operation over it a no-op that reports success.",
+      "find": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["unsafe impl IoBuf for Arc<[u8]> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n    }\n\n    fn bytes_len(&self) -> usize {\n        0\n"]
+    },
+    {
+      "name": "IB-1.1: a static slice reports no address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "As for a Vec.",
+      "find": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for &'static [u8] {\n    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.1: a static mutable slice reports no mutable address",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "The one reference type that is a legal destination: its mutable address must be the slice's.",
+      "find": ["        <[u8]>::as_mut_ptr(self)\n"],
+      "replace": ["        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.1: a static mutable slice reports its length plus one",
+      "file": "src/buf.rs",
+      "expect": "caught",
+      "why": "A length past the allocation is the direction that lets the kernel write out of bounds.",
+      "find": ["        <[u8]>::len(self)\n"],
+      "replace": ["        <[u8]>::len(self) + 1\n"]
+    },
+    {
+      "name": "IB-1.4: an alignment that is not a power of two is not refused",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "Without the check the layout call refuses it for the wrong reason, and the caller is told its length was too large when its alignment was wrong.",
+      "find": ["    if !align.is_power_of_two() {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "IB-1.4: the layout ignores the alignment asked for",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "The one promise the buffer exists to make. Every alignment test reads the address back.",
+      "find": ["    Layout::from_size_align(len, align).map_err(|_| AlignedBufError::TooLarge { len, align })\n"],
+      "replace": ["    Layout::from_size_align(len, 1).map_err(|_| AlignedBufError::TooLarge { len, align })\n"]
+    },
+    {
+      "name": "IB-1.4: a layout that cannot be made is reported as a bad alignment",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "The two reasons a layout fails are different faults of the caller's; the error names which.",
+      "find": ["    Layout::from_size_align(len, align).map_err(|_| AlignedBufError::TooLarge { len, align })\n"],
+      "replace": ["    Layout::from_size_align(len, align).map_err(|_| AlignedBufError::InvalidAlignment { align })\n"]
+    },
+    {
+      "name": "IB-1.4: a failed allocation is reported as too large",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A caller sizing from a device's geometry shrinks on one and gives up on the other.",
+      "find": ["ok_or(AlignedBufError::AllocationFailed { len, align })?;\n"],
+      "replace": ["ok_or(AlignedBufError::TooLarge { len, align })?;\n"]
+    },
+    {
+      "name": "IB-1.4: the memory is not zeroed",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "The buffer promises initialised bytes, which the traits require. Caught by allocating, dirtying and freeing a block and asking for the same size again; an allocator that happened to hand back zeroes would hide it, which is why the test repeats.",
+      "find": ["        let raw = unsafe { alloc::alloc_zeroed(layout) };\n"],
+      "replace": ["        let raw = unsafe { alloc::alloc(layout) };\n"]
+    },
+    {
+      "name": "IB-1.4: from_bytes does not copy",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A buffer reported as holding the bytes it was given, and holding zeroes.",
+      "find": ["        buffer.as_mut_slice().copy_from_slice(bytes);\n"],
+      "replace": ["        let _ = bytes;\n"]
+    },
+    {
+      "name": "IB-1.4: a copy loses the alignment",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A copy of a sector-aligned buffer that is not sector-aligned fails an unbuffered write for a reason far from the copy.",
+      "find": ["        Self::from_bytes(self.as_slice(), self.align())\n"],
+      "replace": ["        Self::from_bytes(self.as_slice(), 1)\n"]
+    },
+    {
+      "name": "IB-1.4: the reported alignment is one",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A caller checking the alignment before handing the buffer to a target is told it is unaligned.",
+      "find": ["    pub fn align(&self) -> usize {\n        self.layout.align()\n"],
+      "replace": ["    pub fn align(&self) -> usize {\n        1\n"]
+    },
+    {
+      "name": "IB-1.4: dropping a buffer does not free it",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A leak is invisible to every assertion but one that counts the allocator's live bytes, which these tests do.",
+      "find": ["        unsafe { alloc::dealloc(self.pointer.as_ptr(), self.layout) };\n"],
+      "replace": ["        let _ = self.layout;\n"]
+    },
+    {
+      "name": "IB-1.4: an empty buffer is freed too",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "An empty buffer's address is dangling, never allocated; freeing it is undefined behaviour. Likely scored as a process abort from the allocator, which is a weaker catch than an assertion; the counting test's arithmetic also disagrees.",
+      "find": ["        if self.layout.size() == 0 {\n            return;\n        }\n"],
+      "replace": ["        let _ = 0;\n"]
+    },
+    {
+      "name": "IB-1.4: equality ignores the alignment",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "Alignment is part of what a buffer promises, so two buffers that differ in it are not equal.",
+      "find": ["        self.align() == other.align() && self.as_slice() == other.as_slice()\n"],
+      "replace": ["        self.as_slice() == other.as_slice()\n"]
+    },
+    {
+      "name": "IB-1.4: the trait reports the alignment as the length",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "A kernel told it may use as many bytes as the alignment, not as many as the buffer holds.",
+      "find": ["    fn bytes_len(&self) -> usize {\n        self.layout.size()\n"],
+      "replace": ["    fn bytes_len(&self) -> usize {\n        self.layout.align()\n"]
+    },
+    {
+      "name": "IB-1.4: the mutable address is null",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "The mutable trait's address must be the shared one. May be scored as a process abort by the tests that read through it; the correspondence test fails an assertion on its own.",
+      "find": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.pointer.as_ptr()\n"],
+      "replace": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "IB-1.4: Debug prints the contents",
+      "file": "src/aligned.rs",
+      "expect": "caught",
+      "why": "An I/O buffer holds someone's data, and a Debug that printed it would put it in any log that formats the value.",
+      "find": ["            .field(\"len\", &self.len())\n"],
+      "replace": ["            .field(\"len\", &self.as_slice())\n"]
+    },
+    {
+      "name": "CONTROL: an empty buffer's address is made from the alignment at least one",
+      "file": "src/aligned.rs",
+      "expect": "survives",
+      "why": "Equivalent: an alignment is never zero, so taking the larger of it and one changes nothing. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["NonZeroUsize::new(layout.align()).expect("],
+      "replace": ["NonZeroUsize::new(layout.align().max(1)).expect("]
+    },
+    {
+      "name": "CONTROL: a Vec's address is read through its type rather than its method",
+      "file": "src/buf.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: Vec::as_ptr(self) is the same call spelled differently, on code every Vec test runs. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["unsafe impl IoBuf for Vec<u8> {\n    fn stable_ptr(&self) -> *const u8 {\n        Vec::as_ptr(self)\n"]
+    }
+  ]
+}

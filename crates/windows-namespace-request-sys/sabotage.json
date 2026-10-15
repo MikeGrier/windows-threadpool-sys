@@ -1,0 +1,90 @@
+{
+  "package": "windows-namespace-request-sys",
+  "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Only the allocation-failure paths have entries: this manifest was added with them. The catalogue's entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
+  "sabotages": [
+    {
+      "name": "NR-3: a capacity the machine cannot supply is reported under another code",
+      "file": "src/outcome.rs",
+      "expect": "caught",
+      "why": "A query whose buffer cannot be allocated reports ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'. Any other code would read as the call's own failure.",
+      "find": ["        Self(ERROR_NOT_ENOUGH_MEMORY)\n"],
+      "replace": ["        Self(0)\n"]
+    },
+    {
+      "name": "NR-3: a descriptor allocation failure is reported as an invalid copy",
+      "file": "src/security.rs",
+      "expect": "caught",
+      "why": "An allocation failure is its own failure, SecurityCaptureFailure::Allocate: an invalid copy would send a caller looking for a malformed descriptor.",
+      "find": ["            SecurityCaptureFailure::Allocate,\n            io::Error::from_raw_os_error("],
+      "replace": ["            SecurityCaptureFailure::InvalidCopy,\n            io::Error::from_raw_os_error("]
+    },
+    {
+      "name": "NR-3: a descriptor allocation failure carries the wrong code",
+      "file": "src/security.rs",
+      "expect": "caught",
+      "why": "The error's raw code is ERROR_NOT_ENOUGH_MEMORY, which a caller who funnels everything through raw_os_error reads as 'out of memory'.",
+      "find": ["                i32::try_from(ERROR_NOT_ENOUGH_MEMORY)\n"],
+      "replace": ["                i32::try_from(ERROR_INSUFFICIENT_BUFFER)\n"]
+    },
+    {
+      "name": "NR-3: a copy of security attributes drops the descriptor",
+      "file": "src/security.rs",
+      "expect": "caught",
+      "why": "A copy that kept the inheritance choice but not the descriptor would open files with different security than the original.",
+      "find": ["            descriptor: self\n                .descriptor\n                .as_ref()\n                .map(SecurityDescriptor::try_clone)\n                .transpose()?,\n"],
+      "replace": ["            descriptor: None,\n"]
+    },
+    {
+      "name": "NR-3: a failed security copy is reported as a failed duplication",
+      "file": "src/handle.rs",
+      "expect": "caught",
+      "why": "A request's try_clone reports a failed copy of its security attributes as HandleCaptureFailure::CopySecurity, not as DuplicateHandle, which would send a caller looking at a handle that was never the problem.",
+      "find": ["        Self::new(HandleCaptureFailure::CopySecurity, source)\n"],
+      "replace": ["        Self::new(HandleCaptureFailure::DuplicateHandle, source)\n"]
+    },
+    {
+      "name": "NR-3: an open request's copy forgets its security attributes",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The copy must open with what the original would; the attributes went through Clone before, and nothing but this test would notice a copy that dropped them.",
+      "find": ["            security,\n            creation_disposition: self.creation_disposition,\n"],
+      "replace": ["            security: None,\n            creation_disposition: self.creation_disposition,\n"]
+    },
+    {
+      "name": "NR-3: an open-by-identifier request's copy forgets its security attributes",
+      "file": "src/open_by_id.rs",
+      "expect": "caught",
+      "why": "As for the path-named open: the copy must carry the attributes the original does.",
+      "find": ["            share_mode: self.share_mode,\n            security,\n"],
+      "replace": ["            share_mode: self.share_mode,\n            security: None,\n"]
+    },
+    {
+      "name": "NR-3: a descriptor alignment that is not a power of two is refused by the build",
+      "file": "src/security.rs",
+      "expect": "refused-by-build",
+      "buildError": "SELF_RELATIVE_ALIGNMENT.is_power_of_two()",
+      "why": "AlignedBuf refuses such an alignment and `allocate` reports every refusal as an allocation failure, so a bad constant would read as out of memory on every call. The constant is asserted where it is defined.",
+      "find": ["const SELF_RELATIVE_ALIGNMENT: usize = align_of::<u32>();\n"],
+      "replace": ["const SELF_RELATIVE_ALIGNMENT: usize = 3;\n"]
+    },
+    {
+      "name": "NR-3: a batch alignment that is not a power of two is refused by the build",
+      "file": "src/query.rs",
+      "expect": "refused-by-build",
+      "buildError": "BATCH_ALIGNMENT.is_power_of_two()",
+      "why": "As for the descriptor's: `perform` reports every refusal of the allocation as ERROR_NOT_ENOUGH_MEMORY, so a bad constant would be misreported as out of memory.",
+      "find": ["const BATCH_ALIGNMENT: usize = align_of::<u64>();\n"],
+      "replace": ["const BATCH_ALIGNMENT: usize = 3;\n"]
+    },
+    {
+      "name": "NR-3: BLIND SPOT: a failed copy of a descriptor is reported as an invalid copy",
+      "file": "src/security.rs",
+      "expect": "survives",
+      "why": "Declared blind spot, not a control. SecurityDescriptor::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail; the failure it would report is the shared `allocation()`, whose result the other entries pin.",
+      "find": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::allocation())\n"],
+      "replace": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::last_os(SecurityCaptureFailure::InvalidCopy))\n"]
+    }
+  ]
+}

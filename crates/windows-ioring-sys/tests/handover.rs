@@ -39,8 +39,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
+use io_buffers::AlignedBuf;
 use windows_ioring_sys::contract::RingContract;
-use windows_ioring_sys::{Batch, IoBuf, IoBufMut, IoRing, PushOptions};
+use windows_ioring_sys::{Batch, IoRing, PushOptions};
 use windows_sys::Win32::Foundation::{
     GENERIC_READ, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
@@ -85,11 +86,11 @@ const MAX_WAITS: usize = 512;
 #[cfg(feature = "threadpool")]
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The ring the unbuffered `Aligned` reads run on.
+/// The ring the unbuffered `AlignedBuf` reads run on.
 ///
 /// A separate alias rather than a wider one: the payload type is what the
 /// ring holds, and these two tests genuinely hold different things.
-type DirectRing = IoRing<Aligned>;
+type DirectRing = IoRing<AlignedBuf>;
 
 /// The ring the `Vec<u8>` waves run on.
 ///
@@ -133,56 +134,13 @@ const DIRECT_WIDTHS: [usize; 4] = [8, 16, 32, 64];
 /// the length to be sector-aligned. 4096 satisfies both 512e and 4Kn devices.
 const ALIGN: usize = 4096;
 
-/// A heap buffer whose first byte is `ALIGN`-aligned.
+/// A zeroed buffer of `len` bytes whose first byte is `ALIGN`-aligned.
 ///
-/// `Vec<u8>` gives no alignment guarantee beyond `u8`'s -- and cannot be made
-/// to, since a hand-aligned allocation would then be freed under the wrong
-/// layout -- so this over-allocates and offsets into the allocation. The heap
-/// block does not move when the `Aligned` value moves, which is what [`IoBuf`]
-/// requires. Same shape as [flush_barrier.rs](flush_barrier.rs)'s, extended to
-/// [`IoBufMut`] because these are reads rather than writes.
-struct Aligned {
-    storage: Vec<u8>,
-    offset: usize,
-    len: usize,
-}
-
-impl Aligned {
-    fn new(len: usize) -> Self {
-        let storage = vec![0_u8; len + ALIGN];
-        let base = storage.as_ptr() as usize;
-        let offset = (ALIGN - (base % ALIGN)) % ALIGN;
-        Self {
-            storage,
-            offset,
-            len,
-        }
-    }
-}
-
-// SAFETY: `storage` is a heap allocation that is never reallocated or resized
-// while this value exists, so the address it reports is stable across moves and
-// for the value's whole life; `offset` is within the over-allocation by
-// construction, and `len` bytes from there are initialized and stay allocated.
-// `len` is fixed at construction.
-unsafe impl IoBuf for Aligned {
-    fn stable_ptr(&self) -> *const u8 {
-        // SAFETY: `offset <= ALIGN` and the allocation is `len + ALIGN` bytes.
-        unsafe { self.storage.as_ptr().add(self.offset) }
-    }
-
-    fn bytes_len(&self) -> usize {
-        self.len
-    }
-}
-
-// SAFETY: the same allocation and offset `IoBuf` reports, so the two addresses
-// are equal and equally stable, as the trait requires.
-unsafe impl IoBufMut for Aligned {
-    fn stable_mut_ptr(&mut self) -> *mut u8 {
-        // SAFETY: `offset <= ALIGN` and the allocation is `len + ALIGN` bytes.
-        unsafe { self.storage.as_mut_ptr().add(self.offset) }
-    }
+/// An [`AlignedBuf`], which allocates under the layout it frees under; the
+/// hand-aligned over-allocation this file used to carry could not. It is an
+/// `IoBufMut` because these are reads rather than writes.
+fn aligned(len: usize) -> AlignedBuf {
+    AlignedBuf::zeroed(len, ALIGN).expect("an aligned allocation")
 }
 
 /// Open `path` for unbuffered, overlapped reading, so its completions are
@@ -467,7 +425,7 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
             {
                 let mut batch = Batch::new(&mut ring);
                 for index in 0..width {
-                    let buffer = Aligned::new(DIRECT_LEN);
+                    let buffer = aligned(DIRECT_LEN);
                     // Wraps, so a wider flight re-reads the fixture rather than
                     // needing a proportionally larger one. This test cares only
                     // that the reads are real and outstanding, never what they

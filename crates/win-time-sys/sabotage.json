@@ -1,0 +1,233 @@
+{
+  "package": "win-time-sys",
+  "description": "Sabotages for win-time-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "Three defects in the interrupt-time clocks no test can catch. A plain clock reading the precise call is more precise, not wrong: the difference is cost, which WT-1.6's probe measures. A clock reading the other interrupt timeline -- biased for unbiased, or the reverse -- gives identical values on a machine that has never slept, which a CI host need not have done. And QueryUnbiasedInterruptTime's failure, asserted in debug builds, is documented to happen only for a null pointer, which a reference cannot be. Likewise QueryPerformanceCounter's and QueryPerformanceFrequency's, which are documented to always succeed on Windows XP and later. Reading the performance counter's frequency on every call rather than once is not caught either: the frequency is fixed at boot, so it changes what a call costs, never what it answers. A clock that claims Steady with no test holding it to the promise is not caught: the tests list their clocks by hand, because Rust cannot enumerate a trait's implementations, and the bound on the test helper only stops a clock that does not claim it from being checked as if it did. A mock clock elsewhere that breaks the promise is its owner's to catch, not this crate's.",
+  "sabotages": [
+    {
+      "name": "WT-1.2: points order backwards",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Which of two readings came first is the question most callers ask of a time point.",
+      "find": ["        self.ticks.cmp(&other.ticks)\n"],
+      "replace": ["        other.ticks.cmp(&self.ticks)\n"]
+    },
+    {
+      "name": "WT-1.2: the distance between points has its sign flipped",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Elapsed time would come out negative, and a duration from it would be refused.",
+      "find": ["        let distance = i128::from(self.ticks) - i128::from(earlier.ticks);\n"],
+      "replace": ["        let distance = i128::from(earlier.ticks) - i128::from(self.ticks);\n"]
+    },
+    {
+      "name": "WT-1.2: moving a point forwards does not check the timeline's end",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A point moved past either end would wrap to the other, silently reordering it against every other point.",
+      "find": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n        u64::try_from(moved).ok().map(Self::from_ticks)\n"],
+      "replace": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n        Some(Self::from_ticks(moved as u64))\n"]
+    },
+    {
+      "name": "WT-1.2: moving a point backwards moves it forwards",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Subtracting ticks is the opposite of adding them.",
+      "find": ["        let moved = i128::from(self.ticks) - i128::from(ticks.count);\n"],
+      "replace": ["        let moved = i128::from(self.ticks) + i128::from(ticks.count);\n"]
+    },
+    {
+      "name": "WT-1.2: a backwards distance becomes a duration",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A Duration cannot be negative; converting a backwards distance to its length would hide which way it pointed.",
+      "find": ["        (!self.is_negative()).then(|| self.abs_duration())\n"],
+      "replace": ["        Some(self.abs_duration())\n"]
+    },
+    {
+      "name": "WT-1.2: a duration drops its fraction of a second",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Interrupt and system time tick every 100 ns; losing the sub-second part loses almost everything a short interval measures.",
+      "find": ["        let nanos = remainder * NANOS_PER_SECOND / u128::from(per_second);\n"],
+      "replace": ["        let nanos = remainder * 0;\n"]
+    },
+    {
+      "name": "WT-1.2: ticks from a duration drop its fraction of a second",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "The same loss in the other direction.",
+      "find": ["        let part = u128::from(duration.subsec_nanos()) * per_second / NANOS_PER_SECOND;\n"],
+      "replace": ["        let part = u128::from(duration.subsec_nanos()) * 0;\n"]
+    },
+    {
+      "name": "WT-1.2: ticks from a duration too long for them wrap",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "A duration that does not fit must be refused, not turned into some other count.",
+      "find": ["        i64::try_from(whole.checked_add(part)?).ok().map(Self::new)\n"],
+      "replace": ["        Some(Self::new((whole + part) as i64))\n"]
+    },
+    {
+      "name": "WT-1.2: negating the most negative distance wraps",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "i64::MIN has no opposite; wrapping returns itself, a distance pointing the wrong way.",
+      "find": ["        self.count.checked_neg().map(Self::new)\n"],
+      "replace": ["        Some(Self::new(self.count.wrapping_neg()))\n"]
+    },
+    {
+      "name": "WT-1.3: the precise interrupt clock reads the plain one",
+      "file": "src/interrupt.rs",
+      "expect": "caught",
+      "why": "A precise clock no finer than the system tick reads the same value across a short interval, which is what a precise clock exists to tell apart. Caught by the test that needs it to advance within a fraction of the finest tick.",
+      "find": ["        unsafe { QueryInterruptTimePrecise(&mut ticks) };\n"],
+      "replace": ["        unsafe { QueryInterruptTime(&mut ticks) };\n"]
+    },
+    {
+      "name": "WT-1.3: the precise unbiased clock reads the plain one",
+      "file": "src/interrupt.rs",
+      "expect": "caught",
+      "why": "The same, on the unbiased timeline.",
+      "find": ["        unsafe { QueryUnbiasedInterruptTimePrecise(&mut ticks) };\n"],
+      "replace": ["        let _ = unsafe { QueryUnbiasedInterruptTime(&mut ticks) };\n"]
+    },
+    {
+      "name": "WT-1.3: the plain interrupt clock is frozen",
+      "file": "src/interrupt.rs",
+      "expect": "caught",
+      "why": "A reading must be the kernel's, not a constant; caught by the test that needs the plain clock to advance across a tick.",
+      "find": ["        unsafe { QueryInterruptTime(&mut ticks) };\n        TimePoint::from_ticks(ticks)\n"],
+      "replace": ["        unsafe { QueryInterruptTime(&mut ticks) };\n        TimePoint::from_ticks(0)\n"]
+    },
+    {
+      "name": "WT-1.3: interrupt time ticks every microsecond",
+      "file": "src/timeline.rs",
+      "expect": "caught",
+      "why": "Every duration measured on interrupt or system time would be ten times too long.",
+      "find": ["pub(crate) const HUNDRED_NANOSECOND_TICKS: NonZeroU64 = NonZeroU64::new(10_000_000).unwrap();\n"],
+      "replace": ["pub(crate) const HUNDRED_NANOSECOND_TICKS: NonZeroU64 = NonZeroU64::new(1_000_000).unwrap();\n"]
+    },
+    {
+      "name": "WT-1.4: the precise system clock reads the coarse one",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "A precise clock no finer than the system tick; caught by the test that needs it to advance within a fraction of the finest tick.",
+      "find": ["        unsafe { GetSystemTimePreciseAsFileTime(&mut time) };\n"],
+      "replace": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n"]
+    },
+    {
+      "name": "WT-1.4: the coarse system clock is frozen",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "A reading must be the kernel's, not a constant; caught by the test that needs the coarse clock to advance across a tick.",
+      "find": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n        point(time)\n"],
+      "replace": ["        unsafe { GetSystemTimeAsFileTime(&mut time) };\n        point(FILETIME::default())\n"]
+    },
+    {
+      "name": "WT-1.4: a FILETIME's halves are put together the wrong way round",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The count would be meaningless. Caught by the comparison with std's own reading of the same call, and by the test of the halves.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwLowDateTime) << 32) | u64::from(time.dwHighDateTime))\n"]
+    },
+    {
+      "name": "WT-1.4: a FILETIME's high half is shifted too little",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The high half would overlap the low one; caught by the same two tests.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 16) | u64::from(time.dwLowDateTime))\n"]
+    },
+    {
+      "name": "WT-1.5: the performance counter's period is twice its frequency",
+      "file": "src/performance.rs",
+      "expect": "caught",
+      "why": "Every duration measured on the counter would be half its length. Caught by the comparison with the frequency Windows reports and with Instant, which reads the same counter.",
+      "find": ["    NonZeroU64::new(per_second.cast_unsigned()).expect(\"a performance counter frequency of zero\")\n"],
+      "replace": ["    NonZeroU64::new(per_second.cast_unsigned() * 2).expect(\"a performance counter frequency of zero\")\n"]
+    },
+    {
+      "name": "WT-1.5: the performance clock is frozen",
+      "file": "src/performance.rs",
+      "expect": "caught",
+      "why": "A reading must be the counter's, not a constant.",
+      "find": ["        TimePoint::from_ticks(ticks.cast_unsigned())\n"],
+      "replace": ["        TimePoint::from_ticks(0)\n"]
+    },
+    {
+      "name": "WT-1.6: the probe's median is the upper middle sample",
+      "file": "examples/clock_costs/main.rs",
+      "expect": "caught",
+      "why": "The probe reports the lower middle of an even count, as documented; the batch count is odd, so this matters only to the arithmetic's own test, which is where it is checked.",
+      "find": ["        median: samples[(samples.len() - 1) / 2],\n"],
+      "replace": ["        median: samples[samples.len() / 2],\n"]
+    },
+    {
+      "name": "WT-1.6: the probe counts a repeated reading as a step of zero",
+      "file": "examples/clock_costs/main.rs",
+      "expect": "caught",
+      "why": "A step is a change; a clock read twice in one tick has not stepped, and a zero step would hide its real granularity.",
+      "find": ["        .filter_map(|pair| pair[1].checked_sub(pair[0]).filter(|step| *step > 0))\n"],
+      "replace": ["        .filter_map(|pair| pair[1].checked_sub(pair[0]))\n"]
+    },
+    {
+      "name": "CONTROL: the performance count is cast rather than reinterpreted",
+      "file": "src/performance.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on code every performance test runs: for a count that is never negative, `as u64` and `cast_unsigned` are the same bits.",
+      "find": ["        TimePoint::from_ticks(ticks.cast_unsigned())\n"],
+      "replace": ["        TimePoint::from_ticks(ticks as u64)\n"]
+    },
+    {
+      "name": "CONTROL: a FILETIME's halves are added rather than or-ed",
+      "file": "src/system.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on code every system-time test runs: the halves cannot overlap, so adding them is or-ing them.",
+      "find": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime))\n"],
+      "replace": ["    TimePoint::from_ticks((u64::from(time.dwHighDateTime) << 32) + u64::from(time.dwLowDateTime))\n"]
+    },
+    {
+      "name": "CONTROL: the plain interrupt clock types its out-parameter",
+      "file": "src/interrupt.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on code every interrupt test runs: the call already makes the out-parameter a u64.",
+      "find": ["        let mut ticks = 0;\n        // SAFETY: the out-parameter is a live, writable local for the duration of the call.\n        unsafe { QueryInterruptTime(&mut ticks) };\n"],
+      "replace": ["        let mut ticks = 0_u64;\n        // SAFETY: the out-parameter is a live, writable local for the duration of the call.\n        unsafe { QueryInterruptTime(&mut ticks) };\n"]
+    },
+    {
+      "name": "CONTROL: a backwards distance is tested by its count",
+      "file": "src/timeline.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: a count below zero is exactly what is_negative tests, so this is an equivalent change on code every duration test runs.",
+      "find": ["        (!self.is_negative()).then(|| self.abs_duration())\n"],
+      "replace": ["        (self.count >= 0).then(|| self.abs_duration())\n"]
+    },
+    {
+      "name": "WT-2.2.1: a system clock claims to be steady",
+      "file": "src/system.rs",
+      "expect": "caught",
+      "why": "The promise Steady carries is the one thing a bound on it buys. A system clock moves backwards when the time is set, so code that took one as steady would be relying on a promise nothing keeps.",
+      "find": ["impl Clock for PreciseSystemClock {\n"],
+      "replace": ["impl crate::clock::Steady for PreciseSystemClock {}\n\nimpl Clock for PreciseSystemClock {\n"]
+    },
+    {
+      "name": "WT-2.2.1: the performance clock stops claiming to be steady",
+      "file": "src/performance.rs",
+      "expect": "refused-by-build",
+      "buildError": "the trait bound `PerformanceClock: Steady` is not satisfied",
+      "why": "The other direction: a clock that keeps the promise but does not make it cannot be used where it is needed. Refused at compile time, because the test that holds a clock to the promise takes only a Steady one.",
+      "find": ["impl Steady for PerformanceClock {}\n"],
+      "replace": ["\n"]
+    },
+    {
+      "name": "WT-2.2.1: the plain interrupt clock stops claiming to be steady",
+      "file": "src/interrupt.rs",
+      "expect": "refused-by-build",
+      "buildError": "the trait bound `InterruptClock: Steady` is not satisfied",
+      "why": "InterruptClock is the workspace's time base and the clock durable-ioring stamps with by default, through a Steady bound. Refused at compile time, as for the performance clock.",
+      "find": ["impl Steady for InterruptClock {}\n"],
+      "replace": ["\n"]
+    }
+  ]
+}

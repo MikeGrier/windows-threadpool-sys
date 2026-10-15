@@ -92,8 +92,9 @@ fn a_ring_satisfies_the_queue_depths_it_was_asked_for() {
 
 /// A node-bound allocation is usable as this crate's I/O memory.
 ///
-/// `numa_buffer_io.rs` implements [`windows_ioring_sys::IoBuf`] and
-/// [`IoBufMut`] for `NumaBuffer`, and nothing exercised them. The claim those
+/// `win-numa-sys` implements [`windows_ioring_sys::IoBuf`] (re-exported from
+/// `io-buffers`) and [`IoBufMut`] for `NumaBuffer`, and nothing here exercised
+/// them through this crate. The claim those
 /// impls make is that placing a buffer on a memory node costs no new surface:
 /// it is pushed and registered like a `Vec<u8>`.
 ///

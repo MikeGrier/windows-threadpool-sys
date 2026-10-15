@@ -1,0 +1,43 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-time-sys"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Memory-safe Rust over the Windows clocks: interrupt time, system time and the performance counter, as time points on typed timelines that can be compared, subtracted and recorded. Thin over Win32, adding no policy."
+keywords = ["windows", "time", "clock", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "date-and-time"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root): a
+# safe layer more or less directly over a Win32 API area, the clocks.
+
+[dependencies]
+# `default-features = false` matches every other crate in the workspace. Each feature arrives with
+# the clocks that call it.
+#
+# `Win32_System_WindowsProgramming` is the four interrupt-time reads.
+# `Win32_System_SystemInformation` is the two system-time reads, and `Win32_Foundation` the
+# `FILETIME` they write. `Win32_System_Performance` is QPC's counter and frequency.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_System_Performance",
+	"Win32_System_SystemInformation",
+	"Win32_System_WindowsProgramming",
+] }
+
+[[example]]
+name = "clock_costs"
+# Its summary and report arithmetic has unit tests; the measurement itself is the machine's.
+test = true
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
