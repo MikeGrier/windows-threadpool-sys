@@ -29,8 +29,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use windows_overlapped_io_sys::{
-    EndpointHandle, Issued, Operation, OperationId, OperationRegistry, OperationState, Submitted,
-    UnassociatedEndpoint, reclaim_overlapped,
+    EndpointHandle, EndpointObserver, Issued, Operation, OperationId, OperationRegistry,
+    OperationState, Submitted, UnassociatedEndpoint, reclaim_overlapped,
 };
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, NO_ERROR};
 use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
@@ -282,6 +282,33 @@ impl ThreadpoolIo {
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+
+    /// A new observer of this object's handle, which keeps the handle open
+    /// after this object drops.
+    ///
+    /// An observer is not an endpoint, so it cannot be bound to a second
+    /// `TP_IO` object:
+    ///
+    /// ```compile_fail,E0308
+    /// # use windows_threadpool_sys::io::ThreadpoolIo;
+    /// fn rebind(tp: &ThreadpoolIo) -> std::io::Result<ThreadpoolIo> {
+    ///     ThreadpoolIo::new(tp.observer(), |_| {}, None)
+    /// }
+    /// ```
+    ///
+    /// What that rejects is the observer, not the call: an endpoint compiles.
+    ///
+    /// ```
+    /// # use windows_threadpool_sys::io::ThreadpoolIo;
+    /// # use windows_overlapped_io_sys::UnassociatedEndpoint;
+    /// fn bind(endpoint: UnassociatedEndpoint) -> std::io::Result<ThreadpoolIo> {
+    ///     ThreadpoolIo::new(endpoint, |_| {}, None)
+    /// }
+    /// ```
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        self.handle.observer()
     }
 
     /// The number of submitted operations whose completion callback has not yet

@@ -317,3 +317,201 @@ fn pending_read_completes_through_the_callback() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+// --- observers alive across cancellation and rundown ---
+
+mod observers {
+    use std::io::{self, Write};
+    use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+    use std::sync::{Arc, Mutex};
+
+    use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
+    use windows_sys::Win32::Foundation::{
+        ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+    use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE};
+
+    use super::{read_endpoint, temp_file_with};
+    use crate::io::{IoCompletion, ThreadpoolIo};
+
+    /// A connected server pipe end carrying no data, so a read on it pends until
+    /// cancelled, and the client end, through which a write shows whether the
+    /// server end is still open.
+    fn pending_pipe(tag: &str) -> (UnassociatedEndpoint, std::fs::File) {
+        let name = format!(
+            r"\\.\pipe\windows-threadpool-sys-io-observer-{tag}-{}",
+            std::process::id()
+        );
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: a NUL-terminated name and no security attributes.
+        let raw = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_BYTE,
+                1,
+                4096,
+                4096,
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(
+            raw,
+            INVALID_HANDLE_VALUE,
+            "CreateNamedPipeW: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: a fresh overlapped pipe, unassociated, unduplicated, moved in exclusively.
+        let endpoint =
+            unsafe { UnassociatedEndpoint::assume_overlapped(OwnedHandle::from_raw_handle(raw)) };
+        let client = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .expect("connect the client end");
+        (endpoint, client)
+    }
+
+    /// Whether the server end is still open: a client write fails once it closes.
+    fn server_is_open(client: &mut std::fs::File) -> bool {
+        client.write(b"x").is_ok()
+    }
+
+    /// Issue one overlapped `ReadFile` on a handle not in skip-on-success mode.
+    ///
+    /// SAFETY: `buffer` must hold `len` writable bytes until the read completes.
+    unsafe fn issue_read(
+        handle: BorrowedHandle<'_>,
+        overlapped: *mut OVERLAPPED,
+        buffer: *mut u8,
+        len: u32,
+    ) -> io::Result<Issued> {
+        // SAFETY: forwarded from this function's own contract.
+        let ok = unsafe {
+            ReadFile(
+                handle.as_raw_handle(),
+                buffer,
+                len,
+                std::ptr::null_mut(),
+                overlapped,
+            )
+        };
+        if ok != 0 {
+            return Ok(Issued::Pending);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+            return Ok(Issued::Pending);
+        }
+        Err(error)
+    }
+
+    /// An object whose callback claims each `Operation<()>` and records its result.
+    fn recording_object(endpoint: UnassociatedEndpoint) -> (ThreadpoolIo, Arc<Mutex<Vec<u32>>>) {
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&results);
+        let tp = ThreadpoolIo::new(
+            endpoint,
+            move |completion: &IoCompletion| {
+                // SAFETY: only Operation<()> is submitted on these objects, claimed once.
+                let _operation = unsafe { completion.claim::<()>() };
+                seen.lock()
+                    .expect("record a completion")
+                    .push(completion.io_result());
+            },
+            None,
+        )
+        .expect("create TP_IO");
+        (tp, results)
+    }
+
+    #[test]
+    fn an_observer_from_the_object_reads_the_length_after_it_drops() {
+        let path = temp_file_with(b"payload", "observer-length");
+        let tp = ThreadpoolIo::new(read_endpoint(&path), |_| {}, None).expect("create TP_IO");
+        let observer = tp.observer();
+
+        drop(tp);
+        assert_eq!(observer.file_len().expect("file_len"), 7);
+        drop(observer);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cancelling_with_observers_alive_aborts_the_read_and_they_still_read() {
+        let (endpoint, mut client) = pending_pipe("cancel");
+        let before = endpoint.observer();
+        let (tp, results) = recording_object(endpoint);
+        let after = tp.observer();
+        assert!(before.same_handle(&after));
+
+        let mut buffer = [0_u8; 8];
+        let buf_ptr = buffer.as_mut_ptr();
+        // SAFETY: one read on a pipe carrying no data, so it pends; `buffer`
+        // outlives it because run_down below waits for its callback.
+        let submitted =
+            unsafe { tp.submit(Operation::new(()), |h, ov| issue_read(h, ov, buf_ptr, 8)) };
+        let Submitted::Pending(id) = submitted else {
+            panic!("expected a pending read, got {submitted:?}");
+        };
+        after.file_len().expect("a query while the read pends");
+        assert_eq!(tp.outstanding(), 1);
+
+        tp.cancel(id).expect("cancel");
+        tp.run_down();
+        assert_eq!(*results.lock().expect("results"), [ERROR_OPERATION_ABORTED]);
+
+        drop(tp);
+        assert!(
+            server_is_open(&mut client),
+            "the observers must keep the handle open"
+        );
+        before.file_len().expect("a query after the object drops");
+        after.file_len().expect("a query after the object drops");
+        drop((before, after));
+        assert!(
+            !server_is_open(&mut client),
+            "the last holder must close the handle"
+        );
+    }
+
+    #[test]
+    fn dropping_with_a_read_pending_drains_it_while_an_observer_keeps_the_handle_open() {
+        let (endpoint, mut client) = pending_pipe("drop");
+        let (tp, results) = recording_object(endpoint);
+        let observer = tp.observer();
+
+        let mut buffer = [0_u8; 8];
+        let buf_ptr = buffer.as_mut_ptr();
+        // SAFETY: one read on a pipe carrying no data, so it pends; `buffer`
+        // outlives it because the drop below waits for its callback.
+        let submitted =
+            unsafe { tp.submit(Operation::new(()), |h, ov| issue_read(h, ov, buf_ptr, 8)) };
+        assert!(matches!(submitted, Submitted::Pending(_)));
+
+        // Drop must cancel explicitly: with the observer holding the handle, nothing closes it.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(tp))).is_err();
+        assert_eq!(
+            panicked,
+            cfg!(feature = "fail-fast"),
+            "only `fail-fast` turns a skipped rundown into a panic"
+        );
+        assert_eq!(*results.lock().expect("results"), [ERROR_OPERATION_ABORTED]);
+
+        assert!(
+            server_is_open(&mut client),
+            "the observer must keep the handle open"
+        );
+        observer.file_len().expect("a query after the drain");
+        drop(observer);
+        assert!(
+            !server_is_open(&mut client),
+            "the last holder must close the handle"
+        );
+    }
+}
