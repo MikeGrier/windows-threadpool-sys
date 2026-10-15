@@ -12,7 +12,7 @@ promise, as the workspace's naming decision defines it.
   handle names a volume on this machine's own disks.
 - **`bytes_per_sector`** -- the sector size a volume is addressed in
   (`IOCTL_DISK_GET_DRIVE_GEOMETRY`), which an unbuffered volume handle's transfers must be a multiple
-  of and aligned to.
+  of and aligned to. A handle to a whole physical disk answers it too (tried on one opened for reading and writing by an administrator).
 - **`lock_volume`** and **`unlock_volume`** -- `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`: until
   released, or until the handle closes, no other handle can use the volume.
 

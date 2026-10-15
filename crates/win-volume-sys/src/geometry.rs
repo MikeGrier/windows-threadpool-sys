@@ -16,7 +16,9 @@ mod tests;
 /// volume handle must be a multiple of in offset and length, and aligned to in memory.
 ///
 /// `volume` is a handle to a volume and needs no access to it, as for
-/// [`volume_disk_extents`](crate::volume_disk_extents).
+/// [`volume_disk_extents`](crate::volume_disk_extents). A handle to a whole physical disk,
+/// `\\.\PhysicalDriveN`, answers the same control (tried on a disk opened for reading and writing by
+/// an administrator; whether one opened with no access does is not).
 ///
 /// # Errors
 ///
