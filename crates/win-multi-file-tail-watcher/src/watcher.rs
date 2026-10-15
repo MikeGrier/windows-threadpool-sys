@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use wtf_string::Wtf16Str;
 
+use crate::sq::{self, SqCapacityError, SqDrain, SqReader, SqWriter};
 use crate::{HeldFile, OpenError};
 
 #[cfg(test)]
@@ -16,6 +17,9 @@ mod tests;
 /// Registering opens the file at once and holds it ([`HeldFile`]); the [`Registration`] it returns
 /// ends the registration when it drops. There is no uniqueness and no lookup by name: registering
 /// one path twice gives two independent registrations.
+///
+/// It owns the submission queue ([`SqEntry`](crate::SqEntry)) the caller drains with
+/// [`drain`](Self::drain); the queue lives exactly as long as the watcher.
 #[derive(Debug)]
 pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
@@ -24,6 +28,9 @@ pub struct Watcher<T: Clone> {
 #[derive(Debug)]
 struct Shared<T> {
     roster: Mutex<Roster<T>>,
+    // Held only to hand out clones, so no writer ever waits on this lock to write.
+    writer: Mutex<SqWriter<T>>,
+    reader: Mutex<SqReader<T>>,
 }
 
 // Ids only grow, so the roster's order is the order of registration and a position in it survives
@@ -48,17 +55,59 @@ impl<T> Shared<T> {
 }
 
 impl<T: Clone> Watcher<T> {
-    /// A watcher with no registrations.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
+    /// A watcher with no registrations, and a submission queue that holds `sq_capacity` entries.
+    ///
+    /// # Errors
+    ///
+    /// [`SqCapacityError`] unless `sq_capacity` is a power of two of at least two.
+    pub fn new(sq_capacity: usize) -> Result<Self, SqCapacityError> {
+        let (writer, reader) = sq::queue(sq_capacity)?;
+        Ok(Self {
             shared: Arc::new(Shared {
                 roster: Mutex::new(Roster {
                     next_id: 0,
                     entries: BTreeMap::new(),
                 }),
+                writer: Mutex::new(writer),
+                reader: Mutex::new(reader),
             }),
-        }
+        })
+    }
+
+    /// The entries in the submission queue, oldest first, until there are none.
+    ///
+    /// Taking an entry makes room for another. Only one drain is live at a time: a second waits
+    /// for the first to drop. It never waits for the crate's writing.
+    pub fn drain(&self) -> SqDrain<'_, T> {
+        SqDrain(
+            self.shared
+                .reader
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    /// How many entries the submission queue holds when full.
+    #[must_use]
+    pub fn sq_capacity(&self) -> usize {
+        self.shared
+            .reader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .capacity()
+    }
+
+    /// A writing handle for one thread of the crate's own.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the poll (TW-2.4) writes through it")
+    )]
+    pub(crate) fn sq_writer(&self) -> SqWriter<T> {
+        self.shared
+            .writer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Register the file at `path`, taking `offset` as where the caller's reading starts, and move
@@ -90,12 +139,6 @@ impl<T: Clone> Watcher<T> {
     #[must_use]
     pub fn registered(&self) -> usize {
         self.shared.roster().entries.len()
-    }
-}
-
-impl<T: Clone> Default for Watcher<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

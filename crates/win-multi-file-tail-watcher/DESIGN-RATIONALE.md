@@ -96,6 +96,16 @@ SQ entry; a reserved SQ slot for it was proposed and declined as unnecessary.
 [Q32](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q32-there-is-no-cq),
 [Q35](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q35-no-special-mechanism)
 
+**The SQ's storage (TW-2.2, 2026-10-15).** The design said an SQ and a capacity and nothing about
+its shape. A mutex around a deque would have met it, and was set aside because the poll is meant to
+stay shardable across threads ([TW-D-5](DESIGN-NOTES.md#tw-d-5)) and a lock on every write is what
+[TW-D-7](DESIGN-NOTES.md#tw-d-7) is written against. The repository already has a bounded
+many-writer one-reader queue, windows-waitable-queues' `slotwise_mpsc`, so the SQ is built on it,
+and its capacity rule (a power of two, at least two) became the SQ's. That queue's other shapes
+were not compared; the choice is the first that fit, and the SQ's interface hides it. Its own
+doorbell is unused, since the two doorbells are the crate's own events
+([TW-D-6](DESIGN-NOTES.md#tw-d-6)).
+
 ## TW-D-7: a full SQ stops the poll; no locks around I/O
 
 Waiting at a full queue was set aside in line with

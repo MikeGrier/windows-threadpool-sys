@@ -116,6 +116,46 @@
       "replace": ["        self.shared.roster().next_id as usize"]
     },
     {
+      "name": "the queue is built with double the capacity asked for",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "TW-D-6: the caller sets the capacity. A queue that holds more than asked is one that never reports full when it should, which only a test that fills it to the stated number can see.",
+      "find": ["slotwise_mpsc::bounded(capacity)?;"],
+      "replace": ["slotwise_mpsc::bounded(capacity.saturating_mul(2))?;"]
+    },
+    {
+      "name": "a full queue is reported as closed",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "The two are told apart because only one is worth retrying, and the poll's stop-and-resume (TW-D-7) depends on which it got.",
+      "find": ["            PushError::Full(entry) => SqPushError::Full(entry),"],
+      "replace": ["            PushError::Full(entry) => SqPushError::Closed(entry),"]
+    },
+    {
+      "name": "the capacity error names the smallest valid capacity as the request",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "A caller correcting a refusal reads the request back to see what was refused.",
+      "find": ["            requested: error.requested(),"],
+      "replace": ["            requested: error.min_valid(),"]
+    },
+    {
+      "name": "a drain yields nothing",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "The drain is the caller's only way to the queue's contents.",
+      "find": ["    fn next(&mut self) -> Option<SqEntry<T>> {\n        self.0.pop()"],
+      "replace": ["    fn next(&mut self) -> Option<SqEntry<T>> {\n        let _ = &self.0;\n        None"]
+    },
+    {
+      "name": "control: an empty read is spelled with map_or",
+      "file": "src/sq.rs",
+      "expect": "survives",
+      "why": "`ok()` and `map_or(None, Some)` are the same conversion.",
+      "find": ["        self.0.pop().ok()"],
+      "replace": ["        self.0.pop().map_or(None, Some)"]
+    },
+    {
       "name": "control: the removed entry is dropped within the statement",
       "file": "src/watcher.rs",
       "expect": "survives",

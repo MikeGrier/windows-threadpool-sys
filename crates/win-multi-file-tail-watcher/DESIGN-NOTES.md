@@ -130,6 +130,14 @@ Reporting the attention makes the current length the new last known length.
   - *Crate to caller*: rung when a batch is ready, when the SQ is full, and when the poll-done entry
     is written. The caller learns which by reading the SQ.
   - *Caller to crate*: rung when the caller has made space in the SQ, so a stopped poll can resume.
+- **The SQ holds a fixed number of entries, set by the caller when the watcher is created, and is a
+  power of two of at least two.** It is many-writer and one-reader, so a poll can be sharded across
+  threads without a change here, and a writer that finds it full is refused and gets its entry back
+  rather than waiting ([TW-D-7](#tw-d-7)). The drain takes entries oldest first until there are none
+  and is the caller's only way to them. The storage is windows-waitable-queues'
+  [slotwise_mpsc](../windows-waitable-queues/src/slotwise_mpsc.rs), whose capacity rule this
+  decision adopts as its own: that crate's behaviour is not the specification, and a replacement
+  would have to keep these properties.
 - **The crate creates both, rather than the caller supplying them**, because the reset mode is a
   correctness property and because the SQ then lives exactly as long as the watcher.
 
@@ -226,7 +234,8 @@ bind to them as settled.
 - **The resume doorbell is waited on by a thread-pool wait the crate registers**, and the poll
   resumes from its callback. An armed, idle wait wakes no thread, so it is consistent with
   [TW-D-5](#tw-d-5).
-- **The caller sets the SQ's capacity**, presumably when the watcher is created.
+- **The caller sets the SQ's capacity**, presumably when the watcher is created. TW-2.2 takes it
+  at `Watcher::new`; see [TW-D-6](#tw-d-6).
 - **The type that holds one file is `HeldFile`** (TW-1.2). A working name taken from this file's
   own phrase "held handle", not a chosen layer: [TW-D-11](#tw-d-11) leaves the names to emerge.
   Nothing here should bind to it.

@@ -14,9 +14,7 @@ SQ with correct last known and current lengths, then a poll-done entry, and ring
 
 - [x] **TW-2.1** -- `Watcher<T: Clone>` registers files into a roster and returns an RAII `Registration` whose `Drop` unregisters. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-21)
 
-- [ ] **TW-2.2** -- **The SQ.** Created by the crate with a capacity set by the caller; two entry
-  kinds, an attention (`T` clone, last known length, current length) and a poll-done entry; a
-  drain operation for the caller. ([TW-D-4](DESIGN-NOTES.md#tw-d-4), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+- [x] **TW-2.2** -- The watcher owns a bounded submission queue of attention and poll-done entries, set at `Watcher::new` and drained by the caller. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-22)
 
 - [ ] **TW-2.3** -- **The two doorbells**: crate-created manual-reset events, crate to caller and
   caller to crate, each exposed as a waitable handle. ([TW-D-6](DESIGN-NOTES.md#tw-d-6))

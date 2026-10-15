@@ -8,10 +8,12 @@
 
 mod held_file;
 mod open_error;
+mod sq;
 #[cfg(test)]
 mod test_support;
 mod watcher;
 
 pub use held_file::HeldFile;
 pub use open_error::OpenError;
+pub use sq::{Attention, SqCapacityError, SqDrain, SqEntry};
 pub use watcher::{Registration, Watcher};

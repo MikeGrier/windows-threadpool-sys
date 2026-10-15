@@ -9,18 +9,22 @@ use super::{Registration, Watcher};
 use crate::OpenError;
 use crate::test_support::{TempDir, code, wtf};
 
+fn watcher<T: Clone>() -> Watcher<T> {
+    Watcher::new(64).expect("a valid SQ capacity")
+}
+
 #[test]
 fn a_new_watcher_has_no_registrations() {
-    let watcher = Watcher::<u32>::new();
+    let watcher = watcher::<u32>();
     assert_eq!(watcher.registered(), 0);
-    assert_eq!(Watcher::<u32>::default().registered(), 0);
+    assert_eq!(watcher.sq_capacity(), 64);
 }
 
 #[test]
 fn registering_a_file_adds_one_and_keeps_its_value_and_offset() {
     let dir = TempDir::new("w-one");
     let path = dir.file("a.log", b"0123456789");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher.register(&wtf(&path), 4, "first").expect("register");
     assert_eq!(watcher.registered(), 1);
     assert_eq!(registration.value(), "first");
@@ -31,7 +35,7 @@ fn registering_a_file_adds_one_and_keeps_its_value_and_offset() {
 fn dropping_the_registration_unregisters() {
     let dir = TempDir::new("w-drop");
     let path = dir.file("a.log", b"abc");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher.register(&wtf(&path), 0, 1u8).expect("register");
     assert_eq!(watcher.registered(), 1);
     drop(registration);
@@ -43,7 +47,7 @@ fn the_value_is_moved_in_and_released_with_the_registration() {
     let dir = TempDir::new("w-move");
     let path = dir.file("a.log", b"abc");
     let tag = Arc::new(());
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher
         .register(&wtf(&path), 0, Arc::clone(&tag))
         .expect("register");
@@ -59,7 +63,7 @@ fn the_value_is_moved_in_and_released_with_the_registration() {
 fn one_path_registered_twice_gives_two_independent_registrations() {
     let dir = TempDir::new("w-twice");
     let path = dir.file("a.log", b"abcdef");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let first = watcher.register(&wtf(&path), 1, "first").expect("first");
     let second = watcher.register(&wtf(&path), 5, "second").expect("second");
     assert_eq!(watcher.registered(), 2);
@@ -73,7 +77,7 @@ fn one_path_registered_twice_gives_two_independent_registrations() {
 fn many_registrations_unregister_in_any_order() {
     let dir = TempDir::new("w-many");
     let path = dir.file("a.log", b"x");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let mut registrations: Vec<_> = (0..200u32)
         .map(|n| watcher.register(&wtf(&path), 0, n).expect("register"))
         .collect();
@@ -102,7 +106,7 @@ fn many_registrations_unregister_in_any_order() {
 fn a_failed_open_registers_nothing_and_drops_the_value() {
     let dir = TempDir::new("w-fail");
     let tag = Arc::new(());
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let error = watcher
         .register(&wtf(&dir.0.join("absent.log")), 0, Arc::clone(&tag))
         .expect_err("no such file");
@@ -118,7 +122,7 @@ fn a_failed_open_registers_nothing_and_drops_the_value() {
 fn an_offset_past_the_length_registers_nothing() {
     let dir = TempDir::new("w-offset");
     let path = dir.file("a.log", b"abc");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let error = watcher
         .register(&wtf(&path), 4, ())
         .expect_err("past the end");
@@ -134,7 +138,7 @@ fn an_offset_past_the_length_registers_nothing() {
 fn a_registration_may_outlive_its_watcher() {
     let dir = TempDir::new("w-outlive");
     let path = dir.file("a.log", b"abc");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher.register(&wtf(&path), 2, 77u64).expect("register");
     drop(watcher);
     assert_eq!(registration.value(), 77);
@@ -146,7 +150,7 @@ fn the_file_is_held_while_registered_and_released_when_it_drops() {
     let dir = TempDir::new("w-held");
     let path = dir.file("a.log", b"abc");
     let exclusive = || OpenOptions::new().read(true).share_mode(0).open(&path);
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher.register(&wtf(&path), 0, ()).expect("register");
     let refused = exclusive().expect_err("held");
     assert_eq!(code(&refused), Some(ERROR_SHARING_VIOLATION));
@@ -158,7 +162,7 @@ fn the_file_is_held_while_registered_and_released_when_it_drops() {
 fn registering_from_many_threads_at_once() {
     let dir = TempDir::new("w-threads");
     let path = dir.file("a.log", b"abc");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registrations: Vec<Registration<usize>> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..8usize)
             .map(|worker| {
@@ -191,7 +195,7 @@ fn registering_from_many_threads_at_once() {
 fn registrations_unregister_from_another_thread() {
     let dir = TempDir::new("w-cross");
     let path = dir.file("a.log", b"abc");
-    let watcher = Watcher::new();
+    let watcher = watcher();
     let registration = watcher.register(&wtf(&path), 0, 5u8).expect("register");
     std::thread::spawn(move || drop(registration))
         .join()

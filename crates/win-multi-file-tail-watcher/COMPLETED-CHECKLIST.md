@@ -159,3 +159,42 @@ a drop-order variant that nothing can observe survives as the control.
 
 The shared test helpers (`TempDir`, `wtf`, `code`) moved to `src/test_support.rs` so the watcher's
 tests and the held file's share one copy.
+
+## Moved 2026-10-15 15:41:26 -04:00 -- TW-2.2: the SQ
+
+### <a id="tw-22"></a>TW-2.2 -- The watcher owns a bounded submission queue of attention and poll-done entries, set at `Watcher::new` and drained by the caller. *(completed 2026-10-15 15:41:26 -04:00)*
+
+`Watcher::new(sq_capacity)` creates the queue ([TW-D-6](DESIGN-NOTES.md#tw-d-6)), so it lives exactly
+as long as the watcher; `Watcher::drain()` is the caller's side. **This changes TW-2.1's
+constructor**, which took no argument, and removes its `Default`: a default capacity would be a
+number nothing here has chosen.
+
+- **Entries.** `SqEntry::Attention(Attention { value, last_known, current })` and
+  `SqEntry::PollDone`, both public and both comparable. The attention carries a clone of the
+  registration's `T`, so it does not depend on the registration surviving
+  ([TW-D-4](DESIGN-NOTES.md#tw-d-4)).
+- **Capacity** is a power of two of at least two, which is windows-waitable-queues' `slotwise_mpsc`
+  rule; the decision in TW-D-6 adopts it as ours. A bad capacity is `SqCapacityError` carrying the
+  request and the smallest and largest valid values. The dependency's own error type does not appear
+  in this crate's interface.
+- **Writing is crate-internal.** `SqWriter` is a clone-per-thread handle over the queue's producer
+  and `SqPushError::{Full, Closed}` returns the entry. The watcher keeps one writer behind a lock
+  that is taken only to clone it, so no writer waits on it to write. The poll (TW-2.4) is the first
+  real caller; until then the writer is reached from tests only, and the three items carry an
+  `expect(dead_code)` that stops compiling when the poll uses them, which is how they get removed.
+- **Draining** is an iterator that takes entries oldest first until there are none, holds the
+  reader's lock for as long as it lives, and does not hold up writers.
+
+Not decided here: how the caller is told there is something to drain (the doorbells are TW-2.3), and
+what a full queue does to a poll (M3).
+
+Tested: capacities 2 to 1024 accepted and 0, 1, 3, 5, 100 and 1000 refused with the bounds; order
+preserved across kinds and across 1000 entries through a four-slot queue; a full queue refusing with
+the entry intact and accepting again after one read; exactly its capacity held; a writer with no
+reader getting `Closed` and its entry back; four cloned writers from four threads losing nothing and
+keeping each one's order; four writers retrying on `Full` against a draining caller; an entry
+outliving the registration it names; and a drain that stops when there is nothing and resumes when
+there is. The sabotage manifest gains a queue of double the asked capacity, `Full` reported as
+`Closed`, a capacity error that misnames the request, and a drain that yields nothing; the last is
+caught by the concurrent test running past the sweep's hang bound, not by an assertion, so it is the
+weakest of the four. A different spelling of the empty read survives as the control.
