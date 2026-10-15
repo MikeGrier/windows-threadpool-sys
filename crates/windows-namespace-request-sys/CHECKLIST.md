@@ -89,10 +89,15 @@ of this crate: durable-ioring decides which of them a consumer may use.
   worker performs it. Open: which of those survive. An interior NUL cannot be passed through a
   `PCWSTR` at all, so refusing it is not policy. The empty path and the verbatim checks are errors
   Win32 gives anyway. The length limit is the engineer's ruling to remove. The resolution at
-  construction is the one behaviour and not a check, and it is what D-9 is for; if it goes from
-  `prepare`, a caller that wants it uses the existing `ResolveFullPath` entry
-  ([full_path.rs](src/full_path.rs)), as an explicit call. Also open: whether `PreparedPath` survives
-  as a type or `OpenFile::new` takes a `Wtf16String`. Every consumer of `prepare` is affected
+  construction is the one behaviour and not a check, and it is what D-9 is for. **Settled by the
+  engineer, 2026-10-15:** `OpenFile::new` takes a `Wtf16String` directly, and the need to capture the
+  root path when the request is built remains, with a relative path resolved textually against that
+  captured root later, on other threads, even after the current directory has changed. That replaces
+  `GetFullPathNameW` at construction, which [D-18](DESIGN-NOTES.md#d-18) records can query the
+  filesystem and write the process environment block for a drive-relative path on another drive,
+  on the submitting thread. **Still open:** what a textual resolution does for each relative form
+  (relative, root-relative, drive-relative on the current drive and on another, a legacy device
+  name), which is the discussion under way. Every consumer of `prepare` is affected
   (`OpenFile`, `WatchDirectory`, `ResolveFullPath` and the tests), as is the duplicate in
   `windows-file-enumeration-sys` ([D-9](DESIGN-NOTES.md#d-9), `M26+.3`), and it is a `feat!` of a
   published crate. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
