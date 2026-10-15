@@ -272,19 +272,19 @@
     },
     {
       "name": "NR-2.3: the query asks a question other than the standard one",
-      "file": "src/storage_property.rs",
+      "file": "src/storage_unique_id.rs",
       "expect": "caught",
       "why": "A query type of 1 asks whether the property exists and returns no structure.",
-      "find": ["        PropertyStandardQuery,\n    );\n"],
-      "replace": ["        PropertyStandardQuery + 1,\n    );\n"]
+      "find": ["StorageDeviceUniqueIdProperty, PropertyStandardQuery, &[]"],
+      "replace": ["StorageDeviceUniqueIdProperty, PropertyStandardQuery + 1, &[]"]
     },
     {
       "name": "NR-2.3: the entry asks for a different property than the one it names",
       "file": "src/storage_unique_id.rs",
       "expect": "caught",
       "why": "The unique-id entry's meaning is the property it queries; a neighbouring property's reply has a different layout and is not this one's.",
-      "find": ["            StorageDeviceUniqueIdProperty,\n"],
-      "replace": ["            StorageDeviceUniqueIdProperty + 1,\n"]
+      "find": ["query_input(StorageDeviceUniqueIdProperty, "],
+      "replace": ["query_input(StorageDeviceUniqueIdProperty + 1, "]
     },
     {
       "name": "NR-2.3: the first buffer may be smaller than the header",
@@ -421,6 +421,102 @@
       "why": "A section's size is the second field of its own header; read from the first, its version is taken for its length.",
       "find": ["    pub(super) const SECTION_SIZE: usize = 4;\n"],
       "replace": ["    pub(super) const SECTION_SIZE: usize = 0;\n"]
+    },
+    {
+      "name": "NR-2.3: the query type is written where the structure has the property",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The query type is a field of its own; written after the property id's offset it would overwrite the property.",
+      "find": ["    put(offset_of!(STORAGE_PROPERTY_QUERY, QueryType), query_type);\n"],
+      "replace": ["    put(offset_of!(STORAGE_PROPERTY_QUERY, QueryType), query_type + 1);\n"]
+    },
+    {
+      "name": "NR-2.3: additional parameters are not written into the query",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A property that reads its additional parameters, as the unique-id property reads its first byte, would be asked without them.",
+      "find": ["    input[additional_at..additional_at + additional.len()].copy_from_slice(additional);\n"],
+      "replace": ["    let _ = additional_at;\n"]
+    },
+    {
+      "name": "NR-2.3: the query is shorter than its structure when there are no additional parameters",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The device requires the structure in full; an input of only the fixed fields is ERROR_BAD_LENGTH.",
+      "find": ["        .max(size_of::<STORAGE_PROPERTY_QUERY>());\n"],
+      "replace": ["        .max(0);\n"]
+    },
+    {
+      "name": "NR-2.3: a query for whether a property exists sends no input",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The exists query is a call with the query structure and no output; without the structure the device refuses it.",
+      "find": ["    device_control(device, IOCTL_STORAGE_QUERY_PROPERTY, input, &mut [])?;\n"],
+      "replace": ["    device_control(device, IOCTL_STORAGE_QUERY_PROPERTY, &[], &mut [])?;\n"]
+    },
+    {
+      "name": "NR-2.3: the generic query names a different property than the one configured",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "The generic entry sends the property it was given and no other.",
+      "find": ["        query_input(self.property.0, self.query_type.0, &self.additional)\n"],
+      "replace": ["        query_input(self.property.0 + 1, self.query_type.0, &self.additional)\n"]
+    },
+    {
+      "name": "NR-2.3: the generic query always asks the standard question",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "The query type is the caller's; one that is always standard cannot ask whether a property exists or for a mask.",
+      "find": ["        query_input(self.property.0, self.query_type.0, &self.additional)\n"],
+      "replace": ["        query_input(self.property.0, 0, &self.additional)\n"]
+    },
+    {
+      "name": "NR-2.3: the generic query drops its additional parameters",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "The additional parameters are sent as given: the unique-id property gives a different answer for them, which is how arrival is shown.",
+      "find": ["        query_input(self.property.0, self.query_type.0, &self.additional)\n"],
+      "replace": ["        query_input(self.property.0, self.query_type.0, &[])\n"]
+    },
+    {
+      "name": "NR-2.3: a query for whether a property exists is asked for a structure",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "An exists query returns no structure; asked for one it would be refused as having a reply shorter than its header.",
+      "find": ["        if self.query_type == StorageQueryType::EXISTS {\n"],
+      "replace": ["        if self.query_type == StorageQueryType::STANDARD && false {\n"]
+    },
+    {
+      "name": "NR-2.3: a copy of a generic query forgets its query type",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "A copy asks the same question as the original.",
+      "find": ["            query_type: self.query_type,\n"],
+      "replace": ["            query_type: StorageQueryType::STANDARD,\n"]
+    },
+    {
+      "name": "NR-2.3: a copy of a generic query forgets its additional parameters",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "A copy sends the same parameters as the original.",
+      "find": ["            additional: Arc::clone(&self.additional),\n"],
+      "replace": ["            additional: Arc::from([]),\n"]
+    },
+    {
+      "name": "NR-2.3: a generic reply's size is read from the wrong field",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "The version and the size are separate fields of the header and are reported separately.",
+      "find": ["    pub(super) const SIZE: usize = 4;\n"],
+      "replace": ["    pub(super) const SIZE: usize = 0;\n"]
+    },
+    {
+      "name": "NR-2.3: the exists query type is the mask query",
+      "file": "src/storage_query.rs",
+      "expect": "caught",
+      "why": "The named query types are the three Windows defines, and are distinct.",
+      "find": ["    pub const EXISTS: Self = Self(PropertyExistsQuery);\n"],
+      "replace": ["    pub const EXISTS: Self = Self(PropertyMaskQuery);\n"]
     },
     {
       "name": "NR-2.3: the version is read from the size field",

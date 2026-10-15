@@ -17,8 +17,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OVERLAPPED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows_sys::Win32::System::Ioctl::{
-    IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_PROPERTY_QUERY,
-    StorageDeviceUniqueIdProperty,
+    IOCTL_STORAGE_QUERY_PROPERTY, PropertyExistsQuery, PropertyMaskQuery, PropertyStandardQuery,
+    STORAGE_PROPERTY_QUERY, StorageDeviceUniqueIdProperty,
 };
 
 use super::{
@@ -100,9 +100,14 @@ impl Device {
 
 // --- The query structure ---------------------------------------------------------------------
 
+/// The standard query for the device unique identifier, which has no additional parameters.
+fn unique_id_input() -> Vec<u8> {
+    query_input(StorageDeviceUniqueIdProperty, PropertyStandardQuery, &[]).expect("a small input")
+}
+
 #[test]
 fn the_query_names_the_property_and_asks_the_standard_question() {
-    let input = query_input(StorageDeviceUniqueIdProperty);
+    let input = unique_id_input();
 
     assert_eq!(input.len(), size_of::<STORAGE_PROPERTY_QUERY>());
     assert_eq!(
@@ -119,8 +124,85 @@ fn the_query_names_the_property_and_asks_the_standard_question() {
             .all(|byte| *byte == 0),
         "no additional parameters are sent"
     );
-    // Different properties are different queries.
-    assert_ne!(input, query_input(StorageDeviceUniqueIdProperty + 1));
+    // Different properties, and different questions, are different queries.
+    assert_ne!(
+        input,
+        query_input(
+            StorageDeviceUniqueIdProperty + 1,
+            PropertyStandardQuery,
+            &[]
+        )
+        .expect("input")
+    );
+    assert_ne!(
+        input,
+        query_input(StorageDeviceUniqueIdProperty, PropertyExistsQuery, &[]).expect("input")
+    );
+}
+
+#[test]
+fn additional_parameters_follow_the_fixed_fields_and_the_input_is_never_shorter_than_the_structure()
+{
+    let additional_at = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+    let structure = size_of::<STORAGE_PROPERTY_QUERY>();
+
+    for extra in [
+        0_usize,
+        1,
+        4,
+        structure - additional_at,
+        structure - additional_at + 1,
+        16,
+        100,
+    ] {
+        let additional: Vec<u8> = (1..=extra)
+            .map(|byte| u8::try_from(byte % 255 + 1).expect("a u8"))
+            .collect();
+
+        let input = query_input(
+            StorageDeviceUniqueIdProperty,
+            PropertyStandardQuery,
+            &additional,
+        )
+        .expect("input");
+
+        assert_eq!(
+            input.len(),
+            structure.max(additional_at + extra),
+            "{extra} extra bytes"
+        );
+        assert_eq!(
+            &input[additional_at..additional_at + extra],
+            additional.as_slice(),
+            "{extra} extra bytes"
+        );
+        assert!(
+            input[additional_at + extra..].iter().all(|byte| *byte == 0),
+            "nothing but zeros after them: {extra} extra bytes"
+        );
+        // The fixed fields are where they were.
+        assert_eq!(
+            u32_at(&input, offset_of!(STORAGE_PROPERTY_QUERY, PropertyId)),
+            Some(u32::try_from(StorageDeviceUniqueIdProperty).expect("non-negative"))
+        );
+    }
+}
+
+#[test]
+fn the_query_type_is_written_where_the_structure_has_it() {
+    for query_type in [
+        PropertyStandardQuery,
+        PropertyExistsQuery,
+        PropertyMaskQuery,
+        77,
+    ] {
+        let input = query_input(StorageDeviceUniqueIdProperty, query_type, &[]).expect("input");
+        assert_eq!(
+            u32_at(&input, offset_of!(STORAGE_PROPERTY_QUERY, QueryType)),
+            Some(u32::try_from(query_type).expect("non-negative")),
+            "query type {query_type}"
+        );
+    }
 }
 
 // --- The real device -------------------------------------------------------------------------
@@ -132,12 +214,9 @@ fn every_first_buffer_size_gets_the_same_reply_from_a_real_disk() {
     let _allocating = handle_allocation().read().expect("not poisoned");
     let disk = system_disk(false);
 
-    let whole = query_property(
-        disk.as_raw_handle(),
-        StorageDeviceUniqueIdProperty,
-        FIRST_BYTES,
-    )
-    .expect("the reply at the usual first size");
+    let input = unique_id_input();
+    let whole = query_property(disk.as_raw_handle(), &input, FIRST_BYTES)
+        .expect("the reply at the usual first size");
     assert!(whole.len() >= HEADER);
     assert_eq!(
         u32_at(
@@ -161,7 +240,7 @@ fn every_first_buffer_size_gets_the_same_reply_from_a_real_disk() {
         whole.len() + 1,
         4096,
     ] {
-        let again = query_property(disk.as_raw_handle(), StorageDeviceUniqueIdProperty, first)
+        let again = query_property(disk.as_raw_handle(), &input, first)
             .unwrap_or_else(|error| panic!("a first buffer of {first} bytes: {error}"));
         assert_eq!(again, whole, "a first buffer of {first} bytes");
     }
@@ -173,7 +252,7 @@ fn a_buffer_smaller_than_the_header_is_a_bad_length() {
     // entry never asks with less than the header.
     let _allocating = handle_allocation().read().expect("not poisoned");
     let disk = system_disk(false);
-    let input = query_input(StorageDeviceUniqueIdProperty);
+    let input = unique_id_input();
 
     for size in [0_usize, 1, HEADER - 1] {
         let outcome = device_control(
@@ -191,7 +270,7 @@ fn a_buffer_smaller_than_the_header_is_a_bad_length() {
 fn a_query_shorter_than_its_structure_is_a_bad_length() {
     let _allocating = handle_allocation().read().expect("not poisoned");
     let disk = system_disk(false);
-    let input = query_input(StorageDeviceUniqueIdProperty);
+    let input = unique_id_input();
 
     for size in [0_usize, 4, input.len() - 1] {
         let outcome = device_control(
@@ -211,19 +290,10 @@ fn a_plain_disk_handle_and_an_overlapped_one_get_the_same_reply() {
     let plain = system_disk(false);
     let overlapped = system_disk(true);
 
+    let input = unique_id_input();
     assert_eq!(
-        query_property(
-            plain.as_raw_handle(),
-            StorageDeviceUniqueIdProperty,
-            FIRST_BYTES
-        )
-        .expect("plain"),
-        query_property(
-            overlapped.as_raw_handle(),
-            StorageDeviceUniqueIdProperty,
-            FIRST_BYTES
-        )
-        .expect("overlapped")
+        query_property(plain.as_raw_handle(), &input, FIRST_BYTES).expect("plain"),
+        query_property(overlapped.as_raw_handle(), &input, FIRST_BYTES).expect("overlapped")
     );
 }
 

@@ -35,11 +35,11 @@
 use std::fmt;
 use std::ops::Range;
 
-use windows_sys::Win32::System::Ioctl::StorageDeviceUniqueIdProperty;
+use windows_sys::Win32::System::Ioctl::{PropertyStandardQuery, StorageDeviceUniqueIdProperty};
 
 use crate::device_control::u32_at;
 use crate::handle::{CapturedHandle, HandleCaptureError};
-use crate::storage_property::{FIRST_BYTES, StoragePropertyError, query_property};
+use crate::storage_property::{FIRST_BYTES, StoragePropertyError, query_input, query_property};
 
 #[cfg(test)]
 mod tests;
@@ -241,11 +241,8 @@ impl QueryStorageDeviceUniqueId {
     /// [`StoragePropertyError::Malformed`] for a reply that does not hold what it says;
     /// [`StoragePropertyError::Unstable`] if the size kept changing.
     pub fn perform(&self) -> Result<StorageDeviceUniqueId, StoragePropertyError> {
-        let bytes = query_property(
-            self.handle.raw(),
-            StorageDeviceUniqueIdProperty,
-            FIRST_BYTES,
-        )?;
+        let input = query_input(StorageDeviceUniqueIdProperty, PropertyStandardQuery, &[])?;
+        let bytes = query_property(self.handle.raw(), &input, FIRST_BYTES)?;
         StorageDeviceUniqueId::decode(bytes)
     }
 }

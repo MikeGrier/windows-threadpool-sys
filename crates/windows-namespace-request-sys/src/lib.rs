@@ -122,6 +122,7 @@ pub mod query;
 pub mod request;
 pub mod security;
 pub mod storage_property;
+pub mod storage_query;
 pub mod storage_unique_id;
 pub mod volume;
 pub mod volume_extents;
@@ -153,6 +154,9 @@ pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
 pub use storage_property::StoragePropertyError;
+pub use storage_query::{
+    QueryStorageProperty, StoragePropertyId, StoragePropertyReply, StorageQueryType,
+};
 pub use storage_unique_id::{QueryStorageDeviceUniqueId, StorageDeviceUniqueId};
 pub use volume::{QueryVolumeInformation, VolumeInformation};
 pub use volume_extents::{DiskExtent, DiskExtentsError, QueryVolumeDiskExtents};

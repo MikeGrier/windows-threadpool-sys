@@ -4,8 +4,10 @@
 //! NR-2.4): the query structure it sends, and learning how big the reply is.
 //!
 //! One call, several entries: each property is its own entry with its own typed reply
-//! ([`crate::storage_unique_id`]), because each reply is a different structure, and what they
-//! share is this module, which is private apart from [`StoragePropertyError`].
+//! ([`crate::storage_unique_id`]), because each reply is a different structure, and the generic
+//! entry ([`crate::storage_query`]) is the same call with the property chosen by the caller and
+//! the reply left as bytes. What they share is this module, which is private apart from
+//! [`StoragePropertyError`].
 //!
 //! # The reply starts with its own size, and the caller asks again
 //!
@@ -17,15 +19,26 @@
 //! whichever of those comes back, and asks again at that size. The retry is bounded and ends in
 //! [`StoragePropertyError::Unstable`], for the reason [`crate::final_path`]'s is.
 //!
-//! The query structure is sent in full: a shorter input is `ERROR_BAD_LENGTH` too.
+//! The query structure is sent in full: a shorter input is `ERROR_BAD_LENGTH` too. Bytes after the
+//! structure's own fixed fields are its additional parameters. Whether a property reads them is
+//! the property's: on the disk measured the device property ignored any bytes, and the unique-id
+//! property read the first, giving the usual reply for 0, a larger one for 1, and
+//! `ERROR_INVALID_PARAMETER` for larger values. What that byte selects is not documented.
+//!
+//! # A query that returns no structure
+//!
+//! A query for whether a property exists (`PropertyExistsQuery`) returns no structure: success
+//! with nothing written, whatever the size of the output, and an unknown property is a failure,
+//! `ERROR_INVALID_FUNCTION` on the disk measured. It is a single call with no output, not the
+//! learn-the-size loop.
 
 use std::fmt;
 use std::mem::offset_of;
 
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, HANDLE};
 use windows_sys::Win32::System::Ioctl::{
-    IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_DESCRIPTOR_HEADER,
-    STORAGE_PROPERTY_ID, STORAGE_PROPERTY_QUERY,
+    IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_DESCRIPTOR_HEADER, STORAGE_PROPERTY_ID,
+    STORAGE_PROPERTY_QUERY, STORAGE_QUERY_TYPE,
 };
 
 use crate::device_control::{device_control, u32_at, zeroed_output};
@@ -99,32 +112,52 @@ impl From<Win32Error> for StoragePropertyError {
     }
 }
 
-/// `STORAGE_PROPERTY_QUERY` for `property`, a standard query, written field by field so no byte
-/// view of a struct is needed.
-fn query_input(property: STORAGE_PROPERTY_ID) -> [u8; size_of::<STORAGE_PROPERTY_QUERY>()] {
-    let mut input = [0_u8; size_of::<STORAGE_PROPERTY_QUERY>()];
+/// `STORAGE_PROPERTY_QUERY` for `property` and `query_type`, with `additional` after the
+/// structure's fixed fields, written field by field so no byte view of a struct is needed.
+///
+/// The input is never shorter than the structure, which the device requires in full, and is as
+/// long as the additional parameters need when they are longer. A buffer for caller-supplied
+/// parameters is allocated fallibly, so a failure is an error the caller receives.
+pub(crate) fn query_input(
+    property: STORAGE_PROPERTY_ID,
+    query_type: STORAGE_QUERY_TYPE,
+    additional: &[u8],
+) -> Result<Vec<u8>, StoragePropertyError> {
+    let additional_at = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+    let length = additional_at
+        .checked_add(additional.len())
+        .ok_or(StoragePropertyError::Malformed {
+            what: "additional parameters too long to hold",
+        })?
+        .max(size_of::<STORAGE_PROPERTY_QUERY>());
+
+    let mut input = zeroed_output(length)?;
     let mut put = |offset: usize, value: i32| {
         input[offset..offset + size_of::<i32>()].copy_from_slice(&value.to_ne_bytes());
     };
     put(offset_of!(STORAGE_PROPERTY_QUERY, PropertyId), property);
-    put(
-        offset_of!(STORAGE_PROPERTY_QUERY, QueryType),
-        PropertyStandardQuery,
-    );
-    input
+    put(offset_of!(STORAGE_PROPERTY_QUERY, QueryType), query_type);
+    input[additional_at..additional_at + additional.len()].copy_from_slice(additional);
+    Ok(input)
 }
 
-/// The reply to a standard query for `property` on `device`: exactly the bytes the reply's own
-/// header says it has.
+/// The reply to the query `input` on `device`: exactly the bytes the reply's own header says it
+/// has.
 pub(crate) fn query_property(
     device: HANDLE,
-    property: STORAGE_PROPERTY_ID,
+    input: &[u8],
     first: usize,
 ) -> Result<Vec<u8>, StoragePropertyError> {
-    let input = query_input(property);
     query_via(first, |output| {
-        device_control(device, IOCTL_STORAGE_QUERY_PROPERTY, &input, output)
+        device_control(device, IOCTL_STORAGE_QUERY_PROPERTY, input, output)
     })
+}
+
+/// Whether the query `input`, which asks if a property exists, succeeds on `device`: one call, with
+/// no output, because the device returns no structure for it.
+pub(crate) fn query_exists(device: HANDLE, input: &[u8]) -> Result<(), StoragePropertyError> {
+    device_control(device, IOCTL_STORAGE_QUERY_PROPERTY, input, &mut [])?;
+    Ok(())
 }
 
 /// The reply `ask` gives, which fills the buffer it is lent and says how many bytes it wrote, or
