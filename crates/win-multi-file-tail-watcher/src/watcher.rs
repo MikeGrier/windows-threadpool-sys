@@ -24,6 +24,10 @@ mod tests;
 /// [`drain`](Self::drain); the queue lives exactly as long as the watcher. So do its two doorbells,
 /// both manual-reset events: [`doorbell`](Self::doorbell), which the crate rings and the caller
 /// waits on, and [`resume_doorbell`](Self::resume_doorbell), the other way.
+///
+/// `T::clone` runs while the watcher's internal lock is held, here in [`Registration::value`] and
+/// when the crate reports a change. A `Clone` that calls back into the watcher (registering,
+/// dropping a [`Registration`], draining) deadlocks.
 #[derive(Debug)]
 pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
@@ -57,7 +61,8 @@ struct Entry<T> {
 
 impl<T> Shared<T> {
     fn roster(&self) -> MutexGuard<'_, Roster<T>> {
-        // The lock is never held across user code, so a poisoned roster is still consistent.
+        // `T::clone` runs under the lock but only reads; nothing under it can leave the map
+        // half-changed, so a poisoned roster is still consistent.
         self.roster.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -114,7 +119,7 @@ impl<T: Clone> Watcher<T> {
     }
 
     /// Ring [`doorbell`](Self::doorbell).
-    #[cfg_attr(not(test), expect(dead_code, reason = "the poll (TW-2.4) rings it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "the poll (TW-3.1) rings it"))]
     pub(crate) fn ring_doorbell(&self) {
         self.shared.doorbell.ring();
     }
@@ -122,7 +127,7 @@ impl<T: Clone> Watcher<T> {
     /// Clear [`resume_doorbell`](Self::resume_doorbell).
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "a resumed poll (TW-3.x) clears it")
+        expect(dead_code, reason = "a resumed poll (TW-3.2) clears it")
     )]
     pub(crate) fn reset_resume(&self) {
         self.shared.resume.reset();
@@ -154,7 +159,7 @@ impl<T: Clone> Watcher<T> {
     /// A writing handle for one thread of the crate's own.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the poll (TW-2.4) writes through it")
+        expect(dead_code, reason = "the report pass (TW-2.7) writes through it")
     )]
     pub(crate) fn sq_writer(&self) -> SqWriter<T> {
         self.shared

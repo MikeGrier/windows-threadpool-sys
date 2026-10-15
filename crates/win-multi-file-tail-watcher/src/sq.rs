@@ -71,7 +71,7 @@ impl From<CapacityError> for SqCapacityError {
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll (TW-2.4) writes through it")
+    expect(dead_code, reason = "the report pass (TW-2.7) writes through it")
 )]
 pub(crate) enum SqPushError<T> {
     /// Every slot holds an entry the caller has not drained.
@@ -94,7 +94,7 @@ impl<T> SqWriter<T> {
     /// Write `entry` without waiting.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the poll (TW-2.4) writes through it")
+        expect(dead_code, reason = "the report pass (TW-2.7) writes through it")
     )]
     pub(crate) fn push(&self, entry: SqEntry<T>) -> Result<(), SqPushError<T>> {
         self.0.push(entry).map_err(|error| match error {
