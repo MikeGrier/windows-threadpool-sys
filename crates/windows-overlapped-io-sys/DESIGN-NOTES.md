@@ -168,6 +168,14 @@ route to association, submission, and the blocking backend, and stays not `Clone
   and compare each value with the constant of the same name, so the local copy cannot drift silently.
   The earlier local constant modules (`storage_info_values`, `remote_protocol_values`) predate this and
   are checked only by behaviour.
+- **One table of every observer query, shared across crates** (M16.10). `test_util::OBSERVER_QUERIES`
+  lists each query, `final_path_as` in every form, and is what every backend's tests issue while an
+  operation pends -- `AssociatedEndpoint` and `BlockingEndpoint` here, `ThreadpoolIo` in
+  [windows-threadpool-sys](../windows-threadpool-sys/src/io/tests.rs). It lives in this crate, which owns
+  the queries, behind an off-by-default `test-util` feature (implying `fs`) so another crate's tests can
+  bind to it instead of keeping a copy; this crate's own tests see it without the feature. The table is a
+  hand census -- Rust cannot enumerate an impl's methods -- so a comment on `EndpointObserver` asks that a
+  new query be added to it.
 - **Every query's output buffer is aligned to 8, not to the structure's own alignment** (M16.6, measured
   2026-10-14): through an SMB loopback handle, `FileRemoteProtocolInfo` refused a buffer aligned to 4 but
   not 8 with `ERROR_NOACCESS`, although the structure's Rust alignment is 4. The kernel's per-class

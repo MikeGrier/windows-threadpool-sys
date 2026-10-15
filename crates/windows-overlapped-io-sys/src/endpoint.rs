@@ -365,6 +365,7 @@ impl UnassociatedEndpoint {
 ///     let _ = BlockingEndpoint::new(endpoint);
 /// }
 /// ```
+// A query added here belongs in `test_util::OBSERVER_QUERIES` too, which every backend's tests issue.
 #[derive(Clone, Debug)]
 pub struct EndpointObserver {
     handle: SharedHandle,

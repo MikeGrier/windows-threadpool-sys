@@ -321,6 +321,7 @@ mod observer_queries {
 #[cfg(feature = "fs")]
 mod observers_across_backends {
     use super::super::UnassociatedEndpoint;
+    use crate::test_util::{OBSERVER_QUERIES, run_every_query};
     use crate::{AssociatedEndpoint, BlockingEndpoint, CompletionPort, Issued, Operation};
     use crate::{OperationId, Submitted};
     use std::io::{self, Write};
@@ -521,6 +522,92 @@ mod observers_across_backends {
             !pipe_is_held(&name),
             "the last holder must close the handle"
         );
+    }
+
+    /// Connect a client to the pipe `name`, completing a pending `ConnectNamedPipe`.
+    fn connect_client(name: &[u16]) -> std::fs::File {
+        let name = String::from_utf16(&name[..name.len() - 1]).expect("an ASCII name");
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+            .expect("connect a client")
+    }
+
+    /// Issue every observer query `rounds` times, checking each round issued them all.
+    fn query_repeatedly(observer: &super::super::EndpointObserver, rounds: usize) {
+        for _ in 0..rounds {
+            assert_eq!(
+                run_every_query(observer).len(),
+                OBSERVER_QUERIES.len(),
+                "a round issues every query"
+            );
+        }
+    }
+
+    #[test]
+    fn every_query_while_a_connect_pends_leaves_it_to_complete() {
+        let name = pipe_name("queries-complete");
+        let port = CompletionPort::new(1).expect("create port");
+        let endpoint = pipe_endpoint(&name);
+        let observer = endpoint.observer();
+        let endpoint = port.associate(endpoint, 1).expect("associate");
+
+        let id = pending_connect(&endpoint);
+        query_repeatedly(&observer, 4);
+        assert_eq!(endpoint.outstanding(), 1);
+        assert!(
+            port.get(0).expect("get").is_none(),
+            "the queries completed nothing"
+        );
+
+        let _client = connect_client(&name);
+        let completion = port
+            .get(5_000)
+            .expect("get")
+            .expect("the connect completes");
+        assert_eq!(completion.overlapped_ptr(), id.as_ptr());
+        assert!(completion.error().is_none(), "{:?}", completion.error());
+        // SAFETY: the completion of the Operation<()> submitted above, claimed once.
+        let _operation = unsafe { completion.claim::<()>() };
+        assert_eq!(endpoint.outstanding(), 0);
+        assert!(
+            port.get(0).expect("get").is_none(),
+            "exactly one completion"
+        );
+        query_repeatedly(&observer, 1);
+    }
+
+    #[test]
+    fn every_query_while_a_connect_pends_leaves_it_to_cancel() {
+        let name = pipe_name("queries-cancel");
+        let port = CompletionPort::new(1).expect("create port");
+        let endpoint = pipe_endpoint(&name);
+        let observer = endpoint.observer();
+        let endpoint = port.associate(endpoint, 1).expect("associate");
+
+        let id = pending_connect(&endpoint);
+        query_repeatedly(&observer, 4);
+        assert_eq!(endpoint.outstanding(), 1);
+
+        endpoint.cancel(id).expect("cancel");
+        let completion = port
+            .get(5_000)
+            .expect("get")
+            .expect("a completion after cancellation");
+        assert_eq!(completion.overlapped_ptr(), id.as_ptr());
+        assert_eq!(
+            completion.error().and_then(io::Error::raw_os_error),
+            Some(ERROR_OPERATION_ABORTED as i32)
+        );
+        // SAFETY: the completion of the Operation<()> submitted above, claimed once.
+        let _operation = unsafe { completion.claim::<()>() };
+        assert_eq!(endpoint.outstanding(), 0);
+        assert!(
+            port.get(0).expect("get").is_none(),
+            "exactly one completion"
+        );
+        query_repeatedly(&observer, 1);
     }
 }
 

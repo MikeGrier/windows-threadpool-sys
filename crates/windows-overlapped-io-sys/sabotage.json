@@ -216,6 +216,28 @@
       "why": "MAX_PATH + 1 is the documented maximum; a larger buffer only leaves more unused space. A test that catches this is asserting the buffer size, not the answer.",
       "find": ["        const NAME_UNITS: usize = MAX_PATH as usize + 1;"],
       "replace": ["        const NAME_UNITS: usize = 2 * (MAX_PATH as usize + 1);"]
+    },
+    {
+      "name": "the volume query cancels the handle's I/O",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "M16.10's claim is that EVERY query leaves a pending operation alone, and the M15.5 tests already cover file_len's path. This patch breaks a query only the shared table issues while an operation pends, so the pending connect and read are aborted rather than completed.",
+      "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
+      "replace": [
+        "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.as_raw_handle(), std::ptr::null()) };"
+      ]
+    },
+    {
+      "name": "the final-path query cancels the handle's I/O",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "As the volume entry, for a query on a different call path: GetFinalPathNameByHandleW rather than GetVolumeInformationByHandleW or GetFileInformationByHandleEx.",
+      "find": ["        let flags = volume.flag() | form.flag();"],
+      "replace": [
+        "        let flags = volume.flag() | form.flag();",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, std::ptr::null()) };"
+      ]
     }
   ]
 }

@@ -175,6 +175,36 @@ fn observer_queries_while_a_read_pends_do_not_disturb_it() {
     drop(writer.join().expect("writer"));
 }
 
+/// Every observer query, not only `file_len`, while a read pends (M16.10). The
+/// blocking backend has no cancellation, so completion is the only outcome.
+#[cfg(feature = "fs")]
+#[test]
+fn every_query_while_a_read_pends_leaves_it_to_complete() {
+    use crate::test_util::{OBSERVER_QUERIES, run_every_query};
+
+    let (endpoint, mut client) = connected_pipe("every-query");
+    let blocking = BlockingEndpoint::new(endpoint).expect("blocking endpoint");
+    let observer = blocking.observer();
+
+    let (pended, writer_go) = mpsc::channel::<()>();
+    let writer = std::thread::spawn(move || {
+        writer_go.recv().expect("the read pended");
+        for _ in 0..4 {
+            assert_eq!(run_every_query(&observer).len(), OBSERVER_QUERIES.len());
+        }
+        client.write_all(b"data").expect("client write");
+        assert_eq!(run_every_query(&observer).len(), OBSERVER_QUERIES.len());
+        client
+    });
+    let mut buffer = [0_u8; 4];
+    let read = read_reporting_pending(&blocking, &mut buffer, || {
+        pended.send(()).expect("wake the writer");
+    })
+    .expect("read");
+    assert_eq!(&buffer[..read], b"data");
+    drop(writer.join().expect("writer"));
+}
+
 /// Pins the measurement M15.6 rests on: a synchronous query through an observer
 /// leaves a signalled handle unsignalled.
 #[cfg(feature = "fs")]

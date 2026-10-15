@@ -58,6 +58,9 @@ mod endpoint;
 #[cfg(all(windows, feature = "fs"))]
 mod fs;
 
+#[cfg(all(windows, feature = "fs", any(test, feature = "test-util")))]
+pub mod test_util;
+
 #[cfg(windows)]
 mod identity;
 
