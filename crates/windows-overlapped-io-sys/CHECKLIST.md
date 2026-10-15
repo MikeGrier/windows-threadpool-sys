@@ -31,9 +31,7 @@ handle queries ([DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handl
 qualifies as an observer query). Each query is behind `fs`, returns a structured result rather than one
 method per field, and lands with tests of its own result. Independent of M14; it may be taken first.
 
-- [ ] **M16.1** -- **`standard_info()`**: the whole `FileStandardInfo` -- length, allocation size, link
-  count, `DeletePending`, directory. `file_len()` stays, as a shortcut that calls `standard_info()` rather
-  than a second copy of the query. Test `DeletePending` by deleting the file while the observer holds it.
+- [x] **M16.1** -- `standard_info()` reads the whole `FileStandardInfo`; `file_len()` is its shortcut. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m161)
 
 - [ ] **M16.2** -- **`file_id()`**: `FileIdInfo` -- the 64-bit volume serial and the 128-bit file ID. Test
   that two observers of one handle agree, that another file differs, and that a rename keeps the ID.

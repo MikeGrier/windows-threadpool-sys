@@ -501,3 +501,17 @@ event of its own (M15.6)". Tests pin the measured reset, complete a genuinely pe
 handle's event suppressed and with observer queries running, and check the event is lent only for the
 call. Sabotage: leaving `hEvent` null made the suppressed-event read hang; dropping the take-back failed
 the lend test.
+
+## Moved 2026-10-14 21:19:36 -04:00 -- M16.1: the observer's standard information
+
+### <a id="m161"></a>M16.1 -- `standard_info()` reads the whole `FileStandardInfo`; `file_len()` is its shortcut. *(completed 2026-10-14 21:19:36 -04:00)*
+
+`EndpointObserver::standard_info` returns a `StandardInfo` (length, allocation size, link count, delete
+pending, directory). The queries live in a new `src/endpoint/query.rs`, child of the endpoint module so they
+reach the observer's private handle; `file_len` now calls `standard_info`, so the query exists once. The
+kernel writes the two flags as `BOOLEAN` bytes, so the call fills a private `#[repr(C)]` mirror with `u8`
+fields, tied to `FILE_STANDARD_INFO`'s layout by compile-time assertions, rather than reading them as Rust
+`bool`. Tests cover an ordinary file, lengths across sizes, a sparse file's smaller allocation, hard links
+made and removed, a delete requested through another handle (pending until the observer lets go, then
+completed), a directory, and every observer agreeing. Sabotage: swapping the two flags failed the delete and
+directory tests; swapping length and allocation failed three others.
