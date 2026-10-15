@@ -202,6 +202,16 @@ kernel mode allocation". Using observers from the first probe made M16 a prerequ
 [Q10](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q10-one-crate),
 [Q30](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q30-the-endpoint-holds-a-sharedhandle)
 
+## TW-D-13: a failed probe
+
+Raised by the replan of 2026-10-15, which left "what a probe that fails does" as a question for the
+engineer. The answer was the two classes and the single predicate, with `ERROR_INVALID_HANDLE` as the
+one example of terminal. Nothing else was weighed in the answer. What was noticed while recording it,
+and left as working positions rather than decided: no diagnostic channel exists to log to; a
+terminal entry that is silently dropped from probing looks, to the caller, like a file that stopped
+changing; and a transient message per entry per beat is a message per file when a whole volume
+fails. Defaulting an unlisted code to transient was chosen as the failure that keeps watching.
+
 ## TW-D-11 and TW-D-12
 
 The first sketch named layers (endpoint, cursor, registry, reader); the engineer pointed out that

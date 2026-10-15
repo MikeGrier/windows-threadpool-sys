@@ -26,6 +26,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
+| <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: noted against the entry, and the entry is no longer probed. |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -253,11 +254,34 @@ windows-overlapped-io-sys replaced that with observers, below.
 Non-Rust fixtures are not kept. The PowerShell harness used to establish [TW-D-2](#tw-d-2)'s
 premises was deleted for that reason; its results survive only as the tables in the design session.
 
+## TW-D-13: a failed probe is transient or terminal
+
+The engineer, 2026-10-15: a failed probe's error code is inspected to decide what to do.
+
+- **Transient** (a failure that may not recur): no corrective action. A message goes to the
+  diagnostic channel, and the entry is probed again on the next beat.
+- **Terminal** (the handle can never answer again; `ERROR_INVALID_HANDLE` is the example given): a
+  note is made against the entry, and the crate stops probing it.
+- **One predicate decides which**, in one place, and every site that needs the distinction asks it.
+  The engineer knows of no further terminal codes but expects there are some.
+
+What this leaves open is under [Working positions](#working-positions-not-decisions): which other
+codes are terminal, what an unlisted code is, how the caller supplies the diagnostic channel, whether
+the caller is told of a terminal entry, and how much a transient failure may log.
+
 ## Working positions (not decisions)
 
 Stated so they can be built on, and expected to be refined during implementation. Nothing should
 bind to them as settled.
 
+- **An unlisted error code is transient** ([TW-D-13](#tw-d-13)): the safe default is to keep
+  probing and say so. The terminal set starts at `ERROR_INVALID_HANDLE` and
+  `ERROR_FILE_INVALID` (the volume under the file was externally altered), the second being mine, not
+  the engineer's. Neither has been put to the engineer.
+- **Open, and not yet put to the engineer, under [TW-D-13](#tw-d-13):** how a caller supplies the
+  diagnostic channel (no such channel exists in the crate or elsewhere in the repository); whether
+  the caller learns that an entry went terminal, which today it would only see as the file going
+  quiet; and the volume of transient messages, since a failed volume gives one per entry per beat.
 - **A registration's last known length starts at its starting offset** ([TW-D-4](#tw-d-4)). So a
   restarted parent that registers a file with the offset it saved is told, by the first poll, of
   whatever the file has gained since; offset 0 on a file that already has content reports all of it.

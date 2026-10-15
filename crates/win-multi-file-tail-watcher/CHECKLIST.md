@@ -25,11 +25,27 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.5** -- Each roster entry holds a last known length starting at its starting offset, and the snapshot pass copies id, last known length and an observer into a chunked buffer one batch per lock. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-25)
 
+- [ ] **TW-2.6.1** -- **Classify a probe failure.** One predicate, in one place, from an
+  `io::Error` to transient or terminal; `ERROR_INVALID_HANDLE` is terminal. The rest of the terminal
+  set and what an unlisted code is are working positions, not yet put to the engineer. A unit test
+  for each code the predicate names and for one it does not. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- [ ] **TW-2.6.2** -- **The diagnostic channel.** An output abstraction for messages the crate emits
+  about a registration, with a collecting sink for tests; every message goes through it. How a caller
+  supplies one is open and needs the engineer's answer before the public way in is built.
+  ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- [ ] **TW-2.6.3** -- **A terminal note on a roster entry**, which the snapshot then skips. Whether
+  and how the caller is told is open and needs the engineer's answer.
+  ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
 - [ ] **TW-2.6** -- **The probe pass.** Reads each snapshotted observer's current length with no
   lock held, drops each observer as soon as it has been read, and keeps the id, last known and
-  current length of those that differ, in id order, in a second chunked buffer. Ask the engineer
-  what a probe that fails does, and record the answer; it is not settled.
-  ([TW-D-2](DESIGN-NOTES.md#tw-d-2), [TW-D-4](DESIGN-NOTES.md#tw-d-4))
+  current length of those that differ, in id order, in a second chunked buffer. A probe that fails
+  is classified: a transient failure is reported through the diagnostic channel and the entry is
+  probed again next beat; a terminal one is noted against the entry.
+  ([TW-D-2](DESIGN-NOTES.md#tw-d-2), [TW-D-4](DESIGN-NOTES.md#tw-d-4),
+  [TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
 - [ ] **TW-2.7** -- **The report pass and the stop point.** Walks the changed list from a recorded
   index. Per batch, under the roster lock: look the id up (a dropped registration is skipped), clone
