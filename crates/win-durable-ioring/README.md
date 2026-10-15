@@ -65,6 +65,31 @@ assert!(unbuffered.capabilities().write_through());
 
 An unbuffered file is refused on a remote device, where the claim cannot hold.
 
+### A raw volume
+
+A raw volume is a target too ([DI-D-61](../durable-ioring/DESIGN-NOTES.md#di-d-61)): one handle, one
+commit per volume, and **regions are offsets the consumer allocates inside it**, not targets of their
+own. `OpenedVolume` opens it by a path that can only name a volume, a drive letter or a volume GUID,
+and finds what the backing must know for itself with documented device controls
+([win-volume-sys](../win-volume-sys/README.md)): the disks it sits on, which become its flush
+domains (`disk_flush_domain` names a disk, so a consumer can declare the same domain for a file on
+it), and the sector it is addressed in, which is the alignment of its operations. A volume that is
+remote, or not a volume, is refused. It claims `SharedDevice` and never `Complete`: a lock keeps
+other handles off the volume, not other writers off its disks. Opening one for writing needs an
+administrator, and `VolumeOptions::lock` takes the volume lock, which a write to a volume with a
+file system on it needs and which fails if anything else has the volume open.
+
+```rust,no_run
+use win_durable_ioring::windows_backend::{
+    OpenedVolume, Unbuffered, VolumeOptions, VolumePath, Win32FileTarget,
+};
+
+let path = VolumePath::drive('E')?;
+let volume = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))?;
+let target = Win32FileTarget::from_volume(volume);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Worked examples
 
 Each example is dioring running the trace in its comments, compiled and run as a test, so a change

@@ -14,6 +14,8 @@ mod fake;
 #[cfg(test)]
 mod held_pool;
 pub mod readiness;
+#[cfg(test)]
+mod scratch_volume;
 pub mod windows_backend;
 
 pub use delivery::{DeliveryEvent, DeliveryHandle, DeliverySetupError, EntryDelivery};

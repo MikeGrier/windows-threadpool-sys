@@ -55,6 +55,16 @@ pub trait Buffering: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static 
 
     /// The alignment a file in this mode starts with.
     fn geometry() -> Geometry;
+
+    /// The alignment a raw volume in this mode needs, addressed in sectors of `sector_size` bytes.
+    /// A volume's transfers are whole sectors in either mode, so offsets and lengths are aligned to
+    /// one; its buffers only when it is unbuffered, as the cache is what lets a cached transfer
+    /// start anywhere.
+    ///
+    /// # Errors
+    ///
+    /// [`GeometryError`] if `sector_size` is not a power of two.
+    fn volume_geometry(sector_size: u32) -> Result<Geometry, GeometryError>;
 }
 
 /// A file opened for cached I/O: the system cache holds its writes, and its write-back can fail
@@ -81,6 +91,10 @@ impl Buffering for Cached {
     fn geometry() -> Geometry {
         Geometry::UNALIGNED
     }
+
+    fn volume_geometry(sector_size: u32) -> Result<Geometry, GeometryError> {
+        Geometry::new(sector_size, sector_size, 1)
+    }
 }
 
 impl Unbuffered {
@@ -99,6 +113,10 @@ impl Buffering for Unbuffered {
 
     fn geometry() -> Geometry {
         Geometry::uniform(Self::DEFAULT_SECTOR_SIZE).expect("4096 is a power of two")
+    }
+
+    fn volume_geometry(sector_size: u32) -> Result<Geometry, GeometryError> {
+        Geometry::uniform(sector_size)
     }
 }
 

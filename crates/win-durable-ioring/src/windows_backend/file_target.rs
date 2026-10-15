@@ -1,25 +1,35 @@
 // Copyright (c) 2026 Mike Grier
-//! [`Win32FileTarget`]: a target backed by a Win32 file (DI-D-48, DI-D-50, DI-D-60).
+//! [`Win32FileTarget`]: a target backed by a Win32 file or a raw volume (DI-D-48, DI-D-50, DI-D-60,
+//! DI-D-61).
 
 use win_shared_os_owned_handle::SharedHandle;
 
 use super::opened_file::{Buffering, OpenedFile};
+use super::opened_volume::OpenedVolume;
 use durable_ioring::FlushDomain;
 use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
 
-/// A target backed by a Win32 file this crate opened, held as a `SharedHandle` -- an owning form,
-/// never a raw handle (DI-D-4).
+/// A target backed by a Win32 file or a raw volume this crate opened, held as a `SharedHandle` -- an
+/// owning form, never a raw handle (DI-D-4).
 ///
-/// It is made from an [`OpenedFile`] and from nothing else, and takes its warranty class, its
-/// alignment and its capabilities from how that file was opened, not from a declaration
-/// (DI-D-60): a file opened cached is [`WarrantyClass::BestEffort`] and needs no alignment, and one
-/// opened [`Unbuffered`](super::Unbuffered) is [`WarrantyClass::SharedDevice`], needs a sector's
-/// alignment, and offers per-write write-through. [`WarrantyClass::Complete`] is never a file's: it
-/// needs knowledge of what else shares the device, which no open mode gives. What a target cannot
-/// know, its flush domains, is declared with [`with_domains`](Self::with_domains).
+/// It is made from an [`OpenedFile`] or an [`OpenedVolume`] and from nothing else, and takes its
+/// warranty class, its alignment and its capabilities from how that was opened, not from a
+/// declaration (DI-D-60): one opened cached is [`WarrantyClass::BestEffort`], and one opened
+/// [`Unbuffered`](super::Unbuffered) is [`WarrantyClass::SharedDevice`], needs a sector's alignment,
+/// and offers per-write write-through. [`WarrantyClass::Complete`] is never one's: it needs
+/// knowledge of what else writes the device, which a volume's lock does not give (DI-D-61).
+///
+/// A volume's flush domains are found from its disks. A file's are what it cannot know, so they are
+/// declared with [`with_domains`](Self::with_domains); declaring them on a volume adds to the ones
+/// found, and never removes one.
 #[derive(Clone, Debug)]
 pub struct Win32FileTarget {
     handle: SharedHandle,
+    /// What the backing found for itself: a volume's disks.
+    found: Vec<FlushDomain>,
+    /// What the consumer declared.
+    declared: Vec<FlushDomain>,
+    /// Both, each once: what the target reports.
     domains: Vec<FlushDomain>,
     warranty: WarrantyClass,
     geometry: Geometry,
@@ -33,16 +43,41 @@ impl Win32FileTarget {
         Self {
             geometry: file.geometry(),
             handle: file.handle().clone(),
+            found: Vec::new(),
+            declared: Vec::new(),
             domains: Vec::new(),
             warranty: B::WARRANTY,
             capabilities: B::CAPABILITIES,
         }
     }
 
-    /// Declare every flush domain its writes depend on.
+    /// The target `volume` makes: its sector's alignment, the flush domains of the disks it sits
+    /// on, and what its open mode allows and no more.
+    #[must_use]
+    pub fn from_volume<B: Buffering>(volume: OpenedVolume<B>) -> Self {
+        let found = volume.flush_domains();
+        Self {
+            geometry: volume.geometry(),
+            handle: volume.handle().clone(),
+            domains: found.clone(),
+            found,
+            declared: Vec::new(),
+            warranty: B::WARRANTY,
+            capabilities: B::CAPABILITIES,
+        }
+    }
+
+    /// Declare every flush domain its writes depend on, beyond any the backing found for itself.
+    /// Declaring again replaces what was declared before, and never what the backing found.
     #[must_use]
     pub fn with_domains(mut self, domains: impl IntoIterator<Item = FlushDomain>) -> Self {
-        self.domains = domains.into_iter().collect();
+        self.declared = domains.into_iter().collect();
+        self.domains = self.found.clone();
+        for domain in &self.declared {
+            if !self.domains.contains(domain) {
+                self.domains.push(domain.clone());
+            }
+        }
         self
     }
 

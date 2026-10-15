@@ -125,6 +125,7 @@ dependencies = [
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
+ "win-volume-sys",
  "windows-ioring-sys",
  "windows-threadpool-sys",
 ]

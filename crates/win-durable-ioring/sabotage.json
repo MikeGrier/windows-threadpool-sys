@@ -963,6 +963,94 @@
       "why": "The alignment the backend enforces is the file's; without it an unbuffered file's operations reach the kernel unaligned.",
       "find": ["            geometry: file.geometry(),"],
       "replace": ["            geometry: Geometry::UNALIGNED,"]
+    },
+    {
+      "name": "DI-10.2: a volume's disks are counted once each per extent",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "A volume with two runs on one disk has one flush domain; a domain repeated is a domain a consumer would see twice.",
+      "find": ["    disks.dedup();"],
+      "replace": ["    disks.len();"]
+    },
+    {
+      "name": "DI-10.2: a volume's domains are left in the order the device gave",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Two volumes on the same disks report the same domains in the same order, which a comparison of them relies on.",
+      "find": ["    disks.sort_unstable();"],
+      "replace": ["    disks.len();"]
+    },
+    {
+      "name": "DI-10.2: a disk is named some other way than a file's declaration would name it",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Two targets share a domain exactly when their bytes agree, so a volume and a file on the same disk fail together only if both name it as \\\\.\\PhysicalDriveN.",
+      "find": ["    FlushDomain::new(format!(r\"\\\\.\\PhysicalDrive{disk_number}\").into_bytes())"],
+      "replace": ["    FlushDomain::new(format!(r\"\\\\.\\Disk{disk_number}\").into_bytes())"]
+    },
+    {
+      "name": "DI-10.2: a digit is taken for a drive letter",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Only the forms that name a volume are accepted; \\\\.\\1: names nothing.",
+      "find": ["        if letter.is_ascii_alphabetic() {"],
+      "replace": ["        if letter.is_ascii_alphanumeric() {"]
+    },
+    {
+      "name": "DI-10.2: a GUID group of any shorter length is accepted",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "A volume GUID path is opened as given, so a malformed one must be refused here rather than opened as whatever it names.",
+      "find": ["                group.len() == length && group.chars().all(|c| c.is_ascii_hexdigit())"],
+      "replace": ["                group.len() <= length && group.chars().all(|c| c.is_ascii_hexdigit())"]
+    },
+    {
+      "name": "DI-10.2: an unbuffered volume needs its sector in the buffer's address only as one byte",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An unbuffered transfer's buffer must start on a sector; a geometry that says otherwise lets a misaligned buffer reach the kernel.",
+      "find": ["        Geometry::uniform(sector_size)\n    }\n"],
+      "replace": ["        Geometry::new(sector_size, sector_size, 1)\n    }\n"]
+    },
+    {
+      "name": "DI-10.2: a cached volume needs its sector in the buffer's address too",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The cache is what lets a cached transfer start anywhere; requiring more only refuses what the kernel would take.",
+      "find": ["        Geometry::new(sector_size, sector_size, 1)\n    }\n"],
+      "replace": ["        Geometry::uniform(sector_size)\n    }\n"]
+    },
+    {
+      "name": "DI-10.2: declaring domains on a volume removes the ones its disks gave",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A backing that finds its own domains makes that its own obligation; a consumer's declaration adds to them and never takes one away, or a missing domain would leave a failure unreported.",
+      "find": ["        self.domains = self.found.clone();"],
+      "replace": ["        self.domains = Vec::new();"]
+    },
+    {
+      "name": "DI-10.2: a volume's target reports no domains of its own finding",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The disks the volume sits on are what a commit failure can reach; a target that finds none shares fate with no one it should.",
+      "find": ["        let found = volume.flush_domains();"],
+      "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
+    },
+    {
+      "name": "DI-10.2: a volume's target claims the class of a complete device",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A lock keeps other handles off the volume, not other writers off its disks, so a volume is never Complete.",
+      "find": ["            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+    },
+    {
+      "name": "DI-10.2: the lock is asked for and not taken",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "survives",
+      "why": "A declared blind spot of the default run: only the elevated raw-volume tests, which need an administrator and are ignored by default, can tell a lock that was taken from one that was not, since the volume's flag is set from the options either way.",
+      "find": ["        if options.lock {\n            lock_volume(&file)?;\n        }\n"],
+      "replace": ["        if options.lock {\n            let _ = &file;\n        }\n"]
     }
   ]
 }

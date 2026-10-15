@@ -31,6 +31,9 @@ windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys"
 # This driver's one time base, interrupt time (DI-D-37), read through `InterruptClock`: the crate
 # forbids `unsafe`, so it cannot call `QueryInterruptTime` itself.
 win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
+# The disks a raw volume sits on, its sector size and its lock: device controls that need `unsafe`,
+# which this crate forbids (DI-D-61).
+win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
 
 [features]
 # The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by
