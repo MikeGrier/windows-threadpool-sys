@@ -153,6 +153,9 @@ route to association, submission, and the blocking backend, and stays not `Clone
   device control codes go through `DeviceIoControl`, which on an overlapped handle needs an `OVERLAPPED`
   and may pend: that is I/O, so they stay with the endpoint and its device adapters. The list beyond
   `file_len` is M16 in [CHECKLIST.md](CHECKLIST.md).
+- **Observer queries return paths and names as `Wtf16String`** (the engineer, 2026-10-14, for M16):
+  `final_path` and `volume_info` hand back Windows' own UTF-16 unconverted, so this crate takes a
+  dependency on [wtf-string](../wtf-string/) for them.
 - **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
   before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
   hold it; nothing reaches that association, because only the endpoint ever submitted through it.
@@ -348,6 +351,17 @@ before `new`. Documenting "do not query while an operation is in flight" leaves 
 	of the split rather than a safety measure. It is the natural handoff for a leaked or statically-allocated
 	pool, and satisfies the stable-address promise trivially: the referent is `'static` and never moves, so
 	moving the reference does not move the bytes.
+
+### Decision -- unbuffered I/O asks for its alignment; it does not assume a bound (M16.5)
+
+*The engineer, 2026-10-14.* **The fixed `PAGE_SIZE` (4096) stands in for three numbers with three
+authorities, and each is to be asked of its authority, with no bound assumed.** The page size that
+scatter/gather segments must be is the operating system's answer. The buffer alignment and the sector size
+(which unbuffered offsets and lengths must be multiples of) are the file system's, asked through the handle
+(`FileAlignmentInfo`, `FileStorageInfo`). File systems are expected to answer between the sector size and
+the page size, and none is known to require more than page alignment, but that is not assumed: an answer
+above a page must be honoured or refused, never silently violated. The work is M16.5 in
+[CHECKLIST.md](CHECKLIST.md).
 
 ## Cancellation and rundown
 

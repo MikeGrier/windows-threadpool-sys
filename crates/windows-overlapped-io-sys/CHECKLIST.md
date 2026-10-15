@@ -43,29 +43,38 @@ method per field, and lands with tests of its own result. Independent of M14; it
   belongs behind `fs` or in the core is part of this item; working position (not a decision): core.
 
 - [ ] **M16.4** -- **`storage_info()` and `alignment_info()`**: `FileStorageInfo` (logical and physical
-  sector sizes) and `FileAlignmentInfo` (the buffer alignment unbuffered I/O requires). The unbuffered adapters
-  currently assume [`PAGE_SIZE`](src/fs.rs) rather than asking; whether they should consult this is a
-  question for the engineer, raised with this item, not scheduled by it.
+  sector sizes) and `FileAlignmentInfo` (the buffer alignment the device requires). M16.5 builds on both.
 
-- [ ] **M16.5** -- **`remote_protocol_info()`**: `FileRemoteProtocolInfo`, answering whether the file is on
+- [ ] **M16.5** -- **The unbuffered adapters ask for their alignment instead of assuming it.** Decided by
+  the engineer: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "unbuffered I/O asks for its alignment". Today
+  [`PAGE_SIZE`](src/fs.rs) (a fixed 4096) stands in for the system page size scatter/gather segments must
+  be (ask the OS), the device's buffer alignment, and the sector size offsets and lengths must be multiples
+  of (ask the file system, M16.4). Covers `PageBuffers` (allocate at the alignment asked for), the
+  scatter/gather validation, and the public `PAGE_SIZE` constant (changing it is breaking). Open, to settle
+  with the engineer when taken: what scatter/gather does when the device alignment exceeds a page, which
+  page-sized segments cannot honour (working position: refuse with an error naming both values); and
+  whether the answers are asked once per endpoint and kept, or per operation. No local volume requires
+  more than a page, so the above-a-page path needs a seam to inject the answer, built with this item.
+
+- [ ] **M16.6** -- **`remote_protocol_info()`**: `FileRemoteProtocolInfo`, answering whether the file is on
   SMB or another remote protocol. On a local file the query fails or reports no protocol; record which,
   measured, and test that case. A remote case needs a share, so state whether the test can reach one.
 
-- [ ] **M16.6** -- **`basic_info()`**: `FileBasicInfo` -- creation, last access, last write and change times,
+- [ ] **M16.7** -- **`basic_info()`**: `FileBasicInfo` -- creation, last access, last write and change times,
   and attributes. **Measure first** whether the times read through the handle are current while the
   directory entry lags, as the length is (the watcher's measurement); record what was observed, then expose
   it, documenting only what was measured.
 
-- [ ] **M16.7** -- **`final_path()`**: `GetFinalPathNameByHandleW` -- the open file's current path, after any
-  renames. Needs a decision on the return type: `OsString`, or this crate taking a dependency on
-  [wtf-string](../wtf-string/) for `Wtf16String`. Raise it with the engineer before building; M16.8 takes
-  the same type. Test a rename while the observer holds the handle.
+- [ ] **M16.8** -- **`final_path()`**: `GetFinalPathNameByHandleW` -- the open file's current path, after any
+  renames, returned as `Wtf16String` (decided: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the
+  handle", the bullet on strings). Adds the [wtf-string](../wtf-string/) dependency, with `fs`. Test a
+  rename while the observer holds the handle.
 
-- [ ] **M16.8** -- **`volume_info()`**: `GetVolumeInformationByHandleW` -- file system name, volume serial,
-  and file system flags (sparse files and others). The name uses M16.7's string type. Test on the temp
+- [ ] **M16.9** -- **`volume_info()`**: `GetVolumeInformationByHandleW` -- file system name (a
+  `Wtf16String`), volume serial, and file system flags (sparse files and others). Test on the temp
   directory's volume, asserting only what the call reports, not which file system it is.
 
-- [ ] **M16.9** -- **Every query against every backend, with an operation pending.** One table of the queries
-  M16.1-M16.8 added, run through an observer while an operation pends on `AssociatedEndpoint`,
+- [ ] **M16.10** -- **Every query against every backend, with an operation pending.** One table of the
+  queries M16.1-M16.9 added, run through an observer while an operation pends on `AssociatedEndpoint`,
   `ThreadpoolIo` and `BlockingEndpoint`, as M15.5 did for `file_len`; each pending operation must still
   complete or cancel as it would without the queries.
