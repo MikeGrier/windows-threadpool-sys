@@ -29,7 +29,8 @@ mod query;
 
 #[cfg(feature = "fs")]
 pub use self::query::{
-    AlignmentInfo, FileId, RemoteProtocolInfo, Smb2Info, StandardInfo, StorageInfo,
+    AlignmentInfo, BasicInfo, FileId, FileTime, RemoteProtocolInfo, Smb2Info, StandardInfo,
+    StorageInfo,
 };
 
 /// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
@@ -290,7 +291,8 @@ impl UnassociatedEndpoint {
 ///
 /// What it offers instead is a fixed set of safe queries -- [`file_type`](Self::file_type)
 /// in every configuration; `standard_info` and its `file_len` shortcut,
-/// `file_id`, `storage_info`, `alignment_info` and `remote_protocol_info`, behind
+/// `basic_info`, `file_id`, `storage_info`, `alignment_info` and
+/// `remote_protocol_info`, behind
 /// the `fs` feature -- and
 /// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
 ///

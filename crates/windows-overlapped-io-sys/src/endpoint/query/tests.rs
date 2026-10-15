@@ -3,13 +3,16 @@ use std::io::Write;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use windows_sys::Win32::Foundation::{
     ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOACCESS,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_REMOTE_PROTOCOL_INFO,
-    FILE_STORAGE_INFO, FileDispositionInfo, FileRemoteProtocolInfo, GetFileInformationByHandleEx,
+    DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_BASIC_INFO,
+    FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO,
+    FILE_REMOTE_PROTOCOL_INFO, FILE_STORAGE_INFO, FileDispositionInfo,
+    FileFullDirectoryRestartInfo, FileRemoteProtocolInfo, GetFileInformationByHandleEx,
     SetFileInformationByHandle,
 };
 
@@ -21,8 +24,8 @@ use super::storage_info_values::{
     FLAGS_PARTITION_ALIGNED_ON_DEVICE as STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE,
     OFFSET_UNKNOWN as STORAGE_INFO_OFFSET_UNKNOWN,
 };
-use super::{remote_protocol_info_from, storage_info_from};
-use crate::{AlignmentInfo, Smb2Info, StandardInfo, UnassociatedEndpoint};
+use super::{basic_info_from, remote_protocol_info_from, storage_info_from};
+use crate::{AlignmentInfo, FileTime, Smb2Info, StandardInfo, UnassociatedEndpoint};
 
 /// `FSCTL_SET_SPARSE`, which `windows-sys` exports only behind `Win32_System_Ioctl`.
 const FSCTL_SET_SPARSE: u32 = 0x0009_00C4;
@@ -783,4 +786,278 @@ fn the_remote_protocol_query_refuses_a_buffer_aligned_to_four_but_not_eight() {
 
     drop((observer, endpoint));
     let _ = std::fs::remove_file(&path);
+}
+
+// --- basic_info ---
+
+/// The file time of 1970-01-01 00:00 UTC, as Win32 documents it; written out
+/// rather than derived, so it checks the conversion's own constants.
+const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+
+#[test]
+fn basic_info_carries_every_field() {
+    let raw = FILE_BASIC_INFO {
+        CreationTime: 1,
+        LastAccessTime: 2,
+        LastWriteTime: 3,
+        ChangeTime: 4,
+        FileAttributes: 0x8020,
+    };
+    let info = basic_info_from(&raw);
+    assert_eq!(info.creation_time, FileTime { ticks: 1 });
+    assert_eq!(info.last_access_time, FileTime { ticks: 2 });
+    assert_eq!(info.last_write_time, FileTime { ticks: 3 });
+    assert_eq!(info.change_time, FileTime { ticks: 4 });
+    assert_eq!(info.attributes, 0x8020);
+}
+
+#[test]
+fn a_file_time_converts_to_the_system_time_it_names() {
+    for (ticks, since_unix_epoch) in [
+        (UNIX_EPOCH_TICKS, Duration::ZERO),
+        (UNIX_EPOCH_TICKS + 1, Duration::from_nanos(100)),
+        (UNIX_EPOCH_TICKS + 15_000_000, Duration::from_millis(1500)),
+        (
+            UNIX_EPOCH_TICKS + 9_999_999,
+            Duration::from_nanos(999_999_900),
+        ),
+        // 2000-01-01 00:00 UTC.
+        (125_911_584_000_000_000, Duration::from_secs(946_684_800)),
+    ] {
+        assert_eq!(
+            FileTime { ticks }.to_system_time(),
+            Some(SystemTime::UNIX_EPOCH + since_unix_epoch),
+            "ticks {ticks}"
+        );
+    }
+}
+
+#[test]
+fn a_file_time_before_1970_converts_too() {
+    for (ticks, before_unix_epoch) in [
+        (0, Duration::from_secs(11_644_473_600)),
+        (UNIX_EPOCH_TICKS - 1, Duration::from_nanos(100)),
+    ] {
+        assert_eq!(
+            FileTime { ticks }.to_system_time(),
+            Some(SystemTime::UNIX_EPOCH - before_unix_epoch),
+            "ticks {ticks}"
+        );
+    }
+}
+
+#[test]
+fn a_negative_file_time_has_no_system_time() {
+    for ticks in [-1, -UNIX_EPOCH_TICKS, i64::MIN] {
+        assert_eq!(FileTime { ticks }.to_system_time(), None, "ticks {ticks}");
+    }
+}
+
+#[test]
+fn the_largest_file_time_converts() {
+    let largest = FileTime { ticks: i64::MAX }
+        .to_system_time()
+        .expect("the largest count");
+    let ticks_past_unix_epoch = (i64::MAX - UNIX_EPOCH_TICKS).cast_unsigned();
+    assert_eq!(
+        largest,
+        SystemTime::UNIX_EPOCH
+            + Duration::from_secs(ticks_past_unix_epoch / 10_000_000)
+            + Duration::from_nanos(ticks_past_unix_epoch % 10_000_000 * 100)
+    );
+}
+
+#[test]
+fn file_times_order_by_their_ticks() {
+    let times = [i64::MIN, -1, 0, 1, UNIX_EPOCH_TICKS, i64::MAX].map(|ticks| FileTime { ticks });
+    assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn a_new_file_reports_times_near_now_and_is_not_a_directory() {
+    let before = SystemTime::now() - Duration::from_secs(60);
+    let path = temp_path("basic-new");
+    std::fs::write(&path, b"basic").expect("write temp file");
+    let endpoint = open(&path);
+    let info = endpoint.observer().basic_info().expect("basic_info");
+    let after = SystemTime::now() + Duration::from_secs(60);
+
+    for time in [
+        info.creation_time,
+        info.last_access_time,
+        info.last_write_time,
+        info.change_time,
+    ] {
+        let system = time.to_system_time().expect("a time after 1601");
+        assert!(before < system && system < after, "{info:?}");
+    }
+    assert!(info.creation_time <= info.last_write_time, "{info:?}");
+    assert_eq!(info.attributes & FILE_ATTRIBUTE_DIRECTORY, 0, "{info:?}");
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_directory_reports_the_directory_attribute() {
+    let dir = temp_path("basic-dir");
+    std::fs::create_dir(&dir).expect("create dir");
+    let endpoint = UnassociatedEndpoint::open(&dir, true, false, FILE_FLAG_BACKUP_SEMANTICS)
+        .expect("open directory");
+    let info = endpoint.observer().basic_info().expect("basic_info");
+    assert_ne!(info.attributes & FILE_ATTRIBUTE_DIRECTORY, 0, "{info:?}");
+    drop(endpoint);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn the_read_only_attribute_follows_changes_made_by_path() {
+    let path = temp_path("basic-readonly");
+    std::fs::write(&path, b"basic").expect("write temp file");
+    let endpoint = open(&path);
+    let observer = endpoint.observer();
+    let set_read_only = |read_only: bool| {
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(&path, permissions).expect("set_permissions");
+    };
+
+    for read_only in [true, false, true, false] {
+        set_read_only(read_only);
+        let info = observer.basic_info().expect("basic_info");
+        assert_eq!(
+            info.attributes & FILE_ATTRIBUTE_READONLY != 0,
+            read_only,
+            "{info:?}"
+        );
+    }
+
+    drop((observer, endpoint));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn every_observer_of_a_handle_reads_the_same_basic_info() {
+    let path = temp_path("basic-shared");
+    std::fs::write(&path, b"basic").expect("write temp file");
+    let endpoint = open(&path);
+    let first = endpoint.observer();
+    let second = first.clone();
+    assert_eq!(
+        first.basic_info().expect("first"),
+        second.basic_info().expect("second")
+    );
+    drop((first, second, endpoint));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Measured: the NUL device refuses the basic query.
+#[test]
+fn the_nul_device_refuses_the_basic_query() {
+    let nul = UnassociatedEndpoint::open(r"\\.\NUL", true, false, 0).expect("open NUL");
+    let error = nul
+        .observer()
+        .basic_info()
+        .expect_err("the NUL device has no times");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_INVALID_PARAMETER as i32),
+        "{error:?}"
+    );
+}
+
+/// The times and length in `name`'s directory entry, read by enumerating `dir`.
+fn directory_entry(dir: &Path, name: &str) -> (FileTime, FileTime, i64) {
+    let dir_handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+        .expect("open directory");
+    let mut buffer = vec![0_u64; 8192];
+    let size = u32::try_from(size_of_val(buffer.as_slice())).expect("a u32 size");
+    // SAFETY: a live directory handle and an 8-aligned buffer of exactly the size
+    // passed; the call is synchronous.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            dir_handle.as_raw_handle(),
+            FileFullDirectoryRestartInfo,
+            buffer.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    assert_ne!(ok, 0, "enumerate: {}", std::io::Error::last_os_error());
+    let base = buffer.as_ptr().cast::<u8>();
+    let mut offset = 0_usize;
+    loop {
+        // SAFETY: the call filled the buffer with a chain of entries, each
+        // 8-aligned and starting at the previous one's `NextEntryOffset`.
+        let entry = unsafe { &*base.add(offset).cast::<FILE_FULL_DIR_INFO>() };
+        let length = entry.FileNameLength as usize / size_of::<u16>();
+        // SAFETY: the entry's name runs `FileNameLength` bytes from `FileName`.
+        let entry_name = unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length) };
+        if String::from_utf16_lossy(entry_name) == name {
+            return (
+                FileTime {
+                    ticks: entry.LastWriteTime,
+                },
+                FileTime {
+                    ticks: entry.ChangeTime,
+                },
+                entry.EndOfFile,
+            );
+        }
+        assert_ne!(entry.NextEntryOffset, 0, "{name} is not in {dir:?}");
+        offset += entry.NextEntryOffset as usize;
+    }
+}
+
+/// The measurement `basic_info`'s documentation reports: a write through another
+/// handle shows here at once, while the directory entry keeps the earlier times
+/// until that handle closes.
+#[test]
+fn a_write_elsewhere_shows_here_at_once_and_in_the_directory_entry_at_close() {
+    let dir = temp_path("basic-lag");
+    std::fs::create_dir(&dir).expect("create dir");
+    let name = "file.txt";
+    let path = dir.join(name);
+    std::fs::write(&path, b"a").expect("write temp file");
+    let endpoint = open(&path);
+    let observer = endpoint.observer();
+    let before = observer.basic_info().expect("before");
+    // Not compared with `before`: the entry's change time was measured lagging the
+    // handle's by under a millisecond right after the create.
+    let entry_before = directory_entry(&dir, name);
+    assert_eq!(entry_before.2, 1);
+
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open writer");
+    // Past the system clock's tick, so the write gets a later time.
+    std::thread::sleep(Duration::from_millis(40));
+    writer.write_all(b"b").expect("write");
+
+    let during = observer.basic_info().expect("during");
+    assert!(
+        during.last_write_time > before.last_write_time,
+        "{during:?}"
+    );
+    assert!(during.change_time > before.change_time, "{during:?}");
+    assert_eq!(
+        directory_entry(&dir, name),
+        entry_before,
+        "the directory entry already reflects the write"
+    );
+
+    drop(writer);
+    let after = observer.basic_info().expect("after");
+    assert_eq!(after.last_write_time, during.last_write_time);
+    let entry_after = directory_entry(&dir, name);
+    assert_eq!(entry_after.0, during.last_write_time, "{entry_after:?}");
+    assert!(entry_after.1 > entry_before.1, "{entry_after:?}");
+    assert_eq!(entry_after.2, 2);
+
+    drop((observer, endpoint));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
 }

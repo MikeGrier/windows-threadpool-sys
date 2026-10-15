@@ -4,11 +4,12 @@
 use std::io;
 use std::mem::{MaybeUninit, offset_of};
 use std::os::windows::io::AsRawHandle;
+use std::time::{Duration, SystemTime};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALIGNMENT_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS,
+    FILE_ALIGNMENT_INFO, FILE_BASIC_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS,
     FILE_REMOTE_PROTOCOL_INFO, FILE_STANDARD_INFO, FILE_STORAGE_INFO, FileAlignmentInfo,
-    FileIdInfo, FileRemoteProtocolInfo, FileStandardInfo, FileStorageInfo,
+    FileBasicInfo, FileIdInfo, FileRemoteProtocolInfo, FileStandardInfo, FileStorageInfo,
     GetFileInformationByHandleEx,
 };
 
@@ -97,6 +98,81 @@ const _: () = {
     );
     assert!(offset_of!(RawStandardInfo, directory) == offset_of!(FILE_STANDARD_INFO, Directory));
 };
+
+/// A file's times and attributes, as
+/// `GetFileInformationByHandleEx(FileBasicInfo)` reports them:
+/// [`EndpointObserver::basic_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BasicInfo {
+    /// When the file was created.
+    pub creation_time: FileTime,
+    /// When the file was last read or written, as far as the file system
+    /// records access.
+    pub last_access_time: FileTime,
+    /// When the file's data was last written.
+    pub last_write_time: FileTime,
+    /// When the file's data or metadata last changed.
+    pub change_time: FileTime,
+    /// The `FILE_ATTRIBUTE_*` bits, as reported.
+    pub attributes: u32,
+}
+
+/// A time as the file system reports it: 100-nanosecond intervals since
+/// 1601-01-01 00:00 UTC, kept exactly as reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileTime {
+    /// The intervals since 1601-01-01 00:00 UTC.
+    pub ticks: i64,
+}
+
+/// The file-time epoch and unit. Changing any value is a breaking change.
+mod file_time_values {
+    /// Seconds from 1601-01-01 to 1970-01-01, both 00:00 UTC.
+    pub(super) const SECONDS_FROM_1601_TO_1970: u64 = 11_644_473_600;
+    /// File-time ticks per second.
+    pub(super) const TICKS_PER_SECOND: i64 = 10_000_000;
+    /// Nanoseconds per file-time tick.
+    pub(super) const NANOS_PER_TICK: i64 = 100;
+}
+
+impl FileTime {
+    /// The time as a `SystemTime`, or `None` when the count is negative: a time
+    /// before 1601, which `SystemTime` cannot hold.
+    #[must_use]
+    pub fn to_system_time(self) -> Option<SystemTime> {
+        use file_time_values::{NANOS_PER_TICK, SECONDS_FROM_1601_TO_1970, TICKS_PER_SECOND};
+        // Equivalent to a bare cast on Windows: a negative count cast is 2^63 or more,
+        // which overflows SystemTime below. Kept so the refusal does not rest on that.
+        let ticks = u64::try_from(self.ticks).ok()?;
+        let per_second = TICKS_PER_SECOND.cast_unsigned();
+        let since_1601 = Duration::new(
+            ticks / per_second,
+            u32::try_from(ticks % per_second * NANOS_PER_TICK.cast_unsigned()).ok()?,
+        );
+        // Checked, though Windows' SystemTime holds every non-negative count (tested).
+        let epoch_1601 =
+            SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(SECONDS_FROM_1601_TO_1970))?;
+        epoch_1601.checked_add(since_1601)
+    }
+}
+
+fn basic_info_from(raw: &FILE_BASIC_INFO) -> BasicInfo {
+    BasicInfo {
+        creation_time: FileTime {
+            ticks: raw.CreationTime,
+        },
+        last_access_time: FileTime {
+            ticks: raw.LastAccessTime,
+        },
+        last_write_time: FileTime {
+            ticks: raw.LastWriteTime,
+        },
+        change_time: FileTime {
+            ticks: raw.ChangeTime,
+        },
+        attributes: raw.FileAttributes,
+    }
+}
 
 /// A file's identity: the volume it is on and its ID within that volume.
 ///
@@ -343,6 +419,28 @@ impl EndpointObserver {
             delete_pending: raw.delete_pending != 0,
             is_directory: raw.directory != 0,
         })
+    }
+
+    /// The file's creation, last-access, last-write and change times and its
+    /// attributes, read through the handle with
+    /// `GetFileInformationByHandleEx(FileBasicInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight. Measured on NTFS and ReFS: after a write through
+    /// another handle, the last-write and change times read here had advanced at
+    /// the first query, while the file's directory entry kept the earlier times
+    /// until that other handle closed. Whether and when the last-access time
+    /// advances on a read differed between the two.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the basic-information query.
+    pub fn basic_info(&self) -> io::Result<BasicInfo> {
+        // SAFETY: FILE_BASIC_INFO is windows-sys' own definition of the class's
+        // structure, and every field is an integer.
+        let raw: FILE_BASIC_INFO = unsafe { self.query_info(FileBasicInfo) }?;
+        Ok(basic_info_from(&raw))
     }
 
     /// The file's identity: its volume's serial number and its 128-bit ID within

@@ -596,3 +596,27 @@ assertion; a second ignored share test drives the raw call through a 4-mod-8 buf
 refusal. Sabotage: dropping the alignment to 1 was not caught by any test (the stack buffer happened to land
 8-aligned), which is why the const assertion exists -- dropping it to 4 then failed the build; the SMB check
 weakened to "any protocol" and the loopback bit swapped for offline each failed their tests.
+
+## Moved 2026-10-14 22:31:47 -04:00 -- M16.7: the basic-information query
+
+### <a id="m167"></a>M16.7 -- `basic_info()` reads the four times and the attributes, measured current through the handle. *(completed 2026-10-14 22:31:47 -04:00)*
+
+Measured first, on Windows build 26300, on NTFS (the temp directory on `C:`) and ReFS (`Q:`), with the same
+results on both. An observer held the file open while a second handle wrote to it; the directory entry was
+read by enumerating the directory (`FileFullDirectoryRestartInfo`). Through the observer's handle the
+last-write, change and last-access times advanced at the first query after each write. The directory entry
+kept the times from before the first write, and the old length, for over four seconds, until the writer
+closed, then matched the handle. A later read by path advanced the last-access time through the handle on
+NTFS but not in its directory entry; on ReFS it advanced neither. Immediately after a create, the entry's
+change time was seen trailing the handle's by under a millisecond (6 of 15 parallel runs), so the kept test
+compares the entry with its own earlier state rather than with the handle. The NUL device refuses the query
+with `ERROR_INVALID_PARAMETER`, tested.
+
+`BasicInfo` holds the times as `FileTime { ticks }` -- 100-ns intervals since 1601, exactly as reported --
+with `to_system_time()`, which is `None` only for a negative count; attributes are the raw
+`FILE_ATTRIBUTE_*` word. The conversion is tested against literal dates, not its own constants. The
+measurement is kept as a test (`a_write_elsewhere_shows_here_at_once_and_in_the_directory_entry_at_close`),
+stable over 30 parallel runs. The sabotages are now recorded in the crate's first
+[sabotage.json](sabotage.json), with M16.6's: field swaps, dropped attributes, a wrong epoch and tick unit
+are caught; two controls survive, one of them the measured finding that refusing a negative count is an
+equivalent mutant on Windows (a cast count overflows `SystemTime` anyway), now said at the site.

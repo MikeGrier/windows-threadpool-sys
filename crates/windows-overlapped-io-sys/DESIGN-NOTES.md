@@ -165,6 +165,13 @@ route to association, submission, and the blocking backend, and stays not `Clone
   requirement is not published, so every query gets 8 rather than only the one measured. A const
   assertion pins it, because no test caught a dropped alignment: a stack buffer lands 8-aligned more often
   than not. The kernel-side refusal is tested on the administrative share, `#[ignore]`d for needing it.
+- **Times read through the handle are current; the directory entry's are not** (M16.7, measured
+  2026-10-14 on NTFS and ReFS): after a write through another handle, `basic_info`'s last-write and change
+  times had advanced at the first query, while the directory entry kept the earlier times and length until
+  that handle closed -- the same lag the tail watcher measured for the length. Times are kept as reported
+  (`FileTime`, 100-ns ticks since 1601); `SystemTime` is a conversion, not the storage. Last-access
+  behaviour differed between the two file systems and is documented as differing, nothing more. The
+  measurement is a kept test, re-checked on every run on the temp directory's volume.
 - **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
   before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
   hold it; nothing reaches that association, because only the endpoint ever submitted through it.

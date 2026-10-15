@@ -43,10 +43,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.6** -- `remote_protocol_info()` reads the remote protocol, version, flags and SMB2 capabilities. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m166)
 
-- [ ] **M16.7** -- **`basic_info()`**: `FileBasicInfo` -- creation, last access, last write and change times,
-  and attributes. **Measure first** whether the times read through the handle are current while the
-  directory entry lags, as the length is (the watcher's measurement); record what was observed, then expose
-  it, documenting only what was measured.
+- [x] **M16.7** -- `basic_info()` reads the four times and the attributes, measured current through the handle. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m167)
 
 - [ ] **M16.8** -- **`final_path()`**: `GetFinalPathNameByHandleW` -- the open file's current path, after any
   renames, returned as `Wtf16String` (decided: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the
