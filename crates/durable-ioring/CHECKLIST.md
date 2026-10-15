@@ -194,6 +194,34 @@ option recorded by construction. The rule throughout is documented APIs only
   `CreateFileW` has, `CREATE_ALWAYS` included. None of the "not in v1" rulings schedules work;
   a consumer or a measurement reopens each, not this checklist.
 
+  **Open, parked 2026-10-15 while the path contract is settled in
+  [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)** (the engineer: "I want to work through
+  this before we continue on to subsequent items"). These are questions, not decisions, and the
+  table waits on them. (a) The public signature for a path: `&Wtf16Str` only, or anything that
+  converts to one, and whether an empty path is passed to Win32 or refused. (b) The remote-device
+  check: with paths opaque the pre-open check, which uses `fs::canonicalize` and so itself opens the
+  path, cannot stay; the check moves onto the opened handle (`DI-14.5`), and an unbuffered create on
+  a remote path then creates the file before it is refused, unless the engineer names a path-based
+  check as the one exception. (c) Which paths can block an open without being cancellable, from
+  documentation and not recollection: dead remote shares and oplock breaks are the candidates; the
+  answer decides between documenting that `open` blocks (and that it can be run on a worker) and
+  refusing specific forms. (d) What an `OpenedFile` claims when its path names a device, which gets
+  a file's default geometry and no flush domains; whether a documented handle query can tell a
+  raw disk from a file is unmeasured. (e) The shape of the structured types: the workspace's
+  `CaptureSet` pattern (a typed set with named constants, `union` and `contains`) for rights, share
+  mode and attributes, an enum for the disposition, builder methods for flags, and whether
+  `create`, `create_new` and `truncate` go entirely (a breaking change to a 0.1.0 crate). (f) Cache
+  hints on an unbuffered file: pass and document, in place of refusing. (g) Whether to run an
+  evidence-only test of the ring on an overlapped handle, without exposing the flag. Standing unless
+  the engineer objects: our calls pass a non-inheritable handle explicitly;
+  `FILE_ATTRIBUTE_TEMPORARY`, the object-ID kind of `OpenFileById` and the four lesser access rights
+  (`ACCESS_SYSTEM_SECURITY`, `FILE_EXECUTE`, `SYNCHRONIZE`, extended attributes) are exposed;
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` is excluded, for it is for pipes. **Superseded by these
+  rulings and still to be reworked:** commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63)
+  made the open match std (create plus truncate as `OPEN_ALWAYS` and an emptying, an automatic
+  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, long paths made verbatim, std's combination checks);
+  none of that is Win32's, so the rework is written once the questions above settle.
+
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
 - [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the

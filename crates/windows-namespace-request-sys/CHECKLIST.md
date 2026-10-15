@@ -51,7 +51,7 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
 `OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
-consumer are the ones this crate can carry, and two are missing. Both are policy-free, like the rest
+consumer are the ones this crate can carry, and three are missing or in the way. All are policy-free, like the rest
 of this crate: durable-ioring decides which of them a consumer may use.
 
 > **-> CROSS-COMPONENT PREREQUISITE:** [DI-13.5](../durable-ioring/CHECKLIST.md) and
@@ -75,9 +75,31 @@ of this crate: durable-ioring decides which of them a consumer may use.
   and passes through. Tests: each documented conflict; a reopen with `FILE_FLAG_NO_BUFFERING` added to
   a handle opened without it. A `feat`, released on its own.
 
-  > **-> CROSS-COMPONENT HANDOFF:** when both are released, the next work is in component
-  > `crates/durable-ioring` -> `DI-M13` -> `DI-13.5` and `DI-13.6` (take the version that carries
-  > them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+- [ ] **NR-3.3** -- **Paths pass through to Win32 untouched.** Opened 2026-10-15 on the engineer's
+  direction, with its details open for discussion, so this is a direction and not yet a decision.
+  The engineer: `PreparedPath` "needs to adjust"; it "should remove any length restrictions"; it
+  should use `Wtf16String` for its path representation if it does not already (it does:
+  `PreparedPath` wraps one); it "should not do its own path checking, it does not need to, let the
+  Windows APIs manage path validation". What `prepare` does today, from
+  [path.rs](src/path.rs) and [D-9](DESIGN-NOTES.md#d-9): refuse an empty path; refuse an interior
+  NUL; for a `\\?\` path, refuse one that is not fully qualified (no root, a drive-relative
+  `\\?\C:foo`, a `\\?\UNC\` with no share); for any other path, refuse one past `MAX_PATH`, and
+  resolve it with `GetFullPathNameW` **when the request object is built**, on the calling thread, so a
+  relative path means what the caller meant and not what the process current directory is when a
+  worker performs it. Open: which of those survive. An interior NUL cannot be passed through a
+  `PCWSTR` at all, so refusing it is not policy. The empty path and the verbatim checks are errors
+  Win32 gives anyway. The length limit is the engineer's ruling to remove. The resolution at
+  construction is the one behaviour and not a check, and it is what D-9 is for; if it goes from
+  `prepare`, a caller that wants it uses the existing `ResolveFullPath` entry
+  ([full_path.rs](src/full_path.rs)), as an explicit call. Also open: whether `PreparedPath` survives
+  as a type or `OpenFile::new` takes a `Wtf16String`. Every consumer of `prepare` is affected
+  (`OpenFile`, `WatchDirectory`, `ResolveFullPath` and the tests), as is the duplicate in
+  `windows-file-enumeration-sys` ([D-9](DESIGN-NOTES.md#d-9), `M26+.3`), and it is a `feat!` of a
+  published crate. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
+
+  > **-> CROSS-COMPONENT HANDOFF:** when `NR-3.1` to `NR-3.3` are released, the next work is in
+  > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
+  > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
 ## NR-M-inf -- The horizon (ungated)
 
