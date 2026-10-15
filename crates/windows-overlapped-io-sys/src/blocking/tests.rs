@@ -3,14 +3,11 @@ use std::io::{self, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::mpsc;
 
-use windows_sys::Win32::Foundation::{
-    ERROR_IO_PENDING, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE};
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use crate::{BlockingEndpoint, NotificationModes, Operation, UnassociatedEndpoint};
 
@@ -183,6 +180,9 @@ fn observer_queries_while_a_read_pends_do_not_disturb_it() {
 #[cfg(feature = "fs")]
 #[test]
 fn an_observer_query_resets_the_handles_own_event() {
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
     let path = temp_file("handle-event");
     let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
     let observer = endpoint.observer();
