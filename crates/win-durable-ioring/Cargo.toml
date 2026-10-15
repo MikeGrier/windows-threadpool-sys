@@ -1,0 +1,64 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-durable-ioring"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A ring for Windows file I/O with durability scheduled into its work: writes are tagged with epochs, and durability through an epoch is requested and reported in the ring's own completion stream. The Windows driver for durable-ioring, built on windows-ioring-sys. No unsafe code."
+readme = "README.md"
+
+[dependencies]
+# The contract, the core and the traits this crate drives and implements (DI-D-50). A version and a
+# path, as `cargo publish` requires: the version is the release that carries the split.
+durable-ioring = { version = "0.1.0", path = "../durable-ioring" }
+# The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
+# ring, `leave_queued` and the registrations this driver is built on.
+windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys" }
+# The file target's type (DI-D-29): a consumer's file is a `SharedHandle`, and this crate hands that
+# same handle to the ring, which takes the type directly.
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+# The readiness signal's type (DI-D-28): an `Event`, so a front end can hand it to a thread-pool
+# wait without `unsafe`.
+win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+# The thread-pool wait the drain and the readiness check wait through. It needs
+# `From<Event> for WaitableHandle`, which this release carries.
+windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
+# This driver's one time base, interrupt time (DI-D-37), read through `InterruptClock`: the crate
+# forbids `unsafe`, so it cannot call `QueryInterruptTime` itself.
+win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
+
+[features]
+# The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by
+# default; nothing in production has a use for it. Built on the ring crate's own seam, which
+# transforms a real completion rather than fabricating one, so it cannot cause undefined behaviour,
+# only the wrong answer it was asked for.
+fault-injection = ["windows-ioring-sys/fault-injection"]
+
+[dev-dependencies]
+# This crate's own tests, and the worked examples in README.md -- compiled as doctests -- drive
+# failures through the seam, so every test build enables it: a feature gate a plain `cargo test`
+# skips would leave those examples unrun.
+win-durable-ioring = { path = ".", features = ["fault-injection"] }
+# The ring crate's kernel seam, for the tests that fail the instance's ring's submits (DI-7.1): a
+# responder registered for the ring answers on every thread that submits to it, pool threads
+# included (the ring crate's D-85), and `sys::submit_faults` is its safe form, so this crate's
+# `forbid(unsafe_code)` stands (DI-D-4). A dev-dependency's features reach test builds only.
+windows-ioring-sys = { path = "../windows-ioring-sys", features = ["kernel-seam"] }
+
+# A blocking push, built on the public API as a helper to use or adapt (DI-7.4, DI-D-56). Its own
+# tests run with the crate's: without `test = true` cargo builds an example and never runs them.
+[[example]]
+name = "blocking_push"
+path = "examples/blocking_push/main.rs"
+test = true
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it would render an
+# almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

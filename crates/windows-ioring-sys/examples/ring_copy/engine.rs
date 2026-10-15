@@ -166,9 +166,10 @@ fn register_buffer(
 
 /// Push one op via `push`, submit it, then wait a bounded time for its
 /// completion and claim it, returning the transferred byte count.
-fn submit_one<F>(ring: &mut IoRing, push: F) -> io::Result<u32>
+fn submit_one<F, E>(ring: &mut IoRing, push: F) -> io::Result<u32>
 where
-    F: FnOnce(&mut Batch<'_>) -> io::Result<OperationId>,
+    F: FnOnce(&mut Batch<'_>) -> Result<OperationId, E>,
+    io::Error: From<E>,
 {
     {
         let mut batch = Batch::new(ring);

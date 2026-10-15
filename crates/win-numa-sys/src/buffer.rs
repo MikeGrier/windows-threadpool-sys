@@ -52,16 +52,15 @@ const NUMA_NO_PREFERRED_NODE: u32 = u32::MAX;
 /// least a page. [`NumaBuffer::len`] reports the length that was *requested*,
 /// which is the length a kernel call should be told about.
 ///
-/// # Buffer traits live with whoever owns them
+/// # Buffer traits
 ///
-/// This type implements no I/O buffer trait, because this crate defines none
-/// and should not: `windows-ioring-sys` and `windows-overlapped-io-sys` each
-/// have their own `IoBuf`/`IoBufMut`, and a third copy here would be one more
-/// of a thing the workspace is already deciding what to do about. A consumer
-/// that owns such a trait implements it for this type -- the orphan rule
-/// permits exactly that, since the trait is theirs -- over
-/// [`NumaBuffer::as_ptr`], [`NumaBuffer::as_mut_ptr`] and [`NumaBuffer::len`].
-/// `windows-ioring-sys` does so.
+/// This type implements `io-buffers`' `IoBuf` and `IoBufMut`, so a ring takes it
+/// as a buffer. This crate defines no trait of its own: the traits belong to
+/// `io-buffers`, which is portable and so cannot depend on this allocator, and
+/// the orphan rule lets only the crate that owns the trait or the type
+/// implement it. A crate that owns a buffer trait of its own implements it for
+/// this type the same way, over [`NumaBuffer::as_ptr`],
+/// [`NumaBuffer::as_mut_ptr`] and [`NumaBuffer::len`].
 pub struct NumaBuffer {
     ptr: *mut u8,
     len: usize,

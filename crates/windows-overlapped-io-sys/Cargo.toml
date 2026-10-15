@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-overlapped-io-sys"
-version = "0.1.3" # x-release-please-version
+version = "0.2.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -43,8 +43,8 @@ default = []
 # Operation-family features gate this crate's own safe adapter modules
 # (`src/fs.rs`, `src/socket.rs`, `src/device.rs`). `fs` adds
 # Win32_System_SystemInformation, for the page size scatter/gather segments must
-# be (`page_size`, M16.5), and wtf-string, for the paths observer queries return
-# (M16.8). `socket` adds only Win32_Networking_WinSock:
+# be (`page_size`, M17.5), and wtf-string, for the paths observer queries return
+# (M17.8). `socket` adds only Win32_Networking_WinSock:
 # `Win32_Storage_FileSystem` is already unconditional (see above).
 fs = ["windows-sys/Win32_System_SystemInformation", "dep:wtf-string"]
 socket = ["windows-sys/Win32_Networking_WinSock"]
@@ -52,7 +52,7 @@ device = ["windows-sys/Win32_System_Ioctl"]
 
 # Exposes `test_util`: one table of every observer query, so another crate's
 # backend tests (windows-threadpool-sys' `ThreadpoolIo`) issue the same set as
-# this crate's (M16.10). Implies `fs`, where the queries live; adds no
+# this crate's (M17.10). Implies `fs`, where the queries live; adds no
 # dependencies.
 test-util = ["fs"]
 
@@ -61,10 +61,18 @@ test-util = ["fs"]
 # capture itself honors RUST_BACKTRACE / RUST_LIB_BACKTRACE at run time.
 operation-backtrace = []
 
+# The buffer contract: `IoBuf` and `IoBufMut`, defined once in a portable crate and re-exported
+# here at the paths they always had (IB-2+.1 in io-buffers' CHECKLIST.md). The version is the one
+# io-buffers' first release is fixed to (`Release-As: 0.1.0`), so it is not a guess; that crate
+# must be on crates.io before this one's next release.
+[dependencies.io-buffers]
+version = "0.1.0"
+path = "../io-buffers"
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-# Win32_System_Threading: the event BlockingEndpoint waits on (M15.6); its
+# Win32_System_Threading: the event BlockingEndpoint waits on (M16.6); its
 # CreateEventW takes a SECURITY_ATTRIBUTES, which is gated on Win32_Security.
 features = [
 	"Win32_Foundation",
@@ -74,12 +82,12 @@ features = [
 	"Win32_System_Threading",
 ]
 
-# An endpoint keeps its handle shared so observers can hold it too (M15).
+# An endpoint keeps its handle shared so observers can hold it too (M16).
 [dependencies.win-shared-os-owned-handle]
 version = "0.1.0"
 path = "../win-shared-os-owned-handle"
 
-# Observer queries return paths as Windows' own UTF-16, unconverted (M16.8).
+# Observer queries return paths as Windows' own UTF-16, unconverted (M17.8).
 [dependencies.wtf-string]
 version = "0.1.0"
 path = "../wtf-string"
@@ -98,6 +106,6 @@ features = [
 	"Win32_System_Pipes",
 	# FSCTL_SET_SPARSE, for the sparse-file tests.
 	"Win32_System_Ioctl",
-	# The FILE_* file-system flags, which the crate names locally (M16.9) and tests against.
+	# The FILE_* file-system flags, which the crate names locally (M17.9) and tests against.
 	"Win32_System_SystemServices",
 ]

@@ -9,7 +9,7 @@
 
 use super::*;
 
-impl<T, X> IoRing<T, X> {
+impl<T, X, K> IoRing<T, X, K> {
     /// The version this ring was created at.
     #[must_use]
     pub fn version(&self) -> RingVersion {
@@ -235,7 +235,9 @@ impl<T, X> IoRing<T, X> {
 
         // SAFETY: `self.handle` is a live ring; `event` is a live event that
         // this ring will own for the rest of its life once stored below.
-        let hr = unsafe { crate::sys::set_completion_event(self.handle, event.as_raw_handle()) };
+        let hr = unsafe {
+            crate::sys::set_completion_event(self.ring_id(), self.handle, event.as_raw_handle())
+        };
         // On failure `event` drops here, closing a handle the ring never
         // successfully referenced.
         check(hr)?;
@@ -417,6 +419,24 @@ impl<T, X> IoRing<T, X> {
         self.late_read.file_handles.as_ptr()
     }
 
+    /// Keep the files a safe file registration queued for the rest of the
+    /// ring's life (M30.2, [D-81](../../DESIGN-NOTES.md#d-81)). `Drop`
+    /// releases them after `CloseIoRing` on a quiesced rundown, and leaks
+    /// them otherwise.
+    ///
+    /// Called only once the registration has queued: a refused one hands its
+    /// files back instead, since the kernel never saw their handles.
+    pub(crate) fn hold_registered_shared_files(
+        &mut self,
+        files: Vec<win_shared_os_owned_handle::SharedHandle>,
+    ) {
+        debug_assert!(
+            self.registered_files.is_empty(),
+            "a ring accepts at most one file registration, so this must only be set once"
+        );
+        *self.registered_files = files;
+    }
+
     /// Release the buffer array held for a `BuildIoRingRegisterBuffers` call
     /// that then failed.
     ///
@@ -541,7 +561,10 @@ impl<T, X> IoRing<T, X> {
     pub unsafe fn push_raw(
         &mut self,
         build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
-    ) -> io::Result<usize> {
+    ) -> io::Result<usize>
+    where
+        K: AllowsRaw,
+    {
         let user_data = self.reserve_user_data()?;
         let hr = build(self.handle, user_data);
         if let Err(error) = check(hr) {
@@ -671,6 +694,17 @@ impl<T, X> IoRing<T, X> {
             if remaining.is_zero() {
                 return Ok(false);
             }
+            // Reap before waiting, once the bound has said to wait at all: `SubmitIoRing` with a
+            // wait reports `IORING_E_COMPLETION_QUEUE_TOO_FULL` when the completion queue holds as
+            // many completions as it can, whatever it was asked to wait for, and an entry that
+            // failed to submit for the same want of room is still queued behind them. Waiting first
+            // fails the rundown of exactly the ring that most needs one, with the room it wants one
+            // pop away (M39.1; the same rule the completion event's edge states, D-19: drain, then
+            // wait).
+            self.drain_for_rundown()?;
+            if self.is_quiescent() {
+                return Ok(true);
+            }
             // Segments sit inside the caller's period, never outside it: the
             // poll is the shorter of the rundown step and what is left.
             let poll_ms = u32::try_from(remaining.as_millis())
@@ -680,7 +714,9 @@ impl<T, X> IoRing<T, X> {
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
-            let hr = unsafe { crate::sys::submit(self.handle, 1, poll_ms, &raw mut submitted) };
+            let hr = unsafe {
+                crate::sys::submit(self.ring_id(), self.handle, 1, poll_ms, &raw mut submitted)
+            };
             wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }

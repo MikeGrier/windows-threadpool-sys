@@ -6220,3 +6220,332 @@ Opened 2026-10-04. The review found that a raw push could still reach a false qu
       `kernel-seam` tests in `ring::tests` that forge the kernel's answer -- never minted,
       duplicate, the minted control, and the unwind case -- and by the two `D-79` cases in
       [sabotage.json](sabotage.json).
+
+## Moved 2026-10-05 19:58:47 -04:00 -- M30.1, a refused push hands back what it was given
+
+### <a id="m301"></a>M30.1 -- A refused owned push hands back its payload and sidecar in a `PushRefused`. *(completed 2026-10-05 19:58:47 -04:00)*
+
+The decision is [D-80](DESIGN-NOTES.md#d-80). Points recorded only here:
+
+- **Scope widened by one method, on the item's own wording.** `register_buffers` takes ownership
+  of the caller's buffers and dropped them on refusal, including on a full queue, which it
+  documents a retry for. It is an owned push by the item's definition, so it returns
+  `PushRefused<Vec<B>, ()>`. Its length checks now run before any address is taken, so a
+  refusal can still hand the `Vec` back whole.
+- **Not covered: a registration whose completion fails.** `PendingBufferRegistration::claim_if`
+  still drops the buffers when the registration op completes with an error (D-18). That is not a
+  refused push: the kernel saw the addresses, and the claim is what proves it has finished
+  with them. Whether it should hand them back is a separate question, left open.
+- **Not covered by a test: the `Unsupported` refusal.** Every ring on the development machine
+  supports every op a push requires, so no test can produce that refusal on demand. It returns
+  through the same `refuse!` macro as the oversized-buffer and foreign-registration refusals,
+  and those are tested; the "a refusal before the build drops the payload" sabotage case
+  patches the macro once for all of them.
+- **Breaking-change reach.** No crate outside `windows-ioring-sys` calls an owned push. Inside,
+  `?` and `.expect(..)` absorbed nearly every call site. The ones that changed read `.kind()`
+  off the error, which is now `refused.error.kind()`; `ring_copy`'s `submit_one` gained an
+  `io::Error: From<E>` bound.
+
+## Moved 2026-10-05 20:09:31 -04:00 -- M30 complete: M30.2, safe file registration
+
+M30 was opened from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+"DI-2.2: what the ring crate cannot give dioring safely") to close two gaps in the safe surface,
+fixed here rather than in a wrapper crate by the engineer's direction. `M30.1` is archived
+[above](#m301).
+
+### <a id="m302"></a>M30.2 -- `Batch::register_shared_files` registers files safely, with the ring holding them for its life. *(completed 2026-10-05 20:09:31 -04:00)*
+
+The decision is [D-81](DESIGN-NOTES.md#d-81). Points recorded only here:
+
+- **The release does not wait on the close succeeding**, although the item's target said it
+  "waits for the close". It still happens *after* `CloseIoRing`; it is just not conditional on
+  the close's result. A quiesced ring has nothing in flight that could use a handle. Gating on the
+  close's success would also leave the rundown gate untestable: the only ring whose rundown can
+  be made to fail on demand is the null-handle one, whose close always fails too.
+- **The "released after the close" ordering has no test.** No observation can distinguish a
+  handle closed just before `CloseIoRing` from one closed just after. It is argued in D-81 and
+  in the comment at the release.
+- **Naming left to the engineer.** M8.6's convention would give the safe method the plain name
+  `register_files` and rename the `unsafe` one to `register_files_raw`. That breaks every caller,
+  so this item stayed additive as planned.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M2` -> `DI-2.2` (composition with `IoRing<T, X>`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-07 16:18:25 -04:00 -- M31.3: `SharedFile` gives way to `SharedHandle`
+
+### <a id="m313"></a>M31.3 -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. *(completed 2026-10-07 16:18:25 -04:00)*
+
+Planned as an alias (`pub type SharedFile = SharedHandle`); the engineer chose
+removal instead, landed on `main` in #119 as a breaking change, and recorded as
+[D-82](DESIGN-NOTES.md#d-82). The M30 additions that existed only on the
+durable-ioring branch -- `register_shared_files`, its bookkeeping and tests, and
+the `PushRefused` example -- moved to `SharedHandle` when that branch merged
+`main`, and [D-81](DESIGN-NOTES.md#d-81) carries an amendment marker. The
+both-directions lifetime test is
+`the_rings_hold_on_a_shared_handle_ends_when_the_pop_retires_it` in
+[ring_owned_inventory.rs](tests/ring_owned_inventory.rs), beside the existing
+test for the other direction; a leaked guard is recorded in
+[sabotage.json](sabotage.json) and was verified caught by it.
+
+## Moved 2026-10-07 17:12:55 -04:00 -- M31.1: the delivery callback's contract is stated
+
+### <a id="m311"></a>M31.1 -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. *(completed 2026-10-07 17:12:55 -04:00)*
+
+The decision is [D-83](DESIGN-NOTES.md#d-83); the statement a consumer binds to is
+`EventDelivery::new`'s "What `on_completion` may rely on". The re-entrancy test is
+`a_callback_may_open_a_scope_and_submit` in
+[event_delivery.rs](tests/event_delivery.rs): the first read's callback reaches the
+delivery through a `Weak` and submits a second read. It deliberately does not use the
+file's `recv_one`, whose post-mortem reads the ring's count under the very lock a
+regression would leave held, and it leaks the delivery on panic so the deadlocked
+callback fails the test instead of hanging its teardown. The sabotage that holds the
+lock across the callback is in [sabotage.json](sabotage.json), and a harness run
+recorded it caught by that test alone, at the bound rather than by a hang. Overlap is
+stated, not tested, as the item required.
+
+The item as it stood at completion:
+
+- **Re-entrancy:** `on_completion` is called with the ring's lock released, so it may call
+  `EventDelivery::scope` and submit without deadlocking.
+- **Concurrency:** two invocations may run at once on different pool threads, and completions
+  handed to concurrent invocations carry no order relative to each other. A consumer that needs
+  an order must impose it. The drain-rearm-drain shape is what produces the overlap.
+- Both go in `EventDelivery::new`'s rustdoc, and in [DESIGN-NOTES.md](DESIGN-NOTES.md) as a
+  decision, so a later change to the delivery loop has a stated contract to answer to.
+- **Tests, in both directions:** a callback that calls `scope()` and pushes completes, which a
+  lock held across the callback would turn into a deadlock -- run it with a bounded wait so a
+  regression fails rather than hangs. The concurrency statement is a permission, not a
+  promise, so it is asserted by documentation; do not write a test that requires overlap to be
+  observed.
+- **Sabotage:** hold the ring lock across `on_completion` in `drain`, and confirm the
+  re-entrancy test fails.
+
+## Moved 2026-10-11 10:30:59 -04:00 -- M33.1: a wake-only delivery
+
+### <a id="m331"></a>M33.1 -- `CompletionWake`: the thread pool wakes an owner, who drains its own ring; `EventDelivery` re-expressed on it, so the delivery protocol is written once. *(completed 2026-10-11 10:30:59 -04:00)*
+
+The decision is [D-84](DESIGN-NOTES.md#d-84), raised by durable-ioring's [DI-D-53](../durable-ioring/DESIGN-NOTES.md#di-d-53). `src/completion_wake.rs` holds the wake and the protocol moved out of `EventDelivery`; `src/completion_wake/tests.rs` pins delivery after the wake is built, the setup signal's call with nothing queued and its reach of a backlog, submitting from inside a call, and silence after the drop. `EventDelivery`'s own tests, and its two contract sabotages, are the proof the re-expression keeps its contract. The assistant's choices are queued for review as `M33.2`. The item as it stood at completion:
+
+**`CompletionWake`: the thread pool wakes an owner, and the owner drains its own
+  ring** ([D-84](DESIGN-NOTES.md#d-84)). A wake built over `&mut IoRing`, calling the owner's
+  closure on a pool thread, holding no reference to the ring and no lock while it does, with an
+  optional callback environment; the protocol -- attach unsignalled, arm, raise the setup signal;
+  call, re-arm, call -- moved out of `EventDelivery` into it, and `EventDelivery` re-expressed on
+  it, so the protocol is written once. Its contract stated in rustdoc: drain to empty on every call
+  (D-19), a call with nothing to pop is normal, calls may overlap (D-83), one waiter per ring
+  (D-21), and never dropped from inside a call. Tested: a completion after the wake is delivered, a
+  backlog before it is delivered by the setup signal, the owner may submit from inside a call, and
+  nothing is called after the wake is dropped; `EventDelivery`'s own tests are the proof the
+  re-expression keeps its contract, and the sabotages anchored in its moved code re-anchored.
+
+## Moved 2026-10-11 11:50:59 -04:00 -- M34.1: a registration's span check
+
+### <a id="m341"></a>M34.1 -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. *(completed 2026-10-11 11:50:59 -04:00)*
+
+Raised by durable-ioring's `DI-3.10.3.5.6.2.1`: its core holds a gated operation until the gate is durable and pushes it then, so a span the registration does not contain has to be refused when the operation is accepted, not at a push nobody is waiting on. `check_span` is `checked_span`, the private check every span push already makes, made public; it adds no rule of its own. `check_span_answers_what_a_push_against_the_span_does` in `tests/registration.rs` binds it to the push both ways, span by span -- every span it accepts a push accepts, and every span it refuses a push refuses, with the same kind -- and the two `M34.1` sabotages, one accepting every span and one refusing every span, are each caught.
+
+## Moved 2026-10-11 18:03:39 -04:00 -- M35.1: a kernel responder registered for one ring
+
+### <a id="m351"></a>M35.1 -- A responder registered for one ring, answering its calls on any thread, ending at the ring's drop after its rundown or at `Registration::end`. *(completed 2026-10-11 18:03:39 -04:00)*
+
+Per [D-85](DESIGN-NOTES.md#d-85). `sys::register(&ring, responder)` registers a `Responses + Send`
+in a process-wide registry keyed by the ring's `RingId`; every seam wrapper now takes the ring's id
+beside its handle, and a ring's responder is consulted before a thread's. A responder is not
+consulted re-entrantly for its own ring, and a panicking one neither wedges its ring nor poisons the
+dispatch. `IoRing`'s `Drop` ends the registration after its rundown and before `CloseIoRing`. **One
+departure from the item as written:** the item said a guard dropped early would end the
+registration; instead **dropping the `Registration` ends nothing**, and `Registration::end` ends it
+explicitly, handing the responder back -- because locals drop in reverse order, a drop-ending guard
+would end before the ring's rundown in the ordinary `let ring; let registration;` shape, the very
+hazard the form removes. Recorded in `D-85`. `Resolver` is `Send`: its stats are an `Arc<Mutex<..>>`
+and its completion event a `Send` wrapper; `ResolverWatch` keeps its API. Tests: ten unit tests of
+the registry in `sys/registered/tests.rs`, which open no ring, and four in
+[tests/responder_per_ring.rs](tests/responder_per_ring.rs) over real rings -- a submit on another
+thread answered, another ring not, the rundown answered then the registration ended, and a later
+ring not answered by a dropped one's registration. Eight sabotages behave as declared, one refused
+by the build, and a control survives. The item as it stood at completion:
+
+**A responder registered for one ring** ([D-85](DESIGN-NOTES.md#d-85)), under the `kernel-seam`
+feature: keyed by the ring's `RingId`, answering that ring's seam calls on whatever thread makes
+them; a ring with none going to the kernel. The responder is `Send`, so `Resolver` is made `Send`:
+its stats are shared through `Rc<RefCell<..>>` (`ResolverWatch`), and it keeps the completion event
+as a raw pointer. A registration ends when its ring drops, after the ring's rundown, so a responder
+holding operations still answers the rundown that pops them; a guard may end it earlier. The seam's
+wrappers in [sys.rs](src/sys.rs) are handed a raw handle today, so they must learn which ring a call
+is for. Tests, each direction asserted: a ring's responder answers its calls from a thread other
+than the one that registered it; it does not answer another ring's; left alone, a registration ends
+at the ring's drop, after answering the rundown; its guard dropped first ends it then; and after it
+ends the ring reaches the kernel. Sabotages for each, in [sabotage.json](sabotage.json).
+
+## Moved 2026-10-11 18:30:44 -04:00 -- M35.2, completing M35: the kernel responder registered for one ring only
+
+### <a id="m352"></a>M35.2 -- The thread-local responder removed: every user moved to the per-ring form, `sys::install` and `Installed` deleted. *(completed 2026-10-11 18:30:44 -04:00)*
+
+Per [D-85](DESIGN-NOTES.md#d-85), completing M35. `Resolver::scoped` is replaced by
+`Resolver::register(&ring) -> ResolverWatch`, called straight after the ring is created; the one
+ordering requirement the resolver still states is to be registered before the ring's first
+operation, the other -- outliving the rundown -- being the registration's own now. The ten `scoped`
+sites in `calibration.rs`, `properties_under_every_resolution.rs` and `resolver_over_a_real_ring.rs`
+became blocks that register after creating the ring; `Stalled`, and the four forged-completion
+tests, register on their ring, and those that `mem::forget` their ring end the registration by hand
+first. The transparency test now asks whether a resolver registered for one ring leaks onto another.
+`sys/installed.rs` became `sys/responses.rs` (`git mv`), keeping the `Responses` trait and losing
+the thread-local install; its tests went, each property they held being one `sys/registered`'s tests
+hold for a ring, and M35.1's precedence test went with the precedence. Sabotages: `M26.2`'s
+re-anchored on the ring dispatch; M35.1's precedence entry retired; and two `M26.3` entries
+re-anchored that M35.1 had broken, by rewriting the resolver lines they patch without checking the
+manifest. A breaking change to the `kernel-seam` surface shipped in 0.7.0. The item as it stood at
+completion:
+
+**The thread-local responder removed** ([D-85](DESIGN-NOTES.md#d-85)): every user moved to the
+per-ring form -- `Resolver::scoped`, which installs before its ring exists and so registers once the
+ring is made; the property test `Stalled`; the forged-completion tests in
+[ring/tests.rs](src/ring/tests.rs); and the seam's own tests in `sys/installed` -- then
+`sys::install` and `Installed` deleted, a breaking change to the `kernel-seam` surface shipped in
+0.7.0, committed as `feat(ioring)!`. The sabotages that pinned the thread-local form are retired or
+re-anchored with it.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-11 22:22:15 -04:00 -- M36.1, completing M36: `CompletionWake`'s tests moved to `tests/`
+
+### <a id="m361"></a>M36.1 -- The five `completion_wake::` lib tests moved to an integration test, and the ring-opening inventory check passing again. *(completed 2026-10-11 22:22:15 -04:00)*
+
+Five tests `M33.1` added as lib tests opened a real ring and waited on the thread pool using only
+public API, so `tools/check-ring-tests.ps1` failed on them. Moved by `git mv` to
+[tests/completion_wake.rs](tests/completion_wake.rs), gated on `threadpool`; the check passes with
+the inventory unchanged, and the entry is moved to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). One sabotage rationale named the old path
+and now names the new. The item as it stood at completion:
+
+**The five `completion_wake::` lib tests moved to an integration test**, since they use only public
+API (`M24.3`), and the check passing again with the inventory unchanged. The entry moves to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in the same commit.
+
+## Moved 2026-10-11 23:20:20 -04:00 -- M37.1, completing M37: a safe responder that fails a ring's submits
+
+### <a id="m371"></a>M37.1 -- `sys::submit_faults()`: a safe responder that fails a ring's submits on demand, for a consumer that forbids `unsafe`. *(completed 2026-10-11 23:20:20 -04:00)*
+
+Per [D-86](DESIGN-NOTES.md#d-86). `SubmitFaults` and `SubmitFaultControl` in `sys/submit_faults.rs`,
+under both `kernel-seam` and `fault-injection`; `InjectedFailure::as_hresult` became crate-visible
+for it, and `submit_faults` compiles away when either feature is missing. A failing submit returns
+without reaching the kernel, so entries stay queued; its out-parameter is left untouched, the real
+call's being undocumented. `failures()` reports each failed call's thread, so a test can show a
+failure was answered off its own thread. Tests: eleven unit tests that call the responder directly
+and open no ring, a doctest that runs the usage, and one real-ring test in
+[tests/submit_faults.rs](tests/submit_faults.rs) showing a failed submit leaves the entry queued,
+the kernel never sees it, a pop still reaches the kernel, and the next submit runs it. Seven
+sabotages caught and a control survives. Not provided, by decision: a safe general `Responses`. The
+item as it stood at completion:
+
+**`sys::submit_faults()`**, under both `kernel-seam` and `fault-injection`: a `SubmitFaults`
+responder, for `sys::register`, that fails the ring's submits on demand and forwards every other
+call to the kernel, and a `SubmitFaultControl` handle -- `Clone`, `Send` and `Sync` -- that arms it
+from any thread: `fail_next(count, failure)`, `fail_until_cleared(failure)` and `clear()`, the
+failure an `InjectedFailure`, which is a failure by construction and is checked when it is armed. A
+failing submit returns the failure without reaching the kernel, so the entries stay queued, as
+`SubmitIoRing` documents ([RS-P-7](RESPONSE-SPACE.md)); `failures()` reports the thread that made
+each failed call, so a test can show a failure was answered on a thread other than its own. A submit
+that waits is failed too, so a ring dropped with the fault armed and operations outstanding cannot
+run down: the fault is cleared first. Tests, each direction asserted: armed, a submit fails with the
+injected code and a clear stops it; a count fails exactly that many; the thread of each failure is
+reported; a failed submit leaves the entry queued on a real ring, and the next submit runs it.
+Sabotages for each, in [sabotage.json](sabotage.json). A decision row records why the responder is
+safe rather than implemented by its consumers.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.1` (failed submissions reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 12:02:28 -04:00 -- M38.1, completing M38: a safe responder that fails any seam call, a completion's result, or stalls submits
+
+### <a id="m381"></a>M38.1 -- `sys::call_faults()`: a safe responder that fails any seam call, a popped completion's result, or stalls submits, with `submit_faults()` its submit-only name. *(completed 2026-10-12 12:02:28 -04:00)*
+
+Per [D-87](DESIGN-NOTES.md#d-87). `CallFaults`, `CallFaultControl` and `Call` in `sys/call_faults.rs`
+(`submit_faults.rs` renamed, its history following), under both `kernel-seam` and `fault-injection`;
+`submit_faults()` now returns the same responder with a control narrowed to submits, so durable-ioring's
+`DI-7.1` tests compile unchanged. A stalled submit never reaches the kernel until the stall ends, after
+which submits run what is queued, so a ring dropped mid-stall still runs down; withholding completions
+was rejected because `SubmitIoRing(wait)` then fails with `E_INVALIDARG`. Tests: unit tests that call
+the responder directly and open no ring, two running doctests, and seven real-ring tests in
+[tests/call_faults.rs](tests/call_faults.rs): a refused file-registration build and a retry that
+registers, a refused buffer-registration build handing the buffers back, a failed completion keeping its
+identity with the accounting balanced, a cleared completion plan, a failed pop reported once, a stalled
+submit leaving the write unrun until the stall ends, and a ring dropped during a stall running down.
+Twelve new sabotages and the seven M37.1 ones re-anchored, all caught, and the control survives. The
+sweep found one hole: the failed completion was the first popped, and zeroing its identity named the
+same operation, so the test now fails the last of three in flight. The item as it stood at completion:
+
+**`sys::call_faults()`**, under both `kernel-seam` and `fault-injection`: a
+`CallFaults` responder, for `sys::register`, and a `CallFaultControl` handle, `Clone + Send + Sync`,
+that arms it from any thread. **A call fails**: `fail_next(call, count, failure)` and
+`fail_until_cleared(call, failure)`, for every call the seam carries -- `Call::Submit`, `Pop`,
+`BuildRead`, `BuildWrite`, `BuildFlush`, `BuildCancel`, `BuildRegisterFiles`,
+`BuildRegisterBuffers` and `SetCompletionEvent` -- with an `InjectedFailure`, returned without
+reaching the kernel; `failures(call)` reports the thread of each. **A completion fails**:
+`fail_next_completions(count, failure)` pops the real completion and rewrites its result code,
+the identity and the rest untouched, as `Completion::with_injected_failure` does for a popped
+one. **A submit stalls**: `stall_submits(duration)` makes a submit return without reaching the
+kernel -- success with nothing submitted if it does not wait, `IORING_E_WAIT_TIMEOUT` after its
+wait or what is left of the stall if it does -- until `duration` has passed since the first it
+stalled, after which submits reach the kernel and run everything queued: the platform's
+permission to leave an operation pending (RS-P-1), so a bounded wait for its completion
+expires, and a ring dropped meanwhile still runs down once the stall ends. `clear()` ends all of
+it. `submit_faults()` stays, its control narrowed to submits over the same responder, so
+there is one implementation and two ways to name it. Tests, each direction asserted: every call
+fails when armed and only that call; counts; the thread of each failure; a completion's result
+failed exactly that many times with its identity intact; a stalled submit leaving an operation
+unrun until the stall ends, then running it; and a refused `BuildRegisterFiles`,
+`BuildRegisterBuffers` and `SetCompletionEvent` on a real ring. Sabotages for each, in
+[sabotage.json](sabotage.json). A decision row records the widening of `D-86`.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M7` -> `DI-7.2` (construction's registration paths reached by tests). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-12 15:05:39 -04:00 -- M39.1: rundown reaps before it waits
+
+### <a id="m391"></a>M39.1 -- `run_down_within` reaps the completion queue before its submit-wait, so a ring whose queue is full runs down. *(completed 2026-10-12 15:05:39 -04:00)*
+
+Found, not planned: durable-ioring's blocking-push example filled a pumped instance's queues and
+dropped it, and the ring's rundown failed with `IORING_E_COMPLETION_QUEUE_TOO_FULL`, tripping the
+debug assertion in `Drop`. Per [D-88](DESIGN-NOTES.md#d-88). `SubmitIoRing` with a wait reports that
+error when the completion queue is full whatever it waits for, and an entry whose submit failed for
+the same want of room stays queued behind the completions; rundown waited and then reaped, so it
+could never get the room it needed. It now reaps once the bound has said to wait, and re-checks
+quiescence, before the submit-wait -- not before the bound check, since a zero bound makes no kernel
+call and the unit tests of a ring whose handle the kernel refuses pin that. Reproduced first, by
+[tests/run_down_full_queue.rs](tests/run_down_full_queue.rs): a ring whose queue is full with an entry
+still queued runs down, runs down within a bound, and drops cleanly, all three failing before the
+change. A first attempt, which reaped before the quiescence check, broke four unit tests over the
+null-handle ring and was moved. One sabotage is added, and the existing `M26.8` entry re-anchored,
+its pattern now occurring twice.
+
+## Moved 2026-10-13 23:22:30 -04:00 -- M40.1: a batch left queued
+
+### <a id="m401"></a>M40.1 -- `Batch::leave_queued`: close a batch without submitting what it queued. *(completed 2026-10-13 23:22:30 -04:00)*
+
+Decision [D-90](DESIGN-NOTES.md#d-90). A batch submits on drop ([D-5](DESIGN-NOTES.md#d-5)), which reports
+nothing and submits once per batch; durable-ioring's threadless backend wants to queue what it is
+pushed, ring the doorbell once for a batch, and see a failure of it. `leave_queued` marks the batch as
+already submitted so the drop does not, leaving the entries queued with their buffers held by the ring,
+as a failed `Batch::submit` leaves them. Tested in
+[submission_lifecycle.rs](tests/submission_lifecycle.rs): a read left queued does not complete, polled
+with `try_pop` since `pop_within`'s own wait is a submit, until a later submit issues it. One sabotage
+entry, caught: without the mark the drop submits.
+
+## Moved 2026-10-14 17:17:20 -04:00 -- M41.1: a ring typed by whether it can hold nothing for an operation
+
+### <a id="m411"></a>M41.1 -- `IoRing<T, X, K>` with `K` `Open` or `Owned`, and `IoRing::into_owned`: a ring that cannot have an operation in flight it holds nothing for. *(completed 2026-10-14 17:17:20 -04:00)*
+
+Decision [D-91](DESIGN-NOTES.md#d-91). A registration, the `_raw` flush and cancel and `push_raw` queue an
+operation the ring holds nothing for, so a pop can return a completion with no entry -- legitimate for a
+caller who chose it, and a branch every other caller wrote and could not reach. A ring now has a kind, and
+an `Owned` one has no call that queues such an operation and pops what it held without the case of nothing.
+
+- **Built**: [kind.rs](src/ring/kind.rs) (`Open`, `Owned`, the sealed `RingKind` with its `Popped` type,
+  and `AllowsRaw`); the kind parameter on `IoRing` and `Batch`, defaulted so `IoRing<T, X>` is still the
+  open ring; `where K: AllowsRaw` on the five `Batch` methods and `push_raw`; `into_owned`, which refuses
+  while `outstanding()` exceeds `held()` and hands the ring back; `CompletionWake::new` and the responder
+  registrations take either kind.
+- **Tested** in [owned_ring.rs](tests/owned_ring.rs) and by `compile_fail` doctests on `AllowsRaw` whose
+  pinned codes were checked under `RUSTC_BOOTSTRAP=1`; the sabotage entries are caught, and the panic an owned
+  ring makes for a completion it held nothing for is a declared blind spot.
+- **Borrow-surface audit**: `Batch::new` and `CompletionWake::new` re-asked, unchanged.

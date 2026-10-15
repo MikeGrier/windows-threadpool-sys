@@ -10,7 +10,7 @@ fn every_query_has_a_distinct_name() {
     assert_eq!(names.len(), OBSERVER_QUERIES.len());
 }
 
-/// Measured (M16.6): on a local file every query answers but the remote one.
+/// Measured (M17.6): on a local file every query answers but the remote one.
 #[test]
 fn every_query_answers_on_a_local_file_but_the_remote_one() {
     let path = std::env::temp_dir().join(format!(
@@ -34,7 +34,7 @@ fn every_query_answers_on_a_local_file_but_the_remote_one() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Measured (M16.8): a named pipe has a path only as opened, under its NT name or
+/// Measured (M17.8): a named pipe has a path only as opened, under its NT name or
 /// no volume -- the one place the `final_path_as` rows answer differently, so it
 /// checks each row passes its own arguments.
 #[test]

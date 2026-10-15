@@ -24,10 +24,10 @@ read through the held handle.
   the reads iteration. A failed open is an error carrying the Win32 error code.
   ([TW-D-3](DESIGN-NOTES.md#tw-d-3), [TW-D-10](DESIGN-NOTES.md#tw-d-10))
 
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-overlapped-io-sys` -> `M15` -> `M15.5`
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-overlapped-io-sys` -> `M16` -> `M16.5`
   > (endpoints share their handle with observers, with the observer's length query and tests) must
   > land first. Landed; see that crate's
-  > [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m155).
+  > [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m165).
 
 - [ ] **TW-1.3** -- **Read the current length through an observer.** ([TW-D-2](DESIGN-NOTES.md#tw-d-2))
 

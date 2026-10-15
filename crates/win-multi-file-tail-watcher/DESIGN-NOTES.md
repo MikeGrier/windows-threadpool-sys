@@ -170,7 +170,7 @@ How roster changes between stop and resume are handled is a working position, be
 
 ## TW-D-10: one crate, endpoints and observers
 
-**Amended 2026-10-14:** this decision first held each handle as a bare `SharedHandle`; M15.1 in
+**Amended 2026-10-14:** this decision first held each handle as a bare `SharedHandle`; M16.1 in
 windows-overlapped-io-sys replaced that with observers, below.
 
 - **Everything is one crate**, whatever its internal layers. Changes it drives in other crates are
@@ -183,9 +183,9 @@ windows-overlapped-io-sys replaced that with observers, below.
   the file's length, and can never become a second endpoint. A poll takes its own observer, which is
   what lets it probe with no lock held ([TW-D-7](#tw-d-7)) while registration and unregistration
   proceed ([TW-D-8](#tw-d-8)). The handle closes when the last holder drops.
-- **This makes windows-overlapped-io-sys' M15 a prerequisite of iteration 1**, not only of reads: the
-  observer and its length query come from M15.2 and M15.3, archived in its
-  [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m152). The decision and its alternatives are in
+- **This makes windows-overlapped-io-sys' M16 a prerequisite of iteration 1**, not only of reads: the
+  observer and its length query come from M16.2 and M16.3, archived in its
+  [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m162). The decision and its alternatives are in
   that crate's [DESIGN-NOTES.md](../windows-overlapped-io-sys/DESIGN-NOTES.md) -> "observers share the
   handle; only the endpoint does I/O".
 

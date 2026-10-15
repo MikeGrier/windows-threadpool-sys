@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use windows_sys::Win32::System::Threading::{ResetEvent, SetEvent};
+use win_sync_sys::{Event, ResetMode};
+use windows_sys::Win32::Foundation::{CompareObjectHandles, FALSE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Threading::{ResetEvent, SetEvent, WaitForSingleObject};
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
@@ -125,6 +127,103 @@ fn the_wait_exposes_its_handle() {
     // Signalling through the borrowed handle must succeed, proving the object
     // kept it open.
     signal(wait.handle());
+}
+
+// --- events from win-sync-sys (M-T14.1) ---
+
+/// Whether the handle is signalled now, without waiting. Consumes an
+/// auto-reset event's signal, as any satisfied wait does.
+fn take(handle: std::os::windows::io::BorrowedHandle<'_>) -> bool {
+    // SAFETY: a borrowed handle is open for the borrow's lifetime.
+    match unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } {
+        WAIT_OBJECT_0 => true,
+        WAIT_TIMEOUT => false,
+        other => panic!("WaitForSingleObject returned {other:#x}"),
+    }
+}
+
+fn same_object(a: std::os::windows::io::BorrowedHandle<'_>, b: &Event) -> bool {
+    // SAFETY: both handles are open for the duration of the borrows.
+    unsafe { CompareObjectHandles(a.as_raw_handle(), b.as_raw_handle()) != FALSE }
+}
+
+#[test]
+fn the_conversion_keeps_the_event_it_was_given() {
+    let event = Event::new(ResetMode::Manual, false).expect("create an event");
+    let kept = event.try_clone().expect("clone");
+    let other = Event::new(ResetMode::Manual, false).expect("create another");
+    let waitable = WaitableHandle::from(event);
+    assert!(
+        same_object(waitable.handle(), &kept),
+        "the wait target is the event given"
+    );
+    assert!(
+        !same_object(waitable.handle(), &other),
+        "and the comparison can tell two events apart"
+    );
+}
+
+#[test]
+fn a_converted_auto_reset_event_stays_auto_reset() {
+    let event = Event::new(ResetMode::Auto, false).expect("create an event");
+    let kept = event.try_clone().expect("clone");
+    let waitable = WaitableHandle::from(event);
+    kept.set().expect("set through the kept clone");
+    assert!(take(waitable.handle()), "the target saw the set");
+    assert!(!take(waitable.handle()), "one wait took the signal");
+}
+
+#[test]
+fn a_converted_manual_reset_event_stays_manual_reset() {
+    let event = Event::new(ResetMode::Manual, false).expect("create an event");
+    let kept = event.try_clone().expect("clone");
+    let waitable = WaitableHandle::from(event);
+    kept.set().expect("set through the kept clone");
+    assert!(take(waitable.handle()), "the target saw the set");
+    assert!(take(waitable.handle()), "a wait did not take the signal");
+}
+
+#[test]
+fn the_event_constructor_makes_each_reset_mode_and_initial_state() {
+    for (manual_reset, initially_signalled) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let case =
+            format!("manual_reset {manual_reset}, initially_signalled {initially_signalled}");
+        let waitable =
+            WaitableHandle::event(manual_reset, initially_signalled).expect("create an event");
+        assert_eq!(
+            take(waitable.handle()),
+            initially_signalled,
+            "{case}: initial state"
+        );
+        signal(waitable.handle());
+        assert!(take(waitable.handle()), "{case}: signalled");
+        assert_eq!(
+            take(waitable.handle()),
+            manual_reset,
+            "{case}: whether a wait took the signal"
+        );
+    }
+}
+
+#[test]
+fn a_wait_built_from_an_event_fires_when_a_kept_clone_is_set() {
+    let event = Event::new(ResetMode::Auto, false).expect("create an event");
+    let kept = event.try_clone().expect("clone");
+    let seen = Activations::new();
+    let recorder = Arc::clone(&seen);
+    let wait = ThreadpoolWait::new(
+        event.into(),
+        move |activation| recorder.record(activation.result()),
+        None,
+    )
+    .expect("create wait");
+    wait.arm(None);
+    kept.set().expect("set through the kept clone");
+    let results = seen.wait_for(1);
+    wait.wait();
+    assert_eq!(results, vec![WaitResult::Signalled]);
 }
 
 // --- signalled activation ---

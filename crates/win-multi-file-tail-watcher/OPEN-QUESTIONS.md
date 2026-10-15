@@ -74,7 +74,7 @@ placeholders from a first sketch in the session file, not chosen names. Naming i
   crate; (c) two handles per file, one for probing and one for reads.
 
   Answer: (b). windows-overlapped-io-sys needs reworking around the shared handle type. Queued
-  there as M15 in its [CHECKLIST.md](../windows-overlapped-io-sys/CHECKLIST.md), investigation first.
+  there as M16 in its [CHECKLIST.md](../windows-overlapped-io-sys/CHECKLIST.md), investigation first.
   [Session](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q30-the-endpoint-holds-a-sharedhandle)
 
 - **Q11. Withdrawn.** It assumed lengths only grow; per Q5 they need not.

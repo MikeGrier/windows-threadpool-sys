@@ -4,7 +4,7 @@ use windows_sys::Win32::Foundation::{
     IORING_E_SUBMIT_IN_PROGRESS, IORING_E_VERSION_NOT_SUPPORTED,
 };
 
-use super::{IoRingError, IoRingErrorExt, RingCondition, check};
+use super::{IoRingError, IoRingErrorExt, PushRefused, RingCondition, check};
 
 /// Every condition this crate names, for the round-trip and agreement tests.
 /// Listed explicitly rather than iterated, because `RingCondition` is
@@ -231,4 +231,61 @@ fn the_io_error_extension_claims_nothing_for_an_unrelated_error() {
     assert!(!unrelated.is_submission_queue_full());
     assert!(!unrelated.is_completion_queue_too_full());
     assert!(!unrelated.is_submit_in_progress());
+}
+
+/// A payload and sidecar with no `Debug`, `Display` or `Clone`, so the tests
+/// below prove `PushRefused`'s impls place no bound on either (D-80).
+struct Opaque(u32);
+
+fn queue_full_refusal() -> PushRefused<Opaque, Opaque> {
+    PushRefused::new(
+        check(IORING_E_SUBMISSION_QUEUE_FULL).expect_err("a failure HRESULT"),
+        Some(Opaque(1)),
+        Opaque(2),
+    )
+}
+
+#[test]
+fn a_refusal_keeps_its_payload_and_sidecar() {
+    let refused = queue_full_refusal();
+    assert_eq!(refused.payload.as_ref().map(|payload| payload.0), Some(1));
+    assert_eq!(refused.extra.0, 2);
+}
+
+#[test]
+fn a_refusal_converts_to_the_error_it_carries_unchanged() {
+    let error = std::io::Error::from(queue_full_refusal());
+    assert!(
+        error.is_submission_queue_full(),
+        "the HRESULT must survive the conversion, or `?` loses the ring condition"
+    );
+    assert!(queue_full_refusal().into_error().is_submission_queue_full());
+}
+
+#[test]
+fn a_refusal_displays_its_error() {
+    let refused = queue_full_refusal();
+    let shown = refused.to_string();
+    assert!(
+        shown.contains("IORING_E_SUBMISSION_QUEUE_FULL"),
+        "Display must name the condition: {shown}"
+    );
+}
+
+#[test]
+fn a_refusal_debugs_without_a_debug_payload_and_names_whether_one_came_back() {
+    let with_payload = format!("{:?}", queue_full_refusal());
+    assert!(with_payload.contains("PushRefused"), "{with_payload}");
+    assert!(with_payload.contains("Some"), "{with_payload}");
+    let without: PushRefused<Opaque, Opaque> =
+        PushRefused::new(std::io::Error::other("refused"), None, Opaque(3));
+    let without = format!("{without:?}");
+    assert!(without.contains("None"), "{without}");
+}
+
+#[test]
+fn a_refusals_source_is_the_error_it_carries() {
+    let refused = queue_full_refusal();
+    let source = std::error::Error::source(&refused).expect("a refusal has a source");
+    assert_eq!(source.to_string(), refused.error.to_string());
 }

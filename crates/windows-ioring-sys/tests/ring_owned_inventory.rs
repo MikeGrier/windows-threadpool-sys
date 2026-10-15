@@ -163,6 +163,51 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// The ring's hold on a `SharedHandle` ends when the pop retires the entry
+/// (`M31.3`, D-82).
+///
+/// Both directions, judged by an exclusive open, which Windows refuses while
+/// any handle to the file is open: refused while the ring still holds the
+/// operation after the caller has dropped its clone, and granted once the pop
+/// has retired it. The test above shows the first half working for the kernel;
+/// this one shows the second, which a guard that leaked would fail silently.
+#[test]
+fn the_rings_hold_on_a_shared_handle_ends_when_the_pop_retires_it() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_ioring_sys::SharedHandle;
+
+    let exclusive = |path: &std::path::Path| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+    };
+
+    let (path, file) = fixture("hold-ends");
+    let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
+    let shared = SharedHandle::new(file.into());
+    {
+        let mut batch = Batch::new(&mut ring);
+        batch
+            .read_owned(&shared, vec![0_u8; LEN], (), 0, PushOptions::new())
+            .expect("queue a guarded read");
+    }
+    drop(shared);
+    assert!(
+        exclusive(&path).is_err(),
+        "the ring still holds the file until the pop retires the operation"
+    );
+
+    let popped = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read completes within the bound");
+    drop(popped);
+    drop(exclusive(&path).expect("the last holder is gone, so the file opens exclusively"));
+
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A `_raw` push holds nothing; an `_owned` push holds something (`M28.5`).
 ///
 /// Both directions on one ring, because the claim is about the *difference*
@@ -312,10 +357,15 @@ fn a_cancel_refuses_an_operation_id_minted_by_a_different_ring() {
             .expect_err("an OperationId from another ring must be refused")
     };
     assert_eq!(
-        refused.kind(),
+        refused.error.kind(),
         std::io::ErrorKind::InvalidInput,
         "a foreign identity is bad input, not a kernel failure"
     );
+    assert_eq!(
+        refused.extra, "home",
+        "a refused cancel hands its sidecar back (D-80)"
+    );
+    assert!(refused.payload.is_none(), "a cancel takes no payload");
 
     // The acceptance.
     let home_id = {

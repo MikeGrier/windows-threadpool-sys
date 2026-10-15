@@ -177,8 +177,9 @@ fn the_resolver_breaks_a_consumer_that_believes_the_drain_flag_holds_back() {
                 ..ResolverConfig::narrowest()
             },
         );
-        let outcome = resolver.scoped(|_| {
+        let outcome = {
             let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
+            resolver.register(&ring);
             let (before, flush, after) = {
                 let mut batch = Batch::new(&mut ring);
                 let mut before = Vec::new();
@@ -230,7 +231,7 @@ fn the_resolver_breaks_a_consumer_that_believes_the_drain_flag_holds_back() {
             }
             ring.run_down().expect("rundown");
             believer
-        });
+        };
 
         if outcome.broken_by.is_some() {
             broken += 1;
@@ -299,8 +300,9 @@ fn an_expired_wait_reaches_pop_within() {
                 ..ResolverConfig::narrowest()
             },
         );
-        let expired = resolver.scoped(|watch| {
+        let expired = {
             let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
+            let watch = resolver.register(&ring);
             {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..4 {
@@ -315,7 +317,7 @@ fn an_expired_wait_reaches_pop_within() {
             drain_in_order(&mut ring, 4);
             ring.run_down().expect("rundown");
             watch.stats().expired_waits
-        });
+        };
         if expired > 0 {
             seeds_with_an_expired_wait += 1;
         }
@@ -355,8 +357,9 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
             },
         );
         let replay = resolver.replay_hint();
-        resolver.scoped(|watch| {
+        {
             let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
+            let watch = resolver.register(&ring);
             {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..3 {
@@ -391,7 +394,7 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
             }
             assert_eq!(seen, 3, "{replay}: not every operation completed");
             ring.run_down().expect("rundown");
-        });
+        }
     }
     let _ = std::fs::remove_file(path);
 }

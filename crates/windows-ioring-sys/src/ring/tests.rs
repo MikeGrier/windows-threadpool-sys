@@ -297,6 +297,89 @@ fn a_ring_whose_rundown_fails_keeps_its_registration_arrays() {
     );
 }
 
+// --- The registered files outlive the ring (M30.2, D-81) ---
+//
+// `Batch::register_shared_files` hands the ring files whose handles the kernel
+// may reference for the ring's whole life. `Drop` releases them only on a
+// quiesced rundown, after `CloseIoRing`, and leaks them otherwise. The two
+// tests below use the null-handle ring, whose close the kernel refuses: the
+// release must not depend on the close succeeding, or a quiesced ring with a
+// failed close would leak every file it registered.
+
+/// Two real file handles, to stand for a registration's files. No SQE is ever
+/// built from them; they are only something for `Drop` to decide about.
+fn two_shared_files() -> Vec<win_shared_os_owned_handle::SharedHandle> {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    (0..2)
+        .map(|_| {
+            let file = std::fs::File::open(&exe).expect("open the test binary for read");
+            win_shared_os_owned_handle::SharedHandle::new(std::os::windows::io::OwnedHandle::from(
+                file,
+            ))
+        })
+        .collect()
+}
+
+/// As [`the_registration_arrays_are_never_dropped_by_the_compiler`]: only the
+/// field's type stops the compiler freeing the files on the failed-rundown
+/// path, so the type is what this pins.
+#[test]
+fn the_registered_files_are_never_dropped_by_the_compiler() {
+    fn pinned(
+        ring: &IoRing,
+    ) -> &std::mem::ManuallyDrop<Vec<win_shared_os_owned_handle::SharedHandle>> {
+        &ring.registered_files
+    }
+    let _ = pinned;
+}
+
+/// The accepting direction: a quiesced ring releases every registered file,
+/// even when its close is refused.
+#[test]
+fn a_quiesced_ring_releases_its_registered_files() {
+    let before = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        ring.hold_registered_shared_files(two_shared_files());
+        assert_eq!(ring.accounting.outstanding(), 0, "nothing is outstanding");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 2,
+        "a ring with nothing outstanding must release every registered file"
+    );
+}
+
+/// The refusing direction: a ring whose rundown fails keeps its registered
+/// files, so a handle the kernel may still use is never closed under it.
+/// Dropped during an unwind for the reason given on
+/// [`a_ring_whose_rundown_fails_keeps_its_registration_arrays`].
+#[test]
+fn a_ring_whose_rundown_fails_keeps_its_registered_files() {
+    let before = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+
+    let unwound = std::panic::catch_unwind(|| {
+        let mut ring = IoRing::refused_by_the_kernel();
+        ring.hold_registered_shared_files(two_shared_files());
+        ring.accounting
+            .reserve_user_data()
+            .expect("a fresh ring's identity space is not exhausted");
+        panic!("deliberate: drop the ring during an unwind");
+    });
+    assert!(unwound.is_err(), "the closure must have unwound");
+
+    let after = super::REGISTERED_FILES_RELEASED.with(std::cell::Cell::get);
+    assert_eq!(
+        after, before,
+        "a ring that could not prove quiescence must not close a handle the kernel may still use"
+    );
+}
+
 // --- The fault-injection seam (M16.3) ---
 
 /// A real completion for a real, finished operation.
@@ -1141,10 +1224,13 @@ impl crate::sys::Responses for ForgedCompletion {
 #[test]
 #[should_panic(expected = "which is not in flight on this ring")]
 fn a_completion_this_ring_never_minted_panics() {
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(0xDEAD),
-    }));
     let mut ring = IoRing::refused_by_the_kernel();
+    let _kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(0xDEAD),
+        }),
+    );
     let _ = ring.try_pop();
 }
 
@@ -1156,9 +1242,12 @@ fn a_duplicate_of_a_retired_completion_panics() {
     let op = ring.reserve_user_data().expect("mint one identity");
     assert!(ring.record_completion(op), "its one real completion");
 
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(op),
-    }));
+    let _kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(op),
+        }),
+    );
     let _ = ring.try_pop();
 }
 
@@ -1169,9 +1258,12 @@ fn a_duplicate_of_a_retired_completion_panics() {
 fn a_completion_this_ring_minted_does_not_panic() {
     let mut ring = IoRing::refused_by_the_kernel();
     let op = ring.reserve_user_data().expect("mint one identity");
-    let kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(op),
-    }));
+    let kernel = crate::sys::register(
+        &ring,
+        Box::new(ForgedCompletion {
+            user_data: Some(op),
+        }),
+    );
 
     // `pop_within` rather than `try_pop`: the forged kernel answers on the
     // first pop, but the crate's contract for "wait for this completion" is
@@ -1184,7 +1276,8 @@ fn a_completion_this_ring_minted_does_not_panic() {
     assert!(held.is_none(), "nothing was stowed for it");
     assert_eq!(ring.outstanding(), 0, "it retired the identity it carried");
 
-    drop(kernel);
+    // Ended by hand: a forgotten ring never runs the drop that would end it.
+    assert!(kernel.end().is_some());
     std::mem::forget(ring);
 }
 
@@ -1221,14 +1314,15 @@ fn an_unminted_completion_during_an_unwind_does_not_panic_again() {
     }
 
     let seen = Seen::default();
-    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
-        user_data: Some(0xBEEF),
-    }));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _pops = PopsWhileUnwinding {
-            ring: IoRing::refused_by_the_kernel(),
-            seen: &seen,
-        };
+        let ring = IoRing::refused_by_the_kernel();
+        let _kernel = crate::sys::register(
+            &ring,
+            Box::new(ForgedCompletion {
+                user_data: Some(0xBEEF),
+            }),
+        );
+        let _pops = PopsWhileUnwinding { ring, seen: &seen };
         panic!("the original failure");
     }));
 

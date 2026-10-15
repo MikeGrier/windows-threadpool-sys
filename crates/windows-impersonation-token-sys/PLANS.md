@@ -7,3 +7,4 @@ Design decisions are in
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
+| [CHECKLIST.md](CHECKLIST.md) | not started | Parked on the horizon: `IT-inf.1`, holding the captured token as a `SharedHandle` instead of an `Arc<OwnedHandle>`. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

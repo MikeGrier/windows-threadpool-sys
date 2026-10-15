@@ -10,7 +10,7 @@
 
 use super::*;
 
-impl<T, X> IoRing<T, X> {
+impl<T, X> IoRing<T, X, Open> {
     /// Create a ring whose inventory holds `T`, negotiating the version as
     /// [`IoRing::new`] does.
     ///
@@ -47,7 +47,9 @@ impl<T, X> IoRing<T, X> {
         let version = RingVersion::HIGHEST_KNOWN.min(caps.max_version);
         Self::with_version_and_inventory(version, submission_queue_size, completion_queue_size)
     }
+}
 
+impl<T, X, K> IoRing<T, X, K> {
     /// Record what an operation is holding, under the identity it will
     /// complete with.
     ///
@@ -80,6 +82,23 @@ impl<T, X> IoRing<T, X> {
         self.inventory.remove(&user_data)
     }
 
+    /// How many operations this ring is currently holding something for.
+    ///
+    /// Distinct from [`IoRing::outstanding`], which counts every operation the
+    /// *kernel* still owes a completion for. The two are **not** expected to
+    /// be equal: every operation held here is also outstanding, but a `_raw`
+    /// flush or cancel and [`IoRing::push_raw`] are outstanding while holding
+    /// nothing, by design. So `held() <= outstanding()` always, and the
+    /// difference is the number of raw operations in flight -- not a sign of
+    /// corruption ([D-78](../../DESIGN-NOTES.md#d-78)). On an [`Owned`] ring the
+    /// two are equal.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.inventory.len()
+    }
+}
+
+impl<T, X, K: RingKind> IoRing<T, X, K> {
     /// Pop a completion and take back whatever this ring was holding for it.
     ///
     /// The replacement for popping a [`Completion`] and matching it against a
@@ -107,9 +126,16 @@ impl<T, X> IoRing<T, X> {
     /// caller never supplied, and the `_owned` forms already exist for a
     /// caller who wants one.
     ///
+    /// # On an [`Owned`] ring
+    ///
+    /// Neither case of nothing is possible: no call that queues an operation the ring holds
+    /// nothing for exists for it, so the return is the flat `(completion, payload, sidecar)`,
+    /// with the payload `None` for an operation that never had a buffer
+    /// ([D-91](../../DESIGN-NOTES.md#d-91)).
+    ///
     /// # Errors
     ///
-    /// As [`IoRing::try_pop`].
+    /// Any error from `PopIoRingCompletion`.
     ///
     /// # Panics
     ///
@@ -118,7 +144,7 @@ impl<T, X> IoRing<T, X> {
     /// build failed. That is a defect, not an outcome
     /// ([D-79](../../DESIGN-NOTES.md#d-79)); during an unwind it is traced
     /// instead, and the completion is returned with an outer `None`.
-    pub fn try_pop(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
+    pub fn try_pop(&mut self) -> io::Result<Option<K::Popped<T, X>>> {
         let Some(completion) = self.pop_raw()? else {
             return Ok(None);
         };
@@ -130,20 +156,42 @@ impl<T, X> IoRing<T, X> {
         let held = self
             .reclaim(completion.user_data())
             .map(|entry| (entry.payload, entry.extra));
-        Ok(Some((completion, held)))
+        K::shape(completion, held).map(Some)
     }
+}
 
-    /// How many operations this ring is currently holding something for.
+impl<T, X> IoRing<T, X, Open> {
+    /// Seal this ring against operations it holds nothing for, so it can be an [`Owned`]
+    /// ring ([D-91](../../DESIGN-NOTES.md#d-91)).
     ///
-    /// Distinct from [`IoRing::outstanding`], which counts every operation the
-    /// *kernel* still owes a completion for. The two are **not** expected to
-    /// be equal: every operation held here is also outstanding, but a `_raw`
-    /// flush or cancel and [`IoRing::push_raw`] are outstanding while holding
-    /// nothing, by design. So `held() <= outstanding()` always, and the
-    /// difference is the number of raw operations in flight -- not a sign of
-    /// corruption ([D-78](../../DESIGN-NOTES.md#d-78)).
-    #[must_use]
-    pub fn held(&self) -> usize {
-        self.inventory.len()
+    /// An [`Open`] ring can have in flight an operation the ring holds nothing for: a
+    /// registration, a `_raw` flush or cancel, or [`IoRing::push_raw`]. Those are queued
+    /// by calls an [`Owned`] ring does not have, and the ring this returns can never have one
+    /// again; the conversion consumes the ring and there is no way back. So it is refused while
+    /// any is in flight -- [`IoRing::outstanding`] exceeds [`IoRing::held`] by exactly that
+    /// many -- and the ring is handed back, to be popped until it is not.
+    ///
+    /// Nothing is lost: the ring's identity, its registrations (a [`RegisteredFiles`](crate::RegisteredFiles) and a
+    /// `RegisteredBuffers` it made still name it), its completion event and its queue are the
+    /// same.
+    ///
+    /// # Errors
+    ///
+    /// The ring, unchanged, if an operation it holds nothing for is in flight.
+    // The `Err` is the ring itself, handed back so the caller can pop what is in flight and ask
+    // again; boxing it would make every caller of a once-per-ring call unbox it.
+    #[allow(clippy::result_large_err)]
+    pub fn into_owned(self) -> Result<IoRing<T, X, Owned>, Self> {
+        if self.outstanding() != self.held() {
+            return Err(self);
+        }
+        let this = ManuallyDrop::new(self);
+        // SAFETY: `IoRing` is `repr(C)` and `K` appears in it only as `PhantomData<fn() -> K>`,
+        // so `IoRing<T, X, Open>` and `IoRing<T, X, Owned>` have one layout, field for field. The
+        // read moves the whole ring out of `this`, which is never dropped, so there is one owner
+        // before and after.
+        Ok(unsafe {
+            std::ptr::read(std::ptr::from_ref::<Self>(&this).cast::<IoRing<T, X, Owned>>())
+        })
     }
 }

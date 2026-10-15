@@ -17,10 +17,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE,
 };
 
-use crate::buf::{IoBuf, IoBufMut};
-use crate::error::check;
-use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
+use crate::error::{PushRefused, check};
+use crate::ring::{AllowsRaw, Completion, Entry, Held, IoRing, Op, Open, RingId};
 use crate::token::OperationId;
+use io_buffers::{IoBuf, IoBufMut, RegisteredSpan};
 use win_shared_os_owned_handle::SharedHandle;
 
 /// Per-push options shared across every op builder (M3.2).
@@ -442,7 +442,10 @@ mod sealed {
 /// so something must keep it open until the kernel is finished; a
 /// `RegisteredFile` is an index into a table the ring itself owns, minted by
 /// this crate and checked against the minting ring, so there is nothing for a
-/// caller to keep alive. Both are therefore safe to push, and neither needs
+/// caller to keep alive per push. (The handles behind that table are kept
+/// open for the ring's life either by [`Batch::register_files`]' caller, under
+/// its `unsafe` contract, or by the ring itself after
+/// [`Batch::register_shared_files`].) Both are therefore safe to push, and neither needs
 /// `unsafe` -- which is why [`Batch::read_owned`] and its siblings are generic over
 /// this trait rather than hardcoding `SharedHandle`.
 ///
@@ -974,6 +977,24 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
             .map(|state| state.outstanding.load(Ordering::SeqCst))
     }
 
+    /// Whether `span` lies within this registration -- its buffer index in
+    /// range, and `span.offset .. span.offset + span.len` within that buffer's
+    /// registered length -- asked without pushing anything. It is the check
+    /// every push against a span makes before the kernel sees it, so the
+    /// answer is the push's (M34.1).
+    ///
+    /// For a caller that accepts an operation now and pushes it later, so it
+    /// can refuse a span the push would refuse at the moment it accepts it,
+    /// rather than at a push nobody is waiting on.
+    ///
+    /// # Errors
+    ///
+    /// The [`io::ErrorKind::InvalidInput`] error a push would refuse `span`
+    /// with.
+    pub fn check_span(&self, span: RegisteredSpan) -> io::Result<()> {
+        self.checked_span(span).map(|_| ())
+    }
+
     /// Record that one more operation is outstanding against `span`'s buffer,
     /// and produce the marker whose drop records it finished.
     ///
@@ -1084,19 +1105,6 @@ impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
     }
 }
 
-/// Which bytes of one [`RegisteredBuffers`] entry an op reads or writes
-/// (M5.2): bundled into one value so `read_registered`/`write_registered`
-/// stay under a sane argument count.
-#[derive(Clone, Copy, Debug)]
-pub struct RegisteredSpan {
-    /// Which buffer within the registration, per [`RegisteredBuffers::get`].
-    pub buffer_index: u32,
-    /// The starting byte offset within that buffer.
-    pub offset: u32,
-    /// How many bytes to read or write.
-    pub len: u32,
-}
-
 /// A [`Batch::register_buffers`] push not yet matched to its completion.
 ///
 /// `buffers` is `ManuallyDrop` and this type's own `Drop` is deliberately
@@ -1201,14 +1209,15 @@ impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
 /// queues its SQE the instant it succeeds -- there is no rewind -- so
 /// `Batch` submits on [`Drop`] rather than leaving queued SQEs for some
 /// later, unrelated submit to discover (D-5).
-pub struct Batch<'ring, T = (), X = ()> {
-    ring: &'ring mut IoRing<T, X>,
+pub struct Batch<'ring, T = (), X = (), K = Open> {
+    ring: &'ring mut IoRing<T, X, K>,
     submitted: bool,
 }
 
-impl<'ring, T, X> Batch<'ring, T, X> {
-    /// Open a batch over `ring`.
-    pub fn new(ring: &'ring mut IoRing<T, X>) -> Self {
+impl<'ring, T, X, K> Batch<'ring, T, X, K> {
+    /// Open a batch over `ring`. The batch has the ring's kind: over an [`Owned`](crate::Owned) ring it has
+    /// no call that queues an operation the ring holds nothing for ([D-91](../DESIGN-NOTES.md#d-91)).
+    pub fn new(ring: &'ring mut IoRing<T, X, K>) -> Self {
         Self {
             ring,
             submitted: false,
@@ -1237,16 +1246,14 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     }
 
     /// The shared tail of every inventory push: stow on success; on failure,
-    /// release the reservation and **drop** the payload and its registration
-    /// lease, returning only the error. The caller does not get the payload
-    /// back -- the public pushes document the same -- so nothing may be built
-    /// on recovering it from a failed push.
+    /// release the reservation, release what the ring held for the operation
+    /// (the file guard and any registered-buffer use), and hand the payload
+    /// and sidecar back in a [`PushRefused`] ([D-80](../DESIGN-NOTES.md#d-80)).
     ///
-    /// The failure path is the mirror image of the borrowed push's, and
-    /// for the same reason. A `Build*` that fails queued no SQE, so nothing
-    /// will ever complete to reclaim what it holds -- which makes dropping
-    /// normally correct here, where leaking is correct once the kernel has
-    /// seen the address.
+    /// Handing back is sound for the same reason dropping was before it: a
+    /// `Build*` that fails queued no SQE, so the kernel never saw the address
+    /// and nothing will ever complete against it. Leaking is correct only once
+    /// the kernel *has* seen an address, which a failed build rules out.
     fn finish_owned(
         &mut self,
         hr: windows_sys::core::HRESULT,
@@ -1254,7 +1261,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         payload: Option<T>,
         extra: X,
         held: Held,
-    ) -> io::Result<OperationId> {
+    ) -> Result<OperationId, PushRefused<T, X>> {
         match check(hr) {
             Ok(()) => {
                 self.ring.stow(
@@ -1269,8 +1276,8 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             }
             Err(error) => {
                 self.ring.cancel_reservation(id.user_data());
-                drop((payload, held));
-                Err(error)
+                drop(held);
+                Err(PushRefused::new(error, payload, extra))
             }
         }
     }
@@ -1313,6 +1320,20 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         self.submit_and_wait(0, 0)
     }
 
+    /// Close the batch **without submitting** what it queued: the entries stay in the submission
+    /// queue, held by the ring with their buffers, until a later [`Batch::submit`] -- over a batch
+    /// that queues nothing, if need be -- issues them ([D-90](../DESIGN-NOTES.md#d-90)).
+    ///
+    /// A batch submits as it drops by default ([D-5](../DESIGN-NOTES.md#d-5)), so that nothing is
+    /// left queued for a later, unrelated submit to discover. This is the caller's explicit choice to
+    /// own the doorbell instead, to ring it once for several pushes, or to learn that it failed:
+    /// the drop's own submit reports nothing. It is the state a failed [`Batch::submit`] leaves,
+    /// reached on purpose. **Until the submit, the kernel has not seen the entries**, so none will
+    /// complete.
+    pub fn leave_queued(mut self) {
+        self.submitted = true;
+    }
+
     /// Submit everything queued so far, then block until at least
     /// `wait_operations` of them have completed or `timeout_ms` elapses
     /// (D-3's Model B primitive: the fused submit-and-wait *is* the event
@@ -1348,6 +1369,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         // SAFETY: `self.ring`'s handle is live.
         let hr = unsafe {
             crate::sys::submit(
+                self.ring.ring_id(),
                 self.ring.raw_handle(),
                 wait_operations,
                 timeout_ms,
@@ -1375,7 +1397,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         Ok(submitted)
     }
 }
-impl<T, X> Drop for Batch<'_, T, X> {
+impl<T, X, K> Drop for Batch<'_, T, X, K> {
     fn drop(&mut self) {
         if !self.submitted {
             // Best-effort: Drop cannot propagate an error, and a batch that

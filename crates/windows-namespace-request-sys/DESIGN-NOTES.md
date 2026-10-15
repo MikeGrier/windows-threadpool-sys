@@ -242,9 +242,37 @@ A self-relative descriptor must live in DWORD-aligned storage. A `Box<[u8]>`
 guarantees an alignment of 1, so this is a requirement the obvious
 representation silently fails. It is the second such requirement in the crate
 -- the directory-information classes need 8-byte alignment for the same
-underlying reason -- so it is met once, by an `AlignedBuffer` primitive whose
-alignment is stated at construction and preserved by `Clone`, rather than being
-solved twice by two different local tricks.
+underlying reason -- so it is met once, by an aligned-buffer primitive whose
+alignment is stated at construction, rather than being solved twice by two
+different local tricks.
+
+That primitive was this crate's own `AlignedBuffer`, and is now `AlignedBuf` from the [io-buffers](../io-buffers/README.md) crate, which the
+crate re-exports because the type appears in its public signatures (the query
+result and the captured security descriptor's storage). The move is a breaking
+change: the old type's constructors panicked on a bad alignment and aborted on
+allocation failure, and `AlignedBuf` returns an error for both. The first
+version of the move took that error with `expect` at each call site, which left
+a panic where there had been an abort; the engineer rejected both (2026-10-13),
+and an allocation that fails is now an error the caller receives, at every site:
+
+- `QueryFileInformation::perform` returns `ERROR_NOT_ENOUGH_MEMORY` when the
+  buffer for the caller's capacity cannot be allocated. It is the one code in
+  this crate that no Win32 call produced, and the call is not made.
+- `SecurityDescriptor::capture` returns
+  `SecurityCaptureFailure::Allocate`, whose error carries the same code, from
+  both of its allocations, which share one function.
+- `SecurityDescriptor` and `SecurityAttributes` are no longer `Clone`: copying
+  one allocates, and an infallible `clone` could only panic or abort. Each has a
+  `try_clone`, which reports `Allocate`; a request's `try_clone` reports it as
+  `HandleCaptureFailure::CopySecurity`.
+
+Every call site passes a constant alignment, so the alignment's own refusal
+cannot occur; the constants are asserted to be powers of two at build time, and
+every refusal of an allocation is then reported as an allocation failure. What
+no test reaches is `SecurityDescriptor::try_clone` failing, because it allocates
+exactly the size of a buffer that already exists; [sabotage.json](sabotage.json)
+declares it. Why the buffer is fallible and clone-less is
+[IB-D-6](../io-buffers/DESIGN-NOTES.md#ib-d-6).
 
 ## <a id="d-9"></a>D-9: Path preparation is duplicated from the enumeration crate, deliberately and temporarily
 

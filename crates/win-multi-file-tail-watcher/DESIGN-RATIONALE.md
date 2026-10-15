@@ -134,13 +134,13 @@ endpoint to hold a `SharedHandle` (a change to that crate), or open two handles 
 engineer chose the second and asked for the owned-versus-shared implications to be investigated up
 front rather than when reads arrive.
 
-That investigation (windows-overlapped-io-sys M15.1) found that exclusivity protects "one endpoint
+That investigation (windows-overlapped-io-sys M16.1) found that exclusivity protects "one endpoint
 per handle", not "one holder per handle", and that an endpoint generic over owned or shared storage
 would need an `unsafe` constructor whose `SharedHandle` clones could become second endpoints. The
 engineer asked for a structural remedy instead and chose *observers*: shared holders that can query
 but implement no handle-lending trait, so they can never reach an endpoint constructor. A second,
 non-overlapped handle per file was again set aside: "a small user mode allocation beats a second
-kernel mode allocation". Using observers from the first probe made M15 a prerequisite of iteration 1.
+kernel mode allocation". Using observers from the first probe made M16 a prerequisite of iteration 1.
 [windows-overlapped-io-sys DESIGN-NOTES.md](../windows-overlapped-io-sys/DESIGN-NOTES.md)
 [Q10](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q10-one-crate),
 [Q30](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q30-the-endpoint-holds-a-sharedhandle)

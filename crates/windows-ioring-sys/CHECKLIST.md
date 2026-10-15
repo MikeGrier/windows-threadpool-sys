@@ -70,3 +70,125 @@ from an absence.
   stalled factory ever made a worker, and the same session spans the poke, so the before/after
   contrast survives the move. Whether it is worth building depends on whether `M-T7.1` is resumed,
   which is a decision for the engineer rather than something this item should assume.
+
+## M29 -- The `epoch_log` sample treats a failed commit as repairable by a later one
+
+Opened 2026-10-05 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+Scenarios 1 and 2). Queued here rather than in [durable-ioring](../durable-ioring/CHECKLIST.md)
+because the sample is wrong whatever becomes of that crate
+([DI-D-7](../durable-ioring/DESIGN-NOTES.md#di-d-7)).
+
+- [ ] **M29.1** -- **Stop letting a later successful commit report an earlier failed epoch durable.**
+  `Committer::claim` in [commit.rs](examples/epoch_log/commit.rs) argues under "A failed commit is
+  not permanent, and that is not a loophole" that commit *N+1*'s covering flush settles a failed
+  commit *N*, and advances `durable_through` past it. That holds only if the writes in the suspect
+  window -- every write pushed before the failure was observed that no earlier successful covering
+  flush covers -- are re-issued before
+  the later flush. Without that, a lower layer that discarded the data on the failed flush (the
+  documented Linux behaviour, and undocumented either way on Windows) leaves *N* reported durable
+  and gone. Correct the code and its rustdoc so the watermark stays at the last epoch below the
+  failure, and update `commit/tests.rs`, which presumably pins the current behaviour. **Sweep the
+  same reasoning** in [checkpoint.rs](examples/epoch_log/checkpoint.rs) (its `settle` advances by
+  `max`; a later checkpoint rewrites the whole record, which is the re-issue case, so it may be
+  correct -- argue it either way in the code) and in
+  [strategy.rs](examples/epoch_log/strategy.rs)'s `settle`, and check
+  [contract.rs](examples/epoch_log/contract.rs) for a statement that relies on it.
+
+## M31 -- `EventDelivery`'s callback contract is specified, not incidental
+
+Opened 2026-10-05 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md),
+"DI-2.3: completion routing"). durable-ioring's design ([DI-D-18](../durable-ioring/DESIGN-NOTES.md#di-d-18))
+needs two properties of the
+`on_completion` callback. When this milestone opened they held only as implementation: the
+comments on the private `drain` and on the callback body said so, but `EventDelivery::new`'s
+rustdoc did not, so relying on them would have bound a consumer to incidental behaviour. The engineer's framing: using
+it "without permission" is not better than getting it properly supported.
+
+This does **not** make the ring a synchronization provider. That is out of this crate's scope, and
+no consumer may share the ring's lock. It states two properties of this crate's own callback that
+any callback API owes its users.
+
+- [x] **M31.1** -- `on_completion`'s re-entrancy and concurrency are stated on `EventDelivery::new` and pinned by a test and a sabotage. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m311)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2.1` (dioring's plain I/O and the delivery its front ends share), which relies on this item's contract. See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+- [x] **M31.2** -- **Withdrawn 2026-10-06: "every `Completion` is real" is already contract.**
+  `try_pop`'s rustdoc hands a payload back by that call alone, and [D-79](DESIGN-NOTES.md#d-79)
+  makes a completion for anything not in flight a panicking defect; the restatement added nothing
+  a consumer could rely on, and its `compile_fail` doctest would have pinned an implementation
+  detail.
+
+- [x] **M31.3** -- `SharedFile` is removed; a safe push's file is `win-shared-os-owned-handle`'s `SharedHandle`. -> [completed 2026-10-07](COMPLETED-CHECKLIST.md#m313)
+
+## M32 -- Write-through needs an unbuffered handle
+
+Opened 2026-10-07 from durable-ioring's `DI-3.2.2.1`, whose test of its caching option found this.
+
+- [ ] **M32.1** -- **State, and pin, what `WriteCaching::WriteThrough` does on a cached handle.**
+  Measured through dioring's ring on 2026-10-07: a write-through write to a handle opened for cached
+  I/O -- including one opened with `FILE_FLAG_WRITE_THROUGH` -- completes with Win32 error 509 ("The
+  specified operation is not supported on a file opened for cached IO"), and to a handle opened with
+  `FILE_FLAG_NO_BUFFERING` as well, it completes as a transfer. This crate's documentation presents
+  the flag as a cache directive a caller may add alongside a covering flush, and none of it says the
+  handle must be unbuffered: `WriteCaching`'s rustdoc in `batch.rs`, the write push's in
+  `batch/push.rs`, `lib.rs`, the README's durability section, and
+  [D-25](DESIGN-NOTES.md#d-25). Sweep all of them. **Test in both directions:** the cached handle
+  fails with 509, and the unbuffered one transfers, with a buffer and offset that meet unbuffered
+  I/O's alignment rules (a page-aligned allocation, for instance), so the test does not pass by
+  accident of the allocator. No crate test exercises write-through today, which is why this was not
+  found here.
+
+## M33 -- A wake-only delivery for a caller that owns its ring
+
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6`
+([DI-D-53](../durable-ioring/DESIGN-NOTES.md#di-d-53)), whose backend owns its ring threadlessly and
+needs the thread pool only to be told when to drain.
+
+- [x] **M33.1** -- `CompletionWake`: the thread pool wakes an owner, who drains its own ring; `EventDelivery` re-expressed on it, so the delivery protocol is written once. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m331)
+
+- [ ] **M33.2** -- **The engineer's review of the assistant's choices in `M33.1`**: the name
+  `CompletionWake`; `new(&mut IoRing, on_wake, env)`; `on_wake: Fn() + Send + Sync + 'static`; one
+  waiter per ring stated, not enforced, as D-21 is; `EventDelivery` holding a `CompletionWake`
+  where it held a `ThreadpoolWait`, its explicit `Drop` folded into the wake's; the setup-signal
+  sabotage moved to the wake as one site serving both; and the explicit drain in the wake's `Drop`
+  recorded as an equivalent mutant, since `ThreadpoolWait`'s own `Drop` drains too and only the
+  obligation report differs.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5` -> `DI-3.10.3.5.6.1` (pool delivery over the threadless backend, built on this wake). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## M34 -- A registration's span check, asked without pushing
+
+Opened 2026-10-11 from durable-ioring's `DI-3.10.3.5.6.2.1`, whose core accepts a gated operation
+now and pushes it once its gate is durable, and so must refuse at acceptance a span the push would
+refuse.
+
+- [x] **M34.1** -- `RegisteredBuffers::check_span`: the span check every push makes, asked without pushing. -> [completed 2026-10-11](COMPLETED-CHECKLIST.md#m341)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-3.10.3.5.6.2` -> `DI-3.10.3.5.6.2.1` (the Windows backend's `check` asks the registration). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## M40 -- A batch left queued, for a caller that owns the doorbell
+
+Opened 2026-10-13 from durable-ioring's `DI-7+.2`.
+
+- [x] **M40.1** -- `Batch::leave_queued`: close a batch without submitting what it queued. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#m401)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.2` (the engine rings the doorbell; the Windows backend's push only queues). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## M41 -- A ring typed by whether it can hold nothing for an operation
+
+Opened 2026-10-14 from durable-ioring's `DI-7+.3`.
+
+- [x] **M41.1** -- `IoRing<T, X, K>` with `K` `Open` or `Owned`, and `IoRing::into_owned`: a ring that cannot have an operation in flight it holds nothing for. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m411)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-7+.3` (the Windows backend's ring is sealed, and its unreachable branch is gone). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+## M31+ -- ETW for the ring's own lock (withdrawn)
+
+Opened and withdrawn 2026-10-06 in the durable-ioring design session.
+
+- [x] **M31+.1** -- **Withdrawn 2026-10-06: the ring crate publishes no ETW provider of its own.**
+  It would have timed contended acquisitions of `EventDelivery`'s mutex. The engineer: "the etw
+  events we publish give a surface for diagnosis of issues; clients don't want to search around
+  across providers to try to correlate issues." durable-ioring publishes the one surface, and sees
+  this lock's contention as a slow call into the ring, timed at its boundary.

@@ -17,6 +17,11 @@
     Explicit binary-only routes are checked by the Node release-tooling checker.
     Every other managed crate must have a crates.io route. A crate may be
     deliberately absent from release-please; the comparison is one-directional.
+
+    A route is not enough: `cargo publish` also refuses a crate with a normal or
+    build dependency that has a path and no version, and that failure shows only
+    after the release PR has merged and the tag has been made. The Node
+    dependency-version checker reads each managed manifest for it.
 #>
 [CmdletBinding()]
 param(
@@ -55,6 +60,16 @@ $binaryChecker = Join-Path $RepositoryRoot '.github/release/check-publication.cj
 node $binaryChecker $RepositoryRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $binaryPaths = ([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github/release/binary-packages.json')) | ConvertFrom-Json).PSObject.Properties.Name
+
+$versionChecker = Join-Path $RepositoryRoot '.github/release/check-dependency-versions.cjs'
+$versionReport = node $versionChecker $RepositoryRoot
+if ($LASTEXITCODE -ne 0) {
+    Write-Report 'Release-managed crates with a dependency that has a path and no version:' -Level bad
+    ($versionReport | ConvertFrom-Json).problems | ForEach-Object { Write-Report "  $_" -Level bad }
+    Write-Report ''
+    Write-Report 'cargo publish refuses these. Add the version of the release that carries what the crate needs, keeping the path.'
+    exit 1
+}
 
 foreach ($required in @($configPath, $workflowPath)) {
     if (-not (Test-Path $required)) {

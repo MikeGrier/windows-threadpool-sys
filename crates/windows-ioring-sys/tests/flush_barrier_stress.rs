@@ -112,9 +112,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, WriteCaching,
-};
+use io_buffers::AlignedBuf;
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, WriteCaching};
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED,
@@ -189,38 +188,11 @@ fn trials() -> usize {
     }
 }
 
-struct Aligned {
-    storage: Vec<u8>,
-    offset: usize,
-    len: usize,
-}
-
-impl Aligned {
-    fn new(len: usize, fill: u8) -> Self {
-        let storage = vec![fill; len + ALIGN];
-        let base = storage.as_ptr() as usize;
-        let offset = (ALIGN - (base % ALIGN)) % ALIGN;
-        Self {
-            storage,
-            offset,
-            len,
-        }
-    }
-}
-
-// SAFETY: as in flush_barrier.rs -- `storage` is a heap allocation that is never
-// reallocated while this value exists, so its address is stable across moves;
-// `offset <= ALIGN` is within the over-allocation, and `len` bytes from there
-// are initialized and stay allocated for the value's whole life.
-unsafe impl IoBuf for Aligned {
-    fn stable_ptr(&self) -> *const u8 {
-        // SAFETY: `offset <= ALIGN` and the allocation is `len + ALIGN` bytes.
-        unsafe { self.storage.as_ptr().add(self.offset) }
-    }
-
-    fn bytes_len(&self) -> usize {
-        self.len
-    }
+/// A buffer of `len` bytes, each `fill`, whose first byte is `ALIGN`-aligned.
+fn aligned(len: usize, fill: u8) -> AlignedBuf {
+    let mut buffer = AlignedBuf::zeroed(len, ALIGN).expect("an aligned allocation");
+    buffer.fill(fill);
+    buffer
 }
 
 fn temp_file(tag: &str) -> PathBuf {
@@ -514,7 +486,7 @@ impl Observed {
 /// used to be a lookup miss in `phase_of`; now it is the absence of the entry
 /// itself, which also covers the flush the old map had to be told about
 /// separately.
-type TrialRing = IoRing<Aligned, (Phase, Option<usize>)>;
+type TrialRing = IoRing<AlignedBuf, (Phase, Option<usize>)>;
 /// Run one trial: phase A, one flush, phase B, submitted as a single batch.
 fn run_trial(
     ring: &mut TrialRing,
@@ -533,7 +505,7 @@ fn run_trial(
         let mut batch = Batch::new(ring);
 
         for index in 0..PHASE_OPS {
-            let buffer = Aligned::new(BIG_LEN, index as u8);
+            let buffer = aligned(BIG_LEN, index as u8);
             let offset = (index * BIG_LEN) as u64;
             // SAFETY: `file` stays open for the whole trial, and the buffer is
             // no longer this trial's to keep alive -- `write_raw_owned` moves it
@@ -579,7 +551,7 @@ fn run_trial(
         seq += 1;
 
         for index in 0..PHASE_OPS {
-            let buffer = Aligned::new(SMALL_LEN, index as u8);
+            let buffer = aligned(SMALL_LEN, index as u8);
             let offset = (PHASE_B_BASE + index * SMALL_LEN) as u64;
             // SAFETY: as above.
             let id = unsafe {

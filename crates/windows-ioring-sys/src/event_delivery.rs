@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use windows_sys::Win32::Storage::FileSystem::IORING_OP_CODE;
 use windows_threadpool_sys::callback_env::CallbackEnviron;
-use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
 use crate::batch::Batch;
 use crate::capability::RingVersion;
+use crate::completion_wake::CompletionWake;
 use crate::ring::{Completion, IoRing, Op, RingInfo};
 /// What a delivery hands a caller for each completion: the completion, and
 /// whatever the ring was holding for it, exactly as [`IoRing::try_pop`]
@@ -29,8 +29,10 @@ type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sy
 ///
 /// Each pop is its own short lock: `on_completion` always runs with the
 /// mutex released, so a slow callback does not block a submitter, and a
-/// callback that calls [`EventDelivery::ring`] and locks it itself cannot
-/// deadlock against this loop.
+/// callback that calls [`EventDelivery::scope`] and submits cannot deadlock
+/// against this loop. That is contract, not just how this happens to work:
+/// [`EventDelivery::new`] states it, and [D-83](../DESIGN-NOTES.md#d-83)
+/// records it.
 fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
         let popped = {
@@ -70,29 +72,18 @@ fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
 /// quiesce-then-close guarantee a group would otherwise provide.
 pub struct EventDelivery<T = (), X = ()> {
     // Drop order matters and is why these fields are declared in this order:
-    // Rust drops struct fields top-to-bottom. `wait` must go first -- its own
+    // Rust drops struct fields top-to-bottom. `wake` must go first -- its own
     // `Drop` disarms, suppresses re-arming, and drains any in-flight callback
     // before releasing its captured `Arc<Mutex<IoRing>>` clone -- so that by
     // the time `ring`'s last reference drops below and runs
     // `IoRing::run_down` then `CloseIoRing`, no callback can still be
     // touching it (M4.3).
-    wait: ThreadpoolWait,
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which stops the wait and drains it before the ring is released"
+    )]
+    wake: CompletionWake,
     ring: Arc<Mutex<IoRing<T, X>>>,
-}
-
-impl<T, X> Drop for EventDelivery<T, X> {
-    fn drop(&mut self) {
-        // The wait is armed, so it owes a drain. Field drop would make that
-        // drain anyway -- this adds no blocking -- but leaving it to `Drop`
-        // leaves the obligation undischarged, which `windows-threadpool-sys`
-        // reports and, under its `fail-fast` feature, panics on.
-        //
-        // Draining here rather than relying on the field order *strengthens*
-        // the guarantee described above: this body runs before any field is
-        // dropped, so no callback can be touching the ring by the time `ring`
-        // is released, which is what `M4.3` requires.
-        self.wait.stop_and_drain();
-    }
 }
 
 impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
@@ -136,6 +127,27 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// and consumed that signal lost its whole backlog, every time rather
     /// than rarely.
     ///
+    /// # What `on_completion` may rely on
+    ///
+    /// Two properties of the callback are part of this method's contract
+    /// ([D-83](../DESIGN-NOTES.md#d-83)), so a consumer may build on them:
+    ///
+    /// - **It runs with the ring unlocked.** Each completion is popped under
+    ///   the ring's lock and handed to `on_completion` after the lock is
+    ///   released, so the callback may call [`EventDelivery::scope`] and
+    ///   submit without deadlocking. This method hands the callback nothing
+    ///   to reach its `EventDelivery` by; the caller arranges that, with a
+    ///   `Weak` set after construction, for instance.
+    /// - **Invocations may overlap.** Two calls may run at once on different
+    ///   pool threads, and completions handed to concurrent calls carry no
+    ///   order relative to each other. A consumer that needs an order imposes
+    ///   it. The overlap comes from the delivery loop's shape -- drain, re-arm
+    ///   the wait, drain again -- since a completion arriving after the
+    ///   re-arm can start a second call while the first is still draining.
+    ///
+    /// Neither makes the ring a synchronization provider: its lock is its
+    /// own, and a callback holds it only for as long as a scope it opens.
+    ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::Unsupported`] if the running system does not
@@ -147,73 +159,30 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// ring's completion event, from `ThreadpoolWait::new`, or from raising
     /// the setup signal.
     pub fn new<F>(
-        mut ring: IoRing<T, X>,
+        ring: IoRing<T, X>,
         on_completion: F,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>
     where
         F: Fn(Completion, Option<(Option<T>, X)>) + Send + Sync + 'static,
     {
-        // The ring creates, owns, and attaches its own event and hands back a
-        // duplicate (D-20), which leaves exactly one
-        // `SetIoRingCompletionEvent` call site in this crate. Delegating also
-        // means the capability check and the `Unsupported` error are each
-        // stated in one place rather than restated here.
-        //
-        // The attachment is taken *unsignalled*, and the setup signal raised
-        // only after `wait.arm` below, because `SetThreadpoolWait` documents
-        // that "you must re-register the event with the wait object before
-        // signaling it each time to trigger the wait callback". Signalling
-        // first and arming afterwards is the order that rule forbids.
-        let event = ring.attach_completion_event_unsignalled()?;
-        windows_threadpool_sys::trace_record!(
-            "delivery",
-            "event-attached",
-            std::os::windows::io::AsRawHandle::as_raw_handle(&event) as usize
-        );
-        // SAFETY: `completion_event` returns a duplicate of an auto-reset
-        // event -- always a supported wait target, and never a mutex -- and
-        // that duplicate is exclusively ours. The ring keeps its own separate
-        // handle, so nothing else closes this one while a wait is pending on
-        // it, and the ring goes on signalling whichever copies survive.
-        let event = unsafe { WaitableHandle::assume_waitable(event) };
-
-        let ring = Arc::new(Mutex::new(ring));
-        let ring_for_wait = Arc::clone(&ring);
+        // The protocol -- attach the event unsignalled, arm the wait, raise the
+        // setup signal; drain, re-arm, drain -- is `CompletionWake`'s, written
+        // once there (D-84). This adds only the drain it calls, over a ring this
+        // delivery owns.
         let on_completion: Arc<OnCompletion<T, X>> = Arc::new(on_completion);
-        let wait = ThreadpoolWait::new(
-            event,
-            move |activation| {
-                // Drain-to-empty, re-arm, drain-to-empty again: the event
-                // auto-resets on wait and is set whenever a completion
-                // lands, so the only gap this leaves is a completion that
-                // arrives between the last pop and the re-arm -- and the
-                // second drain closes exactly that gap (M4.2).
-                windows_threadpool_sys::trace_record!("delivery", "callback-entered");
-                drain(&ring_for_wait, on_completion.as_ref());
-                activation.rearm(None);
-                drain(&ring_for_wait, on_completion.as_ref());
-                windows_threadpool_sys::trace_record!("delivery", "callback-left");
-            },
+        let ring = Arc::new(Mutex::new(ring));
+        let ring_for_wake = Arc::clone(&ring);
+        // Built under the ring's lock, which the setup signal needs; a callback
+        // the signal starts waits for the lock until this returns.
+        let wake = CompletionWake::new(
+            &mut *ring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            move || drain(&ring_for_wake, on_completion.as_ref()),
             env,
         )?;
-        wait.arm(None);
-        windows_threadpool_sys::trace_record!("delivery", "armed");
-
-        // Only now, with the wait registered, is the setup signal raised --
-        // the order `SetThreadpoolWait` documents. This is what makes the
-        // backlog guarantee above true, so a failure to raise it is a failure
-        // to construct.
-        //
-        // Raised unconditionally. It was once raised only when this call had
-        // itself attached the event, which stranded the backlog of a caller
-        // who attached earlier and consumed that signal -- the state the
-        // guarantee is precisely about. See `M26.12`.
-        ring.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .raise_setup_signal()?;
-
-        Ok(Self { wait, ring })
+        Ok(Self { wake, ring })
     }
 
     /// Lock the wrapped ring and return a scope for submitting work to it.

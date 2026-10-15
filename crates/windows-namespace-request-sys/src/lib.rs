@@ -106,7 +106,6 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
-pub mod buffer;
 pub mod close;
 pub mod file_info;
 pub mod final_path;
@@ -122,12 +121,12 @@ pub mod security;
 pub mod volume;
 pub mod watch;
 
-pub use buffer::AlignedBuffer;
 pub use close::{CloseFn, CloseRequest};
 pub use file_info::QueryFileInformationByHandle;
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
 pub use full_path::{FullPathError, ResolveFullPath};
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
+pub use io_buffers::AlignedBuf;
 pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
 pub use outcome::{Outcome, Win32Error};

@@ -318,7 +318,7 @@
       "name": "M26.2: the seam consults the responder but ignores its answer",
       "file": "src/sys.rs",
       "expect": "caught",
-      "why": "The seam's whole purpose is that an installed responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
+      "why": "The seam's whole purpose is that a registered responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
       "testArgs": [
         "test",
         "-p",
@@ -327,13 +327,14 @@
         "--all-features"
       ],
       "find": [
-        "            if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })",
+        "            if let Some(answer) =",
+        "                $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) })",
         "            {",
         "                return answer;",
         "            }"
       ],
       "replace": [
-        "            let _ = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) });"
+        "            let _ = $crate::sys::registered::with($ring_id, |r| unsafe { r.$method($($arg),*) });"
       ]
     },
     {
@@ -433,10 +434,10 @@
         "--all-features"
       ],
       "find": [
-        "        if !self.event.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
+        "        if !self.event.0.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
       ],
       "replace": [
-        "        if !self.event.is_null() {"
+        "        if !self.event.0.is_null() {"
       ]
     },
     {
@@ -473,7 +474,7 @@
         "--all-features"
       ],
       "find": [
-        "        self.event = event;",
+        "        self.event = CompletionEvent(event);",
         "        S_OK"
       ],
       "replace": [
@@ -965,11 +966,13 @@
         "resolver_over_a_real_ring"
       ],
       "find": [
+        "        loop {",
         "            if self.is_quiescent() {",
         "                return Ok(true);",
         "            }"
       ],
       "replace": [
+        "        loop {",
         "            return Ok(true);"
       ]
     },
@@ -1146,12 +1149,12 @@
       ]
     },
     {
-      "name": "M26.12: EventDelivery stops raising the setup signal after arming",
-      "file": "src/event_delivery.rs",
+      "name": "M26.12: the delivery protocol stops raising the setup signal after arming",
+      "file": "src/completion_wake.rs",
       "expect": "caught",
-      "why": "The backlog guarantee in EventDelivery::new rustdoc is bought entirely by this one signal: the ring's event is edge-triggered (D-19), so a queue that is already non-empty at handover signals nothing and never will. Dropping the call strands every handed-over backlog, which is M11.3's defect and M26.12's together.",
+      "why": "The backlog guarantee in EventDelivery::new rustdoc, and CompletionWake's reach of a backlog, are bought entirely by this one signal: the ring's event is edge-triggered (D-19), so a queue that is already non-empty at handover signals nothing and never will. Dropping the call strands every handed-over backlog, which is M11.3's defect and M26.12's together. Since M33.1 the protocol lives in CompletionWake, which EventDelivery is built on, so this one site serves both.",
       "find": [
-        "        ring.lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)\n            .raise_setup_signal()?;"
+        "        ring.raise_setup_signal()?;"
       ],
       "replace": [
         "        let _ = &ring;"
@@ -1216,6 +1219,648 @@
       "replace": [
         ""
       ]
+    },
+    {
+      "name": "M30.1: a failed build drops the payload instead of handing it back",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "The pre-M30.1 behaviour, restored at the one site every owned push's build failure goes through. Caught by push_refusal.rs, which fills a real submission queue so the build itself fails, and asserts the same allocation comes back. Only a full queue reaches this site on demand: the pre-build refusals return through the refuse! macro instead, which is the next case.",
+      "find": [
+        "                Err(PushRefused::new(error, payload, extra))\n"
+      ],
+      "replace": [
+        "                Err(PushRefused::new(error, None::<T>, extra))\n"
+      ]
+    },
+    {
+      "name": "M30.1: a refusal before the build drops the payload",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The checks before the build -- an oversized buffer, a foreign registration or file, an unsupported op -- all return through refuse!, so one patch reaches every one of them. Caught by the oversized-buffer tests in submission_lifecycle.rs and the foreign-file tests in registration.rs, which assert the buffer comes back.",
+      "find": [
+        "            Err(error) => return Err(PushRefused::new(error, $payload, $extra)),\n"
+      ],
+      "replace": [
+        "            Err(error) => return Err(PushRefused::new(error, None, $extra)),\n"
+      ]
+    },
+    {
+      "name": "M30.1: a failed buffer-registration build drops the buffers",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "register_buffers is an owned push too: it takes the caller's buffers, which may have been placed with care, and a full queue is the refusal it documents a retry for. Caught by the full-queue registration retry test in registration.rs.",
+      "find": [
+        "            return Err(PushRefused::new(error, Some(buffers), ()));\n"
+      ],
+      "replace": [
+        "            return Err(PushRefused::new(error, None, ()));\n"
+      ]
+    },
+    {
+      "name": "M30.1: a failed build keeps the registration in use",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "What the ring held for the operation -- the file guard and the registered-buffer use -- belongs to the ring and must be released, not returned and not leaked. Forgetting it leaves the registration's use count raised for good. Caught by push_refusal.rs's registered-write case, which asserts the count is back to zero after the refusal.",
+      "find": [
+        "                drop(held);\n"
+      ],
+      "replace": [
+        "                std::mem::forget(held);\n"
+      ]
+    },
+    {
+      "name": "M30.1 control: the explicit release of what the ring held is cosmetic",
+      "file": "src/batch.rs",
+      "expect": "survives",
+      "why": "Removing drop(held) changes nothing: held is a by-value parameter and drops at the end of the call either way. Recorded so the case above is read correctly -- it is forgetting the hold that the suite catches, not the absence of the explicit drop -- and so the explicit drop is not later mistaken for load-bearing.",
+      "find": [
+        "                drop(held);\n"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M30.2: the ring releases its registered files on a failed rundown",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "Releases the files on every path instead of only on a quiesced rundown, so a ring that cannot prove the kernel is finished closes handles the kernel may still use. Caught by ring::tests' failed-rundown case, which drives Drop with the null-handle ring and a reserved identity. The release deliberately does not depend on the close succeeding: if it did, that null-handle test could not tell the two gates apart.",
+      "find": [
+        "        if let Some(files) = released_files {\n"
+      ],
+      "replace": [
+        "        if let Some(files) = released_files.or_else(|| Some(unsafe { ManuallyDrop::take(&mut self.registered_files) })) {\n"
+      ]
+    },
+    {
+      "name": "M30.2: the ring never closes its registered files",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The counter in Drop records the decision, not the close, so this leaks the files after counting them. Caught only by shared_file_registration.rs, which watches the handle from outside: an exclusive open must succeed once the ring is dropped. That is the observation the counter cannot make.",
+      "find": [
+        "            drop(files);\n"
+      ],
+      "replace": [
+        "            std::mem::forget(files);\n"
+      ]
+    },
+    {
+      "name": "M30.2: register_shared_files lets go of the files it registered",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "The whole safety argument of the method: the ring, not the caller, keeps the handles open. Dropping the files once queued closes the caller's last handle under a live registration. Caught by shared_file_registration.rs, which drops every caller clone and then requires the file still be held open, and reads through each registered index.",
+      "find": [
+        "                self.ring.hold_registered_shared_files(files);\n"
+      ],
+      "replace": [
+        "                drop(files);\n"
+      ]
+    },
+    {
+      "name": "M30.2: a refused shared-file registration drops the files",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "D-80 for the registration: the refusal must hand the files back for the retry. Caught by the full-queue and second-registration cases in shared_file_registration.rs.",
+      "find": [
+        "            Err(error) => Err(PushRefused::new(error, Some(files), ())),\n"
+      ],
+      "replace": [
+        "            Err(error) => Err(PushRefused::new(error, None, ())),\n"
+      ]
+    },
+    {
+      "name": "M31.3: a SharedHandle's guard leaks a clone, so the file never closes",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "D-82's other half: the ring holds the handle until the pop retires the operation, and no longer. A leaked guard keeps every pushed file open for the life of the process while every lifetime test that only checks the handle stays open still passes. Caught by ring_owned_inventory.rs, which requires an exclusive open to succeed once the pop has retired the operation.",
+      "find": [
+        "        self.clone()\n"
+      ],
+      "replace": [
+        "        std::mem::forget(self.clone());\n        self.clone()\n"
+      ]
+    },
+    {
+      "name": "M31.1: the delivery loop holds the ring's lock across on_completion",
+      "file": "src/event_delivery.rs",
+      "expect": "caught",
+      "why": "D-83: the callback runs with the ring unlocked, so it may open a scope and submit. Holding the guard through the match makes the callback's own scope() wait on a lock its thread already holds. Caught by a_callback_may_open_a_scope_and_submit in event_delivery.rs, whose second read is never submitted; it leaks the delivery on failure, so the deadlocked callback fails the test rather than hanging its teardown.",
+      "find": [
+        "        let popped = {\n            let mut ring = ring\n                .lock()\n                .unwrap_or_else(std::sync::PoisonError::into_inner);\n            ring.try_pop()\n        };\n"
+      ],
+      "replace": [
+        "        let mut held = ring\n            .lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner);\n        let popped = held.try_pop();\n"
+      ]
+    },
+    {
+      "name": "M33.1: the wake is never armed",
+      "file": "src/completion_wake.rs",
+      "expect": "caught",
+      "why": "D-84: the wait is armed before the setup signal, so the owner is called at all. Unarmed, no call ever comes, and every owner's completions sit undrained.",
+      "find": [
+        "        wait.arm(None);"
+      ],
+      "replace": [
+        "        let _ = &wait;"
+      ]
+    },
+    {
+      "name": "EQUIVALENT: a dropped wake leaves the drain to ThreadpoolWait's own Drop",
+      "file": "src/completion_wake.rs",
+      "expect": "survives",
+      "why": "An equivalent mutant, recorded so a reader does not go looking for the missing test. D-84 promises that a dropped wake calls no one afterwards, and that holds either way: ThreadpoolWait's own Drop disarms and drains before it closes the wait. The explicit stop_and_drain only discharges the drain obligation windows-threadpool-sys reports, and panics on under its fail-fast feature, which this crate's tests do not enable. tests/completion_wake.rs's nothing_is_called_once_the_wake_is_dropped pins the promise itself. Measured: survived when first swept as expect caught.",
+      "find": [
+        "        self.wait.stop_and_drain();"
+      ],
+      "replace": [
+        "        let _ = &self.wait;"
+      ]
+    },
+    {
+      "name": "CONTROL: the wake's trace label is reworded",
+      "file": "src/completion_wake.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: nothing asserts on a trace label, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": [
+        "                windows_threadpool_sys::trace_record!(\"delivery\", \"callback-left\");"
+      ],
+      "replace": [
+        "                windows_threadpool_sys::trace_record!(\"delivery\", \"wake-left\");"
+      ]
+    },
+    {
+      "name": "M34.1: check_span accepts every span",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "check_span is the push's own span check, asked without pushing; a check that accepts what the push refuses lets a caller accept an operation it can never issue.",
+      "find": [
+        "        self.checked_span(span).map(|_| ())"
+      ],
+      "replace": [
+        "        let _ = span;",
+        "        Ok(())"
+      ]
+    },
+    {
+      "name": "M34.1: check_span refuses every span",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "The other direction: a check that refuses what the push accepts turns away operations that would have run.",
+      "find": [
+        "        self.checked_span(span).map(|_| ())"
+      ],
+      "replace": [
+        "        let _ = span;",
+        "        self.checked_index(u32::MAX).map(|_| ())"
+      ]
+    },
+    {
+      "name": "M35.1: a ring's responder answers every ring",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "D-85: a registration answers its own ring and no other; tests share a process, so one answering every ring would answer other tests' calls.",
+      "find": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| *id == ring)?;"
+      ],
+      "replace": [
+        "        let (_, slot) = registry.first()?;"
+      ]
+    },
+    {
+      "name": "CONTROL: a ring's responder is found with its comparison reversed",
+      "file": "src/sys/registered.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: equality is symmetric, so the lookup finds the same entry.",
+      "find": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| *id == ring)?;"
+      ],
+      "replace": [
+        "        let (_, slot) = registry.iter().find(|(id, _)| ring == *id)?;"
+      ]
+    },
+    {
+      "name": "M35.1: a ring's drop does not end its registration",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-85: a registration ends when its ring drops. Left registered, it outlives the ring, and Registration::end finds it still there; the real-ring test asserts it is gone.",
+      "find": [
+        "        crate::sys::ring_dropped(self.accounting.ring_id());"
+      ],
+      "replace": [
+        "        let _ = self.accounting.ring_id();"
+      ]
+    },
+    {
+      "name": "M35.1: a registration ends before its ring's rundown",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-85: the rundown is the responder's to answer, since it may hold operations the kernel never saw. Ended first, the rundown pops from the kernel and the responder never sees it; the real-ring test counts its pops.",
+      "find": [
+        "        let quiesced = match self.run_down() {"
+      ],
+      "replace": [
+        "        #[cfg(feature = \"kernel-seam\")]",
+        "        crate::sys::ring_dropped(self.accounting.ring_id());",
+        "        let quiesced = match self.run_down() {"
+      ]
+    },
+    {
+      "name": "M35.1: a responder is consulted re-entrantly for its own ring",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "A call a responder makes into the seam for its own ring must fall through, as the thread-local form's does. Consulted again, it blocks on its own lock; the re-entrancy test hangs, which a timeout counts as caught.",
+      "find": [
+        "                if answering.contains(&ring) {"
+      ],
+      "replace": [
+        "                if false {"
+      ]
+    },
+    {
+      "name": "M35.1: a responder that panicked leaves its ring marked as answering",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "The mark is cleared by a guard, so a panicking responder unwinds through it. Left set, every later call on that thread falls through, and the ring is never answered there again.",
+      "find": [
+        "                answering.remove(at);"
+      ],
+      "replace": [
+        "                let _ = at;"
+      ]
+    },
+    {
+      "name": "M35.1: ending a registration leaves it in place",
+      "file": "src/sys/registered.rs",
+      "expect": "caught",
+      "why": "Registration::end ends it now and hands the responder back; left in place, the ring is still answered. Caught by every test that ends a registration and expects its responder back.",
+      "find": [
+        "    pub fn end(self) -> Option<Box<dyn Responses + Send>> {",
+        "        end_id(self.ring)"
+      ],
+      "replace": [
+        "    pub fn end(self) -> Option<Box<dyn Responses + Send>> {",
+        "        let _ = self.ring;",
+        "        None"
+      ]
+    },
+    {
+      "name": "M35.1: the resolver cannot be registered",
+      "file": "src/sys/resolver.rs",
+      "expect": "refused-by-build",
+      "buildError": "cannot be sent between threads safely",
+      "why": "A registered responder answers on whatever thread calls, so it is Send. Without CompletionEvent's Send, the resolver is not, and the test that registers one does not build.",
+      "find": [
+        "unsafe impl Send for CompletionEvent {}"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M37.1: a failing submit still reaches the kernel",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failed submit must return without reaching the kernel, so the entries stay queued as SubmitIoRing documents (RS-P-7). Falling through makes the real call, which submits them: the failure is reported and the work runs anyway. Caught by the unit tests, which see the kernel's answer instead of the injected one, and by the real-ring test, whose try_pop finds a completion nothing had submitted.",
+      "find": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;"
+      ],
+      "replace": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            let _ = code;"
+      ]
+    },
+    {
+      "name": "M37.1: a counted fault never ends",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "fail_next(n) fails n submits and then reaches the kernel again. Staying armed turns every count into fail_until_cleared, which a test written for one failed submit would not survive.",
+      "find": [
+        "            Some(_) => None,"
+      ],
+      "replace": [
+        "            Some(_) => Some(fail),"
+      ]
+    },
+    {
+      "name": "M37.1: a counted fault is cut one short",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "The boundary a decrement-then-compare gets wrong: a count of n must fail n submits, not n-1.",
+      "find": [
+        "            Some(left) if left > 1 => Some(Self {"
+      ],
+      "replace": [
+        "            Some(left) if left > 2 => Some(Self {"
+      ]
+    },
+    {
+      "name": "M37.1: a failure is not recorded with its thread",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "failures() is how a test shows a failure was answered on a thread other than its own, which is what D-85 exists for. Unrecorded, every such test is told nothing happened.",
+      "find": [
+        "        state.failed_from.push((call, std::thread::current().id()));"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M37.1: clearing does not clear",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "clear() is how a test lets the work through again after a failure. A clear that leaves the per-call plans leaves every later call failing, so the ring can never be run down.",
+      "find": [
+        "        state.calls.clear();"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "M37.1: a count of zero arms a failure",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "fail_next(0) is documented to clear: zero failures means none. Arming it anyway fails once.",
+      "find": [
+        "        if count == 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M37.1: arming a non-failure changes the responder before it is refused",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failure that is not one is refused when armed and must change nothing: the responder stays as it was, not half-armed with a placeholder.",
+      "find": [
+        "    pub fn fail_until_cleared(&self, call: Call, failure: InjectedFailure) {",
+        "        let code = failure.as_hresult();"
+      ],
+      "replace": [
+        "    pub fn fail_until_cleared(&self, call: Call, failure: InjectedFailure) {",
+        "        lock(&self.shared).calls.insert(",
+        "            call,",
+        "            Fail {",
+        "                code: 0,",
+        "                remaining: None,",
+        "            },",
+        "        );",
+        "        let code = failure.as_hresult();"
+      ]
+    },
+    {
+      "name": "CONTROL: a failing submit returns its code through an identity",
+      "file": "src/sys/call_faults.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: masking with all ones changes nothing, so this must survive; if it comes back caught, something is matching incidental text.",
+      "find": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;"
+      ],
+      "replace": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code & !0;"
+      ]
+    },
+    {
+      "name": "M38.1: a call's plan is looked up without regard to which call",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failure armed for one call must not fail another: a test that arms BuildRegisterFiles to see a registration refused would otherwise also fail every submit and pop. The lookup by call is the whole of the per-call contract.",
+      "find": [
+        "        let mut slot = state.calls.get(&call).copied();"
+      ],
+      "replace": [
+        "        let mut slot = state.calls.values().next().copied();"
+      ]
+    },
+    {
+      "name": "M38.1: a failure is not recorded with its call",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "failures(call) is how a test shows which call was refused, and on which thread. Recording every failure as a submit's tells a test of a failed pop that nothing failed.",
+      "find": [
+        "        state.failed_from.push((call, std::thread::current().id()));"
+      ],
+      "replace": [
+        "        state.failed_from.push((Call::Submit, std::thread::current().id()));"
+      ]
+    },
+    {
+      "name": "M38.1: a failed completion loses its identity",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A completion failed on demand is the kernel's completion with a different result, not a different completion: its user data names the operation the ring's accounting settles. Zeroing it settles nothing and the ring's counts no longer balance.",
+      "find": [
+        "            unsafe { (*cqe).ResultCode = code };"
+      ],
+      "replace": [
+        "            unsafe {",
+        "                *cqe = std::mem::zeroed();",
+        "                (*cqe).ResultCode = code;",
+        "            };"
+      ]
+    },
+    {
+      "name": "M38.1: a failed completion is spent on an empty pop",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "An empty queue answers S_FALSE with no completion to fail. Spending the plan on it uses up the failure before any completion exists, so the one a test armed for never fails.",
+      "find": [
+        "        if answer == S_OK",
+        "            && let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
+      ],
+      "replace": [
+        "        if let Some(code) = Fail::spend(&mut lock(&self.shared).completions)"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled submit reaches the kernel",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stalled submit must not reach the kernel: that is what leaves the work queued and its completion absent. Falling through submits it, and the completion arrives during the stall it was meant to outlast.",
+      "find": [
+        "            return answer;"
+      ],
+      "replace": [
+        "            let _ = answer;"
+      ]
+    },
+    {
+      "name": "M38.1: the stall clock starts at arming",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "The stall is measured from the first submit it stalls, so a test that arms it and then builds its work is not charged for the building. Measured from arming, a slow build leaves nothing to stall.",
+      "find": [
+        "            Stall::For(duration)"
+      ],
+      "replace": [
+        "            Stall::Since(Instant::now(), duration)"
+      ]
+    },
+    {
+      "name": "M38.1: a stall never ends",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stall that never ends leaves a ring dropped mid-stall unable to run down: every submit is answered without reaching the kernel, forever.",
+      "find": [
+        "        if left.is_zero() {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled wait does not sleep",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A stalled submit that waits answers after the time it was asked to wait, as the kernel's wait would. Answering at once turns the stall into a spin of failed waits, and a bound measured on the clock passes without the time having passed.",
+      "find": [
+        "            std::thread::sleep(wait);"
+      ],
+      "replace": [
+        "            let _ = wait;"
+      ]
+    },
+    {
+      "name": "M38.1: a stalled wait is answered as a success",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A submit that waits for a completion and is not given one answers IORING_E_WAIT_TIMEOUT, which is how callers learn the wait expired. S_OK tells them the wait was satisfied.",
+      "find": [
+        "                IORING_E_WAIT_TIMEOUT,"
+      ],
+      "replace": [
+        "                S_OK,"
+      ]
+    },
+    {
+      "name": "M38.1: a stall takes precedence over a failure",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "A failure armed is a failure delivered: it is the answer a test asked for. Checked after the stall, a failure armed during a stall is never seen until the stall ends.",
+      "find": [
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;",
+        "        }",
+        "        if let Some((answer, wait)) = self.stalled(wait_operations, milliseconds) {",
+        "            std::thread::sleep(wait);",
+        "            if answer == S_OK && !submitted.is_null() {",
+        "                // SAFETY: `submitted` is the caller's valid out-pointer, as `SubmitIoRing`",
+        "                // requires; nothing was submitted, which is what is written.",
+        "                unsafe { submitted.write(0) };",
+        "            }",
+        "            return answer;",
+        "        }"
+      ],
+      "replace": [
+        "        if let Some((answer, wait)) = self.stalled(wait_operations, milliseconds) {",
+        "            std::thread::sleep(wait);",
+        "            if answer == S_OK && !submitted.is_null() {",
+        "                // SAFETY: `submitted` is the caller's valid out-pointer, as `SubmitIoRing`",
+        "                // requires; nothing was submitted, which is what is written.",
+        "                unsafe { submitted.write(0) };",
+        "            }",
+        "            return answer;",
+        "        }",
+        "        if let Some(code) = self.fails(Call::Submit) {",
+        "            return code;",
+        "        }"
+      ]
+    },
+    {
+      "name": "M38.1: clearing leaves the stall",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "clear() lets every call reach the kernel again, a stall included: a stall that survives it leaves the ring unable to run down after a test that cleared.",
+      "find": [
+        "        state.completions = None;",
+        "        state.stall = Stall::Off;"
+      ],
+      "replace": [
+        "        state.completions = None;"
+      ]
+    },
+    {
+      "name": "M38.1: clearing leaves the failed completions",
+      "file": "src/sys/call_faults.rs",
+      "expect": "caught",
+      "why": "clear() ends a failed-completion plan as it ends the others: a plan that survives it fails a completion the kernel completed.",
+      "find": [
+        "        state.completions = None;",
+        "        state.stall = Stall::Off;"
+      ],
+      "replace": [
+        "        state.stall = Stall::Off;"
+      ]
+    },
+    {
+      "name": "M39.1: rundown waits before it reaps",
+      "file": "src/ring/bookkeeping.rs",
+      "expect": "caught",
+      "why": "SubmitIoRing with a wait reports IORING_E_COMPLETION_QUEUE_TOO_FULL when the completion queue is full, whatever it waits for, and an entry that failed to submit for want of room is queued behind the completions. Waiting first fails the rundown of the ring that most needs one, with the room it wants one pop away; every full-queue test sees it, and so does a ring dropped that way.",
+      "find": [
+        "            self.drain_for_rundown()?;",
+        "            if self.is_quiescent() {"
+      ],
+      "replace": [
+        "            if self.is_quiescent() {"
+      ]
+    },
+    {
+      "name": "D-90: a batch left queued submits as it drops",
+      "file": "src/batch.rs",
+      "expect": "caught",
+      "why": "leave_queued is the caller's choice to own the doorbell: it marks the batch as already submitted so the drop does not. Without the mark the drop submits, and the read the test left queued is issued and completes before the later submit, which the test's wait for quiet sees.",
+      "find": [
+        "    pub fn leave_queued(mut self) {\n        self.submitted = true;\n    }"
+      ],
+      "replace": [
+        "    pub fn leave_queued(mut self) {\n        let _ = &mut self;\n    }"
+      ]
+    },
+    {
+      "name": "D-91: a ring is sealed with an operation in flight that it holds nothing for",
+      "file": "src/ring/inventory.rs",
+      "expect": "caught",
+      "why": "An owned ring promises it never has such an operation in flight, and the seal is where that is checked: outstanding exceeds held by exactly the operations the ring holds nothing for. Without the check a registration in flight goes in, and its completion later reaches a pop that cannot represent it.",
+      "find": ["        if self.outstanding() != self.held() {\n            return Err(self);\n        }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "D-91: an owned ring may queue what an open one may",
+      "file": "src/ring/kind.rs",
+      "expect": "caught",
+      "why": "The registrations and the raw flush and cancel are bounded by AllowsRaw, which only Open has, and that is what makes them not exist for an owned ring. Caught by the compile_fail doctests on AllowsRaw, which stop failing to compile.",
+      "find": ["impl AllowsRaw for Open {}\n"],
+      "replace": ["impl AllowsRaw for Open {}\n\nimpl AllowsRaw for Owned {}\n"]
+    },
+    {
+      "name": "D-91: a registration build loses its bound",
+      "file": "src/batch/push.rs",
+      "expect": "caught",
+      "why": "register_buffers on an owned ring is the case the bound exists for: its completion is one the ring holds nothing for. Caught by the compile_fail doctest that calls it on one.",
+      "find": ["    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>>\n    where\n        K: AllowsRaw,\n    {"],
+      "replace": ["    ) -> Result<PendingBufferRegistration<B>, PushRefused<Vec<B>, ()>> {"]
+    },
+    {
+      "name": "D-91: an open ring pop loses what the ring held",
+      "file": "src/ring/kind.rs",
+      "expect": "caught",
+      "why": "An open ring says what it held for a completion, or that it held nothing; the shape is passed through untouched.",
+      "find": ["        Ok((completion, held))\n"],
+      "replace": ["        let _ = held;\n        Ok((completion, None))\n"]
+    },
+    {
+      "name": "D-91: BLIND SPOT: an owned ring that held nothing for a completion returns an error instead of panicking",
+      "file": "src/ring/kind.rs",
+      "expect": "survives",
+      "why": "DECLARED BLIND SPOT. The branch is unreachable by construction: nothing can queue an operation an owned ring holds nothing for, and the seal refused while one was in flight, so no test can make a completion arrive for one without unsafe code that defeats the type. What stays unchecked is that reaching it panics, outside an unwind, as a defect (D-79).",
+      "find": ["            None => panic!(\n                \"an owned ring held nothing for the completion of operation {}: nothing can \\\n                 queue an operation it does not hold, so the ring's bookkeeping is inconsistent \\\n                 (D-91)\",\n                completion.user_data()\n            ),"],
+      "replace": ["            None => Err(io::Error::other(\"an owned ring held nothing for a completion\")),"]
     }
   ]
 }

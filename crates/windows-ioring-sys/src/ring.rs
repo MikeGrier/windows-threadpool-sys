@@ -2,6 +2,7 @@
 //! The owned `IoRing` handle (M1.2), and the op capability set (M1.4).
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use crate::token::OperationId;
@@ -162,7 +163,7 @@ impl InjectedFailure {
     /// guarantee is true by construction rather than by convention. A seam
     /// that could turn a real failure into an apparent success would let a
     /// test conceal the very defects it exists to find.
-    fn as_hresult(self) -> windows_sys::core::HRESULT {
+    pub(crate) fn as_hresult(self) -> windows_sys::core::HRESULT {
         let code = match self {
             Self::Ring(condition) => condition.code(),
             // `HRESULT_FROM_WIN32`: severity 1, facility 7 (`FACILITY_WIN32`),
@@ -550,7 +551,7 @@ const RUN_DOWN_POLL_MS: u32 = 50;
 /// reader does not re-derive it from a run. The `0x8007_0000` is
 /// `HRESULT_FROM_WIN32`'s severity-plus-`FACILITY_WIN32` prefix, which that
 /// macro ors onto any code of `0xFFFF` or less.
-const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
+pub(crate) const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
     (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as windows_sys::core::HRESULT;
 
 /// The largest `timeout_ms` a [`CompletionWait`] is ever handed: one below
@@ -607,7 +608,8 @@ fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
 // `Debug` is hand-written rather than derived: `IORING_BUFFER_INFO` does not
 // implement it, and the array's contents (raw addresses and lengths) are not
 // useful to print anyway -- its length is.
-pub struct IoRing<T = (), X = ()> {
+#[repr(C)]
+pub struct IoRing<T = (), X = (), K = Open> {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
@@ -635,6 +637,12 @@ pub struct IoRing<T = (), X = ()> {
     /// unwind out of that path's assert before any later line of the body
     /// could intervene. PR #113 review.
     late_read: ManuallyDrop<LateReadArrays>,
+    /// The files [`crate::Batch::register_shared_files`] registered, held for
+    /// the ring's life because Win32 has no unregister (M30.2,
+    /// [D-81](../DESIGN-NOTES.md#d-81)). Released by `Drop` after
+    /// `CloseIoRing`, and only on the proof `late_read` waits for; leaked
+    /// otherwise.
+    registered_files: ManuallyDrop<Vec<win_shared_os_owned_handle::SharedHandle>>,
     /// The completion event this ring created and attached, once
     /// [`IoRing::completion_event`] has been called (M11.1, D-20).
     ///
@@ -659,6 +667,11 @@ pub struct IoRing<T = (), X = ()> {
     ///
     /// `T` defaults to `()` so a consumer holding nothing never names it.
     inventory: ManuallyDrop<HashMap<usize, Entry<T, X>>>,
+    /// Whether the ring can have an operation in flight that it holds nothing for (M41.1,
+    /// [D-91](../DESIGN-NOTES.md#d-91)); no data. `repr(C)` above is what lets
+    /// [IoRing::into_owned] change it without moving a field: two rings that differ only here
+    /// have one layout.
+    kind: PhantomData<fn() -> K>,
 }
 
 /// The arrays a registration op reads when it *runs*, during a later
@@ -682,7 +695,7 @@ pub(crate) struct LateReadArrays {
     pub(crate) file_handles: Vec<*mut c_void>,
 }
 
-impl<T, X> std::fmt::Debug for IoRing<T, X> {
+impl<T, X, K> std::fmt::Debug for IoRing<T, X, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoRing")
             .field("handle", &self.handle)
@@ -695,6 +708,7 @@ impl<T, X> std::fmt::Debug for IoRing<T, X> {
             .field("accounting", &self.accounting)
             .field("late_read_buffer_infos", &self.late_read.buffer_infos.len())
             .field("late_read_file_handles", &self.late_read.file_handles.len())
+            .field("registered_files", &self.registered_files.len())
             .field("completion_event", &self.completion_event)
             .finish()
     }
@@ -705,7 +719,7 @@ impl<T, X> std::fmt::Debug for IoRing<T, X> {
 // moving ownership of one to another thread is sound. This does not imply
 // `Sync`: submitting to the ring is not thread-safe (D-5), so only `Send` is
 // implemented.
-unsafe impl<T: Send, X: Send> Send for IoRing<T, X> {}
+unsafe impl<T: Send, X: Send, K> Send for IoRing<T, X, K> {}
 
 /// Constructors for a ring that holds nothing on a caller's behalf.
 ///
@@ -744,7 +758,7 @@ impl IoRing<()> {
     }
 }
 
-impl<T, X> IoRing<T, X> {
+impl<T, X> IoRing<T, X, Open> {
     /// Create a ring at exactly `version`, whose inventory holds `T`.
     ///
     /// # Errors
@@ -781,14 +795,16 @@ impl<T, X> IoRing<T, X> {
             supported_ops,
             accounting: Accounting::new(),
             late_read: ManuallyDrop::new(LateReadArrays::default()),
+            registered_files: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
+            kind: PhantomData,
         })
     }
 }
 
 /// A ring that holds `T` on the caller's behalf for each in-flight operation.
-impl<T, X> IoRing<T, X> {
+impl<T, X, K> IoRing<T, X, K> {
     /// Whether this ring can be believed when it says nothing is outstanding.
     ///
     /// Asks the ledger, which tracks outstanding operations by **identity**:
@@ -833,7 +849,9 @@ impl<T, X> IoRing<T, X> {
     /// rather than merely convenient -- the completion is the proof the kernel
     /// has finished, which is exactly what makes freeing safe.
     fn drain_for_rundown(&mut self) -> io::Result<()> {
-        while let Some((_completion, _held)) = self.try_pop()? {}
+        while let Some(completion) = self.pop_raw()? {
+            drop(self.reclaim(completion.user_data()));
+        }
         Ok(())
     }
 
@@ -887,7 +905,7 @@ impl<T, X> IoRing<T, X> {
             Information: 0,
         };
         // SAFETY: `self.handle` is a live ring; valid out-pointer.
-        let hr = unsafe { crate::sys::pop(self.handle, &raw mut cqe) };
+        let hr = unsafe { crate::sys::pop(self.ring_id(), self.handle, &raw mut cqe) };
         if hr == S_FALSE {
             return Ok(None);
         }
@@ -902,7 +920,9 @@ impl<T, X> IoRing<T, X> {
             ring_id: self.accounting.ring_id(),
         }))
     }
+}
 
+impl<T, X, K: RingKind> IoRing<T, X, K> {
     /// Pop one completion, blocking in the ring's own wait until one is
     /// available or `timeout` elapses (M21.2).
     ///
@@ -936,7 +956,7 @@ impl<T, X> IoRing<T, X> {
     /// # Panics
     ///
     /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
-    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<HeldCompletion<T, X>>> {
+    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<K::Popped<T, X>>> {
         self.pop_within_with(&mut SubmitWait, timeout)
     }
 
@@ -960,16 +980,18 @@ impl<T, X> IoRing<T, X> {
         &mut self,
         wait: &mut W,
         timeout: Duration,
-    ) -> io::Result<Option<HeldCompletion<T, X>>> {
+    ) -> io::Result<Option<K::Popped<T, X>>> {
         let Some(completion) = self.pop_within_raw_with(wait, timeout)? else {
             return Ok(None);
         };
         let held = self
             .reclaim(completion.user_data())
             .map(|entry| (entry.payload, entry.extra));
-        Ok(Some((completion, held)))
+        K::shape(completion, held).map(Some)
     }
+}
 
+impl<T, X, K> IoRing<T, X, K> {
     /// [`IoRing::pop_within_with`] without touching the inventory.
     ///
     /// The counterpart to [`IoRing::pop_raw`], and private for the same
@@ -1131,7 +1153,15 @@ impl RingWait<'_> {
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
-        let hr = unsafe { crate::sys::submit(self.handle, 1, timeout_ms, &raw mut submitted) };
+        let hr = unsafe {
+            crate::sys::submit(
+                self.accounting.ring_id(),
+                self.handle,
+                1,
+                timeout_ms,
+                &raw mut submitted,
+            )
+        };
         wait_outcome(hr)
     }
 
@@ -1187,13 +1217,15 @@ impl IoRing {
             supported_ops: OpSupport::default(),
             accounting: Accounting::new(),
             late_read: ManuallyDrop::new(LateReadArrays::default()),
+            registered_files: ManuallyDrop::new(Vec::new()),
             completion_event: None,
             inventory: ManuallyDrop::new(HashMap::new()),
+            kind: PhantomData,
         }
     }
 }
 
-impl<T, X> Drop for IoRing<T, X> {
+impl<T, X, K> Drop for IoRing<T, X, K> {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
         // the rundown-and-close actually executes rather than trusting the
@@ -1242,6 +1274,14 @@ impl<T, X> Drop for IoRing<T, X> {
             }
         };
 
+        // A responder registered for this ring answers through the rundown
+        // above and no further (D-85): it may hold operations the kernel never
+        // saw, so the rundown is its to answer, and nothing after this line
+        // calls through the seam. Ended before `CloseIoRing`, so the handle
+        // cannot be reused while it is registered.
+        #[cfg(feature = "kernel-seam")]
+        crate::sys::ring_dropped(self.accounting.ring_id());
+
         // The inventory is dropped only when rundown actually quiesced the
         // ring, and **forgotten otherwise** (D-73). This is `Token`'s
         // leak-on-unclaimed-drop, relocated: it used to be the caller's,
@@ -1267,6 +1307,7 @@ impl<T, X> Drop for IoRing<T, X> {
         // The kernel reads them when the registration op runs (D-32), and a
         // failed rundown is precisely the case where this ring cannot say
         // whether that has happened.
+        let mut released_files = None;
         if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds and no registration op can still
@@ -1287,11 +1328,24 @@ impl<T, X> Drop for IoRing<T, X> {
                 LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));
             }
             drop(arrays);
+            // Taken now, released only after the close below (D-81).
+            //
+            // SAFETY: as above; the field is not read again.
+            released_files = Some(unsafe { ManuallyDrop::take(&mut self.registered_files) });
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
         // (or made a best-effort attempt to, above).
         let hr = unsafe { CloseIoRing(self.handle) };
+        // Whether the kernel references a registered handle until the ring
+        // closes is undocumented, so the handles outlive the close. They are
+        // released before the assert below, which would otherwise unwind past
+        // this line.
+        if let Some(files) = released_files {
+            #[cfg(test)]
+            REGISTERED_FILES_RELEASED.with(|released| released.set(released.get() + files.len()));
+            drop(files);
+        }
         debug_assert!(
             hr >= 0 || std::thread::panicking(),
             "CloseIoRing failed: 0x{:08X}",
@@ -1328,6 +1382,13 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     pub(crate) static LATE_READ_ARRAYS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// How many registered `SharedHandle`s `IoRing`'s `Drop` has released on the
+// calling thread (D-81). Thread-local for the reason `DROP_RUNS` is.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REGISTERED_FILES_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Pop one completion, bounded, for tests that need a real one.
@@ -1370,6 +1431,9 @@ pub(crate) fn pop_within<T, X>(ring: &mut IoRing<T, X>, what: &str) -> Completio
 // No public path changes: an inherent `impl` is found by its type.
 mod bookkeeping;
 mod inventory;
+mod kind;
+
+pub use kind::{AllowsRaw, Open, Owned, RingKind};
 
 #[cfg(test)]
 mod tests;

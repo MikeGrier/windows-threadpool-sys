@@ -1,8 +1,8 @@
 {
   "package": "windows-overlapped-io-sys",
-  "description": "Sabotages for the observer's information queries (M16). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "Sabotages of M16.1-M16.5 were run by hand when those items landed and were not recorded; they are not reconstructed here. The two administrative-share tests are #[ignore]d, so the sweep does not run them: the SMB2 and loopback entries below are caught by the pure conversion tests alone.",
-  "testArgs": ["-p", "windows-overlapped-io-sys", "--features", "fs", "--lib"],
+  "description": "Sabotages for the observer's information queries (M17) and for PageBuffers, which holds its pages in an io_buffers::AlignedBuf (IB-2+.2) aligned to the OS page size or a device's (M17.5). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Sabotages of M17.1-M17.5 were run by hand when those items landed and were not recorded; they are not reconstructed here. The two administrative-share tests are #[ignore]d, so the sweep does not run them: the SMB2 and loopback entries below are caught by the pure conversion tests alone. The completion-port and operation machinery is not covered. The entry that refused a PAGE_SIZE not a power of two at build time went with PAGE_SIZE itself: the page size is asked of the OS (M17.5), so that fact is a test (the_page_size_is_the_operating_systems), not a constant.",
+  "testArgs": ["-p", "windows-overlapped-io-sys", "--all-features", "--lib", "--locked"],
   "sabotages": [
     {
       "name": "basic info swaps the access and write times",
@@ -221,7 +221,7 @@
       "name": "the volume query cancels the handle's I/O",
       "file": "src/endpoint/volume_info.rs",
       "expect": "caught",
-      "why": "M16.10's claim is that EVERY query leaves a pending operation alone, and the M15.5 tests already cover file_len's path. This patch breaks a query only the shared table issues while an operation pends, so the pending connect and read are aborted rather than completed.",
+      "why": "M17.10's claim is that EVERY query leaves a pending operation alone, and the M16.5 tests already cover file_len's path. This patch breaks a query only the shared table issues while an operation pends, so the pending connect and read are aborted rather than completed.",
       "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
       "replace": [
         "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
@@ -238,6 +238,70 @@
         "        let flags = volume.flag() | form.flag();",
         "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, std::ptr::null()) };"
       ]
+    },
+    {
+      "name": "IB-2+.2: the pages are allocated at byte alignment",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Page alignment is what the scatter and gather calls require of every segment. The alignment tests read it back from the buffer's own address for several page counts.",
+      "find": ["AlignedBuf::zeroed(size, align)"],
+      "replace": ["AlignedBuf::zeroed(size, 1)"]
+    },
+    {
+      "name": "IB-2+.2: each segment starts eight bytes after the last, not a page",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "Every segment must name its own page; overlapping segments would read or write the same bytes twice.",
+      "find": ["self.buffer.as_ptr().cast_mut().add(i * page_size)"],
+      "replace": ["self.buffer.as_ptr().cast_mut().add(i * 8)"]
+    },
+    {
+      "name": "IB-2+.2: the segment array has no terminator",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The kernel reads segments until it meets a zeroed element, so a missing one runs it off the end of the array.",
+      "find": ["        segments.push(FILE_SEGMENT_ELEMENT { Alignment: 0 });\n"],
+      "replace": ["        // (sabotaged) no terminator\n"]
+    },
+    {
+      "name": "IB-2+.2: the length is half a page short",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A short length transfers fewer bytes than the buffer holds.",
+      "find": ["        self.pages * page_size()\n    }\n\n    /// Always"],
+      "replace": ["        self.pages * page_size() - page_size() / 2\n    }\n\n    /// Always"]
+    },
+    {
+      "name": "NR-3: zero pages is not refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A buffer with no pages has nothing for a scatter or gather call to name; the constructor refuses it as invalid input, at the caller's own call site.",
+      "find": ["        if pages == 0 {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3: a page count whose length overflows wraps instead of being refused",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "A wrapped length is a small, valid allocation for a count that asked for far more: the buffer would be short of its own page count.",
+      "find": ["        let size = pages.checked_mul(page_size()).ok_or_else(|| {\n            io::Error::new(io::ErrorKind::InvalidInput, \"page buffer size overflow\")\n        })?;\n"],
+      "replace": ["        let size = pages.wrapping_mul(page_size());\n"]
+    },
+    {
+      "name": "NR-3: an allocation the machine cannot supply is reported as invalid input",
+      "file": "src/fs.rs",
+      "expect": "caught",
+      "why": "The count is the caller's and a failed allocation is out of memory, which a caller answers by asking for fewer pages; invalid input would read as a bug in the count's shape.",
+      "find": ["                io::Error::new(io::ErrorKind::OutOfMemory, error)\n"],
+      "replace": ["                io::Error::new(io::ErrorKind::InvalidInput, error)\n"]
+    },
+    {
+      "name": "IB-2+.2: CONTROL: the page count is read through an identity addition",
+      "file": "src/fs.rs",
+      "expect": "survives",
+      "why": "Behaviour is unchanged, so a sweep that reports this caught is not discriminating.",
+      "find": ["    pub fn pages(&self) -> usize {\n        self.pages\n"],
+      "replace": ["    pub fn pages(&self) -> usize {\n        self.pages + 0\n"]
     }
   ]
 }

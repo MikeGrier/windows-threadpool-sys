@@ -7,8 +7,9 @@
 //!
 //! - **The handle must stay valid while a wait is pending.** [`ThreadpoolWait`]
 //!   therefore *owns* its handle rather than borrowing one, so it cannot be
-//!   closed underneath a pending wait. Use [`ThreadpoolWait::handle`] to signal
-//!   or inspect it.
+//!   closed underneath a pending wait. Use [`ThreadpoolWait::handle`] to
+//!   inspect it; to signal an event the wait owns, build the wait from a
+//!   `win-sync-sys` [`Event`] and keep a clone of it.
 //! - **A wait fires at most once per arming.** The SDK requires the wait to be
 //!   rearmed explicitly for each activation, so the callback receives a
 //!   [`WaitActivation`] carrying [`WaitActivation::rearm`]. A callback that does
@@ -18,17 +19,18 @@
 //! [`ThreadpoolWait::new`].
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::ptr;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
 
 use crate::rearm::RearmSuppression;
 
+use win_sync_sys::{Event, ResetMode};
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
-    CloseThreadpoolWait, CreateEventW, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT,
-    SetThreadpoolWait, WaitForThreadpoolWaitCallbacks,
+    CloseThreadpoolWait, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT, SetThreadpoolWait,
+    WaitForThreadpoolWaitCallbacks,
 };
 use windows_sys::core::BOOL;
 
@@ -158,7 +160,8 @@ impl std::fmt::Debug for WaitTarget {
 /// type instead of a bare [`OwnedHandle`] moves that precondition from prose
 /// into the type system, so a safe caller cannot reach the undefined case.
 ///
-/// Construct one safely with [`WaitableHandle::event`], or vouch for a handle
+/// Construct one safely from a `win-sync-sys` [`Event`] (`From<Event>`) or with
+/// [`WaitableHandle::event`], or vouch for a handle
 /// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam --
 /// or [`WaitableHandle::assume_waitable_with`] when the handle needs a close
 /// routine other than `CloseHandle`.
@@ -178,27 +181,21 @@ impl WaitableHandle {
     /// event returns to unsignalled as soon as one wait is satisfied, which
     /// makes it the usual choice for handing off work one activation at a time.
     ///
+    /// The event is a `win-sync-sys` [`Event`], so this crate creates none of
+    /// its own. To be able to set the event once the wait owns it, create the
+    /// [`Event`] directly, keep a [`try_clone`](Event::try_clone), and convert
+    /// the other with `From<Event>`.
+    ///
     /// # Errors
     ///
-    /// Returns the error from `CreateEventW`.
+    /// Returns the error from [`Event::new`].
     pub fn event(manual_reset: bool, initially_signalled: bool) -> io::Result<Self> {
-        // SAFETY: creating an unnamed event with default security attributes;
-        // all pointer arguments are null by design.
-        let raw = unsafe {
-            CreateEventW(
-                ptr::null(),
-                if manual_reset { TRUE } else { FALSE },
-                if initially_signalled { TRUE } else { FALSE },
-                ptr::null(),
-            )
+        let reset = if manual_reset {
+            ResetMode::Manual
+        } else {
+            ResetMode::Auto
         };
-        if raw.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the call returned a fresh, exclusively owned event handle.
-        Ok(Self {
-            target: WaitTarget::Owned(unsafe { OwnedHandle::from_raw_handle(raw) }),
-        })
+        Ok(Event::new(reset, initially_signalled)?.into())
     }
 
     /// Wrap a handle whose wait support the caller vouches for.
@@ -283,6 +280,19 @@ impl WaitableHandle {
     /// Consume the wrapper and recover the owner, whichever kind it is.
     pub(crate) fn into_target(self) -> WaitTarget {
         self.target
+    }
+}
+
+/// An event is always a target the pool supports, so this needs no `unsafe`.
+///
+/// An [`Event`] is guaranteed to be an event rather than a mutex -- adopting a
+/// handle as one is `unsafe` in `win-sync-sys` for exactly this reason -- and
+/// to carry the access a wait needs.
+impl From<Event> for WaitableHandle {
+    fn from(event: Event) -> Self {
+        Self {
+            target: WaitTarget::Owned(event.into()),
+        }
     }
 }
 
@@ -452,16 +462,16 @@ impl WaitActivation<'_> {
     /// the wait to be re-armed for the handle's *current* signal state to be
     /// observed.
     ///
-    /// Either reset the handle before re-arming, using
-    /// [`handle`](Self::handle), so the next activation waits for a fresh
-    /// signal:
+    /// Either reset the event before re-arming, so the next activation waits
+    /// for a fresh signal -- through a clone of the `win-sync-sys` [`Event`]
+    /// the wait was built from, which the callback keeps:
     ///
     /// ```no_run
-    /// # use std::os::windows::io::AsRawHandle;
-    /// # use windows_sys::Win32::System::Threading::ResetEvent;
-    /// # fn example(activation: &windows_threadpool_sys::wait::WaitActivation<'_>) {
-    /// // SAFETY: the wait owns the event, so the handle is open here.
-    /// unsafe { ResetEvent(activation.handle().as_raw_handle()) };
+    /// # fn example(activation: &windows_threadpool_sys::wait::WaitActivation<'_>, event: &win_sync_sys::Event) {
+    /// // `event` is the callback's clone of the event this wait watches.
+    /// event
+    ///     .reset()
+    ///     .expect("an event created here has the access to reset it");
     /// activation.rearm(None);
     /// # }
     /// ```
@@ -628,26 +638,26 @@ unsafe extern "system" fn wait_trampoline(
 ///
 /// # Examples
 ///
-/// Watch an event once. The wait takes ownership of the handle, and
-/// [`ThreadpoolWait::handle`] borrows it back for signalling:
+/// Watch an event once. The wait takes ownership of the handle it is given, so
+/// keep a clone of the [`Event`] -- a second handle to the same event -- to
+/// signal it through:
 ///
 /// ```
-/// use std::os::windows::io::AsRawHandle;
 /// use std::sync::mpsc;
-/// use windows_sys::Win32::System::Threading::SetEvent;
-/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult, WaitableHandle};
+/// use win_sync_sys::{Event, ResetMode};
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult};
 ///
-/// let event = WaitableHandle::event(true, false)?;
+/// let event = Event::new(ResetMode::Manual, false)?;
+/// let signal = event.try_clone()?;
 ///
 /// let (tx, rx) = mpsc::channel();
 /// let sender = std::sync::Mutex::new(tx);
-/// let wait = ThreadpoolWait::new(event, move |activation| {
+/// let wait = ThreadpoolWait::new(event.into(), move |activation| {
 ///     let _ = sender.lock().expect("send").send(activation.result());
 /// }, None)?;
 ///
 /// wait.arm(None);
-/// // SAFETY: the wait owns the event, so the handle is still open.
-/// unsafe { SetEvent(wait.handle().as_raw_handle()) };
+/// signal.set()?;
 ///
 /// assert_eq!(rx.recv().expect("activation"), WaitResult::Signalled);
 /// # Ok::<(), std::io::Error>(())
@@ -657,25 +667,24 @@ unsafe extern "system" fn wait_trampoline(
 /// is what the SDK requires -- an activation consumes the arming:
 ///
 /// ```
-/// # use std::os::windows::io::AsRawHandle;
 /// # use std::sync::Arc;
 /// # use std::sync::atomic::{AtomicUsize, Ordering};
-/// # use windows_sys::Win32::System::Threading::SetEvent;
-/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
+/// use win_sync_sys::{Event, ResetMode};
+/// use windows_threadpool_sys::wait::ThreadpoolWait;
 ///
-/// let event = WaitableHandle::event(false, false)?;
+/// let event = Event::new(ResetMode::Auto, false)?;
+/// let signal = event.try_clone()?;
 ///
 /// let seen = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&seen);
-/// let wait = ThreadpoolWait::new(event, move |activation| {
+/// let wait = ThreadpoolWait::new(event.into(), move |activation| {
 ///     counter.fetch_add(1, Ordering::SeqCst);
 ///     activation.rearm(None);
 /// }, None)?;
 ///
 /// wait.arm(None);
 /// for _ in 0..3 {
-///     // SAFETY: the wait owns the event, so the handle is still open.
-///     unsafe { SetEvent(wait.handle().as_raw_handle()) };
+///     signal.set()?;
 ///     std::thread::sleep(std::time::Duration::from_millis(5));
 /// }
 ///

@@ -14,6 +14,9 @@
 //!   Windows will answer about nodes, wrapped so a caller can find a node to
 //!   pass without writing the FFI themselves.
 //!
+//! [`NumaBuffer`] implements `io-buffers`' `IoBuf` and `IoBufMut`, so it can be
+//! handed to a ring as it is. This crate defines no buffer trait of its own.
+//!
 //! # What is not here, and will not be
 //!
 //! **Any opinion about which node anything should use.** This crate reports
@@ -49,6 +52,7 @@
 #![deny(missing_docs)]
 
 mod buffer;
+mod io_buf;
 mod node;
 
 pub use buffer::NumaBuffer;

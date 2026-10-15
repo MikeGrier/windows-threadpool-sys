@@ -205,26 +205,34 @@ impl OpenFile {
     /// Copies the request, duplicating the template handle if it has one.
     ///
     /// This is not `Clone` because a request may own a handle, and duplicating
-    /// a handle is fallible. The type inherits that from
-    /// [`CapturedHandle::try_clone`] rather than hiding it behind an infallible
+    /// a handle is fallible, as is copying the security attributes it may own.
+    /// The type inherits that from [`CapturedHandle::try_clone`] and
+    /// [`SecurityAttributes::try_clone`] rather than hiding it behind an infallible
     /// signature that would have to panic.
     ///
     /// # Errors
     ///
     /// Returns the handle-capture failure when the template cannot be
-    /// duplicated. A request with no template cannot fail.
+    /// duplicated, or [`crate::HandleCaptureFailure::CopySecurity`] when the memory for the
+    /// security attributes cannot be allocated. A request with neither cannot fail.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         let template = self
             .template
             .as_ref()
             .map(CapturedHandle::try_clone)
             .transpose()?;
+        let security = self
+            .security
+            .as_ref()
+            .map(SecurityAttributes::try_clone)
+            .transpose()
+            .map_err(|error| HandleCaptureError::copying_security(error.into_source()))?;
 
         Ok(Self {
             path: self.path.clone(),
             desired_access: self.desired_access,
             share_mode: self.share_mode,
-            security: self.security.clone(),
+            security,
             creation_disposition: self.creation_disposition,
             flags_and_attributes: self.flags_and_attributes,
             template,

@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "io-buffers"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Buffers for asynchronous I/O: the unsafe traits by which an owner promises its memory stays put until the kernel is done with it, and an owned buffer with an alignment the caller chooses. Portable."
+keywords = ["io", "buffer", "aligned", "io-uring", "ioring"]
+categories = ["memory-management", "asynchronous"]
+
+# Portable: no `cfg(windows)` gating and no dependencies. The crate exists so the portable core of
+# `durable-ioring` can name the buffer contract without a Windows dependency (IB-D-1 in
+# DESIGN-NOTES.md), and CI builds, tests and lints it on Linux and macOS beside `wtf-string`.
+[dependencies]

@@ -241,6 +241,25 @@ fn a_copy_duplicates_the_volume_hint() {
 }
 
 #[test]
+fn a_copy_keeps_the_security_attributes() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("byid-copy-security");
+    let hint = open_directory_for_hint(&fixture);
+    let request = OpenFileByIdentifier::new(
+        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        FileIdentifier::FileId(1),
+    )
+    .with_security(Some(SecurityAttributes::new(None, true)));
+
+    let copy = request.try_clone().expect("copy the request");
+
+    assert!(copy.security().is_some(), "the copy kept its attributes");
+    assert_eq!(copy.security(), request.security());
+}
+
+#[test]
 fn a_request_performs_the_same_way_on_another_thread() {
     const fn assert_send<T: Send>() {}
     const fn assert_sync<T: Sync>() {}

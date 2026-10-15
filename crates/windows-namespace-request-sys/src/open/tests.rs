@@ -352,6 +352,36 @@ fn a_copy_is_fallible_because_a_request_may_own_a_handle() {
 }
 
 #[test]
+fn a_copy_owns_its_own_copy_of_the_security_attributes() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("open-copy-security");
+    let absolute = Absolute::with_populated_dacl();
+    // SAFETY: the absolute descriptor and everything it names outlive the call.
+    let descriptor =
+        unsafe { SecurityDescriptor::capture(absolute.as_ptr()) }.expect("capture a descriptor");
+    let request = request_for(&fixture.file())
+        .with_security(Some(SecurityAttributes::new(Some(descriptor), true)));
+
+    let copy = request.try_clone().expect("copy the request");
+
+    assert_eq!(copy.security(), request.security());
+    let blob = |request: &OpenFile| {
+        request
+            .security()
+            .and_then(SecurityAttributes::descriptor)
+            .expect("the request has a descriptor")
+            .as_ptr()
+    };
+    assert_ne!(
+        blob(&copy),
+        blob(&request),
+        "each request owns its own blob"
+    );
+}
+
+#[test]
 fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
     let _allocating = handle_allocation()
         .read()

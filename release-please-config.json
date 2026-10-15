@@ -21,13 +21,33 @@
             "component": "windows-platform-probes",
             "versioning": "probe-calver"
         },
-        "crates/win-numa-sys": {
+        "crates/durable-ioring": {
+      "package-name": "durable-ioring",
+      "component": "durable-ioring"
+    },
+    "crates/win-numa-sys": {
       "package-name": "win-numa-sys",
       "component": "win-numa-sys"
     },
         "crates/win-shared-os-owned-handle": {
             "package-name": "win-shared-os-owned-handle",
             "component": "win-shared-os-owned-handle"
+        },
+        "crates/io-buffers": {
+            "package-name": "io-buffers",
+            "component": "io-buffers"
+        },
+        "crates/win-durable-ioring": {
+            "package-name": "win-durable-ioring",
+            "component": "win-durable-ioring"
+        },
+        "crates/win-sync-sys": {
+            "package-name": "win-sync-sys",
+            "component": "win-sync-sys"
+        },
+        "crates/win-time-sys": {
+            "package-name": "win-time-sys",
+            "component": "win-time-sys"
         },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",

@@ -225,7 +225,7 @@ fn a_release_whose_claim_pinned_nothing_reports_untracked_rather_than_re_registe
 
     // Registration fails while the member is created, so its registration --
     // and the claim recovered from it -- holds no entry.
-    crate::heal::FORCE_REPAIR_FAILURE_FOR.store(key, Ordering::SeqCst);
+    let forced = Arc::new(crate::heal::ForcedRepairFailure::for_pool(key));
 
     let mut group = CleanupGroup::new().expect("create group");
     {
@@ -244,8 +244,9 @@ fn a_release_whose_claim_pinned_nothing_reports_untracked_rather_than_re_registe
     // removed retry would have succeeded.
     let lifted = Arc::new(AtomicBool::new(false));
     let in_hook = Arc::clone(&lifted);
+    let forced_in_hook = Arc::clone(&forced);
     group.on_before_release(move || {
-        crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
+        forced_in_hook.lift();
         in_hook.store(true, Ordering::SeqCst);
     });
 
@@ -257,7 +258,7 @@ fn a_release_whose_claim_pinned_nothing_reports_untracked_rather_than_re_registe
         lifted.load(Ordering::SeqCst),
         "the hook never ran, so the failure was never lifted and this proved nothing"
     );
-    crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
+    forced.lift();
 
     let payload = panicked.expect_err(
         "a cancellation whose claim pinned nothing is untracked, and `fail-fast` must say so. \

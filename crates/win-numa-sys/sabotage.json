@@ -1,0 +1,39 @@
+{
+  "package": "win-numa-sys",
+  "description": "Sabotages for win-numa-sys's buffer-trait implementations (IB-1.2). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The allocator itself (buffer.rs) and the node queries (node.rs) have no entries here: this manifest was added with the buffer-trait implementations, and covers only them. Whether the pages landed on the node asked for is not observable on the single-node host these tests run on, as buffer/tests.rs says.",
+  "sabotages": [
+    {
+      "name": "IB-1.2: the shared address is null",
+      "file": "src/io_buf.rs",
+      "expect": "caught",
+      "why": "A null address is the one a ring would hand the kernel. Compared against the buffer's own pointer, and read back after a write through the mutable one, so a plausible wrong pointer fails too. Scored as a process abort, because the test that reads through the pointer builds a slice from it and Rust's precondition check aborts on a null one; the correspondence test fails an assertion on its own, which is the deterministic catch, and the abort only hides it.",
+      "find": ["    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["    fn stable_ptr(&self) -> *const u8 {\n        std::ptr::null()\n"]
+    },
+    {
+      "name": "IB-1.2: the length reported is the mapped one, not the requested one",
+      "file": "src/io_buf.rs",
+      "expect": "caught",
+      "why": "The allocation is page-granular. Reporting the page-rounded length tells the kernel it may use bytes the caller never asked about.",
+      "find": ["    fn bytes_len(&self) -> usize {\n        self.len()\n"],
+      "replace": ["    fn bytes_len(&self) -> usize {\n        self.len().next_multiple_of(4096)\n"]
+    },
+    {
+      "name": "IB-1.2: the mutable address is null",
+      "file": "src/io_buf.rs",
+      "expect": "caught",
+      "why": "The mutable trait's obligation is that its address equals the shared one, so the kernel writes where the owner reads. Scored as a process abort for the reason the first entry gives; the correspondence test fails an assertion on its own.",
+      "find": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        self.as_mut_ptr()\n"],
+      "replace": ["    fn stable_mut_ptr(&mut self) -> *mut u8 {\n        std::ptr::null_mut()\n"]
+    },
+    {
+      "name": "CONTROL: the address is read through the type rather than the method",
+      "file": "src/io_buf.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself: NumaBuffer::as_ptr(self) is the same call spelled differently, on code every test runs. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["    fn stable_ptr(&self) -> *const u8 {\n        self.as_ptr()\n"],
+      "replace": ["    fn stable_ptr(&self) -> *const u8 {\n        NumaBuffer::as_ptr(self)\n"]
+    }
+  ]
+}

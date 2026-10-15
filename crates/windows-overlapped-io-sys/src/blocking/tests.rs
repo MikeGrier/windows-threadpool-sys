@@ -175,7 +175,7 @@ fn observer_queries_while_a_read_pends_do_not_disturb_it() {
     drop(writer.join().expect("writer"));
 }
 
-/// Every observer query, not only `file_len`, while a read pends (M16.10). The
+/// Every observer query, not only `file_len`, while a read pends (M17.10). The
 /// blocking backend has no cancellation, so completion is the only outcome.
 #[cfg(feature = "fs")]
 #[test]
@@ -205,7 +205,7 @@ fn every_query_while_a_read_pends_leaves_it_to_complete() {
     drop(writer.join().expect("writer"));
 }
 
-/// Pins the measurement M15.6 rests on: a synchronous query through an observer
+/// Pins the measurement M16.6 rests on: a synchronous query through an observer
 /// leaves a signalled handle unsignalled.
 #[cfg(feature = "fs")]
 #[test]

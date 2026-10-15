@@ -31,7 +31,7 @@ mod tests;
 ///
 /// The event is the endpoint's own rather than the handle's, because a
 /// synchronous query through an [`EndpointObserver`] resets the handle's event
-/// and could strand a wait on it (M15.6).
+/// and could strand a wait on it (M16.6).
 ///
 /// The type is still `Send + Sync`, so an endpoint can be moved between threads
 /// or shared behind a `Mutex`; what it cannot do is have two operations in
@@ -55,7 +55,7 @@ impl BlockingEndpoint {
     /// Take ownership of an overlapped endpoint for synchronous completion.
     ///
     /// Any notification mode is accepted. `skip_set_event_on_handle` was
-    /// refused before M15.6, when the wait used the handle's own event; it now
+    /// refused before M16.6, when the wait used the handle's own event; it now
     /// uses an event this endpoint creates, which that mode does not suppress.
     ///
     /// # Errors

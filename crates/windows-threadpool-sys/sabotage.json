@@ -351,12 +351,68 @@
       "name": "an observer's volume query cancels the handle's I/O",
       "file": "../windows-overlapped-io-sys/src/endpoint/volume_info.rs",
       "expect": "caught",
-      "why": "M16.10: every observer query, issued from windows-overlapped-io-sys' shared table while a TP_IO read pends, must leave that read to complete. The volume query is one only that table issues while an operation pends. Patched in the sibling crate because that is where the query lives. CAUTION on what a catch here shows: this manifest's testArgs run the whole workspace, and cargo stops at the first failing test binary, which is windows-overlapped-io-sys' own -- so the sweep reports this caught without reaching the TP_IO tests. That those tests catch it too was verified by applying this patch and running `io::tests::observers::every_query` alone (both failed, 2026-10-15); this entry re-checks the claim, not that half of it.",
+      "why": "M17.10: every observer query, issued from windows-overlapped-io-sys' shared table while a TP_IO read pends, must leave that read to complete. The volume query is one only that table issues while an operation pends. Patched in the sibling crate because that is where the query lives. CAUTION on what a catch here shows: this manifest's testArgs run the whole workspace, and cargo stops at the first failing test binary, which is windows-overlapped-io-sys' own -- so the sweep reports this caught without reaching the TP_IO tests. That those tests catch it too was verified by applying this patch and running `io::tests::observers::every_query` alone (both failed, 2026-10-15); this entry re-checks the claim, not that half of it.",
       "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
       "replace": [
         "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
         "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.as_raw_handle(), std::ptr::null()) };"
       ]
+    },
+    {
+      "name": "M-T14.1: the conversion from an Event makes a fresh event",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A wait target that is a different event looks like a working wait in isolation; it fails only where the caller signals through the clone it kept, which is the documented way to signal a pool-owned event. Caught in this crate by the_conversion_keeps_the_event_it_was_given, without a timing window -- checked by hand with this crate's wait tests alone, because under this manifest's workspace-wide run a dependent crate's test (windows-file-enumeration-sys' doorbell, which starts signalled through WaitableHandle::event) fails first and cargo stops there.",
+      "find": [
+        "            target: WaitTarget::Owned(event.into()),\n"
+      ],
+      "replace": [
+        "            target: WaitTarget::Owned(Event::new(ResetMode::Manual, false).expect(\"sabotage\").into()),\n"
+      ]
+    },
+    {
+      "name": "M-T14.1: WaitableHandle::event swaps the reset modes",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The constructor's boolean must still mean what it meant when it called CreateEventW itself. Caught in this crate by the_event_constructor_makes_each_reset_mode_and_initial_state -- checked by hand, for the same reason as the entry above: dependent crates' tests fail first under the workspace-wide run.",
+      "find": [
+        "        let reset = if manual_reset {\n            ResetMode::Manual\n        } else {\n            ResetMode::Auto\n        };\n"
+      ],
+      "replace": [
+        "        let reset = if manual_reset {\n            ResetMode::Auto\n        } else {\n            ResetMode::Manual\n        };\n"
+      ]
+    },
+    {
+      "name": "a forced repair failure replaces every other one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The test seam's own defect, which made two self-heal tests fail intermittently: one slot shared by every forcing test, so a second forcing replaced the first. The tests that rely on a forced failure would then pass or fail by scheduling.",
+      "find": ["            forced_repair_failures().push(key);\n"],
+      "replace": ["            let mut forced = forced_repair_failures();\n            forced.clear();\n            forced.push(key);\n"]
+    },
+    {
+      "name": "ending a forced repair failure ends every other one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The other half of the same defect: the slot was cleared when any forcing ended, so a test still inside its forced scope found its pool registering after all.",
+      "find": ["            if let Some(at) = forced.iter().position(|&key| key == self.key) {\n                forced.swap_remove(at);\n            }\n"],
+      "replace": ["            forced.clear();\n"]
+    },
+    {
+      "name": "lifting a forced repair failure twice removes another forcing of the same pool",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "A forcing may be lifted early and then dropped, as the cleanup-group test does; without the once-only guard the drop removes a second entry for the key, which belongs to another forcing of the same pool.",
+      "find": ["            if self.lifted.swap(true, Ordering::SeqCst) {\n                return;\n            }\n"],
+      "replace": ["            self.lifted.store(true, Ordering::SeqCst);\n"]
+    },
+    {
+      "name": "CONTROL: a lifted forcing is removed in order rather than swapped out",
+      "file": "src/heal.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The forced keys are a multiset that is only searched, never read in order, so which removal is used changes nothing a test can see.",
+      "find": ["                forced.swap_remove(at);\n"],
+      "replace": ["                forced.remove(at);\n"]
     }
   ]
 }

@@ -2,4 +2,4 @@
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | not started | Adoption by the crates that wrap `Arc<OwnedHandle>` themselves, and publication. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | Adoption by the crates that wrap `Arc<OwnedHandle>` themselves; publication is done. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
