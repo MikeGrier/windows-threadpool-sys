@@ -83,7 +83,7 @@
 //! // omission distinguishable from an aspect that was captured and empty.
 //! assert_eq!(state.captured_set(), CaptureSet::DEFAULT);
 //! assert!(state.impersonation().was_captured());
-//! assert!(!state.transaction().was_captured());
+//! assert!(state.error_mode().was_captured());
 //!
 //! // Applying installs every aspect in a fixed order and releases in exact
 //! // reverse. An uncaptured aspect is skipped, leaving the running thread's own
@@ -108,8 +108,8 @@ use crate::error_mode::{
     ApplyError as ErrorModeApplyError, RestoreError as ErrorModeRestoreError, ThreadErrorMode,
     UnsupportedBits,
 };
-use crate::transaction::{TransactionContext, TransactionError};
-use crate::{impersonation, transaction};
+use crate::impersonation;
+
 /// Which aspect failed to capture, and why.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -118,8 +118,6 @@ pub enum CaptureFailure {
     Impersonation(ImpersonationCaptureError),
     /// The thread error mode reported a value this crate cannot represent.
     ErrorMode(UnsupportedBits),
-    /// The current transaction could not be captured.
-    Transaction(TransactionError),
 }
 
 /// A composite capture failed.
@@ -138,7 +136,6 @@ impl CaptureError {
         match self.failure {
             CaptureFailure::Impersonation(_) => CapturableAspect::Impersonation,
             CaptureFailure::ErrorMode(_) => CapturableAspect::ErrorMode,
-            CaptureFailure::Transaction(_) => CapturableAspect::Transaction,
         }
     }
 
@@ -154,7 +151,6 @@ impl CaptureError {
         match &self.failure {
             CaptureFailure::Impersonation(error) => error.raw_os_error(),
             CaptureFailure::ErrorMode(_) => None,
-            CaptureFailure::Transaction(error) => error.raw_os_error(),
         }
     }
 }
@@ -165,7 +161,6 @@ impl fmt::Display for CaptureError {
         match &self.failure {
             CaptureFailure::Impersonation(error) => write!(f, "{error}"),
             CaptureFailure::ErrorMode(error) => write!(f, "{error}"),
-            CaptureFailure::Transaction(error) => write!(f, "{error}"),
         }
     }
 }
@@ -175,7 +170,6 @@ impl std::error::Error for CaptureError {
         match &self.failure {
             CaptureFailure::Impersonation(error) => Some(error),
             CaptureFailure::ErrorMode(error) => Some(error),
-            CaptureFailure::Transaction(error) => Some(error),
         }
     }
 }
@@ -188,7 +182,6 @@ impl std::error::Error for CaptureError {
 pub struct AmbientState {
     impersonation: Captured<ImpersonationToken>,
     error_mode: Captured<ThreadErrorMode>,
-    transaction: Captured<TransactionContext>,
     declared: Declared,
 }
 
@@ -226,18 +219,9 @@ impl AmbientState {
             Captured::NotCaptured
         };
 
-        let transaction = if set.contains(CaptureSet::TRANSACTION) {
-            transaction::capture().map_err(|error| CaptureError {
-                failure: CaptureFailure::Transaction(error),
-            })?
-        } else {
-            Captured::NotCaptured
-        };
-
         Ok(Self {
             impersonation,
             error_mode,
-            transaction,
             declared: Declared::none(),
         })
     }
@@ -261,9 +245,6 @@ impl AmbientState {
         if self.error_mode.was_captured() {
             set = set.union(CaptureSet::ERROR_MODE);
         }
-        if self.transaction.was_captured() {
-            set = set.union(CaptureSet::TRANSACTION);
-        }
         set
     }
 
@@ -277,12 +258,6 @@ impl AmbientState {
     #[must_use]
     pub const fn error_mode(&self) -> &Captured<ThreadErrorMode> {
         &self.error_mode
-    }
-
-    /// The captured transaction.
-    #[must_use]
-    pub const fn transaction(&self) -> &Captured<TransactionContext> {
-        &self.transaction
     }
 
     /// The declared aspects.
@@ -301,8 +276,7 @@ impl AmbientState {
     /// 1. thread error mode -- outermost, so hard-error suppression is already
     ///    in force while everything else is being applied;
     /// 2. declared aspects (background mode, memory priority, redirection);
-    /// 3. TxF transaction;
-    /// 4. impersonation -- innermost, because its window is the narrowest and
+    /// 3. impersonation -- innermost, because its window is the narrowest and
     ///    its restoration is the one that must not be delayed.
     ///
     /// Applying a subset stays expressible: an aspect that is
@@ -369,24 +343,11 @@ impl AmbientState {
             }
         };
 
-        // 3. Transaction.
-        let transaction_guard = match transaction::install(&self.transaction) {
-            Ok(guard) => guard,
-            Err(error) => {
-                drop(declared_guard);
-                drop(error_mode_guard);
-                return Err(ApplyError {
-                    failure: ApplyFailure::Transaction(error),
-                });
-            }
-        };
-
-        // 4. Impersonation, innermost, and closure-scoped by its own crate.
+        // 3. Impersonation, innermost, and closure-scoped by its own crate.
         let outcome = impersonation::with_applied(&self.impersonation, operation);
         let value = match outcome {
             Ok(value) => value,
             Err(error) => {
-                drop(transaction_guard);
                 drop(declared_guard);
                 drop(error_mode_guard);
                 return Err(ApplyError {
@@ -402,7 +363,6 @@ impl AmbientState {
         // the order below *is* the release order, and burying it in field
         // initialisers would make a later reader's harmless-looking field
         // reordering silently reorder the releases.
-        let transaction = transaction_guard.release().err();
         let declared = declared_guard.release().err();
         let error_mode = match error_mode_guard {
             Some(guard) => guard.release().err(),
@@ -414,7 +374,6 @@ impl AmbientState {
             restore: RestoreReport {
                 error_mode,
                 declared,
-                transaction,
             },
         })
     }
@@ -469,14 +428,13 @@ impl<T> Applied<T> {
 pub struct RestoreReport {
     error_mode: Option<ErrorModeRestoreError>,
     declared: Option<DeclaredError>,
-    transaction: Option<TransactionError>,
 }
 
 impl RestoreReport {
     /// Whether every aspect was restored.
     #[must_use]
     pub const fn is_clean(&self) -> bool {
-        self.error_mode.is_none() && self.declared.is_none() && self.transaction.is_none()
+        self.error_mode.is_none() && self.declared.is_none()
     }
 
     /// The thread error mode's restore failure, if any.
@@ -489,12 +447,6 @@ impl RestoreReport {
     #[must_use]
     pub const fn declared(&self) -> Option<&DeclaredError> {
         self.declared.as_ref()
-    }
-
-    /// The transaction's restore failure, if any.
-    #[must_use]
-    pub const fn transaction(&self) -> Option<&TransactionError> {
-        self.transaction.as_ref()
     }
 }
 
@@ -510,9 +462,6 @@ impl fmt::Display for RestoreReport {
         if let Some(error) = &self.declared {
             write!(f, " declared: {error};")?;
         }
-        if let Some(error) = &self.transaction {
-            write!(f, " transaction: {error};")?;
-        }
         Ok(())
     }
 }
@@ -527,8 +476,6 @@ pub enum ApplyFailure {
     ErrorMode(ErrorModeApplyError),
     /// A declared aspect could not be installed.
     Declared(DeclaredError),
-    /// The transaction could not be installed.
-    Transaction(TransactionError),
     /// The impersonation context could not be applied.
     Impersonation(ImpersonationApplyError),
 }
@@ -552,7 +499,6 @@ impl ApplyError {
         match &self.failure {
             ApplyFailure::ErrorMode(error) => error.raw_os_error(),
             ApplyFailure::Declared(error) => error.raw_os_error(),
-            ApplyFailure::Transaction(error) => error.raw_os_error(),
             ApplyFailure::Impersonation(error) => error.raw_os_error(),
         }
     }
@@ -564,7 +510,6 @@ impl fmt::Display for ApplyError {
         match &self.failure {
             ApplyFailure::ErrorMode(error) => write!(f, "{error}"),
             ApplyFailure::Declared(error) => write!(f, "{error}"),
-            ApplyFailure::Transaction(error) => write!(f, "{error}"),
             ApplyFailure::Impersonation(error) => write!(f, "{error}"),
         }
     }
@@ -575,7 +520,6 @@ impl std::error::Error for ApplyError {
         match &self.failure {
             ApplyFailure::ErrorMode(error) => Some(error),
             ApplyFailure::Declared(error) => Some(error),
-            ApplyFailure::Transaction(error) => Some(error),
             ApplyFailure::Impersonation(error) => Some(error),
         }
     }
