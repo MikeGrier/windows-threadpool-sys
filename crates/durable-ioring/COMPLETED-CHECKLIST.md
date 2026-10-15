@@ -2877,3 +2877,9 @@ The authoritative text is [DI-D-60](DESIGN-NOTES.md#di-d-60). The item asked wha
 ### <a id="di-102"></a>DI-10.2 -- A raw volume is a file target made from a volume this crate opened, with its disks found and never `Complete`. *(completed 2026-10-15 12:00:26 -04:00)*
 
 The authoritative text is [DI-D-61](DESIGN-NOTES.md#di-d-61). The item asked for one volume handle with regions in it, one commit per volume, failure sharing found from the volume's disks and optionally the volume lock; the engineer ruled that the target is the whole volume and regions are the consumer's offsets, and that the unsafe device controls live in a new crate, `win-volume-sys`, whose own checklist and notes are in [crates/win-volume-sys/](../win-volume-sys/CHECKLIST.md).
+
+## Moved 2026-10-15 12:22:00 -04:00 -- DI-10.4: a whole physical disk as a target backing
+
+### <a id="di-104"></a>DI-10.4 -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. *(completed 2026-10-15 12:22:00 -04:00)*
+
+The authoritative text is [DI-D-62](DESIGN-NOTES.md#di-d-62). The engineer asked for the raw-volume work to be repeated against the disk itself rather than a partition on it; it was not a numbered item, so it is recorded here. `OpenedDisk<B>` is opened from a `DiskPath` and `Win32FileTarget::from_disk` takes it and nothing else. The elevated tests run against an unpartitioned scratch VHDX whose disk number is taken only from `diskpart`'s report of the file the helper made.

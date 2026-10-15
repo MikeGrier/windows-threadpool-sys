@@ -146,7 +146,9 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.2** -- A raw volume is a file target made from a volume this crate opened, with its disks found and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-102)
 
-- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could.
+- [x] **DI-10.4** -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-104)
+
+- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume or a whole disk could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61), [DI-D-62](DESIGN-NOTES.md#di-d-62)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could.
 
 ## DI-M11 -- The core driven by script
 
