@@ -49,6 +49,10 @@
             "package-name": "win-time-sys",
             "component": "win-time-sys"
         },
+        "crates/win-volume-sys": {
+            "package-name": "win-volume-sys",
+            "component": "win-volume-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

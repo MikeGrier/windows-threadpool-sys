@@ -1,0 +1,41 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-volume-sys"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Memory-safe Rust over the Win32 volume device controls: the disks a volume sits on, the sector size it is addressed in, and its lock. Thin over Win32, adding no policy."
+keywords = ["windows", "volume", "disk", "ioctl", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "filesystem"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root): a
+# safe layer more or less directly over a Win32 API area, the volume device controls.
+
+[dependencies]
+# `default-features = false` matches every other crate in the workspace.
+#
+# `Win32_System_IO` is `DeviceIoControl` and `GetOverlappedResult`; `Win32_System_Ioctl` is
+# `DISK_GEOMETRY`, `DISK_EXTENT`, `VOLUME_DISK_EXTENTS` and the `FSCTL_*` and `IOCTL_DISK_*`
+# codes; `Win32_Storage_FileSystem` is `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`. `Win32_System_Threading`
+# is the event a call waits on, and `Win32_Security` is there only because `CreateEventW`'s
+# attributes parameter is a `SECURITY_ATTRIBUTES` pointer.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
+	"Win32_System_Ioctl",
+	"Win32_System_Threading",
+] }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

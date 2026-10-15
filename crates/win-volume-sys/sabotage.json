@@ -1,0 +1,63 @@
+{
+  "package": "win-volume-sys",
+  "description": "Sabotages for win-volume-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one.",
+  "sabotages": [
+    {
+      "name": "WV-1.1: an extent's offset is read from where its length is",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "The extents are what a flush domain is found from; reading the wrong field puts every run in the wrong place. The tests build the answer from the layout Windows fixes, not from the offsets the parser uses.",
+      "find": ["            let start = i64_at(buffer, at + offset_of!(DISK_EXTENT, StartingOffset));\n"],
+      "replace": ["            let start = i64_at(buffer, at + offset_of!(DISK_EXTENT, ExtentLength));\n"]
+    },
+    {
+      "name": "WV-1.1: an answer exactly as long as its extents is refused",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "The usual answer is exactly the size of what it counts; a bound that is off by one refuses it.",
+      "find": ["    if answer_size(declared)? > buffer.len() {\n"],
+      "replace": ["    if answer_size(declared)? >= buffer.len() {\n"]
+    },
+    {
+      "name": "WV-1.1: a negative offset is read as a very large one",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A device that reports a negative offset is broken, and an answer is refused rather than passed on as a run starting past the end of any disk.",
+      "find": ["                    starting_offset: u64::try_from(start)\n                        .map_err(|_| invalid(\"a negative offset\"))?,\n"],
+      "replace": ["                    starting_offset: start as u64,\n"]
+    },
+    {
+      "name": "WV-1.1: ERROR_MORE_DATA is not recognised",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A volume with more extents than the first answer holds, a spanned or striped one, would then fail where it should be asked again at the size it needs.",
+      "find": ["            Err(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {\n"],
+      "replace": ["            Err(error) if error.raw_os_error() == Some(0) => {\n"]
+    },
+    {
+      "name": "WV-1.1: an answer is asked for only once",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "The second call, at the size the device reported, is what a volume on several disks needs.",
+      "find": ["    for _ in 0..ATTEMPTS {\n"],
+      "replace": ["    for _ in 0..1 {\n"]
+    },
+    {
+      "name": "WV-1.2: a sector size of zero is accepted",
+      "file": "src/geometry.rs",
+      "expect": "caught",
+      "why": "Zero is no sector size, and a geometry that says it means the answer is damaged; passed on, it would become an alignment that no power of two satisfies.",
+      "find": ["        0 => Err(io::Error::new(\n"],
+      "replace": ["        u32::MAX => Err(io::Error::new(\n"]
+    },
+    {
+      "name": "WV-1.3: the call is made without the OVERLAPPED it waits on",
+      "file": "src/control.rs",
+      "expect": "survives",
+      "why": "A declared blind spot: on an overlapped handle a call with no OVERLAPPED is undefined, and the volumes the tests open take it without incident, so no test can tell the two apart. The OVERLAPPED is there for the handle this crate is lent and cannot inspect.",
+      "find": ["            &mut overlapped,\n"],
+      "replace": ["            ptr::null_mut(),\n"]
+    }
+  ]
+}

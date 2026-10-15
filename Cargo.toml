@@ -10,6 +10,7 @@ members = [
 	"crates/win-shared-os-owned-handle",
 	"crates/win-sync-sys",
 	"crates/win-time-sys",
+	"crates/win-volume-sys",
 	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-file-watcher-example-test-harness",
