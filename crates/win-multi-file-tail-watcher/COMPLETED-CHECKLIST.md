@@ -270,3 +270,40 @@ nothing, the ends, runs across chunk edges and every third item; retain on strin
 that frees its chunks, a truncate that forgets the length or cuts one late, a retain that does not
 move, and a chunk index of the wrong width; a retain that also swaps an item with itself survives as
 the control.
+
+## Moved 2026-10-15 17:35:41 -04:00 -- TW-2.5: last known length and the snapshot pass
+
+### <a id="tw-25"></a>TW-2.5 -- Each roster entry holds a last known length starting at its starting offset, and the snapshot pass copies id, last known length and an observer into a chunked buffer one batch per lock. *(completed 2026-10-15 17:35:41 -04:00)*
+
+Crate-internal; nothing public changes, which is why this is a `chore`. Both new pieces are in
+`src/watcher.rs`, and the snapshot's tests are in `src/watcher/snapshot_tests.rs`.
+
+- **`last_known`.** `register` sets it from the held file's starting offset. This is the working
+  position recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions), built that
+  way and still not put to the engineer. Nothing writes it afterwards yet; reporting does, in TW-2.7.
+- **`snapshot`** appends one `SnapshotItem { id, last_known, observer }` (24 bytes) per registration
+  to a `Chunked` buffer, in registration order. It takes the roster lock once per batch, found by id
+  range after the last id copied, so the lock is held for at most a batch of map work and an entry is
+  never copied twice. The batch is 256, provisional: TW-2.8 chooses it. The observer's reference
+  count is taken, and the chunk allocated when one is needed, under the lock.
+- **The pause between batches** is a closure that runs with the lock released. The engine passes
+  nothing now; it is where the stop check goes (M4), and it is how the tests change the roster in
+  the middle of a pass.
+- **Roster changes during a pass.** A registration dropped before the pass reaches it is skipped; one
+  dropped after it was copied still has a working observer, which keeps the file open; one made
+  while the pass is still short of the end is seen, and one made after it is the next pass's.
+
+Tested: starting offsets of 0, 1, 4, 9 and 10 as last known lengths; an empty roster; forty
+registrations copied in order with each observer reading its own file's length; each registration's
+own last known length; the same result at batch sizes from 1 to past the roster's size; the lock
+taken the right number of times and free during every pause, checked with `try_lock`; each of the
+roster changes above; a snapshot that appends and changes nothing; one path registered twice as two
+items with their own handles; an observer that outlives its registration and its watcher; the
+default batch over 600 registrations; and a snapshot run 100 times against another thread
+registering and dropping.
+
+The sabotage manifest gains a last known length of zero at registration and in the copy, a cursor
+that skips the next registration, a batch that is not honoured, and the lock held across the pause;
+the cursor written as a `match` survives as the control. The last of those is caught by a hang, not
+an assertion: with the lock held, the tests that register from inside the pause deadlock before the
+`try_lock` check can fail, so the sweep reports it past its hang bound.

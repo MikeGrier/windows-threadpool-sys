@@ -23,14 +23,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.4** -- `Chunked<T>`, an append-only sequence in chunks of at most 64 KiB that keeps its chunks across a clear, for the poll's copies. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-24)
 
-- [ ] **TW-2.5** -- **A last known length per registration, and the snapshot pass.** Each roster
-  entry holds the length last reported for it, starting from the registration's starting offset
-  (a working position, see [DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)).
-  The snapshot copies each entry's id, last known length and an observer of its handle into a
-  chunked buffer, taking the roster lock once per batch of entries by id range and never across the
-  whole roster. The batch size is a provisional constant until TW-2.8.
-  ([TW-D-4](DESIGN-NOTES.md#tw-d-4), [TW-D-7](DESIGN-NOTES.md#tw-d-7),
-  [TW-D-8](DESIGN-NOTES.md#tw-d-8))
+- [x] **TW-2.5** -- Each roster entry holds a last known length starting at its starting offset, and the snapshot pass copies id, last known length and an observer into a chunked buffer one batch per lock. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-25)
 
 - [ ] **TW-2.6** -- **The probe pass.** Reads each snapshotted observer's current length with no
   lock held, drops each observer as soon as it has been read, and keeps the id, last known and

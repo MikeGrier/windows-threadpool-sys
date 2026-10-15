@@ -244,6 +244,54 @@
       "replace": ["        Some(&self.chunks[index / (Self::PER_CHUNK + 1)][index % (Self::PER_CHUNK + 1)])"]
     },
     {
+      "name": "a registration starts with a last known length of zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The starting offset is what lets a restarted parent resume. A registration made at offset zero cannot tell the two apart.",
+      "find": ["        let last_known = file.start_offset();"],
+      "replace": ["        let last_known = 0;"]
+    },
+    {
+      "name": "the snapshot copies a last known length of zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Every registration made at offset zero reads the same either way.",
+      "find": ["                        last_known: entry.last_known,"],
+      "replace": ["                        last_known: 0,"]
+    },
+    {
+      "name": "the snapshot cursor skips the next registration",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A cursor one past where it should be loses an entry at every batch boundary and nowhere else.",
+      "find": ["                    after = Some(id);"],
+      "replace": ["                    after = Some(id + 1);"]
+    },
+    {
+      "name": "the snapshot batch is not honoured",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The roster lock is meant to be held for one batch of map work. Without the bound the copy is the same and the lock is held for all of it.",
+      "find": ["                for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(batch) {"],
+      "replace": ["                for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(usize::MAX) {"]
+    },
+    {
+      "name": "the roster lock is held across the pause between batches",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Everything is copied correctly and a registration made in the pause waits for the whole pass.",
+      "find": ["            let copied = {\n                let roster = self.shared.roster();"],
+      "replace": ["            let roster = self.shared.roster();\n            let copied = {"]
+    },
+    {
+      "name": "control: the cursor bound is written as a match",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "`map_or(Unbounded, Excluded)` and the match are the same bound.",
+      "find": ["                let from = after.map_or(Bound::Unbounded, Bound::Excluded);"],
+      "replace": ["                let from = match after {\n                    Some(id) => Bound::Excluded(id),\n                    None => Bound::Unbounded,\n                };"]
+    },
+    {
       "name": "control: retain also swaps an item with itself",
       "file": "src/chunked.rs",
       "expect": "survives",

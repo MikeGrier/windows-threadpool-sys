@@ -2,17 +2,38 @@
 //! The watcher and its roster of registered files.
 
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::os::windows::io::BorrowedHandle;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use windows_overlapped_io_sys::EndpointObserver;
 use wtf_string::Wtf16Str;
 
+use crate::chunked::Chunked;
 use crate::doorbell::Doorbell;
 use crate::sq::{self, SqDrain, SqReader, SqWriter};
 use crate::{CreateError, HeldFile, OpenError};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod snapshot_tests;
+
+/// How many roster entries the snapshot copies per lock acquisition. Provisional: TW-2.8 chooses.
+const SNAPSHOT_BATCH: usize = 256;
+
+/// What the snapshot pass copies from a roster entry (TW-D-7).
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the probe pass (TW-2.6) reads it")
+)]
+pub(crate) struct SnapshotItem {
+    pub(crate) id: u64,
+    pub(crate) last_known: u64,
+    pub(crate) observer: EndpointObserver,
+}
 
 /// A set of files whose lengths are watched, each registered with a caller value `T`.
 ///
@@ -57,6 +78,8 @@ struct Roster<T> {
 struct Entry<T> {
     value: T,
     file: HeldFile,
+    // The length last reported for this registration (TW-D-4). It starts at the starting offset.
+    last_known: u64,
 }
 
 impl<T> Shared<T> {
@@ -186,12 +209,71 @@ impl<T: Clone> Watcher<T> {
         let mut roster = self.shared.roster();
         let id = roster.next_id;
         roster.next_id += 1;
-        roster.entries.insert(id, Entry { value, file });
+        let last_known = file.start_offset();
+        roster.entries.insert(
+            id,
+            Entry {
+                value,
+                file,
+                last_known,
+            },
+        );
         drop(roster);
         Ok(Registration {
             shared: Arc::clone(&self.shared),
             id,
         })
+    }
+
+    /// Append to `out` the id, last known length and an observer of every registration, in
+    /// registration order, taking the roster lock once per batch and never across the whole roster.
+    ///
+    /// A registration made while the pass runs is seen if the pass has not yet reached the end of
+    /// the roster; one dropped is skipped if the pass has not yet reached it, and its observer
+    /// keeps the file open if it has.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the poll engine (TW-2.7) runs it")
+    )]
+    pub(crate) fn snapshot(&self, out: &mut Chunked<SnapshotItem>) {
+        self.snapshot_batches(out, SNAPSHOT_BATCH, || {});
+    }
+
+    // `between` runs after each full batch with the lock released, which is where a later stop
+    // check can go, and where a test can change the roster.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the poll engine (TW-2.7) runs it")
+    )]
+    fn snapshot_batches(
+        &self,
+        out: &mut Chunked<SnapshotItem>,
+        batch: usize,
+        mut between: impl FnMut(),
+    ) {
+        assert!(batch > 0, "a batch of nothing never finishes");
+        let mut after = None;
+        loop {
+            let copied = {
+                let roster = self.shared.roster();
+                let from = after.map_or(Bound::Unbounded, Bound::Excluded);
+                let mut copied = 0;
+                for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(batch) {
+                    out.push(SnapshotItem {
+                        id,
+                        last_known: entry.last_known,
+                        observer: entry.file.observer(),
+                    });
+                    after = Some(id);
+                    copied += 1;
+                }
+                copied
+            };
+            if copied < batch {
+                return;
+            }
+            between();
+        }
     }
 
     /// How many registrations are live.
@@ -223,6 +305,11 @@ impl<T: Clone> Registration<T> {
     #[must_use]
     pub fn start_offset(&self) -> u64 {
         self.with_entry(|entry| entry.file.start_offset())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_known(&self) -> u64 {
+        self.with_entry(|entry| entry.last_known)
     }
 
     fn with_entry<R>(&self, read: impl FnOnce(&Entry<T>) -> R) -> R {
