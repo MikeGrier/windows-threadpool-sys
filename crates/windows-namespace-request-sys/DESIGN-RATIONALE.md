@@ -335,5 +335,45 @@ every test that follows. Measured as 1 mass failure in 60 runs before the fix an
 Separately, two `watch` tests shared the fixture label `watch-defaults` and removed each other's
 directory, failing 8 of 30 runs; each now has its own.
 
-**What this does not settle.** `DeviceIoControl`'s own behaviour when it pends is unchecked, for want of a
-control that does so on demand; `NR-2.2` looks for one.
+**What this did not settle at the time.** `DeviceIoControl`'s own behaviour when it pends was unchecked, for
+want of a control that does so on demand. `FSCTL_REQUEST_OPLOCK` is one, found in `NR-2.2`
+([D-21](#d-21)'s rationale below).
+
+## D-21: the disk-extents entry
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-21`. This is how it was reached.
+
+**A premise in the checklist was wrong.** `NR-2.2` was written as "first, give the helper an input buffer, since
+this item and the next two need one". This control takes none; `NR-2.3` and `NR-2.4`
+(`IOCTL_STORAGE_QUERY_PROPERTY`) do. The input buffer was done under `NR-2.2` anyway, because it had been
+scheduled there and because the one control found that pends on demand, `FSCTL_REQUEST_OPLOCK`, takes input, so
+the two were the same piece of work; but the entry itself did not need it.
+
+**Finding the control that pends.** The candidate was `FSCTL_REQUEST_OPLOCK`. A throwaway test requested a read
+oplock on an overlapped handle and had another thread open the file for write: the call pended and did not
+return in 25 seconds, so it was killed by a timer outside the test (an in-test wait would have hung the run). The
+same test with the other thread writing a byte completed in 304 ms against a 300 ms delay, with the oplock's
+original level `1` and new level `0`. So a write-open does not break a read oplock and a write does, and the
+control pends exactly as long as the test says. The real test uses that, and the same request with no input,
+which the device refuses at once, is what shows the input is what made it work.
+
+**Why a `Vec<DiskExtent>` of `u64`s and not the raw reply.** A consumer given the bytes would have to know the
+layout, the `ERROR_MORE_DATA` convention and where the count is, which is what an entry exists to carry. `u64`
+is what an offset and a length in bytes are; the structure's `LARGE_INTEGER` is signed, and a negative value is
+not a length, so it is reported as malformed and not cast. `i64`s that a caller then casts would put the same
+check in every caller. `AlignedBuf` was not used: the reply is read with `from_ne_bytes`, so no alignment is
+needed, and a `Vec<u8>` allocated with `try_reserve_exact` fails as an error the caller receives.
+
+**The fake device had the wrong code, and the real one showed it.** The documentation suggests
+`ERROR_INSUFFICIENT_BUFFER` for a buffer smaller than the header, and the first fake and the first real-device
+test both said so. The real-device test failed (87, not 122), a sweep of every size from 0 to 48 found the
+boundary (below the count plus one extent: 87; from it up: the answer), and the fake was corrected to match. The
+fake is the only way to test the multi-extent half on this machine, so its one measured behaviour is stated where
+it is built, and the documented half (`ERROR_MORE_DATA` with the count) is stated as not observed.
+
+**What was weighed and set aside.** Sharing `win-volume-sys`'s `extents.rs` instead of writing this: that crate
+is a working, released one, and the rule for speculative duplicate work is to build beside it and decide when the
+new one is proven, so the decision is `NR-2.6`. Capping the count the device reports, to refuse a huge
+allocation: a cap is a number this crate would have to choose and defend, the count comes from the volume driver,
+and the failure is already an error the caller receives; not decided against for ever, but nothing shows it is
+needed.

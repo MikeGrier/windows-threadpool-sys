@@ -93,3 +93,23 @@ controls; four cover the helper's pending path, which is driven through its `ove
 overlapped `ReadFile` on a named pipe, because no file-system control pends on demand. What this left to do is
 `NR-2.2` (an input buffer for the helper, and a control that pends on demand, to exercise `DeviceIoControl`
 itself through that path) and `NR-2.6` (the duplicate in `win-volume-sys`).
+
+## Moved 2026-10-15 17:36:13 -04:00 -- NR-2.2: the runs of disk a volume is made of
+
+### <a id="nr-22"></a>NR-2.2 -- `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` on a volume handle, with the helper's input buffer and its first real pending control. *(completed 2026-10-15 17:36:13 -04:00)*
+
+`QueryVolumeDiskExtents` returns the runs of disk a volume is made of as a `Vec<DiskExtent>`, asks again at the
+count the device names when the first buffer is too small, and refuses a reply that does not hold what it counts.
+The `DeviceIoControl` helper now takes an input buffer, which `NR-2.3` and `NR-2.4` need, and
+`FSCTL_REQUEST_OPLOCK`, which takes input and pends until another handle writes, is the first real control to
+reach it through the pending path. The decisions are [D-21](DESIGN-NOTES.md#d-21) and the amended
+[D-20](DESIGN-NOTES.md#d-20); how they were reached is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code
+is `0b20b59a`.
+
+Measured here: the system volume reports one run, and a buffer below the count plus one extent is refused with
+`ERROR_INVALID_PARAMETER`, where `ERROR_INSUFFICIENT_BUFFER` was expected. A volume that spans disks was not
+observed, so the multi-extent retry is tested against a fake device that answers as the real one was measured
+to. Thirteen sabotages pin it, in [sabotage.json](sabotage.json), all caught. The checklist's premise that this
+control needed the input buffer was wrong (`NR-2.3` and `NR-2.4` do); the buffer was added here regardless, as
+scheduled. What this left to do is `NR-2.6`, which now covers two duplicates in `win-volume-sys`, and the
+`IOCTL_STORAGE_*` codes of `NR-2.3` and `NR-2.4`, which have not been checked to work through the helper.

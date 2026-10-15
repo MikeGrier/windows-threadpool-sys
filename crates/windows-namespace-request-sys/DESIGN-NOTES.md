@@ -821,11 +821,13 @@ fill would read as an answer.
   answers is not documented and was not observed.
 - `FSCTL_PIPE_LISTEN` on an overlapped named-pipe server fails with `ERROR_INVALID_FUNCTION`
   through `DeviceIoControl`. Why is not established, and it is evidence about that one code only: the
-  codes of `NR-2.2` to `NR-2.4` are ordinary device controls for which `DeviceIoControl` is the
-  documented route, and nothing here says they behave as it did.
+  code of `NR-2.2` worked through the helper (below), and the `IOCTL_STORAGE_*` codes of `NR-2.3` and
+  `NR-2.4` are ordinary device controls for which `DeviceIoControl` is the documented route, which
+  nothing here has yet checked.
 - An overlapped call to a file-system control pended in 0 of 20000 isolated runs of two controls,
-  and pended on some runs while the full test suite ran in parallel. No control tried pends on
-  demand, so the pending path is not reached by a control reliably.
+  and pended on some runs while the full test suite ran in parallel. Of the controls tried,
+  `FSCTL_REQUEST_OPLOCK` is the only one that pends on demand (below); with a write-open alone the
+  oplock was not broken, and a write through the second handle broke it.
 
 **The pending path is pinned through a seam.** The helper is two functions: `device_control`, which
 is the `DeviceIoControl` argument list, and `overlapped_call`, which owns the event, the
@@ -834,14 +836,15 @@ is the `DeviceIoControl` argument list, and `overlapped_call`, which owns the ev
 and whose completion, byte count and failure are documented behaviour. Four sabotages pin it (not
 waited for, waits for nothing, byte count lost, failure after pending reported as success), and
 [sabotage.json](sabotage.json) names what stays unpinned: the abort when the wait fails, which the
-helper's own event cannot provoke, and `DeviceIoControl`'s own behaviour when it pends, which no
-control reaches.
+helper's own event cannot provoke.
 
-**The helper takes no input yet.** That is the scope of the first entry, not a ruling that controls
-take none: `NR-2.2` to `NR-2.4` need an input buffer, which is scheduled in
-[CHECKLIST.md](CHECKLIST.md) as part of those items. A real control that pends on demand
-(`FSCTL_REQUEST_OPLOCK` is the candidate) would additionally exercise `DeviceIoControl` itself
-through the pending path, which the pipe read does not.
+**The helper takes an input buffer** (`NR-2.2`). An empty input reaches the device as a null pointer
+and a length of zero, so a control that takes none is unchanged. `FSCTL_REQUEST_OPLOCK` takes input and
+is the one control found that pends on demand: a read-oplock request stays pending until another
+handle writes to the file, and then completes with the oplock's original and new levels. It is the
+test that reaches `DeviceIoControl` itself through the pending path, and it shows the input arriving,
+because the same request with no input is refused by the device. A sabotage that drops the input
+pointer is caught by it, and by nothing that takes no input.
 
 **A duplicate that must be decided.** `win-volume-sys` has its own `control()`
 ([control.rs](../win-volume-sys/src/control.rs)) with the same overlapped-and-event shape and an
@@ -849,4 +852,49 @@ through the pending path, which the pipe read does not.
 crate while this one is proven, is deliberate; the merge-or-delete decision is scheduled as `NR-2.6`,
 so the duplicate does not become permanent because nobody came back.
 
-**Scheduled work:** the input buffer, in `NR-2.2`; the decision about `win-volume-sys`, `NR-2.6`.
+**Scheduled work:** the decision about `win-volume-sys`, `NR-2.6`.
+
+## <a id="d-21"></a>D-21: The disk-extents entry reads the reply and refuses one that is not what it counts
+
+**Status: decided and implemented** by `NR-2.2` (`src/volume_extents.rs`).
+
+**What is decided.** `QueryVolumeDiskExtents` sends `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` through the
+helper ([D-20](#d-20)) and returns the runs as a `Vec<DiskExtent>`, in the order the device gave them.
+
+- **It asks again at the count the device names.** The reply is a count then that many extents. A
+  buffer with room for the count but not the extents fails with `ERROR_MORE_DATA` and the count is
+  written, so the entry reads the count and allocates for it. The retry is bounded and ends in
+  `DiskExtentsError::Unstable`, for the reason [`QueryFinalPath`](src/final_path.rs)'s is: an unbounded
+  loop on an answer that keeps changing would spin a worker a consumer moved the call onto.
+- **It never asks with room for fewer than one extent.** A buffer smaller than the count plus one
+  extent is refused by the volume device with `ERROR_INVALID_PARAMETER`, which is not what
+  `ERROR_INSUFFICIENT_BUFFER` would lead a caller to expect (measured, below).
+- **It reads fields, as `u64`s, and refuses a reply that does not hold what it says.** The disk number,
+  the starting offset and the length are read from where the layout puts them. A count the written
+  bytes cannot hold, a call that claims more bytes than the buffer has, and a negative offset or length
+  (the structure's `LARGE_INTEGER`s) are `DiskExtentsError::Malformed`, not read: extents taken from a
+  buffer that does not hold them would read as disks the volume does not have. This is the same
+  position as [`QueryVolumeNumaInfo`](src/volume_numa.rs) takes on a reply of the wrong size
+  ([D-12](#d-12)), and it is validation of the reply, not interpretation of the device's answer.
+- **Any other failure is the device's own code, unaltered, and is not retried.**
+- **A count whose buffer cannot be allocated is `ERROR_NOT_ENOUGH_MEMORY`**, this crate's own report
+  ([D-8](#d-8)), because the count is the device's and is not trusted to be allocatable.
+
+**Measured on 2026-10-15**, Windows 11, one disk:
+
+- The system volume opened with no access reports one run. A volume handle needs no access, which an
+  ordinary account can open.
+- The volume device answers a buffer of any size below the count plus one extent with
+  `ERROR_INVALID_PARAMETER` (every size from 0 up to one byte short of it was tried) and answers from
+  that size up. An ordinary file and the `NUL` device fail with the device's own code.
+
+**What was not observed.** A volume that spans or stripes disks: the `ERROR_MORE_DATA` half, the
+count written with it, and the order of several runs are from the documentation and from
+[`win-volume-sys`](../win-volume-sys/src/extents.rs)'s reading of it, and are tested here only against
+a fake device built to answer that way. The fake's one measured behaviour is the
+`ERROR_INVALID_PARAMETER` above.
+
+**A duplicate that must be decided.** `win-volume-sys` has `volume_disk_extents`, the same call with the
+same retry, over its own `control()`. It is covered by `NR-2.6` with the helper's.
+
+**Scheduled work:** none beyond `NR-2.6`.

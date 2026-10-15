@@ -24,20 +24,11 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.1** -- `FSCTL_QUERY_VOLUME_NUMA_INFO` on a file or directory handle, through the crate's one overlapped-safe `DeviceIoControl` helper. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-21)
 
-- [ ] **NR-2.2** -- **`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`** on a volume handle: every disk the
-  volume spans, with its extents. A multi-extent volume needs the `ERROR_MORE_DATA` resize loop,
-  following the existing variable-size entries.
-
-  **First, give the helper an input buffer** ([D-20](DESIGN-NOTES.md#d-20)): it takes none today,
-  and this item and `NR-2.3` and `NR-2.4` need one. Do it here, in the same commit, and look for a
-  control that takes an input and pends on demand (`FSCTL_REQUEST_OPLOCK` is the candidate), so
-  `DeviceIoControl` itself can be exercised through the pending path, which `overlapped_call`'s pipe
-  tests reach only with a `ReadFile`. `FSCTL_PIPE_LISTEN` was tried for that and failed with
-  `ERROR_INVALID_FUNCTION` through `DeviceIoControl`, for a reason not established; check that this
-  item's and the next two items' codes behave through the helper before building on them.
+- [x] **NR-2.2** -- `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` on a volume handle, with the helper's input buffer and its first real pending control. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-22)
 
 - [ ] **NR-2.3** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty`** on a
-  disk handle: the device's `STORAGE_DEVICE_UNIQUE_IDENTIFIER`, its stable identity, variable-sized.
+  disk handle (the helper's input buffer is there from `NR-2.2`; check first that this code behaves
+  through it, as `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` did, before building on it): the device's `STORAGE_DEVICE_UNIQUE_IDENTIFIER`, its stable identity, variable-sized.
   This, not the disk number, is what a flush-domain key is derived from: a disk number can be
   reused by a different device after hot removal within one process.
 
@@ -53,8 +44,9 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 - [ ] **NR-2.6** -- **Decide between `win-volume-sys`' `control()` and this crate's helper**
   ([D-20](DESIGN-NOTES.md#d-20)). The two are the same overlapped-and-event shape, built
   separately on purpose so the working crate was not disturbed while this one was proven. Decide
-  when `NR-2.2` to `NR-2.4` have used the helper: move `win-volume-sys` onto it, or delete one, or
-  keep both and say why. A duplicate nobody came back to is the failure this item exists to prevent.
+  when `NR-2.3` and `NR-2.4` have used the helper: move `win-volume-sys` onto it, or delete one, or
+  keep both and say why. The duplicate is two things, not one: `control()` against the helper, and
+  `volume_disk_extents` against [D-21](DESIGN-NOTES.md#d-21)'s entry. A duplicate nobody came back to is the failure this item exists to prevent.
 
 ## NR-3 -- What durable-ioring's open surface needs of this crate
 
