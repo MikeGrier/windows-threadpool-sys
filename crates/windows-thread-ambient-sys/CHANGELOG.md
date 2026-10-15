@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-thread-ambient-sys-v0.2.2...windows-thread-ambient-sys-v0.2.3) (2026-10-15)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dev-dependencies
+    * windows-threadpool-sys bumped from 0.2.0 to 0.2.1
+
 ## [0.2.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-thread-ambient-sys-v0.2.1...windows-thread-ambient-sys-v0.2.2) (2026-10-04)
 
 
