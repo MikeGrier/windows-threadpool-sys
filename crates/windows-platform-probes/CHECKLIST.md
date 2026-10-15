@@ -300,3 +300,27 @@ IDs keep their M2 numbers, for the reason given under M4.
 - [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
 - [x] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m216)
+
+## M6 -- Follow the namespace request crate's path contract
+
+- [ ] **M6.1** -- **Rewrite the `request_cost` probe against the new request path design.** The probe
+  ([request_cost.rs](src/request_cost.rs)) measures `windows_namespace_request_sys::prepare` for a
+  short and a long path, a whole `OpenFile` request, and a clone of the prepared units, and states its
+  premise in its own comments: that `prepare` allocates twice (an input copy and a `MAX_PATH` buffer)
+  and what it additionally does is resolve a path. That whole contract is replaced by
+  [NR-3.3 to NR-3.6](../windows-namespace-request-sys/CHECKLIST.md): a request captures the current
+  directory when it is built, and when it is performed grafts a clearly safe child onto it by
+  concatenation, or passes the path through. The engineer, 2026-10-15: schedule rewriting the probe.
+  The probe keeps its purpose, which is the cost a request-recycling scheme would avoid, and is
+  rewritten to measure the new costs: building a request (the capture of the current directory and
+  the owned path), the graft at perform for a path that is grafted and for one that is passed
+  through, a whole request built and performed, and a clone. Its row keys are the crate's encoded-row
+  contract ([DESIGN-NOTES.md](DESIGN-NOTES.md#d-encoded-row-is-the-contract), and the shapes declared
+  in `MEASURED_ROW_SHAPES`), so renaming a key follows that discipline and is not a find-and-replace,
+  and the test in [tests.rs](src/tests.rs) that asserts `prepare` accepts a path is rewritten with it.
+  Whether the old measurements are kept as history is the crate's own decision under its
+  three-tier scheme; they are not true of the new design.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** waits on `NR-3.3` to `NR-3.6` in
+  > `crates/windows-namespace-request-sys` ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)),
+  > since the probe cannot call a `prepare` that no longer exists.

@@ -117,17 +117,35 @@ a validation of its own, or a `\\?\` rewrite.
   [README.md](README.md), [D-9](DESIGN-NOTES.md#d-9) and [D-18](DESIGN-NOTES.md#d-18) already carry a
   status line pointing at `D-19`. A breaking removal from a published crate.
 
-- [ ] **NR-3.7** -- **The crate's consumers move with it.** `windows-platform-probes`, whose
-  `request_cost` probe measures `prepare` and a cloned prepared path and whose premise ("`prepare`
-  allocates twice, an input copy and a `MAX_PATH` buffer") no longer holds, so the probe is
-  re-measured against the captured root and the graft or retired; and `win-durable-ioring`, whose
-  `OpenedFile::open` calls `prepare` today. The assistant's reading of the probe is from its
+- [ ] **NR-3.7** -- **The `request_cost` probe in `windows-platform-probes` is rewritten, not
+  retired.** It measures `prepare` (a short and a long path), building a whole request, and cloning a
+  prepared path, and its premise ("`prepare` allocates twice, an input copy and a `MAX_PATH`
+  buffer") stops holding when `NR-3.3` to `NR-3.6` land. The engineer, 2026-10-15: schedule rewriting
+  it. It is rewritten to measure what the new design costs, which is `windows-platform-probes`'s
+  `M6.1`; this item is done when that one is. The assistant's reading of the probe is from its
   comments and has not been checked against its code.
 
-  > **-> CROSS-COMPONENT HANDOFF:** the probe is in `crates/windows-platform-probes`. When
-  > `NR-3.1` to `NR-3.7` are released, the next work is in component `crates/durable-ioring` ->
-  > `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2` (take the version that carries
-  > them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-platform-probes` ->
+  > `M6` -> `M6.1` (rewrite the `request_cost` probe). See
+  > [CHECKLIST.md](../windows-platform-probes/CHECKLIST.md).
+
+- [ ] **NR-3.8** -- **The enumeration crate's duplicate of the path preparation is resolved.** The
+  engineer, 2026-10-15: schedule resolving it. This is the merge-or-delete decision of the workspace
+  checklist's `M26+.3` ([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)), which was
+  gated on this crate's branch merging with `main`, and that has happened. It is made as the first
+  option `M26+.3` names: `windows-file-enumeration-sys` consumes the path contract of `NR-3.3` to
+  `NR-3.6` and deletes its older copy, [D-9](DESIGN-NOTES.md#d-9)'s reason for duplicating ("that
+  crate is released; this one is not") no longer holds, and the layering D-9 recorded puts the
+  enumeration crate above this one, so it is the right direction for the dependency. The work is
+  `PATH-1` in that crate's checklist; this item is done when that one is, and the workspace item
+  `M26+.3` is done with it. Until then, a fix to either copy is applied to both.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-enumeration-sys` ->
+  > `PATH` -> `PATH-1`. See [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** when `NR-3.1` to `NR-3.6` are released, the next work is in
+  > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
+  > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
 ## NR-M-inf -- The horizon (ungated)
 
