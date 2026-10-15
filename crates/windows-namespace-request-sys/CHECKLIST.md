@@ -30,11 +30,7 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.7** -- The generic `IOCTL_STORAGE_QUERY_PROPERTY` entry, `QueryStorageProperty`: any property, any query type, additional parameters, reply as bytes. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-27)
 
-- [ ] **NR-2.4** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty`** on a disk
-  handle: the device's NUMA node, or the documented unknown value. Per disk, so a volume spanning
-  disks on different nodes reports each rather than one false answer (the spike's question 6). The
-  query structure and the learn-the-size loop are `storage_property`'s, from `NR-2.3`
-  ([D-22](DESIGN-NOTES.md#d-22)); this item is the property's own typed reply.
+- [x] **NR-2.4** -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty` on a disk handle, the node carried unaltered. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-24)
 
 - [ ] **NR-2.5** -- **`GetStorageDependencyInformation`** (`virtdisk`) on a virtual disk or volume
   handle: the backing file a VHD or VHDX depends on, so the helper can follow it to its own flush
@@ -44,8 +40,8 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 - [ ] **NR-2.6** -- **Decide between `win-volume-sys`' `control()` and this crate's helper**
   ([D-20](DESIGN-NOTES.md#d-20)). The two are the same overlapped-and-event shape, built
   separately on purpose so the working crate was not disturbed while this one was proven. Decide
-  when `NR-2.3` and `NR-2.4` have used the helper: move `win-volume-sys` onto it, or delete one, or
-  keep both and say why. The duplicate is two things, not one: `control()` against the helper, and
+  now that `NR-2.3` and `NR-2.4` have used the helper (it is unblocked): move `win-volume-sys` onto it,
+  or delete one, or keep both and say why. The duplicate is two things, not one: `control()` against the helper, and
   `volume_disk_extents` against [D-21](DESIGN-NOTES.md#d-21)'s entry. A duplicate nobody came back to is the failure this item exists to prevent.
 
 ## NR-3 -- What durable-ioring's open surface needs of this crate

@@ -980,3 +980,47 @@ marks the property as intended for driver use. The reply structure is documented
 Win32 SDK headers; it is the documented route to the structure, which is what this crate's rule asks.
 
 **Scheduled work:** `NR-2.4` reuses `storage_property`; the decision about `win-volume-sys` is `NR-2.6`.
+
+## <a id="d-23"></a>D-23: A disk's NUMA node is its own entry, carried unaltered, and the size protocol is a property's
+
+**Status: decided and implemented** by `NR-2.4` (`src/storage_numa.rs`). It builds on [D-22](#d-22).
+
+**What is decided.**
+
+- **The node is asked per disk.** `QueryStorageDeviceNumaNode` takes a disk handle. A volume that spans disks has
+  one answer from [`QueryVolumeNumaInfo`](src/volume_numa.rs) and a node per disk from here, and one node
+  reported for a volume whose disks sit on different nodes would be a fiction; the disks of a volume come from
+  [`QueryVolumeDiskExtents`](src/volume_extents.rs) ([D-21](#d-21)). The consumer composes them; this crate
+  composes nothing.
+- **The node is carried unaltered, and no sentinel is invented.** The reply is the three `u32`s of
+  `STORAGE_DEVICE_NUMA_PROPERTY` (a version, a size and the node). The checklist item spoke of "the documented
+  unknown value"; none was found documented, so it is not claimed, and whether a given value means no node is
+  the caller's to decide, as in [D-12](#d-12) and `QueryVolumeNumaInfo`.
+- **The size protocol is a property's, not the call's.** What a buffer smaller than the header, or one between
+  the header and the reply, gets differs by property (the table is in `storage_property`'s module
+  documentation). The loop reads the size from the header of whichever comes back and never asks with less
+  than the header, so it needs to know neither, and a test pins the difference so it is not forgotten.
+
+**Not documented, and stated where it is claimed.** The property is documented ("Provides the non-uniform
+memory access (NUMA) node of the storage device"), but its description names no reply structure and the
+structure's own reference page was not found (a 404 at the address the other storage structures use). The
+structure is declared in the public SDK header `winioctl.h`, which `windows-sys` carries, and that is what is
+read. This is a weaker footing than [D-22](#d-22)'s unique identifier, whose structure is documented in the
+driver kit, and the repository's rule on documented interfaces
+([copilot-instructions.md](../../.github/copilot-instructions.md)) was written about `Nt*` and `Rtl*`
+exports, not this case. It is recorded so the engineer can overrule it: the entry is one small module, and the
+generic entry ([D-22](#d-22)) reaches the property regardless.
+
+**Measured on 2026-10-15**, Windows 11, one disk, a handle opened with no access:
+
+- The reply is twelve bytes and the node is zero, on a machine with one NUMA node.
+- Below the header the device answers `ERROR_INSUFFICIENT_BUFFER` (the unique-id property answers
+  `ERROR_BAD_LENGTH`). From the header up to one short of the reply it answers with the header alone as a
+  *success* (the unique-id property answers `ERROR_MORE_DATA`). The loop is tested against the real disk for
+  every first-buffer size.
+- The exists query succeeds and a plain and an overlapped handle give the same answer.
+
+**What was not observed.** A node other than zero, a disk on a multi-node machine, and what a disk with no node
+reports. Those need hardware this machine is not.
+
+**Scheduled work:** none.

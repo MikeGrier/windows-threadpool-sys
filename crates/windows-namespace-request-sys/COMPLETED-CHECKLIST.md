@@ -153,3 +153,23 @@ Measured here: an exists query on a real property succeeds with nothing written,
 established. The unique-id property reads the first additional byte and the device property ignores them, which
 is how their arrival at a real device is shown. Thirty-three sabotages cover `NR-2.3` and this item together, in
 [sabotage.json](sabotage.json), all caught. What this left to do is `NR-2.4`.
+
+## Moved 2026-10-15 19:01:45 -04:00 -- NR-2.4: the NUMA node a disk is attached to
+
+### <a id="nr-24"></a>NR-2.4 -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty` on a disk handle, the node carried unaltered. *(completed 2026-10-15 19:01:45 -04:00)*
+
+`QueryStorageDeviceNumaNode` reports the NUMA node a disk is attached to, per disk so that a volume spanning
+disks on different nodes reports each (the disks come from `QueryVolumeDiskExtents`) rather than one false
+answer. The reply is the three `u32`s of `STORAGE_DEVICE_NUMA_PROPERTY`, and the node is carried as the device
+wrote it: the checklist's "documented unknown value" was not found documented, so no sentinel is invented. The
+decision is [D-23](DESIGN-NOTES.md#d-23) and how it was reached is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+The code is `f46d95fe`.
+
+Two things are stated in the record that the item did not anticipate. The property is documented but its
+description names no reply structure and the structure's own reference page was not found; the structure is in
+the public SDK header, and `D-23` marks that footing as one the engineer can overrule. And this property answers
+a short buffer differently from the unique-id property (`ERROR_INSUFFICIENT_BUFFER` below the header, and the
+header alone as a success between the header and the reply), which corrected `storage_property`'s documentation,
+which had stated the other property's behaviour as the call's. Measured here: a twelve-byte reply and node zero on
+a one-node machine; a node other than zero was not observed. Six sabotages pin it, in
+[sabotage.json](sabotage.json), all caught. What this left to do is `NR-2.5` and `NR-2.6`, which is now unblocked.

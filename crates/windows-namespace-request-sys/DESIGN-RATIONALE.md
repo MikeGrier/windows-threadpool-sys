@@ -454,3 +454,40 @@ swaps them compiles and asks a different question. Newtypes make the swap a comp
 every value Windows may define later reachable, so the types narrow nothing. Only the query type has named
 constants, because the three documented values are all that enumeration has; the property ids are `windows-sys`'
 and are not reproduced.
+
+## D-23: a disk's NUMA node
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-23`. This is how it was reached.
+
+**The documentation check came first, and found less than the other entries had.** Looking up the structure's
+reference page returned a 404, and the enumeration page's row for `StorageDeviceNumaProperty` is one sentence
+that names no structure, where the unique-id row names its structure and points at the driver kit. `windows-sys`
+carries `STORAGE_DEVICE_NUMA_PROPERTY` from the SDK header, so the layout is public, but "public header" and
+"documented" are not the same, and the repository's rule is about the second. The decision to proceed on the
+header's footing is recorded in `D-23` as one the engineer can overrule, with the generic entry as the way
+around it, rather than as settled: the entry was asked for, the property is documented, and the structure is the
+one the property's own header ships, but the weaker footing is a fact the engineer should have in front of them.
+
+**One probe, which found the thing worth recording.** A throwaway test asked the property with output buffers of
+0, 7, 8, 11, 12, 13, 64 and 512 bytes, for the standard and the exists query. The standard answers were the whole
+size protocol and they differed from the unique-id property's: `ERROR_INSUFFICIENT_BUFFER` below the header, and
+a success with the header alone between the header and the reply. The `storage_property` module documentation
+had stated the unique-id behaviour as the call's, with "(measured)" on it. The loop was already correct because
+it reads the size from the header of whichever comes back, but the documentation would have misled whoever added
+the next property, so it was rewritten as a table with one row per property measured, and a test pins this
+property's row.
+
+**What was weighed.**
+
+- *A single entry for both NUMA questions* (volume and disk). Rejected: they are different calls on different
+  handles, and the point of asking per disk is that a volume's answer is not every disk's.
+- *Reporting `u32::MAX` as `None`.* Rejected for the reason `QueryVolumeNumaInfo` gave: it would be a sentinel
+  this crate chose, and nothing documented says it means none.
+- *A test comparing the disk's node with the volume's.* Written, and removed: it printed two numbers and compared
+  nothing, and on a one-node machine nothing would distinguish a correct comparison from a wrong one. A test
+  that cannot fail is not a test.
+
+**Why the descriptor tests use constructed replies.** A one-node machine reports zero, which is also what a field
+read from the wrong place would give when the bytes are zeros. So the field-placement tests build replies with
+distinct values in each field, and the sabotages for a node read from the wrong field are caught by those, not by
+the real disk.
