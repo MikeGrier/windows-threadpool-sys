@@ -246,6 +246,11 @@ time, so the mechanism carrying it must not either. A ring is not required.
   remains safe by blocking, as a fallback. The request is idempotent; `poll` after it is refused.
   [Session](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q34-shutdown-is-requested-signalled-then-dropped)
 
+  **Amended 2026-10-15** in [TW-D-9](DESIGN-NOTES.md#tw-d-9): the request sets the stop flag and
+  returns without draining, and `Drop` drains, waiting at most for a running poll to reach its next
+  roster entry. "`Drop` has nothing left to wait for" did not hold: draining inside the request
+  could block, and the Q35 answer lets the caller drop without reading the poll-done entry.
+
 - **Q35. Signalling "polling has ended" when the SQ is full.** Shutdown is often requested while
   the poll is parked on a full SQ, so a terminal SQ entry may not fit. A reserved slot only a
   terminal entry may use, a terminal state read beside the SQ when the doorbell rings, or a
@@ -255,6 +260,13 @@ time, so the mechanism carrying it must not either. A ring is not required.
   and waits for space like any other. A caller not interested in it need not drain for it: having
   requested shutdown, it may simply drop the watcher.
   [Session](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q35-no-special-mechanism)
+
+- **Q36. Signalling quiescence after a shutdown request.** Open, raised 2026-10-15 by the review
+  that corrected [TW-D-9](DESIGN-NOTES.md#tw-d-9). After the request, `Drop` waits at most for a
+  running poll to reach its next roster entry and return; even after the poll-done entry is read,
+  the callback that wrote it may not have returned. Should the crate offer a way to know it is
+  quiescent -- so a caller can drop knowing `Drop` will not wait -- or is the bounded wait enough?
+  Too early to say is a valid answer; nothing binds to either until it is answered.
 
 ## Population
 

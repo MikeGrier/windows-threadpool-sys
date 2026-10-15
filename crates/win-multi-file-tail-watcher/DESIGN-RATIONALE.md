@@ -126,6 +126,15 @@ it to reach the crate); a reserved slot or separate event for the final signal (
 [stop value](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#a-stop-result-returned-from-the-callers-callback-set-aside),
 [Q35](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q35-no-special-mechanism)
 
+**Corrected 2026-10-15**, after a review of the branch: the decision had the request stop and drain
+the resume wait, and promised `Drop` would then have nothing to wait for. Draining waits for a
+callback inside a probe, so a request made while a poll was probing would block, against its own
+promise; and the Q35 answer lets a caller drop without reading the poll-done entry, so `Drop` could
+always find a callback to wait for. The session's own analysis of Q35 had already put the wait at
+"at most a running poll reaching its next roster entry"; the decision text had not followed it. The
+drain moved from the request into `Drop`, and a signal that would let `Drop` promise no wait at all
+is left open as Q36 rather than invented here.
+
 ## TW-D-10: one crate, shared handles
 
 Three ways to reconcile the roster's `SharedHandle` with windows-overlapped-io-sys' exclusively

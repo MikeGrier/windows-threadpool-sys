@@ -102,24 +102,26 @@ I/O.
 ## M4 -- Shutdown
 
 Deliverable: shutdown requested from inside the caller's own doorbell callback stops the watcher
-from any state, and the subsequent `Drop` returns without waiting.
+from any state without blocking, and the subsequent `Drop` waits at most for a running poll to reach
+its next roster entry.
 
 - [ ] **TW-4.1** -- **The shutdown request**: non-blocking, idempotent, and `poll` refused after it.
   ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
 
-- [ ] **TW-4.2** -- **Stopping the poll**: set the stop flag, then stop and drain the resume wait; a
-  queued resume callback returns at once on seeing the flag, and a running poll stops at its next
-  roster entry. The poll-done entry is written as normal when there is space.
+- [ ] **TW-4.2** -- **Stopping the poll**: the request sets the stop flag and returns without
+  draining; a queued resume callback returns at once on seeing the flag, and a running poll stops at
+  its next roster entry. The poll-done entry is written as normal when there is space.
   ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
 
-- [ ] **TW-4.3** -- **`Drop` of the watcher**: nothing to wait for after shutdown; without a prior
-  shutdown, blocks until the crate's own callbacks have finished; never depends on the poll-done
+- [ ] **TW-4.3** -- **`Drop` of the watcher**: sets the stop flag if no request was made, then stops
+  and drains the resume wait and waits for a running poll to return; never depends on the poll-done
   entry having been written or read. ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
 
 - [ ] **TW-4.4** -- **Integration tests: shutdown from every state.** From the caller's doorbell
-  callback on a thread-pool wait; while parked on a full SQ; during a running poll over a large
-  roster; repeated requests; `Drop` with and without a prior shutdown; no crate callback runs after
-  `Drop` returns.
+  callback on a thread-pool wait, asserting the request returns while a poll is inside a probe;
+  while parked on a full SQ; during a running poll over a large roster; repeated requests; `Drop`
+  with and without a prior shutdown, each bounded by one probe; no crate callback runs after `Drop`
+  returns.
 
 ## M4+ -- Reads on the thread pool (parked behind M4)
 

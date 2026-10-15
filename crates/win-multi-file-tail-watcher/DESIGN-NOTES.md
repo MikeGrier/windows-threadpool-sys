@@ -22,7 +22,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-6"></a>TW-D-6 | **Delivery is one crate-created submission queue and two crate-created manual-reset doorbell events.** No CQ. |
 | <a id="tw-d-7"></a>TW-D-7 | **A poll that fills the SQ stops without waiting and resumes later; no lock is held across a probe, an SQ write, or a doorbell.** |
 | <a id="tw-d-8"></a>TW-D-8 | **Registration and unregistration are legal during a poll, and neither waits for it.** |
-| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` afterwards has nothing to wait for.** |
+| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks, which after a request means at most a running poll reaching its next roster entry.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
 | <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
@@ -154,19 +154,30 @@ How roster changes between stop and resume are handled is a working position, be
 
 ## TW-D-9: cancellation is shutdown
 
+**Amended 2026-10-15:** this decision had the request drain the resume wait and `Drop` wait for
+nothing. Draining waits for a callback inside a probe, so the request could block, and the caller
+may drop without reading the poll-done entry, so `Drop` could always have a callback to wait for.
+The drain moved to `Drop`, below.
+
 - **Cancelling means stopping the watcher for good**, not one poll. No use was found for cancelling
   a single poll and polling again, so that is not offered; nothing here forecloses adding it.
 - **Shutdown is an explicit request that does not block and may be repeated.** It is typically made
   from the caller's own callback for a crate notification.
-- **What it does:** set a stop flag, then stop and drain the resume wait. A queued resume callback
-  sees the flag and returns at once; a running poll stops at its next roster entry. Draining, not
-  cancelling queued callbacks, follows the repository's
-  [teardown-drains decision](../../DESIGN-NOTES.md#teardown-drains).
+- **What the request does:** set the stop flag, and return. It does not drain. A queued resume
+  callback sees the flag and returns at once; a running poll stops at its next roster entry, one
+  system call away.
+- **Requested is not quiescent.** After the request a crate callback may still be running (a poll
+  finishing its current probe) or queued (a resume callback about to see the flag).
 - **The end of polling reaches the caller as the ordinary poll-done entry**, when there is space
   for it. A caller that does not care need not drain for it.
-- **The caller then drops the watcher, and `Drop` has nothing left to wait for.** `Drop` without a
-  prior shutdown is still safe, by blocking until the crate's own callbacks have finished; it never
-  depends on the poll-done entry having been written or read.
+- **`Drop` drains.** It stops and drains the resume wait and waits for a running poll to return,
+  following the repository's [teardown-drains decision](../../DESIGN-NOTES.md#teardown-drains), and
+  never depends on the poll-done entry having been written or read. After a shutdown request that
+  wait is at most a running poll reaching its next roster entry and returning; without one, `Drop`
+  sets the stop flag itself first, so the bound is the same. Even after the poll-done entry is read,
+  the callback that wrote it may not yet have returned, so no `Drop` that never waits is promised.
+  Whether to offer a signal that would make one promisable is open:
+  [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) Q36.
 
 ## TW-D-10: one crate, endpoints and observers
 
