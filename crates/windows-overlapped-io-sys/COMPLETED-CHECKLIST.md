@@ -528,3 +528,17 @@ and a hard link both keeping the ID, a file recreated under the same name gettin
 directory. Measured: the NUL device and a named pipe both refuse `FileIdInfo` with
 `ERROR_INVALID_PARAMETER`, so the shared error path is now tested, on the NUL device. Sabotage: returning
 success on failure failed that test; zeroing the ID failed the three that compare IDs.
+
+## Moved 2026-10-14 21:33:14 -04:00 -- M16.3: the observer's handle type
+
+### <a id="m163"></a>M16.3 -- `file_type()` classifies any handle, in the core rather than behind `fs`. *(completed 2026-10-14 21:33:14 -04:00)*
+
+The engineer placed it in the core: what counts as a file system is broad. `EndpointObserver::file_type`
+returns a `FileType` (`Disk`, `Character`, `Pipe`, `Remote`, `Unknown`, or `Other(u32)` for an undocumented
+value) from `GetFileType`, clearing the last error first so a stale one cannot pass for the call's. It lives
+in its own always-compiled `src/endpoint/file_type.rs`, since `query.rs` is `fs`-gated as a whole. The mapping
+from return value and last error is a pure function, so every branch is tested, the error and undocumented
+values included; real handles cover a disk file, a directory, the NUL device, both ends of a named pipe, and
+an observer outliving its endpoint. Sabotage: swapping disk and character, and dropping the error branch,
+failed five tests. Testing the crate alone also surfaced unused imports left by M15.6, fixed separately in
+`a054f8b8`.

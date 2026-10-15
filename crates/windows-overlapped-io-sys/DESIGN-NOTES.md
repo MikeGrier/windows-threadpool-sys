@@ -152,7 +152,10 @@ route to association, submission, and the blocking backend, and stays not `Clone
   classes, `GetFileType`, `GetFinalPathNameByHandleW`, `GetVolumeInformationByHandleW`). File-system and
   device control codes go through `DeviceIoControl`, which on an overlapped handle needs an `OVERLAPPED`
   and may pend: that is I/O, so they stay with the endpoint and its device adapters. The list beyond
-  `file_len` is M16 in [CHECKLIST.md](CHECKLIST.md).
+  `file_len` is M16 in [CHECKLIST.md](CHECKLIST.md). Queries sit behind `fs` unless they classify any
+  handle: `file_type` (`GetFileType`) is core (the engineer, 2026-10-14: the name says "file", but what
+  counts as a file system is broad -- pipes and character devices answer it, measured, and Win32 documents
+  sockets as pipes).
 - **Observer queries return paths and names as `Wtf16String`** (the engineer, 2026-10-14, for M16):
   `final_path` and `volume_info` hand back Windows' own UTF-16 unconverted, so this crate takes a
   dependency on [wtf-string](../wtf-string/) for them.

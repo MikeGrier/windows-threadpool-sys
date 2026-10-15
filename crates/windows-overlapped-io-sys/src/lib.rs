@@ -86,7 +86,9 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use device::DeviceIoControlIo;
 
 #[cfg(windows)]
-pub use endpoint::{EndpointHandle, EndpointObserver, NotificationModes, UnassociatedEndpoint};
+pub use endpoint::{
+    EndpointHandle, EndpointObserver, FileType, NotificationModes, UnassociatedEndpoint,
+};
 
 #[cfg(all(windows, feature = "fs"))]
 pub use endpoint::{FileId, StandardInfo};

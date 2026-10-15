@@ -35,9 +35,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.2** -- `file_id()` reads the volume serial and 128-bit file ID. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m162)
 
-- [ ] **M16.3** -- **`file_type()`**: `GetFileType` -- disk, pipe, character, or unknown, with its error
-  path (`FILE_TYPE_UNKNOWN` plus a last error). It classifies any handle, not only files, so whether it
-  belongs behind `fs` or in the core is part of this item; working position (not a decision): core.
+- [x] **M16.3** -- `file_type()` classifies any handle, in the core rather than behind `fs`. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m163)
 
 - [ ] **M16.4** -- **`storage_info()` and `alignment_info()`**: `FileStorageInfo` (logical and physical
   sector sizes) and `FileAlignmentInfo` (the buffer alignment the device requires). M16.5 builds on both.

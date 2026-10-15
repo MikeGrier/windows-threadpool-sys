@@ -20,6 +20,10 @@ use std::path::Path;
 
 use win_shared_os_owned_handle::SharedHandle;
 
+mod file_type;
+
+pub use self::file_type::FileType;
+
 #[cfg(feature = "fs")]
 mod query;
 
@@ -282,9 +286,10 @@ impl UnassociatedEndpoint {
 /// cannot borrow, duplicate, or wrap the handle, and so cannot reach any
 /// constructor that associates it or issues I/O through it.
 ///
-/// What it offers instead is a fixed set of safe queries, behind the `fs`
-/// feature -- `standard_info` and its `file_len` shortcut, and `file_id` -- and
-/// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
+/// What it offers instead is a fixed set of safe queries -- [`file_type`](Self::file_type)
+/// in every configuration; `standard_info` and its `file_len` shortcut, and
+/// `file_id`, behind the `fs` feature -- and an `unsafe` borrow
+/// ([`handle`](Self::handle)) for any other query.
 ///
 /// Obtained from an endpoint, or from the backend that endpoint moved into, with
 /// `observer()`. Cloning shares the same handle.
