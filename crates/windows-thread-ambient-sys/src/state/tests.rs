@@ -4,16 +4,25 @@
 
 use std::error::Error as _;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, HANDLE};
-use windows_sys::Win32::Security::TOKEN_QUERY;
-use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_TOKEN, HANDLE};
+use windows_sys::Win32::Security::{
+    ACL, ACL_REVISION, DuplicateTokenEx, InitializeAcl, InitializeSecurityDescriptor,
+    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SecurityImpersonation, SetSecurityDescriptorDacl,
+    TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY, TokenImpersonation,
+};
+use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken, SetThreadToken,
+};
 
 use super::{AmbientState, ApplyError, ApplyFailure, CaptureError, CaptureFailure, RestoreReport};
 use crate::capture_set::{CapturableAspect, CaptureSet};
 use crate::declared::{DeclaredAspect, DeclaredError, MemoryPriority};
 use crate::error_mode::{RestoreError as ErrorModeRestoreError, ThreadErrorMode};
-use crate::transaction::{TransactionError, TransactionFailure};
 use crate::{Captured, Declared};
+use windows_impersonation_token_sys::{
+    CaptureError as ImpersonationCaptureError, CaptureFailure as ImpersonationCaptureFailure,
+};
 
 /// Whether the calling thread currently carries an impersonation token.
 fn thread_has_token() -> bool {
@@ -33,13 +42,76 @@ fn thread_has_token() -> bool {
     true
 }
 
+/// A real capture failure, provoked rather than constructed: a thread that is
+/// impersonating a token whose DACL grants nothing cannot have that token opened
+/// for query, so the capture fails with `ERROR_ACCESS_DENIED`.
+fn access_denied_capture_error() -> CaptureError {
+    let mut process_token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `process_token` is a valid writable destination, and the handle it
+    // receives is closed below.
+    let opened =
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE, &mut process_token) };
+    assert_ne!(opened, 0, "the process token could not be opened");
+
+    // A present, empty DACL: it exists and has no entries, so it denies everyone.
+    // (An absent DACL would grant everyone.) Eight bytes is the ACL header.
+    let mut acl = [0u32; 2];
+    // SAFETY: zeroed storage is the state `InitializeSecurityDescriptor` expects
+    // to overwrite, and the pointers refer to locals that outlive every use.
+    let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let descriptor_ptr = (&raw mut descriptor).cast::<core::ffi::c_void>();
+    let acl_ptr = acl.as_mut_ptr().cast::<ACL>();
+    // SAFETY: `acl` is eight writable, suitably aligned bytes, the size of an
+    // empty ACL; `descriptor` is a writable security descriptor.
+    let built = unsafe {
+        InitializeAcl(acl_ptr, size_of_val(&acl) as u32, ACL_REVISION) != 0
+            && InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
+            && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl_ptr, 0) != 0
+    };
+    assert!(built, "the empty DACL could not be built");
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor_ptr,
+        bInheritHandle: 0,
+    };
+
+    let mut locked_token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `process_token` was opened for duplication above, and `attributes`
+    // and `locked_token` are valid for the call.
+    let duplicated = unsafe {
+        DuplicateTokenEx(
+            process_token,
+            TOKEN_IMPERSONATE,
+            &attributes,
+            SecurityImpersonation,
+            TokenImpersonation,
+            &mut locked_token,
+        )
+    };
+    // SAFETY: the handle came from `OpenProcessToken` and nothing else owns it.
+    unsafe { CloseHandle(process_token) };
+    assert_ne!(duplicated, 0, "the locked token could not be made");
+
+    // SAFETY: a null thread handle means the calling thread, and the token is
+    // removed again below on the same thread before this returns.
+    let applied = unsafe { SetThreadToken(std::ptr::null(), locked_token) };
+    assert_ne!(applied, 0, "the locked token could not be applied");
+    let outcome = AmbientState::capture(CaptureSet::IMPERSONATION);
+    // SAFETY: passing a null token removes the one set above from this thread.
+    let removed = unsafe { SetThreadToken(std::ptr::null(), std::ptr::null_mut()) };
+    // SAFETY: the handle came from `DuplicateTokenEx` and nothing else owns it.
+    unsafe { CloseHandle(locked_token) };
+    assert_ne!(removed, 0, "the locked token could not be removed");
+
+    outcome.expect_err("a token that cannot be opened cannot be captured")
+}
+
 #[test]
 fn capturing_nothing_captures_nothing() {
     let state = AmbientState::capture(CaptureSet::NONE).expect("capture");
     assert_eq!(state.captured_set(), CaptureSet::NONE);
     assert!(matches!(state.impersonation(), Captured::NotCaptured));
     assert_eq!(*state.error_mode(), Captured::NotCaptured);
-    assert!(matches!(state.transaction(), Captured::NotCaptured));
 }
 
 #[test]
@@ -48,7 +120,6 @@ fn the_captured_set_reports_exactly_what_was_asked_for() {
         CaptureSet::NONE,
         CaptureSet::IMPERSONATION,
         CaptureSet::ERROR_MODE,
-        CaptureSet::TRANSACTION,
         CaptureSet::DEFAULT,
         CaptureSet::ALL,
     ] {
@@ -93,22 +164,10 @@ fn a_captured_impersonation_context_is_present_even_without_a_thread_token() {
 }
 
 #[test]
-fn a_transaction_is_captured_as_absent_on_an_untransacted_thread() {
-    // Absent, not NotCaptured: the caller asked, and the answer was none.
-    let state = AmbientState::capture(CaptureSet::TRANSACTION).expect("capture");
-    assert!(matches!(state.transaction(), Captured::Absent));
-    assert!(state.transaction().was_captured());
-}
-
-#[test]
 fn the_default_set_captures_impersonation_and_error_mode_only() {
     let state = AmbientState::capture(CaptureSet::DEFAULT).expect("capture");
     assert!(state.impersonation().was_captured());
     assert!(state.error_mode().was_captured());
-    assert!(
-        !state.transaction().was_captured(),
-        "the default must not quietly capture a transaction"
-    );
 }
 
 #[test]
@@ -407,7 +466,6 @@ fn a_clean_report_says_so() {
     assert!(applied.restore().is_clean());
     assert!(applied.restore().error_mode().is_none());
     assert!(applied.restore().declared().is_none());
-    assert!(applied.restore().transaction().is_none());
     assert_eq!(
         applied.restore().to_string(),
         "the thread was restored cleanly"
@@ -416,25 +474,27 @@ fn a_clean_report_says_so() {
 
 #[test]
 fn capture_errors_preserve_aspect_code_display_and_source() {
-    const CODE: i32 = 1234;
-    let error = CaptureError {
-        failure: CaptureFailure::Transaction(TransactionError::for_test(
-            TransactionFailure::Duplicate,
-            Some(CODE),
-        )),
-    };
+    let error = access_denied_capture_error();
+    let code = i32::try_from(ERROR_ACCESS_DENIED).expect("fits in i32");
 
-    assert_eq!(error.aspect(), CapturableAspect::Transaction);
-    assert_eq!(error.raw_os_error(), Some(CODE));
-    assert!(error.to_string().starts_with(
-        "capturing the transaction aspect failed: the transaction handle could not be duplicated:"
+    assert_eq!(error.aspect(), CapturableAspect::Impersonation);
+    assert!(matches!(
+        error.failure(),
+        CaptureFailure::Impersonation(inner)
+            if inner.failure() == ImpersonationCaptureFailure::OpenThreadToken
     ));
+    assert_eq!(error.raw_os_error(), Some(code));
+    assert!(
+        error
+            .to_string()
+            .starts_with("capturing the impersonation aspect failed: OpenThreadToken:")
+    );
     assert_eq!(
         error
             .source()
-            .and_then(|source| source.downcast_ref::<TransactionError>())
-            .and_then(TransactionError::raw_os_error),
-        Some(CODE)
+            .and_then(|source| source.downcast_ref::<ImpersonationCaptureError>())
+            .and_then(ImpersonationCaptureError::raw_os_error),
+        Some(code)
     );
 }
 
@@ -466,30 +526,20 @@ fn restore_report_predicates_and_accessors_cover_every_failure_combination() {
     const CODE: i32 = 1234;
     for has_error_mode in [false, true] {
         for has_declared in [false, true] {
-            for has_transaction in [false, true] {
-                let report = RestoreReport {
-                    error_mode: has_error_mode.then(|| {
-                        ErrorModeRestoreError::for_test(
-                            ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits(),
-                            CODE,
-                        )
-                    }),
-                    declared: has_declared.then(|| {
-                        DeclaredError::for_test(DeclaredAspect::MemoryPriority, Some(CODE))
-                    }),
-                    transaction: has_transaction.then(|| {
-                        TransactionError::for_test(TransactionFailure::Install, Some(CODE))
-                    }),
-                };
+            let report = RestoreReport {
+                error_mode: has_error_mode.then(|| {
+                    ErrorModeRestoreError::for_test(
+                        ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits(),
+                        CODE,
+                    )
+                }),
+                declared: has_declared
+                    .then(|| DeclaredError::for_test(DeclaredAspect::MemoryPriority, Some(CODE))),
+            };
 
-                assert_eq!(
-                    report.is_clean(),
-                    !has_error_mode && !has_declared && !has_transaction
-                );
-                assert_eq!(report.error_mode().is_some(), has_error_mode);
-                assert_eq!(report.declared().is_some(), has_declared);
-                assert_eq!(report.transaction().is_some(), has_transaction);
-            }
+            assert_eq!(report.is_clean(), !has_error_mode && !has_declared);
+            assert_eq!(report.error_mode().is_some(), has_error_mode);
+            assert_eq!(report.declared().is_some(), has_declared);
         }
     }
 }
@@ -593,9 +643,9 @@ fn an_uncaptured_aspect_leaves_the_running_threads_value_alone() {
 // three constant mutants (`Some(0)`, `Some(1)`, `Some(-1)`) are ruled out by
 // the `ErrorMode` arm alone, which hardcodes `None` (there is no OS code for
 // an unrepresentable bit) -- but that same case cannot rule out the fourth,
-// `-> None` unconditionally, since it already agrees there. The `Transaction`
-// arm, built with `TransactionError::synthetic`, is what supplies a `Some`
-// case to rule that one out too.
+// `-> None` unconditionally, since it already agrees there. The `Impersonation`
+// arm, reached by `access_denied_capture_error`, is what supplies a `Some` case
+// to rule that one out too.
 
 #[test]
 fn raw_os_error_forwards_through_the_failing_aspect_or_reports_none() {
@@ -609,13 +659,10 @@ fn raw_os_error_forwards_through_the_failing_aspect_or_reports_none() {
         "an unsupported thread error mode carries no Win32 code to report"
     );
 
-    let transaction_failure = CaptureError {
-        failure: CaptureFailure::Transaction(TransactionError::synthetic(
-            TransactionFailure::Duplicate,
-            Some(5),
-        )),
-    };
-    assert_eq!(transaction_failure.raw_os_error(), Some(5));
+    assert_eq!(
+        access_denied_capture_error().raw_os_error(),
+        Some(i32::try_from(ERROR_ACCESS_DENIED).expect("fits in i32"))
+    );
 }
 
 #[test]
@@ -623,18 +670,13 @@ fn display_and_source_forward_through_the_failing_aspect() {
     // `<impl Display for CaptureError>::fmt -> Ok(Default::default())` and
     // `<impl Error for CaptureError>::source -> None` survived alongside
     // `raw_os_error`'s gap above, for the same reason: nothing in this suite
-    // provokes a real capture failure. One constructed variant is enough for
+    // provokes a real capture failure. One provoked variant is enough for
     // both -- the mutation replaces the whole body, so any one working arm
     // proves the real one ran.
-    let error = CaptureError {
-        failure: CaptureFailure::Transaction(TransactionError::synthetic(
-            TransactionFailure::Duplicate,
-            Some(5),
-        )),
-    };
+    let error = access_denied_capture_error();
     let rendered = error.to_string();
     assert!(
-        rendered.contains("capturing the transaction aspect failed"),
+        rendered.contains("capturing the impersonation aspect failed"),
         "got {rendered}"
     );
     assert!(std::error::Error::source(&error).is_some());
@@ -651,13 +693,13 @@ fn display_and_source_forward_through_the_failing_aspect() {
 
 // --- RestoreReport -----------------------------------------------------------
 //
-// `is_clean` chains three `&&`, and both operators survived: every existing
-// test either sets no field (all `is_none()` agree with any operator) or
-// reaches `RestoreReport` only through a real, clean `with_applied` call. One
-// field set at a time is what a wrong operator cannot survive; the three
-// accessors are exercised the same way `Declared::is_empty`'s gap was, and the
-// `error_mode`/`declared`/`transaction` accessors are covered alongside them
-// since building a non-empty report is the same construction either test needs.
+// `is_clean` is a conjunction over the fields, and its operator survived: every
+// existing test either sets no field (all `is_none()` agree with any operator)
+// or reaches `RestoreReport` only through a real, clean `with_applied` call. One
+// field set at a time is what a wrong operator cannot survive; the accessors
+// are exercised the same way `Declared::is_empty`'s gap was, and the
+// `error_mode`/`declared` accessors are covered alongside them since building
+// a non-empty report is the same construction either test needs.
 
 #[test]
 fn is_clean_and_the_accessors_require_every_field_to_be_unset() {
@@ -665,12 +707,10 @@ fn is_clean_and_the_accessors_require_every_field_to_be_unset() {
     assert!(empty.is_clean());
     assert!(empty.error_mode().is_none());
     assert!(empty.declared().is_none());
-    assert!(empty.transaction().is_none());
 
     let only_error_mode = RestoreReport {
         error_mode: Some(crate::error_mode::RestoreError::synthetic(0x0001, 5)),
         declared: None,
-        transaction: None,
     };
     assert!(
         !only_error_mode.is_clean(),
@@ -684,27 +724,12 @@ fn is_clean_and_the_accessors_require_every_field_to_be_unset() {
             DeclaredAspect::MemoryPriority,
             Some(5),
         )),
-        transaction: None,
     };
     assert!(
         !only_declared.is_clean(),
         "a declared failure alone must not read as clean"
     );
     assert!(only_declared.declared().is_some());
-
-    let only_transaction = RestoreReport {
-        error_mode: None,
-        declared: None,
-        transaction: Some(TransactionError::synthetic(
-            TransactionFailure::Install,
-            Some(5),
-        )),
-    };
-    assert!(
-        !only_transaction.is_clean(),
-        "a transaction failure alone must not read as clean"
-    );
-    assert!(only_transaction.transaction().is_some());
 }
 
 // --- state::ApplyError's own error-trait surface ----------------------------

@@ -30,11 +30,6 @@
 //! let set = CaptureSet::DEFAULT;
 //! assert!(set.contains(CaptureSet::IMPERSONATION));
 //!
-//! // TxF is excluded from the default; ask for it deliberately.
-//! assert!(!set.contains(CaptureSet::TRANSACTION));
-//! let with_txf = set.union(CaptureSet::TRANSACTION);
-//! assert!(with_txf.contains(CaptureSet::TRANSACTION));
-//!
 //! // A caller that wants stability names its aspects rather than taking a set
 //! // whose membership may grow.
 //! let pinned = CaptureSet::IMPERSONATION.union(CaptureSet::ERROR_MODE);
@@ -51,7 +46,6 @@ use std::fmt;
 mod bit {
     pub(super) const IMPERSONATION: u8 = 1;
     pub(super) const ERROR_MODE: u8 = 1 << 1;
-    pub(super) const TRANSACTION: u8 = 1 << 2;
 }
 
 /// One aspect that can be read off the calling thread.
@@ -65,8 +59,6 @@ pub enum CapturableAspect {
     Impersonation,
     /// The thread error mode.
     ErrorMode,
-    /// The thread's current TxF transaction.
-    Transaction,
 }
 
 impl CapturableAspect {
@@ -75,13 +67,12 @@ impl CapturableAspect {
     /// [`CaptureSet::ALL`] is derived from this list rather than restating it,
     /// so an aspect added here joins that set automatically instead of leaving
     /// it quietly stale.
-    pub const EVERY: &'static [Self] = &[Self::Impersonation, Self::ErrorMode, Self::Transaction];
+    pub const EVERY: &'static [Self] = &[Self::Impersonation, Self::ErrorMode];
 
     const fn bit(self) -> u8 {
         match self {
             Self::Impersonation => bit::IMPERSONATION,
             Self::ErrorMode => bit::ERROR_MODE,
-            Self::Transaction => bit::TRANSACTION,
         }
     }
 
@@ -97,7 +88,6 @@ impl fmt::Display for CapturableAspect {
         f.write_str(match self {
             Self::Impersonation => "impersonation",
             Self::ErrorMode => "error mode",
-            Self::Transaction => "transaction",
         })
     }
 }
@@ -133,21 +123,10 @@ impl CaptureSet {
     /// Just the thread error mode.
     pub const ERROR_MODE: Self = CapturableAspect::ErrorMode.as_set();
 
-    /// Just the current TxF transaction.
-    pub const TRANSACTION: Self = CapturableAspect::Transaction.as_set();
-
     /// The recommended starting point: impersonation and the thread error mode.
     ///
     /// **Adding an aspect to this set is a breaking change**, and that is the
     /// reason it exists as a name rather than as a `Default` implementation.
-    ///
-    /// TxF is deliberately excluded. It is deprecated by Microsoft, capturing it
-    /// costs a lazy `ntdll` binding a caller may never need, and -- the reason
-    /// that actually decides it -- a captured transaction enlists remoted work
-    /// in a transaction the caller may commit or roll back while that work is
-    /// still running. That is a hazard to opt into deliberately, not one to
-    /// acquire by taking a default. Add [`TRANSACTION`](Self::TRANSACTION) when
-    /// you mean it.
     pub const DEFAULT: Self = Self::IMPERSONATION.union(Self::ERROR_MODE);
 
     /// Every capturable aspect this version knows.

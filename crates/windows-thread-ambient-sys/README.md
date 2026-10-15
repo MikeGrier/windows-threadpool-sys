@@ -69,10 +69,9 @@ let applied = thread::spawn(move || {
 
 assert_eq!(*applied.value(), "ran as the submitter");
 
-// A restore failure for the reported aspects -- the error mode, the declared
-// aspects, the transaction -- does not discard the value; it is reported
-// alongside it, so a caller can retire a contaminated thread without losing the
-// result. Impersonation is deliberately not among them: its restore is
+// A restore failure for the reported aspects -- the error mode and the declared
+// aspects -- does not discard the value; it is reported alongside it, so a
+// caller can retire a contaminated thread without losing the result. Impersonation is deliberately not among them: its restore is
 // fail-fast and panics, as "One capture, many workers" below explains.
 assert!(applied.restore().is_clean());
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -119,7 +118,6 @@ assert_eq!(refused.bits(), 0x0004);
 |---|---|---|
 | Impersonation | captured | Fail-fast restore, guaranteed by this crate; [windows-impersonation-token-sys](../windows-impersonation-token-sys/README.md) is used because it already behaves that way |
 | Thread error mode | captured **and** declarable | The only aspect in both sets, so a consumer may transplant it or impose its own |
-| TxF transaction | captured | Outside the default set: deprecated, and a captured transaction can be committed or rolled back beneath the worker |
 | WOW64 redirection | declared | Has no getter at all, so there is nothing to capture |
 | Memory priority | declared | Readable, but remoting a caller's priority without being asked is a policy choice |
 | Background mode | declared | Moves CPU, I/O and memory priority together, which the name says out loud |

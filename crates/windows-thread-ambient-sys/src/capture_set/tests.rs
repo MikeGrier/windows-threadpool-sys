@@ -41,16 +41,11 @@ fn every_variant_is_listed_in_every() {
     // The exhaustive match is the point: adding a variant to `CapturableAspect`
     // without adding it to `EVERY` stops this test compiling, and `ALL` is
     // derived from `EVERY`, so the new aspect cannot be silently absent from it.
-    for aspect in [
-        CapturableAspect::Impersonation,
-        CapturableAspect::ErrorMode,
-        CapturableAspect::Transaction,
-    ] {
+    for aspect in [CapturableAspect::Impersonation, CapturableAspect::ErrorMode] {
         let listed = CapturableAspect::EVERY.contains(&aspect);
         match aspect {
             CapturableAspect::Impersonation => assert!(listed, "impersonation is unlisted"),
             CapturableAspect::ErrorMode => assert!(listed, "error mode is unlisted"),
-            CapturableAspect::Transaction => assert!(listed, "transaction is unlisted"),
         }
     }
 }
@@ -65,14 +60,6 @@ fn the_default_is_impersonation_and_error_mode() {
 }
 
 #[test]
-fn the_default_excludes_the_transaction_aspect() {
-    // TxF is deprecated, costs a lazy ntdll binding, and enlists remoted work in
-    // a transaction the caller may commit or roll back underneath it. That is a
-    // hazard to opt into, never one to acquire by taking a default.
-    assert!(!CaptureSet::DEFAULT.contains(CaptureSet::TRANSACTION));
-}
-
-#[test]
 fn the_default_is_a_subset_of_all() {
     assert!(CaptureSet::ALL.contains(CaptureSet::DEFAULT));
 }
@@ -82,10 +69,10 @@ fn union_accumulates_and_is_idempotent() {
     let one = CaptureSet::IMPERSONATION;
     assert_eq!(one.union(one), one);
 
-    let two = one.union(CaptureSet::TRANSACTION);
+    assert!(!one.contains(CaptureSet::ERROR_MODE));
+    let two = one.union(CaptureSet::ERROR_MODE);
     assert!(two.contains(CaptureSet::IMPERSONATION));
-    assert!(two.contains(CaptureSet::TRANSACTION));
-    assert!(!two.contains(CaptureSet::ERROR_MODE));
+    assert!(two.contains(CaptureSet::ERROR_MODE));
 }
 
 #[test]
@@ -97,16 +84,15 @@ fn union_is_commutative() {
 
 #[test]
 fn without_removes_only_what_was_named() {
-    let reduced = CaptureSet::ALL.without(CaptureSet::TRANSACTION);
-    assert!(!reduced.contains(CaptureSet::TRANSACTION));
+    let reduced = CaptureSet::ALL.without(CaptureSet::ERROR_MODE);
+    assert!(!reduced.contains(CaptureSet::ERROR_MODE));
     assert!(reduced.contains(CaptureSet::IMPERSONATION));
-    assert!(reduced.contains(CaptureSet::ERROR_MODE));
 }
 
 #[test]
 fn without_an_absent_aspect_changes_nothing() {
     let set = CaptureSet::IMPERSONATION;
-    assert_eq!(set.without(CaptureSet::TRANSACTION), set);
+    assert_eq!(set.without(CaptureSet::ERROR_MODE), set);
 }
 
 #[test]
@@ -148,8 +134,8 @@ fn aspects_are_yielded_in_a_stable_order() {
 
 #[test]
 fn a_set_built_in_either_order_yields_the_same_sequence() {
-    let left = CaptureSet::TRANSACTION.union(CaptureSet::IMPERSONATION);
-    let right = CaptureSet::IMPERSONATION.union(CaptureSet::TRANSACTION);
+    let left = CaptureSet::ERROR_MODE.union(CaptureSet::IMPERSONATION);
+    let right = CaptureSet::IMPERSONATION.union(CaptureSet::ERROR_MODE);
     assert_eq!(
         left.aspects().collect::<Vec<_>>(),
         right.aspects().collect::<Vec<_>>(),
@@ -164,7 +150,6 @@ fn debug_names_the_aspects_rather_than_a_bit_pattern() {
     let rendered = format!("{:?}", CaptureSet::DEFAULT);
     assert!(rendered.contains("impersonation"), "got {rendered}");
     assert!(rendered.contains("error mode"), "got {rendered}");
-    assert!(!rendered.contains("transaction"), "got {rendered}");
 
     assert_eq!(format!("{:?}", CaptureSet::NONE), "CaptureSet(none)");
 }
@@ -181,7 +166,7 @@ fn debug_delimits_single_and_multiple_aspects_exactly() {
     );
     assert_eq!(
         format!("{:?}", CaptureSet::ALL),
-        "CaptureSet(impersonation, error mode, transaction)"
+        "CaptureSet(impersonation, error mode)"
     );
 }
 

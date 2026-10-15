@@ -68,10 +68,10 @@
 //!
 //! assert_eq!(*applied.value(), "ran as the submitter");
 //!
-//! // A restore failure for the reported aspects -- the error mode, the
-//! // declared aspects, the transaction -- does not discard the operation's
-//! // value; it arrives alongside it, so a caller can retire a contaminated
-//! // thread without losing what the work produced.
+//! // A restore failure for the reported aspects -- the error mode and the
+//! // declared aspects -- does not discard the operation's value; it arrives
+//! // alongside it, so a caller can retire a contaminated thread without
+//! // losing what the work produced.
 //! assert!(applied.restore().is_clean());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -99,7 +99,6 @@ pub mod declared;
 pub mod error_mode;
 pub mod impersonation;
 pub mod state;
-pub mod transaction;
 
 #[cfg(test)]
 mod test_injection;
