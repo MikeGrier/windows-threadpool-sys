@@ -112,7 +112,7 @@ fn page_buffers_are_readable_and_writable() {
     let before = buffers.stable_ptr();
     assert_eq!(buffers.stable_mut_ptr().cast_const(), before);
     assert_eq!(
-        before.addr() % crate::PAGE_SIZE,
+        before.addr() % crate::page_size(),
         0,
         "the alignment a caller chose PageBuffers for must survive the trait"
     );

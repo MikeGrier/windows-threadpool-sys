@@ -39,17 +39,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.4** -- `storage_info()` and `alignment_info()` read the sector geometry and buffer alignment. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m164)
 
-- [ ] **M16.5** -- **The unbuffered adapters ask for their alignment instead of assuming it.** Decided by
-  the engineer: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "unbuffered I/O asks for its alignment". Today
-  [`PAGE_SIZE`](src/fs.rs) (a fixed 4096) stands in for the system page size scatter/gather segments must
-  be (ask the OS), the device's buffer alignment, and the sector size offsets and lengths must be multiples
-  of (ask the file system, M16.4). Covers `PageBuffers` (allocate at the alignment asked for), the
-  scatter/gather validation, and the public `PAGE_SIZE` constant (changing it is breaking). Above a page,
-  decided: best effort -- buffers and segments are allocated at the larger of the page size and the
-  reported alignment, nothing is refused in advance, and a native call that still rejects the buffer
-  returns its error. Open, to settle with the engineer when taken: whether the answers are asked once per
-  endpoint and kept, or per operation. No local volume requires more than a page, so the above-a-page
-  path needs a seam to inject the answer, built with this item.
+- [x] **M16.5** -- The page size is asked of the OS, and `PageBuffers` aligns to what the device reports. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m165)
 
 - [ ] **M16.6** -- **`remote_protocol_info()`**: `FileRemoteProtocolInfo`, answering whether the file is on
   SMB or another remote protocol. On a local file the query fails or reports no protocol; record which,

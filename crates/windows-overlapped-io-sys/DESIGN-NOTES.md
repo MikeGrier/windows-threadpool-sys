@@ -357,20 +357,32 @@ before `new`. Documenting "do not query while an operation is in flight" leaves 
 
 ### Decision -- unbuffered I/O asks for its alignment; it does not assume a bound (M16.5)
 
-*The engineer, 2026-10-14.* **The fixed `PAGE_SIZE` (4096) stands in for three numbers with three
-authorities, and each is to be asked of its authority, with no bound assumed.** The page size that
+*The engineer, 2026-10-14.* **A fixed `PAGE_SIZE` (4096) stood in for three numbers with three
+authorities; each is now asked of its authority, with no bound assumed.** The page size that
 scatter/gather segments must be is the operating system's answer. The buffer alignment and the sector size
 (which unbuffered offsets and lengths must be multiples of) are the file system's, asked through the handle
 (`FileAlignmentInfo`, `FileStorageInfo`). File systems are expected to answer between the sector size and
 the page size, and none is known to require more than page alignment, but that is not assumed.
 
 **An answer above a page gets a best effort, and the native call is the final judge** (the engineer,
-2026-10-14). The crate aligns what it controls -- the virtual addresses of the buffers and scatter/gather
-segments it allocates -- to the larger of the page size and the reported alignment, and does not refuse in
-advance; if the device still cannot accept the buffer, the native call fails and that error is returned.
-User mode controls only virtual addresses: beyond a page, they say nothing about the physical pages behind
-them, which is presumably why such requirements are not seen in practice. The work is M16.5 in
-[CHECKLIST.md](CHECKLIST.md).
+2026-10-14). The crate aligns what it controls -- the virtual address of the buffer it allocates -- to the
+larger of the page size and the reported alignment, and does not refuse in advance; if the device still
+cannot accept the buffer, the native call fails and that error is returned. User mode controls only virtual
+addresses: beyond a page, they say nothing about the physical pages behind them, which is presumably why
+such requirements are not seen in practice.
+
+As built (M16.5):
+
+- **`page_size()` replaces the `PAGE_SIZE` constant**, asking `GetSystemInfo` once and keeping the answer.
+- **The caller asks, once, when it allocates; the adapters ask nothing.** `PageBuffers::with_alignment`
+  takes the `AlignmentInfo` an observer reported and aligns the allocation's base to it; `PageBuffers::new`
+  page-aligns as before. This follows "No adapter allocates on the caller's behalf" (M11, below): the
+  buffer is the caller's, so its alignment is too, and the question of asking once per endpoint or per
+  operation does not arise.
+- **Only the base is aligned above a page.** Later pages follow at page intervals, so the buffer stays one
+  contiguous allocation viewable as a slice; each scatter/gather segment is page-aligned.
+- **The sector size is not enforced.** Unbuffered offsets and lengths are the caller's; one that is not a
+  multiple of `storage_info().logical_bytes_per_sector` fails the native call.
 
 ## Cancellation and rundown
 
@@ -586,12 +598,12 @@ not pay for):
 	all.
 - Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
 	minimal, one per the families the checklist enumerates:
-	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
-		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
-		own `src/fs.rs` module.)
+	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather, which is already core per
+		the point above, plus `Win32_System_SystemInformation` for `page_size` (M16.5): the page size
+		scatter/gather segments must be is asked of the operating system rather than assumed.
 	- `socket` -> `Win32_Networking_WinSock` -- overlapped socket operations, including
 		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
-		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
+		the core `Win32_Storage_FileSystem` either.
 	- `device` -> `Win32_System_Ioctl` -- device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.

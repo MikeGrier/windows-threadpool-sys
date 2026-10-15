@@ -94,7 +94,7 @@ pub use endpoint::{
 pub use endpoint::{AlignmentInfo, FileId, StandardInfo, StorageInfo};
 
 #[cfg(all(windows, feature = "fs"))]
-pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
+pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PageBuffers, ScatterGatherIo, page_size};
 
 #[cfg(windows)]
 pub use identity::{OperationId, OperationRegistry};

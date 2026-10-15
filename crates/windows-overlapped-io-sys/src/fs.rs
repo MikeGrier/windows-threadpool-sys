@@ -13,17 +13,19 @@ use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::ptr::NonNull;
 use std::slice;
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SEGMENT_ELEMENT, ReadFile, ReadFileScatter, WriteFile, WriteFileGather,
 };
 use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
 use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
-    OperationId, Started, Submitted,
+    AlignmentInfo, AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued,
+    Operation, OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
@@ -407,30 +409,53 @@ impl<B: IoBuf> FileIo<B> {
     }
 }
 
-/// The memory page size assumed by the scatter/gather adapters.
+/// The operating system's memory page size: the size, and the least alignment,
+/// of each scatter/gather segment.
 ///
-/// A fixed 4 KiB, matching every Windows target this crate supports. Buffers are
-/// aligned to it and I/O lengths are multiples of it, which also satisfies the
-/// sector alignment `FILE_FLAG_NO_BUFFERING` requires.
-pub const PAGE_SIZE: usize = 4096;
+/// Asked of the operating system (`GetSystemInfo`) on first use and kept, since
+/// it cannot change while the process runs.
+#[must_use]
+pub fn page_size() -> usize {
+    static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+    *PAGE_SIZE.get_or_init(|| {
+        let mut info = SYSTEM_INFO::default();
+        // SAFETY: `info` is a live local of the right type; the call only writes it.
+        unsafe { GetSystemInfo(&raw mut info) };
+        info.dwPageSize as usize
+    })
+}
+
+/// The base alignment for buffers a device reporting `alignment` reads and
+/// writes: the larger of `page` and the least power of two that clears every bit
+/// of its mask. `None` when that does not fit a `usize`.
+fn buffer_alignment(page: usize, alignment: AlignmentInfo) -> Option<usize> {
+    let device = (u64::from(alignment.requirement_mask) + 1).next_power_of_two();
+    // Fails only where usize is 32 bits and the mask is u32::MAX; no target tested here has that.
+    usize::try_from(device).ok().map(|device| device.max(page))
+}
 
 /// The Win32 `FILE_FLAG_NO_BUFFERING` flag.
 ///
 /// The scatter/gather adapters require the endpoint be opened with this flag (in
 /// addition to `FILE_FLAG_OVERLAPPED`, which [`crate::UnassociatedEndpoint::open`]
-/// always sets); pass it as that constructor's `extra_flags`.
+/// always sets); pass it as that constructor's `extra_flags`. Unbuffered offsets
+/// and lengths must then be multiples of the volume's sector size
+/// ([`EndpointObserver::storage_info`](crate::EndpointObserver::storage_info)'s
+/// `logical_bytes_per_sector`), or the native call fails.
 pub const FILE_FLAG_NO_BUFFERING: u32 =
     windows_sys::Win32::Storage::FileSystem::FILE_FLAG_NO_BUFFERING;
 
-/// A page-aligned set of memory pages: the buffer form the scatter/gather
-/// adapters read into and write from.
+/// A set of memory pages: the buffer form the scatter/gather adapters read into
+/// and write from.
 ///
-/// It owns one page-aligned allocation of `pages * PAGE_SIZE` bytes and can be
-/// viewed as a byte slice. Its page-aligned segments are what `ReadFileScatter`
-/// and `WriteFileGather` require.
+/// It owns one zeroed allocation of `pages *` [`page_size()`] bytes and can be
+/// viewed as a byte slice. Each page is one `ReadFileScatter` / `WriteFileGather`
+/// segment, aligned to at least a page. [`with_alignment`](Self::with_alignment)
+/// also aligns the allocation's base to a device's reported alignment.
 pub struct PageBuffers {
     ptr: NonNull<u8>,
     pages: usize,
+    align: usize,
 }
 
 // SAFETY: `PageBuffers` uniquely owns its heap allocation; moving it between
@@ -444,18 +469,51 @@ impl PageBuffers {
     ///
     /// # Panics
     ///
-    /// Panics if `pages` is zero or `pages * PAGE_SIZE` overflows.
+    /// Panics if `pages` is zero or `pages *` [`page_size()`] overflows.
     #[must_use]
     pub fn new(pages: usize) -> Self {
+        Self::allocate(pages, page_size())
+    }
+
+    /// Allocate `pages` zeroed memory pages whose base meets `alignment` -- a
+    /// device's requirement, from
+    /// [`EndpointObserver::alignment_info`](crate::EndpointObserver::alignment_info)
+    /// -- as well as a page.
+    ///
+    /// A best effort, not a guarantee: the base is aligned to the larger of the
+    /// page size and the least power of two meeting the mask, while later pages
+    /// follow on at page intervals, and user mode controls only virtual
+    /// addresses. A device that still cannot accept the buffer fails the native
+    /// call, and that error is returned there.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if the alignment does not fit an
+    /// allocation on this target.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pages` is zero or `pages *` [`page_size()`] overflows.
+    pub fn with_alignment(pages: usize, alignment: AlignmentInfo) -> io::Result<Self> {
+        let align = buffer_alignment(page_size(), alignment).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the device's alignment does not fit an allocation on this target",
+            )
+        })?;
+        Ok(Self::allocate(pages, align))
+    }
+
+    fn allocate(pages: usize, align: usize) -> Self {
         assert!(pages > 0, "PageBuffers requires at least one page");
         let size = pages
-            .checked_mul(PAGE_SIZE)
+            .checked_mul(page_size())
             .expect("page buffer size overflow");
-        let layout = Layout::from_size_align(size, PAGE_SIZE).expect("valid page layout");
+        let layout = Layout::from_size_align(size, align).expect("valid page layout");
         // SAFETY: `layout` has non-zero size.
         let raw = unsafe { alloc::alloc_zeroed(layout) };
         let ptr = NonNull::new(raw).unwrap_or_else(|| alloc::handle_alloc_error(layout));
-        Self { ptr, pages }
+        Self { ptr, pages, align }
     }
 
     /// The number of pages.
@@ -464,10 +522,17 @@ impl PageBuffers {
         self.pages
     }
 
-    /// The total length in bytes (`pages * PAGE_SIZE`).
+    /// The alignment of the allocation's base, in bytes: the page size, or more
+    /// when [`with_alignment`](Self::with_alignment) was asked for more.
+    #[must_use]
+    pub fn alignment(&self) -> usize {
+        self.align
+    }
+
+    /// The total length in bytes (`pages *` [`page_size()`]).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.pages * PAGE_SIZE
+        self.pages * page_size()
     }
 
     /// Always `false`: a `PageBuffers` holds at least one page.
@@ -492,11 +557,12 @@ impl PageBuffers {
 
     /// Build the `NULL`-terminated `FILE_SEGMENT_ELEMENT` array over these pages.
     fn segment_array(&self) -> Vec<FILE_SEGMENT_ELEMENT> {
+        let page_size = page_size();
         let mut segments = Vec::with_capacity(self.pages + 1);
         for i in 0..self.pages {
             // SAFETY: `i < pages`, so the offset stays within the allocation, and
             // each page start is page-aligned because the base is.
-            let page = unsafe { self.ptr.as_ptr().add(i * PAGE_SIZE) };
+            let page = unsafe { self.ptr.as_ptr().add(i * page_size) };
             segments.push(FILE_SEGMENT_ELEMENT {
                 Buffer: page.cast(),
             });
@@ -511,13 +577,14 @@ impl fmt::Debug for PageBuffers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PageBuffers")
             .field("pages", &self.pages)
+            .field("alignment", &self.align)
             .finish_non_exhaustive()
     }
 }
 
 impl Drop for PageBuffers {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(self.len(), PAGE_SIZE).expect("valid page layout");
+        let layout = Layout::from_size_align(self.len(), self.align).expect("valid page layout");
         // SAFETY: `ptr` came from `alloc_zeroed` with this exact layout.
         unsafe { alloc::dealloc(self.ptr.as_ptr(), layout) };
     }

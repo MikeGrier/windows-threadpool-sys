@@ -559,3 +559,21 @@ alignment mask of 1 -- word alignment, far below a page; the NUL device refuses 
 tested across every flag, the unknown sentinel on each offset, and masks of and not of the documented form.
 Sabotage: inverting the unknown check, swapping the flag bits, and dropping the power-of-two check each
 failed its own test.
+
+## Moved 2026-10-14 22:10:23 -04:00 -- M16.5: unbuffered I/O asks for its alignment
+
+### <a id="m165"></a>M16.5 -- The page size is asked of the OS, and `PageBuffers` aligns to what the device reports. *(completed 2026-10-14 22:10:23 -04:00)*
+
+`page_size()` (asked of `GetSystemInfo` once and kept) replaces the public `PAGE_SIZE` constant -- breaking.
+`PageBuffers::with_alignment(pages, AlignmentInfo)` aligns the allocation's base to the larger of the page
+size and the least power of two clearing every bit of the reported mask; `new` page-aligns as before, and
+`alignment()` reports which. Later pages follow at page intervals, so the buffer stays one contiguous
+allocation. The open question -- ask once per endpoint or per operation -- dissolved in the building: the
+caller asks once, through an observer, when it allocates, and the adapters ask nothing, following M11's "no
+adapter allocates on the caller's behalf". The sector size is not enforced; a non-multiple fails the native
+call. `fs` now enables `Win32_System_SystemInformation`. The seam for alignments above a page is
+`AlignmentInfo` itself, whose mask is a public field: tests build one asking for 16 KiB and round-trip
+through blocking scatter/gather, and another round-trip uses what the real endpoint reports. Sabotage:
+ignoring the alignment failed two tests; dropping the page floor failed four. Replacing `page_size()` with a
+constant 4096 would pass on this machine, whose page is 4 KiB -- the test compares against `GetSystemInfo`
+and catches it only where the two differ.
