@@ -60,7 +60,9 @@
 //! One entry per Win32 call; a consumer needing two makes two requests and
 //! sequences them itself. The round-one entry list is audited from three real
 //! consumers rather than chosen by taste, and its omissions are deliberate and
-//! written down. See `DESIGN-NOTES.md` in the crate root.
+//! written down. The storage-locality entries added after round one for
+//! durable-ioring (`DeviceIoControl` and the rest) are listed in the README. See
+//! `DESIGN-NOTES.md` in the crate root.
 //!
 //! # Example
 //!
@@ -107,6 +109,7 @@
 #![warn(missing_docs)]
 
 pub mod close;
+mod device_control;
 pub mod file_info;
 pub mod final_path;
 pub mod full_path;
@@ -119,6 +122,7 @@ pub mod query;
 pub mod request;
 pub mod security;
 pub mod volume;
+pub mod volume_numa;
 pub mod watch;
 
 pub use close::{CloseFn, CloseRequest};
@@ -146,4 +150,5 @@ pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
 pub use volume::{QueryVolumeInformation, VolumeInformation};
+pub use volume_numa::{NumaInfoError, QueryVolumeNumaInfo, VolumeNumaInfo};
 pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};

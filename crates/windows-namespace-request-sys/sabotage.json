@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "Only the allocation-failure paths have entries: this manifest was added with them. The catalogue's entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first entry (NR-2.1) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The pending path of the device-control helper (the wait, the abort, the result read after it) has no entry, and the reason is a measurement rather than a gap: an overlapped call pended in 0 of 20000 isolated runs of the two controls tried, and appeared only while the whole suite ran in parallel, so a mutation confined to it is caught on some runs and survives on others, and neither outcome is a control. Only a control that pends on demand would settle it, and none taking no input is known: FSCTL_PIPE_LISTEN, the obvious one, failed with ERROR_INVALID_FUNCTION through DeviceIoControl on a named-pipe server, for a reason not established. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -85,6 +85,54 @@
       "why": "Declared blind spot, not a control. SecurityDescriptor::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail; the failure it would report is the shared `allocation()`, whose result the other entries pin.",
       "find": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::allocation())\n"],
       "replace": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::last_os(SecurityCaptureFailure::InvalidCopy))\n"]
+    },
+    {
+      "name": "NR-2.1: the event handed to an overlapped control does not suppress the completion packet",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A handle on a completion port gets a packet when an overlapped call completes unless the event's low bit is set. Without it a control would reach a consumer's loop as a completion it never asked for.",
+      "find": ["map_addr(|address| address | 1)"],
+      "replace": ["map_addr(|address| address | 0)"]
+    },
+    {
+      "name": "NR-2.1: a control is told its output buffer is empty",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The buffer length the device is given is the buffer's own; a shorter one makes every control fail for want of room.",
+      "find": ["            DeviceIoControl(\n                device,\n                code,\n                ptr::null(),\n                0,\n                output.as_mut_ptr().cast(),\n                output_len,\n"],
+      "replace": ["            DeviceIoControl(\n                device,\n                code,\n                ptr::null(),\n                0,\n                output.as_mut_ptr().cast(),\n                output_len - output_len,\n"]
+    },
+    {
+      "name": "NR-2.1: a control that completed reports no bytes written",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The byte count is what a caller checks the reply's size by; a count of nothing would read as an empty reply.",
+      "find": ["        Ok(()) => Ok(written),\n"],
+      "replace": ["        Ok(()) => Ok(written - written),\n"]
+    },
+    {
+      "name": "NR-2.1: a reply larger than the structure is read as the node",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "A reply of any size but the structure's is reported and not read, because a value taken from a buffer the device did not fill would read as a node.",
+      "find": ["if usize::try_from(returned) != Ok(OUTPUT_SIZE) {"],
+      "replace": ["if returned < 4 {"]
+    },
+    {
+      "name": "NR-2.1: a reply smaller than the structure is read as the node",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "The other half of the size check: a short reply leaves the buffer's remainder as it was, and reading it would report a node the device never named.",
+      "find": ["if usize::try_from(returned) != Ok(OUTPUT_SIZE) {"],
+      "replace": ["if returned > 4 {"]
+    },
+    {
+      "name": "NR-2.1: the node is read from the first byte alone",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "The node is a whole ULONG, carried unaltered; a value above 255 would be truncated.",
+      "find": ["        node: u32::from_ne_bytes(output),\n"],
+      "replace": ["        node: u32::from_ne_bytes([output[0], 0, 0, 0]),\n"]
     }
   ]
 }

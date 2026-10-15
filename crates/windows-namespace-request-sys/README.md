@@ -127,6 +127,18 @@ Deletion, rename, directory creation, attribute setting, link creation, and the
 consumer calls them. [DESIGN-NOTES.md](DESIGN-NOTES.md) records the full list so
 a considered omission is distinguishable from an unexamined one.
 
+## Storage-locality entries
+
+Added after round one, for [durable-ioring](../durable-ioring/CHECKLIST.md)'s flush domains,
+which need to know where storage is. Each is one `DeviceIoControl` call, made through one
+overlapped-safe helper, so it is the same call on a handle opened overlapped or not and posts
+nothing to a completion port the handle belongs to. The checklist's `NR-2` milestone lists the
+entries still to come.
+
+| Win32 call | Type |
+|---|---|
+| `DeviceIoControl` with `FSCTL_QUERY_VOLUME_NUMA_INFO` | `QueryVolumeNumaInfo` |
+
 ## Testing your own code against these entries
 
 Every entry implements `Request` (or `ConsumingRequest`, for the one-shot
