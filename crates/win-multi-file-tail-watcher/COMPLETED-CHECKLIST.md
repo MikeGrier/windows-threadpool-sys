@@ -51,3 +51,23 @@ observer offers, whose contract forbids associating it. The sabotage manifest
 ([sabotage.json](sabotage.json)) is this crate's first: opening with write access, converting the
 path lossily, and losing the Win32 code are each caught, and a differently spelled conversion
 survives as the control.
+
+## Moved 2026-10-15 14:24:34 -04:00 -- TW-1.3: reading the length
+
+### <a id="tw-13"></a>TW-1.3 -- `HeldFile::len` reads the file's current length through an observer of the held handle. *(completed 2026-10-15 14:24:34 -04:00)*
+
+`len` takes a new observer and asks it for `file_len`, which is `standard_info`'s end-of-file
+([TW-D-2](DESIGN-NOTES.md#tw-d-2)). The path is not consulted. The method is named `len` and carries
+no `is_empty`, since the query can fail.
+
+Tested, each against a real file: lengths of 0, 1, 5, 4096, 4097 and 100000 bytes; a length that
+tracks twelve writes by a writer that stays open; a shrink by another handle, repeated to the same
+size and to zero; a file of 2^32 + 5 bytes; the length after the file is deleted while held; the
+length after a rename with a different file recreated at the old path, which reads the held file
+and not the new one; an observer that outlives the hold and sees a later append; two holds of one
+path; fifty steady reads. The sabotage manifest catches reading the allocation size instead, a
+32-bit cut and a cached first read, and a length read through `standard_info` survives as the control.
+
+Not tested here: a read on the thread pool, and a file on a remote or non-NTFS volume. The
+directory entry's lag behind the held handle is recorded under [TW-D-2](DESIGN-NOTES.md#tw-d-2) and is
+not re-measured.

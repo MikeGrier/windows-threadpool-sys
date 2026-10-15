@@ -28,6 +28,38 @@
       "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)\n            .map_err(|error| io::Error::new(error.kind(), \"open failed\"))?;"]
     },
     {
+      "name": "the length is the bytes allocated rather than the end of file",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Allocation is rounded up to the allocation unit, and a small file reports its whole cluster. Only a length that is not a multiple of it can tell the two apart.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.allocation_size)"]
+    },
+    {
+      "name": "the length is cut to 32 bits",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Every file under 4 GiB reads the same either way, so only a file past that can show it.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().file_len()? as u32 as u64)"]
+    },
+    {
+      "name": "the length is read once and remembered",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A cache returns the right answer until the file changes, so only a read after a write or a shrink can tell.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        static FIRST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();\n        let now = self.observer().file_len()?;\n        Ok(*FIRST.get_or_init(|| now))"]
+    },
+    {
+      "name": "control: the length is read through standard_info",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "file_len is defined as standard_info's len, so the two are one read spelled twice.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.len)"]
+    },
+    {
       "name": "control: the path is converted through OsString::from",
       "file": "src/held_file.rs",
       "expect": "survives",

@@ -16,7 +16,7 @@ read through the held handle.
 
 - [x] **TW-1.2** -- `HeldFile::open` opens a file by `Wtf16String` path as a read-only, overlapped endpoint, and hands out observers. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-12)
 
-- [ ] **TW-1.3** -- **Read the current length through an observer.** ([TW-D-2](DESIGN-NOTES.md#tw-d-2))
+- [x] **TW-1.3** -- `HeldFile::len` reads the file's current length through an observer of the held handle. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-13)
 
 - [ ] **TW-1.4** -- **Validate the starting offset at open.** An offset beyond the length read at
   open is a registration error with its own `Err` variant, distinct from an open failure.

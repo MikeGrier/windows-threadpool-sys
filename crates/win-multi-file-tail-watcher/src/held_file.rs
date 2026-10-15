@@ -39,6 +39,20 @@ impl HeldFile {
         Ok(Self { endpoint })
     }
 
+    /// The file's current length in bytes, read through the held handle.
+    ///
+    /// The count is what has reached the file system: bytes a writer still buffers on its side
+    /// are not in it. The file's path is not consulted, so the answer holds after the file has
+    /// been renamed or deleted.
+    ///
+    /// # Errors
+    ///
+    /// When the operating system refuses the query, the error carries its Win32 code.
+    #[allow(clippy::len_without_is_empty)] // the query can fail, so it is not a collection's len
+    pub fn len(&self) -> io::Result<u64> {
+        self.observer().file_len()
+    }
+
     /// A new observer of this file's handle.
     ///
     /// It keeps the handle open after this `HeldFile` drops, and can never become a second

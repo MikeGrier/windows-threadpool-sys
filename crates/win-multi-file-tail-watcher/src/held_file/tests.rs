@@ -273,3 +273,117 @@ fn a_held_file_can_move_between_threads() {
     fn assert_send_and_sync<T: Send + Sync>() {}
     assert_send_and_sync::<HeldFile>();
 }
+
+#[test]
+fn a_new_files_length_is_its_content() {
+    let dir = TempDir::new("len-content");
+    for (name, content) in [
+        ("zero", &b""[..]),
+        ("one", b"x"),
+        ("five", b"hello"),
+        ("page", &[7u8; 4096]),
+        ("page-plus", &[7u8; 4097]),
+        ("big", &[7u8; 100_000]),
+    ] {
+        let held = HeldFile::open(&wtf(&dir.file(name, content))).expect("open");
+        assert_eq!(held.len().expect("len"), content.len() as u64, "{name}");
+    }
+}
+
+#[test]
+fn the_length_tracks_each_write_by_a_writer_that_stays_open() {
+    let dir = TempDir::new("len-grow");
+    let path = dir.file("grow.log", b"");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    let mut writer = OpenOptions::new().append(true).open(&path).expect("writer");
+    let mut expected = 0u64;
+    for step in 1..=12usize {
+        let chunk = vec![b'a'; step * 37];
+        writer.write_all(&chunk).expect("write");
+        expected += chunk.len() as u64;
+        assert_eq!(held.len().expect("len"), expected, "step {step}");
+    }
+}
+
+#[test]
+fn a_shrink_by_another_handle_is_the_smaller_length() {
+    let dir = TempDir::new("len-shrink");
+    let path = dir.file("shrink.log", &[1u8; 1000]);
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    let writer = OpenOptions::new().write(true).open(&path).expect("writer");
+    for len in [600u64, 600, 10, 0, 250] {
+        writer.set_len(len).expect("set_len");
+        assert_eq!(held.len().expect("len"), len);
+    }
+}
+
+#[test]
+fn the_length_is_not_cut_to_32_bits() {
+    let dir = TempDir::new("len-big");
+    let path = dir.file("big.bin", b"");
+    let target = (1u64 << 32) + 5;
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("writer")
+        .set_len(target)
+        .expect("set_len");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    assert_eq!(held.len().expect("len"), target);
+}
+
+#[test]
+fn the_length_is_still_read_after_the_file_is_deleted() {
+    let dir = TempDir::new("len-deleted");
+    let path = dir.file("gone.log", b"twelve bytes");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    std::fs::remove_file(&path).expect("delete while held");
+    assert_eq!(held.len().expect("len"), 12);
+}
+
+#[test]
+fn the_length_is_still_read_after_the_file_is_renamed() {
+    let dir = TempDir::new("len-renamed");
+    let path = dir.file("before.log", b"abc");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    std::fs::rename(&path, dir.0.join("after.log")).expect("rename while held");
+    std::fs::write(&path, b"a different file at the old path, longer").expect("recreate");
+    assert_eq!(held.len().expect("len"), 3);
+}
+
+#[test]
+fn an_observer_reads_the_same_length_and_outlives_the_hold() {
+    let dir = TempDir::new("len-observer");
+    let path = dir.file("o.log", b"12345");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    let observer = held.observer();
+    assert_eq!(observer.file_len().expect("len"), held.len().expect("len"));
+    drop(held);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("writer")
+        .write_all(b"678")
+        .expect("write");
+    assert_eq!(observer.file_len().expect("len"), 8);
+}
+
+#[test]
+fn two_holds_of_one_path_read_the_same_length() {
+    let dir = TempDir::new("len-two");
+    let path = dir.file("t.log", b"abcd");
+    let first = HeldFile::open(&wtf(&path)).expect("open");
+    let second = HeldFile::open(&wtf(&path)).expect("open");
+    std::fs::write(&path, b"abcdefgh").expect("write");
+    assert_eq!(first.len().expect("len"), 8);
+    assert_eq!(second.len().expect("len"), 8);
+}
+
+#[test]
+fn repeated_reads_with_no_change_agree() {
+    let dir = TempDir::new("len-steady");
+    let held = HeldFile::open(&wtf(&dir.file("s.log", b"steady"))).expect("open");
+    for _ in 0..50 {
+        assert_eq!(held.len().expect("len"), 6);
+    }
+}
