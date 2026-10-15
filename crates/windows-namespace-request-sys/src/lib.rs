@@ -121,6 +121,7 @@ pub mod path;
 pub mod query;
 pub mod request;
 pub mod security;
+pub mod storage_numa;
 pub mod storage_property;
 pub mod storage_query;
 pub mod storage_unique_id;
@@ -153,6 +154,7 @@ mod tests;
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
+pub use storage_numa::{QueryStorageDeviceNumaNode, StorageDeviceNuma};
 pub use storage_property::StoragePropertyError;
 pub use storage_query::{
     QueryStorageProperty, StoragePropertyId, StoragePropertyReply, StorageQueryType,

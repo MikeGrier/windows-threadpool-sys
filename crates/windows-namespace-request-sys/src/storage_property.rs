@@ -13,11 +13,19 @@
 //!
 //! Every reply begins with a `STORAGE_DESCRIPTOR_HEADER`: a version, then the size in bytes of
 //! the whole reply. A buffer of exactly the header's size is answered with the header alone,
-//! which is how the size is learned; a buffer between that and the full size is answered with
-//! `ERROR_MORE_DATA` and the header written; one smaller than the header is `ERROR_BAD_LENGTH`
-//! (measured, below). The entry asks once with a buffer it expects to suffice, reads the size from
-//! whichever of those comes back, and asks again at that size. The retry is bounded and ends in
-//! [`StoragePropertyError::Unstable`], for the reason [`crate::final_path`]'s is.
+//! which is how the size is learned. What a buffer *between* that and the full size, or one
+//! *smaller* than the header, gets is the property's own, and two were measured to differ:
+//!
+//! | Property | Between the header and the reply | Smaller than the header |
+//! |---|---|---|
+//! | device unique identifier | `ERROR_MORE_DATA`, header written | `ERROR_BAD_LENGTH` |
+//! | device NUMA node | success, header alone | `ERROR_INSUFFICIENT_BUFFER` |
+//!
+//! So the entry asks once with a buffer it expects to suffice, reads the size from the header of
+//! whichever comes back (a failure that wrote the header, or a success that wrote only the
+//! header), and asks again at that size, and it never asks with less than the header. The retry
+//! is bounded and ends in [`StoragePropertyError::Unstable`], for the reason
+//! [`crate::final_path`]'s is.
 //!
 //! The query structure is sent in full: a shorter input is `ERROR_BAD_LENGTH` too. Bytes after the
 //! structure's own fixed fields are its additional parameters. Whether a property reads them is

@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first three entries (NR-2.1 to NR-2.3) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well (NR-2.2). The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its entries through NR-2.4 (and the generic property query, NR-2.7) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well (NR-2.2). The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -517,6 +517,54 @@
       "why": "The named query types are the three Windows defines, and are distinct.",
       "find": ["    pub const EXISTS: Self = Self(PropertyExistsQuery);\n"],
       "replace": ["    pub const EXISTS: Self = Self(PropertyMaskQuery);\n"]
+    },
+    {
+      "name": "NR-2.4: the NUMA entry asks for a different property",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "The entry's meaning is the property it queries; a neighbouring property's reply is not a NUMA descriptor.",
+      "find": ["query_input(StorageDeviceNumaProperty, "],
+      "replace": ["query_input(StorageDeviceNumaProperty + 1, "]
+    },
+    {
+      "name": "NR-2.4: the NUMA entry asks a question other than the standard one",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "A query for whether the property exists returns no structure, so there would be no node to read.",
+      "find": ["StorageDeviceNumaProperty, PropertyStandardQuery, &[]"],
+      "replace": ["StorageDeviceNumaProperty, PropertyStandardQuery + 1, &[]"]
+    },
+    {
+      "name": "NR-2.4: the node is read from the size field",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "The node is the third field of the descriptor; each field is read from where the structure has it.",
+      "find": ["            node: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, NumaNode))?,\n"],
+      "replace": ["            node: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, Size))?,\n"]
+    },
+    {
+      "name": "NR-2.4: the version is read from the node field",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it, and reported separately.",
+      "find": ["            version: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, Version))?,\n"],
+      "replace": ["            version: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, NumaNode))?,\n"]
+    },
+    {
+      "name": "NR-2.4: the size is read from the version field",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it, and reported separately.",
+      "find": ["            size: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, Size))?,\n"],
+      "replace": ["            size: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, Version))?,\n"]
+    },
+    {
+      "name": "NR-2.4: a node that is not a node of any machine is altered",
+      "file": "src/storage_numa.rs",
+      "expect": "caught",
+      "why": "The node is carried as the device wrote it; no value is documented as meaning none, so none is invented or clamped.",
+      "find": ["            node: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, NumaNode))?,\n"],
+      "replace": ["            node: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, NumaNode))?.min(255),\n"]
     },
     {
       "name": "NR-2.3: the version is read from the size field",

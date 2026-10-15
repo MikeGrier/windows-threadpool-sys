@@ -30,27 +30,37 @@ use crate::handle::tests::handle_allocation;
 use crate::outcome::Win32Error;
 use crate::volume_extents::QueryVolumeDiskExtents;
 
-/// The disk the system volume is on, opened with no access, which an ordinary account can do.
-pub(crate) fn system_disk(overlapped: bool) -> File {
+/// The numbers of the disks the system volume is on, in the order the device reports them.
+pub(crate) fn system_disk_numbers() -> Vec<u32> {
     let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
     let volume = OpenOptions::new()
         .access_mode(0)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(format!(r"\\.\{drive}"))
         .expect("open the system volume with no access");
-    let extents = QueryVolumeDiskExtents::new(
+    QueryVolumeDiskExtents::new(
         CapturedHandle::capture(volume.as_handle()).expect("capture the volume"),
     )
     .perform()
-    .expect("the system volume's disks");
-    let number = extents[0].disk_number();
+    .expect("the system volume's disks")
+    .iter()
+    .map(|extent| extent.disk_number())
+    .collect()
+}
 
+/// Disk `number`, opened with no access, which an ordinary account can do.
+pub(crate) fn open_disk(number: u32, overlapped: bool) -> File {
     OpenOptions::new()
         .access_mode(0)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(if overlapped { FILE_FLAG_OVERLAPPED } else { 0 })
         .open(format!(r"\\.\PhysicalDrive{number}"))
-        .expect("open the system disk with no access")
+        .expect("open the disk with no access")
+}
+
+/// The first disk the system volume is on, opened with no access.
+pub(crate) fn system_disk(overlapped: bool) -> File {
+    open_disk(system_disk_numbers()[0], overlapped)
 }
 
 /// A reply of `size` bytes: the header (a version of 1 and the size), then a recognisable body.
