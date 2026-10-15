@@ -139,6 +139,7 @@ entries still to come.
 |---|---|
 | `DeviceIoControl` with `FSCTL_QUERY_VOLUME_NUMA_INFO` | `QueryVolumeNumaInfo` |
 | `DeviceIoControl` with `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` | `QueryVolumeDiskExtents` |
+| `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceUniqueIdProperty`) | `QueryStorageDeviceUniqueId` |
 
 ## Testing your own code against these entries
 

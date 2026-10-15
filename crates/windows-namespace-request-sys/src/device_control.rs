@@ -26,7 +26,7 @@ use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE, HANDLE, TRUE, WAIT
 use windows_sys::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
 
-use crate::outcome::{Outcome, perform, perform_bool, perform_nonnull_handle};
+use crate::outcome::{Outcome, Win32Error, perform, perform_bool, perform_nonnull_handle};
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +82,26 @@ pub(crate) fn device_control(
             )
         }
     })
+}
+
+/// A zeroed buffer of `size` bytes for a control's reply, or this crate's own out-of-memory report
+/// if the machine cannot supply it.
+///
+/// Used where the size is a device's to name, so it is not trusted to be allocatable: the failure
+/// is an error the caller receives, not an abort.
+pub(crate) fn zeroed_output(size: usize) -> Outcome<Vec<u8>> {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(size)
+        .map_err(|_| Win32Error::out_of_memory())?;
+    buffer.resize(size, 0);
+    Ok(buffer)
+}
+
+/// The native-endian `u32` at `offset` in `buffer`, or `None` if it does not lie within it.
+pub(crate) fn u32_at(buffer: &[u8], offset: usize) -> Option<u32> {
+    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;
+    Some(u32::from_ne_bytes(bytes.try_into().ok()?))
 }
 
 /// Runs `call`, a Win32 call that takes an `OVERLAPPED` and writes into a buffer, and returns the

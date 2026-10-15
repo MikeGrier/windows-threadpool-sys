@@ -21,7 +21,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, INVALID_HANDLE_VALUE,
+    ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, ERROR_NOT_ENOUGH_MEMORY,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile};
 use windows_sys::Win32::System::Ioctl::{
@@ -31,7 +32,7 @@ use windows_sys::Win32::System::Ioctl::{
 };
 use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT};
 
-use super::{device_control, overlapped_call};
+use super::{device_control, overlapped_call, u32_at, zeroed_output};
 use crate::handle::tests::{Fixture, handle_allocation};
 
 /// The size of the `USHORT` `FSCTL_GET_COMPRESSION` writes.
@@ -325,10 +326,6 @@ fn oplock_request(level: u32) -> [u8; size_of::<REQUEST_OPLOCK_INPUT_BUFFER>()] 
     input
 }
 
-fn u32_at(buffer: &[u8], offset: usize) -> u32 {
-    u32::from_ne_bytes(buffer[offset..offset + 4].try_into().expect("four bytes"))
-}
-
 #[test]
 fn a_request_with_input_pends_until_the_device_answers_and_reports_what_it_wrote() {
     let _allocating = handle_allocation().read().expect("not poisoned");
@@ -370,7 +367,7 @@ fn a_request_with_input_pends_until_the_device_answers_and_reports_what_it_wrote
             &output,
             offset_of!(REQUEST_OPLOCK_OUTPUT_BUFFER, OriginalOplockLevel)
         ),
-        OPLOCK_LEVEL_CACHE_READ,
+        Some(OPLOCK_LEVEL_CACHE_READ),
         "the oplock that was granted is the one the input asked for"
     );
     assert_eq!(
@@ -378,7 +375,7 @@ fn a_request_with_input_pends_until_the_device_answers_and_reports_what_it_wrote
             &output,
             offset_of!(REQUEST_OPLOCK_OUTPUT_BUFFER, NewOplockLevel)
         ),
-        0,
+        Some(0),
         "and it broke to none"
     );
     drop(writer.join().expect("the writer thread"));
@@ -399,4 +396,32 @@ fn input_that_does_not_arrive_is_refused_by_the_device() {
         outcome.is_err(),
         "a request with no input was accepted: {outcome:?}"
     );
+}
+
+// --- The shared reply helpers ----------------------------------------------------------------
+
+#[test]
+fn a_u32_is_read_at_an_offset_only_where_it_lies_entirely_within_the_buffer() {
+    let bytes: Vec<u8> = (1_u8..=8).collect();
+
+    assert_eq!(u32_at(&bytes, 0), Some(u32::from_ne_bytes([1, 2, 3, 4])));
+    assert_eq!(u32_at(&bytes, 4), Some(u32::from_ne_bytes([5, 6, 7, 8])));
+    assert_eq!(u32_at(&bytes, 1), Some(u32::from_ne_bytes([2, 3, 4, 5])));
+    // One byte short, past the end, empty, and an offset whose end overflows.
+    assert_eq!(u32_at(&bytes, 5), None);
+    assert_eq!(u32_at(&bytes, 8), None);
+    assert_eq!(u32_at(&[], 0), None);
+    assert_eq!(u32_at(&bytes, usize::MAX), None);
+    assert_eq!(u32_at(&bytes, usize::MAX - 1), None);
+}
+
+#[test]
+fn a_reply_buffer_is_zeroed_and_the_size_the_machine_cannot_supply_is_out_of_memory() {
+    assert_eq!(zeroed_output(0).expect("an empty buffer"), Vec::<u8>::new());
+    assert_eq!(zeroed_output(40).expect("a small buffer"), vec![0_u8; 40]);
+
+    // `isize::MAX` is the most any allocation can name, and no machine has it.
+    let error =
+        zeroed_output(usize::try_from(isize::MAX).expect("fits")).expect_err("no machine has it");
+    assert_eq!(error.code(), ERROR_NOT_ENOUGH_MEMORY);
 }

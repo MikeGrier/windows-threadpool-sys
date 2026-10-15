@@ -121,6 +121,8 @@ pub mod path;
 pub mod query;
 pub mod request;
 pub mod security;
+pub mod storage_property;
+pub mod storage_unique_id;
 pub mod volume;
 pub mod volume_extents;
 pub mod volume_numa;
@@ -150,6 +152,8 @@ mod tests;
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
+pub use storage_property::StoragePropertyError;
+pub use storage_unique_id::{QueryStorageDeviceUniqueId, StorageDeviceUniqueId};
 pub use volume::{QueryVolumeInformation, VolumeInformation};
 pub use volume_extents::{DiskExtent, DiskExtentsError, QueryVolumeDiskExtents};
 pub use volume_numa::{NumaInfoError, QueryVolumeNumaInfo, VolumeNumaInfo};

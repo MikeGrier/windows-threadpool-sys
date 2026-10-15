@@ -39,7 +39,7 @@ use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
 use windows_sys::Win32::Storage::FileSystem::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS;
 use windows_sys::Win32::System::Ioctl::{DISK_EXTENT, VOLUME_DISK_EXTENTS};
 
-use crate::device_control::device_control;
+use crate::device_control::{device_control, u32_at, zeroed_output};
 use crate::handle::{CapturedHandle, HandleCaptureError};
 use crate::outcome::{Outcome, Win32Error};
 
@@ -259,15 +259,10 @@ fn extents_via(
     })
 }
 
-/// A zeroed buffer of `size` bytes, or the crate's out-of-memory report if the machine cannot
-/// supply it. The count is the device's, so it is not trusted to be allocatable.
+/// A zeroed buffer of `size` bytes. The count is the device's, so it is not trusted to be
+/// allocatable.
 fn zeroed(size: usize) -> Result<Vec<u8>, DiskExtentsError> {
-    let mut buffer = Vec::new();
-    buffer
-        .try_reserve_exact(size)
-        .map_err(|_| DiskExtentsError::Win32(Win32Error::out_of_memory()))?;
-    buffer.resize(size, 0);
-    Ok(buffer)
+    zeroed_output(size).map_err(DiskExtentsError::Win32)
 }
 
 /// The size of an answer holding `extents` extents.
@@ -278,11 +273,6 @@ fn answer_size(extents: usize) -> Result<usize, DiskExtentsError> {
         .ok_or(DiskExtentsError::Malformed {
             what: "a count too large to hold",
         })
-}
-
-fn u32_at(buffer: &[u8], offset: usize) -> Option<u32> {
-    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;
-    Some(u32::from_ne_bytes(bytes.try_into().ok()?))
 }
 
 fn i64_at(buffer: &[u8], offset: usize) -> Option<i64> {

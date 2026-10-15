@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first two entries (NR-2.1, NR-2.2) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well (NR-2.2). The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first three entries (NR-2.1 to NR-2.3) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well (NR-2.2). The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -256,11 +256,179 @@
     },
     {
       "name": "NR-2.2: a buffer the machine cannot supply is reported under another code",
-      "file": "src/volume_extents.rs",
+      "file": "src/device_control.rs",
       "expect": "caught",
-      "why": "The count is the device's, so a buffer for it may not be allocatable; that is ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'.",
-      "find": ["        .map_err(|_| DiskExtentsError::Win32(Win32Error::out_of_memory()))?;\n"],
-      "replace": ["        .map_err(|_| DiskExtentsError::Win32(Win32Error::from_code(0)))?;\n"]
+      "why": "The size is the device's to name, so a buffer for it may not be allocatable; that is ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'. The function is shared by every entry that sizes a buffer from a reply.",
+      "find": ["        .map_err(|_| Win32Error::out_of_memory())?;\n"],
+      "replace": ["        .map_err(|_| Win32Error::from_code(0))?;\n"]
+    },
+    {
+      "name": "NR-2.3: the query names a different property",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The property id is what makes this the unique-id query and not another; the query structure is sent field by field and each field is checked where it lands.",
+      "find": ["    put(offset_of!(STORAGE_PROPERTY_QUERY, PropertyId), property);\n"],
+      "replace": ["    put(offset_of!(STORAGE_PROPERTY_QUERY, PropertyId), property + 1);\n"]
+    },
+    {
+      "name": "NR-2.3: the query asks a question other than the standard one",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A query type of 1 asks whether the property exists and returns no structure.",
+      "find": ["        PropertyStandardQuery,\n    );\n"],
+      "replace": ["        PropertyStandardQuery + 1,\n    );\n"]
+    },
+    {
+      "name": "NR-2.3: the entry asks for a different property than the one it names",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "The unique-id entry's meaning is the property it queries; a neighbouring property's reply has a different layout and is not this one's.",
+      "find": ["            StorageDeviceUniqueIdProperty,\n"],
+      "replace": ["            StorageDeviceUniqueIdProperty + 1,\n"]
+    },
+    {
+      "name": "NR-2.3: the first buffer may be smaller than the header",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A buffer smaller than the header is refused as ERROR_BAD_LENGTH, so an entry that asks with less than the header fails on every disk.",
+      "find": ["    let mut capacity = first.max(HEADER);\n"],
+      "replace": ["    let mut capacity = first;\n"]
+    },
+    {
+      "name": "NR-2.3: a reply that needs more room is not asked again",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A buffer between the header and the reply is answered with ERROR_MORE_DATA and the header written; unless that code starts the retry, a reply larger than the first buffer fails.",
+      "find": ["            Err(error) if error.code() == ERROR_MORE_DATA => {\n"],
+      "replace": ["            Err(error) if error.code() == 0 => {\n"]
+    },
+    {
+      "name": "NR-2.3: the size is read from the version instead",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The reply's size is the second field of its header; read from the first, every reply is taken to be a few bytes long.",
+      "find": ["offset_of!(STORAGE_DESCRIPTOR_HEADER, Size)"],
+      "replace": ["offset_of!(STORAGE_DESCRIPTOR_HEADER, Version)"]
+    },
+    {
+      "name": "NR-2.3: the retry is not bounded by its constant",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The bound on attempts is the one the error reports; a loop that runs one more would spin a worker on a reply whose size keeps changing and report a number it did not use.",
+      "find": ["    for _ in 0..MAX_ATTEMPTS {\n"],
+      "replace": ["    for _ in 0..=MAX_ATTEMPTS {\n"]
+    },
+    {
+      "name": "NR-2.3: a call that says it wrote more than the buffer held is read",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A byte count beyond the buffer is the device's claim and not a fact; reading to it would return bytes that were never written.",
+      "find": ["                    .filter(|written| *written <= buffer.len())\n"],
+      "replace": ["                    .filter(|_| true)\n"]
+    },
+    {
+      "name": "NR-2.3: a reply shorter than its header is asked for again",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A call that wrote less than a header cannot have named a size; asking again at a size read from bytes it did not write would trust nothing.",
+      "find": ["                if written < HEADER {\n"],
+      "replace": ["                if written < 1 {\n"]
+    },
+    {
+      "name": "NR-2.3: a reply that exactly fills what was written is not accepted",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A reply whose size is exactly the bytes written is the normal case, and the one a buffer of the right size gets.",
+      "find": ["                if size <= written {\n"],
+      "replace": ["                if size < written {\n"]
+    },
+    {
+      "name": "NR-2.3: the reply is not cut to the size its header gives",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The first buffer is larger than most replies; its zero padding is not part of the reply, and a section found by its own size would otherwise be followed by bytes nobody wrote.",
+      "find": ["                    buffer.truncate(size);\n"],
+      "replace": ["                    let _ = size;\n"]
+    },
+    {
+      "name": "NR-2.3: a header that is learned is not asked for again at the size it names",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "A call that wrote only the header, or less than the reply, is asked again at the size the header names, and at exactly that size.",
+      "find": ["                // The header alone, or less than the reply: ask again at the size it names.\n                capacity = size;\n"],
+      "replace": ["                // The header alone, or less than the reply: ask again at the size it names.\n                capacity = size - 1;\n"]
+    },
+    {
+      "name": "NR-2.3: a reply shorter than the size it names, in a buffer with room, is retried",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "Asking again at a size the buffer already had would get the same buffer and the same answer; it is a malformed reply, and is reported as one.",
+      "find": ["                if size <= buffer.len() {\n                    return Err(malformed(\"a reply shorter than the size it names\"));\n"],
+      "replace": ["                if size == 0 {\n                    return Err(malformed(\"a reply shorter than the size it names\"));\n"]
+    },
+    {
+      "name": "NR-2.3: a reply that needs more room but names a size already given is retried",
+      "file": "src/storage_property.rs",
+      "expect": "caught",
+      "why": "The same reasoning for the ERROR_MORE_DATA half: a size that was already given cannot be the answer to asking for more.",
+      "find": ["                if size <= buffer.len() {\n                    return Err(malformed(\n                        \"a reply that needs more room"],
+      "replace": ["                if size == 0 {\n                    return Err(malformed(\n                        \"a reply that needs more room"]
+    },
+    {
+      "name": "NR-2.3: the device id descriptor's offset is read from the wrong field",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "Each of the three offsets is read from its own field of the header; a reader that takes one from a neighbour reports one section's bytes as another's.",
+      "find": ["    pub(super) const ID_DESCRIPTOR_OFFSET: usize = 8;\n"],
+      "replace": ["    pub(super) const ID_DESCRIPTOR_OFFSET: usize = 12;\n"]
+    },
+    {
+      "name": "NR-2.3: an offset of zero is a section",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "An offset of zero names no section; the measured disk reports only one of the three, and the other two must not be read from the header.",
+      "find": ["            if offset == 0 {\n"],
+      "replace": ["            if offset == 1 {\n"]
+    },
+    {
+      "name": "NR-2.3: a section may start inside the header",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "An offset inside the header would make the header its own section.",
+      "find": ["            if offset < layout::HEADER {\n"],
+      "replace": ["            if offset < 1 {\n"]
+    },
+    {
+      "name": "NR-2.3: a section may say it is smaller than its own header",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "A section is at least its own version and size; one that says less is not a section.",
+      "find": ["            if size < layout::SECTION_HEADER {\n"],
+      "replace": ["            if size < 1 {\n"]
+    },
+    {
+      "name": "NR-2.3: a section may run past the end of the reply",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "A section whose own size is longer than the reply would be sliced past the bytes the device wrote.",
+      "find": ["                .filter(|end| *end <= bytes.len())\n"],
+      "replace": ["                .filter(|_| true)\n"]
+    },
+    {
+      "name": "NR-2.3: a section's size is read from the wrong field",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "A section's size is the second field of its own header; read from the first, its version is taken for its length.",
+      "find": ["    pub(super) const SECTION_SIZE: usize = 4;\n"],
+      "replace": ["    pub(super) const SECTION_SIZE: usize = 0;\n"]
+    },
+    {
+      "name": "NR-2.3: the version is read from the size field",
+      "file": "src/storage_unique_id.rs",
+      "expect": "caught",
+      "why": "The version and the size are separate fields of the header and are reported separately.",
+      "find": ["        self.field(layout::VERSION)\n"],
+      "replace": ["        self.field(layout::SIZE)\n"]
     }
   ]
 }
