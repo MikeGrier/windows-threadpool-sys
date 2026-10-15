@@ -47,9 +47,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.8** -- `final_path()` and `final_path_as()` read the current path as `Wtf16String`, in every volume and name form. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m168)
 
-- [ ] **M16.9** -- **`volume_info()`**: `GetVolumeInformationByHandleW` -- file system name (a
-  `Wtf16String`), volume serial, and file system flags (sparse files and others). Test on the temp
-  directory's volume, asserting only what the call reports, not which file system it is.
+- [x] **M16.9** -- `volume_info()` reads the label, serial, component limit, file-system flags and name. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m169)
 
 - [ ] **M16.10** -- **Every query against every backend, with an operation pending.** One table of the
   queries M16.1-M16.9 added, run through an observer while an operation pends on `AssociatedEndpoint`,

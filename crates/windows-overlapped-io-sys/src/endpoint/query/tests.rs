@@ -27,8 +27,7 @@ use super::storage_info_values::{
 use super::{basic_info_from, remote_protocol_info_from, storage_info_from};
 use crate::{AlignmentInfo, FileTime, Smb2Info, StandardInfo, UnassociatedEndpoint};
 
-/// `FSCTL_SET_SPARSE`, which `windows-sys` exports only behind `Win32_System_Ioctl`.
-const FSCTL_SET_SPARSE: u32 = 0x0009_00C4;
+use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
 
 fn temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(

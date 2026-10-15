@@ -152,6 +152,70 @@
       "why": "The default is the drive-letter form a caller can open again; the rename and move tests compare it with the canonical path.",
       "find": ["        self.final_path_as(VolumeName::Dos, PathForm::Normalized)"],
       "replace": ["        self.final_path_as(VolumeName::Nt, PathForm::Normalized)"]
+    },
+    {
+      "name": "a volume name keeps its NUL padding",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "The call reports no lengths, only terminated names in zeroed buffers; without the cut each name is MAX_PATH + 1 units, mostly NULs.",
+      "find": ["        .position(|&unit| unit == 0)", "        .unwrap_or(buffer.len());"],
+      "replace": ["        .position(|_| false)", "        .unwrap_or(buffer.len());"]
+    },
+    {
+      "name": "a name with no NUL is read as empty",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "A name filling the whole buffer has no terminator; it is the whole buffer, not nothing.",
+      "find": ["        .unwrap_or(buffer.len());"],
+      "replace": ["        .unwrap_or(0);"]
+    },
+    {
+      "name": "the serial number and component length are crossed",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Both are u32 out-parameters next to each other, so the swap type-checks; the comparison with the root-path query sees it.",
+      "find": ["                &raw mut serial_number,", "                &raw mut maximum_component_length,"],
+      "replace": ["                &raw mut maximum_component_length,", "                &raw mut serial_number,"]
+    },
+    {
+      "name": "the flags are dropped",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "No flags is a legal answer, so only a comparison with what the volume reports by another route can tell.",
+      "find": ["            file_system_flags: FileSystemFlags { bits: flags },"],
+      "replace": ["            file_system_flags: FileSystemFlags { bits: 0 },"]
+    },
+    {
+      "name": "the sparse-files flag has the wrong bit",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Every named value is checked against windows-sys' constant of the same name, and separately against the volume's own answer to FSCTL_SET_SPARSE.",
+      "find": ["    pub const SUPPORTS_SPARSE_FILES: Self = Self { bits: 0x0000_0040 };"],
+      "replace": ["    pub const SUPPORTS_SPARSE_FILES: Self = Self { bits: 0x0000_0080 };"]
+    },
+    {
+      "name": "contains accepts any shared bit",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "'Has every one of these' and 'has one of these' agree for a single flag, so only a multi-bit query separates them.",
+      "find": ["        self.bits & other.bits == other.bits"],
+      "replace": ["        self.bits & other.bits != 0"]
+    },
+    {
+      "name": "or intersects",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Combining two distinct flags with & gives no flags at all.",
+      "find": ["            bits: self.bits | other.bits,"],
+      "replace": ["            bits: self.bits & other.bits,"]
+    },
+    {
+      "name": "control: the name buffers are twice the documented size",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "survives",
+      "why": "MAX_PATH + 1 is the documented maximum; a larger buffer only leaves more unused space. A test that catches this is asserting the buffer size, not the answer.",
+      "find": ["        const NAME_UNITS: usize = MAX_PATH as usize + 1;"],
+      "replace": ["        const NAME_UNITS: usize = 2 * (MAX_PATH as usize + 1);"]
     }
   ]
 }

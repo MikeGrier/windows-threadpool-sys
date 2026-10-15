@@ -644,3 +644,22 @@ NT form (`\Device\NamedPipe\<name>`) or without a volume (`\<name>`). A path of 
 `MAX_PATH`, was read whole; renames, a move to another directory, and directories are tested. Seven
 sabotages added to [sabotage.json](sabotage.json), all caught. `tools/check-publishable.ps1` could not run
 here (the Node module `yaml` is missing) and fails the same way without this change.
+
+## Moved 2026-10-14 23:01:11 -04:00 -- M16.9: the volume query
+
+### <a id="m169"></a>M16.9 -- `volume_info()` reads the label, serial, component limit, file-system flags and name. *(completed 2026-10-14 23:01:11 -04:00)*
+
+`VolumeInfo` carries everything `GetVolumeInformationByHandleW` returns: the label and file-system name as
+`Wtf16String`, the 32-bit serial, the maximum component length, and `FileSystemFlags` -- the raw bits, with
+all 30 documented `FILE_*` flags as associated constants, `contains` and `|`, and unnamed bits kept as
+reported. The call reports no name lengths, so names are read from zeroed `MAX_PATH + 1` buffers up to the
+first NUL. The flag values are named locally (they are behind `Win32_System_SystemServices`) and tested
+against `windows-sys`' own through a dev-dependency feature; `Win32_System_Ioctl` was added beside it, so
+the query tests' local `FSCTL_SET_SPARSE` copy is now `windows-sys`' constant.
+
+As the item asked, the tests assert only what the call reports: the handle's answer equals
+`GetVolumeInformationW` on the volume's root path, a directory and its files agree, and marking a file
+sparse succeeds exactly when the volume reports `FILE_SUPPORTS_SPARSE_FILES`. Measured on NTFS (temp) and
+ReFS (`Q:`): the 32-bit serial is the low half of `file_id()`'s 64-bit serial (tested on the temp volume),
+and every reported flag bit is a named one. The NUL device is refused with `ERROR_INVALID_FUNCTION`,
+tested. Eight sabotages added to [sabotage.json](sabotage.json), one a control; the sweep behaves as declared.

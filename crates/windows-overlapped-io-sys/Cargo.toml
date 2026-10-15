@@ -90,4 +90,8 @@ features = [
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
 	"Win32_System_Pipes",
+	# FSCTL_SET_SPARSE, for the sparse-file tests.
+	"Win32_System_Ioctl",
+	# The FILE_* file-system flags, which the crate names locally (M16.9) and tests against.
+	"Win32_System_SystemServices",
 ]

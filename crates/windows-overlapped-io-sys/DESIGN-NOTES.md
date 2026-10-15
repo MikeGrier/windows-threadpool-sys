@@ -162,6 +162,12 @@ route to association, submission, and the blocking backend, and stays not `Clone
   `fs`, not re-exported, as in the repository's other crates. `final_path_as` exposes every volume and
   name form `GetFinalPathNameByHandleW` takes, since they answer differently -- measured, a named pipe has
   a path only in the opened form -- and `final_path` is the drive-letter, normalized default.
+- **Win32 constants this crate names itself are tested against `windows-sys`' own** (M16.9). The
+  `FILE_*` file-system flags live behind `Win32_System_SystemServices`, which the crate does not
+  enable, so `FileSystemFlags` names all 30 locally; the tests enable that feature as a dev-dependency
+  and compare each value with the constant of the same name, so the local copy cannot drift silently.
+  The earlier local constant modules (`storage_info_values`, `remote_protocol_values`) predate this and
+  are checked only by behaviour.
 - **Every query's output buffer is aligned to 8, not to the structure's own alignment** (M16.6, measured
   2026-10-14): through an SMB loopback handle, `FileRemoteProtocolInfo` refused a buffer aligned to 4 but
   not 8 with `ERROR_NOACCESS`, although the structure's Rust alignment is 4. The kernel's per-class

@@ -31,6 +31,9 @@ mod final_path;
 mod query;
 
 #[cfg(feature = "fs")]
+mod volume_info;
+
+#[cfg(feature = "fs")]
 pub use self::final_path::{PathForm, VolumeName};
 
 #[cfg(feature = "fs")]
@@ -38,6 +41,9 @@ pub use self::query::{
     AlignmentInfo, BasicInfo, FileId, FileTime, RemoteProtocolInfo, Smb2Info, StandardInfo,
     StorageInfo,
 };
+
+#[cfg(feature = "fs")]
+pub use self::volume_info::{FileSystemFlags, VolumeInfo};
 
 /// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
@@ -298,7 +304,7 @@ impl UnassociatedEndpoint {
 /// What it offers instead is a fixed set of safe queries -- [`file_type`](Self::file_type)
 /// in every configuration; `standard_info` and its `file_len` shortcut,
 /// `basic_info`, `file_id`, `storage_info`, `alignment_info`,
-/// `remote_protocol_info` and `final_path`, behind
+/// `remote_protocol_info`, `final_path` and `volume_info`, behind
 /// the `fs` feature -- and
 /// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
 ///
