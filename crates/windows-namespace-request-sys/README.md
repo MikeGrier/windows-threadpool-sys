@@ -138,6 +138,7 @@ entries still to come.
 | Win32 call | Type |
 |---|---|
 | `DeviceIoControl` with `FSCTL_QUERY_VOLUME_NUMA_INFO` | `QueryVolumeNumaInfo` |
+| `DeviceIoControl` with `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` | `QueryVolumeDiskExtents` |
 
 ## Testing your own code against these entries
 

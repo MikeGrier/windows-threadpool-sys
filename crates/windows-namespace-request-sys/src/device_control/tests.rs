@@ -12,6 +12,7 @@
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -23,7 +24,11 @@ use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile};
-use windows_sys::Win32::System::Ioctl::{FSCTL_GET_COMPRESSION, FSCTL_QUERY_VOLUME_NUMA_INFO};
+use windows_sys::Win32::System::Ioctl::{
+    FSCTL_GET_COMPRESSION, FSCTL_QUERY_VOLUME_NUMA_INFO, FSCTL_REQUEST_OPLOCK,
+    OPLOCK_LEVEL_CACHE_READ, REQUEST_OPLOCK_CURRENT_VERSION, REQUEST_OPLOCK_INPUT_BUFFER,
+    REQUEST_OPLOCK_INPUT_FLAG_REQUEST, REQUEST_OPLOCK_OUTPUT_BUFFER,
+};
 use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT};
 
 use super::{device_control, overlapped_call};
@@ -41,7 +46,7 @@ fn overlapped(fixture: &Fixture) -> File {
 }
 
 fn control(file: &File, code: u32, buffer: &mut [u8]) -> Result<u32, u32> {
-    device_control(file.as_raw_handle(), code, buffer).map_err(|error| error.code())
+    device_control(file.as_raw_handle(), code, &[], buffer).map_err(|error| error.code())
 }
 
 fn numa(file: &File, buffer: &mut [u8]) -> Result<u32, u32> {
@@ -283,4 +288,115 @@ fn a_call_that_fails_after_pending_reports_its_own_code() {
         "the pipe's own code, unaltered"
     );
     closer.join().expect("the closer thread");
+}
+
+// --- A control that takes input and pends on demand -----------------------------------------
+//
+// `FSCTL_REQUEST_OPLOCK` is both: it is sent a request, stays pending while the oplock is held, and
+// completes when another handle writes to the file. So it is the one test that reaches `DeviceIoControl`
+// itself through the pending path, and the one that shows the input buffer arriving.
+
+/// `REQUEST_OPLOCK_INPUT_BUFFER` for a request of `level`, written field by field so no byte view of
+/// a struct is needed.
+fn oplock_request(level: u32) -> [u8; size_of::<REQUEST_OPLOCK_INPUT_BUFFER>()] {
+    let mut input = [0_u8; size_of::<REQUEST_OPLOCK_INPUT_BUFFER>()];
+    let mut put =
+        |offset: usize, bytes: &[u8]| input[offset..offset + bytes.len()].copy_from_slice(bytes);
+    put(
+        offset_of!(REQUEST_OPLOCK_INPUT_BUFFER, StructureVersion),
+        &u16::try_from(REQUEST_OPLOCK_CURRENT_VERSION)
+            .expect("a u16")
+            .to_ne_bytes(),
+    );
+    put(
+        offset_of!(REQUEST_OPLOCK_INPUT_BUFFER, StructureLength),
+        &u16::try_from(size_of::<REQUEST_OPLOCK_INPUT_BUFFER>())
+            .expect("a u16")
+            .to_ne_bytes(),
+    );
+    put(
+        offset_of!(REQUEST_OPLOCK_INPUT_BUFFER, RequestedOplockLevel),
+        &level.to_ne_bytes(),
+    );
+    put(
+        offset_of!(REQUEST_OPLOCK_INPUT_BUFFER, Flags),
+        &REQUEST_OPLOCK_INPUT_FLAG_REQUEST.to_ne_bytes(),
+    );
+    input
+}
+
+fn u32_at(buffer: &[u8], offset: usize) -> u32 {
+    u32::from_ne_bytes(buffer[offset..offset + 4].try_into().expect("four bytes"))
+}
+
+#[test]
+fn a_request_with_input_pends_until_the_device_answers_and_reports_what_it_wrote() {
+    let _allocating = handle_allocation().read().expect("not poisoned");
+    let fixture = Fixture::new("dc-oplock");
+    let file = overlapped(&fixture);
+    let path = fixture.file();
+    let writer = thread::spawn(move || {
+        thread::sleep(WRITER_DELAY);
+        let mut other = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open to write");
+        // A write through another handle is what breaks a read oplock.
+        other.write_all(b"x").expect("write");
+        other
+    });
+
+    let mut output = [0_u8; size_of::<REQUEST_OPLOCK_OUTPUT_BUFFER>()];
+    let started = Instant::now();
+    let written = device_control(
+        file.as_raw_handle(),
+        FSCTL_REQUEST_OPLOCK,
+        &oplock_request(OPLOCK_LEVEL_CACHE_READ),
+        &mut output,
+    );
+    let waited = started.elapsed();
+
+    assert_eq!(
+        written.map_err(|error| error.code()),
+        Ok(u32::try_from(output.len()).expect("a u32")),
+        "the whole output structure was written"
+    );
+    assert!(
+        waited >= WRITER_DELAY / 2,
+        "returned after {waited:?}, so it did not wait for the oplock to break"
+    );
+    assert_eq!(
+        u32_at(
+            &output,
+            offset_of!(REQUEST_OPLOCK_OUTPUT_BUFFER, OriginalOplockLevel)
+        ),
+        OPLOCK_LEVEL_CACHE_READ,
+        "the oplock that was granted is the one the input asked for"
+    );
+    assert_eq!(
+        u32_at(
+            &output,
+            offset_of!(REQUEST_OPLOCK_OUTPUT_BUFFER, NewOplockLevel)
+        ),
+        0,
+        "and it broke to none"
+    );
+    drop(writer.join().expect("the writer thread"));
+}
+
+#[test]
+fn input_that_does_not_arrive_is_refused_by_the_device() {
+    // The control above passing shows the input reaches the device; this shows it is the input that
+    // made it work, by sending the same control with none and seeing the device refuse.
+    let _allocating = handle_allocation().read().expect("not poisoned");
+    let fixture = Fixture::new("dc-oplock-none");
+    let file = overlapped(&fixture);
+
+    let mut output = [0_u8; size_of::<REQUEST_OPLOCK_OUTPUT_BUFFER>()];
+    let outcome = device_control(file.as_raw_handle(), FSCTL_REQUEST_OPLOCK, &[], &mut output);
+
+    assert!(
+        outcome.is_err(),
+        "a request with no input was accepted: {outcome:?}"
+    );
 }

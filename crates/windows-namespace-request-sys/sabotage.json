@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first entry (NR-2.1) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves. The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first two entries (NR-2.1, NR-2.2) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well (NR-2.2). The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -165,6 +165,102 @@
       "why": "A call that pends and then fails reports its own code through GetOverlappedResult; discarding it would report success with whatever count was left.",
       "find": ["            })?;\n            Ok(written)\n"],
       "replace": ["            });\n            Ok(written)\n"]
+    },
+    {
+      "name": "NR-2.2: a control's input is not passed to the device",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "An oplock request is refused without its input structure, so a helper that drops the input fails the control that takes one; none of the no-input controls could tell.",
+      "find": ["        input.as_ptr().cast()\n"],
+      "replace": ["        ptr::null()\n"]
+    },
+    {
+      "name": "NR-2.2: the disk-extents entry sends a different control code",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "The entry's whole meaning is the control code it sends; a neighbouring code is refused by a volume.",
+      "find": ["                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,\n"],
+      "replace": ["                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS + 4,\n"]
+    },
+    {
+      "name": "NR-2.2: a reply that needs more room is not asked again",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "A volume with more extents than the first buffer holds is reported ERROR_MORE_DATA with a count; unless that code starts the retry, such a volume fails.",
+      "find": ["            Err(error) if error.code() == ERROR_MORE_DATA => {\n"],
+      "replace": ["            Err(error) if error.code() == 0 => {\n"]
+    },
+    {
+      "name": "NR-2.2: the first answer may have room for no extent",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "The device refuses a buffer with no room for one extent, so an entry that asks with none fails every volume.",
+      "find": ["    let mut capacity = first.max(1);\n"],
+      "replace": ["    let mut capacity = first;\n"]
+    },
+    {
+      "name": "NR-2.2: a count of nothing in a more-data reply allocates a buffer with no room for an extent",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "A reply that says it needs more room and counts none must not shrink the next buffer below the one extent the device requires.",
+      "find": ["                    .max(1);\n"],
+      "replace": ["                    ;\n"]
+    },
+    {
+      "name": "NR-2.2: the retry is not bounded by its constant",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "The bound on attempts is the one the error reports; a loop that runs one more would spin a worker on a volume whose extents keep changing and report a number it did not use.",
+      "find": ["    for _ in 0..MAX_ATTEMPTS {\n"],
+      "replace": ["    for _ in 0..=MAX_ATTEMPTS {\n"]
+    },
+    {
+      "name": "NR-2.2: a refusal by the device is retried as though it needed more room",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "Any code but ERROR_MORE_DATA ends the attempts and is the device's own; retrying it would hide it behind an Unstable report.",
+      "find": ["            Err(error) => return Err(error.into()),\n"],
+      "replace": ["            Err(_) => {}\n"]
+    },
+    {
+      "name": "NR-2.2: an answer that exactly fills what was written is refused",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "A reply of exactly the size of the extents it counts is the normal case, so the size check refuses only a reply that is shorter.",
+      "find": ["    if answer_size(declared)? > buffer.len() {\n"],
+      "replace": ["    if answer_size(declared)? >= buffer.len() {\n"]
+    },
+    {
+      "name": "NR-2.2: a call that says it wrote more than the buffer held is read",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "A byte count beyond the buffer is the device's claim and not a fact; reading to it would slice outside the buffer.",
+      "find": ["        .filter(|written| *written <= buffer.len())\n"],
+      "replace": ["        .filter(|_| true)\n"]
+    },
+    {
+      "name": "NR-2.2: an extent's offset is read from its length",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "Each extent is read field by field from where the device put it; a reader that takes the length for the start reports runs of disk that are not the volume's.",
+      "find": ["                    starting_offset: u64::try_from(start)\n"],
+      "replace": ["                    starting_offset: u64::try_from(length)\n"]
+    },
+    {
+      "name": "NR-2.2: a negative length is accepted as zero",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "A length below zero is not a length; reporting it as an empty run would hide a damaged answer behind a plausible one.",
+      "find": ["                    length: u64::try_from(length)\n                        .map_err(|_| malformed(\"an extent of negative length\"))?,\n"],
+      "replace": ["                    length: u64::try_from(length).unwrap_or(0),\n"]
+    },
+    {
+      "name": "NR-2.2: a buffer the machine cannot supply is reported under another code",
+      "file": "src/volume_extents.rs",
+      "expect": "caught",
+      "why": "The count is the device's, so a buffer for it may not be allocatable; that is ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'.",
+      "find": ["        .map_err(|_| DiskExtentsError::Win32(Win32Error::out_of_memory()))?;\n"],
+      "replace": ["        .map_err(|_| DiskExtentsError::Win32(Win32Error::from_code(0)))?;\n"]
     }
   ]
 }

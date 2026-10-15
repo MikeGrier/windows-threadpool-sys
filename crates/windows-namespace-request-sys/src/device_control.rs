@@ -31,16 +31,19 @@ use crate::outcome::{Outcome, perform, perform_bool, perform_nonnull_handle};
 #[cfg(test)]
 mod tests;
 
-/// Sends `code`, which takes no input, to `device`, and reads what it answers into `output`: the
-/// number of bytes the device wrote.
+/// Sends `code` and `input` to `device`, and reads what it answers into `output`: the number of
+/// bytes the device wrote. A control that takes no input passes an empty `input`, which reaches
+/// the device as a null pointer and a length of zero.
 ///
-/// The call returns only when the device has finished with `output`. The raw Win32 code is
+/// The call returns only when the device has finished with `input` and `output`, so neither need
+/// outlive more than the call. The raw Win32 code is
 /// returned unaltered on failure, including `ERROR_MORE_DATA` and `ERROR_INSUFFICIENT_BUFFER`,
 /// which a control that reports a size first is sized by.
 ///
 /// # Panics
 ///
-/// If `output` is longer than a `u32` can count, which no control this crate carries has.
+/// If `input` or `output` is longer than a `u32` can count, which no control this crate carries
+/// has.
 ///
 /// # Aborts
 ///
@@ -48,16 +51,30 @@ mod tests;
 /// created and owns, so it cannot fail in practice; but the device may still be about to write
 /// into memory this function would otherwise let go of, and unwinding past that would be
 /// undefined behaviour, where stopping the process is not.
-pub(crate) fn device_control(device: HANDLE, code: u32, output: &mut [u8]) -> Outcome<u32> {
+pub(crate) fn device_control(
+    device: HANDLE,
+    code: u32,
+    input: &[u8],
+    output: &mut [u8],
+) -> Outcome<u32> {
+    let input_len = u32::try_from(input.len()).expect("a control's input buffer fits a u32");
+    let input_ptr = if input.is_empty() {
+        ptr::null()
+    } else {
+        input.as_ptr().cast()
+    };
+
     overlapped_call(device, output, |buffer, length, written, overlapped| {
-        // SAFETY: `device` is a handle the caller holds open for this call. There is no input.
-        // The four pointers are the ones `overlapped_call` guarantees outlive the operation.
+        // SAFETY: `device` is a handle the caller holds open for this call. `input` is readable
+        // for `input_len` bytes and borrowed for the whole call, which does not return until the
+        // device has finished with it. The other four pointers are the ones `overlapped_call`
+        // guarantees outlive the operation.
         unsafe {
             DeviceIoControl(
                 device,
                 code,
-                ptr::null(),
-                0,
+                input_ptr,
+                input_len,
                 buffer.cast(),
                 length,
                 written,

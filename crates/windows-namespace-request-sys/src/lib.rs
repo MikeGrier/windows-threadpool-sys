@@ -122,6 +122,7 @@ pub mod query;
 pub mod request;
 pub mod security;
 pub mod volume;
+pub mod volume_extents;
 pub mod volume_numa;
 pub mod watch;
 
@@ -150,5 +151,6 @@ pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
 pub use volume::{QueryVolumeInformation, VolumeInformation};
+pub use volume_extents::{DiskExtent, DiskExtentsError, QueryVolumeDiskExtents};
 pub use volume_numa::{NumaInfoError, QueryVolumeNumaInfo, VolumeNumaInfo};
 pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};

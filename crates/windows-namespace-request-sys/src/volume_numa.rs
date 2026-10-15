@@ -188,8 +188,12 @@ impl QueryVolumeNumaInfo {
     /// the call succeeded and reported a size other than the structure's.
     pub fn perform(&self) -> Result<VolumeNumaInfo, NumaInfoError> {
         let mut output = [0_u8; OUTPUT_SIZE];
-        let returned =
-            device_control(self.handle.raw(), FSCTL_QUERY_VOLUME_NUMA_INFO, &mut output)?;
+        let returned = device_control(
+            self.handle.raw(),
+            FSCTL_QUERY_VOLUME_NUMA_INFO,
+            &[],
+            &mut output,
+        )?;
         decode(returned, output)
     }
 }
