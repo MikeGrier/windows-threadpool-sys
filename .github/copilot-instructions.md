@@ -161,7 +161,7 @@ change the answer: which conditions the apparatus could not reach, and what a co
 would need to measure on their own hardware. Foreclosing costs a client a choice they may
 have needed; keeping an unproven option costs a paragraph.
 
-## DOCUMENTED APIS ONLY — no `Nt*`, no undocumented behaviour shipped
+## DOCUMENTED APIS ONLY — no `Nt*`, no `Rtl*` from `ntdll`, no undocumented behaviour shipped
 
 **This repository does not call the `Nt*` (or `Zw*`) APIs, does not load `ntdll` to reach an
 export, and does not ship any other use of an undocumented interface.** The engineer, 2026-10-14:
@@ -178,7 +178,7 @@ an assistant does not reach for it again.
 - **A fact only an undocumented call can give is not available to this repository.** Do not
   design around reading it. Where a design would have read it (an open handle's buffering mode,
   for instance, which only `NtQueryInformationFile` reports), the answer is that the caller
-  declares it, and the design says so plainly.
+  declares it, or the design makes it structural, and the design says so plainly.
 - **Look for a documented route before concluding there is none**, and say which you checked:
   `GetFileInformationByHandleEx` classes, `DeviceIoControl` with a documented `IOCTL_*` /
   `FSCTL_*`, the Win32 query functions. A documented API that reports something less than the
@@ -187,10 +187,14 @@ an assistant does not reach for it again.
   is thrown away has not been committed, but it should not be written in the first place: it
   produces a design this repository could not build. Records of measurements already taken stay
   as history; do not extend them.
-- **`Rtl*` exports from `ntdll`: the assistant's reading, not yet ruled on**, is that they are the
-  same case, however a header names the operation. `windows-thread-ambient-sys`'s
-  [transaction.rs](../crates/windows-thread-ambient-sys/src/transaction.rs) binds two of them
-  today; whether that stays is the engineer's to rule.
+- **`Rtl*` exports from `ntdll` are the same case, ruled on 2026-10-15.** A documented header
+  wrapper over an `Rtl*` export does not make the export documented: the wrapper is, the export
+  is not, and binding the export from here is the call the rule forbids. The case that settled
+  it was `windows-thread-ambient-sys`'s transaction aspect, which bound
+  `RtlGetCurrentTransaction` and `RtlSetCurrentTransaction`; the engineer's ruling was that
+  those aspects "should never have gotten in to the code base", and they were removed, with
+  the published versions that carried them yanked
+  ([the decision](../crates/windows-thread-ambient-sys/DESIGN-NOTES.md#d-transaction-removed)).
 
 ## Line endings in tool parameters
 

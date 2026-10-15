@@ -14,11 +14,11 @@
   "crates/win-time-sys": "0.1.0",
   "crates/win-volume-sys": "0.0.1",
   "crates/windows-overlapped-io-sys": "0.2.0",
-  "crates/windows-namespace-request-sys": "0.3.0",
-  "crates/windows-thread-ambient-sys": "0.2.3",
+  "crates/windows-namespace-request-sys": "0.3.1",
+  "crates/windows-thread-ambient-sys": "0.3.0",
   "crates/windows-threadpool-sys": "0.2.1",
   "crates/windows-topology-sys": "0.2.0",
   "crates/windows-waitable-queues": "0.1.0",
   "crates/wtf-string": "0.1.0",
-  "crates/windows-platform-probes": "2026.1015.0"
+  "crates/windows-platform-probes": "2026.1015.1"
 }
