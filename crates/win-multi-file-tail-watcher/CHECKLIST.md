@@ -14,15 +14,7 @@ read through the held handle.
 
 - [x] **TW-1.1** -- The crate exists, registered for release and publication. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-11)
 
-- [ ] **TW-1.2** -- **Open a file by `Wtf16String` path as an endpoint, and take an observer.**
-  Read-only, sharing read, write and delete, with `FILE_FLAG_OVERLAPPED`; the endpoint is kept for
-  the reads iteration. A failed open is an error carrying the Win32 error code.
-  ([TW-D-3](DESIGN-NOTES.md#tw-d-3), [TW-D-10](DESIGN-NOTES.md#tw-d-10))
-
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/windows-overlapped-io-sys` -> `M16` -> `M16.5`
-  > (endpoints share their handle with observers, with the observer's length query and tests) must
-  > land first. Landed; see that crate's
-  > [COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md#m165).
+- [x] **TW-1.2** -- `HeldFile::open` opens a file by `Wtf16String` path as a read-only, overlapped endpoint, and hands out observers. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-12)
 
 - [ ] **TW-1.3** -- **Read the current length through an observer.** ([TW-D-2](DESIGN-NOTES.md#tw-d-2))
 

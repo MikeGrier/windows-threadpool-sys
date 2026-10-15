@@ -1,0 +1,39 @@
+{
+  "package": "win-multi-file-tail-watcher",
+  "description": "Sabotages for how a file is opened and held. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "win-multi-file-tail-watcher", "--all-features", "--lib"],
+  "sabotages": [
+    {
+      "name": "the file is opened with write access",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "TW-D-3 says read-only. A hold with write access still opens, still shares, and still answers the observer's queries, so only a new open that denies write sharing -- which collides with a writer -- can tell.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, true, 0)?;"]
+    },
+    {
+      "name": "the path is converted lossily",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A name with an unpaired surrogate is a real NTFS name and not valid Unicode. Replacing the surrogate with U+FFFD names a different file, which does not exist.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_string_lossy(), true, false, 0)?;"]
+    },
+    {
+      "name": "an open failure loses its Win32 code",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The caller tells a missing file from a sharing violation by the code. Wrapping the error in a new one keeps the kind and drops the number.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)\n            .map_err(|error| io::Error::new(error.kind(), \"open failed\"))?;"]
+    },
+    {
+      "name": "control: the path is converted through OsString::from",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "The same lossless conversion spelled another way. A test that catches it is asserting how the conversion is written, not what it does.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(std::ffi::OsString::from(path), true, false, 0)?;"]
+    }
+  ]
+}

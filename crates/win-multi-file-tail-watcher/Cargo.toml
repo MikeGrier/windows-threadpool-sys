@@ -36,3 +36,10 @@ windows-sys = { version = "0.61.2", default-features = false }
 # would render an almost-empty crate.
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+
+# Win32 names the tests compare error codes and sharing modes against. The crate itself needs
+# none yet.
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_Storage_FileSystem"]

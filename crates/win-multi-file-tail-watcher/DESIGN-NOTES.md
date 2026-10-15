@@ -227,5 +227,8 @@ bind to them as settled.
   resumes from its callback. An armed, idle wait wakes no thread, so it is consistent with
   [TW-D-5](#tw-d-5).
 - **The caller sets the SQ's capacity**, presumably when the watcher is created.
+- **The type that holds one file is `HeldFile`** (TW-1.2). A working name taken from this file's
+  own phrase "held handle", not a chosen layer: [TW-D-11](#tw-d-11) leaves the names to emerge.
+  Nothing here should bind to it.
 - **The expected population tops out around 20,000 files** (some 10,000 jobs, each with stdout and
   stderr), a guesstimate the engineer regards as an extreme.

@@ -5,3 +5,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 // Every `unsafe` here is a Win32 call or a handle query, and each states why it is sound (TW-1.1).
 #![deny(clippy::undocumented_unsafe_blocks)]
+
+mod held_file;
+
+pub use held_file::HeldFile;
