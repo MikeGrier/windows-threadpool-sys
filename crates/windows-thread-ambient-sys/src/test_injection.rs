@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
-const POINT_COUNT: usize = 6;
+const POINT_COUNT: usize = 4;
 
 #[derive(Clone, Copy)]
 pub(crate) enum FaultPoint {
@@ -15,8 +15,6 @@ pub(crate) enum FaultPoint {
     MemoryInstall,
     RedirectionRevert,
     ErrorModeSet,
-    TransactionSupport,
-    TransactionSet,
 }
 
 impl FaultPoint {
@@ -26,8 +24,6 @@ impl FaultPoint {
             Self::MemoryInstall => 1,
             Self::RedirectionRevert => 2,
             Self::ErrorModeSet => 3,
-            Self::TransactionSupport => 4,
-            Self::TransactionSet => 5,
         }
     }
 }

@@ -52,7 +52,7 @@ The aspects divide by whether the calling thread's value can be *read*:
 
 | Set | Aspects | Chosen by |
 |---|---|---|
-| **Capturable** | impersonation, thread error mode, TxF transaction | a capture set, per call |
+| **Capturable** | impersonation, thread error mode | a capture set, per call |
 | **Declared** | WOW64 filesystem redirection, memory priority, I/O priority | the caller states a value; unspecified means leave the target alone |
 
 An earlier statement of this division placed WOW64 redirection with the captured
@@ -117,8 +117,7 @@ exact reverse:
    force while the remaining aspects are being applied;
 2. priority;
 3. WOW64 filesystem redirection;
-4. TxF transaction;
-5. impersonation -- innermost, because its window is the narrowest and its
+4. impersonation -- innermost, because its window is the narrowest and its
    restoration is the one that must not be delayed.
 
 Applying a subset must stay expressible. That is not a convenience: the aspects
@@ -158,53 +157,35 @@ calling thread has no token it snapshots the process identity as a
 unreachable by construction. The three-state shape is retained anyway, per the
 decision above.
 
-### TxF transaction
+### TxF transaction (removed)
 
-<a id="d-transaction-binding"></a>
+<a id="d-transaction-removed"></a>
 
-**The documented entry points are not exports, and the real ones are in
-`ntdll`.** `ktmw32.h` documents `GetCurrentTransaction` and
-`SetCurrentTransaction`, and MSDN names `Ktmw32.dll` as their library. Neither
-is exported from it: the shipping DLL's export table offers
-`CreateTransaction`, `CommitTransaction`, `RollbackTransaction` and their
-neighbours and nothing named `CurrentTransaction`. The header declares the two
-as `FORCEINLINE` wrappers over `RtlGetCurrentTransaction` and
-`RtlSetCurrentTransaction` in **`ntdll.dll`**, which is what this crate binds.
+**Withdrawn -- the aspect was removed and its published versions yanked.** The
+engineer's ruling, 2026-10-15: the Get/Set transaction aspects "should never have
+gotten in to the code base".
 
-This was found by a test failing, not by reading. The first implementation
-resolved the documented names from `ktmw32.dll` and every transaction test failed
-at symbol resolution; the export table then settled it. Recorded because the
-documentation is actively misleading here, and the next person to reach for these
-functions will start where we did.
+The reason is the repository's rule that published code binds documented
+interfaces only (see the repository's
+[copilot-instructions.md](../../.github/copilot-instructions.md)). The aspect had
+no documented binding. `GetCurrentTransaction` and `SetCurrentTransaction` are
+documented, but as `FORCEINLINE` wrappers in a header; neither `kernel32.dll` nor
+`kernelbase.dll` exports a name containing `CurrentTransaction` (export tables
+read on 2026-10-15), and the only exports that carry the operation are the
+`Rtl`-prefixed ones in `ntdll.dll`. Binding those from a published crate reads as
+an endorsement of an undocumented interface, which is the thing the rule exists to
+prevent. Neither a lazy lookup nor a typed `Unsupported` failure changes what the
+crate calls.
 
-Two consequences:
+Everything that depended on it went with it: the `Transaction` capturable aspect,
+`CaptureSet::TRANSACTION`, `AmbientState::transaction`, the transaction entries of
+the failure and restore-report types, and the `Win32_System_LibraryLoader` feature
+that only the lookup used. That is a breaking change to a public API, and every
+published version (0.2.0 to 0.2.3) carried the aspect, so each was yanked.
 
-- **The aspect rests on an `Rtl`-prefixed `ntdll` export**, which is weaker
-  footing than the rest of this crate. It is unavoidable -- no documented export
-  exists -- but it is why binding is lazy and why an unresolvable symbol is a
-  typed `Unsupported` failure rather than a process that will not start.
-- **`RtlSetCurrentTransaction` returns `BOOLEAN`, one byte**, not the four-byte
-  `BOOL` its documented wrapper returns. Reading it as `BOOL` would test three
-  bytes of whatever happened to be in the register, which is the kind of defect
-  that passes for years and then does not.
-
-Binding is lazy for a second reason too: a consumer that never captures a
-transaction should pay nothing for the aspect's existence.
-
-**`Absent` clears rather than leaves alone, and this is the aspect where that
-distinction first has teeth.** `NotCaptured` leaves the running thread's own
-transaction untouched, because the caller never asked. `Absent` *installs* "no
-transaction", because the caller did ask and the answer was none -- a worker that
-happened to carry one would otherwise silently enlist the caller's work in it.
-Impersonation never reaches `Absent`, so the question does not arise there.
-
-The aspect carries an owned duplicate of the transaction handle, so the captured
-value does not depend on the caller keeping its own handle open.
-
-One hazard it cannot remove, stated because it is invisible from the API: the
-caller may commit or roll the transaction back while the worker is still inside
-it. TxF is also deprecated by Microsoft, which is a reason to keep the aspect
-optional and out of any minimal default, not a reason to omit it.
+**A transaction aspect returns only on a documented export.** None exists at
+present, so no work is scheduled; if one appears, the aspect is a new decision
+under the same rule, not a reversal of this one.
 
 ### Thread error mode
 

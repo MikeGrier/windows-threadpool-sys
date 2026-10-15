@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-thread-ambient-sys-v0.2.3...windows-thread-ambient-sys-v0.3.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **thread-ambient:** every published version (0.2.0 to 0.2.3) carried the aspect and is to be yanked.
+
+### Features
+
+* **thread-ambient:** remove the TxF transaction aspect ([f2c9655](https://github.com/MikeGrier/windows-threadpool-sys/commit/f2c965520142d73cc060ae258f9a0f6a0fdd3e96))
+
 ## [0.2.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-thread-ambient-sys-v0.2.2...windows-thread-ambient-sys-v0.2.3) (2026-10-15)
 
 
