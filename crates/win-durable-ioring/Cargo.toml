@@ -13,28 +13,24 @@ description = "A ring for Windows file I/O with durability scheduled into its wo
 readme = "README.md"
 
 [dependencies]
-# The contract, the core and the traits this crate drives and implements (DI-D-50). **Path only,
-# with no `version`, deliberately**: durable-ioring is unreleased, and a version written now would
-# guess the number release-please will choose. A path-only dependency also makes `cargo publish`
-# refuse, so the pin cannot be skipped at release: DI-12.4 adds the version, keeping the path.
-durable-ioring = { path = "../durable-ioring" }
-# **Path only, with no `version`, deliberately** (DI-D-16 in durable-ioring's DESIGN-NOTES.md).
-# This crate is built against the ring crate's unreleased tree, and a version written now would
-# guess the number release-please will choose. DI-12.4 adds the version, keeping the path.
-windows-ioring-sys = { path = "../windows-ioring-sys" }
+# The contract, the core and the traits this crate drives and implements (DI-D-50). A version and a
+# path, as `cargo publish` requires: the version is the release that carries the split.
+durable-ioring = { version = "0.1.0", path = "../durable-ioring" }
+# The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
+# ring, `leave_queued` and the registrations this driver is built on.
+windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys" }
 # The file target's type (DI-D-29): a consumer's file is a `SharedHandle`, and this crate hands that
 # same handle to the ring, which takes the type directly.
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 # The readiness signal's type (DI-D-28): an `Event`, so a front end can hand it to a thread-pool
-# wait without `unsafe`. Path only, as for the ring crate: it is unreleased, and DI-12.4 pins it.
-win-sync-sys = { path = "../win-sync-sys" }
-# The thread-pool wait the drain and the readiness check wait through. Path only: it needs
-# `From<Event> for WaitableHandle`, which is unreleased, and DI-12.4 pins it.
-windows-threadpool-sys = { path = "../windows-threadpool-sys" }
+# wait without `unsafe`.
+win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+# The thread-pool wait the drain and the readiness check wait through. It needs
+# `From<Event> for WaitableHandle`, which this release carries.
+windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
 # This driver's one time base, interrupt time (DI-D-37), read through `InterruptClock`: the crate
-# forbids `unsafe`, so it cannot call `QueryInterruptTime` itself. Path only, as for the ring
-# crate: it is unreleased, and DI-12.4 pins it.
-win-time-sys = { path = "../win-time-sys" }
+# forbids `unsafe`, so it cannot call `QueryInterruptTime` itself.
+win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
 
 [features]
 # The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by

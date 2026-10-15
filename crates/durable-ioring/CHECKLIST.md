@@ -194,19 +194,7 @@ milestone; the decision rows named below carry the reasons.
 - [ ] **DI-12.3** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
 
-- [ ] **DI-12.4** -- **Pin `windows-ioring-sys` by version once the set of changes is about to
-  release** ([DI-D-16](DESIGN-NOTES.md#di-d-16)). Gated on that release, not on `DI-12.3`. Add the
-  `version` of the `windows-ioring-sys` release carrying everything dioring relies on (at least
-  [D-80](../windows-ioring-sys/DESIGN-NOTES.md#d-80) and
-  [D-81](../windows-ioring-sys/DESIGN-NOTES.md#d-81)), keeping the `path`. This must land before
-  dioring's first release PR merges, because its publish job fails on a path-only dependency.
-  `DI-3.2.2.1` added two more path-only dependencies, pinned the same way: `win-sync-sys` (the
-  readiness signal's `Event`), at its first release, and `windows-threadpool-sys` (the readiness
-  check's wait), at the release carrying its `M-T14.1` (`From<Event> for WaitableHandle`).
-  win-time-sys' `WT-2.2.2` adds a fourth, `win-time-sys` (the failure timestamps' clock), at its
-  first release. Since `DI-8.2` these dependencies are `win-durable-ioring`'s, with a fifth: its
-  path-only dependency on `durable-ioring`, pinned at `durable-ioring`'s first release, which must
-  publish first. `durable-ioring` itself has only `io-buffers`, already pinned.
+- [x] **DI-12.4** -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-124)
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 

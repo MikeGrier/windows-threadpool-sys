@@ -2859,3 +2859,9 @@ From the second round of the review of [PR 126](https://github.com/MikeGrier/win
 ### <a id="di-982"></a>DI-9.8.2 -- The portable CI job's first run is read: the crate's tests run on Linux and macOS. *(completed 2026-10-14 19:26:34 -04:00)*
 
 Draft PR 126 gave the branch a pull request, which is what [ci.yml](../../.github/workflows/ci.yml)'s trigger waits for. Its `portable` job builds, tests and lints `wtf-string`, `io-buffers` and `durable-ioring` on `ubuntu-latest` and `macos-latest`, and both runs passed; the checks are listed on the pull request as `wtf-string (non-Windows)`, a name the job shares with its first crate. Nothing in the crate needed to change for a non-Windows host.
+
+## Moved 2026-10-14 21:11:41 -04:00 -- DI-12.4: the version pins
+
+### <a id="di-124"></a>DI-12.4 -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. *(completed 2026-10-14 21:11:41 -04:00)*
+
+The item was meant to land before the first release PR merged, and did not: the release merged first, `publish-crate` refused `win-durable-ioring` 0.1.0 for a dependency with no version, and its tag points at that commit. The pins landed afterwards: `durable-ioring`, `windows-ioring-sys`, `win-sync-sys`, `windows-threadpool-sys` and `win-time-sys`, each at the version release-please published or was asked to. `win-time-sys` had not been released at all, which stalled every crate waiting on it, so it was published by the `workflow_dispatch` escape hatch at the version its manifest declares. `win-durable-ioring` 0.1.0 cannot publish from its tag, so it is published by the same dispatch from the commit that carries the pins.
