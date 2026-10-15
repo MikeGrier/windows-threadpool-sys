@@ -33,7 +33,7 @@ milestones when the next of these is taken up.
   edited the dependents would request 0.1.0 of them too (a downgrade for `windows-threadpool-sys`).
   The dependents' version requirements move separately: read the release PR to see whether the
   workspace plugin rewrites them, and if it does not, set them in a commit of their own after it. The
-  dependency-version check (`.github/release/check-dependency-versions.cjs`) does not cover this,
+  dependency-version check ([check-dependency-versions.cjs](../../.github/release/check-dependency-versions.cjs)) does not cover this,
   since it asks only that a version exist. Gated on this crate's next release.
 
 ## M-inf -- Parked
