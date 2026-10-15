@@ -928,10 +928,26 @@ same retry, over its own `control()`. It is covered by `NR-2.6` with the helper'
 - **The identifier is not interpreted.** What an identifier inside a descriptor is, and which of them a
   key for a disk is made from, is the consumer's, as the reply's own documentation is.
 
-**Working position, not a decision:** typed accessors for the identifiers *inside* the descriptors
-(`STORAGE_IDENTIFIER` entries) are not provided. Whether they belong in this crate or in the locality helper
-that derives the key (root `M39`) is not yet settled, and nothing binds to the present answer. No work is
-scheduled for it.
+**Ruled by the engineer on 2026-10-15, and open to revisiting:** typed accessors for the identifiers *inside*
+the descriptors (`STORAGE_IDENTIFIER` entries) are not provided -- "at this time, no. We can revisit later if
+necessary." Whether they belong here or in the locality helper that derives the key (root `M39`) is for
+whoever needs them to raise. No work is scheduled for it, deliberately.
+
+**A generic entry is provided** (the engineer's ruling, same date): `QueryStorageProperty`
+([`src/storage_query.rs`](src/storage_query.rs)) is the same call with the property and the query type
+chosen by the caller and the reply returned as the bytes the device gave, so a consumer can reach a property
+this crate has no typed entry for.
+
+- The property and the query type are newtypes over the raw values, so one cannot be passed for the other.
+  Neither is validated: a value the device does not know is the device's own failure, unaltered.
+- Additional parameters follow the query structure's fixed fields, are passed as given, and are held shared
+  (`Arc<[u8]>`), so copying a request never allocates ([D-8](#d-8)'s rule that an allocation that fails is an
+  error the caller receives).
+- A standard query's size is learned by the same loop. A query for whether a property exists returns no
+  structure, so it is one call with no output and an empty reply, and success means the property exists.
+- What is *not* established is what a query type other than standard and exists returns, and so what the
+  entry makes of it: a reply that does not begin with the descriptor header is `Malformed`. The mask query
+  was refused by both properties tried.
 
 **Measured on 2026-10-15**, Windows 11, one disk, a handle opened with no access:
 
@@ -944,6 +960,14 @@ scheduled for it.
   size.
 - The disk reports its device ID descriptor and neither of the other two sections (their offsets are zero).
   The descriptor's own size is exactly what remains of the reply.
+
+- An exists query on a real property succeeds with nothing written whatever the output size, and an unknown
+  property is `ERROR_INVALID_FUNCTION` for both the exists and the standard question. A mask query, and a
+  query type Windows does not define, were `ERROR_NOT_SUPPORTED` for the two properties tried.
+- Additional parameters are read by some properties and not others. The device property gave the same reply
+  for any bytes. The unique-id property read the first: 0 gave the usual reply, 1 a larger one, and larger
+  values `ERROR_INVALID_PARAMETER`. What that byte selects is not documented and is not interpreted; it is
+  also how the generic entry's additional parameters are shown to arrive.
 
 **What was not observed.** A disk that reports a device descriptor or a drive layout signature, one on
 another bus (NVMe, USB, a virtual disk), and a reply larger than the first buffer. Those shapes are tested

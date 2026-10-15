@@ -133,3 +133,23 @@ every first-buffer size. Twenty-one sabotages pin it, in [sabotage.json](sabotag
 a disk that reports the other two sections, and one on another bus. What this left to do is `NR-2.4`, and the
 question whether the identifiers inside the descriptors belong in this crate, which `D-22` records as a working
 position and not a decision.
+
+## Moved 2026-10-15 18:38:54 -04:00 -- NR-2.7: the generic storage property query
+
+### <a id="nr-27"></a>NR-2.7 -- The generic `IOCTL_STORAGE_QUERY_PROPERTY` entry, `QueryStorageProperty`: any property, any query type, additional parameters, reply as bytes. *(completed 2026-10-15 18:38:54 -04:00)*
+
+Raised by the engineer when `NR-2.3` was reviewed ("Generic property query: yes"; the identifiers inside the
+descriptors stay unparsed, "at this time, no. We can revisit later if necessary"). `QueryStorageProperty` is the
+same call as `QueryStorageDeviceUniqueId` with the property and the query type chosen by the caller, both as
+newtypes over the raw values and neither validated, additional parameters held shared so a copy never allocates,
+and the reply returned as exactly the bytes its header says. A query for whether a property exists returns no
+structure, so it is one call with no output and an empty reply. The decision is
+[D-22](DESIGN-NOTES.md#d-22) and how it was reached, including a probe whose zero bytes wrongly suggested
+additional parameters were ignored, is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code is `7aec7e85`.
+
+Measured here: an exists query on a real property succeeds with nothing written, an unknown property is
+`ERROR_INVALID_FUNCTION` for both questions, and a mask query and an undefined query type are
+`ERROR_NOT_SUPPORTED` for the properties tried, so what a type other than standard and exists returns is not
+established. The unique-id property reads the first additional byte and the device property ignores them, which
+is how their arrival at a real device is shown. Thirty-three sabotages cover `NR-2.3` and this item together, in
+[sabotage.json](sabotage.json), all caught. What this left to do is `NR-2.4`.

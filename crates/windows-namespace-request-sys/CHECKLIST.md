@@ -28,6 +28,8 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.3** -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty` on a disk handle, through a shared `storage_property` module. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-23)
 
+- [x] **NR-2.7** -- The generic `IOCTL_STORAGE_QUERY_PROPERTY` entry, `QueryStorageProperty`: any property, any query type, additional parameters, reply as bytes. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-27)
+
 - [ ] **NR-2.4** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty`** on a disk
   handle: the device's NUMA node, or the documented unknown value. Per disk, so a volume spanning
   disks on different nodes reports each rather than one false answer (the spike's question 6). The

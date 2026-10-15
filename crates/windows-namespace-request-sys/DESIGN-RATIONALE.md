@@ -393,15 +393,16 @@ which identify the machine.
 
 **What was weighed for the reply type.**
 
-- *Parsed, with typed identifiers inside the descriptors.* Rejected for now as a working position, not a
-  decision, for the gradient reason: which identifiers a key uses is the locality helper's question, which has
-  not been asked yet, and a typed surface here would be an answer to it.
+- *Parsed, with typed identifiers inside the descriptors.* Declined for now, which the engineer confirmed
+  ("at this time, no. We can revisit later if necessary"), for the gradient reason: which identifiers a key
+  uses is the locality helper's question, which has not been asked yet, and a typed surface here would be an
+  answer to it.
 - *Raw bytes of the whole reply only.* A consumer would redo the offset checks every time, and the checks are
   where a damaged reply becomes an out-of-bounds read; so the sections are delimited and bounds-checked here and
   handed back as slices.
-- *One generic entry that takes a property id and returns bytes.* Not built, and not foreclosed: nothing argues
-  it has no value, and it would let a consumer reach a property this crate has no entry for. It is raised with
-  the engineer rather than added unasked, and the shared `storage_property` module is the shape it would take.
+- *One generic entry that takes a property id and returns bytes.* Raised with the engineer, who said yes; built
+  as `QueryStorageProperty` (below). Nothing argued it had no value, and it lets a consumer reach a property
+  this crate has no entry for.
 
 **Why the zeroed-buffer and `u32` reader moved.** The second entry to size a buffer from a reply needed the
 same two helpers `volume_extents` had written privately; the mono-repo rule is to fix the layer, so they are now
@@ -418,3 +419,38 @@ shorter than its header asserts the number of calls, which is what distinguishes
 **A name collision, and what it showed.** The oplock test in `device_control` had its own `u32_at` that panicked
 on a short buffer; the shared one returns `None`. The test now uses the shared one, so the one reader every entry
 relies on is the one the earliest tests exercise.
+
+## D-22 addendum: the generic storage property query
+
+**What a generic entry exposes that a typed one hid.** A throwaway probe asked the disk about the cases the
+unique-id entry never reached. An exists query on a real property succeeds with nothing written; an unknown
+property fails (`ERROR_INVALID_FUNCTION`) for exists and standard alike; a mask query and an undefined query
+type fail with `ERROR_NOT_SUPPORTED`. Those shaped the entry: an exists query cannot go through the
+learn-the-size loop, which would refuse an empty reply as shorter than its header, so it is its own single call.
+
+**A wrong conclusion that a second probe corrected.** The first probe sent additional parameters of zero bytes
+and got the same reply for every length, and the module documentation was written to say a property that takes
+none accepts and ignores them (measured). The test written from it failed on a nonzero byte: the unique-id
+property refuses 0xA5 with `ERROR_INVALID_PARAMETER`. A second probe over values and lengths showed the first
+additional byte is read by that property (0 gives 112 bytes, 1 gives 140) and ignored by the device property.
+The claim was withdrawn from both modules before anything was committed, the test now covers both properties,
+and the byte's effect on the answer is what shows additional parameters arriving at a real device. The cause was
+a probe whose input could not distinguish "ignored" from "zero"; it is recorded because the same shape of probe
+would have been trusted again.
+
+**A lead, not an interpretation.** The larger reply for a first byte of 1 may carry more identifiers than the
+usual one. The typed entry sends no parameters, so it does not ask. The generic entry is how a consumer gets the
+larger reply, and what the byte means is not recorded as anything but an observation. If the locality helper
+needs those identifiers, that is the moment to ask what the byte selects and whether the typed entry should
+offer it.
+
+**Why `Arc<[u8]>` for the parameters.** A request's `try_clone` returns a handle-capture error and has no
+allocation-failure case, and the crate's rule is that an allocation that fails is an error the caller receives.
+Sharing the parameters makes the copy allocation-free, so the rule holds without a new error variant. The
+input that is sent is built fallibly (`zeroed_output`), at `perform`, where an error can be returned.
+
+**Newtypes over the raw values.** Both the property id and the query type are `i32` in Windows, and a call that
+swaps them compiles and asks a different question. Newtypes make the swap a compile error, and `from_raw` keeps
+every value Windows may define later reachable, so the types narrow nothing. Only the query type has named
+constants, because the three documented values are all that enumeration has; the property ids are `windows-sys`'
+and are not reproduced.
