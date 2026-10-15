@@ -51,8 +51,8 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
 `OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
-consumer are the ones this crate can carry, and three are missing or in the way. All are policy-free, like the rest
-of this crate: durable-ioring decides which of them a consumer may use.
+consumer are the ones this crate can carry, and some are missing or in the way. All are policy-free,
+like the rest of this crate: durable-ioring decides which of them a consumer may use.
 
 > **-> CROSS-COMPONENT PREREQUISITE:** [DI-13.5](../durable-ioring/CHECKLIST.md) and
 > [DI-13.6](../durable-ioring/CHECKLIST.md) in `crates/durable-ioring` wait on `NR-3.1` and `NR-3.2`;
@@ -75,27 +75,59 @@ of this crate: durable-ioring decides which of them a consumer may use.
   and passes through. Tests: each documented conflict; a reopen with `FILE_FLAG_NO_BUFFERING` added to
   a handle opened without it. A `feat`, released on its own.
 
-- [ ] **NR-3.3** -- **Paths pass through to Win32 untouched, with a relative path grafted onto a root
-  captured at construction.** Decided by the engineer on 2026-10-15 and recorded in
-  [D-19](DESIGN-NOTES.md#d-19), which supersedes the mechanism of [D-9](DESIGN-NOTES.md#d-9) and
-  the decision of [D-18](DESIGN-NOTES.md#d-18). `OpenFile::new` takes a `Wtf16String`; `prepare`'s
-  `MAX_PATH` limit, its verbatim validation, its empty-path refusal and its resolution through
-  `GetFullPathNameW` go from the path of an open; an interior NUL stays refused, since a `PCWSTR`
-  cannot carry it. The request captures the current directory when it is built, and when it is
-  performed grafts a child onto it by concatenation (a backslash unless the directory ends in one)
-  only if all five rules of D-19 hold; any other path is passed through untouched. Tests: each rule,
-  both ways (a child that meets it is grafted, a child that breaks only that rule is not); the graft
-  still means the captured directory after the process current directory has changed; a drive root
-  as the captured directory makes no doubled backslash; `NUL` grafts and `CON`, `CONIN$` and
-  `CONOUT$` do not; nothing in a path is rewritten to a `\\?\` form. Open, not yet decided: which
-  other entries that take a path (`WatchDirectory`, `ResolveFullPath`, and the tests that use
-  `prepare`) take the same treatment, and what happens to `PreparedPath` and `prepare` for them; the
-  duplicate in `windows-file-enumeration-sys` ([D-9](DESIGN-NOTES.md#d-9), `M26+.3`) is affected. A
-  `feat!` of a published crate. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
+The path work is **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the
+whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and split into
+`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile` and `WatchDirectory`, which
+take a `PreparedPath` from `prepare` and open it, and `ResolveFullPath`, which already takes a
+`Wtf16String` and hands it to `GetFullPathNameW` as it is. Every other entry takes a handle, an
+identifier or a class. After this work all three take a `Wtf16String`, and none has a length limit,
+a validation of its own, or a `\\?\` rewrite.
 
-  > **-> CROSS-COMPONENT HANDOFF:** when `NR-3.1` to `NR-3.3` are released, the next work is in
-  > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
-  > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+- [ ] **NR-3.3** -- **The captured root and the graft, as one internal type.** A type that holds the
+  path as the caller gave it and the current directory captured when it was built
+  (`GetCurrentDirectoryW`, no I/O), and produces the path to hand to Win32 when the request is
+  performed: the child grafted onto the root by concatenation (a backslash unless the root ends in
+  one) if all five rules of [D-19](DESIGN-NOTES.md#d-19) hold, and the path unchanged otherwise.
+  Nothing is rewritten to a `\\?\` form. Tests: each rule, both ways (a child that meets it is
+  grafted, a child that breaks only that rule is not); the graft still names the captured directory
+  after the process current directory has changed; a drive root as the captured directory makes no
+  doubled backslash; `NUL` grafts and `CON`, `CONIN$` and `CONOUT$` do not; a UNC root with a `..`
+  child is not grafted. Replaces `path.rs`'s `prepare`, `resolve` and `validate_verbatim`.
+
+- [ ] **NR-3.4** -- **`OpenFile` and `WatchDirectory` take a `Wtf16String`** and hold the type from
+  `NR-3.3`; `OpenFile::path` and `WatchDirectory::path` return the path as it was given, and a second
+  accessor returns the path that will be handed to Win32, so a test or a caller can see what the
+  graft did. A `feat!` of a published crate. The crate's own tests, doctests and README examples that
+  call `prepare` are rewritten.
+
+- [ ] **NR-3.5** -- **An interior NUL is refused in every entry that takes a path, including
+  `ResolveFullPath`.** `Wtf16String` does not exclude one (its documentation: a terminated pointer to
+  a string with one is *truncated*, and a no-NUL guarantee is "a reserved seam for a future
+  release"), so `ResolveFullPath::new` today passes a truncated path to `GetFullPathNameW` without
+  saying so, and the `SAFETY` comment in [full_path.rs](src/full_path.rs) that claims "no interior
+  NUL by Wtf16String's own invariant" is wrong and is corrected. Open, to be decided: whether the
+  constructors become fallible (the assistant's recommendation, as [D-7](DESIGN-NOTES.md#d-7) fails a
+  handle that cannot be captured at construction, where the caller can still act) or `perform` reports
+  it, which needs an error that is not a raw Win32 code. `ResolveFullPath` stays a faithful entry with
+  no graft: it is the Win32 call that resolves against the current directory when performed, and a
+  caller who wants a path fixed at construction uses `OpenFile` or `WatchDirectory`.
+
+- [ ] **NR-3.6** -- **Retire `prepare`, `PreparedPath`, `PathError` and `PathFailure`**, and the
+  `path` module's public surface, with the documentation that describes them: [lib.rs](src/lib.rs),
+  [README.md](README.md), [D-9](DESIGN-NOTES.md#d-9) and [D-18](DESIGN-NOTES.md#d-18) already carry a
+  status line pointing at `D-19`. A breaking removal from a published crate.
+
+- [ ] **NR-3.7** -- **The crate's consumers move with it.** `windows-platform-probes`, whose
+  `request_cost` probe measures `prepare` and a cloned prepared path and whose premise ("`prepare`
+  allocates twice, an input copy and a `MAX_PATH` buffer") no longer holds, so the probe is
+  re-measured against the captured root and the graft or retired; and `win-durable-ioring`, whose
+  `OpenedFile::open` calls `prepare` today. The assistant's reading of the probe is from its
+  comments and has not been checked against its code.
+
+  > **-> CROSS-COMPONENT HANDOFF:** the probe is in `crates/windows-platform-probes`. When
+  > `NR-3.1` to `NR-3.7` are released, the next work is in component `crates/durable-ioring` ->
+  > `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2` (take the version that carries
+  > them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
 ## NR-M-inf -- The horizon (ungated)
 
