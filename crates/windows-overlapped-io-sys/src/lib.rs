@@ -92,8 +92,8 @@ pub use endpoint::{
 
 #[cfg(all(windows, feature = "fs"))]
 pub use endpoint::{
-    AlignmentInfo, BasicInfo, FileId, FileTime, RemoteProtocolInfo, Smb2Info, StandardInfo,
-    StorageInfo,
+    AlignmentInfo, BasicInfo, FileId, FileTime, PathForm, RemoteProtocolInfo, Smb2Info,
+    StandardInfo, StorageInfo, VolumeName,
 };
 
 #[cfg(all(windows, feature = "fs"))]

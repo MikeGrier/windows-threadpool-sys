@@ -220,6 +220,7 @@ version = "0.1.3"
 dependencies = [
  "win-shared-os-owned-handle",
  "windows-sys",
+ "wtf-string",
 ]
 
 [[package]]

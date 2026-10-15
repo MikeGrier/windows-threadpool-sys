@@ -25,7 +25,13 @@ mod file_type;
 pub use self::file_type::FileType;
 
 #[cfg(feature = "fs")]
+mod final_path;
+
+#[cfg(feature = "fs")]
 mod query;
+
+#[cfg(feature = "fs")]
+pub use self::final_path::{PathForm, VolumeName};
 
 #[cfg(feature = "fs")]
 pub use self::query::{
@@ -291,8 +297,8 @@ impl UnassociatedEndpoint {
 ///
 /// What it offers instead is a fixed set of safe queries -- [`file_type`](Self::file_type)
 /// in every configuration; `standard_info` and its `file_len` shortcut,
-/// `basic_info`, `file_id`, `storage_info`, `alignment_info` and
-/// `remote_protocol_info`, behind
+/// `basic_info`, `file_id`, `storage_info`, `alignment_info`,
+/// `remote_protocol_info` and `final_path`, behind
 /// the `fs` feature -- and
 /// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
 ///

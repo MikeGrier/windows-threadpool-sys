@@ -43,9 +43,10 @@ default = []
 # Operation-family features gate this crate's own safe adapter modules
 # (`src/fs.rs`, `src/socket.rs`, `src/device.rs`). `fs` adds
 # Win32_System_SystemInformation, for the page size scatter/gather segments must
-# be (`page_size`, M16.5). `socket` adds only Win32_Networking_WinSock:
+# be (`page_size`, M16.5), and wtf-string, for the paths observer queries return
+# (M16.8). `socket` adds only Win32_Networking_WinSock:
 # `Win32_Storage_FileSystem` is already unconditional (see above).
-fs = ["windows-sys/Win32_System_SystemInformation"]
+fs = ["windows-sys/Win32_System_SystemInformation", "dep:wtf-string"]
 socket = ["windows-sys/Win32_Networking_WinSock"]
 device = ["windows-sys/Win32_System_Ioctl"]
 
@@ -71,6 +72,12 @@ features = [
 [dependencies.win-shared-os-owned-handle]
 version = "0.1.0"
 path = "../win-shared-os-owned-handle"
+
+# Observer queries return paths as Windows' own UTF-16, unconverted (M16.8).
+[dependencies.wtf-string]
+version = "0.1.0"
+path = "../wtf-string"
+optional = true
 
 # Extra windows-sys features used only by tests that issue real overlapped I/O.
 # These stay out of the published crate's feature set for downstream consumers.

@@ -45,10 +45,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.7** -- `basic_info()` reads the four times and the attributes, measured current through the handle. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m167)
 
-- [ ] **M16.8** -- **`final_path()`**: `GetFinalPathNameByHandleW` -- the open file's current path, after any
-  renames, returned as `Wtf16String` (decided: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the
-  handle", the bullet on strings). Adds the [wtf-string](../wtf-string/) dependency, with `fs`. Test a
-  rename while the observer holds the handle.
+- [x] **M16.8** -- `final_path()` and `final_path_as()` read the current path as `Wtf16String`, in every volume and name form. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m168)
 
 - [ ] **M16.9** -- **`volume_info()`**: `GetVolumeInformationByHandleW` -- file system name (a
   `Wtf16String`), volume serial, and file system flags (sparse files and others). Test on the temp

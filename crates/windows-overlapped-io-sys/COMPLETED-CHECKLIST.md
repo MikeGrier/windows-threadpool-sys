@@ -620,3 +620,27 @@ stable over 30 parallel runs. The sabotages are now recorded in the crate's firs
 [sabotage.json](sabotage.json), with M16.6's: field swaps, dropped attributes, a wrong epoch and tick unit
 are caught; two controls survive, one of them the measured finding that refusing a negative count is an
 equivalent mutant on Windows (a cast count overflows `SystemTime` anyway), now said at the site.
+
+## Moved 2026-10-14 22:43:09 -04:00 -- M16.8: the final-path query
+
+### <a id="m168"></a>M16.8 -- `final_path()` and `final_path_as()` read the current path as `Wtf16String`, in every volume and name form. *(completed 2026-10-14 22:43:09 -04:00)*
+
+`final_path_as(VolumeName, PathForm)` exposes every combination `GetFinalPathNameByHandleW` offers --
+`Dos`, `Guid`, `Nt` and `Omitted` volumes, `Normalized` and `Opened` names -- and `final_path()` is the
+drive-letter, normalized default. The result is `Wtf16String`, filled in place through wtf-string's
+`with_capacity` / `as_mut_ptr` / `set_len_from_ffi`; wtf-string is an optional dependency enabled by `fs`,
+and is not re-exported, following the repository's other crates. The fill loop (`fill_wide`) is a private
+function over a closure, tested against a stand-in for fits, exact fits, one-short, long, growing between
+calls, a callee reporting the size it was given, empty initial buffers, failures before and after a retry,
+and unpaired surrogates and NULs kept verbatim.
+
+Measured on the temp volume (NTFS): each volume form puts its own volume name before the same path from the
+root, tested. Opened and Normalized agreed for a plain open, an open by another case and an open through a
+hard link (which reports the link's own path), and differed only for an open by 8.3 short name, which
+Opened keeps -- tested where the volume gives short names, and as agreement where it does not. The NUL
+device refuses every form with `ERROR_INVALID_PARAMETER`. A named pipe refuses Normalized
+(`ERROR_INVALID_FUNCTION`, or `ERROR_PATH_NOT_FOUND` with the GUID form), and answers Opened only with the
+NT form (`\Device\NamedPipe\<name>`) or without a volume (`\<name>`). A path of 376 units, past
+`MAX_PATH`, was read whole; renames, a move to another directory, and directories are tested. Seven
+sabotages added to [sabotage.json](sabotage.json), all caught. `tools/check-publishable.ps1` could not run
+here (the Node module `yaml` is missing) and fails the same way without this change.

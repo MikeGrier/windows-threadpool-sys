@@ -158,7 +158,10 @@ route to association, submission, and the blocking backend, and stays not `Clone
   sockets as pipes).
 - **Observer queries return paths and names as `Wtf16String`** (the engineer, 2026-10-14, for M16):
   `final_path` and `volume_info` hand back Windows' own UTF-16 unconverted, so this crate takes a
-  dependency on [wtf-string](../wtf-string/) for them.
+  dependency on [wtf-string](../wtf-string/) for them. As built (M16.8): an optional dependency enabled by
+  `fs`, not re-exported, as in the repository's other crates. `final_path_as` exposes every volume and
+  name form `GetFinalPathNameByHandleW` takes, since they answer differently -- measured, a named pipe has
+  a path only in the opened form -- and `final_path` is the drive-letter, normalized default.
 - **Every query's output buffer is aligned to 8, not to the structure's own alignment** (M16.6, measured
   2026-10-14): through an SMB loopback handle, `FileRemoteProtocolInfo` refused a buffer aligned to 4 but
   not 8 with `ERROR_NOACCESS`, although the structure's Rust alignment is 4. The kernel's per-class

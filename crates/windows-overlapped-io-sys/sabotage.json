@@ -96,6 +96,62 @@
       "why": "Measured: FileRemoteProtocolInfo refuses a buffer aligned to 4 but not 8. No test catches the loss at run time, because a stack buffer usually lands 8-aligned anyway, so the const assertion is the guard.",
       "find": ["#[repr(C, align(8))]", "struct QueryBuffer<T>(MaybeUninit<T>);"],
       "replace": ["#[repr(C, align(4))]", "struct QueryBuffer<T>(MaybeUninit<T>);"]
+    },
+    {
+      "name": "the buffer fill can be held in place by a callee",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "A callee answering 'too small' with the size it was given would make the loop retry at the same size forever. Caught by assertion, not a hang: the stand-in answers once that way, and the test checks the retry was given a larger buffer.",
+      "find": ["        content = (written as usize - 1).max(content + 1);"],
+      "replace": ["        content = written as usize - 1;"]
+    },
+    {
+      "name": "the buffer fill grows by less than the size reported",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Still converges, one unit at a time, so every result is right; only the recorded capacities show the extra calls.",
+      "find": ["        content = (written as usize - 1).max(content + 1);"],
+      "replace": ["        content += 1;"]
+    },
+    {
+      "name": "a full buffer is taken as a fit",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "A return equal to the capacity is a size request, not a length: taking it as a length publishes a unit the callee never wrote and leaves no room for the terminator.",
+      "find": ["        if written < capacity {"],
+      "replace": ["        if written <= capacity {"]
+    },
+    {
+      "name": "a failure loses its error code",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "The caller's only way to tell a device without a path from any other failure is the Win32 code.",
+      "find": ["            return Err(io::Error::last_os_error());"],
+      "replace": ["            return Err(io::Error::other(\"GetFinalPathNameByHandleW failed\"));"]
+    },
+    {
+      "name": "opened names are normalized",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Opened and Normalized were measured to differ only for an open by 8.3 short name and for a named pipe; the pipe test catches this wherever named pipes exist, the short-name test only where the volume has short names.",
+      "find": ["            Self::Opened => FILE_NAME_OPENED,"],
+      "replace": ["            Self::Opened => FILE_NAME_NORMALIZED,"]
+    },
+    {
+      "name": "the GUID form asks for the NT name",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Each volume form is checked against its own prefix, so a crossed flag shows as the wrong prefix.",
+      "find": ["            Self::Guid => VOLUME_NAME_GUID,"],
+      "replace": ["            Self::Guid => VOLUME_NAME_NT,"]
+    },
+    {
+      "name": "final_path names the volume by its NT device",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "The default is the drive-letter form a caller can open again; the rename and move tests compare it with the canonical path.",
+      "find": ["        self.final_path_as(VolumeName::Dos, PathForm::Normalized)"],
+      "replace": ["        self.final_path_as(VolumeName::Nt, PathForm::Normalized)"]
     }
   ]
 }
