@@ -123,6 +123,36 @@ later an observer; see TW-D-10).
 [Q25](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q25-resume-by-roster-index-no-locks-around-io-a-working-position),
 [Q29](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#q18-q31-and-q29-firmed-up)
 
+**The three-pass poll (2026-10-15, after TW-2.3).** The engineer proposed it while the roster's
+storage and the poll's enumeration were being questioned, and it replaced a poll that kept an index
+into the roster: copy each entry's id, last known length and observer under the lock; probe with the
+lock released; then, for the changes, take the lock again and write the attentions, stopping when
+the SQ fills and continuing from the last one written. Full discussion in the
+[design session](design-sessions/DESIGN-SESSION-2026-10-15-poll-passes.md). What was weighed:
+
+- **A cursor into the roster** (the earlier working position) was set aside. It needs the probe and
+  the report interleaved per entry, which keeps the roster lock's scope tied to the file system; the
+  passes separate them, so only pass 2 touches the file system and it holds no lock.
+- **Restarting at pass 1 on resume** would find only the unreported changes, because reporting
+  updates the last known length, with no kept position at all. It was set aside for its cost: it
+  probes every file again on every resume, which is about `n` probes per resume for an SQ that
+  holds fewer entries than there are changes. Continuing from a kept index reads a list that is
+  already built; its price is that an attention can report a length that is a few resumes old.
+- **A `BTreeMap` for the copy** would also keep every allocation small, but the copy is only
+  appended to and read in order, so it needs no lookup, and clearing it frees every node on every
+  poll. A chunked sequence of at most 64 KiB per chunk, held between polls, was chosen.
+- **`Arc<T>` inside the roster**, so that `T::clone` could run outside the lock, was rejected by the
+  engineer: `T` may be an integer or a boolean and should not be wrapped. The lock does not depend on
+  `T`; a `Clone` that re-enters the watcher is the one hazard, and the documentation says so.
+- **Asking the SQ for its free space** before pushing was considered so that no `T` is cloned for a
+  refused write. The queue's own free-space count is a snapshot and documented as unsuitable for
+  control flow, so a push can still be refused; the cost it would avoid is one clone per stop.
+  Reserve-then-fill is how the sibling queue crate's other shape avoids it, and was not adopted.
+- **The lock rule's scope.** The engineer's original wording said the file system, the SQ write and
+  the doorbell should be outside any lock. With an SQ that never waits, the SQ write is not that
+  kind of operation, and "no lock" cannot literally hold in a process whose allocator and kernel
+  take locks. It now says the roster lock, and the operations that can wait on the outside world.
+
 ## TW-D-8: registration and unregistration during a poll
 
 Making `Drop` wait for the poll, or deferring removal to the poll's end, was considered; the shared

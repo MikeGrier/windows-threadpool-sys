@@ -20,9 +20,9 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-4"></a>TW-D-4 | **An attention reports a length change in either direction: a clone of `T`, the last reported length, and the current length.** The crate attaches no meaning to the change and is never told what was consumed. |
 | <a id="tw-d-5"></a>TW-D-5 | **The caller owns the beat; `poll` initiates one poll and returns; one poll at a time; no thread wakeups between polls.** |
 | <a id="tw-d-6"></a>TW-D-6 | **Delivery is one crate-created submission queue and two crate-created manual-reset doorbell events.** No CQ. |
-| <a id="tw-d-7"></a>TW-D-7 | **A poll that fills the SQ stops without waiting and resumes later; no lock is held across a probe, an SQ write, or a doorbell.** |
+| <a id="tw-d-7"></a>TW-D-7 | **A poll is three passes -- copy, probe, report -- and a full SQ stops the third without waiting, to continue from a kept position when the caller rings back; the roster lock is never held across a probe or a doorbell ring.** Amended 2026-10-15: was a roster position and "no lock across a probe, an SQ write, or a doorbell". |
 | <a id="tw-d-8"></a>TW-D-8 | **Registration and unregistration are legal during a poll, and neither waits for it.** |
-| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks and is allowed to block, which after a request means at most a running poll reaching its next roster entry.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
+| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks and is allowed to block, which after a request means at most a running poll reaching its next step.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
 | <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
@@ -150,15 +150,37 @@ Reporting the attention makes the current length the new last known length.
 - **The crate creates both, rather than the caller supplying them**, because the reset mode is a
   correctness property and because the SQ then lives exactly as long as the watcher.
 
-## TW-D-7: a full SQ stops the poll; no locks around I/O
+## TW-D-7: the poll is three passes; a full SQ stops the third
 
-- When the SQ fills, the poll records its position in the roster, rings the crate-to-caller
-  doorbell, and stops. It does not wait.
-- When the caller rings the resume doorbell, the poll continues from the recorded position.
-- **No lock is held across a length probe, an SQ write, or a doorbell ring.** The poll takes its own
-  observer of each file's handle ([TW-D-10](#tw-d-10)) and probes with no lock held.
+**Amended 2026-10-15:** this decision kept a position in the roster and said no lock is held across a
+probe, an SQ write, or a doorbell ring. The poll is now three passes and the kept position is an
+index into a saved list of changes; the lock rule is about the roster lock and about operations that
+can wait on something outside the crate. The reasoning, and the engineer's original wording, are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
 
-How roster changes between stop and resume are handled is a working position, below.
+- **Pass 1, copy.** Under the roster lock, in batches by id range, copy each entry's id, last known
+  length and an observer of its handle ([TW-D-10](#tw-d-10)) into a chunked buffer. The lock is
+  taken per batch, so it is held for a bounded amount of map work. The batch size is not chosen.
+- **Pass 2, probe.** With no lock held, read each observer's current length, drop the observer, and
+  keep the id, last known and current length of those that differ, in id order.
+- **Pass 3, report.** From a kept index into that list, per batch under the roster lock: look the id
+  up (a dropped registration is skipped), clone `T`, write the attention to the SQ, and on success
+  make the reported length the entry's last known one. Then the poll-done entry, which is an
+  ordinary entry that needs room like the others.
+- **A refused write stops the pass without waiting.** The index is kept, the crate-to-caller
+  doorbell is rung once the lock is released, and the poll stays in flight. When the caller rings
+  the resume doorbell the pass continues from the index. The list is not probed again, so an
+  attention reports the length read in pass 2; growth since is the next poll's.
+- **The lock rule.** The roster lock is not held across a probe or a doorbell ring, the two
+  operations that can wait on something outside the crate. It is held across the SQ write, which
+  never waits (a refused write returns the entry), and across `T::clone`: the lock does not depend
+  on `T`, but a `Clone` that calls back into the watcher would deadlock against it, and must not.
+  Other locks exist in the process that this crate does not control; the rule is about its own.
+- **No allocation for these copies is larger than 64 KiB.** They are chunked buffers, held between
+  polls so there is none after warm-up.
+- **Roster changes between a stop and its continuation need no special handling.** A dropped
+  registration's id is not found and is skipped; one made since is seen by the next poll; nothing is
+  repeated, because ids are never reused ([TW-D-8](#tw-d-8)).
 
 ## TW-D-8: registration and unregistration during a poll
 
@@ -181,8 +203,8 @@ The drain moved to `Drop`, below.
 - **Shutdown is an explicit request that does not block and may be repeated.** It is typically made
   from the caller's own callback for a crate notification.
 - **What the request does:** set the stop flag, and return. It does not drain. A queued resume
-  callback sees the flag and returns at once; a running poll stops at its next roster entry, one
-  system call away.
+  callback sees the flag and returns at once; a running poll stops at its next step, which is one
+  probe or one report.
 - **Requested is not quiescent.** After the request a crate callback may still be running (a poll
   finishing its current probe) or queued (a resume callback about to see the flag).
 - **The end of polling reaches the caller as the ordinary poll-done entry**, when there is space
@@ -191,7 +213,7 @@ The drain moved to `Drop`, below.
   block"). It stops and drains the resume wait and waits for a running poll to return, following the
   repository's [teardown-drains decision](../../DESIGN-NOTES.md#teardown-drains), and never depends
   on the poll-done entry having been written or read. After a shutdown request that wait is at most
-  a running poll reaching its next roster entry and returning; without one, `Drop` sets the stop
+  a running poll reaching its next step and returning; without one, `Drop` sets the stop
   flag itself first, so the bound is the same. No signal of quiescence is offered for a caller to
   avoid the wait ([OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) Q36).
 
@@ -236,10 +258,11 @@ premises was deleted for that reason; its results survive only as the tables in 
 Stated so they can be built on, and expected to be refined during implementation. Nothing should
 bind to them as settled.
 
-- **Roster changes between a stop and its resume** ([TW-D-7](#tw-d-7)): resume at the same roster
-  index even if that skips or repeats an entry for that beat. Offered by the engineer as a
-  suggestion, not an edict. A skip costs that file one beat of latency and loses nothing, because
-  the next poll reports the current length; a repeat finds no change and produces nothing.
+- **A registration's last known length starts at its starting offset** ([TW-D-4](#tw-d-4)). So a
+  restarted parent that registers a file with the offset it saved is told, by the first poll, of
+  whatever the file has gained since; offset 0 on a file that already has content reports all of it.
+  The alternative, starting at the length read at registration, would report nothing until the next
+  write. The engineer has not been asked.
 - **The resume doorbell is waited on by a thread-pool wait the crate registers**, and the poll
   resumes from its callback. An armed, idle wait wakes no thread, so it is consistent with
   [TW-D-5](#tw-d-5).

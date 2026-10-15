@@ -99,7 +99,9 @@ time, so the mechanism carrying it must not either. A ring is not required.
   and when it has a batch to hand over.
   [Session](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q20-resolved-reading-b-with-a-doorbell)
 
-- **Q25. A full queue in the middle of a poll.** Does the poll wait for the caller to drain, or
+- **Q25. A full queue in the middle of a poll.** **Superseded in part by
+  [TW-D-7](DESIGN-NOTES.md#tw-d-7), amended 2026-10-15: the kept roster position became an index
+  into a saved list of changes, and the lock rule was scoped.** Does the poll wait for the caller to drain, or
   stop and resume on the next call from where it left off? (windows-file-watcher D-29: throttle,
   never block at a full queue.)
 
