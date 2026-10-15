@@ -168,11 +168,15 @@ option recorded by construction. The rule throughout is documented APIs only
   calls -- `CreateFile2` and its extended parameters, `OpenFileById`, `ReOpenFile` -- saying for each
   whether it is exposed (and as which type) or excluded (and the analytic reason, per the option
   integrity rule: it computes the wrong answer, not that no consumer is in sight). Each row also says
-  what the option does to a target's claims: class, alignment, write-through, offsets. Rows to settle
-  with the engineer and not by the assistant's reading: append-only access (as the assistant reads the
-  documentation, `FILE_APPEND_DATA` without `FILE_WRITE_DATA` lands a write at end of file whatever
-  offset it names, and the core addresses by offset); handle-level `FILE_FLAG_WRITE_THROUGH` and what
-  it can warrant; handles that child processes inherit. Exclusions the assistant expects, to confirm:
+  what the option does to a target's claims: class, alignment, write-through, offsets. Rows ruled by
+  the engineer on 2026-10-15, to be recorded in the table with these reasons: **append-only access is
+  excluded** (it does not fit this crate's use pattern; as the assistant reads the documentation,
+  `FILE_APPEND_DATA` without `FILE_WRITE_DATA` lands a write at end of file whatever offset it names,
+  and the core addresses by offset, so it would compute the wrong answer); **handle-level
+  `FILE_FLAG_WRITE_THROUGH` is not offered in v1** (what it can warrant is unclear, and the answer is
+  a measurement of its effect on a cached file); **inheritable handles are not offered in v1**.
+  Neither of the last two schedules work: each is a v1 ruling, reopened by a consumer or a
+  measurement and not by this checklist. Exclusions confirmed by the engineer, with their reasons:
   `CreateFileTransacted` (a transacted write is durable at the transaction's commit, so the epoch's
   warranty would mean nothing), `hTemplateFile`, and directory handles by
   `FILE_FLAG_BACKUP_SEMANTICS` (the ring moves file data).
@@ -199,13 +203,12 @@ option recorded by construction. The rule throughout is documented APIs only
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
-- [ ] **DI-14.1** -- **Cache hints and handle-level write-through.** `FILE_FLAG_RANDOM_ACCESS`,
-  `FILE_FLAG_SEQUENTIAL_SCAN` and `FILE_FLAG_WRITE_THROUGH`, each with what `DI-13.1` ruled it
-  warrants. A hint that only means something to a cached file is not offered to an unbuffered one,
-  by type where the buffering mode is in the type and by a typed error where it is not. Handle-level
-  write-through is measured before it is described: the per-write flag is already known to fail with
-  error 509 on a cached handle, even one opened with `FILE_FLAG_WRITE_THROUGH` (a kept test), and
-  the handle-level flag's effect on a cached file is what the measurement decides.
+- [ ] **DI-14.1** -- **Cache hints.** `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`,
+  each with what `DI-13.1` ruled it warrants. A hint that only means something to a cached file is
+  not offered to an unbuffered one, by type where the buffering mode is in the type and by a typed
+  error where it is not. Handle-level `FILE_FLAG_WRITE_THROUGH` is not offered in v1 by the
+  engineer's ruling (`DI-13.1`); the per-write flag is unaffected, and is known to fail with error
+  509 on a cached handle even one opened with that flag (a kept test).
 
 - [ ] **DI-14.2** -- **Namespace and lifetime flags.** `FILE_FLAG_DELETE_ON_CLOSE`,
   `FILE_FLAG_OPEN_REPARSE_POINT`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
@@ -217,11 +220,12 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-14.3** -- **Creation attributes, security descriptor, inheritance.** The file attributes a
   new file can be created with (hidden, read-only, temporary, encrypted and the others the table
   lists), as a typed set. A security descriptor built from SDDL by a documented conversion call,
-  owned and freed by the wrapper, so a caller never holds a raw pointer. Handle inheritance as an
-  explicit choice, off by default, since an inheritable handle reaches child processes that can
-  write through it. Security quality-of-service flags where the table keeps them. Tests: a created
-  file carries the attributes and the descriptor asked for, read back with a documented query; a
-  non-inheritable handle is absent from a child's table.
+  owned and freed by the wrapper, so a caller never holds a raw pointer. Handles are never
+  inheritable in v1 (the engineer's ruling, `DI-13.1`): an inheritable handle reaches child processes
+  that can write through it, so there is no option to set. Security quality-of-service flags where
+  the table keeps them. Tests: a created file carries the attributes and the descriptor asked for,
+  read back with a documented query; the handle is not inheritable, read back with
+  `GetHandleInformation`.
 
 - [ ] **DI-14.4** -- **Combinations are refused where the kernel refuses them.** Every pair the table
   marks as invalid or silently ignored is tested on this machine and is either refused with a typed
