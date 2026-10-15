@@ -95,3 +95,32 @@ The first sweep found a hole: with only small refused offsets, comparing as 32 b
 because none had low 32 bits within the length. Offsets 2^32 and 2^32 + 3 close it. The manifest
 now also catches `>=`, a dropped check and a forgotten offset, and a reversed comparison survives
 as the control.
+
+## Moved 2026-10-15 14:51:44 -04:00 -- TW-1.5 and M1: one file, real writers
+
+M1 ("Register one file and read its length through a held handle") is complete: TW-1.1 to TW-1.4
+above and TW-1.5 below. Its deliverable -- a file written to by a child process is opened by path
+and its growing length is read through the held handle -- is the first test below.
+
+### <a id="tw-15"></a>TW-1.5 -- Integration tests: one file, real writers. *(completed 2026-10-15 14:51:44 -04:00)*
+
+[tests/real_writers.rs](tests/real_writers.rs), five tests across real process and file-system
+boundaries:
+
+- **A child process's output, tracked a write at a time.** `cmd.exe` is started with its stdout
+  redirected to the file; each line the test writes to its stdin releases one 13-byte append, and
+  the held length is waited for at exactly that value, so an overshoot fails at once. The child's
+  `/q` is needed: with command echo on, the prompt and the command text land in the file too.
+- **A shrink by another handle** is the smaller length, to 4096, 100, 0 and 7.
+- **A missing path** is `ERROR_FILE_NOT_FOUND` (2), a missing directory `ERROR_PATH_NOT_FOUND` (3),
+  and `open_at` reports the same code as `OpenError::Io`.
+- **An offset past the length** is `OffsetBeyondLength` with both numbers, and one equal to the
+  length is accepted.
+- **Another process can append to and delete the file while it is held**, and the length is still
+  read after the delete.
+
+The shrink is by a second handle, not by the child: a redirected stdout keeps its own file
+position, so a child writing after a truncation would extend the file with zeros, which is a
+different case. [sabotage-integration.json](sabotage-integration.json) is the set these tests catch
+without the unit tests: a cached length, the allocation size, a lost Win32 code, `>=` and a dropped
+offset check; a length read through `standard_info` survives as the control.

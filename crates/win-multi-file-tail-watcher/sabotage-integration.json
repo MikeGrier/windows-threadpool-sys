@@ -1,0 +1,55 @@
+{
+  "package": "win-multi-file-tail-watcher",
+  "description": "Sabotages the real-writer integration tests (tests/real_writers.rs) must catch on their own. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "win-multi-file-tail-watcher", "--all-features", "--test", "real_writers"],
+  "sabotages": [
+    {
+      "name": "the length is read once and remembered",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A child process's growth is the case a cache gets wrong: the first answer is right and every later one is stale.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        static FIRST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();\n        let now = self.observer().file_len()?;\n        Ok(*FIRST.get_or_init(|| now))"]
+    },
+    {
+      "name": "the length is the bytes allocated rather than the end of file",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A 13-byte file reports its whole cluster, so the first write already overshoots.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.allocation_size)"]
+    },
+    {
+      "name": "an open failure loses its Win32 code",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The missing-path test reads the number, not the kind.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)\n            .map_err(|error| io::Error::new(error.kind(), \"open failed\"))?;"]
+    },
+    {
+      "name": "an offset equal to the length is refused",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The restart-at-the-end case sits exactly on the boundary.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if offset >= len {"]
+    },
+    {
+      "name": "an offset past the length is accepted",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Without the check, only the refusal tests can tell.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if false && offset > len {"]
+    },
+    {
+      "name": "control: the length is read through standard_info",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "file_len is defined as standard_info's len, so the two are one read spelled twice.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.len)"]
+    }
+  ]
+}

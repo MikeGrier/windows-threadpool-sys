@@ -7,25 +7,6 @@ Reports length changes across a large population of files, on a beat the caller 
 Each milestone ends in a deliverable exercised by integration tests: every one of them crosses a
 real file system, process, or thread-pool boundary. Unit tests accompany each item as usual.
 
-## M1 -- Register one file and read its length through a held handle
-
-Deliverable: a file, written to by a child process, is opened by path and its growing length is
-read through the held handle.
-
-- [x] **TW-1.1** -- The crate exists, registered for release and publication. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-11)
-
-- [x] **TW-1.2** -- `HeldFile::open` opens a file by `Wtf16String` path as a read-only, overlapped endpoint, and hands out observers. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-12)
-
-- [x] **TW-1.3** -- `HeldFile::len` reads the file's current length through an observer of the held handle. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-13)
-
-- [x] **TW-1.4** -- `HeldFile::open_at` validates a starting offset against the length read at open, and refuses one beyond it with its own error. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-14)
-
-- [ ] **TW-1.5** -- **Integration tests: one file, real writers.** A child process whose stdout is
-  redirected to the file grows it, and the held-handle length tracks each write; a shrink by
-  another handle is reported as the smaller length; a missing path yields its Win32 error code; an
-  offset past the length yields the distinct error; another process can still write to and delete
-  the file while the handle is held.
-
 ## M2 -- A poll over many files reports attentions through the SQ
 
 Deliverable: a watcher over hundreds of files, polled once, puts exactly the changed files into the
