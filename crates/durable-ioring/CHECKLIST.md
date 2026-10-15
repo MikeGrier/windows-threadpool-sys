@@ -148,7 +148,129 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.4** -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-104)
 
-- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. Decide which, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume or a whole disk could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61), [DI-D-62](DESIGN-NOTES.md#di-d-62)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could.
+`DI-10.3`, whether a handle opened elsewhere can be given to a file target, is parked behind
+`DI-M15` as `DI-M15+` below; it kept its ID because [DI-D-60](DESIGN-NOTES.md#di-d-60),
+[DI-D-61](DESIGN-NOTES.md#di-d-61) and [DI-D-62](DESIGN-NOTES.md#di-d-62) cite it.
+
+## DI-M13 -- Opening a file: the surface and its home
+
+Why this milestone exists. [DI-D-60](DESIGN-NOTES.md#di-d-60) made a file target from a file this
+crate opened and from nothing else, and [`FileOptions`](../win-durable-ioring/src/windows_backend/opened_file.rs)
+carries only `read`, `write`, `create`, `create_new` and `truncate`. A consumer whose open needs more
+(a share mode, a security descriptor, delete-on-close, an open by file ID) cannot say so, and would
+want a handle from elsewhere ([DI-10.3](#di-m15----handles-opened-elsewhere-parked-behind-di-m15)).
+Widening what this crate can open is the structural answer: every option a consumer can pass is an
+option recorded by construction. The rule throughout is documented APIs only
+([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
+
+- [ ] **DI-13.1** -- **The surface, written down before any of it is built.** One decision in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md), with a table over every parameter of the documented open
+  calls -- `CreateFile2` and its extended parameters, `OpenFileById`, `ReOpenFile` -- saying for each
+  whether it is exposed (and as which type) or excluded (and the analytic reason, per the option
+  integrity rule: it computes the wrong answer, not that no consumer is in sight). Each row also says
+  what the option does to a target's claims: class, alignment, write-through, offsets. Rows to settle
+  with the engineer and not by the assistant's reading: append-only access (as the assistant reads the
+  documentation, `FILE_APPEND_DATA` without `FILE_WRITE_DATA` lands a write at end of file whatever
+  offset it names, and the core addresses by offset); handle-level `FILE_FLAG_WRITE_THROUGH` and what
+  it can warrant; handles that child processes inherit. Exclusions the assistant expects, to confirm:
+  `CreateFileTransacted` (a transacted write is durable at the transaction's commit, so the epoch's
+  warranty would mean nothing), `hTemplateFile`, and directory handles by
+  `FILE_FLAG_BACKUP_SEMANTICS` (the ring moves file data).
+
+- [ ] **DI-13.2** -- **The unsafe home for opening, and one wrapper over the documented open call.**
+  The crate that holds the `unsafe` is the engineer's to name: a new `-sys` crate for opening, or
+  [win-volume-sys](../win-volume-sys/README.md) widened, whose name says volumes. Either way the
+  wrapper takes typed parameters and no raw flag word, returns an owned handle, and is the only
+  place the crate calls `CreateFile2`, so `std::fs::OpenOptions` stops being the opener and its gaps
+  (no security attributes on stable, no template, no by-ID) stop being ours. `OpenedFile::open`
+  moves onto it with no change a caller can see; `DI-13.1`'s table is its specification.
+
+- [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the
+  documented file access rights the table in `DI-13.1` exposes (data read and write; attributes;
+  `DELETE`; the security rights; append-only if ruled in), with no raw `u32`. A target needs a data
+  right, which is checked when the file is opened and not when the first operation fails. Tests: each
+  right opens and is exercised; a right the file's security refuses reaches the caller as the
+  kernel's error and not as a panic.
+
+- [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
+  exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
+  violation is a typed error that names which side conflicted where the kernel says. Tests with two
+  opens: each combination the table lists is accepted or refused as `CreateFile2` documents.
+
+## DI-M14 -- Opening a file: flags, attributes, security
+
+- [ ] **DI-14.1** -- **Cache hints and handle-level write-through.** `FILE_FLAG_RANDOM_ACCESS`,
+  `FILE_FLAG_SEQUENTIAL_SCAN` and `FILE_FLAG_WRITE_THROUGH`, each with what `DI-13.1` ruled it
+  warrants. A hint that only means something to a cached file is not offered to an unbuffered one,
+  by type where the buffering mode is in the type and by a typed error where it is not. Handle-level
+  write-through is measured before it is described: the per-write flag is already known to fail with
+  error 509 on a cached handle, even one opened with `FILE_FLAG_WRITE_THROUGH` (a kept test), and
+  the handle-level flag's effect on a cached file is what the measurement decides.
+
+- [ ] **DI-14.2** -- **Namespace and lifetime flags.** `FILE_FLAG_DELETE_ON_CLOSE`,
+  `FILE_FLAG_OPEN_REPARSE_POINT`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
+  `FILE_FLAG_OVERLAPPED` if the ring turns out to need or refuse it (settled by a test on the ring,
+  not by recollection). The remote-device check in `DI-14.5` must see a reparse point's target, not
+  the reparse point. Tests: delete-on-close removes the file when the last handle closes; a reparse
+  point opened with the flag is the point and without it is the target.
+
+- [ ] **DI-14.3** -- **Creation attributes, security descriptor, inheritance.** The file attributes a
+  new file can be created with (hidden, read-only, temporary, encrypted and the others the table
+  lists), as a typed set. A security descriptor built from SDDL by a documented conversion call,
+  owned and freed by the wrapper, so a caller never holds a raw pointer. Handle inheritance as an
+  explicit choice, off by default, since an inheritable handle reaches child processes that can
+  write through it. Security quality-of-service flags where the table keeps them. Tests: a created
+  file carries the attributes and the descriptor asked for, read back with a documented query; a
+  non-inheritable handle is absent from a child's table.
+
+- [ ] **DI-14.4** -- **Combinations are refused where the kernel refuses them.** Every pair the table
+  marks as invalid or silently ignored is tested on this machine and is either refused with a typed
+  error before the file is created, or documented as ignored with the test that shows it. A
+  combination refused only after a file was created is the worse outcome, so the refusal is ahead of
+  the open wherever the table lets it be.
+
+- [ ] **DI-14.5** -- **The remote-device check is made on the opened handle, not on the path.**
+  [DI-D-60](DESIGN-NOTES.md#di-d-60) records a window between canonicalising the path and opening it,
+  in which a link can be swapped. A documented query of the handle closes it, and it is also what an
+  open by ID needs, since it has no path. The assistant must say which documented handle queries it
+  checked and which it chose. A file created on a remote device before the check can refuse it
+  leaves a file behind, which is why the path check stays for a create and the handle check is the
+  authority for every open.
+
+## DI-M15 -- Opening by identity, and reopening
+
+- [ ] **DI-15.1** -- **A file's identity, read from an opened file.** A `FileId` type over the
+  documented identity query (the 128-bit form that also covers 64-bit file systems), and the volume it
+  belongs to. Which of the identifier kinds `FILE_ID_DESCRIPTOR` accepts are offered (the file ID,
+  the extended 128-bit ID, the legacy object ID) is a row in `DI-13.1`'s table. Tests: the ID of an
+  opened file is stable across two opens and differs between two files.
+
+- [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
+  volume hint that must be a file this crate opened or a volume it opened, so the hint is
+  provenance-checked like everything else. It takes the full typed set from `DI-M13` and `DI-M14`. The
+  remote check runs on the hint's device (`DI-14.5`). Tests: round trip of a file opened by path and
+  again by ID; an ID from a directory listing (`FileIdExtdDirectoryInfo`) opens by ID; a stale ID is
+  the kernel's error.
+
+- [ ] **DI-15.3** -- **Opening relative to a directory handle: confirm there is no documented route,
+  then record what stands in for it.** The assistant knows of no documented Win32 call that opens a
+  name relative to a directory handle; the only one it knows is `NtCreateFile` with a root directory,
+  which is out under the repository's rule. That is a reading to verify against the documentation and
+  not a finding. If it holds, the decision records it and names the substitute: list the directory,
+  take the child's ID, open it by ID (`DI-15.2`). If a documented route exists, it is an item here.
+
+- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`.** A new `OpenedFile<B2>` from an
+  owned one, changing access, sharing and flags: cached to unbuffered and back, a read-only handle for
+  a scrubber beside the writer. The target's alignment is recomputed for the new mode, and going
+  unbuffered runs the remote check. `ReOpenFile` documents that the new access and sharing cannot
+  conflict with a previous open that is still open; each conflict the table lists is a test, and a
+  sharing violation reaches the caller as the typed error from `DI-13.4`, not a panic. Documented as
+  well: the object must have been created by `CreateFile`, which an `OpenedFile` is and an
+  `OpenedVolume` or `OpenedDisk` may not be, so whether those reopen is a test, not an assumption.
+
+## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
+
+- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation, asked of what `DI-M13` to `DI-M15` leave.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. The blocker is that ruling and not the lack of a consumer. It is parked here because most reasons to want a foreign handle are opens this crate could not express, which the milestones above remove, and what remains is the handle a broker or another library hands over. Decide which route, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume or a whole disk could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61), [DI-D-62](DESIGN-NOTES.md#di-d-62)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could. A wrong attestation is silent, which for a durability layer is the worst failure; that is the argument for `unsafe` over a builder method.
 
 ## DI-M11 -- The core driven by script
 
