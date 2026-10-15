@@ -236,3 +236,37 @@ The concurrent SQ test now gives its writers the same deadline as its reader. Th
 catching "a drain yields nothing" only by running past its hang bound, because a stalled reader left
 the scope waiting on writers that could never get room; it is now caught by the test's own failure.
 The TW-2.2 entry's remark that this was the weakest catch no longer holds.
+
+## Moved 2026-10-15 17:21:39 -04:00 -- TW-2.4: the chunked buffer
+
+### <a id="tw-24"></a>TW-2.4 -- `Chunked<T>`, an append-only sequence in chunks of at most 64 KiB that keeps its chunks across a clear, for the poll's copies. *(completed 2026-10-15 17:21:39 -04:00)*
+
+`src/chunked.rs`, crate-internal. The interface is `push`, `get`, `len`, `iter`, `clear`, `truncate`
+and `retain`; the first three passes of the poll ([TW-D-7](DESIGN-NOTES.md#tw-d-7)) will use it, which
+is why the module carries an `expect(dead_code)` that stops compiling when TW-2.5 does.
+
+- **Chunks are allocated whole and never grow.** Items per chunk is `64 KiB / size_of::<T>()`, so a
+  24-byte poll entry is 2,730 to a chunk. A pushed item never moves, and a push past a chunk's end
+  allocates the next chunk and nothing else. An item of zero size, or larger than a chunk, does not
+  compile.
+- **Clearing keeps the chunks**, and so does a truncate: `clear` and `truncate` drop the items and
+  leave every allocation, so a buffer filled once is refilled with no allocation. Held addresses are
+  the test of it.
+- **`retain` compacts in place by swapping**, so it needs neither `Default` nor `Clone` of the item,
+  keeps the accepted items in their order, and drops each rejected one exactly once.
+
+Not decided, and not scheduled by itself: whether the buffers should give chunks back after an
+unusually large poll. A buffer never shrinks, so the high-water mark stays allocated. TW-2.8 now
+lists it among the things the benchmark informs, since the answer depends on how large and how
+frequent the large polls are.
+
+Tested: empty, one chunk, several chunks, and the indexes either side of each chunk edge; items per
+chunk for six item sizes including one exactly a chunk and one larger than half of one; no chunk
+allocation over 64 KiB for each of those sizes; 40,000 poll entries taking 15 chunks; an item not
+moving when later chunks are pushed; clear and truncate keeping addresses over twenty refills; drops
+counted with a reference-counted item through clear, truncate and retain; retain keeping everything,
+nothing, the ends, runs across chunk edges and every third item; retain on strings; and
+`Send + Sync`. The sabotage manifest gains a megabyte chunk, chunks that grow by doubling, a clear
+that frees its chunks, a truncate that forgets the length or cuts one late, a retain that does not
+move, and a chunk index of the wrong width; a retain that also swaps an item with itself survives as
+the control.

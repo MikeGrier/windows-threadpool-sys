@@ -188,6 +188,70 @@
       "replace": ["        self.shared.doorbell.handle()"]
     },
     {
+      "name": "a chunk may be a megabyte",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "TW-D-7: no allocation for the poll's copies is larger than 64 KiB. Every other property of the buffer holds with bigger chunks.",
+      "find": ["const CHUNK_BYTES: usize = 64 * 1024;"],
+      "replace": ["const CHUNK_BYTES: usize = 1024 * 1024;"]
+    },
+    {
+      "name": "chunks grow by doubling instead of being allocated whole",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Doubling past the item count overshoots the limit for sizes that do not divide it, and moves items already stored.",
+      "find": ["self.chunks.push(Vec::with_capacity(Self::PER_CHUNK));"],
+      "replace": ["self.chunks.push(Vec::new());"]
+    },
+    {
+      "name": "clear gives its chunks back",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The buffers are held between polls so that there is no allocation after warm-up.",
+      "find": ["    pub(crate) fn clear(&mut self) {\n        self.truncate(0);"],
+      "replace": ["    pub(crate) fn clear(&mut self) {\n        self.chunks.clear();\n        self.len = 0;"]
+    },
+    {
+      "name": "truncate forgets to shorten the length",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The items go and the count stays, so the buffer reads from slots that hold nothing.",
+      "find": ["        self.len = new_len;"],
+      "replace": ["        let _ = new_len;"]
+    },
+    {
+      "name": "truncate cuts one item too late inside the boundary chunk",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "An off-by-one at the cut leaves one item that should have been dropped.",
+      "find": ["                new_len % Self::PER_CHUNK\n            } else {"],
+      "replace": ["                (new_len + 1) % Self::PER_CHUNK\n            } else {"]
+    },
+    {
+      "name": "retain never moves a kept item forward",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Compaction is the moving; without it the kept items stay where they were and the tail is cut off.",
+      "find": ["                    self.swap_items(write, read);"],
+      "replace": ["                    let _ = (write, read);"]
+    },
+    {
+      "name": "an index is mapped to its chunk with the wrong width",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Everything in the first chunk still reads back, so only a buffer of several chunks can tell.",
+      "find": ["        Some(&self.chunks[index / Self::PER_CHUNK][index % Self::PER_CHUNK])"],
+      "replace": ["        Some(&self.chunks[index / (Self::PER_CHUNK + 1)][index % (Self::PER_CHUNK + 1)])"]
+    },
+    {
+      "name": "control: retain also swaps an item with itself",
+      "file": "src/chunked.rs",
+      "expect": "survives",
+      "why": "Swapping a slot with itself is a no-op, so the guard that skips it only saves work.",
+      "find": ["                if write != read {"],
+      "replace": ["                if true {"]
+    },
+    {
       "name": "control: the null check is written as a comparison",
       "file": "src/doorbell.rs",
       "expect": "survives",

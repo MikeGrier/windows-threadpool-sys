@@ -6,6 +6,7 @@
 // Every `unsafe` here is a Win32 call or a handle query, and each states why it is sound (TW-1.1).
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod chunked;
 mod create_error;
 mod doorbell;
 mod held_file;

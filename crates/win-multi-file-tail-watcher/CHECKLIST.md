@@ -21,11 +21,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.3** -- The watcher owns two manual-reset doorbell events, one each way, each exposed as a waitable handle. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-23)
 
-- [ ] **TW-2.4** -- **A chunked buffer for the poll's copies.** An append-only sequence stored in
-  fixed-size chunks, none larger than 64 KiB, with indexed read, a clear that keeps its chunks, and
-  in-place compaction of the entries kept. The chunk size is a constant derived from the item size.
-  The poll's buffers are held between polls, so there is no allocation after warm-up.
-  ([TW-D-7](DESIGN-NOTES.md#tw-d-7))
+- [x] **TW-2.4** -- `Chunked<T>`, an append-only sequence in chunks of at most 64 KiB that keeps its chunks across a clear, for the poll's copies. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-24)
 
 - [ ] **TW-2.5** -- **A last known length per registration, and the snapshot pass.** Each roster
   entry holds the length last reported for it, starting from the registration's starting offset
@@ -56,8 +52,8 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 - [ ] **TW-2.8** -- **Benchmark the passes against population size**, from 1,000 files to the
   expected top end, each pass separately: the snapshot (the lock hold per batch and in total), the
   probe, and the report; and the roster's walk and churn under appended registrations and random
-  removals. The numbers choose the batch size, the chunk size and whether the roster's `BTreeMap`
-  stays. They also inform the thread count, which [TW-D-5](DESIGN-NOTES.md#tw-d-5) leaves open;
+  removals. The numbers choose the batch size, the chunk size, whether the roster's `BTreeMap`
+  stays, and whether the buffers should give chunks back after an unusually large poll. They also inform the thread count, which [TW-D-5](DESIGN-NOTES.md#tw-d-5) leaves open;
   sharding the probe pass is deliberately not scheduled until a measurement calls for it.
   Comparison against per-file timers is out of scope ([TW-D-1](DESIGN-NOTES.md#tw-d-1)).
 
