@@ -169,18 +169,30 @@ option recorded by construction. The rule throughout is documented APIs only
   `CreateFile2`, which has the same parameters, `OpenFileById`, `ReOpenFile` -- saying for each
   whether it is exposed (and as which type) or excluded (and the analytic reason, per the option
   integrity rule: it computes the wrong answer, not that no consumer is in sight). Each row also says
-  what the option does to a target's claims: class, alignment, write-through, offsets. Rows ruled by
-  the engineer on 2026-10-15, to be recorded in the table with these reasons: **append-only access is
-  excluded** (it does not fit this crate's use pattern; as the assistant reads the documentation,
+  what the option does to a target's claims: class, alignment, write-through, offsets. Rulings by the
+  engineer on 2026-10-15, to be recorded in the table with their reasons. **The principle: this
+  crate reflects Win32, not the Rust standard library.** A disposition, a share mode and an access
+  right are the call's own, mapped into structured Rust types and not a word of flags to OR, and no
+  default or combination check is added that Win32 does not make. **Paths are opaque:** a
+  `Wtf16String` passed through untouched for Win32 to interpret (`\\?\`, long paths where enabled,
+  `/` against `\`); the one possible exception is a path whose open can block without being
+  cancellable, which is to be identified before anything is refused. **Excluded:** append-only access
+  (it does not fit this crate's use pattern, and as the assistant reads the documentation
   `FILE_APPEND_DATA` without `FILE_WRITE_DATA` lands a write at end of file whatever offset it names,
-  and the core addresses by offset, so it would compute the wrong answer); **handle-level
-  `FILE_FLAG_WRITE_THROUGH` is not offered in v1** (what it can warrant is unclear, and the answer is
-  a measurement of its effect on a cached file); **inheritable handles are not offered in v1**.
-  Neither of the last two schedules work: each is a v1 ruling, reopened by a consumer or a
-  measurement and not by this checklist. Exclusions confirmed by the engineer, with their reasons:
-  `CreateFileTransacted` (a transacted write is durable at the transaction's commit, so the epoch's
-  warranty would mean nothing), `hTemplateFile`, and directory handles by
-  `FILE_FLAG_BACKUP_SEMANTICS` (the ring moves file data).
+  which the core addresses by, so it would compute the wrong answer); `CreateFileTransacted` (a
+  transacted write is durable at the transaction's commit, so the epoch's warranty would mean
+  nothing); `hTemplateFile`; `FILE_ATTRIBUTE_ENCRYPTED` (it brings a set of certificate problems this
+  crate does not take on); the security quality-of-service flags, `SECURITY_SQOS_PRESENT` and what
+  it enables. **Not in v1, each a v1 ruling and not a rejection:** handle-level
+  `FILE_FLAG_WRITE_THROUGH` (what it can warrant is unclear); inheritable handles (no call this
+  crate makes chooses inheritance, and that is not a structural restriction on the request crate);
+  `FILE_FLAG_BACKUP_SEMANTICS` (there is no reason against it, it serves backup and restore
+  applications); `FILE_FLAG_SESSION_AWARE` (the session-specific part of the device namespace is a
+  small interest and hard to test); `FILE_FLAG_OVERLAPPED`, unless the ring turns out to require it.
+  **Exposed:** `FILE_FLAG_OPEN_REPARSE_POINT` (if the caller wants to follow a reparse point, so be
+  it); access as the table lists it, passed through; every share mode; every creation disposition
+  `CreateFileW` has, `CREATE_ALWAYS` included. None of the "not in v1" rulings schedules work;
+  a consumer or a measurement reopens each, not this checklist.
 
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
