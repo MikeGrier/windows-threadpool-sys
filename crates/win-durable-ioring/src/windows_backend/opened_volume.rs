@@ -174,7 +174,7 @@ impl<B: Buffering> OpenedVolume<B> {
             .open(path.as_str())?;
         let extents = volume_disk_extents(&file)?;
         let sector = bytes_per_sector(&file)?;
-        let geometry = B::volume_geometry(sector)
+        let geometry = B::sector_geometry(sector)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if options.lock {
             lock_volume(&file)?;
@@ -229,7 +229,7 @@ impl<B: Buffering> OpenedVolume<B> {
     ) -> Self {
         Self {
             handle,
-            geometry: B::volume_geometry(sector).expect("a power of two"),
+            geometry: B::sector_geometry(sector).expect("a power of two"),
             extents,
             locked,
             buffering: PhantomData,

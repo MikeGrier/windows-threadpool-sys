@@ -54,8 +54,8 @@ pub(crate) fn detach_script(vhd: &Path) -> String {
     )
 }
 
-/// Run `script` through `diskpart`, and fail with what it printed if it reported an error.
-fn run_diskpart(script: &str, tag: &str) -> io::Result<()> {
+/// Run `script` through `diskpart`, and give what it printed, or fail with it if it reported an error.
+fn run_diskpart(script: &str, tag: &str) -> io::Result<String> {
     let path = std::env::temp_dir().join(format!(
         "dioring-diskpart-{tag}-{}-{}.txt",
         std::process::id(),
@@ -67,7 +67,7 @@ fn run_diskpart(script: &str, tag: &str) -> io::Result<()> {
     let output = output?;
     let printed = String::from_utf8_lossy(&output.stdout);
     if output.status.success() && !printed.contains(DISKPART_FAILURE) {
-        Ok(())
+        Ok(printed.into_owned())
     } else {
         Err(io::Error::other(format!(
             "diskpart ({}): {printed}",
@@ -137,6 +137,134 @@ impl ScratchVolume {
 }
 
 impl Drop for ScratchVolume {
+    fn drop(&mut self) {
+        let _ = run_diskpart(&detach_script(&self.vhd), "detach");
+        let _ = std::fs::remove_file(&self.vhd);
+    }
+}
+
+/// The `diskpart` script that creates a virtual disk of `megabytes` at `vhd`, attaches it with no
+/// partition on it, and prints what it is, so the number of the disk it became can be read.
+pub(crate) fn create_disk_script(vhd: &Path, megabytes: u32) -> String {
+    format!(
+        "create vdisk file=\"{vhd}\" maximum={megabytes} type=expandable\n\
+         select vdisk file=\"{vhd}\"\n\
+         attach vdisk\n\
+         detail vdisk\n",
+        vhd = vhd.display()
+    )
+}
+
+/// The `diskpart` script that brings disk `disk_number` online and writable, as a new virtual
+/// disk may not be.
+pub(crate) fn online_script(disk_number: u32) -> String {
+    format!(
+        "select disk {disk_number}\n\
+         online disk noerr\n\
+         attributes disk clear readonly noerr\n"
+    )
+}
+
+/// What `detail vdisk` printed for `vhd`, read for the number of the disk it is attached as.
+///
+/// This is the only way a number reaches a test that writes to a disk, so it is strict: the output
+/// must name the very file the test created, once, and exactly one associated disk, which cannot be
+/// disk 0, the one a machine starts from. Anything else is an error and nothing is written.
+pub(crate) fn associated_disk(printed: &str, vhd: &Path) -> Result<u32, String> {
+    let value = |label: &str| -> Vec<&str> {
+        printed
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix(label))
+            .map(str::trim)
+            .collect()
+    };
+    let names = value("Filename:");
+    let [name] = names.as_slice() else {
+        return Err(format!("expected one Filename, found {names:?}"));
+    };
+    if !name.eq_ignore_ascii_case(&vhd.display().to_string()) {
+        return Err(format!(
+            "diskpart describes {name:?}, not the disk made at {}",
+            vhd.display()
+        ));
+    }
+    let disks = value("Associated disk#:");
+    let [disk] = disks.as_slice() else {
+        return Err(format!("expected one associated disk, found {disks:?}"));
+    };
+    match disk.parse::<u32>() {
+        Ok(0) => Err("the associated disk is disk 0, which is never a scratch disk".to_owned()),
+        Ok(number) => Ok(number),
+        Err(error) => Err(format!(
+            "the associated disk {disk:?} is not a number: {error}"
+        )),
+    }
+}
+
+/// A virtual disk attached with no partition and no volume, and the number it was given. Writing
+/// to it needs an administrator, as for [`ScratchVolume`]; it is detached and removed when it
+/// drops.
+pub(crate) struct ScratchDisk {
+    vhd: PathBuf,
+    disk_number: u32,
+    megabytes: u32,
+}
+
+impl ScratchDisk {
+    /// A disk of `megabytes`, attached, online and writable.
+    pub(crate) fn create(megabytes: u32) -> io::Result<Self> {
+        let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
+        let vhd = std::env::temp_dir().join(format!(
+            "dioring-scratch-disk-{}-{}.vhdx",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&vhd);
+        // Made, and then named in full by the system, so the name compared below is the long one
+        // diskpart prints and not a short form of the temporary directory.
+        let printed = run_diskpart(&create_disk_script(&vhd, megabytes), "create-disk");
+        let named = std::fs::canonicalize(&vhd).map(|path| {
+            path.display()
+                .to_string()
+                .trim_start_matches(r"\\?\")
+                .to_owned()
+        });
+        let disk = match (&printed, named) {
+            (Ok(printed), Ok(named)) => associated_disk(printed, Path::new(&named))
+                .map_err(|reason| format!("{reason}\n{printed}")),
+            (Err(error), _) => Err(error.to_string()),
+            (_, Err(error)) => Err(format!("the disk file was not made: {error}")),
+        };
+        let disk_number = match disk {
+            Ok(number) => number,
+            Err(reason) => {
+                // Whatever was attached is detached, and the file removed, before giving up.
+                let _ = run_diskpart(&detach_script(&vhd), "detach");
+                let _ = std::fs::remove_file(&vhd);
+                return Err(io::Error::other(reason));
+            }
+        };
+        let scratch = Self {
+            vhd,
+            disk_number,
+            megabytes,
+        };
+        run_diskpart(&online_script(disk_number), "online")?;
+        Ok(scratch)
+    }
+
+    /// The disk's number.
+    pub(crate) fn disk_number(&self) -> u32 {
+        self.disk_number
+    }
+
+    /// The disk's size in bytes, as it was asked for.
+    pub(crate) fn bytes(&self) -> u64 {
+        u64::from(self.megabytes) * 1024 * 1024
+    }
+}
+
+impl Drop for ScratchDisk {
     fn drop(&mut self) {
         let _ = run_diskpart(&detach_script(&self.vhd), "detach");
         let _ = std::fs::remove_file(&self.vhd);

@@ -1051,6 +1051,62 @@
       "why": "A declared blind spot of the default run: only the elevated raw-volume tests, which need an administrator and are ignored by default, can tell a lock that was taken from one that was not, since the volume's flag is set from the options either way.",
       "find": ["        if options.lock {\n            lock_volume(&file)?;\n        }\n"],
       "replace": ["        if options.lock {\n            let _ = &file;\n        }\n"]
+    },
+    {
+      "name": "DI-10.4: a disk is named by some other form than the one that names a disk",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "caught",
+      "why": "The path is the one form that names a physical disk; any other opens something else with the write access a disk is opened with.",
+      "find": ["        format!(r\"\\\\.\\PhysicalDrive{}\", self.0)"],
+      "replace": ["        format!(r\"\\\\.\\Disk{}\", self.0)"]
+    },
+    {
+      "name": "DI-10.4: a disk's target reports no flush domain",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The disk is the domain a commit failure on it can reach; a target that reports none shares fate with every target, which over-reports, and with no domain of its own, so a consumer cannot declare a file on the same disk against it.",
+      "find": ["        let found = vec![disk.flush_domain()];"],
+      "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
+    },
+    {
+      "name": "DI-10.4: a disk's target claims the class of a complete device",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Opening a whole disk directly keeps no other writer off it, so a disk is never Complete, as a volume is not.",
+      "find": ["            geometry: disk.geometry(),\n            handle: disk.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            geometry: disk.geometry(),\n            handle: disk.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+    },
+    {
+      "name": "DI-10.4: a disk's target takes no alignment from its disk",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The alignment the backend enforces is the disk's sector; without it an unbuffered transfer reaches the kernel unaligned.",
+      "find": ["            geometry: disk.geometry(),\n"],
+      "replace": ["            geometry: Geometry::UNALIGNED,\n"]
+    },
+    {
+      "name": "DI-10.4: an opened disk ignores the sector size the device reported",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "survives",
+      "why": "A declared blind spot of the default run: only the elevated raw-disk tests open a real disk and read its sector size, so a geometry that ignores it is seen there and not here.",
+      "find": ["        let geometry = B::sector_geometry(sector)\n"],
+      "replace": ["        let geometry = B::sector_geometry(sector.max(1) * 0 + 4096)\n"]
+    },
+    {
+      "name": "DI-10.4: the scratch disk helper takes the output for any file",
+      "file": "src/scratch_volume.rs",
+      "expect": "caught",
+      "why": "This is what keeps a test that writes to a disk from writing to one it did not make: the number must come from output that names the file the test created.",
+      "find": ["    if !name.eq_ignore_ascii_case(&vhd.display().to_string()) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "DI-10.4: the scratch disk helper accepts disk 0",
+      "file": "src/scratch_volume.rs",
+      "expect": "caught",
+      "why": "Disk 0 is the one a machine starts from; a scratch disk is never it, whatever diskpart prints.",
+      "find": ["        Ok(0) => Err(\"the associated disk is disk 0, which is never a scratch disk\".to_owned()),\n"],
+      "replace": ["        Ok(0) => Ok(0),\n"]
     }
   ]
 }

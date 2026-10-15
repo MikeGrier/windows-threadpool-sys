@@ -1,18 +1,19 @@
 // Copyright (c) 2026 Mike Grier
-//! [`Win32FileTarget`]: a target backed by a Win32 file or a raw volume (DI-D-48, DI-D-50, DI-D-60,
-//! DI-D-61).
+//! [`Win32FileTarget`]: a target backed by a Win32 file, a raw volume or a whole disk (DI-D-48,
+//! DI-D-50, DI-D-60, DI-D-61, DI-D-62).
 
 use win_shared_os_owned_handle::SharedHandle;
 
+use super::opened_disk::OpenedDisk;
 use super::opened_file::{Buffering, OpenedFile};
 use super::opened_volume::OpenedVolume;
 use durable_ioring::FlushDomain;
 use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
 
-/// A target backed by a Win32 file or a raw volume this crate opened, held as a `SharedHandle` -- an
-/// owning form, never a raw handle (DI-D-4).
+/// A target backed by a Win32 file, a raw volume or a whole disk this crate opened, held as a
+/// `SharedHandle` -- an owning form, never a raw handle (DI-D-4).
 ///
-/// It is made from an [`OpenedFile`] or an [`OpenedVolume`] and from nothing else, and takes its
+/// It is made from an [`OpenedFile`], an [`OpenedVolume`] or an [`OpenedDisk`] and from nothing else, and takes its
 /// warranty class, its alignment and its capabilities from how that was opened, not from a
 /// declaration (DI-D-60): one opened cached is [`WarrantyClass::BestEffort`], and one opened
 /// [`Unbuffered`](super::Unbuffered) is [`WarrantyClass::SharedDevice`], needs a sector's alignment,
@@ -59,6 +60,22 @@ impl Win32FileTarget {
         Self {
             geometry: volume.geometry(),
             handle: volume.handle().clone(),
+            domains: found.clone(),
+            found,
+            declared: Vec::new(),
+            warranty: B::WARRANTY,
+            capabilities: B::CAPABILITIES,
+        }
+    }
+
+    /// The target `disk` makes: its sector's alignment, the disk itself as its flush domain, and
+    /// what its open mode allows and no more.
+    #[must_use]
+    pub fn from_disk<B: Buffering>(disk: OpenedDisk<B>) -> Self {
+        let found = vec![disk.flush_domain()];
+        Self {
+            geometry: disk.geometry(),
+            handle: disk.handle().clone(),
             domains: found.clone(),
             found,
             declared: Vec::new(),

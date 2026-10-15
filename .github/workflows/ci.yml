@@ -290,12 +290,15 @@ jobs:
       # Nothing here is real storage; each test detaches and deletes its own disk. A failure here is
       # a result: if the runner stops being able to attach a virtual disk, the answer is to say so,
       # not to delete the tests.
-      - name: cargo test (win-durable-ioring, raw volume on a scratch virtual disk)
+      #
+      # Two sets: a raw volume on a scratch disk with a partition, and a whole raw disk with none
+      # (DI-D-62). The disk tests write only to the disk diskpart reports for the file each makes.
+      - name: cargo test (win-durable-ioring, raw volume and raw disk on scratch virtual disks)
         if: ${{ matrix.isolated }}
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored raw_volume
+        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored raw_volume raw_disk
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
       # the `--workspace` steps above unify that feature onto

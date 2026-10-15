@@ -40,6 +40,8 @@ mod ending;
 mod pumped;
 mod signalled;
 mod submits;
+// A whole raw disk, through an instance, against an unpartitioned scratch virtual disk: DI-D-62.
+mod raw_disk;
 // A raw volume, through an instance, against a scratch virtual disk: DI-D-61.
 mod raw_volume;
 // A file opened unbuffered, through an instance: DI-D-60.
