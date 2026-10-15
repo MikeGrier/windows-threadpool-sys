@@ -4,6 +4,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FileDispositionInfo,
     SetFileInformationByHandle,
@@ -215,4 +216,166 @@ fn every_observer_of_a_handle_reads_the_same_standard_info() {
 
     drop((first, clone, late, held, writer));
     let _ = std::fs::remove_file(&path);
+}
+
+// --- file_id ---
+
+#[test]
+fn every_observer_of_a_handle_reads_the_same_file_id() {
+    let path = temp_path("id-agree");
+    std::fs::write(&path, b"one file").expect("write temp file");
+    let endpoint = open(&path);
+    let first = endpoint.observer();
+    let clone = first.clone();
+    let held = endpoint.into_endpoint_handle();
+    let late = held.observer();
+
+    let expected = first.file_id().expect("file_id");
+    for observer in [&clone, &late] {
+        assert_eq!(observer.file_id().expect("file_id"), expected);
+    }
+
+    drop((first, clone, late, held));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_second_open_of_the_same_path_reads_the_same_file_id() {
+    let path = temp_path("id-reopen");
+    std::fs::write(&path, b"reopened").expect("write temp file");
+    let first = open(&path);
+    let second = open(&path);
+
+    assert_eq!(
+        first.observer().file_id().expect("file_id"),
+        second.observer().file_id().expect("file_id")
+    );
+
+    drop((first, second));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn files_in_one_directory_differ_in_id_and_share_a_volume() {
+    let paths: Vec<PathBuf> = (0..4)
+        .map(|i| temp_path(&format!("id-distinct-{i}")))
+        .collect();
+    let mut ids = Vec::new();
+    for path in &paths {
+        std::fs::write(path, b"distinct").expect("write temp file");
+        let endpoint = open(path);
+        ids.push(endpoint.observer().file_id().expect("file_id"));
+    }
+
+    for (i, a) in ids.iter().enumerate() {
+        assert_eq!(a.volume_serial_number, ids[0].volume_serial_number);
+        for b in &ids[i + 1..] {
+            assert_ne!(a.file_id, b.file_id, "{a:?} {b:?}");
+        }
+    }
+
+    for path in &paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn a_rename_while_the_observer_holds_the_file_keeps_its_id() {
+    let path = temp_path("id-rename");
+    let renamed = temp_path("id-renamed");
+    std::fs::write(&path, b"moving").expect("write temp file");
+    let endpoint = open(&path);
+    let observer = endpoint.observer();
+    let before = observer.file_id().expect("file_id");
+
+    std::fs::rename(&path, &renamed).expect("rename while held");
+    assert_eq!(observer.file_id().expect("file_id after rename"), before);
+    let reopened = open(&renamed);
+    assert_eq!(reopened.observer().file_id().expect("file_id"), before);
+
+    drop((observer, endpoint, reopened));
+    let _ = std::fs::remove_file(&renamed);
+}
+
+#[test]
+fn a_hard_link_reads_the_same_file_id() {
+    let path = temp_path("id-link");
+    let link = temp_path("id-link-second");
+    std::fs::write(&path, b"linked").expect("write temp file");
+    std::fs::hard_link(&path, &link).expect("hard link");
+
+    let through_path = open(&path);
+    let through_link = open(&link);
+    assert_eq!(
+        through_path.observer().file_id().expect("file_id"),
+        through_link.observer().file_id().expect("file_id")
+    );
+
+    drop((through_path, through_link));
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_file_recreated_under_the_same_name_has_a_new_id() {
+    let path = temp_path("id-recreate");
+    std::fs::write(&path, b"first").expect("write temp file");
+    let first = open(&path);
+    let first_id = first.observer().file_id().expect("file_id");
+    drop(first);
+
+    std::fs::remove_file(&path).expect("remove");
+    std::fs::write(&path, b"second").expect("recreate");
+    let second = open(&path);
+    let second_id = second.observer().file_id().expect("file_id");
+
+    assert_eq!(
+        second_id.volume_serial_number,
+        first_id.volume_serial_number
+    );
+    assert_ne!(second_id.file_id, first_id.file_id);
+
+    drop(second);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_directory_has_a_file_id_distinct_from_a_file_inside_it() {
+    let dir = temp_path("id-directory");
+    std::fs::create_dir(&dir).expect("create directory");
+    let inner = dir.join("inner.tmp");
+    std::fs::write(&inner, b"inside").expect("write inner file");
+
+    let dir_endpoint = UnassociatedEndpoint::open(&dir, true, false, FILE_FLAG_BACKUP_SEMANTICS)
+        .expect("open directory endpoint");
+    let file_endpoint = open(&inner);
+    let dir_id = dir_endpoint.observer().file_id().expect("file_id");
+    let file_id = file_endpoint.observer().file_id().expect("file_id");
+
+    assert_eq!(dir_id.volume_serial_number, file_id.volume_serial_number);
+    assert_ne!(dir_id.file_id, file_id.file_id);
+
+    drop((dir_endpoint, file_endpoint));
+    let _ = std::fs::remove_file(&inner);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+/// The NUL device answers the standard query but not the file-ID one, which is
+/// how the shared query's error path is reached.
+#[test]
+fn a_device_without_file_ids_reports_the_error() {
+    let nul = UnassociatedEndpoint::open(r"\\.\NUL", true, false, 0).expect("open NUL");
+    let observer = nul.observer();
+
+    let error = observer
+        .file_id()
+        .expect_err("the NUL device has no file ID");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_INVALID_PARAMETER as i32),
+        "{error:?}"
+    );
+    observer
+        .standard_info()
+        .expect("the same handle still answers the standard query");
 }

@@ -515,3 +515,16 @@ fields, tied to `FILE_STANDARD_INFO`'s layout by compile-time assertions, rather
 made and removed, a delete requested through another handle (pending until the observer lets go, then
 completed), a directory, and every observer agreeing. Sabotage: swapping the two flags failed the delete and
 directory tests; swapping length and allocation failed three others.
+
+## Moved 2026-10-14 21:27:57 -04:00 -- M16.2: the observer's file identity
+
+### <a id="m162"></a>M16.2 -- `file_id()` reads the volume serial and 128-bit file ID. *(completed 2026-10-14 21:27:57 -04:00)*
+
+`EndpointObserver::file_id` returns a `FileId` (volume serial number, and the 128-bit ID as the 16 bytes the
+file system reports, not reinterpreted as an integer). The `GetFileInformationByHandleEx` call is now one
+private `unsafe fn query_info<T>` that every query uses, `standard_info` included. Tests cover observers of
+one handle and a second open agreeing, files in one directory differing on one volume, a rename while held
+and a hard link both keeping the ID, a file recreated under the same name getting a new one, and a
+directory. Measured: the NUL device and a named pipe both refuse `FileIdInfo` with
+`ERROR_INVALID_PARAMETER`, so the shared error path is now tested, on the NUL device. Sabotage: returning
+success on failure failed that test; zeroing the ID failed the three that compare IDs.

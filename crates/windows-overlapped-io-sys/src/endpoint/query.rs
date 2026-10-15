@@ -6,7 +6,8 @@ use std::mem::{MaybeUninit, offset_of};
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_STANDARD_INFO, FileStandardInfo, GetFileInformationByHandleEx,
+    FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_STANDARD_INFO, FileIdInfo,
+    FileStandardInfo, GetFileInformationByHandleEx,
 };
 
 use super::EndpointObserver;
@@ -64,6 +65,50 @@ const _: () = {
     assert!(offset_of!(RawStandardInfo, directory) == offset_of!(FILE_STANDARD_INFO, Directory));
 };
 
+/// A file's identity: the volume it is on and its ID within that volume.
+///
+/// Two handles with equal `FileId`s are open on the same file, whatever paths
+/// they were opened by -- hard links and renames included. What
+/// `GetFileInformationByHandleEx(FileIdInfo)` reports:
+/// [`EndpointObserver::file_id`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileId {
+    /// The serial number of the volume holding the file.
+    pub volume_serial_number: u64,
+    /// The file's 128-bit ID within its volume, as the file system reports it.
+    pub file_id: [u8; 16],
+}
+
+impl EndpointObserver {
+    /// Fill a `T` with the information class `class` through the handle.
+    ///
+    /// # Safety
+    ///
+    /// `T` must be laid out as the structure `class` returns, and every bit
+    /// pattern of it must be valid.
+    unsafe fn query_info<T>(&self, class: FILE_INFO_BY_HANDLE_CLASS) -> io::Result<T> {
+        let mut out = MaybeUninit::<T>::uninit();
+        let size = u32::try_from(size_of::<T>()).expect("an information structure fits a u32 size");
+        // SAFETY: a live handle this observer holds, and an output buffer laid out
+        // as `class` requires (the caller's obligation) of exactly the size passed.
+        // The call is synchronous, so the buffer is borrowed only for this statement.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                self.handle.as_raw_handle(),
+                class,
+                out.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call succeeded, so it filled the whole structure, and any
+        // bit pattern is valid for `T` (the caller's obligation).
+        Ok(unsafe { out.assume_init() })
+    }
+}
+
 impl EndpointObserver {
     /// The file's standard information: its length, allocation, link count,
     /// whether a delete is pending, and whether it is a directory.
@@ -80,28 +125,10 @@ impl EndpointObserver {
     /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
     /// whose device does not answer the standard-information query.
     pub fn standard_info(&self) -> io::Result<StandardInfo> {
-        let mut raw = MaybeUninit::<RawStandardInfo>::uninit();
-        let size = u32::try_from(size_of::<RawStandardInfo>())
-            .expect("FILE_STANDARD_INFO fits a u32 size");
-        // SAFETY: a live handle this observer holds, and an output buffer laid out
-        // as FILE_STANDARD_INFO (asserted above) of exactly the size passed. The
-        // call is synchronous, so the buffer is borrowed only for this statement.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                self.handle.as_raw_handle(),
-                FileStandardInfo,
-                raw.as_mut_ptr().cast(),
-                size,
-            )
-        };
-        // No test reaches this: files, the NUL device and an unconnected named-pipe
-        // server all answer. A driver rejecting IRP_MJ_QUERY_INFORMATION would.
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the call succeeded, so it filled the whole structure, and every
-        // field is an integer, valid for any bit pattern.
-        let raw = unsafe { raw.assume_init() };
+        // Never seen failing -- files, the NUL device and an unconnected named-pipe server
+        // all answer -- so its error is tested through `file_id`, on the shared path.
+        // SAFETY: laid out as FILE_STANDARD_INFO (asserted above), and all integers.
+        let raw: RawStandardInfo = unsafe { self.query_info(FileStandardInfo) }?;
         // A file system never reports a negative size; reinterpret rather than check.
         Ok(StandardInfo {
             len: raw.end_of_file.cast_unsigned(),
@@ -109,6 +136,28 @@ impl EndpointObserver {
             link_count: raw.number_of_links,
             delete_pending: raw.delete_pending != 0,
             is_directory: raw.directory != 0,
+        })
+    }
+
+    /// The file's identity: its volume's serial number and its 128-bit ID within
+    /// that volume, read through the handle with
+    /// `GetFileInformationByHandleEx(FileIdInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the file-ID query.
+    pub fn file_id(&self) -> io::Result<FileId> {
+        // SAFETY: FILE_ID_INFO is windows-sys' own definition of the class's
+        // structure, and both its fields are integers.
+        let raw: FILE_ID_INFO = unsafe { self.query_info(FileIdInfo) }?;
+        let FILE_ID_128 { Identifier } = raw.FileId;
+        Ok(FileId {
+            volume_serial_number: raw.VolumeSerialNumber,
+            file_id: Identifier,
         })
     }
 }

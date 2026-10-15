@@ -33,8 +33,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.1** -- `standard_info()` reads the whole `FileStandardInfo`; `file_len()` is its shortcut. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m161)
 
-- [ ] **M16.2** -- **`file_id()`**: `FileIdInfo` -- the 64-bit volume serial and the 128-bit file ID. Test
-  that two observers of one handle agree, that another file differs, and that a rename keeps the ID.
+- [x] **M16.2** -- `file_id()` reads the volume serial and 128-bit file ID. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m162)
 
 - [ ] **M16.3** -- **`file_type()`**: `GetFileType` -- disk, pipe, character, or unknown, with its error
   path (`FILE_TYPE_UNKNOWN` plus a last error). It classifies any handle, not only files, so whether it

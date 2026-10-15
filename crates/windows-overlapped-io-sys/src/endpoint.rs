@@ -24,7 +24,7 @@ use win_shared_os_owned_handle::SharedHandle;
 mod query;
 
 #[cfg(feature = "fs")]
-pub use self::query::StandardInfo;
+pub use self::query::{FileId, StandardInfo};
 
 /// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
@@ -283,8 +283,8 @@ impl UnassociatedEndpoint {
 /// constructor that associates it or issues I/O through it.
 ///
 /// What it offers instead is a fixed set of safe queries, behind the `fs`
-/// feature -- `standard_info` and its `file_len` shortcut -- and an `unsafe`
-/// borrow ([`handle`](Self::handle)) for any other query.
+/// feature -- `standard_info` and its `file_len` shortcut, and `file_id` -- and
+/// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
 ///
 /// Obtained from an endpoint, or from the backend that endpoint moved into, with
 /// `observer()`. Cloning shares the same handle.
