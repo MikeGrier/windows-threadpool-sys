@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.0...windows-ioring-sys-v0.7.1) (2026-10-15)
+
+
+### Features
+
+* **ioring:** add sys::submit_faults, a safe responder that fails a ring's submits ([104cd38](https://github.com/MikeGrier/windows-threadpool-sys/commit/104cd385a7a4046df6a4086373d3f13e9ab9b00a))
+* **ioring:** Batch::leave_queued, to close a batch without submitting it ([2941c3c](https://github.com/MikeGrier/windows-threadpool-sys/commit/2941c3c8194fda559876ef7565acb610a582733f))
+* **ioring:** sys::call_faults, a safe responder that fails any seam call, a completion's result, or stalls submits ([c6b0853](https://github.com/MikeGrier/windows-threadpool-sys/commit/c6b08535b2aea73c66591f2605c841803eb60e2a))
+* **ioring:** type a ring by whether it can hold nothing for an operation, with IoRing::into_owned ([e1efc8f](https://github.com/MikeGrier/windows-threadpool-sys/commit/e1efc8f9fc2e4eaf68c5364b0c6e536589641b7b))
+
+
+### Bug Fixes
+
+* **ioring:** reap the completion queue before rundown's submit-wait, so a full queue runs down ([d29a18b](https://github.com/MikeGrier/windows-threadpool-sys/commit/d29a18bceae6dc4d156b628588aef08249492723))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.2.0 to 0.2.1
+    * win-numa-sys bumped from 0.1.0 to 0.1.1
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.1.3 to 0.2.0
+
 ## [0.7.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.6.0...windows-ioring-sys-v0.7.0) (2026-10-07)
 
 

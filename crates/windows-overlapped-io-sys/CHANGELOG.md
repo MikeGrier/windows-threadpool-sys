@@ -4,6 +4,23 @@ Both 0.1.0 and 1.0.0 were yanked from crates.io: the 1.0.0 bump was
 accidental, and this crate is intended to stay pre-1.0 for now. Releases
 resume at 0.1.1, which supersedes both.
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.3...windows-overlapped-io-sys-v0.2.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **overlapped-io:** PageBuffers::new returns io::Result<PageBuffers>, and no longer panics for zero pages or an overflowing length.
+* **overlapped-io:** windows_overlapped_io_sys::IoBuf and IoBufMut are now the same traits as windows_ioring_sys's. A crate that implemented both crates' traits for one type now has two implementations of one trait and must drop one.
+
+### Bug Fixes
+
+* **overlapped-io:** report an allocation that fails as an error ([f5a1efd](https://github.com/MikeGrier/windows-threadpool-sys/commit/f5a1efd82ac91ac320f423a72fd147616e002b57))
+
+
+### Code Refactoring
+
+* **overlapped-io:** take IoBuf and IoBufMut from io-buffers ([86e7a86](https://github.com/MikeGrier/windows-threadpool-sys/commit/86e7a86c22736abf7e39ed64823b0a1e64ee28c9))
+
 ## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.2...windows-overlapped-io-sys-v0.1.3) (2026-08-27)
 
 
