@@ -276,6 +276,8 @@ declares it. Why the buffer is fallible and clone-less is
 
 ## <a id="d-9"></a>D-9: Path preparation is duplicated from the enumeration crate, deliberately and temporarily
 
+**Superseded in part by [D-19](#d-19).** The mechanism below -- resolving with `GetFullPathNameW` when the request is built, refusing a path past `MAX_PATH`, validating a verbatim path -- is replaced by a graft onto a captured root. The need to fix a relative path's meaning at construction, and the duplication with the enumeration crate and its scheduled merge-or-delete decision, stand; once `NR-3.3` lands the two copies differ, so that decision is no longer a plain de-duplication.
+
 Path preparation resolves a caller's path **on the calling thread, when the
 request is built**, because the process current directory is shared mutable
 state that any thread can change between submission and execution. That is not
@@ -566,6 +568,8 @@ to one side alone.
 
 ## <a id="d-18"></a>D-18: `GetFullPathNameW` is not lexical, and the genuinely lexical alternative is the wrong call
 
+**Its decision, to keep `GetFullPathNameW` at construction, is superseded by [D-19](#d-19); its measurements stand.** D-18 weighed only the canonicalisers, which leave a relative path relative; the lexical joins `PathAllocCombine` and `PathCchCombineEx` were not weighed, and are measured in D-19.
+
 **The correction.** This crate described `GetFullPathNameW` as **lexical** in
 **nine places across five files**, in a sentence that then went on to say it
 resolves against the process current directory. Those two claims disagree, and
@@ -711,3 +715,73 @@ The drafts themselves, and why each failed, are Tier 2:
   Binding to it rather than writing a second one therefore needs it published or
   extracted; duplicating it is the option this repository's mono-repo policy
   rejects.
+
+## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
+
+**Status: decided by the engineer on 2026-10-15; not yet implemented** -- the work is `NR-3.3` in
+[CHECKLIST.md](CHECKLIST.md). It supersedes the mechanism of [D-9](#d-9) and the decision of
+[D-18](#d-18); D-18's measurements stand.
+
+**What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
+and no check of this crate's own beyond the one that cannot be avoided, an interior NUL, which a
+`PCWSTR` cannot carry. `OpenFile::new` takes the `Wtf16String` directly. What is kept from D-9 is the
+need to fix the meaning of a relative path when the request is built, because the process current
+directory is shared and mutable and a request is performed later, on any thread. That is done by
+capturing the current directory when the request is built (`GetCurrentDirectoryW`, which does no
+I/O) and resolving a relative path against it **textually** when the request is performed, even after
+the current directory has changed.
+
+**The graft is concatenation:** the captured directory, a backslash unless it already ends in one (a
+drive root does), then the child. There is no combine call, no flag, and no canonicalisation:
+`CreateFileW` normalises `.`, `..` and trailing dots and spaces on the final path itself, and Win32
+decides whether a long result is acceptable to the host. Nothing here prefixes `\\?\`, ever.
+
+**Only a clearly safe child is grafted.** All of these must hold:
+
+1. it is not empty;
+2. it does not begin with `\` or `/` (that rules out root-relative, UNC, `\\?\` and `\\.\`);
+3. it contains no `:` (that rules out drive-relative `C:a` and `C:`, and a stream `name:stream`);
+4. if the captured directory is a UNC path, the child has no `..` component;
+5. no component of the child is a reserved device name -- `CON`, `PRN`, `AUX`, `NUL`, `COM` and `LPT`
+   with a digit, `CONIN$`, `CONOUT$` -- compared without regard to case, after removing everything from
+   the first `.` and any trailing spaces. The list is the one in Microsoft's "Naming Files, Paths, and
+   Namespaces", and the rule errs toward not grafting.
+
+A child that is not grafted is passed through untouched, and Win32 resolves it when the call is
+made, against whatever the current directory is then. For those forms the race D-9 closed stays
+open, and is documented as open. A root-relative child (`\a\b`) is among them: grafting it needs the
+root of the captured directory, a parse this version does not do, and no work is scheduled for it.
+
+**Why not the alternatives**, measured on 2026-10-15 on Windows 11 with the process current directory
+set to `C:\Windows\System32` (the full table is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) ->
+`D-19`):
+
+- **`GetFullPathNameW` at construction (D-9, D-18).** It is exact for every form, but for a
+  drive-relative path on another drive it reads, validates against the filesystem, and may write the
+  hidden `=X:` entry (D-18), on the submitting thread; and its output buffer is what imposed the
+  `MAX_PATH` limit.
+- **`PathAllocCombine` / `PathCchCombineEx` (a lexical join).** Exact for relative and root-relative
+  paths, and also not safe to hand every path: it returns a drive-relative path unresolved and turns
+  `C:` into `C:\`; it returns an empty path as the base; it drops the `\\?\` prefix and collapses `.`
+  and `..` inside a verbatim path; and it drops the `\\.\` prefix, so `\\.\PhysicalDrive0` becomes
+  `\\PhysicalDrive0`. Its long-path flags are Win32's, not this crate's, and
+  `PATHCCH_ALLOW_LONG_PATHS` alone **rewrites a result longer than `MAX_PATH` into a `\\?\` path**,
+  which is the prefixing this decision refuses. So the call needs a classification of the path first
+  anyway, and once the child is known to be a plain relative one, concatenation does the same job
+  with none of that.
+
+**Device names are why rule 5 exists.** `NUL` is a device whatever precedes it, so a graft changes
+nothing for it. `CON`, `con`, `CONIN$` and `CONOUT$` open as devices when bare and as a lookup of a
+file of that name when grafted, so a graft would change what the call means.
+
+**Not verified**, and stated as such:
+
+- Concatenation is not measured against Win32's own resolution of the same relative path; it follows
+  from the join's measured equality with `GetFullPathNameW` for the relative forms.
+- `GetCurrentDirectoryW` with a current directory longer than `MAX_PATH` was not measured.
+- `PRN`, `AUX`, `COM1`, `COM2` and `LPT1` open as nothing in any spelling on the machine measured,
+  so whether they behave as `CON` does when a device is present is unknown; they are on the list
+  because the documentation names them.
+- Behaviour in a process that is long-path aware was not measured; the test binary is not.
+
+**Scheduled work:** `NR-3.3`. `DI-13.2`'s rework in `win-durable-ioring` waits on it.

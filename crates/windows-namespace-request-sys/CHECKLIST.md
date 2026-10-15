@@ -75,32 +75,23 @@ of this crate: durable-ioring decides which of them a consumer may use.
   and passes through. Tests: each documented conflict; a reopen with `FILE_FLAG_NO_BUFFERING` added to
   a handle opened without it. A `feat`, released on its own.
 
-- [ ] **NR-3.3** -- **Paths pass through to Win32 untouched.** Opened 2026-10-15 on the engineer's
-  direction, with its details open for discussion, so this is a direction and not yet a decision.
-  The engineer: `PreparedPath` "needs to adjust"; it "should remove any length restrictions"; it
-  should use `Wtf16String` for its path representation if it does not already (it does:
-  `PreparedPath` wraps one); it "should not do its own path checking, it does not need to, let the
-  Windows APIs manage path validation". What `prepare` does today, from
-  [path.rs](src/path.rs) and [D-9](DESIGN-NOTES.md#d-9): refuse an empty path; refuse an interior
-  NUL; for a `\\?\` path, refuse one that is not fully qualified (no root, a drive-relative
-  `\\?\C:foo`, a `\\?\UNC\` with no share); for any other path, refuse one past `MAX_PATH`, and
-  resolve it with `GetFullPathNameW` **when the request object is built**, on the calling thread, so a
-  relative path means what the caller meant and not what the process current directory is when a
-  worker performs it. Open: which of those survive. An interior NUL cannot be passed through a
-  `PCWSTR` at all, so refusing it is not policy. The empty path and the verbatim checks are errors
-  Win32 gives anyway. The length limit is the engineer's ruling to remove. The resolution at
-  construction is the one behaviour and not a check, and it is what D-9 is for. **Settled by the
-  engineer, 2026-10-15:** `OpenFile::new` takes a `Wtf16String` directly, and the need to capture the
-  root path when the request is built remains, with a relative path resolved textually against that
-  captured root later, on other threads, even after the current directory has changed. That replaces
-  `GetFullPathNameW` at construction, which [D-18](DESIGN-NOTES.md#d-18) records can query the
-  filesystem and write the process environment block for a drive-relative path on another drive,
-  on the submitting thread. **Still open:** what a textual resolution does for each relative form
-  (relative, root-relative, drive-relative on the current drive and on another, a legacy device
-  name), which is the discussion under way. Every consumer of `prepare` is affected
-  (`OpenFile`, `WatchDirectory`, `ResolveFullPath` and the tests), as is the duplicate in
-  `windows-file-enumeration-sys` ([D-9](DESIGN-NOTES.md#d-9), `M26+.3`), and it is a `feat!` of a
-  published crate. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
+- [ ] **NR-3.3** -- **Paths pass through to Win32 untouched, with a relative path grafted onto a root
+  captured at construction.** Decided by the engineer on 2026-10-15 and recorded in
+  [D-19](DESIGN-NOTES.md#d-19), which supersedes the mechanism of [D-9](DESIGN-NOTES.md#d-9) and
+  the decision of [D-18](DESIGN-NOTES.md#d-18). `OpenFile::new` takes a `Wtf16String`; `prepare`'s
+  `MAX_PATH` limit, its verbatim validation, its empty-path refusal and its resolution through
+  `GetFullPathNameW` go from the path of an open; an interior NUL stays refused, since a `PCWSTR`
+  cannot carry it. The request captures the current directory when it is built, and when it is
+  performed grafts a child onto it by concatenation (a backslash unless the directory ends in one)
+  only if all five rules of D-19 hold; any other path is passed through untouched. Tests: each rule,
+  both ways (a child that meets it is grafted, a child that breaks only that rule is not); the graft
+  still means the captured directory after the process current directory has changed; a drive root
+  as the captured directory makes no doubled backslash; `NUL` grafts and `CON`, `CONIN$` and
+  `CONOUT$` do not; nothing in a path is rewritten to a `\\?\` form. Open, not yet decided: which
+  other entries that take a path (`WatchDirectory`, `ResolveFullPath`, and the tests that use
+  `prepare`) take the same treatment, and what happens to `PreparedPath` and `prepare` for them; the
+  duplicate in `windows-file-enumeration-sys` ([D-9](DESIGN-NOTES.md#d-9), `M26+.3`) is affected. A
+  `feat!` of a published crate. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
 
   > **-> CROSS-COMPONENT HANDOFF:** when `NR-3.1` to `NR-3.3` are released, the next work is in
   > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`

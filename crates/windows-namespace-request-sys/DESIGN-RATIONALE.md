@@ -217,3 +217,66 @@ exists to close, so the "smaller job" omits the part being bought.
 
 Recorded here rather than only in Tier 1 so the next reader who notices the
 cheaper-looking API does not have to re-derive why it was declined.
+
+## D-19: grafting a relative path
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-19`. This is the record of how it was
+reached, with the measurements behind it. They were taken on 2026-10-15 on Windows 11 with a probe
+test that was not kept (it failed on purpose so libtest would replay its output), the process
+current directory set to `C:\Windows\System32`, the long-path flags below not including a
+long-path-aware host.
+
+**How the direction arrived.** The engineer asked what `prepare` did that was not Win32's own, said
+a path should reach Win32 untouched with no length limit and no checking of its own, and then, once
+"resolve at build time" was read as "when the object is built" and not at compile time, held that the
+need to capture the root at construction remained, with relative paths resolved textually against it
+later. Windows provides a lexical join, `PathAllocCombine`, which [D-18](DESIGN-NOTES.md#d-18) had not
+weighed (it weighed only the canonicalisers), so it was measured.
+
+**`PathAllocCombine` against `GetFullPathNameW`** (base = the process current directory):
+
+| Input | `PathAllocCombine`, flags 0 | `GetFullPathNameW` |
+|---|---|---|
+| `a\b`, `.\a`, `..\a`, `a\..\b`, `..\..\..\..\x` | the same | the same |
+| `\a\b` | `C:\a\b` | `C:\a\b` |
+| `a.`, `a ` | `...\a` | `...\a` |
+| `a/b` | `...\a/b` (slash kept) | `...\a\b` |
+| `C:a`, `C:a\b`, `Q:a` | `C:a`, `C:a\b`, `Q:a` (unresolved) | resolved |
+| `C:` | `C:\` | `C:\Windows\System32` |
+| `C:\x\..\y` | `C:\y` | `C:\y` |
+| `C:/x/y` | `C:/x/y` | `C:\x\y` |
+| `\\?\C:\x\.\y` | `C:\x\y` (prefix dropped, `.` collapsed) | `\\?\C:\x\y` |
+| `\\.\PhysicalDrive0` | `\\PhysicalDrive0` | `\\.\PhysicalDrive0` |
+| `\\.\C:\x\..\y` | `\\C:\y` | `\\.\C:\y` |
+| `CON`, `NUL`, `COM1` | `...\System32\CON` and so on | `\\.\CON` and so on |
+| empty | the base | error 87 |
+
+With a UNC base `\\server\share\dir\sub`: `a\b` and `\a\b` join correctly, and `..\..\..\x` gives
+`\\server\x`, past the share root. With a verbatim base `\\?\C:\work\proj` the result loses its
+prefix. Long results (a base of about 350 units): flags 0 fail with `0x800700ce`;
+`PATHCCH_ALLOW_LONG_PATHS` gives a `\\?\` path; adding
+`PATHCCH_FORCE_ENABLE_LONG_NAME_PROCESS` gives a plain long path. `PATHCCH_DO_NOT_NORMALIZE_SEGMENTS`
+keeps a trailing dot or space that the default strips.
+
+**`CreateFileW` on a device name, spelled four ways** (open for query; the number is the Win32 error,
+or the file type):
+
+| Name | bare | joined onto the directory | `x\name`, `x` missing | `drivers\name`, `drivers` exists |
+|---|---|---|---|---|
+| `NUL` | char device | char device | 3 | char device |
+| `CON`, `con` | 87 | 2 | 3 | 2 |
+| `CONIN$`, `CONOUT$` | char device | 2 | 3 | 2 |
+| `PRN`, `AUX`, `COM1`, `COM2`, `LPT1` | 2 | 2 | 3 | 2 |
+| `NUL.txt` | 2 | 2 | 3 | 2 |
+
+So `NUL` is a device in any position and a join is faithful to it, where `GetFullPathNameW`'s habit of
+resolving `a\NUL` to `\\.\NUL` is not what `CreateFileW` does with `a\NUL` (it fails with error 3 when
+`a` is missing). `CON`, `CONIN$` and `CONOUT$` change meaning under a join, which is rule 5 of the
+decision. `PRN`, `AUX`, `COM1`, `COM2` and `LPT1` fail the same way in every spelling here, so nothing
+is shown about them either way.
+
+**What was weighed and set aside.** A combine call with the long-path flags, for the reasons in the
+decision. A classification that grafts everything but the forms known to be wrong, which would make
+the list of wrong forms the policy; the engineer's rule was that the graft is allowed "when we can
+show that the child path is clearly safe", so the rule names what is safe and lets the rest through
+untouched.
