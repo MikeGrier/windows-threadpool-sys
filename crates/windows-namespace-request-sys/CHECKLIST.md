@@ -32,10 +32,7 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.4** -- `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceNumaProperty` on a disk handle, the node carried unaltered. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-24)
 
-- [ ] **NR-2.5** -- **`GetStorageDependencyInformation`** (`virtdisk`) on a virtual disk or volume
-  handle: the backing file a VHD or VHDX depends on, so the helper can follow it to its own flush
-  domains. Check which `windows-sys` feature carries it. Creating a virtual disk in a test needs
-  elevation, so state what the tests can and cannot reach on an unelevated run.
+- [x] **NR-2.5** -- `GetStorageDependencyInformation` (virtdisk) on a volume, root directory or disk handle, with the version as an input and names copied out of the reply. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-25)
 
 - [ ] **NR-2.6** -- **Decide between `win-volume-sys`' `control()` and this crate's helper**
   ([D-20](DESIGN-NOTES.md#d-20)). The two are the same overlapped-and-event shape, built

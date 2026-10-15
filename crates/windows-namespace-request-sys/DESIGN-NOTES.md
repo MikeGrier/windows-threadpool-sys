@@ -1024,3 +1024,56 @@ generic entry ([D-22](#d-22)) reaches the property regardless.
 reports. Those need hardware this machine is not.
 
 **Scheduled work:** none.
+
+## <a id="d-24"></a>D-24: The dependency query is its own entry, the version is an input, and names are copied out of the reply
+
+**Status: decided and implemented** by `NR-2.5` (`src/storage_dependency.rs`). Its blind spot is stated below
+and is not a deferral.
+
+**What is decided.**
+
+- **It is `GetStorageDependencyInformation`, not a `DeviceIoControl`.** It is a documented virtdisk call
+  (`windows-sys` feature `Win32_Storage_Vhd`), so [D-20](#d-20)'s helper is not involved and the call is made
+  directly. It returns its status as the return value, not as `BOOL` followed by `GetLastError`, and the entry
+  reads it that way.
+- **The status is carried unaltered.** A handle that is not on a virtual disk gets `0xC03A0015` for
+  `HOST_VOLUMES`, which is an `NTSTATUS` value and not a Win32 error code. It is reported as the call returned
+  it in `StorageDependencyError::Win32`; turning it into a Win32 code is an `Rtl*` call, which the repository's
+  rule on documented interfaces excludes.
+- **The version is an input.** The call fails with `ERROR_INVALID_LEVEL` unless the buffer's version field is
+  1 or 2 when it is made. The entry sets it, defaults to 2 (the version with the names), and lets
+  `StorageDependencyVersion::from_raw` carry any other value to the device to refuse.
+- **The first buffer is never below the structure.** A buffer under `size_of::<STORAGE_DEPENDENCY_INFO>()`
+  (72 bytes) is `ERROR_INVALID_PARAMETER` and writes nothing, not even the size. The first size is raised to
+  that, so `with_capacity` can be anything. On `ERROR_INSUFFICIENT_BUFFER` or `ERROR_MORE_DATA` the entry asks
+  again at the size the call wrote, a bounded number of times, and refuses a size that is not larger than the
+  one it asked with.
+- **Names are copied out and never followed.** A version 2 entry holds four `PWSTR`s. They are read as
+  addresses, compared against the address of the reply, and used as offsets into it; a name outside the bytes
+  the call said it used, or one with no terminator inside them, is `Malformed` and is not read. The result holds
+  owned `Wtf16String`s, so nothing a caller keeps points into a buffer that is gone. A null pointer is `None`.
+- **Flag and type values are raw-carrying newtypes.** `StorageDependencyFlags` and `DependentDiskFlags` name the
+  documented bits and keep the rest, and nothing is defaulted on a caller's behalf ([D-12](#d-12)).
+
+**Not documented, and stated where it is claimed.** The documentation does not say the name strings lie inside
+the buffer the caller gives. A variable-length structure with a size parameter suggests it, and nothing here can
+show it. The entry's behaviour does not depend on it being so: a pointer outside the reply is refused rather than
+dereferenced.
+
+**Measured on 2026-10-15**, Windows 11, a Hyper-V guest, not elevated, no virtual disk attached, handles opened
+with no access:
+
+- A volume, a root directory and a disk handle each answer success with zero entries and the version echoed back,
+  for both versions, in a 72-byte buffer.
+- A version other than 1 or 2 is `ERROR_INVALID_LEVEL`. Every buffer size below 72 that was tried (0, 8, 12, 16,
+  24, 40, 64, 65 and 71) is `ERROR_INVALID_PARAMETER`.
+- `HOST_VOLUMES` is `0xC03A0015` on all four handles, and `DISK_HANDLE` on a volume is
+  `ERROR_INVALID_PARAMETER`.
+
+**What was not observed.** An entry. Attaching a virtual disk needs an elevated token, which this machine's
+account does not have, so no real entry's layout, no placement of its strings, no ancestor level, and no reply
+to a buffer too small for entries were seen. The entry is tested against replies built from the structure's
+declared layout and a fake device that checks what it is asked ([sabotage.json](sabotage.json) says the same).
+A run with an elevated token on a machine that can attach a VHD would turn each of these into an observation.
+
+**Scheduled work:** none. `NR-2.6` is unchanged by this entry.

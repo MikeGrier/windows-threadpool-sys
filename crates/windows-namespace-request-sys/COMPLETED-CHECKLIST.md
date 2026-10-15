@@ -173,3 +173,20 @@ header alone as a success between the header and the reply), which corrected `st
 which had stated the other property's behaviour as the call's. Measured here: a twelve-byte reply and node zero on
 a one-node machine; a node other than zero was not observed. Six sabotages pin it, in
 [sabotage.json](sabotage.json), all caught. What this left to do is `NR-2.5` and `NR-2.6`, which is now unblocked.
+
+## Moved 2026-10-15 19:42:00 -04:00 -- NR-2.5: the dependency a virtual disk has on its backing file
+
+### <a id="nr-25"></a>NR-2.5 -- `GetStorageDependencyInformation` (virtdisk) on a volume, root directory or disk handle, with the version as an input and names copied out of the reply. *(completed 2026-10-15 19:42:00 -04:00)*
+
+`QueryStorageDependencyInformation` asks which volumes or disks a volume hosts, or with `HOST_VOLUMES` which host
+it: the link from a virtual disk to the file that backs it, for durable-ioring's flush domains. The decision is
+[D-24](DESIGN-NOTES.md#d-24) and how it was reached is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code
+is `0306fda0`.
+
+The feature is `Win32_Storage_Vhd`. The call returns its status directly, and one status measured here is an
+`NTSTATUS` value (`0xC03A0015`), which is carried raw. The version is an input, and a buffer under 72 bytes is
+`ERROR_INVALID_PARAMETER`, so the first size is raised to 72. **No entry was ever observed**: attaching a virtual
+disk needs an elevated token, which this machine's account does not have. The entries and names are tested
+against replies built from the structure's declared layout and a fake device, 25 sabotages pin them in
+[sabotage.json](sabotage.json) (all caught), and `D-24` and the manifest's `notCoveredHere` say what an elevated
+run on a machine that can attach a VHD would settle. What this left to do in this crate is `NR-2.6`.

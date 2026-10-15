@@ -491,3 +491,38 @@ property's row.
 read from the wrong place would give when the bytes are zeros. So the field-placement tests build replies with
 distinct values in each field, and the sabotages for a node read from the wrong field are caught by those, not by
 the real disk.
+
+## D-24: the dependency query
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-24`. This is how it was reached.
+
+**What the probes showed that the item did not say.** The item asked for the call and for a statement of what
+an unelevated run can reach. Probing it with a buffer whose version field was 0 or 3 gave
+`ERROR_INVALID_LEVEL`, and with 1 or 2 it succeeded, so the version is an input the caller sets. Sizes below 72
+were `ERROR_INVALID_PARAMETER` and not the `ERROR_INSUFFICIENT_BUFFER` that a size-learning loop looks for, so
+a loop that started small would have been refused instead of told a size. The raised first size follows from
+that.
+
+**The code `0xC03A0015` was a surprise worth keeping.** `HOST_VOLUMES` on a volume that is not virtual returned
+3225026581, which no Win32 constant names; it is an `NTSTATUS`. Converting it would have been an `Rtl*` call, and
+that is excluded, so it is carried raw. A consumer that wants to say "not a virtual disk" compares against the
+value, which the test names.
+
+**Names, and the choice not to trust the buffer.** The structure's name fields are pointers. Reading them
+directly would have been simplest and would have trusted a reply this machine could never produce, so each
+pointer is converted to an offset against the reply's own address and bounds-checked, and the string must end
+inside the bytes the call said it used. Both checks matter independently: a pointer exactly at the end of the
+reply is refused for lying outside it, and a string that reaches the end with no room for its terminator is
+refused for that, and the tests assert which reason was given because the second check would otherwise hide
+the first being removed.
+
+**Why the sabotage entries are built replies and not the device.** No entry could be produced here. The
+alternatives were an elevated run, which is not available, or leaving the entry decoding untested; the
+decoding is the larger part of the module, so it is tested against replies laid out with `offset_of!` from the
+structure's declared types, with every field given a value no other field has, and against a fake device that
+asserts the buffer is aligned, never smaller than 72 bytes, and has the version set on every attempt including
+the regrow.
+
+**What was weighed.** `with_capacity` raises a size below 72 to 72 and does not refuse it: the call's own
+refusal of a smaller buffer is a fact about the call, and the request has no use for a first size it could not
+make.
