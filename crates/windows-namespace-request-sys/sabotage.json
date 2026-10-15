@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first entry (NR-2.1) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The pending path of the device-control helper (the wait, the abort, the result read after it) has no entry, and the reason is a measurement rather than a gap: an overlapped call pended in 0 of 20000 isolated runs of the two controls tried, and appeared only while the whole suite ran in parallel, so a mutation confined to it is caught on some runs and survives on others, and neither outcome is a control. Only a control that pends on demand would settle it, and none taking no input is known: FSCTL_PIPE_LISTEN, the obvious one, failed with ERROR_INVALID_FUNCTION through DeviceIoControl on a named-pipe server, for a reason not established. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) and the device-control helper with its first entry (NR-2.1) have entries. The catalogue's other entries, the capture of handles and paths, and the security descriptor's own parsing are not covered. SecurityDescriptor::try_clone's failure is a declared blind spot (see its survives entry): AlignedBuf::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail. The device-control helper's pending path is run through its seam, `overlapped_call`, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand (an overlapped control pended in 0 of 20000 isolated runs). So the wait, the result read and the failure after pending are pinned with a call that is not a control; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves. The abort when the wait fails is not reachable: the event is the helper's own. The failures of the two descriptor allocations, in capture and in conversion, are reached through their shared function, `allocate`, which the tests call with a length no machine has; the OS names the real length, so no descriptor can be made to ask for it.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -99,8 +99,8 @@
       "file": "src/device_control.rs",
       "expect": "caught",
       "why": "The buffer length the device is given is the buffer's own; a shorter one makes every control fail for want of room.",
-      "find": ["            DeviceIoControl(\n                device,\n                code,\n                ptr::null(),\n                0,\n                output.as_mut_ptr().cast(),\n                output_len,\n"],
-      "replace": ["            DeviceIoControl(\n                device,\n                code,\n                ptr::null(),\n                0,\n                output.as_mut_ptr().cast(),\n                output_len - output_len,\n"]
+      "find": ["                buffer.cast(),\n                length,\n"],
+      "replace": ["                buffer.cast(),\n                length - length,\n"]
     },
     {
       "name": "NR-2.1: a control that completed reports no bytes written",
@@ -133,6 +133,38 @@
       "why": "The node is a whole ULONG, carried unaltered; a value above 255 would be truncated.",
       "find": ["        node: u32::from_ne_bytes(output),\n"],
       "replace": ["        node: u32::from_ne_bytes([output[0], 0, 0, 0]),\n"]
+    },
+    {
+      "name": "NR-2.1: a call still running is not waited for",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A call that reports ERROR_IO_PENDING is waited for and its result read; without that the caller is handed the pending code while the device is still writing into a buffer about to be freed.",
+      "find": ["        Err(error) if error.code() == ERROR_IO_PENDING => {\n"],
+      "replace": ["        Err(error) if error.code() == u32::MAX => {\n"]
+    },
+    {
+      "name": "NR-2.1: the wait for a call still running does not wait",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The result is read without waiting, so a call that has not completed is reported as ERROR_IO_INCOMPLETE and the device is left writing.",
+      "find": ["WaitForSingleObject(event.as_raw_handle(), INFINITE)"],
+      "replace": ["WaitForSingleObject(event.as_raw_handle(), 0)"]
+    },
+    {
+      "name": "NR-2.1: a call that completed after pending reports no bytes written",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The count a call that completed asynchronously wrote is read from GetOverlappedResult, and it is what a caller checks a reply's size by.",
+      "find": ["            })?;\n            Ok(written)\n"],
+      "replace": ["            })?;\n            Ok(written - written)\n"]
+    },
+    {
+      "name": "NR-2.1: a call that failed after pending is reported as a success",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A call that pends and then fails reports its own code through GetOverlappedResult; discarding it would report success with whatever count was left.",
+      "find": ["            })?;\n            Ok(written)\n"],
+      "replace": ["            });\n            Ok(written)\n"]
     }
   ]
 }

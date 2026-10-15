@@ -88,7 +88,8 @@ was and was not known about this control beforehand.
 
 Measured here: a file on the system volume answers node `0`, and the `NUL` device answers
 `ERROR_INVALID_FUNCTION`. This machine has one node, so a node other than `0`, and a volume that advertises no
-proximity domain, were not observed. Six sabotages pin it, in [sabotage.json](sabotage.json); the helper's
-pending path has none, because an overlapped call pended only while the whole suite ran in parallel, and the
-manifest says so where the entries are. What this left to do is `NR-2.2` (an input buffer for the helper, and a
-control that pends on demand) and `NR-2.6` (the duplicate in `win-volume-sys`).
+proximity domain, were not observed. Ten sabotages pin it, in [sabotage.json](sabotage.json). Six cover the entry and the
+controls; four cover the helper's pending path, which is driven through its `overlapped_call` seam with an
+overlapped `ReadFile` on a named pipe, because no file-system control pends on demand. What this left to do is
+`NR-2.2` (an input buffer for the helper, and a control that pends on demand, to exercise `DeviceIoControl`
+itself through that path) and `NR-2.6` (the duplicate in `win-volume-sys`).

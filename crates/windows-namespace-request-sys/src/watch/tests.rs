@@ -323,7 +323,9 @@ fn an_unconfigured_watch_reads_back_as_the_narrowest_one() {
     // The other half: the defaults are what `new` documents rather than what an
     // accessor invents, and asserting them is what stops the test above from
     // being satisfied by an accessor that always reports the configured shape.
-    let fixture = Fixture::new("watch-defaults");
+    // Its own label: a fixture is a directory named by it, and two tests sharing one removed and
+    // recreated each other's directory.
+    let fixture = Fixture::new("watch-defaults-readback");
     let text = fixture
         .directory()
         .to_str()

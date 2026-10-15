@@ -823,16 +823,25 @@ fill would read as an answer.
   through `DeviceIoControl`. Why is not established, and it is evidence about that one code only: the
   codes of `NR-2.2` to `NR-2.4` are ordinary device controls for which `DeviceIoControl` is the
   documented route, and nothing here says they behave as it did.
-- An overlapped call pended in 0 of 20000 isolated runs of two controls, and pended on some runs
-  while the full test suite ran in parallel. The pending path (the wait, the abort, the result read)
-  is therefore reached on some runs and not on others, and **has no sabotage entry**: a mutation
-  confined to it is caught on some runs and survives on others, which is neither a control nor a
-  declared blind spot. [sabotage.json](sabotage.json) says so where the entries are.
+- An overlapped call to a file-system control pended in 0 of 20000 isolated runs of two controls,
+  and pended on some runs while the full test suite ran in parallel. No control tried pends on
+  demand, so the pending path is not reached by a control reliably.
+
+**The pending path is pinned through a seam.** The helper is two functions: `device_control`, which
+is the `DeviceIoControl` argument list, and `overlapped_call`, which owns the event, the
+`OVERLAPPED`, the wait and the result read, and takes the call as a closure. The tests hand
+`overlapped_call` an overlapped `ReadFile` on a named pipe, which pends until the other end writes
+and whose completion, byte count and failure are documented behaviour. Four sabotages pin it (not
+waited for, waits for nothing, byte count lost, failure after pending reported as success), and
+[sabotage.json](sabotage.json) names what stays unpinned: the abort when the wait fails, which the
+helper's own event cannot provoke, and `DeviceIoControl`'s own behaviour when it pends, which no
+control reaches.
 
 **The helper takes no input yet.** That is the scope of the first entry, not a ruling that controls
-take none: `NR-2.2` to `NR-2.4` need an input buffer, and a control that takes one and pends on demand
-(`FSCTL_REQUEST_OPLOCK` is the candidate) is what would make the pending path testable. Both are
-scheduled in [CHECKLIST.md](CHECKLIST.md) as part of those items.
+take none: `NR-2.2` to `NR-2.4` need an input buffer, which is scheduled in
+[CHECKLIST.md](CHECKLIST.md) as part of those items. A real control that pends on demand
+(`FSCTL_REQUEST_OPLOCK` is the candidate) would additionally exercise `DeviceIoControl` itself
+through the pending path, which the pipe read does not.
 
 **A duplicate that must be decided.** `win-volume-sys` has its own `control()`
 ([control.rs](../win-volume-sys/src/control.rs)) with the same overlapped-and-event shape and an

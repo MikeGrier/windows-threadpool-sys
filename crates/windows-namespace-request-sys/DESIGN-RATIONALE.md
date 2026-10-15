@@ -314,12 +314,26 @@ buffer was empty turned every call into a failure, and every test that tolerated
 `FSCTL_GET_COMPRESSION` is answered by every file on an NTFS or ReFS volume, so the helper's tests
 assert success on it and do not stand down; that closed the hole.
 
-**What was tried and removed.** A named-pipe listen (`FSCTL_PIPE_LISTEN`) was the obvious control that
-pends until a client connects, which would have made the pending path testable on demand. It failed
-with `ERROR_INVALID_FUNCTION`, so it was removed rather than worked around, and the pending path's
-sabotage entries went with it: two of the three had been caught only because the full suite happened
-to make a call pend, and the third survived for the same reason. The measurement that showed this was
-a throwaway test that counted `ERROR_IO_PENDING` over 20000 calls with the pending branch disabled.
+**How the pending path came to be pinned.** A named-pipe listen (`FSCTL_PIPE_LISTEN`) was the obvious
+control that pends until a client connects. It failed with `ERROR_INVALID_FUNCTION`, so it was removed
+rather than worked around. The first sabotage entries for the pending path were then caught only
+because the full suite happened to make a call pend, and one survived for the same reason; a throwaway
+test that counted `ERROR_IO_PENDING` over 20000 calls with the pending branch disabled showed 0, so
+those entries were removed as neither a control nor a declared blind spot. The engineer's question
+("I guess add a sabotage for it?") then led to the seam: split the helper at the one call that makes it a
+control, and drive the rest with a call that does pend on demand.
 
-**What this does not settle.** Whether the pending path's byte-count read is right is unchecked: the
-controls that write output complete synchronously here, and the one that pends writes none.
+**What was weighed for that call.** A fake that sets `OVERLAPPED.Internal` and `InternalHigh` and
+signals the event by hand would pend deterministically too, but it relies on fields the documentation
+reserves for the system and on how `GetOverlappedResult` reads them, which is the incidental-behaviour
+binding the platform rules forbid. An overlapped `ReadFile` on a pipe uses only documented behaviour.
+
+**A defect the seam work found in the tests.** The helper's tests opened handles without taking the read
+side of `handle_allocation`, so on roughly one run in thirty another test, which holds the write side
+while it reasons about a closed handle's value, saw a handle reused and panicked, poisoning the lock for
+every test that follows. Measured as 1 mass failure in 60 runs before the fix and none in 200 after.
+Separately, two `watch` tests shared the fixture label `watch-defaults` and removed each other's
+directory, failing 8 of 30 runs; each now has its own.
+
+**What this does not settle.** `DeviceIoControl`'s own behaviour when it pends is unchecked, for want of a
+control that does so on demand; `NR-2.2` looks for one.

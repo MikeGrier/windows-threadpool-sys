@@ -30,11 +30,11 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
   **First, give the helper an input buffer** ([D-20](DESIGN-NOTES.md#d-20)): it takes none today,
   and this item and `NR-2.3` and `NR-2.4` need one. Do it here, in the same commit, and look for a
-  control that takes an input and pends on demand (`FSCTL_REQUEST_OPLOCK` is the candidate), so the
-  helper's pending path -- the wait, the abort, the byte count read after it -- can be pinned for the
-  first time. `FSCTL_PIPE_LISTEN` was tried for that and failed with `ERROR_INVALID_FUNCTION`
-  through `DeviceIoControl`, for a reason not established; check that this item's and the next two
-  items' codes behave through the helper before building on them.
+  control that takes an input and pends on demand (`FSCTL_REQUEST_OPLOCK` is the candidate), so
+  `DeviceIoControl` itself can be exercised through the pending path, which `overlapped_call`'s pipe
+  tests reach only with a `ReadFile`. `FSCTL_PIPE_LISTEN` was tried for that and failed with
+  `ERROR_INVALID_FUNCTION` through `DeviceIoControl`, for a reason not established; check that this
+  item's and the next two items' codes behave through the helper before building on them.
 
 - [ ] **NR-2.3** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty`** on a
   disk handle: the device's `STORAGE_DEVICE_UNIQUE_IDENTIFIER`, its stable identity, variable-sized.

@@ -49,6 +49,37 @@ mod tests;
 /// into memory this function would otherwise let go of, and unwinding past that would be
 /// undefined behaviour, where stopping the process is not.
 pub(crate) fn device_control(device: HANDLE, code: u32, output: &mut [u8]) -> Outcome<u32> {
+    overlapped_call(device, output, |buffer, length, written, overlapped| {
+        // SAFETY: `device` is a handle the caller holds open for this call. There is no input.
+        // The four pointers are the ones `overlapped_call` guarantees outlive the operation.
+        unsafe {
+            DeviceIoControl(
+                device,
+                code,
+                ptr::null(),
+                0,
+                buffer.cast(),
+                length,
+                written,
+                overlapped,
+            )
+        }
+    })
+}
+
+/// Runs `call`, a Win32 call that takes an `OVERLAPPED` and writes into a buffer, and returns the
+/// number of bytes it wrote, whether it completed at once or was still running.
+///
+/// This is [`device_control`] without the one call that makes it a device control, so a test can
+/// hand it a call that pends on demand: no file-system control does, and an overlapped read on a
+/// named pipe does. `call` is given the output buffer and its length, the byte count to write
+/// and the `OVERLAPPED`, and must pass them to a call on `device`; all four live until this
+/// function returns, which it does only after the operation has finished.
+pub(crate) fn overlapped_call(
+    device: HANDLE,
+    output: &mut [u8],
+    call: impl FnOnce(*mut u8, u32, *mut u32, *mut OVERLAPPED) -> i32,
+) -> Outcome<u32> {
     let output_len = u32::try_from(output.len()).expect("a control's output buffer fits a u32");
 
     // SAFETY: no security attributes, an unnamed manual-reset event, unsignalled to start.
@@ -62,23 +93,16 @@ pub(crate) fn device_control(device: HANDLE, code: u32, output: &mut [u8]) -> Ou
     overlapped.hEvent = event.as_raw_handle().map_addr(|address| address | 1);
 
     let mut written = 0_u32;
+    // `output` is writable for `output_len` bytes, and `overlapped` and `written` live until this
+    // function returns, which it does only after the operation has finished: the call completed
+    // here, or the wait below has.
     let started = perform_bool(|| {
-        // SAFETY: `device` is a handle the caller holds open for this call. There is no input.
-        // `output` is writable for `output_len` bytes, and `overlapped` and `written` live until
-        // this function returns, which it does only after the device has finished: the call
-        // completed here, or the wait below has.
-        unsafe {
-            DeviceIoControl(
-                device,
-                code,
-                ptr::null(),
-                0,
-                output.as_mut_ptr().cast(),
-                output_len,
-                &raw mut written,
-                &raw mut overlapped,
-            )
-        }
+        call(
+            output.as_mut_ptr(),
+            output_len,
+            &raw mut written,
+            &raw mut overlapped,
+        )
     });
 
     match started {
