@@ -8,6 +8,7 @@
 
 mod chunked;
 mod create_error;
+mod diagnostics;
 mod doorbell;
 mod held_file;
 mod open_error;
@@ -18,6 +19,7 @@ mod test_support;
 mod watcher;
 
 pub use create_error::CreateError;
+pub use diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink, NoDiagnostics};
 pub use held_file::HeldFile;
 pub use open_error::OpenError;
 pub use sq::{Attention, SqCapacityError, SqDrain, SqEntry};

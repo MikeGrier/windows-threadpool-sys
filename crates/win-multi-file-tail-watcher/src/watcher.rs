@@ -10,6 +10,7 @@ use windows_overlapped_io_sys::EndpointObserver;
 use wtf_string::Wtf16Str;
 
 use crate::chunked::Chunked;
+use crate::diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink, NoDiagnostics, SharedSink};
 use crate::doorbell::Doorbell;
 use crate::sq::{self, SqDrain, SqReader, SqWriter};
 use crate::{CreateError, HeldFile, OpenError};
@@ -64,6 +65,7 @@ struct Shared<T> {
     doorbell: Doorbell,
     // Caller to crate: the caller has made room in the SQ.
     resume: Doorbell,
+    diagnostics: SharedSink,
 }
 
 // Ids only grow, so the roster's order is the order of registration and a position in it survives
@@ -98,6 +100,18 @@ impl<T: Clone> Watcher<T> {
     /// [`CreateError::Capacity`] unless `sq_capacity` is a power of two of at least two.
     /// [`CreateError::Io`] when a doorbell cannot be created.
     pub fn new(sq_capacity: usize) -> Result<Self, CreateError> {
+        Self::with_diagnostics(sq_capacity, Arc::new(NoDiagnostics))
+    }
+
+    /// As [`new`](Self::new), reporting what the watcher observes about itself to `diagnostics`.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn with_diagnostics(
+        sq_capacity: usize,
+        diagnostics: Arc<dyn DiagnosticSink>,
+    ) -> Result<Self, CreateError> {
         let (writer, reader) = sq::queue(sq_capacity)?;
         Ok(Self {
             shared: Arc::new(Shared {
@@ -109,6 +123,7 @@ impl<T: Clone> Watcher<T> {
                 reader: Mutex::new(reader),
                 doorbell: Doorbell::new()?,
                 resume: Doorbell::new()?,
+                diagnostics: SharedSink::new(diagnostics),
             }),
         })
     }
@@ -177,6 +192,15 @@ impl<T: Clone> Watcher<T> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .capacity()
+    }
+
+    /// Report an event to the watcher's sink if it wants `kind`; `make` builds the event only then.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the probe pass (TW-2.6) reports through it")
+    )]
+    pub(crate) fn diagnose(&self, kind: DiagnosticKind, make: impl FnOnce() -> Diagnostic) {
+        self.shared.diagnostics.emit(kind, make);
     }
 
     /// A writing handle for one thread of the crate's own.
@@ -295,6 +319,13 @@ pub struct Registration<T: Clone> {
 }
 
 impl<T: Clone> Registration<T> {
+    /// This registration's number within its watcher: unique, handed out in order, never reused.
+    /// [`Diagnostic`] events name a registration by it.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// A clone of the value this registration was made with.
     #[must_use]
     pub fn value(&self) -> T {

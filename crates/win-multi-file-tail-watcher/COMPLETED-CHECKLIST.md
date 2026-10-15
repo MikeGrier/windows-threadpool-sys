@@ -338,3 +338,41 @@ control.
 
 Not known: whether the nine transient codes above are all transient in practice. They are
 transient because they are not listed, which is the default, not because anything was observed.
+
+## Moved 2026-10-15 19:32:00 -04:00 -- TW-2.6.2: the diagnostic sink
+
+### <a id="tw-262"></a>TW-2.6.2 -- The watcher reports typed diagnostic events to a sink the caller supplies through `Watcher::with_diagnostics`, in the shape of durable-ioring's `DiagnosticSink`. *(completed 2026-10-15 19:32:00 -04:00)*
+
+`src/diagnostics.rs`. Public: `DiagnosticSink`, `Diagnostic`, `DiagnosticKind`, `NoDiagnostics`,
+`Watcher::with_diagnostics` and `Registration::id`. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- **The shape is durable-ioring's** ([DI-D-51](../durable-ioring/DESIGN-NOTES.md#di-d-51)): typed
+  events, never text; a `wants(kind)` question before an event is built; a default that wants
+  nothing. The types are this crate's own, because durable-ioring's enums are its own. Display on the
+  event is for a text sink.
+- **The first event is `Diagnostic::ProbeFailed { registration, win32_code }`**, for a transient
+  failure; both enums are `#[non_exhaustive]`. The code is an `Option<u32>`, since an error need not
+  carry one.
+- **`Watcher::with_diagnostics(sq_capacity, sink)`** supplies the sink, and `Watcher::new` is the
+  same with `NoDiagnostics`. A second constructor and not a setup struct, because nothing else
+  needs to be supplied yet; the batch size may change that when TW-2.8 chooses it.
+- **A sink's contract**, stated on the trait: called from whatever thread observed the event,
+  possibly with a lock of the watcher's held, so it returns promptly and never calls back into the
+  watcher.
+- **`Registration::id`** was added so that an event's registration means something to the caller. It
+  is the roster's own number: unique, handed out in order, never reused, and the one the snapshot
+  copies.
+- **The watcher reaches its sink through `diagnose`**, which builds the event only for a sink that
+  wants the kind. It is crate-internal and carries an `expect(dead_code)` that stops compiling when
+  the probe pass (TW-2.6) uses it.
+- **Not mirrored:** durable-ioring's `StderrDiagnostics` and `FanOutDiagnostics`. Shared machinery
+  would bring them; see TW-2+.1.
+
+Tested: the event's kind, text and equality; `NoDiagnostics` wanting nothing; a watcher made with `new`
+building no event; a sink that wants nothing being asked and given nothing, with no event built; a
+sink that wants the kind receiving each event, in order, with the event built once each; one sink
+shared by two watchers; eight threads reporting at once; a bad capacity refused by both
+constructors; a registration's id unique, ordered and never reused, and equal to the one the
+snapshot copies; and `Send + Sync`. The sabotage manifest gains a sink that is not asked, an event
+built before the question, an event built and dropped, a sink replaced by the default, an id of zero,
+and a text that drops the code; the question written as an early return survives as the control.

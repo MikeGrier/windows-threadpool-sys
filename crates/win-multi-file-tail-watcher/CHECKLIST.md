@@ -27,12 +27,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.6.1** -- One predicate classifies a probe failure as transient or terminal from its Win32 code; the terminal list is `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-261)
 
-- [ ] **TW-2.6.2** -- **The diagnostic sink**, in the shape of durable-ioring's `DiagnosticSink`:
-  this crate's own typed `Diagnostic` and `DiagnosticKind`, a `wants` check before an event is
-  built, `NoDiagnostics` as the default, a collecting sink for tests, and an optional
-  `Arc<dyn DiagnosticSink>` supplied when the watcher is made. The first event is a transient probe
-  failure, carrying the registration's id and the Win32 code. Every message goes through it.
-  ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+- [x] **TW-2.6.2** -- The watcher reports typed diagnostic events to a sink the caller supplies through `Watcher::with_diagnostics`, in the shape of durable-ioring's `DiagnosticSink`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-262)
 
 - [ ] **TW-2.6.3** -- **The terminal SQ entry.** A third `SqEntry` kind carrying a clone of `T`, the
   Win32 code as a `u32`, and the last length reported; `SqEntry` becomes `#[non_exhaustive]`.
@@ -85,7 +80,8 @@ Parked, not pending: the milestone that is next after M2 pulls these in.
   and durable-ioring use**, generic over the event type, or whether this crate's mirror stays. The
   mirror is deliberate duplication, so that the sink could be built without touching another
   crate's layering; the decision is to merge it or to delete the question, and is made when there
-  is more than one event to compare. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+  is more than one event to compare. durable-ioring's `StderrDiagnostics` and `FanOutDiagnostics`
+  were not mirrored, so shared machinery would bring them here. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
 ## M3 -- The poll on the thread pool
 

@@ -276,7 +276,8 @@ The engineer, 2026-10-15: a failed probe's error code is inspected to decide wha
 - <a id="tw-d-13-sink"></a>**Diagnostics go to a sink the caller supplies, in the shape of
   durable-ioring's `DiagnosticSink` ([DI-D-51](../durable-ioring/DESIGN-NOTES.md#di-d-51)):** typed
   events and not text; a sink says which kinds it `wants` before an event is built; the default,
-  `NoDiagnostics`, wants none; supplied as an optional `Arc<dyn DiagnosticSink>`. A sink is called
+  `NoDiagnostics`, wants none; supplied through `Watcher::with_diagnostics` as an
+  `Arc<dyn DiagnosticSink>`, and `Watcher::new` is the default. A sink is called
   from whatever thread observed the event, returns promptly, and does not call back into the
   watcher. The shape is mirrored, not shared: durable-ioring's event and kind enums are its own.
   Whether the machinery moves to a crate both use is a later decision, tracked in

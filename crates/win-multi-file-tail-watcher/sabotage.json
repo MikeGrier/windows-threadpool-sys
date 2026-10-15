@@ -348,6 +348,62 @@
       "replace": ["TERMINAL_CODES.iter().any(|&t| t == code) => FailureClass::Terminal,"]
     },
     {
+      "name": "the sink is not asked before an event is reported",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A sink that wants nothing must cost a branch. Reporting to it anyway is correct for a sink that wants everything.",
+      "find": ["        if self.0.wants(kind) {"],
+      "replace": ["        if true {"]
+    },
+    {
+      "name": "the event is built before the sink is asked",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The event is built only for a sink that wants it, so the default costs nothing at a call site that formats something.",
+      "find": ["        if self.0.wants(kind) {\n            self.0.report(&make());\n        }"],
+      "replace": ["        let event = make();\n        if self.0.wants(kind) {\n            self.0.report(&event);\n        }"]
+    },
+    {
+      "name": "an event the sink wants is built and dropped",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "Everything about the question is right and nothing arrives.",
+      "find": ["            self.0.report(&make());"],
+      "replace": ["            let _ = make();"]
+    },
+    {
+      "name": "the sink given at construction is replaced by the default",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "`new` and `with_diagnostics` agree for the default sink, so only a sink that wants something can tell.",
+      "find": ["                diagnostics: SharedSink::new(diagnostics),"],
+      "replace": ["                diagnostics: SharedSink::new(Arc::new(NoDiagnostics)),"]
+    },
+    {
+      "name": "a registration's id is zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The diagnostic events name a registration by it, so a constant names them all as one.",
+      "find": ["    pub fn id(&self) -> u64 {\n        self.id"],
+      "replace": ["    pub fn id(&self) -> u64 {\n        0"]
+    },
+    {
+      "name": "the event's text drops the code",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The code is why the event exists, and a text sink prints only what Display gives it.",
+      "find": ["failed with Win32 code {code}; it will be probed again\""],
+      "replace": ["failed with a code; it will be probed again\""]
+    },
+    {
+      "name": "control: the sink's question is an early return",
+      "file": "src/diagnostics.rs",
+      "expect": "survives",
+      "why": "Returning early on `!wants` is the same branch written the other way.",
+      "find": ["        if self.0.wants(kind) {\n            self.0.report(&make());\n        }"],
+      "replace": ["        if !self.0.wants(kind) {\n            return;\n        }\n        self.0.report(&make());"]
+    },
+    {
       "name": "control: retain also swaps an item with itself",
       "file": "src/chunked.rs",
       "expect": "survives",

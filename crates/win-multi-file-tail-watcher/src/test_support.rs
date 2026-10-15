@@ -58,3 +58,43 @@ pub(crate) fn signalled_within(
 pub(crate) fn is_signalled(handle: std::os::windows::io::BorrowedHandle<'_>) -> bool {
     signalled_within(handle, 0)
 }
+
+/// A sink that keeps each event it is given, and each kind it was asked about.
+#[derive(Default)]
+pub(crate) struct RecordingSink {
+    pub(crate) wanted: bool,
+    seen: std::sync::Mutex<Vec<crate::Diagnostic>>,
+    asked: std::sync::Mutex<Vec<crate::DiagnosticKind>>,
+}
+
+impl RecordingSink {
+    pub(crate) fn wanting() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            wanted: true,
+            ..Self::default()
+        })
+    }
+
+    pub(crate) fn unwilling() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::default())
+    }
+
+    pub(crate) fn seen(&self) -> Vec<crate::Diagnostic> {
+        self.seen.lock().expect("the record").clone()
+    }
+
+    pub(crate) fn asked(&self) -> Vec<crate::DiagnosticKind> {
+        self.asked.lock().expect("the record").clone()
+    }
+}
+
+impl crate::DiagnosticSink for RecordingSink {
+    fn wants(&self, kind: crate::DiagnosticKind) -> bool {
+        self.asked.lock().expect("the record").push(kind);
+        self.wanted
+    }
+
+    fn report(&self, event: &crate::Diagnostic) {
+        self.seen.lock().expect("the record").push(*event);
+    }
+}
