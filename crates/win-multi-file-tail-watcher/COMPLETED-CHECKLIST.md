@@ -307,3 +307,34 @@ that skips the next registration, a batch that is not honoured, and the lock hel
 the cursor written as a `match` survives as the control. The last of those is caught by a hang, not
 an assertion: with the lock held, the tests that register from inside the pause deadlock before the
 `try_lock` check can fail, so the sweep reports it past its hang bound.
+
+## Moved 2026-10-15 19:03:30 -04:00 -- TW-2.6.1: classifying a probe failure
+
+### <a id="tw-261"></a>TW-2.6.1 -- One predicate classifies a probe failure as transient or terminal from its Win32 code; the terminal list is `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`. *(completed 2026-10-15 19:03:30 -04:00)*
+
+`src/probe_failure.rs`, crate-internal, so a `chore`. It carries the module-level
+`expect(dead_code)` that stops compiling when the probe pass (TW-2.6) and the diagnostic sink
+(TW-2.6.2) use it. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- **`classify(&io::Error) -> FailureClass`** answers `Terminal` for a code on `TERMINAL_CODES` and
+  `Transient` for everything else, including an error that carries no code. Every site that needs the
+  distinction asks it; there is one list to add to as the system produces codes nobody listed.
+- **`win32_code(&io::Error) -> Option<u32>`** is the code as a `u32`, which is what the terminal SQ
+  entry and the diagnostic event will carry. Only a plain Win32 code is read. An error made from a
+  message carries none, and a code in `HRESULT` form is not recognised as the Win32 code inside it:
+  the probe's errors come from `GetFileInformationByHandleEx` and are plain, so reading an `HRESULT`
+  would be a guess.
+- **Sign.** `std` hands a Win32 code back as an `i32`, so a code above `i32::MAX` arrives negative;
+  `win32_code` casts the bit pattern back, and a test reads `u32::MAX` and `0x8007_0006` through it.
+
+Tested: each listed code is terminal and none is listed twice; the codes either side of every listed
+one are transient; nine codes that may pass (access denied, not found, general failure, invalid
+parameter, network name deleted, not ready, operation aborted, sharing violation, virtual circuit
+disconnected); zero and the extremes; errors with no code; an `HRESULT` that wraps
+`ERROR_INVALID_HANDLE`; and the code read back unchanged. The sabotage manifest gains a list missing
+each of its two codes, an inverted test, an error with no code made terminal, a match by nearness,
+and a negative code read as its magnitude; the list searched with an explicit loop survives as the
+control.
+
+Not known: whether the nine transient codes above are all transient in practice. They are
+transient because they are not listed, which is the default, not because anything was observed.

@@ -292,6 +292,62 @@
       "replace": ["                let from = match after {\n                    Some(id) => Bound::Excluded(id),\n                    None => Bound::Unbounded,\n                };"]
     },
     {
+      "name": "an invalid handle is not on the terminal list",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "TW-D-13 names it. Without it a closed handle is probed again every beat for good.",
+      "find": ["    ERROR_INVALID_HANDLE,\n    // The volume"],
+      "replace": ["    // The volume"]
+    },
+    {
+      "name": "an invalidated file is not on the terminal list",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "The second code on the list, and the one a list of a single entry would hide.",
+      "find": ["    ERROR_FILE_INVALID,\n];"],
+      "replace": ["];"]
+    },
+    {
+      "name": "the classification is inverted",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "Every other property of the predicate holds for the wrong answer read the wrong way round.",
+      "find": ["        Some(code) if TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["        Some(code) if !TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"]
+    },
+    {
+      "name": "an error with no code is terminal",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "TW-D-13: the safe failure is to keep probing. An error that carries no code cannot be known to be terminal.",
+      "find": ["        _ => FailureClass::Transient,"],
+      "replace": ["        _ => FailureClass::Terminal,"]
+    },
+    {
+      "name": "a code next to a terminal one is terminal",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "A match by nearness is a different list: ERROR_ACCESS_DENIED is one below ERROR_INVALID_HANDLE.",
+      "find": ["TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["TERMINAL_CODES.iter().any(|t| t.abs_diff(code) <= 1) => FailureClass::Terminal,"]
+    },
+    {
+      "name": "a negative os error is read as its magnitude",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "The Win32 code is a u32 that std hands back as an i32, so a code above i32::MAX is negative; only the bit pattern is the code.",
+      "find": ["    error.raw_os_error().map(i32::cast_unsigned)"],
+      "replace": ["    error.raw_os_error().map(|code| code.unsigned_abs())"]
+    },
+    {
+      "name": "control: the list is searched with an explicit loop",
+      "file": "src/probe_failure.rs",
+      "expect": "survives",
+      "why": "`contains` and an equality search are the same test.",
+      "find": ["TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["TERMINAL_CODES.iter().any(|&t| t == code) => FailureClass::Terminal,"]
+    },
+    {
       "name": "control: retain also swaps an item with itself",
       "file": "src/chunked.rs",
       "expect": "survives",

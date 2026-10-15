@@ -11,6 +11,7 @@ mod create_error;
 mod doorbell;
 mod held_file;
 mod open_error;
+mod probe_failure;
 mod sq;
 #[cfg(test)]
 mod test_support;

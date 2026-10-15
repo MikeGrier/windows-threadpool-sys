@@ -25,11 +25,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.5** -- Each roster entry holds a last known length starting at its starting offset, and the snapshot pass copies id, last known length and an observer into a chunked buffer one batch per lock. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-25)
 
-- [ ] **TW-2.6.1** -- **Classify a probe failure.** One predicate, in one place, from an
-  `io::Error` to transient or terminal. Terminal: `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`;
-  anything else, and an error carrying no Win32 code, is transient. The set grows as the system
-  produces codes, so it is a single list that is easy to extend. A unit test for each named code
-  and for several that are not. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+- [x] **TW-2.6.1** -- One predicate classifies a probe failure as transient or terminal from its Win32 code; the terminal list is `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-261)
 
 - [ ] **TW-2.6.2** -- **The diagnostic sink**, in the shape of durable-ioring's `DiagnosticSink`:
   this crate's own typed `Diagnostic` and `DiagnosticKind`, a `wants` check before an event is
