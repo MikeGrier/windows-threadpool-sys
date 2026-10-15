@@ -279,7 +279,8 @@ bind to them as settled.
   `ERROR_FILE_INVALID` (the volume under the file was externally altered), the second being mine, not
   the engineer's. Neither has been put to the engineer.
 - **Open, and not yet put to the engineer, under [TW-D-13](#tw-d-13):** how a caller supplies the
-  diagnostic channel (no such channel exists in the crate or elsewhere in the repository); whether
+  diagnostic channel (this crate has none; durable-ioring has one, its `DiagnosticSink` of DI-D-51,
+  whose events are its own); whether
   the caller learns that an entry went terminal, which today it would only see as the file going
   quiet; and the volume of transient messages, since a failed volume gives one per entry per beat.
 - **A registration's last known length starts at its starting offset** ([TW-D-4](#tw-d-4)). So a

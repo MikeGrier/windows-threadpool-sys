@@ -207,7 +207,9 @@ kernel mode allocation". Using observers from the first probe made M16 a prerequ
 Raised by the replan of 2026-10-15, which left "what a probe that fails does" as a question for the
 engineer. The answer was the two classes and the single predicate, with `ERROR_INVALID_HANDLE` as the
 one example of terminal. Nothing else was weighed in the answer. What was noticed while recording it,
-and left as working positions rather than decided: no diagnostic channel exists to log to; a
+and left as working positions rather than decided: this crate has no diagnostic channel to log to (it
+was first written down here as there being none anywhere in the repository, which was wrong:
+durable-ioring has a `DiagnosticSink`, DI-D-51); a
 terminal entry that is silently dropped from probing looks, to the caller, like a file that stopped
 changing; and a transient message per entry per beat is a message per file when a whole volume
 fails. Defaulting an unlisted code to transient was chosen as the failure that keeps watching.
