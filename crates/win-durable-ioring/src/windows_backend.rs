@@ -11,6 +11,9 @@
 //! once after the pushes it makes, so a batch of pushes is one submission and a failure to submit
 //! is seen where the doorbell is rung (DI-7+.2).
 //!
+//! **Files.** A [`Win32FileTarget`] is made from an [`OpenedFile`], a file this crate opened and so
+//! knows the buffering mode of, and from nothing else (DI-D-60).
+//!
 //! **Targets.** A target given at construction is registered with the ring, which holds it for the
 //! ring's life (`windows-ioring-sys` D-81) and addresses it by index; one attached later is
 //! addressed through its `SharedHandle`, guarded per operation. Registered buffers are given at
@@ -43,6 +46,7 @@ use durable_ioring::backend::{
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
 mod file_target;
+mod opened_file;
 pub(crate) mod pool;
 pub(crate) mod signalled;
 mod wait;
@@ -50,6 +54,7 @@ mod wait;
 pub use wait::CompletionEvent;
 
 pub use file_target::Win32FileTarget;
+pub use opened_file::{Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, Unbuffered};
 
 #[cfg(test)]
 mod tests;

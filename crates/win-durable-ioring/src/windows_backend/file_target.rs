@@ -1,19 +1,22 @@
 // Copyright (c) 2026 Mike Grier
-//! [`Win32FileTarget`]: a target backed by a Win32 file (DI-D-48, DI-D-50).
+//! [`Win32FileTarget`]: a target backed by a Win32 file (DI-D-48, DI-D-50, DI-D-60).
 
 use win_shared_os_owned_handle::SharedHandle;
 
+use super::opened_file::{Buffering, OpenedFile};
 use durable_ioring::FlushDomain;
 use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
 
-/// A target backed by a Win32 file, held as a `SharedHandle` -- an owning form, never a raw handle
-/// (DI-D-4). It states what it is built with: no flush domains,
-/// [`WarrantyClass::BestEffort`], [`Geometry::UNALIGNED`] and [`Capabilities::NONE`] unless set.
+/// A target backed by a Win32 file this crate opened, held as a `SharedHandle` -- an owning form,
+/// never a raw handle (DI-D-4).
 ///
-/// The warranty class is taken on the consumer's declaration, and `BestEffort` is the default
-/// because a file opened for cached I/O can claim no more: its system write-back can fail without
-/// telling its writer. One opened unbuffered can claim `SharedDevice`. Whether dioring should read
-/// the class from the handle rather than take it on declaration is `DI-10.1`'s.
+/// It is made from an [`OpenedFile`] and from nothing else, and takes its warranty class, its
+/// alignment and its capabilities from how that file was opened, not from a declaration
+/// (DI-D-60): a file opened cached is [`WarrantyClass::BestEffort`] and needs no alignment, and one
+/// opened [`Unbuffered`](super::Unbuffered) is [`WarrantyClass::SharedDevice`], needs a sector's
+/// alignment, and offers per-write write-through. [`WarrantyClass::Complete`] is never a file's: it
+/// needs knowledge of what else shares the device, which no open mode gives. What a target cannot
+/// know, its flush domains, is declared with [`with_domains`](Self::with_domains).
 #[derive(Clone, Debug)]
 pub struct Win32FileTarget {
     handle: SharedHandle,
@@ -24,15 +27,15 @@ pub struct Win32FileTarget {
 }
 
 impl Win32FileTarget {
-    /// The file `handle` names.
+    /// The target `file` makes, claiming what its open mode allows and no more.
     #[must_use]
-    pub fn new(handle: SharedHandle) -> Self {
+    pub fn new<B: Buffering>(file: OpenedFile<B>) -> Self {
         Self {
-            handle,
+            geometry: file.geometry(),
+            handle: file.handle().clone(),
             domains: Vec::new(),
-            warranty: WarrantyClass::BestEffort,
-            geometry: Geometry::UNALIGNED,
-            capabilities: Capabilities::NONE,
+            warranty: B::WARRANTY,
+            capabilities: B::CAPABILITIES,
         }
     }
 
@@ -43,32 +46,25 @@ impl Win32FileTarget {
         self
     }
 
-    /// State its warranty class.
-    #[must_use]
-    pub fn with_warranty(mut self, warranty: WarrantyClass) -> Self {
-        self.warranty = warranty;
-        self
-    }
-
-    /// State the alignment its operations need, which the backend enforces: an unbuffered file's
-    /// is its device's sector size.
-    #[must_use]
-    pub fn with_geometry(mut self, geometry: Geometry) -> Self {
-        self.geometry = geometry;
-        self
-    }
-
-    /// State its capabilities: write-through, for a file that honours it.
-    #[must_use]
-    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
-        self.capabilities = capabilities;
-        self
-    }
-
     /// The file's handle.
     #[must_use]
     pub fn handle(&self) -> &SharedHandle {
         &self.handle
+    }
+
+    /// State a class a file's open mode cannot give, to test what the backend does with each.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn declared(
+        mut self,
+        warranty: WarrantyClass,
+        geometry: Geometry,
+        capabilities: Capabilities,
+    ) -> Self {
+        self.warranty = warranty;
+        self.geometry = geometry;
+        self.capabilities = capabilities;
+        self
     }
 }
 

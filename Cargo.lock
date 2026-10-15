@@ -120,6 +120,7 @@ name = "win-durable-ioring"
 version = "0.1.0"
 dependencies = [
  "durable-ioring",
+ "io-buffers",
  "win-durable-ioring",
  "win-shared-os-owned-handle",
  "win-sync-sys",

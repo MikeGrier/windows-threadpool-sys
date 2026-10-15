@@ -875,6 +875,94 @@
       "why": "A handle for a live lineage that something else made has a count of one, so ending or retiring through it abandons epochs while the genuine handles are live, and the genuine last release then finds the lineage gone.",
       "find": ["        handle.is_homed_at(&self.hub)"],
       "replace": ["        handle.lineage().instance == self.default.lineage().instance"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file is opened without the flag that makes it so",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The class an unbuffered file claims is only true if the kernel treats it as unbuffered; the test that writes unaligned through it and sees the kernel refuse does not read this crate's own record.",
+      "find": ["    const FLAGS: u32 = FILE_FLAG_NO_BUFFERING;"],
+      "replace": ["    const FLAGS: u32 = 0;"]
+    },
+    {
+      "name": "DI-10.1: a cached file is opened unbuffered",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The opposite error: a file that claims BestEffort and no alignment but that the kernel holds to a sector would refuse the operations its target accepts.",
+      "find": ["    const FLAGS: u32 = 0;"],
+      "replace": ["    const FLAGS: u32 = FILE_FLAG_NO_BUFFERING;"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file claims no more than best effort",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The class is what the type exists to carry; an unbuffered file understating itself is the safe direction, and still wrong.",
+      "find": ["    const WARRANTY: WarrantyClass = WarrantyClass::SharedDevice;"],
+      "replace": ["    const WARRANTY: WarrantyClass = WarrantyClass::BestEffort;"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file is allowed on a remote device",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A remote file cannot keep the claim that makes a file unbuffered. The behavioural test that opens one over the administrative share is ignored by default, so the constant that gates the check is what a default run holds.",
+      "find": ["    const LOCAL_DEVICE_ONLY: bool = true;"],
+      "replace": ["    const LOCAL_DEVICE_ONLY: bool = false;"]
+    },
+    {
+      "name": "DI-10.1: the default sector size is the smaller one",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "4096 is chosen because every smaller sector size divides it and so no device refuses it; 512 would be refused by a 4096-sector device on the first transfer.",
+      "find": ["    pub const DEFAULT_SECTOR_SIZE: u32 = 4096;"],
+      "replace": ["    pub const DEFAULT_SECTOR_SIZE: u32 = 512;"]
+    },
+    {
+      "name": "DI-10.1: a stated sector size is ignored",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The caller's sector size is the only way to be offered less alignment than the default, and a size that is not a power of two must be refused.",
+      "find": ["        self.geometry = Geometry::uniform(sector_size)?;"],
+      "replace": ["        self.geometry = Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE)?;"]
+    },
+    {
+      "name": "DI-10.1: the verbatim form of a share is read as local",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "canonicalize returns a share in its verbatim form, \\\\?\\UNC\\..., which is the form the check sees in practice; only matching the plain form would miss every real one.",
+      "find": ["            if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))"],
+      "replace": ["            if matches!(prefix.kind(), Prefix::UNC(..))"]
+    },
+    {
+      "name": "DI-10.1: a new file's remote check is skipped by looking nowhere",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A path that does not exist yet is judged by the directory it would be created in; without that, creating an unbuffered file fails or goes unchecked.",
+      "find": ["        Err(error) if error.kind() == io::ErrorKind::NotFound => {"],
+      "replace": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {"]
+    },
+    {
+      "name": "DI-10.1: a target takes its class from a declaration instead of its file",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The class must come from how the file was opened, never from the target.",
+      "find": ["            warranty: B::WARRANTY,"],
+      "replace": ["            warranty: WarrantyClass::Complete,"]
+    },
+    {
+      "name": "DI-10.1: a target drops what its file offers",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "An unbuffered file's write-through capability is what lets a consumer ask for it; the kernel refuses it on a cached file.",
+      "find": ["            capabilities: B::CAPABILITIES,"],
+      "replace": ["            capabilities: Capabilities::NONE,"]
+    },
+    {
+      "name": "DI-10.1: a target takes no alignment from its file",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The alignment the backend enforces is the file's; without it an unbuffered file's operations reach the kernel unaligned.",
+      "find": ["            geometry: file.geometry(),"],
+      "replace": ["            geometry: Geometry::UNALIGNED,"]
     }
   ]
 }

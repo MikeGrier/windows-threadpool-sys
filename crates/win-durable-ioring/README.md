@@ -30,6 +30,41 @@ A blocking push is not an API of either crate: a refused push names its cause, a
 waits it out is a maintained example, [examples/blocking_push/](examples/blocking_push/main.rs), to
 use as it stands or adapt ([DI-D-56](../durable-ioring/DESIGN-NOTES.md#di-d-56)).
 
+## Opening a file
+
+A file target is made from a file **this crate opened**, and from nothing else
+([DI-D-60](../durable-ioring/DESIGN-NOTES.md#di-d-60)). How a handle was opened decides what its
+target can claim, and the only call that reports it is one this repository does not make, so the
+open mode is recorded by the type that opens the file instead of asked of a handle afterwards.
+`OpenedFile<Cached>` is a file opened for cached I/O: it claims `BestEffort` and needs no alignment.
+`OpenedFile<Unbuffered>` is opened with no intermediate buffering: it claims `SharedDevice`, needs
+a sector's alignment (4096 unless told less with `with_sector_size`), and offers per-write
+write-through. A consumer that needs the stronger warranty asks for `OpenedFile<Unbuffered>` in its
+own signature, and a cached file cannot be passed. A handle opened elsewhere cannot be given to a
+target in this version.
+
+```rust
+use win_durable_ioring::windows_backend::{
+    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
+};
+use win_durable_ioring::{IoTarget, WarrantyClass};
+
+let path = std::env::temp_dir().join(format!("durable-ioring-open-{}", std::process::id()));
+std::fs::write(&path, [0u8; 8192])?;
+let options = FileOptions::new().read(true).write(true);
+
+let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(&path, options)?);
+assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
+
+let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&path, options)?);
+assert_eq!(unbuffered.warranty(), WarrantyClass::SharedDevice);
+assert!(unbuffered.capabilities().write_through());
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```
+
+An unbuffered file is refused on a remote device, where the claim cannot hold.
+
 ## Worked examples
 
 Each example is dioring running the trace in its comments, compiled and run as a test, so a change
@@ -44,7 +79,6 @@ flush of a file report the error given whatever the device answered. Setting up 
 ### Healing a failure
 
 ```rust
-# use std::os::windows::io::OwnedHandle;
 # use std::time::{Duration, Instant};
 # use win_durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
@@ -64,13 +98,16 @@ flush of a file report the error given whatever the device answered. Setting up 
 # }
 # let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
-# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
+#     &path,
+#     windows_backend::FileOptions::new().read(true).write(true),
+# )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
+#         target: windows_backend::Win32FileTarget::new(file),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
@@ -126,7 +163,6 @@ the high-water mark cannot pass the unresolved failure at 41.
 pushed before the failure is observed: the seal's commit is issued as soon as `A` completes.
 
 ```rust
-# use std::os::windows::io::OwnedHandle;
 # use std::time::{Duration, Instant};
 # use win_durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
@@ -146,13 +182,16 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # }
 # let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
-# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
+#     &path,
+#     windows_backend::FileOptions::new().read(true).write(true),
+# )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
+#         target: windows_backend::Win32FileTarget::new(file),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,
@@ -213,7 +252,6 @@ effect, at the first seal made after it that reaches the re-issue. Any operation
 fails as never issued.
 
 ```rust
-# use std::os::windows::io::OwnedHandle;
 # use std::time::{Duration, Instant};
 # use win_durable_ioring::*;
 # type Ring = Dioring<Vec<u8>>;
@@ -233,13 +271,16 @@ fails as never issued.
 # }
 # let path = std::env::temp_dir().join(format!("durable-ioring-abandon-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
-# let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+# let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
+#     &path,
+#     windows_backend::FileOptions::new().read(true).write(true),
+# )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
 #     files: vec![TargetSetup {
 #         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(SharedHandle::new(OwnedHandle::from(file))),
+#         target: windows_backend::Win32FileTarget::new(file),
 #     }],
 #     buffers: Vec::new(),
 #     provider: None,

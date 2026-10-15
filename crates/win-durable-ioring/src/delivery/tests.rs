@@ -478,7 +478,7 @@ fn a_file_is_removed_through_the_handle() {
         .add_target(IoTargetKey(2), Win32FileTarget::new(file.clone()))
         .expect("add a file");
     let back = delivery.remove_target(IoTargetKey(2)).expect("remove it");
-    assert!(back.handle().same_handle(&file));
+    assert!(back.handle().same_handle(file.handle()));
     assert!(matches!(
         delivery.remove_target(IoTargetKey(2)),
         Err(durable_ioring::RemoveTargetError::UnknownKey(IoTargetKey(

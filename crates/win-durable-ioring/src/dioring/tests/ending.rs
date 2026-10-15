@@ -70,7 +70,7 @@ fn an_idle_file_added_later_comes_back_and_its_key_can_be_reused() {
         .expect("add a file");
     let back = ring.remove_target(ADDED).expect("remove it");
     assert!(
-        back.handle().same_handle(&handle),
+        back.handle().same_handle(handle.handle()),
         "the consumer's own target"
     );
 

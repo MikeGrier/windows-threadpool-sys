@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use windows_ioring_sys::{Batch, InjectedFailure, IoBuf, IoRing, PushOptions, RingCondition};
 
 use super::{
-    Win32FileTarget, WindowsBackend, WindowsBackendError, WindowsBackendRefusal,
-    WindowsBackendSetup, refusal_cause, transfer,
+    FileOptions, OpenedFile, Unbuffered, Win32FileTarget, WindowsBackend, WindowsBackendError,
+    WindowsBackendRefusal, WindowsBackendSetup, refusal_cause, transfer,
 };
 use crate::dioring::tests::TempFile;
 use durable_ioring::backend::{
@@ -346,7 +346,11 @@ fn the_targets_geometry_is_enforced_before_the_ring_is_asked() {
     backend
         .attach(
             IoTargetKey(3),
-            Win32FileTarget::new(added.open()).with_geometry(geometry),
+            Win32FileTarget::new(added.open()).declared(
+                WarrantyClass::BestEffort,
+                geometry,
+                durable_ioring::Capabilities::NONE,
+            ),
         )
         .expect("a new key");
     for (offset, length) in [(1, 512), (512, 1)] {
@@ -402,7 +406,11 @@ fn check_answers_what_push_does() {
     backend
         .attach(
             aligned,
-            Win32FileTarget::new(added.open()).with_geometry(geometry),
+            Win32FileTarget::new(added.open()).declared(
+                WarrantyClass::BestEffort,
+                geometry,
+                durable_ioring::Capabilities::NONE,
+            ),
         )
         .expect("a new key");
     let region = |token, target, index, offset, length| Submission {
@@ -518,7 +526,11 @@ fn a_ring_that_cannot_be_created_hands_everything_back() {
 fn attach_refuses_a_key_in_use_and_detach_hands_the_target_back() {
     let (given, added) = (TempFile::new("wb-given"), TempFile::new("wb-added"));
     let mut backend = backend(&given, &added);
-    let target = Win32FileTarget::new(added.open()).with_warranty(WarrantyClass::Complete);
+    let target = Win32FileTarget::new(added.open()).declared(
+        WarrantyClass::Complete,
+        Geometry::UNALIGNED,
+        durable_ioring::Capabilities::NONE,
+    );
     let duplicate = backend.attach(ADDED, target).expect_err("taken");
     assert_eq!(duplicate.key, ADDED);
     assert_eq!(duplicate.target.warranty(), WarrantyClass::Complete);
@@ -533,23 +545,29 @@ fn attach_refuses_a_key_in_use_and_detach_hands_the_target_back() {
 }
 
 #[test]
-fn a_file_target_states_what_it_is_built_with() {
+fn a_file_target_claims_what_its_open_mode_allows() {
     let file = TempFile::new("wb-target");
-    let plain = Win32FileTarget::new(file.open());
-    assert_eq!(plain.warranty(), WarrantyClass::BestEffort);
-    assert_eq!(plain.geometry(), Geometry::UNALIGNED);
-    assert!(plain.flush_domains().is_empty());
-    assert!(!plain.capabilities().write_through());
-    let stated = plain
-        .with_domains([FlushDomain::new(b"disk".as_slice())])
-        .with_warranty(WarrantyClass::SharedDevice)
-        .with_capabilities(durable_ioring::Capabilities::NONE.with_write_through());
-    let description = stated.describe();
+    let cached = Win32FileTarget::new(file.open());
+    assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
+    assert_eq!(cached.geometry(), Geometry::UNALIGNED);
+    assert!(cached.flush_domains().is_empty());
+    assert!(!cached.capabilities().write_through());
+
+    let unbuffered = Win32FileTarget::new(
+        OpenedFile::<Unbuffered>::open(&file.0, FileOptions::new().read(true).write(true))
+            .expect("open unbuffered"),
+    )
+    .with_domains([FlushDomain::new(b"disk".as_slice())]);
+    let description = unbuffered.describe();
     assert_eq!(
         description.flush_domains,
         [FlushDomain::new(b"disk".as_slice())]
     );
     assert_eq!(description.warranty, WarrantyClass::SharedDevice);
+    assert_eq!(
+        description.geometry,
+        Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE).expect("a power of two")
+    );
     assert!(description.capabilities.write_through());
 }
 
@@ -746,7 +764,7 @@ fn real_completion() -> windows_ioring_sys::Completion {
     let handle = file.open();
     let mut ring: IoRing<Vec<u8>, ()> = IoRing::with_inventory(4, 4).expect("a ring");
     Batch::new(&mut ring)
-        .read_owned(&handle, vec![0; 1], (), 0, PushOptions::new())
+        .read_owned(handle.handle(), vec![0; 1], (), 0, PushOptions::new())
         .expect("a read");
     let (completion, _) = ring.pop_within(BOUND).expect("pop").expect("a completion");
     completion
