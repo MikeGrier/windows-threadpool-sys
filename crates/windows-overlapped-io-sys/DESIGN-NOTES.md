@@ -147,6 +147,12 @@ route to association, submission, and the blocking backend, and stays not `Clone
   safe queries -- the file's length first (`file_len`, M15.3, behind the `fs` feature, since it is a file
   query) -- plus an `unsafe` borrow (`EndpointObserver::handle`) whose `# Safety` section lists what must
   not be done through it: anything that could make it a second endpoint.
+- **What qualifies as an observer query** (2026-10-14, queuing M16): a synchronous information query
+  through the handle that starts no I/O -- file and volume information (`GetFileInformationByHandleEx`
+  classes, `GetFileType`, `GetFinalPathNameByHandleW`, `GetVolumeInformationByHandleW`). File-system and
+  device control codes go through `DeviceIoControl`, which on an overlapped handle needs an `OVERLAPPED`
+  and may pend: that is I/O, so they stay with the endpoint and its device adapters. The list beyond
+  `file_len` is M16 in [CHECKLIST.md](CHECKLIST.md).
 - **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
   before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
   hold it; nothing reaches that association, because only the endpoint ever submitted through it.
