@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-numa-sys-v0.1.0...win-numa-sys-v0.1.1) (2026-10-15)
+
+
+### Features
+
+* **numa:** implement io-buffers' IoBuf and IoBufMut for NumaBuffer ([e4d9061](https://github.com/MikeGrier/windows-threadpool-sys/commit/e4d906126efdcaed52dabee9a234de36f753e50b))
+
 ## 0.1.0 (2026-09-25)
 
 

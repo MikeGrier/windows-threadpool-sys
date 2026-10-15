@@ -27,6 +27,22 @@ test('release-please uses calendar versions for probes and unchanged semver for 
   assert.equal(separate.merge, false);
 });
 
+test('a package that lists itself as a dev-dependency is no cycle, and a real one still is', async () => {
+  registerCalendarVersions(new Date('2026-09-19T00:00:00Z'));
+  const github = { repository: { owner: 'test', repo: 'test' } };
+  const plugin = buildPlugin({ type: 'cargo-workspace', github, targetBranch: 'main', repositoryConfig: {} });
+  const crate = (name, manifest) => ({ name, path: `crates/${name}`, version: '0.1.0', manifest });
+  const order = async packages => {
+    const graph = await plugin.buildGraph(packages);
+    return plugin.buildGraphOrder(graph, ['base']).map(pkg => pkg.name);
+  };
+  const base = crate('base', {});
+  const driver = crate('driver', { dependencies: { base: {} }, 'dev-dependencies': { driver: { features: ['seam'] } } });
+  assert.deepEqual(await order([base, driver]), ['base', 'driver']);
+  const looped = crate('base', { dependencies: { driver: {} } });
+  await assert.rejects(order([looped, driver]), /found cycle/);
+});
+
 test('release phase precedes fresh proposal loading and errors are not swallowed', async () => {
   const events = [];
   const load = async () => {

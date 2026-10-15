@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.2.3...windows-namespace-request-sys-v0.3.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace-request:** SecurityDescriptor and SecurityAttributes no longer implement Clone; use try_clone. QueryFileInformation::perform can return ERROR_NOT_ENOUGH_MEMORY and no longer panics.
+* **namespace-request:** windows_namespace_request_sys::AlignedBuffer and the buffer module are removed. QueryFileInformation::perform and the Request output for it return AlignedBuf, whose constructors return a Result and which has try_clone in place of Clone.
+
+### Bug Fixes
+
+* **namespace-request:** report an allocation that fails as an error ([aab545c](https://github.com/MikeGrier/windows-threadpool-sys/commit/aab545cf9395c8e3ddb2ac8bb4b3792575fd5ab1))
+
+
+### Code Refactoring
+
+* **namespace-request:** replace AlignedBuffer with io-buffers' AlignedBuf ([b61de26](https://github.com/MikeGrier/windows-threadpool-sys/commit/b61de26d0e8478f28d39234d0e4ed02631fdb4d8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dev-dependencies
+    * windows-thread-ambient-sys bumped from 0.2.2 to 0.2.3
+
 ## [0.2.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.2.2...windows-namespace-request-sys-v0.2.3) (2026-10-04)
 
 
