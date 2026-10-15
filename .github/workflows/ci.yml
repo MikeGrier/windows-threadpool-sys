@@ -218,9 +218,25 @@ jobs:
         shell: pwsh
         run: ./tools/check-ring-tests.ps1
 
+  # The two feature variants are independent -- each builds and tests one feature configuration of
+  # the whole workspace -- so they run as parallel jobs rather than one after the other. The
+  # `build-test-result` job below is what the repository's ruleset requires, by the name
+  # `build + test`; keep the two in step.
   build-test:
-    name: build + test
+    name: build + test (${{ matrix.variant }})
     runs-on: windows-latest
+    strategy:
+      # Both variants report, so one failing does not hide whether the other does too.
+      fail-fast: false
+      matrix:
+        include:
+          - variant: all features
+            flags: --all-features
+          - variant: default features
+            flags: ''
+            # The steps that stand outside `--workspace`'s feature unification belong to the
+            # default-feature variant: they exist to verify what a default build does.
+            isolated: true
     # The repo's rust-toolchain.toml pins the MSRV for local dev; without this
     # override rustup's directory-scoped toolchain file would win over whatever
     # dtolnay/rust-toolchain@stable just installed, silently running the MSRV
@@ -230,21 +246,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # A key per variant: the two build different feature sets into the same target directory
+      # layout, and one cache each keeps either from restoring the other's artifacts.
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build (all features)
-        run: cargo build --workspace --all-targets --all-features --locked
-      - name: cargo build (default features)
-        run: cargo build --workspace --all-targets --locked
-      - name: cargo test (all features)
+        with:
+          key: ${{ matrix.variant }}
+      - name: cargo build (${{ matrix.variant }})
+        run: cargo build --workspace --all-targets ${{ matrix.flags }} --locked
+      - name: cargo test (${{ matrix.variant }})
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test --workspace --all-features --locked --no-fail-fast
-      - name: cargo test (default features)
-        env:
-          RUST_BACKTRACE: 1
-          RUST_LIB_BACKTRACE: 1
-        run: cargo test --workspace --locked --no-fail-fast
+        run: cargo test --workspace ${{ matrix.flags }} --locked --no-fail-fast
       # The UNC current-directory test is ignored by default because it needs a
       # reachable administrative share (`\\localhost\C$`), which an ordinary
       # developer account does not have -- running it by default would report an
@@ -258,23 +271,43 @@ jobs:
       # runner the test says so in those terms, and the answer is to provision a
       # UNC fixture rather than to delete the assertion.
       - name: cargo test (namespace-request, UNC current directory)
+        if: ${{ matrix.isolated }}
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-namespace-request-sys --locked --test unc_current_directory -- --include-ignored
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
-      # the two `--workspace` steps above unify that feature onto
+      # the `--workspace` steps above unify that feature onto
       # windows-file-watcher and no longer actually verify its published
       # *default*-feature build/test. Select it alone (no --workspace) to
       # isolate from that unification and close the gap.
       - name: cargo build (windows-file-watcher, default features)
+        if: ${{ matrix.isolated }}
         run: cargo build -p windows-file-watcher --all-targets --locked
       - name: cargo test (windows-file-watcher, default features)
+        if: ${{ matrix.isolated }}
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-file-watcher --locked --no-fail-fast
+
+  # The check the repository's ruleset requires is named `build + test`, which the matrix above no
+  # longer produces: its jobs carry the variant in their names. This one keeps the name and
+  # passes only when every variant did. `always()` so that a failed variant fails this job, and
+  # is not left skipping, which a required check would read as a pass.
+  build-test-result:
+    name: build + test
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: ${{ always() }}
+    steps:
+      - name: Every build + test variant passed
+        env:
+          RESULT: ${{ needs.build-test.result }}
+        run: |
+          echo "build + test variants: ${RESULT}"
+          test "${RESULT}" = success
 
   # A `compile_fail` doctest passes on ANY compile error, so one that breaks for
   # the wrong reason -- a typo, a method since renamed -- reports green while
