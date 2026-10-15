@@ -71,3 +71,27 @@ path; fifty steady reads. The sabotage manifest catches reading the allocation s
 Not tested here: a read on the thread pool, and a file on a remote or non-NTFS volume. The
 directory entry's lag behind the held handle is recorded under [TW-D-2](DESIGN-NOTES.md#tw-d-2) and is
 not re-measured.
+
+## Moved 2026-10-15 14:45:25 -04:00 -- TW-1.4: the starting offset
+
+### <a id="tw-14"></a>TW-1.4 -- `HeldFile::open_at` validates a starting offset against the length read at open, and refuses one beyond it with its own error. *(completed 2026-10-15 14:45:25 -04:00)*
+
+`open_at(path, offset)` opens as `open` does, reads the length through the new handle, and returns
+`OpenError::OffsetBeyondLength { offset, len }` when `offset > len` ([TW-D-3](DESIGN-NOTES.md#tw-d-3)).
+An offset equal to the length is accepted, so a parent that stopped at the end of a file can
+restart there. `OpenError::Io` carries every other failure, with its Win32 code, including a
+failed length read. The accepted offset is kept and read back with `start_offset()`; `open` is
+`open_at` with offset 0 and returns `io::Result` as before. Whether the offset is the watcher's
+first "last known length" is not decided here; it is the TW-2.x items' to settle.
+
+Tested: offsets 0, 1, 5, 9 and 10 on a 10-byte file are accepted and 11, 12, 4096, 2^32,
+2^32 + 3 and `u64::MAX` are refused with both numbers; an empty file takes only 0; the check is made
+against the length at open, so a later shrink leaves an accepted offset in place and a fresh open
+at it is refused; a file of 2^32 + 5 bytes accepts its length and one less and refuses one more; a
+missing file is `Io` with `ERROR_FILE_NOT_FOUND` whatever the offset, and `Io` has a source where
+the offset error has none.
+
+The first sweep found a hole: with only small refused offsets, comparing as 32 bits survived,
+because none had low 32 bits within the length. Offsets 2^32 and 2^32 + 3 close it. The manifest
+now also catches `>=`, a dropped check and a forgotten offset, and a reversed comparison survives
+as the control.

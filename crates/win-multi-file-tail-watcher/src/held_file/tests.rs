@@ -387,3 +387,103 @@ fn repeated_reads_with_no_change_agree() {
         assert_eq!(held.len().expect("len"), 6);
     }
 }
+
+fn beyond(error: &crate::OpenError) -> Option<(u64, u64)> {
+    match error {
+        crate::OpenError::OffsetBeyondLength { offset, len } => Some((*offset, *len)),
+        crate::OpenError::Io(_) => None,
+    }
+}
+
+#[test]
+fn offsets_up_to_and_including_the_length_are_accepted() {
+    let dir = TempDir::new("at-ok");
+    let path = dir.file("a.log", b"0123456789");
+    for offset in [0u64, 1, 5, 9, 10] {
+        let held = HeldFile::open_at(&wtf(&path), offset).expect("accepted");
+        assert_eq!(held.start_offset(), offset);
+        assert_eq!(held.len().expect("len"), 10);
+    }
+}
+
+#[test]
+fn an_offset_past_the_length_is_its_own_error_with_both_numbers() {
+    let dir = TempDir::new("at-beyond");
+    let path = dir.file("a.log", b"0123456789");
+    for offset in [11u64, 12, 4096, 1 << 32, (1 << 32) + 3, u64::MAX] {
+        let error = HeldFile::open_at(&wtf(&path), offset).expect_err("refused");
+        assert_eq!(beyond(&error), Some((offset, 10)), "{offset}");
+        assert!(error.to_string().contains(&offset.to_string()));
+    }
+}
+
+#[test]
+fn an_empty_file_accepts_only_offset_zero() {
+    let dir = TempDir::new("at-empty");
+    let path = dir.file("e.log", b"");
+    assert!(HeldFile::open_at(&wtf(&path), 0).is_ok());
+    let error = HeldFile::open_at(&wtf(&path), 1).expect_err("refused");
+    assert_eq!(beyond(&error), Some((1, 0)));
+}
+
+#[test]
+fn the_offset_is_checked_against_the_length_at_open_not_the_length_later() {
+    let dir = TempDir::new("at-moment");
+    let path = dir.file("m.log", b"abc");
+    let held = HeldFile::open_at(&wtf(&path), 3).expect("accepted");
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("writer")
+        .set_len(0)
+        .expect("shrink");
+    assert_eq!(held.start_offset(), 3);
+    assert_eq!(held.len().expect("len"), 0);
+    let error = HeldFile::open_at(&wtf(&path), 3).expect_err("refused now");
+    assert_eq!(beyond(&error), Some((3, 0)));
+}
+
+#[test]
+fn an_offset_past_four_gib_is_compared_in_full() {
+    let dir = TempDir::new("at-big");
+    let path = dir.file("big.bin", b"");
+    let len = (1u64 << 32) + 5;
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("writer")
+        .set_len(len)
+        .expect("set_len");
+    assert!(HeldFile::open_at(&wtf(&path), len).is_ok());
+    assert!(HeldFile::open_at(&wtf(&path), len - 1).is_ok());
+    let error = HeldFile::open_at(&wtf(&path), len + 1).expect_err("refused");
+    assert_eq!(beyond(&error), Some((len + 1, len)));
+}
+
+#[test]
+fn an_open_failure_is_the_io_variant_and_keeps_its_code_whatever_the_offset() {
+    let dir = TempDir::new("at-io");
+    for offset in [0u64, 1, u64::MAX] {
+        let error = HeldFile::open_at(&wtf(&dir.0.join("missing.log")), offset).expect_err("fail");
+        match error {
+            crate::OpenError::Io(ref io) => assert_eq!(code(io), Some(ERROR_FILE_NOT_FOUND)),
+            crate::OpenError::OffsetBeyondLength { .. } => panic!("an open failure, not an offset"),
+        }
+        assert!(std::error::Error::source(&error).is_some());
+    }
+}
+
+#[test]
+fn an_offset_error_has_no_source() {
+    let dir = TempDir::new("at-source");
+    let path = dir.file("r.log", b"abc");
+    let error = HeldFile::open_at(&wtf(&path), 99).expect_err("refused");
+    assert!(std::error::Error::source(&error).is_none());
+}
+
+#[test]
+fn plain_open_starts_at_zero() {
+    let dir = TempDir::new("at-plain");
+    let held = HeldFile::open(&wtf(&dir.file("p.log", b"abc"))).expect("open");
+    assert_eq!(held.start_offset(), 0);
+}

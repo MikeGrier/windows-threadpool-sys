@@ -7,5 +7,7 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 mod held_file;
+mod open_error;
 
 pub use held_file::HeldFile;
+pub use open_error::OpenError;

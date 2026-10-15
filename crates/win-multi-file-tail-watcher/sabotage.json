@@ -52,6 +52,46 @@
       "replace": ["        static FIRST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();\n        let now = self.observer().file_len()?;\n        Ok(*FIRST.get_or_init(|| now))"]
     },
     {
+      "name": "an offset equal to the length is refused",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "TW-D-3 says beyond the length. A parent that stopped at the end of the file must be able to restart there, so the boundary is where the comparison goes wrong.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if offset >= len {"]
+    },
+    {
+      "name": "an offset past the length is accepted",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The check is the item. Without it every other test of an accepted offset still passes.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if false && offset > len {"]
+    },
+    {
+      "name": "the offset is not kept",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A validated offset that is then forgotten leaves the restart with nowhere to resume.",
+      "find": ["        held.start_offset = offset;"],
+      "replace": ["        let _ = offset;"]
+    },
+    {
+      "name": "the offset is compared as 32 bits",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Every file under 4 GiB compares the same either way.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if offset as u32 > len as u32 {"]
+    },
+    {
+      "name": "control: the comparison is written the other way round",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "len < offset is offset > len, so the two are one check.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if len < offset {"]
+    },
+    {
       "name": "control: the length is read through standard_info",
       "file": "src/held_file.rs",
       "expect": "survives",

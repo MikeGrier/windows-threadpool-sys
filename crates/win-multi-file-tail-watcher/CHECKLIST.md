@@ -18,9 +18,7 @@ read through the held handle.
 
 - [x] **TW-1.3** -- `HeldFile::len` reads the file's current length through an observer of the held handle. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-13)
 
-- [ ] **TW-1.4** -- **Validate the starting offset at open.** An offset beyond the length read at
-  open is a registration error with its own `Err` variant, distinct from an open failure.
-  ([TW-D-3](DESIGN-NOTES.md#tw-d-3))
+- [x] **TW-1.4** -- `HeldFile::open_at` validates a starting offset against the length read at open, and refuses one beyond it with its own error. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-14)
 
 - [ ] **TW-1.5** -- **Integration tests: one file, real writers.** A child process whose stdout is
   redirected to the file grows it, and the held-handle length tracks each write; a shrink by

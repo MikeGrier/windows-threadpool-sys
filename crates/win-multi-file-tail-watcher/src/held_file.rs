@@ -6,6 +6,8 @@ use std::io;
 use windows_overlapped_io_sys::{EndpointObserver, UnassociatedEndpoint};
 use wtf_string::Wtf16Str;
 
+use crate::OpenError;
+
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +22,7 @@ pub struct HeldFile {
     // Kept so the handle stays open and, from the iteration that reads bytes, so the endpoint is
     // the one thing that submits I/O on it.
     endpoint: UnassociatedEndpoint,
+    start_offset: u64,
 }
 
 impl HeldFile {
@@ -36,7 +39,36 @@ impl HeldFile {
     /// made, as [`io::ErrorKind::InvalidInput`] with no Win32 code.
     pub fn open(path: &Wtf16Str) -> io::Result<Self> {
         let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;
-        Ok(Self { endpoint })
+        Ok(Self {
+            endpoint,
+            start_offset: 0,
+        })
+    }
+
+    /// Open the file at `path`, hold it, and take `offset` as where the caller's reading starts.
+    ///
+    /// The offset is checked against the length read through the new handle, so a restarted
+    /// parent whose recorded position is ahead of the file hears of it at once. An offset equal
+    /// to the length is accepted.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError::Io`] as for [`open`](Self::open), and also when the length cannot be read.
+    /// [`OpenError::OffsetBeyondLength`] when `offset` is past the end of the file.
+    pub fn open_at(path: &Wtf16Str, offset: u64) -> Result<Self, OpenError> {
+        let mut held = Self::open(path)?;
+        let len = held.len()?;
+        if offset > len {
+            return Err(OpenError::OffsetBeyondLength { offset, len });
+        }
+        held.start_offset = offset;
+        Ok(held)
+    }
+
+    /// The offset this file was opened at: 0 for [`open`](Self::open).
+    #[must_use]
+    pub fn start_offset(&self) -> u64 {
+        self.start_offset
     }
 
     /// The file's current length in bytes, read through the held handle.
