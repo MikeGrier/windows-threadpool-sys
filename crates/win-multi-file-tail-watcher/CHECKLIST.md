@@ -26,32 +26,40 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 - [x] **TW-2.5** -- Each roster entry holds a last known length starting at its starting offset, and the snapshot pass copies id, last known length and an observer into a chunked buffer one batch per lock. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-25)
 
 - [ ] **TW-2.6.1** -- **Classify a probe failure.** One predicate, in one place, from an
-  `io::Error` to transient or terminal; `ERROR_INVALID_HANDLE` is terminal. The rest of the terminal
-  set and what an unlisted code is are working positions, not yet put to the engineer. A unit test
-  for each code the predicate names and for one it does not. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+  `io::Error` to transient or terminal. Terminal: `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`;
+  anything else, and an error carrying no Win32 code, is transient. The set grows as the system
+  produces codes, so it is a single list that is easy to extend. A unit test for each named code
+  and for several that are not. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
-- [ ] **TW-2.6.2** -- **The diagnostic channel.** An output abstraction for messages the crate emits
-  about a registration, with a collecting sink for tests; every message goes through it. How a caller
-  supplies one is open and needs the engineer's answer before the public way in is built.
+- [ ] **TW-2.6.2** -- **The diagnostic sink**, in the shape of durable-ioring's `DiagnosticSink`:
+  this crate's own typed `Diagnostic` and `DiagnosticKind`, a `wants` check before an event is
+  built, `NoDiagnostics` as the default, a collecting sink for tests, and an optional
+  `Arc<dyn DiagnosticSink>` supplied when the watcher is made. The first event is a transient probe
+  failure, carrying the registration's id and the Win32 code. Every message goes through it.
   ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
-- [ ] **TW-2.6.3** -- **A terminal note on a roster entry**, which the snapshot then skips. Whether
-  and how the caller is told is open and needs the engineer's answer.
+- [ ] **TW-2.6.3** -- **The terminal SQ entry.** A third `SqEntry` kind carrying a clone of `T`, the
+  Win32 code as a `u32`, and the last length reported; `SqEntry` becomes `#[non_exhaustive]`.
+  ([TW-D-13](DESIGN-NOTES.md#tw-d-13), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+
+- [ ] **TW-2.6.4** -- **A terminal state on a roster entry**, which the snapshot skips and which is
+  set only by the report pass once the terminal entry is written.
   ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
 - [ ] **TW-2.6** -- **The probe pass.** Reads each snapshotted observer's current length with no
   lock held, drops each observer as soon as it has been read, and keeps the id, last known and
   current length of those that differ, in id order, in a second chunked buffer. A probe that fails
-  is classified: a transient failure is reported through the diagnostic channel and the entry is
-  probed again next beat; a terminal one is noted against the entry.
+  is classified: a transient failure is reported through the diagnostic sink and the entry is
+  probed again next beat; a terminal one is kept in the list for the report pass to write.
   ([TW-D-2](DESIGN-NOTES.md#tw-d-2), [TW-D-4](DESIGN-NOTES.md#tw-d-4),
   [TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
 - [ ] **TW-2.7** -- **The report pass and the stop point.** Walks the changed list from a recorded
   index. Per batch, under the roster lock: look the id up (a dropped registration is skipped), clone
   `T`, write the attention to the SQ, and on success make the reported length the entry's last known
-  one. A refused write stops the pass without waiting and keeps the index; a clone made for a
-  refused write is dropped after the lock is released. The poll-done entry follows the last
+  one. A terminal failure in the list is written the same way as a terminal entry, and on success
+  marks the roster entry terminal. A refused write stops the pass without waiting and keeps the
+  index; a clone made for a refused write is dropped after the lock is released. The poll-done entry follows the last
   attention, needs room like any entry, and stops the pass the same way when there is none. The
   engine runs to a stop or to completion and says which; continuing is calling it again from the
   kept index. `T::clone` runs under the lock, so a `Clone` that calls back into the watcher would
@@ -72,6 +80,16 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
   current pair, and then poll-done; a run with no writes reports only poll-done; a registration
   dropped between a stop and its continuation is skipped, and one added meanwhile is seen by the
   next run; an attention for a dropped registration carries a usable `T`.
+
+## M2+ -- Decisions to revisit once M2 is done
+
+Parked, not pending: the milestone that is next after M2 pulls these in.
+
+- [ ] **TW-2+.1** -- **Decide whether the diagnostic sink's machinery moves to a crate both this one
+  and durable-ioring use**, generic over the event type, or whether this crate's mirror stays. The
+  mirror is deliberate duplication, so that the sink could be built without touching another
+  crate's layering; the decision is to merge it or to delete the question, and is made when there
+  is more than one event to compare. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
 
 ## M3 -- The poll on the thread pool
 

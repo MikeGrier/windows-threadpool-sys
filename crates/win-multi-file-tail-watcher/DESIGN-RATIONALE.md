@@ -206,13 +206,24 @@ kernel mode allocation". Using observers from the first probe made M16 a prerequ
 
 Raised by the replan of 2026-10-15, which left "what a probe that fails does" as a question for the
 engineer. The answer was the two classes and the single predicate, with `ERROR_INVALID_HANDLE` as the
-one example of terminal. Nothing else was weighed in the answer. What was noticed while recording it,
-and left as working positions rather than decided: this crate has no diagnostic channel to log to (it
-was first written down here as there being none anywhere in the repository, which was wrong:
-durable-ioring has a `DiagnosticSink`, DI-D-51); a
-terminal entry that is silently dropped from probing looks, to the caller, like a file that stopped
-changing; and a transient message per entry per beat is a message per file when a whole volume
-fails. Defaulting an unlisted code to transient was chosen as the failure that keeps watching.
+one example of terminal. Recording it raised three points, which the engineer then settled:
+
+- **A diagnostic sink.** This crate had none; it was first written down here as there being none
+  anywhere in the repository, which was wrong: durable-ioring has a `DiagnosticSink` (DI-D-51). Its
+  events and kinds are its own, so this crate mirrors the shape instead of using it. Putting a
+  watcher event in durable-ioring was the alternative, and the wrong layering; factoring the
+  machinery into a crate both use was the other, and was set aside for now because it would change
+  two crates for one event. The merge-or-delete decision is tracked as TW-2+.1.
+- **Telling the caller of a terminal entry.** Left alone, a file dropped from probing looks to the
+  caller like a file that stopped changing, and the Win32 code would be lost. An accessor on
+  `Registration` would keep the code but only for a caller that polls it. The engineer chose a
+  dedicated SQ entry. Only terminal failures are sent that way; transient ones are diagnostics.
+- **Log volume.** A failed volume gives one transient message per entry per beat. The engineer's
+  answer was not to aggregate; with the default sink wanting nothing, the cost when nobody listens is
+  a branch.
+
+Defaulting an unlisted code to transient was chosen as the failure that keeps watching.
+`ERROR_FILE_INVALID` was added to the terminal set by the assistant and accepted.
 
 ## TW-D-11 and TW-D-12
 

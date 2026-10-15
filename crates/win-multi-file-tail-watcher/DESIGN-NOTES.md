@@ -26,7 +26,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
-| <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: noted against the entry, and the entry is no longer probed. |
+| <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -122,9 +122,11 @@ Reporting the attention makes the current length the new last known length.
 - **One submission queue (SQ), created by the crate.** The crate writes entries; the caller drains
   them. There is no completion queue: nothing flows from caller to crate except the resume
   doorbell.
-- **Two kinds of SQ entry**: an attention ([TW-D-4](#tw-d-4)), and a poll-done entry marking the end
-  of a poll. The poll-done entry is ordinary: it is queued after the attentions and waits for space
-  like them.
+- **Three kinds of SQ entry**: an attention ([TW-D-4](#tw-d-4)), a terminal entry for a file that
+  can no longer be probed ([TW-D-13](#tw-d-13); amended 2026-10-15, there were two), and a poll-done
+  entry marking the end of a poll. The poll-done entry is ordinary: it is queued after the
+  attentions and waits for space like them. The entry type is `#[non_exhaustive]`, so a further
+  kind is not a break.
 - **Two doorbells, both Windows events created by the crate, both manual-reset.** Manual-reset
   because an auto-reset event can lose a signal, which
   [windows-waitable-queues](../windows-waitable-queues/src/doorbell.rs) established.
@@ -259,30 +261,32 @@ premises was deleted for that reason; its results survive only as the tables in 
 The engineer, 2026-10-15: a failed probe's error code is inspected to decide what to do.
 
 - **Transient** (a failure that may not recur): no corrective action. A message goes to the
-  diagnostic channel, and the entry is probed again on the next beat.
-- **Terminal** (the handle can never answer again; `ERROR_INVALID_HANDLE` is the example given): a
-  note is made against the entry, and the crate stops probing it.
+  diagnostic sink, and the entry is probed again on the next beat. Messages are not aggregated: one
+  per entry per beat. A sink that does not want the kind costs a branch ([below](#tw-d-13-sink)).
+- **Terminal** (the handle can never answer again): the caller is told, by an SQ entry of its own
+  that carries a clone of `T`, the Win32 code as a `u32`, and the last length reported, so the code
+  is not lost. The report pass writes it as it writes an attention, and marks the roster entry
+  terminal only once it is written, so a full SQ retries it. A terminal entry is no longer probed or
+  snapshotted, stays registered until dropped, and is reported once.
 - **One predicate decides which**, in one place, and every site that needs the distinction asks it.
-  The engineer knows of no further terminal codes but expects there are some.
-
-What this leaves open is under [Working positions](#working-positions-not-decisions): which other
-codes are terminal, what an unlisted code is, how the caller supplies the diagnostic channel, whether
-the caller is told of a terminal entry, and how much a transient failure may log.
+  The terminal set starts at `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID` (the volume under the
+  file was externally altered). **The complete set is not known** and grows as the system produces
+  codes nobody listed.
+- **An unlisted code is transient**: the safe failure is to keep probing and say so.
+- <a id="tw-d-13-sink"></a>**Diagnostics go to a sink the caller supplies, in the shape of
+  durable-ioring's `DiagnosticSink` ([DI-D-51](../durable-ioring/DESIGN-NOTES.md#di-d-51)):** typed
+  events and not text; a sink says which kinds it `wants` before an event is built; the default,
+  `NoDiagnostics`, wants none; supplied as an optional `Arc<dyn DiagnosticSink>`. A sink is called
+  from whatever thread observed the event, returns promptly, and does not call back into the
+  watcher. The shape is mirrored, not shared: durable-ioring's event and kind enums are its own.
+  Whether the machinery moves to a crate both use is a later decision, tracked in
+  [CHECKLIST.md](CHECKLIST.md).
 
 ## Working positions (not decisions)
 
 Stated so they can be built on, and expected to be refined during implementation. Nothing should
 bind to them as settled.
 
-- **An unlisted error code is transient** ([TW-D-13](#tw-d-13)): the safe default is to keep
-  probing and say so. The terminal set starts at `ERROR_INVALID_HANDLE` and
-  `ERROR_FILE_INVALID` (the volume under the file was externally altered), the second being mine, not
-  the engineer's. Neither has been put to the engineer.
-- **Open, and not yet put to the engineer, under [TW-D-13](#tw-d-13):** how a caller supplies the
-  diagnostic channel (this crate has none; durable-ioring has one, its `DiagnosticSink` of DI-D-51,
-  whose events are its own); whether
-  the caller learns that an entry went terminal, which today it would only see as the file going
-  quiet; and the volume of transient messages, since a failed volume gives one per entry per beat.
 - **A registration's last known length starts at its starting offset** ([TW-D-4](#tw-d-4)). So a
   restarted parent that registers a file with the offset it saved is told, by the first poll, of
   whatever the file has gained since; offset 0 on a file that already has content reports all of it.
