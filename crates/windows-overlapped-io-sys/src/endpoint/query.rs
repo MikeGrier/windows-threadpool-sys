@@ -6,14 +6,29 @@ use std::mem::{MaybeUninit, offset_of};
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_STANDARD_INFO, FileIdInfo,
-    FileStandardInfo, GetFileInformationByHandleEx,
+    FILE_ALIGNMENT_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_STANDARD_INFO,
+    FILE_STORAGE_INFO, FileAlignmentInfo, FileIdInfo, FileStandardInfo, FileStorageInfo,
+    GetFileInformationByHandleEx,
 };
 
 use super::EndpointObserver;
 
 #[cfg(test)]
 mod tests;
+
+/// `FILE_STORAGE_INFO`'s flag bits and its unknown-offset sentinel.
+///
+/// `windows-sys` exports these only behind `Win32_System_WindowsProgramming`, so
+/// they are named here rather than pulling that feature in. Changing any value is
+/// a breaking change.
+pub(crate) mod storage_info_values {
+    /// `STORAGE_INFO_FLAGS_ALIGNED_DEVICE`.
+    pub(crate) const FLAGS_ALIGNED_DEVICE: u32 = 0x1;
+    /// `STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE`.
+    pub(crate) const FLAGS_PARTITION_ALIGNED_ON_DEVICE: u32 = 0x2;
+    /// `STORAGE_INFO_OFFSET_UNKNOWN`.
+    pub(crate) const OFFSET_UNKNOWN: u32 = 0xFFFF_FFFF;
+}
 
 /// A file's standard information, read through an open handle.
 ///
@@ -77,6 +92,90 @@ pub struct FileId {
     pub volume_serial_number: u64,
     /// The file's 128-bit ID within its volume, as the file system reports it.
     pub file_id: [u8; 16],
+}
+
+/// The sector geometry of the storage under a file, as
+/// `GetFileInformationByHandleEx(FileStorageInfo)` reports it:
+/// [`EndpointObserver::storage_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StorageInfo {
+    /// The logical sector size: the unit unbuffered offsets and lengths are
+    /// multiples of.
+    pub logical_bytes_per_sector: u32,
+    /// The physical sector size the device writes atomically.
+    pub physical_bytes_per_sector_for_atomicity: u32,
+    /// The physical sector size the device performs best at.
+    pub physical_bytes_per_sector_for_performance: u32,
+    /// The atomic write unit the file system honours, which may be smaller than
+    /// the device's.
+    pub file_system_effective_physical_bytes_per_sector_for_atomicity: u32,
+    /// The `STORAGE_INFO_FLAGS_*` bits, as reported; see
+    /// [`aligned_device`](Self::aligned_device) and
+    /// [`partition_aligned_on_device`](Self::partition_aligned_on_device).
+    pub flags: u32,
+    /// Bytes from the start of the first sector to the first physical sector
+    /// boundary, or `None` when the file system reports it unknown.
+    pub byte_offset_for_sector_alignment: Option<u32>,
+    /// Bytes from the partition's start to the first physical sector boundary,
+    /// or `None` when the file system reports it unknown.
+    pub byte_offset_for_partition_alignment: Option<u32>,
+}
+
+impl StorageInfo {
+    /// Whether `STORAGE_INFO_FLAGS_ALIGNED_DEVICE` is set: the device's logical
+    /// sectors start on physical sector boundaries.
+    #[must_use]
+    pub fn aligned_device(&self) -> bool {
+        self.flags & storage_info_values::FLAGS_ALIGNED_DEVICE != 0
+    }
+
+    /// Whether `STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE` is set: the
+    /// partition starts on a physical sector boundary.
+    #[must_use]
+    pub fn partition_aligned_on_device(&self) -> bool {
+        self.flags & storage_info_values::FLAGS_PARTITION_ALIGNED_ON_DEVICE != 0
+    }
+}
+
+fn storage_info_from(raw: &FILE_STORAGE_INFO) -> StorageInfo {
+    let known = |offset| (offset != storage_info_values::OFFSET_UNKNOWN).then_some(offset);
+    StorageInfo {
+        logical_bytes_per_sector: raw.LogicalBytesPerSector,
+        physical_bytes_per_sector_for_atomicity: raw.PhysicalBytesPerSectorForAtomicity,
+        physical_bytes_per_sector_for_performance: raw.PhysicalBytesPerSectorForPerformance,
+        file_system_effective_physical_bytes_per_sector_for_atomicity: raw
+            .FileSystemEffectivePhysicalBytesPerSectorForAtomicity,
+        flags: raw.Flags,
+        byte_offset_for_sector_alignment: known(raw.ByteOffsetForSectorAlignment),
+        byte_offset_for_partition_alignment: known(raw.ByteOffsetForPartitionAlignment),
+    }
+}
+
+/// The buffer alignment a device requires for unbuffered I/O, as
+/// `GetFileInformationByHandleEx(FileAlignmentInfo)` reports it:
+/// [`EndpointObserver::alignment_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlignmentInfo {
+    /// The reported requirement, a mask: an address meets it when every bit set
+    /// here is clear in the address. Win32 documents it as one less than a power
+    /// of two (`FILE_BYTE_ALIGNMENT` is 0, `FILE_512_BYTE_ALIGNMENT` is `0x1FF`).
+    pub requirement_mask: u32,
+}
+
+impl AlignmentInfo {
+    /// Whether `address` meets the requirement.
+    #[must_use]
+    pub fn is_aligned(&self, address: usize) -> bool {
+        address as u64 & u64::from(self.requirement_mask) == 0
+    }
+
+    /// The requirement in bytes, or `None` when the mask is not one less than a
+    /// power of two and so names no single alignment.
+    #[must_use]
+    pub fn byte_alignment(&self) -> Option<u64> {
+        let bytes = u64::from(self.requirement_mask) + 1;
+        bytes.is_power_of_two().then_some(bytes)
+    }
 }
 
 impl EndpointObserver {
@@ -158,6 +257,42 @@ impl EndpointObserver {
         Ok(FileId {
             volume_serial_number: raw.VolumeSerialNumber,
             file_id: Identifier,
+        })
+    }
+
+    /// The sector geometry of the storage under the file, read through the
+    /// handle with `GetFileInformationByHandleEx(FileStorageInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the storage query.
+    pub fn storage_info(&self) -> io::Result<StorageInfo> {
+        // SAFETY: FILE_STORAGE_INFO is windows-sys' own definition of the class's
+        // structure, and every field is a u32.
+        let raw: FILE_STORAGE_INFO = unsafe { self.query_info(FileStorageInfo) }?;
+        Ok(storage_info_from(&raw))
+    }
+
+    /// The buffer alignment the device requires for unbuffered I/O, read through
+    /// the handle with `GetFileInformationByHandleEx(FileAlignmentInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the alignment query.
+    pub fn alignment_info(&self) -> io::Result<AlignmentInfo> {
+        // SAFETY: FILE_ALIGNMENT_INFO is windows-sys' own definition of the class's
+        // structure: one u32.
+        let raw: FILE_ALIGNMENT_INFO = unsafe { self.query_info(FileAlignmentInfo) }?;
+        Ok(AlignmentInfo {
+            requirement_mask: raw.AlignmentRequirement,
         })
     }
 }

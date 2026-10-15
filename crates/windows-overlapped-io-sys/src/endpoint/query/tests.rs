@@ -4,13 +4,19 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
+use windows_sys::Win32::Foundation::{ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER};
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FileDispositionInfo,
-    SetFileInformationByHandle,
+    DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_STORAGE_INFO,
+    FileDispositionInfo, SetFileInformationByHandle,
 };
 
-use crate::{StandardInfo, UnassociatedEndpoint};
+use super::storage_info_from;
+use super::storage_info_values::{
+    FLAGS_ALIGNED_DEVICE as STORAGE_INFO_FLAGS_ALIGNED_DEVICE,
+    FLAGS_PARTITION_ALIGNED_ON_DEVICE as STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE,
+    OFFSET_UNKNOWN as STORAGE_INFO_OFFSET_UNKNOWN,
+};
+use crate::{AlignmentInfo, StandardInfo, UnassociatedEndpoint};
 
 /// `FSCTL_SET_SPARSE`, which `windows-sys` exports only behind `Win32_System_Ioctl`.
 const FSCTL_SET_SPARSE: u32 = 0x0009_00C4;
@@ -378,4 +384,229 @@ fn a_device_without_file_ids_reports_the_error() {
     observer
         .standard_info()
         .expect("the same handle still answers the standard query");
+}
+
+// --- storage_info and alignment_info ---
+
+fn raw_storage(sector_offset: u32, partition_offset: u32, flags: u32) -> FILE_STORAGE_INFO {
+    FILE_STORAGE_INFO {
+        LogicalBytesPerSector: 512,
+        PhysicalBytesPerSectorForAtomicity: 4096,
+        PhysicalBytesPerSectorForPerformance: 4096,
+        FileSystemEffectivePhysicalBytesPerSectorForAtomicity: 4096,
+        Flags: flags,
+        ByteOffsetForSectorAlignment: sector_offset,
+        ByteOffsetForPartitionAlignment: partition_offset,
+    }
+}
+
+#[test]
+fn storage_info_carries_every_field_and_maps_the_unknown_offset_to_none() {
+    let info = storage_info_from(&raw_storage(0, STORAGE_INFO_OFFSET_UNKNOWN, 0));
+    assert_eq!(info.logical_bytes_per_sector, 512);
+    assert_eq!(info.physical_bytes_per_sector_for_atomicity, 4096);
+    assert_eq!(info.physical_bytes_per_sector_for_performance, 4096);
+    assert_eq!(
+        info.file_system_effective_physical_bytes_per_sector_for_atomicity,
+        4096
+    );
+    assert_eq!(info.byte_offset_for_sector_alignment, Some(0));
+    assert_eq!(info.byte_offset_for_partition_alignment, None);
+
+    let swapped = storage_info_from(&raw_storage(STORAGE_INFO_OFFSET_UNKNOWN, 3584, 0));
+    assert_eq!(swapped.byte_offset_for_sector_alignment, None);
+    assert_eq!(swapped.byte_offset_for_partition_alignment, Some(3584));
+}
+
+#[test]
+fn storage_flags_are_read_bit_by_bit_and_kept_as_reported() {
+    for (flags, aligned, partition) in [
+        (0, false, false),
+        (STORAGE_INFO_FLAGS_ALIGNED_DEVICE, true, false),
+        (STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE, false, true),
+        (
+            STORAGE_INFO_FLAGS_ALIGNED_DEVICE | STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE,
+            true,
+            true,
+        ),
+        (0x8000_0000, false, false),
+    ] {
+        let info = storage_info_from(&raw_storage(0, 0, flags));
+        assert_eq!(info.flags, flags);
+        assert_eq!(info.aligned_device(), aligned, "flags {flags:#x}");
+        assert_eq!(
+            info.partition_aligned_on_device(),
+            partition,
+            "flags {flags:#x}"
+        );
+    }
+}
+
+#[test]
+fn an_alignment_mask_names_its_byte_alignment() {
+    for (mask, bytes) in [
+        (0_u32, 1_u64),
+        (1, 2),
+        (3, 4),
+        (7, 8),
+        (0x1FF, 512),
+        (0xFFF, 4096),
+        (0xFFFF, 65_536),
+        (u32::MAX, 1 << 32),
+    ] {
+        let info = AlignmentInfo {
+            requirement_mask: mask,
+        };
+        assert_eq!(info.byte_alignment(), Some(bytes), "mask {mask:#x}");
+    }
+}
+
+#[test]
+fn a_mask_that_is_not_one_less_than_a_power_of_two_names_no_alignment() {
+    for mask in [2_u32, 5, 0x100, 0x1FE, 0x8000_0000] {
+        assert_eq!(
+            AlignmentInfo {
+                requirement_mask: mask
+            }
+            .byte_alignment(),
+            None,
+            "mask {mask:#x}"
+        );
+    }
+}
+
+#[test]
+fn an_address_is_aligned_when_it_clears_every_bit_of_the_mask() {
+    let sector = AlignmentInfo {
+        requirement_mask: 0x1FF,
+    };
+    for (address, aligned) in [
+        (0, true),
+        (512, true),
+        (4096, true),
+        (1, false),
+        (511, false),
+        (513, false),
+    ] {
+        assert_eq!(sector.is_aligned(address), aligned, "address {address:#x}");
+    }
+    let any = AlignmentInfo {
+        requirement_mask: 0,
+    };
+    assert!(any.is_aligned(1) && any.is_aligned(0x1234_5677));
+    // A mask that is not of the documented form still means "these bits clear".
+    let odd = AlignmentInfo {
+        requirement_mask: 0x100,
+    };
+    assert!(odd.is_aligned(0xFF) && !odd.is_aligned(0x100));
+}
+
+#[test]
+fn a_file_reports_a_sector_geometry_consistent_with_itself() {
+    let path = temp_path("storage");
+    std::fs::write(&path, b"geometry").expect("write temp file");
+    let endpoint = open(&path);
+    let info = endpoint.observer().storage_info().expect("storage_info");
+
+    let logical = info.logical_bytes_per_sector;
+    assert!(logical.is_power_of_two(), "{info:?}");
+    for physical in [
+        info.physical_bytes_per_sector_for_atomicity,
+        info.physical_bytes_per_sector_for_performance,
+        info.file_system_effective_physical_bytes_per_sector_for_atomicity,
+    ] {
+        assert!(physical >= logical && physical % logical == 0, "{info:?}");
+    }
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_file_reports_an_alignment_of_the_documented_form() {
+    let path = temp_path("alignment");
+    std::fs::write(&path, b"aligned").expect("write temp file");
+    let endpoint = open(&path);
+    let info = endpoint
+        .observer()
+        .alignment_info()
+        .expect("alignment_info");
+
+    let bytes = info.byte_alignment().expect("one less than a power of two");
+    assert!(
+        info.is_aligned(0) && info.is_aligned(bytes as usize),
+        "{info:?}"
+    );
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn files_on_one_volume_and_every_observer_agree_on_storage_and_alignment() {
+    let first_path = temp_path("geometry-first");
+    let second_path = temp_path("geometry-second");
+    std::fs::write(&first_path, b"one").expect("write temp file");
+    std::fs::write(&second_path, b"two").expect("write temp file");
+    let first = open(&first_path);
+    let second = open(&second_path);
+    let observer = first.observer();
+    let clone = observer.clone();
+
+    let storage = observer.storage_info().expect("storage_info");
+    let alignment = observer.alignment_info().expect("alignment_info");
+    for other in [clone, second.observer()] {
+        assert_eq!(other.storage_info().expect("storage_info"), storage);
+        assert_eq!(other.alignment_info().expect("alignment_info"), alignment);
+    }
+
+    drop((observer, first, second));
+    let _ = std::fs::remove_file(&first_path);
+    let _ = std::fs::remove_file(&second_path);
+}
+
+/// Measured: the NUL device refuses the storage query but answers the alignment
+/// query, with no requirement at all.
+#[test]
+fn the_nul_device_has_no_storage_geometry_and_needs_no_alignment() {
+    let nul = UnassociatedEndpoint::open(r"\\.\NUL", true, false, 0).expect("open NUL");
+    let observer = nul.observer();
+
+    let error = observer
+        .storage_info()
+        .expect_err("the NUL device has no sectors");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_INVALID_FUNCTION as i32),
+        "{error:?}"
+    );
+    let alignment = observer.alignment_info().expect("alignment_info");
+    assert_eq!(alignment.requirement_mask, 0);
+    assert_eq!(alignment.byte_alignment(), Some(1));
+}
+
+#[test]
+fn a_directory_reports_its_volumes_geometry() {
+    let dir = temp_path("geometry-dir");
+    std::fs::create_dir(&dir).expect("create directory");
+    let file_path = dir.join("inner.tmp");
+    std::fs::write(&file_path, b"inside").expect("write inner file");
+    let dir_endpoint = UnassociatedEndpoint::open(&dir, true, false, FILE_FLAG_BACKUP_SEMANTICS)
+        .expect("open directory endpoint");
+    let file_endpoint = open(&file_path);
+
+    let from_dir = dir_endpoint.observer();
+    let from_file = file_endpoint.observer();
+    assert_eq!(
+        from_dir.storage_info().expect("storage_info"),
+        from_file.storage_info().expect("storage_info")
+    );
+    assert_eq!(
+        from_dir.alignment_info().expect("alignment_info"),
+        from_file.alignment_info().expect("alignment_info")
+    );
+
+    drop((from_dir, from_file, dir_endpoint, file_endpoint));
+    let _ = std::fs::remove_file(&file_path);
+    let _ = std::fs::remove_dir(&dir);
 }

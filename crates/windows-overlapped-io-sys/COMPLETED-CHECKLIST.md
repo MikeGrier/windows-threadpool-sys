@@ -542,3 +542,20 @@ values included; real handles cover a disk file, a directory, the NUL device, bo
 an observer outliving its endpoint. Sabotage: swapping disk and character, and dropping the error branch,
 failed five tests. Testing the crate alone also surfaced unused imports left by M15.6, fixed separately in
 `a054f8b8`.
+
+## Moved 2026-10-14 21:43:21 -04:00 -- M16.4: the observer's sector geometry and buffer alignment
+
+### <a id="m164"></a>M16.4 -- `storage_info()` and `alignment_info()` read the sector geometry and buffer alignment. *(completed 2026-10-14 21:43:21 -04:00)*
+
+`StorageInfo` carries every `FILE_STORAGE_INFO` field: the four sector sizes, the flags kept as reported
+(with `aligned_device()` and `partition_aligned_on_device()` reading the two documented bits), and the two
+offsets as `Option`, `None` for `STORAGE_INFO_OFFSET_UNKNOWN`. `AlignmentInfo` keeps the reported mask,
+with `is_aligned(address)` (meaningful for any mask) and `byte_alignment()` (`None` unless the mask is one
+less than a power of two). `windows-sys` exports the `STORAGE_INFO_*` values only behind
+`Win32_System_WindowsProgramming`, so they are named in a local const module. Measured on this machine: the
+temp volume reports logical 512 and physical 4096, flags `0xB` (bit `0x8` is named by neither), and an
+alignment mask of 1 -- word alignment, far below a page; the NUL device refuses the storage query
+(`ERROR_INVALID_FUNCTION`) and answers the alignment query with mask 0. The conversions are pure functions,
+tested across every flag, the unknown sentinel on each offset, and masks of and not of the documented form.
+Sabotage: inverting the unknown check, swapping the flag bits, and dropping the power-of-two check each
+failed its own test.

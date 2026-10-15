@@ -37,8 +37,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.3** -- `file_type()` classifies any handle, in the core rather than behind `fs`. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m163)
 
-- [ ] **M16.4** -- **`storage_info()` and `alignment_info()`**: `FileStorageInfo` (logical and physical
-  sector sizes) and `FileAlignmentInfo` (the buffer alignment the device requires). M16.5 builds on both.
+- [x] **M16.4** -- `storage_info()` and `alignment_info()` read the sector geometry and buffer alignment. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m164)
 
 - [ ] **M16.5** -- **The unbuffered adapters ask for their alignment instead of assuming it.** Decided by
   the engineer: [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "unbuffered I/O asks for its alignment". Today

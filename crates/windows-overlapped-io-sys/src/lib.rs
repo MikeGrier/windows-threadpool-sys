@@ -91,7 +91,7 @@ pub use endpoint::{
 };
 
 #[cfg(all(windows, feature = "fs"))]
-pub use endpoint::{FileId, StandardInfo};
+pub use endpoint::{AlignmentInfo, FileId, StandardInfo, StorageInfo};
 
 #[cfg(all(windows, feature = "fs"))]
 pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
