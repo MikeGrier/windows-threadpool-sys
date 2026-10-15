@@ -362,8 +362,14 @@ authorities, and each is to be asked of its authority, with no bound assumed.** 
 scatter/gather segments must be is the operating system's answer. The buffer alignment and the sector size
 (which unbuffered offsets and lengths must be multiples of) are the file system's, asked through the handle
 (`FileAlignmentInfo`, `FileStorageInfo`). File systems are expected to answer between the sector size and
-the page size, and none is known to require more than page alignment, but that is not assumed: an answer
-above a page must be honoured or refused, never silently violated. The work is M16.5 in
+the page size, and none is known to require more than page alignment, but that is not assumed.
+
+**An answer above a page gets a best effort, and the native call is the final judge** (the engineer,
+2026-10-14). The crate aligns what it controls -- the virtual addresses of the buffers and scatter/gather
+segments it allocates -- to the larger of the page size and the reported alignment, and does not refuse in
+advance; if the device still cannot accept the buffer, the native call fails and that error is returned.
+User mode controls only virtual addresses: beyond a page, they say nothing about the physical pages behind
+them, which is presumably why such requirements are not seen in practice. The work is M16.5 in
 [CHECKLIST.md](CHECKLIST.md).
 
 ## Cancellation and rundown
