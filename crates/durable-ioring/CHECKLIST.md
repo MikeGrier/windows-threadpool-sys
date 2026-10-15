@@ -143,8 +143,16 @@ milestone; the decision rows named below carry the reasons.
 ## DI-M10 -- Target backings
 
 - [ ] **DI-10.1** -- **The Win32 file object as a target backing** -- the separate concern DI-D-48
-  names: what such a target warrants by buffering class, and whether dioring reads the class from
-  the handle (`FileModeInformation`) rather than taking it on declaration.
+  names: what such a target warrants by buffering class, and what dioring can read from the handle
+  rather than take on declaration. **Ruled 2026-10-14: no `Nt*` call, so the buffering class is
+  declared.** An open handle's no-buffering and write-through modes are reported only by
+  `NtQueryInformationFile(FileModeInformation)`, which this repository may not call
+  ([copilot-instructions.md](../../.github/copilot-instructions.md), "DOCUMENTED APIS ONLY"); no
+  documented `GetFileInformationByHandleEx` class reports them. What remains to build, to be
+  confirmed against documented routes only: the target's geometry from `FileStorageInfo`'s logical
+  sector size, and a refusal to let a remote handle (`FileRemoteProtocolInfo`, or the volume's
+  drive type through `GetFinalPathNameByHandleW`) be declared above `BestEffort`. The Win32 queries
+  need a home that allows `unsafe`, which is the engineer's call: a new crate, or an existing one.
 
 - [ ] **DI-10.2** -- **A raw partition as a target backing** (the engineer, 2026-10-09: "ok"): one
   volume handle with regions in it, one commit per volume, failure sharing found from the volume's
