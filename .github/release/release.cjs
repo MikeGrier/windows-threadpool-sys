@@ -13,6 +13,14 @@ function registerCalendarVersions(date = new Date()) {
     }
   }
   class CalendarWorkspace extends CargoWorkspace {
+    // A package may list itself as a dev-dependency to switch on its own features for its tests, which
+    // Cargo accepts and which is no dependency on anything else; the stock graph reads it as a cycle
+    // and refuses to plan any release.
+    async buildGraph(allPackages) {
+      const graph = await super.buildGraph(allPackages);
+      for (const [name, node] of graph) node.deps = node.deps.filter(dep => dep !== name);
+      return graph;
+    }
     bumpVersion(pkg) {
       if (this.repositoryConfig[pkg.path]?.versioning === 'probe-calver') {
         return Version.parse(nextCalendarVersion(pkg.version, date));
