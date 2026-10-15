@@ -6,8 +6,9 @@ use std::mem::{MaybeUninit, offset_of};
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALIGNMENT_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_STANDARD_INFO,
-    FILE_STORAGE_INFO, FileAlignmentInfo, FileIdInfo, FileStandardInfo, FileStorageInfo,
+    FILE_ALIGNMENT_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS,
+    FILE_REMOTE_PROTOCOL_INFO, FILE_STANDARD_INFO, FILE_STORAGE_INFO, FileAlignmentInfo,
+    FileIdInfo, FileRemoteProtocolInfo, FileStandardInfo, FileStorageInfo,
     GetFileInformationByHandleEx,
 };
 
@@ -28,6 +29,23 @@ pub(crate) mod storage_info_values {
     pub(crate) const FLAGS_PARTITION_ALIGNED_ON_DEVICE: u32 = 0x2;
     /// `STORAGE_INFO_OFFSET_UNKNOWN`.
     pub(crate) const OFFSET_UNKNOWN: u32 = 0xFFFF_FFFF;
+}
+
+/// `FILE_REMOTE_PROTOCOL_INFO`'s SMB protocol value and flag bits.
+///
+/// `windows-sys` exports these only behind `Win32_Storage_InstallableFileSystems`
+/// and `Win32_System_WindowsProgramming`, so they are named here rather than
+/// pulling those features in. Changing any value is a breaking change.
+pub(crate) mod remote_protocol_values {
+    /// `WNNC_NET_SMB`: the protocol value for SMB, whose protocol-specific
+    /// information is the SMB2 block.
+    pub(crate) const PROTOCOL_SMB: u32 = 0x0002_0000;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_LOOPBACK`.
+    pub(crate) const FLAG_LOOPBACK: u32 = 0x1;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_OFFLINE`.
+    pub(crate) const FLAG_OFFLINE: u32 = 0x2;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_PERSISTENT_HANDLE`.
+    pub(crate) const FLAG_PERSISTENT_HANDLE: u32 = 0x4;
 }
 
 /// A file's standard information, read through an open handle.
@@ -178,6 +196,95 @@ impl AlignmentInfo {
     }
 }
 
+/// The remote protocol a file is reached through, as
+/// `GetFileInformationByHandleEx(FileRemoteProtocolInfo)` reports it:
+/// [`EndpointObserver::remote_protocol_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RemoteProtocolInfo {
+    /// The version of the structure the file system filled in.
+    pub structure_version: u16,
+    /// The protocol, as a `WNNC_NET_*` value; SMB is `0x20000`.
+    pub protocol: u32,
+    /// The protocol's major version.
+    pub major_version: u16,
+    /// The protocol's minor version.
+    pub minor_version: u16,
+    /// The protocol's revision.
+    pub revision: u16,
+    /// The `REMOTE_PROTOCOL_INFO_FLAG_*` bits, as reported; see
+    /// [`loopback`](Self::loopback), [`offline`](Self::offline) and
+    /// [`persistent_handle`](Self::persistent_handle).
+    pub flags: u32,
+    /// The SMB2 block, present when `protocol` is SMB.
+    pub smb2: Option<Smb2Info>,
+}
+
+impl RemoteProtocolInfo {
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_LOOPBACK` is set: the remote server is
+    /// this machine.
+    #[must_use]
+    pub fn loopback(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_LOOPBACK != 0
+    }
+
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_OFFLINE` is set: the file is reached
+    /// from an offline cache.
+    #[must_use]
+    pub fn offline(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_OFFLINE != 0
+    }
+
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_PERSISTENT_HANDLE` is set: the handle
+    /// survives a reconnection to the server.
+    #[must_use]
+    pub fn persistent_handle(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_PERSISTENT_HANDLE != 0
+    }
+}
+
+/// The SMB2 server and share capabilities of a [`RemoteProtocolInfo`], as
+/// reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Smb2Info {
+    /// The server's capability bits.
+    pub server_capabilities: u32,
+    /// The share's capability bits.
+    pub share_capabilities: u32,
+    /// The share's flag bits.
+    pub share_flags: u32,
+}
+
+fn remote_protocol_info_from(raw: &FILE_REMOTE_PROTOCOL_INFO) -> RemoteProtocolInfo {
+    let smb2 = (raw.Protocol == remote_protocol_values::PROTOCOL_SMB).then(|| {
+        // SAFETY: both union members are plain integers, valid for any bit pattern;
+        // the SMB2 one is the member the file system fills in for SMB.
+        let block = unsafe { raw.ProtocolSpecific.Smb2 };
+        Smb2Info {
+            server_capabilities: block.Server.Capabilities,
+            share_capabilities: block.Share.Capabilities,
+            share_flags: block.Share.ShareFlags,
+        }
+    });
+    RemoteProtocolInfo {
+        structure_version: raw.StructureVersion,
+        protocol: raw.Protocol,
+        major_version: raw.ProtocolMajorVersion,
+        minor_version: raw.ProtocolMinorVersion,
+        revision: raw.ProtocolRevision,
+        flags: raw.Flags,
+        smb2,
+    }
+}
+
+/// The output buffer of every query. The kernel checks a per-class buffer
+/// alignment that can exceed `T`'s own: measured, `FileRemoteProtocolInfo`
+/// refused a buffer aligned to 4 but not 8 with `ERROR_NOACCESS`, so every
+/// query gets 8.
+#[repr(C, align(8))]
+struct QueryBuffer<T>(MaybeUninit<T>);
+
+const _: () = assert!(align_of::<QueryBuffer<u8>>() >= 8);
+
 impl EndpointObserver {
     /// Fill a `T` with the information class `class` through the handle.
     ///
@@ -186,7 +293,7 @@ impl EndpointObserver {
     /// `T` must be laid out as the structure `class` returns, and every bit
     /// pattern of it must be valid.
     unsafe fn query_info<T>(&self, class: FILE_INFO_BY_HANDLE_CLASS) -> io::Result<T> {
-        let mut out = MaybeUninit::<T>::uninit();
+        let mut out = QueryBuffer(MaybeUninit::<T>::uninit());
         let size = u32::try_from(size_of::<T>()).expect("an information structure fits a u32 size");
         // SAFETY: a live handle this observer holds, and an output buffer laid out
         // as `class` requires (the caller's obligation) of exactly the size passed.
@@ -195,7 +302,7 @@ impl EndpointObserver {
             GetFileInformationByHandleEx(
                 self.handle.as_raw_handle(),
                 class,
-                out.as_mut_ptr().cast(),
+                out.0.as_mut_ptr().cast(),
                 size,
             )
         };
@@ -204,7 +311,7 @@ impl EndpointObserver {
         }
         // SAFETY: the call succeeded, so it filled the whole structure, and any
         // bit pattern is valid for `T` (the caller's obligation).
-        Ok(unsafe { out.assume_init() })
+        Ok(unsafe { out.0.assume_init() })
     }
 }
 
@@ -294,5 +401,24 @@ impl EndpointObserver {
         Ok(AlignmentInfo {
             requirement_mask: raw.AlignmentRequirement,
         })
+    }
+
+    /// The remote protocol the file is reached through -- for a file on a share,
+    /// SMB and its version and capabilities -- read through the handle with
+    /// `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports. Measured: a file
+    /// on a local volume is refused with `ERROR_INVALID_PARAMETER`, so an error is
+    /// how a local file answers, not a failure to tell.
+    pub fn remote_protocol_info(&self) -> io::Result<RemoteProtocolInfo> {
+        // SAFETY: FILE_REMOTE_PROTOCOL_INFO is windows-sys' own definition of the
+        // class's structure, and every field, union members included, is integers.
+        let raw: FILE_REMOTE_PROTOCOL_INFO = unsafe { self.query_info(FileRemoteProtocolInfo) }?;
+        Ok(remote_protocol_info_from(&raw))
     }
 }

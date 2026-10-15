@@ -577,3 +577,22 @@ through blocking scatter/gather, and another round-trip uses what the real endpo
 ignoring the alignment failed two tests; dropping the page floor failed four. Replacing `page_size()` with a
 constant 4096 would pass on this machine, whose page is 4 KiB -- the test compares against `GetSystemInfo`
 and catches it only where the two differ.
+
+## Moved 2026-10-14 22:18:54 -04:00 -- M16.6: the remote protocol query
+
+### <a id="m166"></a>M16.6 -- `remote_protocol_info()` reads the remote protocol, version, flags and SMB2 capabilities. *(completed 2026-10-14 22:18:54 -04:00)*
+
+`RemoteProtocolInfo` carries the structure version, protocol, major/minor version, revision and flags as
+reported, with `loopback()`, `offline()` and `persistent_handle()` reading the three documented bits; `smb2`
+is `Some(Smb2Info)` only when the protocol is `WNNC_NET_SMB` (`0x20000`), since the union member is defined
+only for SMB. Measured on this machine: a local file refuses the query with `ERROR_INVALID_PARAMETER` (it
+does not report an empty protocol), and that is tested. Through `\\localhost\<drive>$` it answers structure
+version 4, SMB 3.1.1, flags `0x39` (loopback plus `0x8`, `0x10` and `0x20`, which are named nowhere and kept
+as reported), server capabilities `0x6F`, share capabilities `0x80`. The share test is `#[ignore]` because it
+needs the administrative share -- administrator rights and the Server service -- and passes here with
+`--include-ignored`. The same probe found the kernel refusing a buffer aligned to 4 but not 8 with
+`ERROR_NOACCESS`, so every query's buffer is now a private `QueryBuffer<T>` aligned to 8, pinned by a const
+assertion; a second ignored share test drives the raw call through a 4-mod-8 buffer and expects the
+refusal. Sabotage: dropping the alignment to 1 was not caught by any test (the stack buffer happened to land
+8-aligned), which is why the const assertion exists -- dropping it to 4 then failed the build; the SMB check
+weakened to "any protocol" and the loopback bit swapped for offline each failed their tests.

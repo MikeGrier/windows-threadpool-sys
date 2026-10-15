@@ -4,19 +4,25 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER};
+use windows_sys::Win32::Foundation::{
+    ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOACCESS,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_STORAGE_INFO,
-    FileDispositionInfo, SetFileInformationByHandle,
+    DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_REMOTE_PROTOCOL_INFO,
+    FILE_STORAGE_INFO, FileDispositionInfo, FileRemoteProtocolInfo, GetFileInformationByHandleEx,
+    SetFileInformationByHandle,
 };
 
-use super::storage_info_from;
+use super::remote_protocol_values::{
+    FLAG_LOOPBACK, FLAG_OFFLINE, FLAG_PERSISTENT_HANDLE, PROTOCOL_SMB,
+};
 use super::storage_info_values::{
     FLAGS_ALIGNED_DEVICE as STORAGE_INFO_FLAGS_ALIGNED_DEVICE,
     FLAGS_PARTITION_ALIGNED_ON_DEVICE as STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE,
     OFFSET_UNKNOWN as STORAGE_INFO_OFFSET_UNKNOWN,
 };
-use crate::{AlignmentInfo, StandardInfo, UnassociatedEndpoint};
+use super::{remote_protocol_info_from, storage_info_from};
+use crate::{AlignmentInfo, Smb2Info, StandardInfo, UnassociatedEndpoint};
 
 /// `FSCTL_SET_SPARSE`, which `windows-sys` exports only behind `Win32_System_Ioctl`.
 const FSCTL_SET_SPARSE: u32 = 0x0009_00C4;
@@ -609,4 +615,172 @@ fn a_directory_reports_its_volumes_geometry() {
     drop((from_dir, from_file, dir_endpoint, file_endpoint));
     let _ = std::fs::remove_file(&file_path);
     let _ = std::fs::remove_dir(&dir);
+}
+
+// --- remote_protocol_info ---
+
+fn raw_remote(protocol: u32, flags: u32) -> FILE_REMOTE_PROTOCOL_INFO {
+    let mut raw = FILE_REMOTE_PROTOCOL_INFO {
+        StructureVersion: 4,
+        StructureSize: 116,
+        Protocol: protocol,
+        ProtocolMajorVersion: 3,
+        ProtocolMinorVersion: 1,
+        ProtocolRevision: 1,
+        Flags: flags,
+        ..FILE_REMOTE_PROTOCOL_INFO::default()
+    };
+    raw.ProtocolSpecific.Smb2.Server.Capabilities = 0x6F;
+    raw.ProtocolSpecific.Smb2.Share.Capabilities = 0x80;
+    raw.ProtocolSpecific.Smb2.Share.ShareFlags = 0x33;
+    raw
+}
+
+#[test]
+fn remote_protocol_info_carries_every_field_and_the_smb2_block_for_smb() {
+    let info = remote_protocol_info_from(&raw_remote(PROTOCOL_SMB, 0));
+    assert_eq!(info.structure_version, 4);
+    assert_eq!(info.protocol, PROTOCOL_SMB);
+    assert_eq!(
+        (info.major_version, info.minor_version, info.revision),
+        (3, 1, 1)
+    );
+    assert_eq!(
+        info.smb2,
+        Some(Smb2Info {
+            server_capabilities: 0x6F,
+            share_capabilities: 0x80,
+            share_flags: 0x33,
+        })
+    );
+}
+
+#[test]
+fn a_protocol_other_than_smb_carries_no_smb2_block() {
+    for protocol in [0_u32, 0x0001_0000, 0x0002_0001, 0x0025_0000, u32::MAX] {
+        let info = remote_protocol_info_from(&raw_remote(protocol, 0));
+        assert_eq!(info.protocol, protocol);
+        assert_eq!(info.smb2, None, "protocol {protocol:#x}");
+    }
+}
+
+#[test]
+fn remote_flags_are_read_bit_by_bit_and_kept_as_reported() {
+    for (flags, loopback, offline, persistent) in [
+        (0, false, false, false),
+        (FLAG_LOOPBACK, true, false, false),
+        (FLAG_OFFLINE, false, true, false),
+        (FLAG_PERSISTENT_HANDLE, false, false, true),
+        (
+            FLAG_LOOPBACK | FLAG_OFFLINE | FLAG_PERSISTENT_HANDLE,
+            true,
+            true,
+            true,
+        ),
+        (0x38, false, false, false),
+        (0x39, true, false, false),
+    ] {
+        let info = remote_protocol_info_from(&raw_remote(PROTOCOL_SMB, flags));
+        assert_eq!(info.flags, flags);
+        assert_eq!(info.loopback(), loopback, "flags {flags:#x}");
+        assert_eq!(info.offline(), offline, "flags {flags:#x}");
+        assert_eq!(info.persistent_handle(), persistent, "flags {flags:#x}");
+    }
+}
+
+/// Measured: a local file is refused, rather than answered with an empty protocol.
+#[test]
+fn a_local_file_is_refused_with_invalid_parameter() {
+    let path = temp_path("remote-local");
+    std::fs::write(&path, b"local").expect("write temp file");
+    let endpoint = open(&path);
+
+    let error = endpoint
+        .observer()
+        .remote_protocol_info()
+        .expect_err("a local file has no remote protocol");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_INVALID_PARAMETER as i32),
+        "{error:?}"
+    );
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The temp directory reached through its drive's administrative share, so the
+/// handle is on SMB over loopback. Needs that share: administrator rights and
+/// the Server service. Run it with `--include-ignored` where both are present.
+fn loopback_share_path(path: &Path) -> String {
+    let full = std::fs::canonicalize(path).expect("canonicalize");
+    let full = full.to_str().expect("a UTF-8 temp path");
+    let local = full.trim_start_matches(r"\\?\");
+    let (drive, rest) = local.split_once(":\\").expect("a drive-letter path");
+    format!(r"\\localhost\{drive}$\{rest}")
+}
+
+#[test]
+#[ignore = "needs the administrative share (admin rights and the Server service)"]
+fn a_file_on_the_loopback_administrative_share_is_smb_over_loopback() {
+    let path = temp_path("remote-share");
+    std::fs::write(&path, b"remote").expect("write temp file");
+    let unc = loopback_share_path(&path);
+
+    let endpoint =
+        UnassociatedEndpoint::open(&unc, true, false, 0).expect("open through the share");
+    let info = endpoint
+        .observer()
+        .remote_protocol_info()
+        .expect("remote_protocol_info");
+
+    assert_eq!(info.protocol, PROTOCOL_SMB, "{info:?}");
+    assert!(info.loopback(), "{info:?}");
+    assert!(info.smb2.is_some(), "{info:?}");
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Why every query's buffer is aligned to 8: the same remote-protocol query through
+/// a buffer aligned to 4 but not 8 is refused with `ERROR_NOACCESS`, while the
+/// observer's own query succeeds. Needs the administrative share, as above.
+#[test]
+#[ignore = "needs the administrative share (admin rights and the Server service)"]
+fn the_remote_protocol_query_refuses_a_buffer_aligned_to_four_but_not_eight() {
+    let path = temp_path("remote-align");
+    std::fs::write(&path, b"remote").expect("write temp file");
+    let unc = loopback_share_path(&path);
+    let endpoint =
+        UnassociatedEndpoint::open(&unc, true, false, 0).expect("open through the share");
+    let observer = endpoint.observer();
+
+    let mut storage = [0_u64; 17];
+    let size = size_of::<FILE_REMOTE_PROTOCOL_INFO>();
+    assert!(4 + size <= size_of_val(&storage));
+    // SAFETY: 4 bytes into an 8-aligned array of 136 bytes, leaving room for the
+    // structure; the call is synchronous and the handle is the observer's own.
+    let ok = unsafe {
+        let misaligned = storage.as_mut_ptr().cast::<u8>().add(4);
+        GetFileInformationByHandleEx(
+            observer.handle().as_raw_handle(),
+            FileRemoteProtocolInfo,
+            misaligned.cast(),
+            u32::try_from(size).expect("a u32 size"),
+        )
+    };
+    let error = std::io::Error::last_os_error();
+    assert_eq!(ok, 0, "a buffer aligned to 4 was accepted");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_NOACCESS as i32),
+        "{error:?}"
+    );
+
+    observer
+        .remote_protocol_info()
+        .expect("the observer's own aligned query");
+
+    drop((observer, endpoint));
+    let _ = std::fs::remove_file(&path);
 }

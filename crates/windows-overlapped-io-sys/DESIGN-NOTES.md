@@ -159,6 +159,12 @@ route to association, submission, and the blocking backend, and stays not `Clone
 - **Observer queries return paths and names as `Wtf16String`** (the engineer, 2026-10-14, for M16):
   `final_path` and `volume_info` hand back Windows' own UTF-16 unconverted, so this crate takes a
   dependency on [wtf-string](../wtf-string/) for them.
+- **Every query's output buffer is aligned to 8, not to the structure's own alignment** (M16.6, measured
+  2026-10-14): through an SMB loopback handle, `FileRemoteProtocolInfo` refused a buffer aligned to 4 but
+  not 8 with `ERROR_NOACCESS`, although the structure's Rust alignment is 4. The kernel's per-class
+  requirement is not published, so every query gets 8 rather than only the one measured. A const
+  assertion pins it, because no test caught a dropped alignment: a stack buffer lands 8-aligned more often
+  than not. The kernel-side refusal is tested on the administrative share, `#[ignore]`d for needing it.
 - **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
   before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
   hold it; nothing reaches that association, because only the endpoint ever submitted through it.

@@ -41,9 +41,7 @@ method per field, and lands with tests of its own result. Independent of M14; it
 
 - [x] **M16.5** -- The page size is asked of the OS, and `PageBuffers` aligns to what the device reports. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m165)
 
-- [ ] **M16.6** -- **`remote_protocol_info()`**: `FileRemoteProtocolInfo`, answering whether the file is on
-  SMB or another remote protocol. On a local file the query fails or reports no protocol; record which,
-  measured, and test that case. A remote case needs a share, so state whether the test can reach one.
+- [x] **M16.6** -- `remote_protocol_info()` reads the remote protocol, version, flags and SMB2 capabilities. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m166)
 
 - [ ] **M16.7** -- **`basic_info()`**: `FileBasicInfo` -- creation, last access, last write and change times,
   and attributes. **Measure first** whether the times read through the handle are current while the
