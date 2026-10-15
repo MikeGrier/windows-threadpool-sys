@@ -1,5 +1,7 @@
 # Changelog
 
+## [2026.1015.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1015.0...windows-platform-probes-v2026.1015.1) (2026-10-15)
+
 ## [2026.1015.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1004.0...windows-platform-probes-v2026.1015.0) (2026-10-15)
 
 ## [2026.1004.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.925.0...windows-platform-probes-v2026.1004.0) (2026-10-04)
