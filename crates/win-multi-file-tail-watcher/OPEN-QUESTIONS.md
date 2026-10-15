@@ -261,12 +261,16 @@ time, so the mechanism carrying it must not either. A ring is not required.
   requested shutdown, it may simply drop the watcher.
   [Session](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q35-no-special-mechanism)
 
-- **Q36. Signalling quiescence after a shutdown request.** Open, raised 2026-10-15 by the review
+- **Q36. Signalling quiescence after a shutdown request.** Raised 2026-10-15 by the review
   that corrected [TW-D-9](DESIGN-NOTES.md#tw-d-9). After the request, `Drop` waits at most for a
   running poll to reach its next roster entry and return; even after the poll-done entry is read,
   the callback that wrote it may not have returned. Should the crate offer a way to know it is
   quiescent -- so a caller can drop knowing `Drop` will not wait -- or is the bounded wait enough?
-  Too early to say is a valid answer; nothing binds to either until it is answered.
+
+  > Drop has to be allowed to block.
+
+  Answer: the bounded wait is enough. `Drop` may block; no quiescence signal is added. Recorded in
+  [TW-D-9](DESIGN-NOTES.md#tw-d-9).
 
 ## Population
 

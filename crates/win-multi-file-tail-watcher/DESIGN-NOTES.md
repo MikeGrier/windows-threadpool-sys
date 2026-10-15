@@ -22,7 +22,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-6"></a>TW-D-6 | **Delivery is one crate-created submission queue and two crate-created manual-reset doorbell events.** No CQ. |
 | <a id="tw-d-7"></a>TW-D-7 | **A poll that fills the SQ stops without waiting and resumes later; no lock is held across a probe, an SQ write, or a doorbell.** |
 | <a id="tw-d-8"></a>TW-D-8 | **Registration and unregistration are legal during a poll, and neither waits for it.** |
-| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks, which after a request means at most a running poll reaching its next roster entry.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
+| <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks and is allowed to block, which after a request means at most a running poll reaching its next roster entry.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
 | <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
@@ -170,14 +170,13 @@ The drain moved to `Drop`, below.
   finishing its current probe) or queued (a resume callback about to see the flag).
 - **The end of polling reaches the caller as the ordinary poll-done entry**, when there is space
   for it. A caller that does not care need not drain for it.
-- **`Drop` drains.** It stops and drains the resume wait and waits for a running poll to return,
-  following the repository's [teardown-drains decision](../../DESIGN-NOTES.md#teardown-drains), and
-  never depends on the poll-done entry having been written or read. After a shutdown request that
-  wait is at most a running poll reaching its next roster entry and returning; without one, `Drop`
-  sets the stop flag itself first, so the bound is the same. Even after the poll-done entry is read,
-  the callback that wrote it may not yet have returned, so no `Drop` that never waits is promised.
-  Whether to offer a signal that would make one promisable is open:
-  [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) Q36.
+- **`Drop` drains, and is allowed to block** (the engineer, 2026-10-15: "Drop has to be allowed to
+  block"). It stops and drains the resume wait and waits for a running poll to return, following the
+  repository's [teardown-drains decision](../../DESIGN-NOTES.md#teardown-drains), and never depends
+  on the poll-done entry having been written or read. After a shutdown request that wait is at most
+  a running poll reaching its next roster entry and returning; without one, `Drop` sets the stop
+  flag itself first, so the bound is the same. No signal of quiescence is offered for a caller to
+  avoid the wait ([OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) Q36).
 
 ## TW-D-10: one crate, endpoints and observers
 

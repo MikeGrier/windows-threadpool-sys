@@ -132,8 +132,9 @@ callback inside a probe, so a request made while a poll was probing would block,
 promise; and the Q35 answer lets a caller drop without reading the poll-done entry, so `Drop` could
 always find a callback to wait for. The session's own analysis of Q35 had already put the wait at
 "at most a running poll reaching its next roster entry"; the decision text had not followed it. The
-drain moved from the request into `Drop`, and a signal that would let `Drop` promise no wait at all
-is left open as Q36 rather than invented here.
+drain moved from the request into `Drop`. Whether to add a signal that would let `Drop` promise no
+wait at all was put as Q36; the engineer answered that `Drop` has to be allowed to block, so none is
+added -- the bounded wait in `Drop` is the design, not a gap in it.
 
 ## TW-D-10: one crate, shared handles
 
