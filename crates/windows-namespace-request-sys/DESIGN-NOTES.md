@@ -785,3 +785,59 @@ file of that name when grafted, so a graft would change what the call means.
 - Behaviour in a process that is long-path aware was not measured; the test binary is not.
 
 **Scheduled work:** `NR-3.3`. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
+
+## <a id="d-20"></a>D-20: Every device control goes through one overlapped-safe helper
+
+**Status: decided and implemented** by `NR-2.1` (the helper is `src/device_control.rs`, its first
+entry is [`QueryVolumeNumaInfo`](src/volume_numa.rs)).
+
+**What is decided.** A catalogue entry that is a `DeviceIoControl` call does not call it. It calls the
+crate's one private helper, which makes the call the same way on every handle:
+
+- It gives the call an `OVERLAPPED` and a manual-reset event of its own, and waits for completion
+  before returning, so the output buffer is not in use by the device when the caller gets it back.
+  The crate cannot see whether a handle was opened `FILE_FLAG_OVERLAPPED` (a request owns a
+  duplicate of a handle its caller opened, [D-4](#d-4)), and `DeviceIoControl` documents that on an
+  overlapped handle a call without a valid `OVERLAPPED` "fails in unpredictable ways".
+- It passes the event with its **low-order bit set**, which `GetQueuedCompletionStatus` documents as
+  suppressing the completion packet, so a handle that belongs to a consumer's completion port gets
+  no packet for a call the consumer never made. The event is still signalled.
+- If the wait itself fails it **aborts the process**: the device may still write into memory that
+  unwinding would release, and stopping is defined where continuing is not.
+- It returns the raw Win32 code unaltered, including `ERROR_MORE_DATA` and
+  `ERROR_INSUFFICIENT_BUFFER`, which a control that reports a size first is sized by
+  ([D-17](#d-17)).
+
+**What an entry owns** is the interpretation of the bytes and nothing else. It does not invent a value
+for a device that has no answer: a failure is the device's own code and a success carries what the
+device wrote ([D-12](#d-12)). It also checks that the number of bytes written is the size its structure
+is, and reports a mismatch as its own error, because a value read from a buffer the device did not
+fill would read as an answer.
+
+**Measured on 2026-10-15**, Windows 11, one NUMA node:
+
+- `FSCTL_QUERY_VOLUME_NUMA_INFO` on a file on the system volume answers node `0`; on the `NUL`
+  device it fails with `ERROR_INVALID_FUNCTION`. What a volume that advertises no proximity domain
+  answers is not documented and was not observed.
+- `FSCTL_PIPE_LISTEN` on an overlapped named-pipe server fails with `ERROR_INVALID_FUNCTION`
+  through `DeviceIoControl`. Why is not established, and it is evidence about that one code only: the
+  codes of `NR-2.2` to `NR-2.4` are ordinary device controls for which `DeviceIoControl` is the
+  documented route, and nothing here says they behave as it did.
+- An overlapped call pended in 0 of 20000 isolated runs of two controls, and pended on some runs
+  while the full test suite ran in parallel. The pending path (the wait, the abort, the result read)
+  is therefore reached on some runs and not on others, and **has no sabotage entry**: a mutation
+  confined to it is caught on some runs and survives on others, which is neither a control nor a
+  declared blind spot. [sabotage.json](sabotage.json) says so where the entries are.
+
+**The helper takes no input yet.** That is the scope of the first entry, not a ruling that controls
+take none: `NR-2.2` to `NR-2.4` need an input buffer, and a control that takes one and pends on demand
+(`FSCTL_REQUEST_OPLOCK` is the candidate) is what would make the pending path testable. Both are
+scheduled in [CHECKLIST.md](CHECKLIST.md) as part of those items.
+
+**A duplicate that must be decided.** `win-volume-sys` has its own `control()`
+([control.rs](../win-volume-sys/src/control.rs)) with the same overlapped-and-event shape and an
+`ERROR_MORE_DATA` convention of its own. Building this one beside it, and not changing the working
+crate while this one is proven, is deliberate; the merge-or-delete decision is scheduled as `NR-2.6`,
+so the duplicate does not become permanent because nobody came back.
+
+**Scheduled work:** the input buffer, in `NR-2.2`; the decision about `win-volume-sys`, `NR-2.6`.

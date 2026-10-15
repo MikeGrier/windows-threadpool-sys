@@ -72,3 +72,23 @@ the published crate. The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) under
 pin it, and the one blind spot, are in [sabotage.json](sabotage.json), a manifest this change introduced.
 Two of those sabotages -- a copy of an open request that forgets its security attributes -- would have survived
 before: nothing tested that a copy kept them, so this change added the tests.
+
+## Moved 2026-10-15 16:13:07 -04:00 -- NR-2.1: where a volume resides, through the one device-control helper
+
+### <a id="nr-21"></a>NR-2.1 -- `FSCTL_QUERY_VOLUME_NUMA_INFO` on a file or directory handle, through the crate's one overlapped-safe `DeviceIoControl` helper. *(completed 2026-10-15 16:13:07 -04:00)*
+
+`QueryVolumeNumaInfo` reports the NUMA node the volume under a file or directory handle resides on, as the
+device wrote it; a failure is the device's own code, and a reply whose size is not the structure's is its own
+error rather than a read. The call goes through a private helper, so every later control is the same call on an
+overlapped handle and on a plain one and posts nothing to a completion port the handle belongs to. The decision
+is [D-20](DESIGN-NOTES.md#d-20) and how it was reached is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code
+is `2d6b757a`. `windows-ioring-sys`' unrun
+[file-handle-numa-spike.rs](../windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs) records what
+was and was not known about this control beforehand.
+
+Measured here: a file on the system volume answers node `0`, and the `NUL` device answers
+`ERROR_INVALID_FUNCTION`. This machine has one node, so a node other than `0`, and a volume that advertises no
+proximity domain, were not observed. Six sabotages pin it, in [sabotage.json](sabotage.json); the helper's
+pending path has none, because an overlapped call pended only while the whole suite ran in parallel, and the
+manifest says so where the entries are. What this left to do is `NR-2.2` (an input buffer for the helper, and a
+control that pends on demand) and `NR-2.6` (the duplicate in `win-volume-sys`).

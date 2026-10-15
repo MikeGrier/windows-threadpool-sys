@@ -280,3 +280,46 @@ decision. A classification that grafts everything but the forms known to be wron
 the list of wrong forms the policy; the engineer's rule was that the graft is allowed "when we can
 show that the child path is clearly safe", so the rule names what is safe and lets the rest through
 untouched.
+
+## D-20: one overlapped-safe `DeviceIoControl` helper
+
+The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-20`. This is how it was reached.
+
+**The problem was visible before any code.** The crate's handle-taking entries (`QueryVolumeInformation`
+and the rest) call functions that take no `OVERLAPPED`, so how a handle was opened never mattered.
+`DeviceIoControl` is the first call that does take one, and the same crate that cannot see how a
+handle was opened is the one that has to call it.
+
+**What was weighed.**
+
+- **Ask the handle how it was opened.** The only route to the overlapped flag is an `Nt*` query,
+  which the repository's DOCUMENTED APIS ONLY rule forbids, and
+  `GetFileInformationByHandleEx` does not report it.
+- **Pass a null `OVERLAPPED`.** Documented to fail unpredictably on an overlapped handle, and
+  unpredictable is not an outcome a catalogue entry can report.
+- **Associate a port of the helper's own, or change the handle's completion-notification mode.**
+  Either changes state on a handle the caller owns and shares; a request borrows a duplicate, not
+  the right to configure it.
+- **Give every call an event and wait for it.** What was chosen. It is the same call on both kinds of
+  handle, and it costs an event creation per call, which is the price of not knowing.
+- **The event's low bit.** Without it a handle on a completion port gets a packet when the call
+  completes, which reaches a consumer's loop as a completion it did not ask for. A sabotage that
+  removes the bit is caught by a test that associates the handle with a port and checks nothing
+  is queued after the call.
+
+**Why the tests use two controls.** `FSCTL_QUERY_VOLUME_NUMA_INFO` is the entry's own control and the
+one whose buffer-size failure is documented, but a volume may have no answer, so tests on it stand
+down when there is none. The first sabotage sweep showed what that costs: telling the helper the
+buffer was empty turned every call into a failure, and every test that tolerated "no answer" passed.
+`FSCTL_GET_COMPRESSION` is answered by every file on an NTFS or ReFS volume, so the helper's tests
+assert success on it and do not stand down; that closed the hole.
+
+**What was tried and removed.** A named-pipe listen (`FSCTL_PIPE_LISTEN`) was the obvious control that
+pends until a client connects, which would have made the pending path testable on demand. It failed
+with `ERROR_INVALID_FUNCTION`, so it was removed rather than worked around, and the pending path's
+sabotage entries went with it: two of the three had been caught only because the full suite happened
+to make a call pend, and the third survived for the same reason. The measurement that showed this was
+a throwaway test that counted `ERROR_IO_PENDING` over 20000 calls with the pending branch disabled.
+
+**What this does not settle.** Whether the pending path's byte-count read is right is unchecked: the
+controls that write output complete synchronously here, and the one that pends writes none.

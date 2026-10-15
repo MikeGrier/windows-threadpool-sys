@@ -22,16 +22,19 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 `GetFinalPathNameByHandleW` with `VOLUME_NAME_GUID`. A handle to `\\?\Volume{GUID}` or
 `\\.\PhysicalDriveN` comes from the existing `CreateFileW` entry.
 
-- [ ] **NR-2.1** -- **`FSCTL_QUERY_VOLUME_NUMA_INFO`** on a file or directory handle: the NUMA node
-  the *volume* resides on, or the documented failure when the device advertises no proximity
-  domain. `windows-ioring-sys`' unrun
-  [file-handle-numa-spike.rs](../windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs)
-  records what is and is not known about it; this machine has one node, so only the failure
-  shapes and a node of `0` are testable here.
+- [x] **NR-2.1** -- `FSCTL_QUERY_VOLUME_NUMA_INFO` on a file or directory handle, through the crate's one overlapped-safe `DeviceIoControl` helper. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-21)
 
 - [ ] **NR-2.2** -- **`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`** on a volume handle: every disk the
   volume spans, with its extents. A multi-extent volume needs the `ERROR_MORE_DATA` resize loop,
   following the existing variable-size entries.
+
+  **First, give the helper an input buffer** ([D-20](DESIGN-NOTES.md#d-20)): it takes none today,
+  and this item and `NR-2.3` and `NR-2.4` need one. Do it here, in the same commit, and look for a
+  control that takes an input and pends on demand (`FSCTL_REQUEST_OPLOCK` is the candidate), so the
+  helper's pending path -- the wait, the abort, the byte count read after it -- can be pinned for the
+  first time. `FSCTL_PIPE_LISTEN` was tried for that and failed with `ERROR_INVALID_FUNCTION`
+  through `DeviceIoControl`, for a reason not established; check that this item's and the next two
+  items' codes behave through the helper before building on them.
 
 - [ ] **NR-2.3** -- **`IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceUniqueIdProperty`** on a
   disk handle: the device's `STORAGE_DEVICE_UNIQUE_IDENTIFIER`, its stable identity, variable-sized.
@@ -46,6 +49,12 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
   handle: the backing file a VHD or VHDX depends on, so the helper can follow it to its own flush
   domains. Check which `windows-sys` feature carries it. Creating a virtual disk in a test needs
   elevation, so state what the tests can and cannot reach on an unelevated run.
+
+- [ ] **NR-2.6** -- **Decide between `win-volume-sys`' `control()` and this crate's helper**
+  ([D-20](DESIGN-NOTES.md#d-20)). The two are the same overlapped-and-event shape, built
+  separately on purpose so the working crate was not disturbed while this one was proven. Decide
+  when `NR-2.2` to `NR-2.4` have used the helper: move `win-volume-sys` onto it, or delete one, or
+  keep both and say why. A duplicate nobody came back to is the failure this item exists to prevent.
 
 ## NR-3 -- What durable-ioring's open surface needs of this crate
 
