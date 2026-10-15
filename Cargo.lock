@@ -136,6 +136,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-multi-file-tail-watcher"
+version = "0.1.0"
+dependencies = [
+ "windows-overlapped-io-sys",
+ "windows-sys",
+ "wtf-string",
+]
+
+[[package]]
 name = "win-numa-sys"
 version = "0.1.1"
 dependencies = [

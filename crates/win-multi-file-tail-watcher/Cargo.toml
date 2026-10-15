@@ -1,0 +1,38 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-multi-file-tail-watcher"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Reports length changes across a large population of files on a beat the caller owns, reading each length through a handle held open, rather than running a timer per file."
+keywords = ["windows", "file", "tail", "watcher"]
+categories = ["os::windows-apis", "filesystem"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root).
+# Everything is one crate, whatever its internal layers (TW-D-10 in DESIGN-NOTES.md).
+
+[dependencies]
+# Path and version both: a dependency on a published sibling must carry a version.
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+
+# `fs` is where the observer's length query lives. No other feature, so none of that crate's
+# optional dependencies come with it.
+windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-io-sys", default-features = false, features = [
+	"fs",
+] }
+
+# `default-features = false` matches every other crate in the workspace. No Win32 feature is
+# enabled yet: each arrives with the call that needs it.
+windows-sys = { version = "0.61.2", default-features = false }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

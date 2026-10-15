@@ -2,7 +2,7 @@
 
 Reports length changes across a large population of files, on a beat the caller owns. See
 [DESIGN-NOTES.md](DESIGN-NOTES.md) for the decisions every item cites, and
-[COMPONENT.md](COMPONENT.md) for the crate's state before `TW-1.1`.
+[README.md](README.md) for what the crate is.
 
 Each milestone ends in a deliverable exercised by integration tests: every one of them crosses a
 real file system, process, or thread-pool boundary. Unit tests accompany each item as usual.
@@ -12,12 +12,7 @@ real file system, process, or thread-pool boundary. Unit tests accompany each it
 Deliverable: a file, written to by a child process, is opened by path and its growing length is
 read through the held handle.
 
-- [ ] **TW-1.1** -- **Create the crate.** `Cargo.toml` inheriting the workspace package fields,
-  `src/lib.rs` with the copyright line and crate docs, membership in the workspace, and an entry in
-  `release-please-config.json` and `.release-please-manifest.json` matching the other `win-` crates.
-  Dependencies: `windows-sys`, [wtf-string](../wtf-string/),
-  [windows-overlapped-io-sys](../windows-overlapped-io-sys/) with its `fs` feature. Replace
-  [COMPONENT.md](COMPONENT.md) with a `README.md`.
+- [x] **TW-1.1** -- The crate exists, registered for release and publication. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-11)
 
 - [ ] **TW-1.2** -- **Open a file by `Wtf16String` path as an endpoint, and take an observer.**
   Read-only, sharing read, write and delete, with `FILE_FLAG_OVERLAPPED`; the endpoint is kept for

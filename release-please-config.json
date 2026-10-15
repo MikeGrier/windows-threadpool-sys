@@ -49,6 +49,10 @@
             "package-name": "win-time-sys",
             "component": "win-time-sys"
         },
+        "crates/win-multi-file-tail-watcher": {
+            "package-name": "win-multi-file-tail-watcher",
+            "component": "win-multi-file-tail-watcher"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"
