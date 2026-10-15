@@ -279,6 +279,10 @@ impl UnassociatedEndpoint {
 /// cannot borrow, duplicate, or wrap the handle, and so cannot reach any
 /// constructor that associates it or issues I/O through it.
 ///
+/// What it offers instead is a fixed set of safe queries -- the file's length
+/// (`file_len`, behind the `fs` feature) -- and an `unsafe` borrow
+/// ([`handle`](Self::handle)) for any other query.
+///
 /// Obtained from an endpoint, or from the backend that endpoint moved into, with
 /// `observer()`. Cloning shares the same handle.
 #[derive(Clone, Debug)]
@@ -291,6 +295,69 @@ impl EndpointObserver {
     #[must_use]
     pub fn same_handle(&self, other: &Self) -> bool {
         self.handle.same_handle(&other.handle)
+    }
+
+    /// The file's current length in bytes: its end-of-file position, read
+    /// through the handle with `GetFileInformationByHandleEx(FileStandardInfo)`.
+    ///
+    /// The query is synchronous and issues no overlapped I/O, so it is safe while
+    /// the endpoint has operations in flight. Read through the handle, the
+    /// length is current as soon as a write through any other handle has
+    /// extended or truncated the file, unlike the size in the file's directory
+    /// entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose device does not answer the standard-information query.
+    #[cfg(feature = "fs")]
+    pub fn file_len(&self) -> io::Result<u64> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_STANDARD_INFO, FileStandardInfo, GetFileInformationByHandleEx,
+        };
+
+        let mut info = std::mem::MaybeUninit::<FILE_STANDARD_INFO>::uninit();
+        let size = u32::try_from(size_of::<FILE_STANDARD_INFO>())
+            .expect("FILE_STANDARD_INFO fits a u32 size");
+        // SAFETY: a live handle this observer holds, and an output buffer of
+        // exactly the size passed. The call is synchronous, so the buffer is
+        // borrowed only for this statement.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                self.handle.as_raw_handle(),
+                FileStandardInfo,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        // No test reaches this: files, the NUL device and an unconnected named-pipe
+        // server all answer. A driver rejecting IRP_MJ_QUERY_INFORMATION would.
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call succeeded, so it filled the whole structure.
+        let info = unsafe { info.assume_init() };
+        // A file system never reports a negative end of file.
+        Ok(info.EndOfFile.cast_unsigned())
+    }
+
+    /// Borrow the handle for a native query this type does not offer.
+    ///
+    /// # Safety
+    ///
+    /// The handle belongs to an endpoint, which alone may issue overlapped I/O
+    /// through it. The caller guarantees that, through this borrow, it:
+    ///
+    /// - issues no overlapped I/O, nor any other request that could complete
+    ///   through the handle's event or a completion port;
+    /// - associates the handle with no completion port or thread-pool I/O
+    ///   object, and sets no completion-notification mode on it;
+    /// - neither duplicates the handle nor closes it.
+    ///
+    /// Synchronous queries of the handle's state are what the borrow is for.
+    #[must_use]
+    pub unsafe fn handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
     }
 
     #[cfg(test)]

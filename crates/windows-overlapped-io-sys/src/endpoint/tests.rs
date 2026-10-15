@@ -181,6 +181,143 @@ mod observers {
     }
 }
 
+#[cfg(feature = "fs")]
+mod observer_queries {
+    use super::super::UnassociatedEndpoint;
+    use std::io::Write;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::PathBuf;
+
+    fn temp_path(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "windows-overlapped-io-sys-query-{tag}-{}.tmp",
+            std::process::id()
+        ))
+    }
+
+    /// `FSCTL_SET_SPARSE`, which `windows-sys` exports only behind `Win32_System_Ioctl`.
+    const FSCTL_SET_SPARSE: u32 = 0x0009_00C4;
+
+    /// Mark `file` sparse, so extending it past 4 GiB allocates nothing.
+    fn make_sparse(file: &std::fs::File) {
+        let mut returned = 0_u32;
+        // SAFETY: a live handle, no input or output buffer, and a synchronous
+        // (non-overlapped) handle, so nothing outlives the call.
+        let ok = unsafe {
+            windows_sys::Win32::System::IO::DeviceIoControl(
+                file.as_raw_handle(),
+                FSCTL_SET_SPARSE,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &raw mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(
+            ok,
+            0,
+            "FSCTL_SET_SPARSE: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    #[test]
+    fn file_len_reports_each_length_set_through_another_handle() {
+        let path = temp_path("sizes");
+        let writer = std::fs::File::create(&path).expect("create temp file");
+        make_sparse(&writer);
+        let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+        let observer = endpoint.observer();
+
+        // Growing and shrinking, across page sizes and the 32-bit boundary.
+        let sizes: [u64; 12] = [
+            0,
+            1,
+            4095,
+            4096,
+            4097,
+            65_536,
+            1 << 20,
+            (1 << 32) - 1,
+            1 << 32,
+            (5 << 30) + 3,
+            17,
+            0,
+        ];
+        for size in sizes {
+            writer.set_len(size).expect("set length");
+            assert_eq!(observer.file_len().expect("file_len"), size, "size {size}");
+        }
+
+        drop((observer, endpoint, writer));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_len_follows_appends_as_they_land() {
+        let path = temp_path("appends");
+        let mut writer = std::fs::File::create(&path).expect("create temp file");
+        let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+        let observer = endpoint.observer();
+
+        let mut expected = 0_u64;
+        for chunk in [1_usize, 7, 512, 4096, 3] {
+            writer.write_all(&vec![b'a'; chunk]).expect("append");
+            expected += chunk as u64;
+            assert_eq!(observer.file_len().expect("file_len"), expected);
+        }
+
+        drop((observer, endpoint, writer));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn every_observer_of_a_handle_reads_the_same_length() {
+        let path = temp_path("agree");
+        std::fs::write(&path, b"twelve bytes").expect("write temp file");
+        let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+        let first = endpoint.observer();
+        let clone = first.clone();
+        let held = endpoint.into_endpoint_handle();
+        let late = held.observer();
+
+        for observer in [&first, &clone, &late] {
+            assert_eq!(observer.file_len().expect("file_len"), 12);
+        }
+
+        drop((first, clone, late, held));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_len_needs_no_read_access() {
+        let path = temp_path("no-read");
+        std::fs::write(&path, b"abc").expect("write temp file");
+        let endpoint = UnassociatedEndpoint::open(&path, false, true, 0).expect("open endpoint");
+        assert_eq!(endpoint.observer().file_len().expect("file_len"), 3);
+
+        drop(endpoint);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_unsafe_borrow_lends_the_endpoints_own_handle() {
+        let path = temp_path("borrow");
+        std::fs::write(&path, b"x").expect("write temp file");
+        let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+        let observer = endpoint.observer();
+
+        // SAFETY: the borrow is only compared, never used for I/O.
+        let borrowed = unsafe { observer.handle() };
+        assert_eq!(borrowed.as_raw_handle(), endpoint.handle().as_raw_handle());
+
+        drop((observer, endpoint));
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 #[test]
 fn open_creates_an_overlapped_endpoint() {
     let path = std::env::temp_dir().join(format!(

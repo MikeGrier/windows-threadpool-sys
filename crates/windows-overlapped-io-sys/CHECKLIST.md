@@ -36,9 +36,7 @@ endpoint does I/O"). Independent of M14; it may be taken first.
 
 - [x] **M15.2** -- Endpoints keep their handle in shared storage and hand out observers. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m152)
 
-- [ ] **M15.3** -- **The observer's queries.** The file's current length (`GetFileInformationByHandleEx`,
-  `FileStandardInfo`) behind the `fs` feature, and an `unsafe` borrow whose contract is that no overlapped
-  I/O is issued through it.
+- [x] **M15.3** -- The observer reads the file's length, and offers an `unsafe` borrow for other queries. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m153)
 
 - [x] **M15.4** -- `ThreadpoolIo` keeps the endpoint's shared storage; landed with M15.2. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#m154)
 

@@ -142,8 +142,9 @@ route to association, submission, and the blocking backend, and stays not `Clone
 - **An observer implements neither `AsHandle` nor `AsRawHandle`.** That is what makes "never a second
   endpoint" structural: safe code holding an observer cannot borrow, duplicate, or wrap the handle, so it
   cannot reach any constructor that associates or submits. What it offers instead is a curated list of
-  safe queries -- the file's length first -- plus an `unsafe` borrow whose contract is that no overlapped
-  I/O is issued through it.
+  safe queries -- the file's length first (`file_len`, M15.3, behind the `fs` feature, since it is a file
+  query) -- plus an `unsafe` borrow (`EndpointObserver::handle`) whose `# Safety` section lists what must
+  not be done through it: anything that could make it a second endpoint.
 - **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
   before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
   hold it; nothing reaches that association, because only the endpoint ever submitted through it.

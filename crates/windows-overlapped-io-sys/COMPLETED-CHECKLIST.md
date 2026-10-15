@@ -459,3 +459,14 @@ returns `Result<OwnedHandle, Self>`, refusing while an observer lives. Breaking 
 `windows-threadpool-sys`' `ThreadpoolIo` holds an `EndpointHandle` taken with `into_endpoint_handle`, so an
 observer taken before binding outlives it; its `Drop` comments now say the guarantee rests on only this object
 submitting through the handle, and that dropping releases its hold rather than closing the handle.
+
+## Moved 2026-10-14 20:07:01 -04:00 -- M15.3: the observer's queries
+
+### <a id="m153"></a>M15.3 -- The observer reads the file's length, and offers an `unsafe` borrow for other queries. *(completed 2026-10-14 20:07:01 -04:00)*
+
+`EndpointObserver::file_len` (behind `fs`) reads `EndOfFile` with
+`GetFileInformationByHandleEx(FileStandardInfo)`; tests cover lengths set and appended through another
+handle, past 4 GiB on a sparse file, and with write-only access. Sabotage confirmed them: returning
+`AllocationSize`, or truncating to 32 bits, each fails. Its error arm is reached by no test -- files, the
+NUL device and an unconnected named-pipe server all answer -- and says so at the definition.
+`EndpointObserver::handle` is the `unsafe` borrow; its `# Safety` section is the contract.
