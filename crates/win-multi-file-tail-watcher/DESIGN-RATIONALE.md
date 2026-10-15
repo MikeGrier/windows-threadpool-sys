@@ -106,6 +106,13 @@ were not compared; the choice is the first that fit, and the SQ's interface hide
 doorbell is unused, since the two doorbells are the crate's own events
 ([TW-D-6](DESIGN-NOTES.md#tw-d-6)).
 
+**The doorbells' reset (TW-2.3, 2026-10-15).** Manual-reset was settled in TW-D-6; what it left open
+is who resets and when. Resetting inside `drain` is the one place a caller cannot get the order wrong,
+and was not taken because a drain dropped early would leave the doorbell clear over entries still
+queued. Rather than add a re-ring on drop to repair that, TW-2.3 leaves the reset to the caller with
+the order stated, and records `drain` as open. The sibling queue crate's doorbell, which this is
+modelled on, is not exported, so the wrapper is rewritten here and not shared.
+
 ## TW-D-7: a full SQ stops the poll; no locks around I/O
 
 Waiting at a full queue was set aside in line with

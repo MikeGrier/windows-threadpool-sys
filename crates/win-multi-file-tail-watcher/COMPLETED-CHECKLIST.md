@@ -198,3 +198,41 @@ there is. The sabotage manifest gains a queue of double the asked capacity, `Ful
 `Closed`, a capacity error that misnames the request, and a drain that yields nothing; the last is
 caught by the concurrent test running past the sweep's hang bound, not by an assertion, so it is the
 weakest of the four. A different spelling of the empty read survives as the control.
+
+## Moved 2026-10-15 15:58:04 -04:00 -- TW-2.3: the doorbells
+
+### <a id="tw-23"></a>TW-2.3 -- The watcher owns two manual-reset doorbell events, one each way, each exposed as a waitable handle. *(completed 2026-10-15 15:58:04 -04:00)*
+
+`Watcher::doorbell()` is the event the crate rings and the caller waits on; `resume_doorbell()` is
+the one the caller rings, with `ring_resume()`, and the crate will wait on. Both are `BorrowedHandle`s
+tied to the watcher and live exactly as long as it does. The caller can clear the first with
+`reset_doorbell()`; the crate's own ring and reset (`ring_doorbell`, `reset_resume`) are crate-internal
+until the poll and its resume use them, under the same `expect(dead_code)` as the SQ's writer.
+
+`Doorbell` is a small crate-internal wrapper over `CreateEventW` (manual-reset, initially clear) with
+`ring`, `reset` and `handle`. `windows-waitable-queues` has its own doorbell but does not export it, so this one is written
+here. The reset-before-read ordering is recorded in [TW-D-6](DESIGN-NOTES.md#tw-d-6) and on
+`Watcher::doorbell`.
+
+**This changes `Watcher::new` again.** It now returns `CreateError::{Capacity, Io}` where it returned
+the capacity error alone, because creating an event can fail. `SqCapacityError` is still the payload of
+the first.
+
+Not decided: whether `drain` should reset the doorbell itself. The ordering rule makes that the safe
+place, and a caller that drops a drain early would be left waiting for entries still queued. TW-D-6
+says it is open.
+
+Tested, against real events: a new doorbell is clear; a ring is not consumed by a wait and stays until
+a reset; two rings take one reset; a reset of a clear one does nothing; two hundred ring and reset
+rounds; two doorbells are two events; a wait begun before the ring is released by it; one ring releases
+four waiters at once, which an auto-reset event would not; a wait on a clear one times out; the watcher's
+two are distinct and clear at creation, each rung and reset in its own direction, not shared between
+two watchers, and a thread blocked on the caller's doorbell is woken by the crate's ring. The sabotage
+manifest gains an auto-reset event, one that starts rung, a ring that does nothing, a reset that does
+nothing, and a resume handle that is the other event; a differently written null check survives as the
+control.
+
+The concurrent SQ test now gives its writers the same deadline as its reader. The sweep had been
+catching "a drain yields nothing" only by running past its hang bound, because a stalled reader left
+the scope waiting on writers that could never get room; it is now caught by the test's own failure.
+The TW-2.2 entry's remark that this was the weakest catch no longer holds.

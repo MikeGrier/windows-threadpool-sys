@@ -31,9 +31,14 @@ windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-i
 # sharded across threads. The crate's `experimental-permit-claim` and `dwcas` features stay off.
 windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", default-features = false }
 
-# `default-features = false` matches every other crate in the workspace. No Win32 feature is
-# enabled yet: each arrives with the call that needs it.
-windows-sys = { version = "0.61.2", default-features = false }
+# `default-features = false` matches every other crate in the workspace; each Win32 feature
+# arrives with the call that needs it. The doorbells' `CreateEventW` takes a security-attributes
+# type, which is why `Win32_Security` is here beside `Win32_System_Threading`.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_Threading",
+] }
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it

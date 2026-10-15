@@ -138,6 +138,15 @@ Reporting the attention makes the current length the new last known length.
   [slotwise_mpsc](../windows-waitable-queues/src/slotwise_mpsc.rs), whose capacity rule this
   decision adopts as its own: that crate's behaviour is not the specification, and a replacement
   would have to keep these properties.
+- **Each doorbell is a handle the caller can wait on, and resetting is not automatic.** Ringing
+  stays rung, for every waiter, until a reset. The reader of a doorbell resets it *before* reading
+  what it announces, so an entry written after the reset rings it again; resetting after the read
+  can erase a ring for an entry not yet read, which is the lost wakeup that a manual-reset event
+  was chosen to avoid. The watcher offers the reset and the ring for the caller's side and keeps
+  the other two to itself. It does not reset in `drain`, which a caller who stops draining early
+  would turn into a wait for entries that are still queued; whether it should is open.
+- **Creating a watcher can fail for two reasons**, a capacity the SQ cannot have and a doorbell the
+  operating system would not create, and the error says which.
 - **The crate creates both, rather than the caller supplying them**, because the reset mode is a
   correctness property and because the SQ then lives exactly as long as the watcher.
 

@@ -2,12 +2,14 @@
 //! The watcher and its roster of registered files.
 
 use std::collections::BTreeMap;
+use std::os::windows::io::BorrowedHandle;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use wtf_string::Wtf16Str;
 
-use crate::sq::{self, SqCapacityError, SqDrain, SqReader, SqWriter};
-use crate::{HeldFile, OpenError};
+use crate::doorbell::Doorbell;
+use crate::sq::{self, SqDrain, SqReader, SqWriter};
+use crate::{CreateError, HeldFile, OpenError};
 
 #[cfg(test)]
 mod tests;
@@ -19,7 +21,9 @@ mod tests;
 /// one path twice gives two independent registrations.
 ///
 /// It owns the submission queue ([`SqEntry`](crate::SqEntry)) the caller drains with
-/// [`drain`](Self::drain); the queue lives exactly as long as the watcher.
+/// [`drain`](Self::drain); the queue lives exactly as long as the watcher. So do its two doorbells,
+/// both manual-reset events: [`doorbell`](Self::doorbell), which the crate rings and the caller
+/// waits on, and [`resume_doorbell`](Self::resume_doorbell), the other way.
 #[derive(Debug)]
 pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
@@ -31,6 +35,10 @@ struct Shared<T> {
     // Held only to hand out clones, so no writer ever waits on this lock to write.
     writer: Mutex<SqWriter<T>>,
     reader: Mutex<SqReader<T>>,
+    // Crate to caller: entries are ready, the SQ is full, or a poll is done.
+    doorbell: Doorbell,
+    // Caller to crate: the caller has made room in the SQ.
+    resume: Doorbell,
 }
 
 // Ids only grow, so the roster's order is the order of registration and a position in it survives
@@ -59,8 +67,9 @@ impl<T: Clone> Watcher<T> {
     ///
     /// # Errors
     ///
-    /// [`SqCapacityError`] unless `sq_capacity` is a power of two of at least two.
-    pub fn new(sq_capacity: usize) -> Result<Self, SqCapacityError> {
+    /// [`CreateError::Capacity`] unless `sq_capacity` is a power of two of at least two.
+    /// [`CreateError::Io`] when a doorbell cannot be created.
+    pub fn new(sq_capacity: usize) -> Result<Self, CreateError> {
         let (writer, reader) = sq::queue(sq_capacity)?;
         Ok(Self {
             shared: Arc::new(Shared {
@@ -70,8 +79,53 @@ impl<T: Clone> Watcher<T> {
                 }),
                 writer: Mutex::new(writer),
                 reader: Mutex::new(reader),
+                doorbell: Doorbell::new()?,
+                resume: Doorbell::new()?,
             }),
         })
+    }
+
+    /// The event the crate rings when entries are ready, the submission queue is full, or a poll
+    /// is done. It is rung until [`reset_doorbell`](Self::reset_doorbell), which releases every
+    /// wait on it meanwhile.
+    ///
+    /// The caller learns which of the three by reading the queue. Reset first and then drain, so
+    /// an entry written after the reset rings it again.
+    #[must_use]
+    pub fn doorbell(&self) -> BorrowedHandle<'_> {
+        self.shared.doorbell.handle()
+    }
+
+    /// Clear [`doorbell`](Self::doorbell). Does nothing if it is not rung.
+    pub fn reset_doorbell(&self) {
+        self.shared.doorbell.reset();
+    }
+
+    /// The event the caller rings, with [`ring_resume`](Self::ring_resume), to say it has made room
+    /// in the submission queue. The crate waits on it.
+    #[must_use]
+    pub fn resume_doorbell(&self) -> BorrowedHandle<'_> {
+        self.shared.resume.handle()
+    }
+
+    /// Ring [`resume_doorbell`](Self::resume_doorbell).
+    pub fn ring_resume(&self) {
+        self.shared.resume.ring();
+    }
+
+    /// Ring [`doorbell`](Self::doorbell).
+    #[cfg_attr(not(test), expect(dead_code, reason = "the poll (TW-2.4) rings it"))]
+    pub(crate) fn ring_doorbell(&self) {
+        self.shared.doorbell.ring();
+    }
+
+    /// Clear [`resume_doorbell`](Self::resume_doorbell).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a resumed poll (TW-3.x) clears it")
+    )]
+    pub(crate) fn reset_resume(&self) {
+        self.shared.resume.reset();
     }
 
     /// The entries in the submission queue, oldest first, until there are none.

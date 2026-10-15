@@ -6,6 +6,8 @@
 // Every `unsafe` here is a Win32 call or a handle query, and each states why it is sound (TW-1.1).
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod create_error;
+mod doorbell;
 mod held_file;
 mod open_error;
 mod sq;
@@ -13,6 +15,7 @@ mod sq;
 mod test_support;
 mod watcher;
 
+pub use create_error::CreateError;
 pub use held_file::HeldFile;
 pub use open_error::OpenError;
 pub use sq::{Attention, SqCapacityError, SqDrain, SqEntry};

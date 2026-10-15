@@ -148,6 +148,54 @@
       "replace": ["    fn next(&mut self) -> Option<SqEntry<T>> {\n        let _ = &self.0;\n        None"]
     },
     {
+      "name": "the doorbell is auto-reset",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "TW-D-6: manual-reset, because an auto-reset event can lose a signal. One wait consumes the ring, so a second wait, or a second waiter, sees nothing.",
+      "find": ["CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"],
+      "replace": ["CreateEventW(ptr::null(), FALSE, FALSE, ptr::null())"]
+    },
+    {
+      "name": "the doorbell starts rung",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A caller waiting on a new watcher would wake at once with nothing to read.",
+      "find": ["CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"],
+      "replace": ["CreateEventW(ptr::null(), TRUE, TRUE, ptr::null())"]
+    },
+    {
+      "name": "ringing does nothing",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The ring is the whole of the doorbell's job.",
+      "find": ["            SetEvent(self.event.as_raw_handle());"],
+      "replace": ["            let _ = SetEvent;"]
+    },
+    {
+      "name": "resetting does nothing",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A manual-reset doorbell that cannot be reset stays rung for good.",
+      "find": ["            ResetEvent(self.event.as_raw_handle());"],
+      "replace": ["            let _ = ResetEvent;"]
+    },
+    {
+      "name": "the resume doorbell is the other doorbell's handle",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Two events are two directions. Waiting on the wrong one wakes a caller for the crate's own ring.",
+      "find": ["        self.shared.resume.handle()"],
+      "replace": ["        self.shared.doorbell.handle()"]
+    },
+    {
+      "name": "control: the null check is written as a comparison",
+      "file": "src/doorbell.rs",
+      "expect": "survives",
+      "why": "`is_null()` and `== null_mut()` are the same test.",
+      "find": ["        if raw.is_null() {"],
+      "replace": ["        if raw == ptr::null_mut() {"]
+    },
+    {
       "name": "control: an empty read is spelled with map_or",
       "file": "src/sq.rs",
       "expect": "survives",

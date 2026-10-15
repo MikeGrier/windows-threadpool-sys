@@ -16,8 +16,7 @@ SQ with correct last known and current lengths, then a poll-done entry, and ring
 
 - [x] **TW-2.2** -- The watcher owns a bounded submission queue of attention and poll-done entries, set at `Watcher::new` and drained by the caller. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-22)
 
-- [ ] **TW-2.3** -- **The two doorbells**: crate-created manual-reset events, crate to caller and
-  caller to crate, each exposed as a waitable handle. ([TW-D-6](DESIGN-NOTES.md#tw-d-6))
+- [x] **TW-2.3** -- The watcher owns two manual-reset doorbell events, one each way, each exposed as a waitable handle. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-23)
 
 - [ ] **TW-2.4** -- **`poll` initiates a poll on the thread pool and returns.** The poll walks the
   roster, compares each length with the last reported one, writes an attention for each change

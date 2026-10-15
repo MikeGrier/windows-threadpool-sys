@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::{Attention, SqCapacityError, SqEntry, SqPushError, queue};
-use crate::Watcher;
+use crate::{CreateError, Watcher};
 
 fn attention(value: u32, last_known: u64, current: u64) -> SqEntry<u32> {
     SqEntry::Attention(Attention {
@@ -151,7 +151,7 @@ fn cloned_writers_from_many_threads_lose_nothing_and_keep_each_ones_order() {
 fn a_watcher_refuses_a_bad_capacity() {
     for requested in [0usize, 1, 3, 100] {
         let error = Watcher::<u32>::new(requested).expect_err("invalid");
-        assert_eq!(error.requested, requested);
+        assert!(matches!(error, CreateError::Capacity(e) if e.requested == requested));
     }
     assert!(Watcher::<u32>::new(2).is_ok());
 }
@@ -221,6 +221,9 @@ fn writers_and_a_draining_caller_run_together_without_loss() {
     const EACH: u32 = 200;
     let watcher = Watcher::<u32>::new(16).expect("watcher");
     let mut seen = vec![0u32; WRITERS as usize];
+    // The writers give up at the same deadline, so a stalled drain fails the test instead of
+    // leaving the scope waiting on writers that can never get room.
+    let deadline = Instant::now() + Duration::from_secs(8);
     std::thread::scope(|scope| {
         for id in 0..WRITERS {
             let writer = watcher.sq_writer();
@@ -229,12 +232,14 @@ fn writers_and_a_draining_caller_run_together_without_loss() {
                     let mut entry = attention(id, 0, u64::from(n));
                     while let Err(SqPushError::Full(back)) = writer.push(entry) {
                         entry = back;
+                        if Instant::now() > deadline {
+                            return;
+                        }
                         std::thread::yield_now();
                     }
                 }
             });
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
         let mut total = 0;
         while total < WRITERS * EACH {
             assert!(Instant::now() < deadline, "stalled at {total}");

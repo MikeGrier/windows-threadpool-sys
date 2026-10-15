@@ -39,3 +39,22 @@ pub(crate) fn wtf(path: &Path) -> Wtf16String {
 pub(crate) fn code(error: &std::io::Error) -> Option<u32> {
     error.raw_os_error().map(i32::cast_unsigned)
 }
+
+/// Whether `handle` is signalled within `millis` milliseconds.
+pub(crate) fn signalled_within(
+    handle: std::os::windows::io::BorrowedHandle<'_>,
+    millis: u32,
+) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    // SAFETY: a live handle borrowed for the duration of the call; waiting has no other
+    // precondition.
+    unsafe { WaitForSingleObject(handle.as_raw_handle(), millis) == WAIT_OBJECT_0 }
+}
+
+/// Whether `handle` is signalled now.
+pub(crate) fn is_signalled(handle: std::os::windows::io::BorrowedHandle<'_>) -> bool {
+    signalled_within(handle, 0)
+}
