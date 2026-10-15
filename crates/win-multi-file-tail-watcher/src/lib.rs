@@ -8,6 +8,10 @@
 
 mod held_file;
 mod open_error;
+#[cfg(test)]
+mod test_support;
+mod watcher;
 
 pub use held_file::HeldFile;
 pub use open_error::OpenError;
+pub use watcher::{Registration, Watcher};

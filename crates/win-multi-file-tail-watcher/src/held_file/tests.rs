@@ -4,7 +4,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
 
 use windows_overlapped_io_sys::FileType;
 use windows_sys::Win32::Foundation::{
@@ -14,41 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use wtf_string::Wtf16String;
 
 use super::HeldFile;
-
-/// A fresh directory for one test, removed with its contents when dropped.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "win-multi-file-tail-watcher-{tag}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir).expect("create the test directory");
-        Self(dir)
-    }
-
-    fn file(&self, name: impl AsRef<std::ffi::OsStr>, content: &[u8]) -> PathBuf {
-        let path = self.0.join(name.as_ref());
-        std::fs::write(&path, content).expect("create the test file");
-        path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn wtf(path: &Path) -> Wtf16String {
-    Wtf16String::from(path.as_os_str())
-}
-
-fn code(error: &std::io::Error) -> Option<u32> {
-    error.raw_os_error().map(i32::cast_unsigned)
-}
+use crate::test_support::{TempDir, code, wtf};
 
 #[test]
 fn an_existing_file_opens_and_its_observer_is_a_live_disk_handle() {

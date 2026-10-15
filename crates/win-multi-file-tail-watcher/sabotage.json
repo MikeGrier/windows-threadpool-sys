@@ -84,6 +84,46 @@
       "replace": ["        if offset as u32 > len as u32 {"]
     },
     {
+      "name": "dropping a registration leaves it registered",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-3: the registration's Drop unregisters. A roster that only grows still registers, reads back and counts correctly until something is dropped.",
+      "find": ["        let removed = self.shared.roster().entries.remove(&self.id);"],
+      "replace": ["        let removed: Option<Entry<T>> = None;"]
+    },
+    {
+      "name": "registration ids repeat",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-3: one path registered twice is two registrations. With a repeated id the second silently replaces the first.",
+      "find": ["        roster.next_id += 1;"],
+      "replace": ["        roster.next_id = id;"]
+    },
+    {
+      "name": "the starting offset is not passed on",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "An offset that is validated and then replaced by zero accepts every registration and reports the wrong one.",
+      "find": ["        let file = HeldFile::open_at(path, offset)?;"],
+      "replace": ["        let file = HeldFile::open_at(path, 0)?;"]
+    },
+    {
+      "name": "the count is read from the id counter",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The two agree until the first unregistration.",
+      "find": ["        self.shared.roster().entries.len()"],
+      "replace": ["        self.shared.roster().next_id as usize"]
+    },
+    {
+      "name": "control: the removed entry is dropped within the statement",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "Whether the entry is dropped before or after the lock guard is not observable through the public surface.",
+      "find": ["        let removed = self.shared.roster().entries.remove(&self.id);\n        // Dropped here, after the lock is released: closing the file and dropping `T` are not\n        // done under it.\n        drop(removed);"],
+      "replace": ["        self.shared.roster().entries.remove(&self.id);"]
+    },
+    {
       "name": "control: the comparison is written the other way round",
       "file": "src/held_file.rs",
       "expect": "survives",

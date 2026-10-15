@@ -12,9 +12,7 @@ real file system, process, or thread-pool boundary. Unit tests accompany each it
 Deliverable: a watcher over hundreds of files, polled once, puts exactly the changed files into the
 SQ with correct last known and current lengths, then a poll-done entry, and rings the doorbell.
 
-- [ ] **TW-2.1** -- **The watcher and its roster.** `Watcher<T: Clone>`; registration moves a `T` in
-  and returns an RAII value whose `Drop` unregisters; no uniqueness and no lookup by name.
-  ([TW-D-3](DESIGN-NOTES.md#tw-d-3), [TW-D-8](DESIGN-NOTES.md#tw-d-8))
+- [x] **TW-2.1** -- `Watcher<T: Clone>` registers files into a roster and returns an RAII `Registration` whose `Drop` unregisters. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-21)
 
 - [ ] **TW-2.2** -- **The SQ.** Created by the crate with a capacity set by the caller; two entry
   kinds, an attention (`T` clone, last known length, current length) and a poll-done entry; a

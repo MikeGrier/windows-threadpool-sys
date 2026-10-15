@@ -124,3 +124,38 @@ position, so a child writing after a truncation would extend the file with zeros
 different case. [sabotage-integration.json](sabotage-integration.json) is the set these tests catch
 without the unit tests: a cached length, the allocation size, a lost Win32 code, `>=` and a dropped
 offset check; a length read through `standard_info` survives as the control.
+
+## Moved 2026-10-15 15:05:48 -04:00 -- TW-2.1: the watcher and its roster
+
+### <a id="tw-21"></a>TW-2.1 -- `Watcher<T: Clone>` registers files into a roster and returns an RAII `Registration` whose `Drop` unregisters. *(completed 2026-10-15 15:05:48 -04:00)*
+
+`Watcher::register(path, offset, value)` opens the file as `HeldFile::open_at` does, moves `value`
+into a roster entry beside the held file, and returns a `Registration`. Dropping the registration
+removes the entry; it waits for nothing and may happen after the `Watcher` has dropped, since the
+registration shares the roster ([TW-D-8](DESIGN-NOTES.md#tw-d-8)). There is no uniqueness and no
+lookup by name ([TW-D-3](DESIGN-NOTES.md#tw-d-3)). On error `value` is dropped with it, so a caller
+who wants it keeps a clone.
+
+Two choices the item left open, recorded here because nothing else says so:
+
+- **The roster is a `BTreeMap` keyed by an id that only grows.** Its order is the order of
+  registration and a position in it survives removals, which is what a poll that stops and resumes
+  ([TW-D-7](DESIGN-NOTES.md#tw-d-7)) will want. TW-2.4 may change it; nothing outside the module sees it.
+- **The roster lock is held for a map operation only.** The entry is dropped after the guard is
+  released, so closing the file and dropping `T` do not happen under it.
+
+`Registration::value()` (a clone of `T`) and `start_offset()` read an entry back; they are what the
+roster's fields are read through until a poll reads them. The last known length that
+[TW-D-4](DESIGN-NOTES.md#tw-d-4) attaches to a registration is not stored yet: it is TW-2.4's to
+define, along with what a registration starts from.
+
+Tested: one registration, two registrations of one path, 200 unregistered in
+several orders, 400 registered from eight threads at once, a registration dropped from another
+thread, one that outlives its watcher, a failed open and a refused offset that each register nothing
+and drop the value, the file held while registered and released on drop (an exclusive open fails with
+a sharing violation and then succeeds), and `Send + Sync`. The sabotage manifest gains a registration
+that stays registered, a repeated id, a dropped starting offset and a count read from the id counter;
+a drop-order variant that nothing can observe survives as the control.
+
+The shared test helpers (`TempDir`, `wtf`, `code`) moved to `src/test_support.rs` so the watcher's
+tests and the held file's share one copy.
