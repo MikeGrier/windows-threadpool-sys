@@ -270,12 +270,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
-- [ ] **DI-14.1** -- **Cache hints.** `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`,
-  each with what `DI-13.1` ruled it warrants. A hint is passed through to an unbuffered file as well
-  and documented there, in place of being refused (the engineer, `DI-13.1` ruling (f), 2026-10-16),
-  with a test on this machine that shows what the kernel does with each pair. Handle-level `FILE_FLAG_WRITE_THROUGH` is not offered in v1 by the
-  engineer's ruling (`DI-13.1`); the per-write flag is unaffected, and is known to fail with error
-  509 on a cached handle even one opened with that flag (a kept test).
+- [x] **DI-14.1** -- Cache hints: `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN` are builder methods on `FileOptions`, passed to a cached and an unbuffered file alike. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-141)
 
 - [ ] **DI-14.2** -- **Namespace and lifetime flags.** `FILE_FLAG_DELETE_ON_CLOSE`,
   `FILE_FLAG_OPEN_REPARSE_POINT`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus

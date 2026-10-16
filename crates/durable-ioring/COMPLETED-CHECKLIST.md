@@ -2949,3 +2949,19 @@ depends on `windows-namespace-request-sys` 0.4.0, and that release's tag carries
 
 As `DI-13.5`: the same release's tag carries the `ReOpenFile` entry (`NR-3.2`), checked against the
 tag's source on 2026-10-16. `DI-15.4` uses it.
+
+## Moved 2026-10-16 19:57:37 -04:00 -- DI-14.1: cache hints
+
+### <a id="di-141"></a>DI-14.1 -- Cache hints: `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN` are builder methods on `FileOptions`, passed to a cached and an unbuffered file alike. *(completed 2026-10-16 19:57:37 -04:00)*
+
+`FileOptions::random_access` and `FileOptions::sequential_scan` add their flag to what the buffering
+mode and the options already imply, and never refuse. The ruling that a hint is passed to an unbuffered
+file and documented there ([DI-13.1](COMPLETED-CHECKLIST.md#di-131) (f)) is what the methods' own
+documentation says, with the measurement: every combination of the two hints, cached and unbuffered,
+opens and carries a sector-aligned write and read, an unbuffered one also through the ring, on Windows
+11 build 26300. Whether a hint changes the system's caching was not measured. A hint changes neither
+the class, the alignment nor what a target offers, which a test reads off the target made from each
+file. Five sabotage entries in `win-durable-ioring`, including a control, cover the flag, the pair, the
+flags the mode opens with, and a refusal on an unbuffered file. Handle-level `FILE_FLAG_WRITE_THROUGH`
+stays out of v1, and the per-write flag's error 509 on a cached handle is the test that was already
+kept.
