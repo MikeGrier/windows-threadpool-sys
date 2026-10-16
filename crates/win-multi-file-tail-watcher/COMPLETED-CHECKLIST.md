@@ -1167,3 +1167,28 @@ is the transition. [DESIGN-NOTES.md](DESIGN-NOTES.md) records it under TW-D-15. 
 sabotage entry, caught.
 
 TW-8.1 to TW-8.3 are one commit because the three changes were made together; none depends on another.
+
+## Moved 2026-10-16 19:20:00 -04:00 -- TW-8.4 to TW-8.6: the second pre-merge review
+
+### <a id="tw-84"></a>TW-8.4 -- A `T` whose `Drop` uses the watcher is dropped outside the roster lock, tested, and the sabotage that dropped it under the lock is declared caught rather than a control. *(completed 2026-10-16 19:20:00 -04:00)*
+
+The review found a manifest entry declared a control (`survives`) whose replacement drops the removed
+entry while the roster guard is held, which deadlocks a `T` whose `Drop` asks the watcher a question;
+only `Clone` was documented as barred from that. The code was right and nothing tested it. A test now
+registers such a `T` and drops its registration on a thread under a timeout; the entry is `caught`, and
+a control that is one spelling of the same thing replaces it. `Watcher`'s rustdoc and
+[DESIGN-NOTES.md](DESIGN-NOTES.md) say a `Drop` may call back in.
+
+### <a id="tw-85"></a>TW-8.5 -- The chunk directory is bound as the chunks are: no allocation of a `Chunked` is larger than 64 KiB, at the price of a ceiling of 2,730 x 2,730 chunks. *(completed 2026-10-16 19:20:00 -04:00)*
+
+`src/chunked.rs`. The chunks were held in a `Vec<Vec<T>>` that doubles past 64 KiB, which TW-D-7's
+"no allocation larger than 64 KiB" does not allow and the test, which looked only at the chunks, could
+not see. The directory is now two levels, groups of at most `FAN` chunks and at most `FAN` groups, each
+growing by doubling clamped to `FAN`, so each allocation is at most 65,520 bytes. A buffer that needs
+more panics. The fan is a field so the tests reach the second level with a small one. Tests: the real
+fan's group never exceeds a chunk, a small fan's allocations stay within it, indexing, `retain`,
+`truncate` and `drain_each` across groups, and the full-directory panic. Two sabotage entries, caught.
+
+### <a id="tw-86"></a>TW-8.6 -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. *(completed 2026-10-16 19:20:00 -04:00)*
+
+The row said reads were parked behind M4. It now says what the crate is and links its checklist.

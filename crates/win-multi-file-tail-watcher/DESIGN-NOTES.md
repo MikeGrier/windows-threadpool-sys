@@ -197,9 +197,13 @@ can wait on something outside the crate. The reasoning, and the engineer's origi
   operations that can wait on something outside the crate. It is held across the SQ write, which
   never waits (a refused write returns the entry), and across `T::clone`: the lock does not depend
   on `T`, but a `Clone` that calls back into the watcher would deadlock against it, and must not.
+  A `Drop` of `T` may call back into it: the entry a registration removes is dropped after the
+  lock is released.
   Other locks exist in the process that this crate does not control; the rule is about its own.
 - **No allocation for these copies is larger than 64 KiB.** They are chunked buffers, held between
-  polls so there is none after warm-up.
+  polls so there is none after warm-up. The chunks are themselves held in groups of at most 2,730,
+  in at most 2,730 groups, both growing in steps that stop there, so the directory is bound too; a
+  buffer that would need more panics, at 2,730 x 2,730 chunks.
 - **Roster changes between a stop and its continuation need no special handling.** A dropped
   registration's id is not found and is skipped; one made since is seen by the next poll; nothing is
   repeated, because ids are never reused ([TW-D-8](#tw-d-8)).

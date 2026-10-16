@@ -612,12 +612,36 @@
       "replace": ["        self.0.pop().map_or(None, Some)"]
     },
     {
-      "name": "control: the removed entry is dropped within the statement",
+      "name": "the removed entry is dropped while the roster lock is held",
       "file": "src/watcher.rs",
-      "expect": "survives",
-      "why": "Whether the entry is dropped before or after the lock guard is not observable through the public surface.",
+      "expect": "caught",
+      "why": "The statement's temporaries drop in reverse order, so the removed entry, and the caller's `T` in it, is dropped before the guard: a `Drop` that asks the watcher a question then deadlocks.",
       "find": ["        let removed = self.shared.roster().entries.remove(&self.id);\n        // Dropped here, after the lock is released: closing the file and dropping `T` are not\n        // done under it.\n        drop(removed);"],
       "replace": ["        self.shared.roster().entries.remove(&self.id);"]
+    },
+    {
+      "name": "control: the removed entry is dropped at the end of the function",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "Bound by `let` the entry outlives the guard, whose temporary ends with the statement, and is dropped when the function returns: still after the lock is released, so one spelling of the same thing.",
+      "find": ["        drop(removed);"],
+      "replace": ["        let _ = &removed;"]
+    },
+    {
+      "name": "a directory group grows past a chunk's worth",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "TW-D-7: no allocation is larger than 64 KiB, and the directory that holds the chunks is one; doubling a Vec of chunks passes it.",
+      "find": ["        let want = (items.capacity() * 2).max(4).min(limit);"],
+      "replace": ["        let want = (items.capacity() * 2).max(4);"]
+    },
+    {
+      "name": "a swap between chunks of two groups reads the wrong chunk",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Retain moves items between chunks, and across groups the high chunk is found by its own position.",
+      "find": ["            (&mut head[low_group][low_at], &mut tail[0][high_at])"],
+      "replace": ["            (&mut head[low_group][low_at], &mut tail[0][low_at])"]
     },
     {
       "name": "control: the comparison is written the other way round",

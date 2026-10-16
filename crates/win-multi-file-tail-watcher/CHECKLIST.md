@@ -133,3 +133,9 @@ A review of the branch against origin/main, 2026-10-16, found three defects in M
 - [x] **TW-8.2** -- A poller that cannot be made leaves the watcher usable: dropping the callbacks' view of the shared state no longer stops it, so a poll after the failure is retried rather than refused with `Shutdown`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-82)
 
 - [x] **TW-8.3** -- A terminal read failure makes its registration terminal once: a later terminal failure of it, one after a probe reported it, and one of a registration since dropped reach the diagnostic sink alone. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-83)
+
+- [x] **TW-8.4** -- A `T` whose `Drop` uses the watcher is dropped outside the roster lock, tested, and the sabotage that dropped it under the lock is declared caught rather than a control. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-84)
+
+- [x] **TW-8.5** -- The chunk directory is bound as the chunks are: no allocation of a `Chunked` is larger than 64 KiB, at the price of a ceiling of 2,730 x 2,730 chunks. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-85)
+
+- [x] **TW-8.6** -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-86)

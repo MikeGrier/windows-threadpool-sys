@@ -13,6 +13,95 @@ mod tests;
 /// The most a single chunk allocates (TW-D-7).
 const CHUNK_BYTES: usize = 64 * 1024;
 
+/// Chunks per group of the directory, so that no allocation of it is more than [`CHUNK_BYTES`].
+const FAN: usize = CHUNK_BYTES / size_of::<Vec<u8>>();
+
+/// The chunks, in two levels: groups of at most `fan` chunks, and at most `fan` groups. Both levels
+/// grow in steps that stop at `fan`, so neither allocation is ever more than [`CHUNK_BYTES`]; a
+/// plain `Vec` of chunks doubles past it.
+#[derive(Debug)]
+struct Directory<T> {
+    groups: Vec<Vec<Vec<T>>>,
+    fan: usize,
+    count: usize,
+}
+
+impl<T> Directory<T> {
+    const fn new(fan: usize) -> Self {
+        Self {
+            groups: Vec::new(),
+            fan,
+            count: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Add a chunk. Panics when all `fan` groups are full.
+    fn push(&mut self, chunk: Vec<T>) {
+        let at = self.count / self.fan;
+        if at == self.groups.len() {
+            assert!(
+                at < self.fan,
+                "a chunked buffer holds at most {} chunks",
+                self.fan * self.fan
+            );
+            grow(&mut self.groups, self.fan);
+            self.groups.push(Vec::new());
+        }
+        let group = &mut self.groups[at];
+        grow(group, self.fan);
+        group.push(chunk);
+        self.count += 1;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Vec<T>> {
+        self.groups.iter().flatten()
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Vec<T>> {
+        self.groups.iter_mut().flatten()
+    }
+
+    // `low < high`.
+    fn pair_mut(&mut self, low: usize, high: usize) -> (&mut Vec<T>, &mut Vec<T>) {
+        let (low_group, low_at) = (low / self.fan, low % self.fan);
+        let (high_group, high_at) = (high / self.fan, high % self.fan);
+        if low_group == high_group {
+            let (head, tail) = self.groups[low_group].split_at_mut(high_at);
+            (&mut head[low_at], &mut tail[0])
+        } else {
+            let (head, tail) = self.groups.split_at_mut(high_group);
+            (&mut head[low_group][low_at], &mut tail[0][high_at])
+        }
+    }
+}
+
+impl<T> std::ops::Index<usize> for Directory<T> {
+    type Output = Vec<T>;
+
+    fn index(&self, index: usize) -> &Vec<T> {
+        &self.groups[index / self.fan][index % self.fan]
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for Directory<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Vec<T> {
+        &mut self.groups[index / self.fan][index % self.fan]
+    }
+}
+
+// Room for one more, by doubling but never past `limit`; the caller has seen to it that `items` is
+// not already at `limit`.
+fn grow<E>(items: &mut Vec<E>, limit: usize) {
+    if items.len() == items.capacity() {
+        let want = (items.capacity() * 2).max(4).min(limit);
+        items.reserve_exact(want - items.len());
+    }
+}
+
 /// A sequence of `T` stored in chunks of at most [`CHUNK_BYTES`], so that growing it never asks
 /// the allocator for more than that and never moves an item already stored.
 ///
@@ -23,7 +112,7 @@ const CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) struct Chunked<T> {
     // Every chunk is allocated at `PER_CHUNK` and never grows. Chunks before the one holding the
     // last item are full; those after it are empty, and kept.
-    chunks: Vec<Vec<T>>,
+    chunks: Directory<T>,
     len: usize,
 }
 
@@ -40,7 +129,7 @@ impl<T> Chunked<T> {
     /// An empty buffer. Nothing is allocated until the first push.
     pub(crate) const fn new() -> Self {
         Self {
-            chunks: Vec::new(),
+            chunks: Directory::new(FAN),
             len: 0,
         }
     }
@@ -87,7 +176,7 @@ impl<T> Chunked<T> {
     /// chunks. The buffer is empty afterwards. If `each` panics the buffer is inconsistent, and
     /// [`clear`](Self::clear) makes it usable again.
     pub(crate) fn drain_each(&mut self, mut each: impl FnMut(T)) {
-        for chunk in &mut self.chunks {
+        for chunk in self.chunks.iter_mut() {
             for item in chunk.drain(..) {
                 each(item);
             }
@@ -133,9 +222,30 @@ impl<T> Chunked<T> {
         if low_chunk == high_chunk {
             self.chunks[low_chunk].swap(low_at, high_at);
         } else {
-            let (head, tail) = self.chunks.split_at_mut(high_chunk);
-            std::mem::swap(&mut head[low_chunk][low_at], &mut tail[0][high_at]);
+            let (low, high) = self.chunks.pair_mut(low_chunk, high_chunk);
+            std::mem::swap(&mut low[low_at], &mut high[high_at]);
         }
+    }
+
+    #[cfg(test)]
+    fn with_fan(fan: usize) -> Self {
+        Self {
+            chunks: Directory::new(fan),
+            len: 0,
+        }
+    }
+
+    // Every allocation the directory makes, as bytes, beside what `chunk_allocation_bytes` gives.
+    #[cfg(test)]
+    fn directory_allocation_bytes(&self) -> Vec<usize> {
+        let groups = &self.chunks.groups;
+        std::iter::once(groups.capacity() * size_of::<Vec<Vec<T>>>())
+            .chain(
+                groups
+                    .iter()
+                    .map(|group| group.capacity() * size_of::<Vec<T>>()),
+            )
+            .collect()
     }
 
     #[cfg(test)]

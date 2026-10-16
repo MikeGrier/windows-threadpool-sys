@@ -209,3 +209,38 @@ fn the_types_cross_threads_when_their_value_does() {
     send_sync::<Watcher<Arc<u32>>>();
     send_sync::<Registration<Arc<u32>>>();
 }
+
+#[test]
+fn a_value_whose_drop_uses_the_watcher_is_dropped_outside_the_roster_lock() {
+    use std::sync::{Mutex, Weak};
+    use std::time::Duration;
+
+    // Asks the watcher it was registered with how many registrations it has, as it drops.
+    #[derive(Clone)]
+    struct Asks(Arc<Mutex<Weak<Watcher<Asks>>>>);
+    impl Drop for Asks {
+        fn drop(&mut self) {
+            let watcher = self.0.lock().unwrap().upgrade();
+            if let Some(watcher) = watcher {
+                let _ = watcher.registered();
+            }
+        }
+    }
+
+    let dir = TempDir::new("w-drop-reenters");
+    let path = dir.file("a.log", b"abc");
+    let watcher = Arc::new(watcher::<Asks>());
+    let slot = Arc::new(Mutex::new(Arc::downgrade(&watcher)));
+    let registration = watcher
+        .register(&wtf(&path), 0, Asks(slot))
+        .expect("register");
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(registration);
+        done.send(()).expect("the test is waiting");
+    });
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("dropping a registration deadlocked on a value that uses the watcher");
+    assert_eq!(watcher.registered(), 0);
+}

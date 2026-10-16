@@ -404,3 +404,92 @@ fn clear_restores_a_buffer_whose_drain_each_panicked() {
     }
     assert_eq!(contents(&buffer), (0..per + 2).collect::<Vec<_>>());
 }
+
+fn filled_with_fan(fan: usize, count: usize) -> Chunked<usize> {
+    let mut buffer = Chunked::with_fan(fan);
+    for n in 0..count {
+        buffer.push(n);
+    }
+    buffer
+}
+
+#[test]
+fn the_directory_never_allocates_more_than_a_chunk_does() {
+    use super::{Directory, FAN};
+    let mut directory = Directory::<u8>::new(FAN);
+    // Two groups of the real fan: more chunks than one group holds, none of them holding items.
+    for _ in 0..FAN + 10 {
+        directory.push(Vec::new());
+    }
+    assert_eq!(directory.len(), FAN + 10);
+    assert_eq!(directory.groups.len(), 2);
+    assert!(directory.groups.capacity() * size_of::<Vec<Vec<u8>>>() <= CHUNK_BYTES);
+    for group in &directory.groups {
+        assert!(group.capacity() * size_of::<Vec<u8>>() <= CHUNK_BYTES);
+    }
+    assert_eq!(
+        FAN * size_of::<Vec<u8>>(),
+        65_520,
+        "a full group, to the byte"
+    );
+}
+
+#[test]
+fn a_buffers_directory_allocations_stay_within_its_fan() {
+    let per = per_chunk::<usize>();
+    let buffer = filled_with_fan(3, 7 * per + 1);
+    for bytes in buffer.directory_allocation_bytes() {
+        assert!(bytes <= 3 * size_of::<Vec<usize>>(), "{bytes} bytes");
+    }
+    assert_eq!(
+        buffer.directory_allocation_bytes().len(),
+        4,
+        "the top and three groups"
+    );
+    let real = filled(per + 1);
+    for bytes in real.directory_allocation_bytes() {
+        assert!(bytes <= CHUNK_BYTES, "{bytes} bytes");
+    }
+}
+
+#[test]
+fn items_across_groups_keep_their_index_and_order() {
+    let per = per_chunk::<usize>();
+    let count = 7 * per + 3;
+    let buffer = filled_with_fan(3, count);
+    assert_eq!(buffer.len(), count);
+    for n in [0, per, 3 * per - 1, 3 * per, 6 * per, count - 1] {
+        assert_eq!(buffer.get(n), Some(&n), "index {n}");
+    }
+    assert_eq!(buffer.get(count), None);
+    assert_eq!(contents(&buffer), (0..count).collect::<Vec<_>>());
+}
+
+#[test]
+fn retain_truncate_and_drain_work_across_groups() {
+    let per = per_chunk::<usize>();
+    let count = 7 * per + 3;
+    let mut buffer = filled_with_fan(3, count);
+    buffer.retain(|n| n % 3 != 0);
+    let kept: Vec<usize> = (0..count).filter(|n| n % 3 != 0).collect();
+    assert_eq!(contents(&buffer), kept);
+    // A swap between two chunks of one group, and between chunks of two groups, both happened.
+    assert!(kept.len() > 3 * per);
+    buffer.truncate(4 * per);
+    assert_eq!(contents(&buffer), kept[..4 * per].to_vec());
+    let mut drained = Vec::new();
+    buffer.drain_each(|n| drained.push(n));
+    assert_eq!(drained, kept[..4 * per].to_vec());
+    assert!(buffer.is_empty());
+    assert!(
+        buffer.chunk_addresses().len() >= 4,
+        "the chunks are kept across groups"
+    );
+}
+
+#[test]
+#[should_panic(expected = "a chunked buffer holds at most 4 chunks")]
+fn a_buffer_whose_directory_is_full_says_so() {
+    let per = per_chunk::<usize>();
+    let _ = filled_with_fan(2, 4 * per + 1);
+}
