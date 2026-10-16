@@ -90,16 +90,16 @@
       "file": "src/delivery.rs",
       "expect": "caught",
       "why": "DI-D-28: a waiter pops to None after every wake. Stopping early leaves entries that no later wake announces.",
-      "find": ["        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        (*handler)(entry, &inner.handle);\n        break;\n"]
+      "find": ["        (*handler)(event, &inner.handle);\n"],
+      "replace": ["        (*handler)(event, &inner.handle);\n        break;\n"]
     },
     {
       "name": "DI-3.2.2.2: the handler runs with the instance's lock held",
       "file": "src/delivery.rs",
       "expect": "caught",
-      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop.",
-      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(entry, &inner.handle));\n"]
+      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop. Measured: the sweep scores this one as a hang past its limit, not as a failed suite, so what catches it is the harness's timeout.",
+      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(event, &inner.handle);\n"],
+      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(event, &inner.handle));\n"]
     },
     {
       "name": "DI-3.2.4: a failed flush is reported as a success",
@@ -977,16 +977,16 @@
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "The class must come from how the file was opened, never from the target.",
-      "find": ["            warranty: B::WARRANTY,"],
-      "replace": ["            warranty: WarrantyClass::Complete,"]
+      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            domains: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
     },
     {
       "name": "DI-10.1: a target drops what its file offers",
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "An unbuffered file's write-through capability is what lets a consumer ask for it; the kernel refuses it on a cached file.",
-      "find": ["            capabilities: B::CAPABILITIES,"],
-      "replace": ["            capabilities: Capabilities::NONE,"]
+      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: B::CAPABILITIES,\n"],
+      "replace": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: Capabilities::NONE,\n"]
     },
     {
       "name": "DI-10.1: a target takes no alignment from its file",
@@ -1073,8 +1073,8 @@
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "A lock keeps other handles off the volume, not other writers off its disks, so a volume is never Complete.",
-      "find": ["            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
-      "replace": ["            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+      "find": ["            geometry: volume.geometry(),\n            handle: volume.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            geometry: volume.geometry(),\n            handle: volume.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
     },
     {
       "name": "DI-10.2: the lock is asked for and not taken",
