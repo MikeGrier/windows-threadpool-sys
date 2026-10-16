@@ -4,6 +4,62 @@
   "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one. The device-control helper's pending path is run through its seam, overlapped_call, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well. The OVERLAPPED the control is made with is a declared blind spot (see its survives entry): a control made without one answers the same on every handle tried, FSCTL_REQUEST_OPLOCK included. The abort when the wait for a pending call fails is not reachable: the event is the helper's own. The failure of CreateEventW is not reachable either.",
   "sabotages": [
     {
+      "name": "WV-2.2: the extents control sends a different code",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "The function's whole meaning is the control code it sends; a neighbouring code is refused by a volume.",
+      "find": ["        device_control(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, &[], buffer)\n"],
+      "replace": ["        device_control(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS + 4, &[], buffer)\n"]
+    },
+    {
+      "name": "WV-2.2: the first answer may have room for no extent",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "The device refuses a buffer with no room for one extent (measured: ERROR_INVALID_PARAMETER), so a function that asks with none fails every volume.",
+      "find": ["    let mut capacity = first.max(1);\n"],
+      "replace": ["    let mut capacity = first;\n"]
+    },
+    {
+      "name": "WV-2.2: a count of nothing in a more-data reply allocates a buffer with no room for an extent",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A reply that says it needs more room and counts none must not shrink the next buffer below the one extent the device requires.",
+      "find": ["                    .max(1);\n"],
+      "replace": ["                    ;\n"]
+    },
+    {
+      "name": "WV-2.2: the retry is not bounded by its constant",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A loop that runs one more than the bound would spin on a volume whose extents keep changing and ask more often than the constant says.",
+      "find": ["    for _ in 0..ATTEMPTS {\n"],
+      "replace": ["    for _ in 0..=ATTEMPTS {\n"]
+    },
+    {
+      "name": "WV-2.2: a refusal by the device is retried as though it needed more room",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "Any code but ERROR_MORE_DATA ends the attempts and is the device's own; retrying it would hide it behind a report that the extents kept changing.",
+      "find": ["            Err(error) => return Err(error),\n"],
+      "replace": ["            Err(_) => {}\n"]
+    },
+    {
+      "name": "WV-2.2: a call that says it wrote more than the buffer held is read",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A byte count beyond the buffer is the call's claim and not a fact; it is refused and not read as though the buffer held that many bytes.",
+      "find": ["                    .get(..written)\n"],
+      "replace": ["                    .get(..written.min(buffer.len()))\n"]
+    },
+    {
+      "name": "WV-2.2: a negative length is accepted as zero",
+      "file": "src/extents.rs",
+      "expect": "caught",
+      "why": "A length below zero is not a length; reporting it as an empty run would hide a damaged answer behind a plausible one.",
+      "find": ["                    length: u64::try_from(length).map_err(|_| invalid(\"a negative length\"))?,\n"],
+      "replace": ["                    length: u64::try_from(length).unwrap_or(0),\n"]
+    },
+    {
       "name": "WV-1.1: an extent's offset is read from where its length is",
       "file": "src/extents.rs",
       "expect": "caught",
@@ -32,8 +88,8 @@
       "file": "src/extents.rs",
       "expect": "caught",
       "why": "A volume with more extents than the first answer holds, a spanned or striped one, would then fail where it should be asked again at the size it needs.",
-      "find": ["            Err(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {\n"],
-      "replace": ["            Err(error) if error.raw_os_error() == Some(0) => {\n"]
+      "find": ["    Win32Error::from_io(error).is_some_and(|code| code.code() == ERROR_MORE_DATA)\n"],
+      "replace": ["    Win32Error::from_io(error).is_some_and(|code| code.code() == ERROR_MORE_DATA + 1)\n"]
     },
     {
       "name": "WV-1.1: an answer is asked for only once",

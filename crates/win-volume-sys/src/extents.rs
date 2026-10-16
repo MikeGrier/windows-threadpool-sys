@@ -5,6 +5,7 @@ use std::io;
 use std::mem::{offset_of, size_of};
 use std::os::windows::io::AsHandle;
 
+use win_error_codes::Win32Error;
 use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
 use windows_sys::Win32::Storage::FileSystem::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS;
 use windows_sys::Win32::System::Ioctl::{DISK_EXTENT, VOLUME_DISK_EXTENTS};
@@ -43,7 +44,10 @@ pub struct DiskExtent {
 /// # Errors
 ///
 /// The device's own error, such as `ERROR_INVALID_FUNCTION` for a handle that is not a volume, and
-/// [`io::ErrorKind::InvalidData`] for an answer that does not hold the extents it counts.
+/// [`io::ErrorKind::InvalidData`] for an answer that does not hold the extents it counts, a call
+/// that claims to have written more than the buffer it was given, a negative offset or length, and
+/// a volume whose extents kept changing between the calls. An allocation that cannot be made for a
+/// count the device named is `ERROR_NOT_ENOUGH_MEMORY`, and the call is not made again.
 pub fn volume_disk_extents(volume: &impl AsHandle) -> io::Result<Vec<DiskExtent>> {
     extents_via(FIRST_EXTENTS, |buffer| {
         device_control(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, &[], buffer)
@@ -63,16 +67,30 @@ fn extents_via(
     for _ in 0..ATTEMPTS {
         let mut buffer = zeroed_output(answer_size(capacity)?)?;
         match ask(&mut buffer) {
-            Ok(written) => return parse(&buffer[..written]),
-            Err(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {
-                // The header is written even when the extents do not fit: it says how many.
+            Ok(written) => {
+                // A byte count beyond the buffer is the call's claim and not a fact.
+                let written = buffer
+                    .get(..written)
+                    .ok_or_else(|| invalid("a call that wrote more than it was given room for"))?;
+                return parse(written);
+            }
+            Err(error) if is_more_data(&error) => {
+                // The header is written even when the extents do not fit: it says how many. A
+                // count of none still leaves room for the one extent the device requires.
                 let needed = count(&buffer).ok_or_else(|| invalid("an answer with no count"))?;
-                capacity = usize::try_from(needed).map_err(|_| invalid("a count too large"))?;
+                capacity = usize::try_from(needed)
+                    .map_err(|_| invalid("a count too large"))?
+                    .max(1);
             }
             Err(error) => return Err(error),
         }
     }
     Err(invalid("a volume whose extents kept changing"))
+}
+
+/// Whether `error` is the device's `ERROR_MORE_DATA`: the buffer held the count and not the extents.
+fn is_more_data(error: &io::Error) -> bool {
+    Win32Error::from_io(error).is_some_and(|code| code.code() == ERROR_MORE_DATA)
 }
 
 /// The size of an answer holding `extents` extents.

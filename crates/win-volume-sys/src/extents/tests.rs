@@ -5,9 +5,11 @@ use std::mem::{offset_of, size_of};
 
 use windows_sys::Win32::System::Ioctl::{DISK_EXTENT, VOLUME_DISK_EXTENTS};
 
-use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_MORE_DATA};
+use windows_sys::Win32::Storage::FileSystem::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS;
 
-use super::{ATTEMPTS, DiskExtent, extents_via, parse, volume_disk_extents};
+use super::{ATTEMPTS, DiskExtent, FIRST_EXTENTS, extents_via, parse, volume_disk_extents};
+use crate::device_control::device_control;
 use crate::test_support::{open_volume, ordinary_file, system_volume_path, temp_volume_path};
 
 /// The answer's layout as Windows fixes it, written out here and not computed from the offsets
@@ -191,10 +193,89 @@ fn an_answer_that_keeps_growing_is_given_up_on() {
 }
 
 #[test]
-fn any_other_error_from_the_device_is_the_callers() {
-    let error =
-        extents_via(1, |_: &mut [u8]| Err(io::Error::from_raw_os_error(5))).expect_err("refused");
+fn any_other_error_from_the_device_is_the_callers_and_ends_the_attempts() {
+    let mut asked = 0usize;
+    let error = extents_via(FIRST_EXTENTS, |_: &mut [u8]| {
+        asked += 1;
+        Err(io::Error::from_raw_os_error(5))
+    })
+    .expect_err("refused");
     assert_eq!(error.raw_os_error(), Some(5));
+    assert_eq!(asked, 1, "a refusal is not retried");
+}
+
+#[test]
+fn a_reply_that_needs_more_room_but_counts_none_still_leaves_room_for_one() {
+    let mut sizes = Vec::new();
+
+    let _ = extents_via(FIRST_EXTENTS, |buffer: &mut [u8]| {
+        sizes.push(buffer.len());
+        // The count stays zero: the header is left as it was.
+        Err(io::Error::from_raw_os_error(ERROR_MORE_DATA as i32))
+    });
+
+    assert_eq!(sizes.len(), ATTEMPTS);
+    assert!(
+        sizes.iter().all(|size| *size >= HEADER + EXTENT),
+        "a buffer with no room for an extent was asked with: {sizes:?}"
+    );
+}
+
+#[test]
+fn a_call_that_says_it_wrote_more_than_the_buffer_held_is_refused_and_not_read() {
+    for excess in [1usize, 8, 4096] {
+        let error = extents_via(1, |buffer: &mut [u8]| Ok(buffer.len() + excess))
+            .expect_err("a count beyond the buffer");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{excess} over");
+    }
+}
+
+#[test]
+fn a_call_that_wrote_exactly_the_buffer_is_read() {
+    const HELD: &[(u32, i64, i64)] = &[(9, 4096, 8192)];
+    let full = answer(HELD);
+    let parsed = extents_via(1, |buffer: &mut [u8]| {
+        buffer[..full.len()].copy_from_slice(&full);
+        Ok(buffer.len())
+    })
+    .expect("the whole buffer");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].disk_number, 9);
+}
+
+#[test]
+fn a_buffer_with_no_room_for_one_extent_is_refused_as_an_invalid_parameter() {
+    // Measured, and not what the documentation leads one to expect: a buffer smaller than the count
+    // and one extent is `ERROR_INVALID_PARAMETER` on the machine measured, where
+    // `ERROR_INSUFFICIENT_BUFFER` might have been. It is why the first answer always has room for at
+    // least one extent, and why a count of none is not asked for again with a buffer of none.
+    let volume = open_volume(&system_volume_path(), false);
+    let ask = |size: usize| {
+        let mut buffer = vec![0u8; size];
+        device_control(
+            &volume,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            &[],
+            &mut buffer,
+        )
+        .map_err(|error| error.raw_os_error())
+    };
+
+    for size in [0usize, 1, HEADER - 1, HEADER, HEADER + EXTENT - 1] {
+        assert_eq!(
+            ask(size),
+            Err(Some(ERROR_INVALID_PARAMETER as i32)),
+            "a buffer of {size} bytes"
+        );
+    }
+
+    // With room for one extent the device answers, whether with the one run or, on a machine whose
+    // system volume spans disks, with a count to ask again at.
+    let outcome = ask(HEADER + EXTENT);
+    assert!(
+        outcome.is_ok() || outcome == Err(Some(ERROR_MORE_DATA as i32)),
+        "room for one extent: {outcome:?}"
+    );
 }
 
 #[test]
