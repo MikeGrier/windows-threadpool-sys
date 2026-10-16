@@ -65,11 +65,7 @@ running between polls.
 
 - [x] **TW-3.1** -- `Watcher::poll` runs the engine on the thread pool and returns, one poll at a time, with the doorbell rung after each full batch and at the end. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-31)
 
-- [ ] **TW-3.2** -- **Park on a full SQ and resume on the caller's doorbell**, through a thread-pool
-  wait the crate registers. The resumed callback resets the resume doorbell, retries, and only then
-  arms the wait again, so a ring that arrives in between is not lost. The pass continues from the
-  kept index. ([TW-D-5](DESIGN-NOTES.md#tw-d-5), [TW-D-6](DESIGN-NOTES.md#tw-d-6),
-  [TW-D-7](DESIGN-NOTES.md#tw-d-7))
+- [x] **TW-3.2** -- A poll that stops on a full SQ is parked on a thread-pool wait on the resume doorbell, and the resumed callback resets it, retries from the kept index, and only then arms again. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-32)
 
 - [ ] **TW-3.3** -- **Registration and unregistration during a running poll.** Dropping a
   registration mid-poll neither waits nor invalidates attentions already written; a registration

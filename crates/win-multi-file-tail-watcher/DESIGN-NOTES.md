@@ -144,6 +144,12 @@ Reporting the attention makes the current length the new last known length.
   - *Crate to caller*: rung when a batch is ready, when the SQ is full, and when the poll-done entry
     is written. The caller learns which by reading the SQ.
   - *Caller to crate*: rung when the caller has made space in the SQ, so a stopped poll can resume.
+    A thread-pool wait the crate registers watches it, and is armed only while a poll is stopped:
+    its callback resets the doorbell, retries the report from the kept index, and only then arms
+    again, so a ring that lands in between finds the event already rung and wakes the wait at once
+    instead of being lost. The wait owns a duplicate of the event, which is the same event. A
+    stopped poll's armed wait wakes no thread, consistent with [TW-D-5](#tw-d-5); between polls
+    nothing is armed, and a ring then starts nothing.
 - **The SQ holds a fixed number of entries, set by the caller when the watcher is created, and is a
   power of two of at least two.** It is many-writer and one-reader, so a poll can be sharded across
   threads without a change here, and a writer that finds it full is refused and gets its entry back
@@ -325,9 +331,6 @@ bind to them as settled.
   whatever the file has gained since; offset 0 on a file that already has content reports all of it.
   The alternative, starting at the length read at registration, would report nothing until the next
   write. The engineer has not been asked.
-- **The resume doorbell is waited on by a thread-pool wait the crate registers**, and the poll
-  resumes from its callback. An armed, idle wait wakes no thread, so it is consistent with
-  [TW-D-5](#tw-d-5).
 - **The caller sets the SQ's capacity**, presumably when the watcher is created. TW-2.2 takes it
   at `Watcher::new`; see [TW-D-6](#tw-d-6).
 - **The type that holds one file is `HeldFile`** (TW-1.2). A working name taken from this file's

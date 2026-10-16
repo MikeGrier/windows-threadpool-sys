@@ -627,3 +627,35 @@ both outcomes; a watcher polled and dropped at once, twenty times; a registratio
 polled watcher; the error messages. For the ringing, with a counting stand-in for the doorbell:
 three rings for 600 changes (two full batches and the end), one for nothing to report, and one for
 a stop.
+
+## Moved 2026-10-15 22:27:52 -04:00 -- TW-3.2: parking on a full SQ and resuming
+
+### <a id="tw-32"></a>TW-3.2 -- A poll that stops on a full SQ is parked on a thread-pool wait on the resume doorbell, and the resumed callback resets it, retries from the kept index, and only then arms again. *(completed 2026-10-15 22:27:52 -04:00)*
+
+A `feat` of `win-multi-file-tail-watcher`: a poll stopped on a full SQ now continues when the caller
+rings `ring_resume`. The mechanism is in `src/watcher/poll.rs`; the decision text is under
+[TW-D-6](DESIGN-NOTES.md#tw-d-6), and the working position it was is removed.
+
+- **Two thread-pool objects, one engine.** The first `poll` makes a work item and a wait; both
+  callbacks run the same engine behind one lock, so a resume and the start of the next poll cannot
+  overlap. The wait owns a duplicate of the resume doorbell's event, which is the same event, and
+  the work item's callback holds the wait through an `Arc` so there is no cycle with the callbacks.
+- **Armed only while stopped.** The work callback arms the wait when its run stops; the wait callback
+  re-arms only when its retry stops again. A poll that completes leaves nothing armed, so a ring
+  between polls starts nothing.
+- **Order inside the resumed callback**: reset the doorbell, then retry, then arm. A ring that lands
+  after the reset finds the event rung when the wait is armed, and wakes it at once; clearing after
+  the retry would erase it.
+- **That order is not verified by a sabotage.** Retrying before the reset gives the same entries in
+  every test, because the ring it would lose has to land in the few instructions between a refused
+  write and the reset, and no test can put a caller's ring there on demand. It rests on the
+  argument above and on the checklist item's own wording.
+- **The watcher's drop drains the work item and then the wait**, so nothing arms the wait after it
+  is drained. A watcher dropped while its poll is parked, or as one resumes, neither hangs nor
+  crashes.
+
+Tested: a parked poll continuing on each ring through two stops to poll-done and then a new poll
+being accepted; 600 changes through a queue of 64, each reported once and in order, with the caller
+ringing as the callback runs; the resumed callback leaving the resume doorbell clear; a ring made
+before the poll parks not lost; a ring between polls starting nothing; the watcher dropped while
+parked and as a poll resumes, twenty times each.

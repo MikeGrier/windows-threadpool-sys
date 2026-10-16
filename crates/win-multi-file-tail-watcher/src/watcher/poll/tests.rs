@@ -228,3 +228,120 @@ fn a_reader_who_polls_the_instant_poll_done_is_visible_is_never_refused() {
         }
     }
 }
+
+// Entries until poll-done has been read, ringing the resume doorbell after each drain.
+fn driven_to_poll_done(watcher: &Watcher<u32>) -> Vec<SqEntry<u32>> {
+    let mut all = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        all.extend(next_entries(watcher));
+        if all.iter().any(|entry| matches!(entry, SqEntry::PollDone)) {
+            return all;
+        }
+        watcher.ring_resume();
+        assert!(Instant::now() < deadline, "the poll never finished");
+    }
+}
+
+#[test]
+fn a_parked_poll_continues_each_time_the_caller_rings_the_resume_doorbell() {
+    let dir = TempDir::new("poll-resume");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    assert_eq!(values(&next_entries(&watcher)), [0, 1]);
+    watcher.ring_resume();
+    assert_eq!(values(&next_entries(&watcher)), [2, 3]);
+    watcher.ring_resume();
+    let last = next_entries(&watcher);
+    assert_eq!(last, [att(4, 0, 14), SqEntry::PollDone]);
+    watcher.poll().expect("a finished poll is not in flight");
+}
+
+#[test]
+fn six_hundred_changes_through_a_queue_of_sixty_four_are_each_reported_once_in_order() {
+    let dir = TempDir::new("poll-many");
+    let path = dir.file("a.log", b"0123456789");
+    let watcher = watcher(64);
+    let _registrations: Vec<_> = (0..600u32)
+        .map(|n| watcher.register(&wtf(&path), 0, n).expect("register"))
+        .collect();
+    watcher.poll().expect("poll");
+    let mut entries = driven_to_poll_done(&watcher);
+    assert_eq!(entries.pop(), Some(SqEntry::PollDone));
+    assert_eq!(values(&entries), (0..600).collect::<Vec<u32>>());
+}
+
+#[test]
+fn the_resumed_callback_clears_the_resume_doorbell() {
+    let dir = TempDir::new("poll-reset");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    next_entries(&watcher);
+    watcher.ring_resume();
+    next_entries(&watcher);
+    assert!(
+        !signalled_within(watcher.resume_doorbell(), 0),
+        "the resume doorbell was left rung"
+    );
+}
+
+#[test]
+fn a_ring_made_before_the_poll_parks_is_not_lost() {
+    let dir = TempDir::new("poll-early");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 5);
+    watcher.ring_resume();
+    watcher.poll().expect("poll");
+    let mut entries = driven_to_poll_done(&watcher);
+    assert_eq!(entries.pop(), Some(SqEntry::PollDone));
+    assert_eq!(values(&entries), [0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn a_ring_between_polls_starts_nothing() {
+    let dir = TempDir::new("poll-stray");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 2);
+    watcher.poll().expect("poll");
+    let mut entries = driven_to_poll_done(&watcher);
+    assert_eq!(entries.pop(), Some(SqEntry::PollDone));
+    watcher.ring_resume();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(watcher.drain().count(), 0, "a ring started a poll");
+    watcher.poll().expect("and the next poll is accepted");
+}
+
+#[test]
+fn a_watcher_dropped_while_its_poll_is_parked_neither_hangs_nor_crashes() {
+    let dir = TempDir::new("poll-drop-parked");
+    for _ in 0..20 {
+        let watcher = watcher(2);
+        let _registrations = changing(&dir, &watcher, 5);
+        watcher.poll().expect("poll");
+        next_entries(&watcher);
+        drop(watcher);
+    }
+}
+
+#[test]
+fn a_watcher_dropped_as_its_poll_resumes_neither_hangs_nor_crashes() {
+    let dir = TempDir::new("poll-drop-resuming");
+    for _ in 0..20 {
+        let watcher = watcher(2);
+        let _registrations = changing(&dir, &watcher, 5);
+        watcher.poll().expect("poll");
+        next_entries(&watcher);
+        watcher.ring_resume();
+        drop(watcher);
+    }
+}
+
+fn att(value: u32, last_known: u64, current: u64) -> SqEntry<u32> {
+    SqEntry::Attention(crate::Attention {
+        value,
+        last_known,
+        current,
+    })
+}

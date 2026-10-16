@@ -257,7 +257,7 @@
       "expect": "caught",
       "why": "Every registration made at offset zero reads the same either way.",
       "find": ["                        last_known: entry.last_known,"],
-      "replace": ["                        last_known: 0,"]
+      "replace": ["                        last_known: entry.last_known * 0,"]
     },
     {
       "name": "the snapshot cursor skips the next registration",
@@ -712,8 +712,40 @@
       "file": "src/watcher/poll.rs",
       "expect": "survives",
       "why": "`stop_and_drain` is the drain the work object's drop performs; naming it only discharges an obligation that is reported under a feature this build does not enable.",
-      "find": ["        self.0.stop_and_drain();"],
+      "find": ["        self.work.stop_and_drain();"],
       "replace": [""]
+    },
+    {
+      "name": "a poll that stops does not arm the wait",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "Nothing would resume it, which is where TW-3.1 left a stopped poll.",
+      "find": ["                    parking.arm(None);"],
+      "replace": ["                    let _ = &parking;"]
+    },
+    {
+      "name": "a resumed callback does not clear the resume doorbell",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A doorbell left rung wakes the wait again at once, so a poll that is still full retries as fast as it can.",
+      "find": ["                resumed.view.reset_resume();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a resumed callback that stops again does not arm the wait",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "The second stop of a poll would never be resumed.",
+      "find": ["                    activation.rearm(None);"],
+      "replace": ["                    let _ = activation;"]
+    },
+    {
+      "name": "a resumed callback that completes arms the wait anyway",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A ring between polls would then run the engine and start a poll nobody asked for.",
+      "find": ["                if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm(None);\n                }"],
+      "replace": ["                resumed.run();\n                activation.rearm(None);"]
     }
   ]
 }

@@ -5,10 +5,11 @@ use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use super::Watcher;
-use super::engine::Engine;
+use super::engine::{Engine, RunOutcome};
 use crate::PollError;
 
 #[cfg(test)]
@@ -70,11 +71,16 @@ impl PollGate {
     }
 }
 
-/// The thread-pool work item that runs the poll, made by the first `poll`.
+/// The thread-pool objects that run the poll, made by the first `poll`: a work item that starts it
+/// and a wait on the resume doorbell that continues it after a stop.
 ///
-/// It is drained when it drops, which is what the work object would do anyway but which also
-/// discharges the obligation the thread-pool crate reports for an undrained one.
-pub(super) struct Poller(ThreadpoolWork);
+/// Both are drained when it drops, which the objects would do anyway but which also discharges the
+/// obligation the thread-pool crate reports for an undrained one.
+pub(super) struct Poller {
+    work: ThreadpoolWork,
+    // Shared with the work item's callback, which arms it when a poll stops.
+    wait: Arc<ThreadpoolWait>,
+}
 
 impl fmt::Debug for Poller {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -84,7 +90,25 @@ impl fmt::Debug for Poller {
 
 impl Drop for Poller {
     fn drop(&mut self) {
-        self.0.stop_and_drain();
+        // The work first: it is what arms the wait, so nothing arms it after the wait is drained.
+        self.work.stop_and_drain();
+        self.wait.stop_and_drain();
+    }
+}
+
+// What both callbacks run: the engine, behind a lock so that a resume and the start of the next
+// poll cannot overlap, against a view of the shared state that owns no thread-pool object.
+struct PollRun<T: Clone> {
+    view: Watcher<T>,
+    engine: Mutex<Engine<T>>,
+}
+
+impl<T: Clone> PollRun<T> {
+    fn run(&self) -> RunOutcome {
+        self.engine
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .run(&self.view)
     }
 }
 
@@ -96,8 +120,10 @@ impl<T: Clone + Send + 'static> Watcher<T> {
     /// are ready, when the queue is full, and when poll-done is written.
     ///
     /// One poll is in flight at a time: from this call until its poll-done entry is written. A
-    /// poll that has stopped on a full queue is still in flight. A caller who has read poll-done
-    /// may call `poll` again at once.
+    /// poll that has stopped on a full queue is still in flight, and continues from where it
+    /// stopped when the caller drains and rings [`resume_doorbell`](Self::resume_doorbell) with
+    /// [`ring_resume`](Self::ring_resume). A caller who has read poll-done may call `poll` again at
+    /// once.
     ///
     /// # Errors
     ///
@@ -109,7 +135,7 @@ impl<T: Clone + Send + 'static> Watcher<T> {
         }
         match self.poller() {
             Ok(poller) => {
-                poller.0.submit();
+                poller.work.submit();
                 Ok(())
             }
             Err(error) => {
@@ -124,20 +150,44 @@ impl<T: Clone + Send + 'static> Watcher<T> {
         if let Some(poller) = self.poller.get() {
             return Ok(poller);
         }
-        // The callback runs against its own view of the shared state, one that owns no work
-        // object: it must not own the object it runs on.
+        // The callbacks run against their own view of the shared state, one that owns no
+        // thread-pool object: they must not own the objects they run on.
         let view = Self::view(Arc::clone(&self.shared));
-        let engine = Mutex::new(Engine::new(&view));
+        let run = Arc::new(PollRun {
+            engine: Mutex::new(Engine::new(&view)),
+            view,
+        });
+
+        // A duplicate of the resume doorbell's event, which the wait owns and closes; the caller
+        // rings the original and the event is the same one.
+        let event = self.shared.resume.duplicate_event()?;
+        // SAFETY: an event is a waitable object the pool supports, not a mutex, and the duplicate
+        // is owned by nothing else.
+        let target = unsafe { WaitableHandle::assume_waitable(event) };
+        let resumed = Arc::clone(&run);
+        // Resets before it retries and arms again only afterwards, so a ring that lands in between
+        // is seen by the arming: a manual-reset event that is already rung wakes the wait at once.
+        let wait = Arc::new(ThreadpoolWait::new(
+            target,
+            move |activation| {
+                resumed.view.reset_resume();
+                if resumed.run() == RunOutcome::Stopped {
+                    activation.rearm(None);
+                }
+            },
+            None,
+        )?);
+
+        let parking = Arc::clone(&wait);
         let work = ThreadpoolWork::new(
             move || {
-                engine
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .run(&view);
+                if run.run() == RunOutcome::Stopped {
+                    parking.arm(None);
+                }
             },
             None,
         )?;
-        Ok(self.poller.get_or_init(|| Poller(work)))
+        Ok(self.poller.get_or_init(|| Poller { work, wait }))
     }
 
     fn view(shared: Arc<super::Shared<T>>) -> Self {

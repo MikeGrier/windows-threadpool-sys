@@ -184,10 +184,6 @@ impl<T: Clone> Watcher<T> {
     }
 
     /// Clear [`resume_doorbell`](Self::resume_doorbell).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "a resumed poll (TW-3.2) clears it")
-    )]
     pub(crate) fn reset_resume(&self) {
         self.shared.resume.reset();
     }

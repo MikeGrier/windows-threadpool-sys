@@ -64,4 +64,13 @@ impl Doorbell {
     pub(crate) fn handle(&self) -> BorrowedHandle<'_> {
         self.event.as_handle()
     }
+
+    /// A second handle to the same event, for a wait that must own the handle it watches.
+    ///
+    /// # Errors
+    ///
+    /// The error from `DuplicateHandle`.
+    pub(crate) fn duplicate_event(&self) -> io::Result<OwnedHandle> {
+        self.event.try_clone()
+    }
 }
