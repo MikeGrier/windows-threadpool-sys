@@ -684,3 +684,35 @@ written leaves that attention in the queue with its value, counted through an `A
 made while parked is not in this poll and is in the next; fifty registrations and drops on another
 thread complete while the poll is parked; and four threads registering and dropping 250 times each
 while polls run through a queue of four, with no failure and only the original registrations left.
+
+## Moved 2026-10-15 22:51:22 -04:00 -- TW-3.4: polls over real files on the thread pool
+
+### <a id="tw-34"></a>TW-3.4 -- Polls over real files that child processes write run through a queue of two slots in tests of the public API, reporting every change across parks and resumes while registrations come and go. *(completed 2026-10-15 22:51:22 -04:00)*
+
+Crate-internal (a `chore`): `tests/poll_real_writers.rs`, driving only `Watcher`, `poll`, the two
+doorbells and `drain`. This closes M3.
+
+- **Why two slots.** Two is the smallest queue the crate accepts, and with it any poll of more than
+  one change parks, because poll-done needs a slot of its own. That makes the number of parks and
+  resumes as large as it can be, which is where a lost ring or a lost change would show. It is a
+  stress setting and not a recommended one; the in-crate tests use larger queues for the ordinary
+  shapes.
+- **Stepped**: 300 registrations, every fifth a child's file (sixty children, each appending through
+  a stdout handle its parent opened), the rest unchanging files registered at their length. Each pass
+  releases every child by one line, waits for exact lengths, and polls to poll-done; the poll must
+  report exactly the live children, in roster order, each from where the pass before ended, and take
+  more than twenty rounds. On the third pass the poll is parked after its first round: a second
+  `poll` is refused, a child's registration is dropped before its attention is written, and a file
+  is registered; the dropped one is skipped, and the new one is reported by the next poll only. After
+  the children exit a poll is silent, and then nothing runs between polls: a ring of the resume
+  doorbell starts no poll and the doorbell stays quiet for 300 ms.
+- **Concurrent**: 150 registrations, thirty of them children appending 300 lines each as fast as
+  they can, while another thread registers and drops a file every 200 microseconds, all through two
+  slots. Each child's attentions must be one unbroken chain from its starting offset to its full
+  length; the registrations made mid-poll are reported as the file's length from zero when they are
+  reported at all; nothing else is reported and nothing is terminal; and only the original
+  registrations remain.
+- **Checked against two mutants** by hand: a poll that stops without arming its wait, and a resumed
+  callback that does not re-arm. Both fail these tests, which wait up to thirty seconds for a doorbell
+  that never comes. The first run of that check hung, because a failing concurrent test left its
+  churn thread running and the scope waited for it; the thread now stops when the test unwinds.

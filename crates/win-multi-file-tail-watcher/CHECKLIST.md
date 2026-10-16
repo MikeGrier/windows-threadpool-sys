@@ -69,10 +69,7 @@ running between polls.
 
 - [x] **TW-3.3** -- Registering and dropping registrations during a running or parked poll is tested on the thread pool and needed no change: neither waits for the poll, attentions already written keep their value, and a registration made mid-poll is seen by the next poll. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-33)
 
-- [ ] **TW-3.4** -- **Integration tests: polls over real files on the thread pool.** Hundreds of
-  changing files with child-process writers against an SQ of two slots: every change is reported
-  across parks and resumes; registrations dropped and added mid-poll cause no failure and no hang; a
-  concurrent `poll` is refused; between polls no crate callback runs.
+- [x] **TW-3.4** -- Polls over real files that child processes write run through a queue of two slots in tests of the public API, reporting every change across parks and resumes while registrations come and go. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-34)
 
 ## M4 -- Shutdown
 
