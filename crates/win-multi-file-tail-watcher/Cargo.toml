@@ -31,6 +31,9 @@ windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-i
 # version both, as for every sibling.
 windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
 
+# The buffer contract the I/O ring takes a read's buffer by (TW-D-15). Path and version both.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
 # The SQ is its `slotwise_mpsc`: bounded, many writers and one reader, so a poll can later be
 # sharded across threads. The crate's `experimental-permit-claim` and `dwcas` features stay off.
 windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", default-features = false }

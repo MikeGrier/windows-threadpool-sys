@@ -810,6 +810,86 @@
       "why": "TW-D-9: Drop sets the flag itself when no request was made, so the drain it waits on is bounded by one step.",
       "find": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks.\n        self.shared.stop.store(true, Ordering::Release);"],
       "replace": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks."]
+    },
+    {
+      "name": "a buffer of no bytes is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A read into an empty buffer reads nothing and never makes progress.",
+      "find": ["    if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {"],
+      "replace": ["    if buffer_len > MAX_BUFFER_LEN {"]
+    },
+    {
+      "name": "a buffer longer than a ring read is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The ring refuses a read longer than u32::MAX bytes, so such a buffer could never be used.",
+      "find": ["    if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {"],
+      "replace": ["    if buffer_len == 0 {"]
+    },
+    {
+      "name": "a pool of no buffers is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A pool with nothing to lend would leave every read waiting forever.",
+      "find": ["    if count == 0 {\n        return Err(PoolError::NoBuffers);\n    }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused take does not arm the doorbell",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A reader starved of buffers would never hear that one came back.",
+      "find": ["                free.starved = true;"],
+      "replace": ["                free.starved = false;"]
+    },
+    {
+      "name": "every buffer given back rings the doorbell",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The doorbell answers a starvation once; ringing on every return wakes a reader with nothing to do.",
+      "find": ["        if was_starved {\n            self.doorbell.ring();\n        }"],
+      "replace": ["        let _ = was_starved;\n        self.doorbell.ring();"]
+    },
+    {
+      "name": "a starvation is answered more than once",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "Without clearing it, every later return rings until the next refusal.",
+      "find": ["            mem::replace(&mut free.starved, false)"],
+      "replace": ["            free.starved"]
+    },
+    {
+      "name": "a dropped buffer is not given back",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "TW-D-15: dropping the chunk is how the client says it is done; a buffer not given back is lost to the pool.",
+      "find": ["        self.shared.give_back(mem::take(&mut self.bytes));"],
+      "replace": ["        drop(mem::take(&mut self.bytes));"]
+    },
+    {
+      "name": "a chunk shows the whole buffer",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A reused buffer holds stale bytes past what the read delivered.",
+      "find": ["        &self.buffer.bytes[..self.len]"],
+      "replace": ["        &self.buffer.bytes[..]"]
+    },
+    {
+      "name": "a chunk may claim more bytes than its buffer",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A length past the buffer is a bug in the caller, which must not be clipped silently.",
+      "find": ["            len <= self.bytes.len(),"],
+      "replace": ["            true,"]
+    },
+    {
+      "name": "control: the doorbell is rung while the lock is held",
+      "file": "src/pool.rs",
+      "expect": "survives",
+      "why": "Ringing outside the lock is for latency, not correctness: the starved flag is cleared under it either way.",
+      "find": ["            mem::replace(&mut free.starved, false)\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"],
+      "replace": ["            let was = mem::replace(&mut free.starved, false);\n            if was {\n                self.doorbell.ring();\n            }\n            false\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"]
     }
   ]
 }

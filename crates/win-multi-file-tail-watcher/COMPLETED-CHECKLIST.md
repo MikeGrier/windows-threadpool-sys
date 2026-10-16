@@ -847,3 +847,38 @@ Crate-internal (a `chore`): `src/held_file.rs`. The decision is
 
 Tested: the handle the `EndpointHandle` lends is the handle every observer shares, and a second hold
 of the same path has another; an observer still reads the length after the `HeldFile` drops.
+
+## Moved 2026-10-16 12:15:51 -04:00 -- TW-5.2: the buffer pool and the chunk
+
+### <a id="tw-52"></a>TW-5.2 -- A pool of owned buffers of one size, all allocated and zeroed when it is made, lends each as a buffer a ring read can take and a chunk of the bytes read, both given back on drop, with a doorbell for a starved reader. *(completed 2026-10-16 12:15:51 -04:00)*
+
+Crate-internal (a `chore`): `src/pool.rs`, and a dependency on io-buffers for the buffer contract the
+ring takes. Everything is `pub(crate)` under `expect(dead_code)` until the reading engine (TW-5.5)
+uses it; the chunk becomes public with the client's entries (TW-5.3). The decision text is under
+[TW-D-15](DESIGN-NOTES.md#tw-d-15).
+
+- **`BufferPool::new(buffer_len, count)`** checks both before allocating anything: a buffer of 1 to
+  `u32::MAX` bytes, since a ring read's length is a `u32`, and at least one buffer. Then it reserves
+  and zeroes every buffer, so the memory is fallible rather than an abort, and every byte is
+  initialized as the buffer contract requires.
+- **`take` lends a `PoolBuffer`**, which implements `IoBuf` and `IoBufMut` over a boxed slice whose
+  address moving the value does not change, so a ring read can take it by ownership. Dropping it
+  gives the buffer back, made into a chunk or not.
+- **`into_chunk(len)` keeps the first `len` bytes as what was read**; the `Chunk` dereferences to
+  exactly those, so the stale bytes of a reused buffer are never visible. A length past the buffer
+  panics rather than clipping.
+- **The doorbell** is manual-reset and the pool's own: a refused take arms it, and the first buffer
+  given back after that rings it once, outside the pool's lock. Arming and the free list share one
+  lock, so a buffer given back between a waiter's reset and its next take is simply taken.
+
+Tested: dimensions out of range refused before allocating, and a count that cannot be reserved
+refused as an allocation error; every buffer available at its length and zeroed; takes up to the
+count and then refused; a buffer given back whether or not it became a chunk; buffers distinct and
+not overlapping; a returned buffer lent again at the same address; the address stable across moves
+and equal for reading and writing; a chunk showing only the bytes read, also from a reused buffer; an
+empty chunk and a full one; a chunk longer than its buffer panicking; the doorbell rung only by the
+first return after a refusal, and again after a reset and a second refusal; a chunk dropped on
+another thread giving its buffer back and ringing; lent buffers outliving the pool; eight threads
+taking and giving back with no buffer lost or gained; the errors' text and sources; and the types
+being `Send` and `Sync`. Ten sabotage entries, nine caught and one control that survives, each run
+on its own.

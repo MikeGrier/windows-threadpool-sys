@@ -13,6 +13,7 @@ mod doorbell;
 mod held_file;
 mod open_error;
 mod poll_error;
+mod pool;
 mod probe_failure;
 mod sq;
 #[cfg(test)]

@@ -139,6 +139,7 @@ dependencies = [
 name = "win-multi-file-tail-watcher"
 version = "0.1.0"
 dependencies = [
+ "io-buffers",
  "windows-overlapped-io-sys",
  "windows-sys",
  "windows-threadpool-sys",

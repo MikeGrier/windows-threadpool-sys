@@ -371,6 +371,11 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   reordering needs.
 - **No CQ.** The one thing that flows back is that the client is done with a buffer, and the chunk's
   `Drop` carries it: the buffer returns to the pool, and a layer waiting for one is woken.
+- **The pool allocates every buffer, zeroed, when it is made**, and wakes a layer waiting for one
+  by a manual-reset doorbell of its own: a take it refuses arms it, and the first buffer given back
+  after that rings it, once. The waiter resets it before taking again, as for the watcher's
+  doorbells ([TW-D-6](#tw-d-6)). A buffer lent for a read goes back when it drops whether or not it
+  became a chunk, and lent buffers may outlive the pool.
 - **Three things stop the reads without waiting**: an empty pool, a full ring SQ, a full client SQ.
   Each continues from where it stopped when a chunk drops, a read completes, or the client rings
   back, as a poll does on a full SQ ([TW-D-7](#tw-d-7)).
