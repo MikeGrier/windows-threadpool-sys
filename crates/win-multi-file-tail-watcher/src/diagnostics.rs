@@ -101,10 +101,6 @@ impl SharedSink {
     }
 
     /// Report the event `make` builds, if the sink wants `kind`. `make` is not called otherwise.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) reports through it")
-    )]
     pub(crate) fn emit(&self, kind: DiagnosticKind, make: impl FnOnce() -> Diagnostic) {
         if self.0.wants(kind) {
             self.0.report(&make());

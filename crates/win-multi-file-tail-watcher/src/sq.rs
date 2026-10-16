@@ -110,10 +110,6 @@ impl From<CapacityError> for SqCapacityError {
 
 /// Why an entry was not written. The entry comes back with it.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the poll engine (TW-3.1) writes through it")
-)]
 pub(crate) enum SqPushError<T> {
     /// Every slot holds an entry the caller has not drained.
     Full(SqEntry<T>),
@@ -133,10 +129,6 @@ impl<T> Clone for SqWriter<T> {
 
 impl<T> SqWriter<T> {
     /// Write `entry` without waiting.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) writes through it")
-    )]
     pub(crate) fn push(&self, entry: SqEntry<T>) -> Result<(), SqPushError<T>> {
         self.0.push(entry).map_err(|error| match error {
             PushError::Full(entry) => SqPushError::Full(entry),

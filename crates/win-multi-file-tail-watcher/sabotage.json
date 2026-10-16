@@ -352,8 +352,8 @@
       "file": "src/watcher/engine.rs",
       "expect": "caught",
       "why": "The consumer would never see the end of that poll.",
-      "find": ["                    Err(SqPushError::Full(_)) => RunOutcome::Stopped,"],
-      "replace": ["                    Err(SqPushError::Full(_)) => RunOutcome::Complete,"]
+      "find": ["                        self.shared.gate.unfinished();\n                        RunOutcome::Stopped"],
+      "replace": ["                        self.shared.gate.unfinished();\n                        RunOutcome::Complete"]
     },
     {
       "name": "the report batch is not honoured",
@@ -642,6 +642,78 @@
       "why": "The same lossless conversion spelled another way. A test that catches it is asserting how the conversion is written, not what it does.",
       "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
       "replace": ["        let endpoint = UnassociatedEndpoint::open(std::ffi::OsString::from(path), true, false, 0)?;"]
+    },
+    {
+      "name": "a poll is accepted while one is in flight",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "TW-D-5: one poll at a time, a stopped one included.",
+      "find": ["                Err(_) => return false,"],
+      "replace": ["                Err(_) => return true,"]
+    },
+    {
+      "name": "the gate is not checked at all",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "The same refusal, removed at the other end.",
+      "find": ["        if !self.shared.gate.begin() {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "a poll that finds poll-done being written is refused instead of waiting",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A caller who has read poll-done may poll at once. Detection depends on the race: the 300-round test is what gives it a chance.",
+      "find": ["                Err(FINISHING) => std::thread::yield_now(),"],
+      "replace": ["                Err(FINISHING) => return false,"]
+    },
+    {
+      "name": "the gate is not marked finishing before poll-done is written",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Without the in-between state a caller who reads poll-done can find the gate still closed. A race, caught by the test that polls in the instant poll-done is visible; 8 of 8 runs failed with the step removed.",
+      "find": ["                self.shared.gate.finishing();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a written poll-done does not open the gate",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "No later poll would ever be accepted.",
+      "find": ["                        self.shared.gate.finished();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused poll-done opens the gate",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A poll waiting for room is still in flight.",
+      "find": ["                        self.shared.gate.unfinished();"],
+      "replace": ["                        self.shared.gate.finished();"]
+    },
+    {
+      "name": "the doorbell is not rung between batches",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Entries are news to the caller as each batch is written, not only when the poll ends.",
+      "find": ["        let outcome = self.finish(watcher, REPORT_BATCH, &ring);"],
+      "replace": ["        let outcome = self.finish(watcher, REPORT_BATCH, || {});"]
+    },
+    {
+      "name": "the doorbell is not rung at the end",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A full queue and poll-done both end a run, and both are news.",
+      "find": ["        ring();\n        outcome"],
+      "replace": ["        outcome"]
+    },
+    {
+      "name": "control: the work object is drained by its own drop and not by name",
+      "file": "src/watcher/poll.rs",
+      "expect": "survives",
+      "why": "`stop_and_drain` is the drain the work object's drop performs; naming it only discharges an obligation that is reported under a feature this build does not enable.",
+      "find": ["        self.0.stop_and_drain();"],
+      "replace": [""]
     }
   ]
 }

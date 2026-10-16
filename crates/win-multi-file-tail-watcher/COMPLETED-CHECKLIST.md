@@ -590,3 +590,40 @@ TW-3.1 makes one.
   starting offset, each later one from exactly where the one before ended, every one a change, and
   the last at the full length. Only children are reported and nothing is terminal. The timing is not
   asserted: it was observed, once, to give each child several attentions across some seventy polls.
+
+## Moved 2026-10-15 22:00:37 -04:00 -- TW-3.1: poll on the thread pool
+
+### <a id="tw-31"></a>TW-3.1 -- `Watcher::poll` runs the engine on the thread pool and returns, one poll at a time, with the doorbell rung after each full batch and at the end. *(completed 2026-10-15 22:00:37 -04:00)*
+
+A `feat` of `win-multi-file-tail-watcher`: `Watcher::poll`, `PollError`, and a dependency on
+windows-threadpool-sys. The mechanism is `src/watcher/poll.rs`; the reasoning is under
+[TW-D-5](DESIGN-NOTES.md#tw-d-5).
+
+- **`poll` returns at once.** It takes the gate and submits a `ThreadpoolWork` made by the first
+  call, so a watcher never polled makes none. The callback runs `Engine::run` against its own view
+  of the shared state, which owns no work object, and the engine lives in the callback behind a
+  mutex. `T` must be `Send + 'static`.
+- **The gate is three states**, idle, running and finishing. A poll is in flight from the call until
+  its poll-done entry is written, a poll stopped on a full SQ included. `finishing` exists so that a
+  caller who has read poll-done may poll again at once, which a flag cleared after the write could
+  not give: a `poll` that finds `finishing` waits for the write's outcome, which is a few
+  instructions away. A refused poll-done goes back to running.
+- **The doorbell is rung with the roster lock released**: after each full batch, and once more when
+  the run ends, whether it stopped on a full SQ or wrote poll-done. The ring after poll-done follows
+  the gate opening.
+- **Not here**: nothing resumes a poll that stopped on a full SQ, so such a poll stays in flight and
+  every later `poll` is refused; the wait that resumes it is TW-3.2. The same holds for shutdown
+  (M4): dropping the watcher drains the work object and waits for a running callback, and a parked
+  poll has returned.
+- **`expect(dead_code)`** on the items the poll now uses is removed.
+
+Tested: a poll of an empty watcher; each change then poll-done, in order; a second poll reporting
+only what changed since; a poll stopped on a full queue still in flight and refusing twice; eight
+threads polling a stopped poll with exactly one accepted; 300 rounds of read-poll-done-then-poll
+with none refused; 2,000 rounds of a reader polling in the instant poll-done is visible, which
+fails every run when the gate's finishing step is removed; a poll-done the queue refuses leaving the
+poll in flight; the gate making a `begin` that finds it finishing wait for the write's outcome, in
+both outcomes; a watcher polled and dropped at once, twenty times; a registration outliving a
+polled watcher; the error messages. For the ringing, with a counting stand-in for the doorbell:
+three rings for 600 changes (two full batches and the end), one for nothing to report, and one for
+a stop.

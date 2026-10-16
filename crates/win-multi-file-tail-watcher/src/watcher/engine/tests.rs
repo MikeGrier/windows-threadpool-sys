@@ -521,3 +521,39 @@ fn a_run_after_completion_starts_a_new_poll() {
         );
     }
 }
+
+#[test]
+fn the_doorbell_is_rung_after_each_full_batch_and_once_more_at_the_end() {
+    let dir = TempDir::new("e-rings");
+    let path = dir.file("a.log", b"0123456789");
+    let watcher = watcher(1024);
+    let _registrations: Vec<_> = (0..600u32)
+        .map(|n| watcher.register(&wtf(&path), 0, n).expect("register"))
+        .collect();
+    let mut engine = Engine::new(&watcher);
+    let rings = std::cell::Cell::new(0);
+    let outcome = engine.run_ringing(&watcher, || rings.set(rings.get() + 1));
+    assert_eq!(outcome, RunOutcome::Complete);
+    // Two full batches of the three the report makes, and the end.
+    assert_eq!(rings.get(), 3);
+}
+
+#[test]
+fn the_doorbell_is_rung_once_for_a_poll_with_nothing_to_report_and_once_for_a_stop() {
+    let dir = TempDir::new("e-rings-once");
+    let empty = watcher(4);
+    let mut engine = Engine::new(&empty);
+    let rings = std::cell::Cell::new(0);
+    engine.run_ringing(&empty, || rings.set(rings.get() + 1));
+    assert_eq!(rings.get(), 1);
+
+    let full = watcher(2);
+    let _files = register_files(&dir, &full, 5, 10);
+    let mut engine = Engine::new(&full);
+    rings.set(0);
+    assert_eq!(
+        engine.run_ringing(&full, || rings.set(rings.get() + 1)),
+        RunOutcome::Stopped
+    );
+    assert_eq!(rings.get(), 1, "a full queue is news to the caller");
+}

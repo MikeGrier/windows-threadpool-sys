@@ -111,6 +111,15 @@ Reporting the attention makes the current length the new last known length.
   ([TW-D-9](#tw-d-9)), is refused. Because a poll outlives the call that started it, this is a
   runtime check, not an exclusive borrow. One poll at a time gives a single resume position
   ([TW-D-7](#tw-d-7)) and a single writer for each registration's last known length.
+- **A poll is in progress from the call until its poll-done entry has been written**, so one stopped
+  on a full SQ still is. A caller who has read poll-done may poll again at once, which is why the
+  gate is not a flag: poll-done has to be visible only once the gate is open, yet a poll-done the SQ
+  refuses is not the end of the poll. The gate has a state between running and idle for the write,
+  and a `poll` that finds it waits for the write's outcome.
+- **`poll` needs `T: Send + 'static`**, because the poll runs on the thread pool, and the
+  thread-pool work object is made by the first `poll`, so a watcher that is never polled makes none.
+  Dropping the watcher drains it, which waits for a running poll to return; a poll parked on a full
+  SQ has returned and is not waited for. ([TW-D-9](#tw-d-9) decides the rest of shutdown.)
 - **Threads: the fewest that finish a poll within a reasonable beat.** The beat interval is not
   known, so no thread count is fixed. The design leaves the querying itself shardable across threads
   without committing to it; what is known of the query's cost and of sharding it is in

@@ -141,6 +141,7 @@ version = "0.1.0"
 dependencies = [
  "windows-overlapped-io-sys",
  "windows-sys",
+ "windows-threadpool-sys",
  "windows-waitable-queues",
  "wtf-string",
 ]

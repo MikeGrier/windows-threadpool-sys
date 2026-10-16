@@ -63,11 +63,7 @@ and resumes when the caller rings back. A watcher over hundreds of files with ch
 is polled repeatedly while registrations are dropped and added, with no hang and no crate callback
 running between polls.
 
-- [ ] **TW-3.1** -- **`poll` submits the engine to the thread pool and returns.** One poll at a
-  time: a second `poll` is refused at run time while one is in flight, which includes one parked on
-  a full SQ. The crate-to-caller doorbell is rung when entries are ready, when the SQ fills and when
-  poll-done is written, after the roster lock is released. No crate callback runs between polls.
-  ([TW-D-5](DESIGN-NOTES.md#tw-d-5), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+- [x] **TW-3.1** -- `Watcher::poll` runs the engine on the thread pool and returns, one poll at a time, with the doorbell rung after each full batch and at the end. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-31)
 
 - [ ] **TW-3.2** -- **Park on a full SQ and resume on the caller's doorbell**, through a thread-pool
   wait the crate registers. The resumed callback resets the resume doorbell, retries, and only then

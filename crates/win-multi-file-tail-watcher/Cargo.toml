@@ -27,6 +27,10 @@ windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-i
 	"fs",
 ] }
 
+# The poll runs as a thread-pool work item, and parks on a thread-pool wait (TW-3.2). Path and
+# version both, as for every sibling.
+windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
+
 # The SQ is its `slotwise_mpsc`: bounded, many writers and one reader, so a poll can later be
 # sharded across threads. The crate's `experimental-permit-claim` and `dwcas` features stay off.
 windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", default-features = false }

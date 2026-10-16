@@ -1,9 +1,5 @@
 // Copyright (c) 2026 Mike Grier
 //! The poll engine: copy, probe, report, and a stop point in the third (TW-D-7).
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the poll on the thread pool (TW-3.1) runs it")
-)]
 
 use std::io;
 
@@ -63,10 +59,19 @@ impl<T: Clone> Engine<T> {
         }
     }
 
-    /// Start a poll, or continue one that stopped, and run it until it completes or the SQ fills.
+    /// Start a poll, or continue one that stopped, and run it until it completes or the SQ fills,
+    /// ringing the doorbell as each batch is written and once more at the end.
     pub(crate) fn run(&mut self, watcher: &Watcher<T>) -> RunOutcome {
+        self.run_ringing(watcher, || watcher.ring_doorbell())
+    }
+
+    // `ring` is called with the roster lock released, between batches and then once at the end:
+    // a stop is a full SQ and a completion is poll-done, and either is news to the caller.
+    fn run_ringing(&mut self, watcher: &Watcher<T>, ring: impl Fn()) -> RunOutcome {
         self.begin(watcher, EndpointObserver::file_len);
-        self.finish(watcher, REPORT_BATCH, || {})
+        let outcome = self.finish(watcher, REPORT_BATCH, &ring);
+        ring();
+        outcome
     }
 
     // Starts a poll if none is in flight: the copy and the probe. The read is the probe itself, so
@@ -170,9 +175,16 @@ impl<T: Clone> Watcher<T> {
                 return RunOutcome::Stopped;
             }
             if exhausted {
+                self.shared.gate.finishing();
                 return match writer.push(SqEntry::PollDone) {
-                    Ok(()) => RunOutcome::Complete,
-                    Err(SqPushError::Full(_)) => RunOutcome::Stopped,
+                    Ok(()) => {
+                        self.shared.gate.finished();
+                        RunOutcome::Complete
+                    }
+                    Err(SqPushError::Full(_)) => {
+                        self.shared.gate.unfinished();
+                        RunOutcome::Stopped
+                    }
                     Err(SqPushError::Closed(_)) => {
                         unreachable!("the watcher holds the SQ's reader")
                     }

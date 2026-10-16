@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::os::windows::io::BorrowedHandle;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use windows_overlapped_io_sys::EndpointObserver;
 use wtf_string::Wtf16Str;
@@ -19,7 +19,10 @@ use crate::{CreateError, HeldFile, OpenError};
 mod tests;
 
 mod engine;
+mod poll;
 mod probe;
+
+use poll::{PollGate, Poller};
 
 #[cfg(test)]
 mod snapshot_tests;
@@ -29,10 +32,6 @@ const SNAPSHOT_BATCH: usize = 256;
 
 /// What the snapshot pass copies from a roster entry (TW-D-7).
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the poll engine (TW-3.1) reads it")
-)]
 pub(crate) struct SnapshotItem {
     pub(crate) id: u64,
     pub(crate) last_known: u64,
@@ -56,10 +55,13 @@ pub(crate) struct SnapshotItem {
 #[derive(Debug)]
 pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
+    // Made by the first `poll`; a watcher that is never polled makes none.
+    poller: OnceLock<Poller>,
 }
 
 #[derive(Debug)]
 struct Shared<T> {
+    gate: PollGate,
     roster: Mutex<Roster<T>>,
     // Held only to hand out clones, so no writer ever waits on this lock to write.
     writer: Mutex<SqWriter<T>>,
@@ -132,7 +134,9 @@ impl<T: Clone> Watcher<T> {
     ) -> Result<Self, CreateError> {
         let (writer, reader) = sq::queue(sq_capacity)?;
         Ok(Self {
+            poller: OnceLock::new(),
             shared: Arc::new(Shared {
+                gate: PollGate::new(),
                 roster: Mutex::new(Roster {
                     next_id: 0,
                     entries: BTreeMap::new(),
@@ -175,7 +179,6 @@ impl<T: Clone> Watcher<T> {
     }
 
     /// Ring [`doorbell`](Self::doorbell).
-    #[cfg_attr(not(test), expect(dead_code, reason = "the poll (TW-3.1) rings it"))]
     pub(crate) fn ring_doorbell(&self) {
         self.shared.doorbell.ring();
     }
@@ -213,19 +216,11 @@ impl<T: Clone> Watcher<T> {
     }
 
     /// Report an event to the watcher's sink if it wants `kind`; `make` builds the event only then.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) reports through it")
-    )]
     pub(crate) fn diagnose(&self, kind: DiagnosticKind, make: impl FnOnce() -> Diagnostic) {
         self.shared.diagnostics.emit(kind, make);
     }
 
     /// A writing handle for one thread of the crate's own.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) writes through it")
-    )]
     pub(crate) fn sq_writer(&self) -> SqWriter<T> {
         self.shared
             .writer
@@ -275,20 +270,12 @@ impl<T: Clone> Watcher<T> {
     /// A registration made while the pass runs is seen if the pass has not yet reached the end of
     /// the roster; one dropped is skipped if the pass has not yet reached it, and its observer
     /// keeps the file open if it has.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
-    )]
     pub(crate) fn snapshot(&self, out: &mut Chunked<SnapshotItem>) {
         self.snapshot_batches(out, SNAPSHOT_BATCH, || {});
     }
 
     // `between` runs after each full batch with the lock released, which is where a later stop
     // check can go, and where a test can change the roster.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
-    )]
     fn snapshot_batches(
         &self,
         out: &mut Chunked<SnapshotItem>,

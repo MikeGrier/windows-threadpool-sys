@@ -12,6 +12,7 @@ mod diagnostics;
 mod doorbell;
 mod held_file;
 mod open_error;
+mod poll_error;
 mod probe_failure;
 mod sq;
 #[cfg(test)]
@@ -22,5 +23,6 @@ pub use create_error::CreateError;
 pub use diagnostics::{Diagnostic, DiagnosticKind, DiagnosticSink, NoDiagnostics};
 pub use held_file::HeldFile;
 pub use open_error::OpenError;
+pub use poll_error::PollError;
 pub use sq::{Attention, SqCapacityError, SqDrain, SqEntry, Terminal};
 pub use watcher::{Registration, Watcher};
