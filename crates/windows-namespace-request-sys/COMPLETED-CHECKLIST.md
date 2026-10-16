@@ -227,3 +227,25 @@ crate is next released, so its changelog would list features that are not in the
 pull request needs those lines removed or overridden. That is a release action, not a checklist item.
 The sabotage manifest here no longer has a control entry of its own, and the one remaining `survives`
 entry is a declared blind spot and not a control.
+
+## Moved 2026-10-15 23:17:03 -04:00 -- NR-4.1: the shared `Win32Error`
+
+### <a id="nr-41"></a>NR-4.1 -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name, and `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` survives its `io::Error` form. *(completed 2026-10-15 23:17:03 -04:00)*
+
+This crate's own type converted a code that does not fit an `i32` to an `io::Error` made with
+`io::Error::other` and a message, so the code did not survive it; the virtdisk errors, such as
+`ERROR_VIRTDISK_NOT_VIRTUAL_DISK` (`0xC03A0015`), are of that kind. The shared type holds the code at
+std's boundary as a bit-preserving cast, for every code. The decision is
+[WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1). The code is the commit that adds the dependency
+and deletes the type from `src/outcome.rs`.
+
+Every existing path keeps working, since the re-export has the same name. `perform` still snapshots the
+code in the statement after the call and now builds it with `Win32Error::last`, and the crate's own
+out-of-memory report stays here as a function, `out_of_memory`, because it cannot be a method on a type
+this crate no longer owns. A test takes `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` through `perform`, runs cleanup
+that overwrites the thread's error, and reads the code back from the `io::Error`; the type it replaced
+returned no code there. The `Display` text now gives the code in hex as well, and nothing in the
+workspace matched on the old text. Three sabotage entries cover the snapshot and the out-of-memory
+report, with a control.
+
+What this left to do is the same swap in the enumeration crate, `ERR-1`.

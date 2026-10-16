@@ -38,8 +38,7 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.8** -- The storage-locality entries and the device-control helper are deleted from this crate, and `D-20` to `D-24` are pointers at the `WV-D` rows they became. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-28)
 
-  **Next:** [NR-3.3](#nr-3----what-durable-iorings-open-surface-needs-of-this-crate), then `NR-4.1`
-  in any order with it.
+  **Next:** [NR-3.3](#nr-3----what-durable-iorings-open-surface-needs-of-this-crate).
 
 ## NR-4 -- Adopt `win-error-codes`
 
@@ -50,12 +49,7 @@ Opened 2026-10-15. This crate has its own `Win32Error`, which converts a code of
 > **-> CROSS-COMPONENT PREREQUISITE:** [WE-1.1](../win-error-codes/CHECKLIST.md) in
 > `crates/win-error-codes`.
 
-- [ ] **NR-4.1** -- **`Win32Error` is `win_error_codes::Win32Error`.** Delete this crate's type and
-  re-export the shared one under the same name, so every existing path keeps working. The
-  snapshot-after-the-call guarantee of `perform` stays here and builds the value with `from_code`;
-  `out_of_memory` stays. A test shows `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` survives
-  `to_io_error().raw_os_error()`, which it does not today. It should land before this crate's next
-  release so the release carries the fix.
+- [x] **NR-4.1** -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name, and `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` survives its `io::Error` form. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-41)
 
 ## NR-3 -- What durable-ioring's open surface needs of this crate
 
