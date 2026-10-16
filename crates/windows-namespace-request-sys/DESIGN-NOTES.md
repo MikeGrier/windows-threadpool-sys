@@ -745,7 +745,12 @@ decides whether a long result is acceptable to the host. Nothing here prefixes `
 5. no component of the child is a reserved device name -- `CON`, `PRN`, `AUX`, `NUL`, `COM` and `LPT`
    with a digit, `CONIN$`, `CONOUT$` -- compared without regard to case, after removing everything from
    the first `.` and any trailing spaces. The list is the one in Microsoft's "Naming Files, Paths, and
-   Namespaces", and the rule errs toward not grafting.
+   Namespaces", and the rule errs toward not grafting;
+6. the captured directory does not begin with `\\?\` or `\\.\`. Win32 does not normalise a path with
+   either prefix, so a grafted `.\a` would be read literally and name a file that is not there, where
+   the same `.\a` handed to Win32 resolves against that directory. It was found by review, which
+   reported that a process whose current directory is verbatim opens `.\kernel32.dll` and could not open
+   the grafted form; the child-process test in the open tests shows it against Win32.
 
 A child that is not grafted is passed through untouched, and Win32 resolves it when the call is
 made, against whatever the current directory is then. For those forms the race D-9 closed stays
@@ -810,16 +815,17 @@ in this crate for it.
   stored beside the path as given. The path handed to Win32 is the same either way and is fixed to
   the directory of the moment of construction; `perform` allocates nothing, and the root is not
   kept after it has been used.
-- **The current directory is read only for a child that rules 1, 2, 3 and 5 allow**, since only rule 4
-  needs it. A path that is absolute, a device, a stream or empty makes no call.
+- **The current directory is read only for a child that rules 1, 2, 3 and 5 allow**, since only rules 4
+  and 6 need it. A path that is absolute, a device, a stream or empty makes no call.
 - **`NUL` is not grafted.** It is among rule 5's names, and the rule errs toward not grafting; the
   checklist item had listed `NUL` among the names that graft, which disagreed with the rule as
   numbered. The rule governs. `NUL` opens the same device grafted or not, so nothing observable turns
   on it.
 - **Rule 5 also names `COM` and `LPT` followed by the superscripts `U+00B9`, `U+00B2` and `U+00B3`**,
   which the documentation lists after the ASCII digits. The comparison folds ASCII case only.
-- **A directory is UNC for rule 4 when it begins with two separators of either kind**, which
-  includes a verbatim one. That is wider than a UNC path and errs toward not grafting.
+- **A directory is UNC for rule 4 when it begins with two separators of either kind.** That is wider
+  than a UNC path and errs toward not grafting. A verbatim or device directory is decided earlier, by
+  rule 6, and is not grafted at all.
 - **A failure to read the directory is its own error**, with the retry shape and vocabulary of
   [`ResolveFullPath`](src/full_path.rs): Windows' code unaltered, or that the size kept changing.
 - **An interior NUL is refused when the request is built**, which is [D-27](#d-27).

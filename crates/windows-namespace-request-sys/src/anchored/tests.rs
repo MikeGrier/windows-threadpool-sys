@@ -172,6 +172,53 @@ fn rule_4_a_unc_directory_is_one_that_begins_with_two_separators() {
 }
 
 #[test]
+fn rule_6_a_verbatim_or_device_directory_is_not_grafted_onto() {
+    // Win32 does not normalise a path with either prefix, so `.` and `..`, a forward slash and
+    // trailing dots and spaces in the child would be read literally after the join.
+    for root in [
+        r"\\?\C:\work",
+        r"\\?\C:\",
+        r"\\?\UNC\server\share\dir",
+        r"\\.\C:\work",
+        r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\dir",
+    ] {
+        for child in ["a", r".\a", r"..\a", "a/b", "a.", "a ", r"a\b"] {
+            assert_not_grafted(root, child);
+        }
+    }
+}
+
+#[test]
+fn rule_6_only_the_two_prefixes_with_backslashes_are_those_of_a_verbatim_or_device_path() {
+    // Close to the prefix and not it: the third unit is something else, the fourth is not a
+    // backslash, or the separators are forward slashes, which Win32 does not read as the prefix.
+    for root in [
+        r"\\?x\a",
+        r"\\.x\a",
+        r"\\??\a",
+        r"\\server\share\dir",
+        r"\?\C:\work",
+        r"C:\?\work",
+    ] {
+        assert!(
+            anchor(root, "a").is_grafted(),
+            "{root:?} is no verbatim or device prefix"
+        );
+    }
+    // Forward slashes are not the prefix, so rule 6 does not decline these; they are UNC-shaped for
+    // rule 4, which a child with no `..` does not meet.
+    assert!(anchor("//?/C:/work", "a").is_grafted());
+}
+
+#[test]
+fn rule_6_does_not_depend_on_the_child_the_other_rules_would_graft() {
+    // The same child grafts under an ordinary directory and does not under a verbatim one, so it is
+    // the directory that decides.
+    assert!(anchor(DRIVE_DIRECTORY, r".\a").is_grafted());
+    assert_not_grafted(r"\\?\C:\work", r".\a");
+}
+
+#[test]
 fn rule_5_every_reserved_name_is_not_grafted() {
     let names = [
         "CON",
@@ -432,6 +479,11 @@ fn the_graft_names_the_directory_captured_not_the_current_one() {
         return;
     }
 
+    // Spawning allocates the pipe handles, which must not reuse a value a test holding the write
+    // lock is reasoning about.
+    let _allocating = crate::handle::tests::handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
     let start = std::env::var_os("SystemRoot").expect("Windows names its directory");
     let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
         .arg("--exact")

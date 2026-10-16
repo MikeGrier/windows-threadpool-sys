@@ -25,16 +25,20 @@
 //! 4. if the captured directory is a UNC path, the child has no `..` component;
 //! 5. no component of the child is a reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM` or
 //!    `LPT` with a digit, `CONIN$` or `CONOUT$`, compared without regard to ASCII case, after
-//!    removing everything from the first `.` and any trailing spaces.
+//!    removing everything from the first `.` and any trailing spaces;
+//! 6. the captured directory does not begin with `\\?\` or `\\.\`. A path with either prefix is not
+//!    normalised by Win32, so a child joined onto one would be taken literally, `.` and `..`
+//!    components, forward slashes and trailing dots and spaces among what would then mean something
+//!    else than they meant relative to that directory.
 //!
 //! The rules err toward not grafting. Where they are wider than Microsoft's list, the child is
 //! passed through, which is what happens to every form that is not grafted. The digits of rule 5
 //! are `0` to `9` and the superscripts `U+00B9`, `U+00B2` and `U+00B3` that the documentation also
-//! names. A directory that begins with two separators of either kind counts as UNC for rule 4, which
-//! includes a verbatim one.
+//! names. A directory that begins with two separators of either kind counts as UNC for rule 4.
 //!
 //! The current directory is read only when it is needed: a path that rules 1, 2, 3 and 5 already
-//! refuse makes no call.
+//! refuse makes no call. Rules 4 and 6 are about the directory itself, so they are decided after it
+//! is read.
 //!
 //! # The one thing refused
 //!
@@ -60,6 +64,7 @@ const BACKSLASH: u16 = b'\\' as u16;
 const SLASH: u16 = b'/' as u16;
 const COLON: u16 = b':' as u16;
 const DOT: u16 = b'.' as u16;
+const QUESTION: u16 = b'?' as u16;
 const SPACE: u16 = b' ' as u16;
 const DIGIT_ZERO: u16 = b'0' as u16;
 const DIGIT_NINE: u16 = b'9' as u16;
@@ -189,6 +194,9 @@ fn graft(child: &[u16], root: &[u16]) -> Option<Vec<u16>> {
     if root.is_empty() || !has_graftable_shape(child) {
         return None;
     }
+    if is_verbatim_or_device(root) {
+        return None;
+    }
     if is_unc(root) && has_parent_component(child) {
         return None;
     }
@@ -212,6 +220,11 @@ fn has_graftable_shape(child: &[u16]) -> bool {
         return false;
     }
     !components(child).any(is_reserved_device_name)
+}
+
+/// Rule 6: a directory with the `\\?\` or `\\.\` prefix, which only backslashes make.
+fn is_verbatim_or_device(root: &[u16]) -> bool {
+    matches!(root, [BACKSLASH, BACKSLASH, prefix, BACKSLASH, ..] if *prefix == QUESTION || *prefix == DOT)
 }
 
 /// Rule 4's two halves: a directory that is a UNC path, and a child with a `..` component.

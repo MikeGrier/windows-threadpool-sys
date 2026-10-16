@@ -567,6 +567,22 @@
       "replace": ["        .map_or(0, |last| 1 + last);\n"]
     },
     {
+      "name": "NR-3.3: a child is grafted onto a verbatim or device directory",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Win32 does not normalise a path with either prefix, so a grafted `.\\kernel32.dll` is read literally and names a file that is not there. Found by review: a process whose current directory is verbatim opens `.\\kernel32.dll` and could not open the grafted form. The child-process test in the open tests is what shows it against Win32.",
+      "find": ["    if is_verbatim_or_device(root) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "NR-3.3: a device prefix is not recognised as one",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`\\\\.\\` is as unnormalised as `\\\\?\\`; recognising one of the two leaves the other grafted.",
+      "find": ["if *prefix == QUESTION || *prefix == DOT)"],
+      "replace": ["if *prefix == QUESTION)"]
+    },
+    {
       "name": "NR-3.4: a path with an interior NUL is accepted",
       "file": "src/anchored.rs",
       "expect": "caught",

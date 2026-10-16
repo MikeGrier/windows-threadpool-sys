@@ -616,3 +616,56 @@ fn a_relative_path_names_the_directory_it_was_built_in_after_the_directory_chang
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+const VERBATIM_CHILD_MARKER: &str = "WNRS_OPEN_VERBATIM_CHILD";
+const VERBATIM_CHILD_TEST: &str =
+    "open::tests::a_relative_path_is_not_grafted_onto_a_verbatim_current_directory";
+
+// A verbatim current directory is one Win32 does not normalise, so a child joined onto it is read
+// literally: `.\kernel32.dll` opens relative to the directory and `<directory>\.\kernel32.dll` does
+// not. The process current directory is shared, so this runs in a child process.
+#[test]
+fn a_relative_path_is_not_grafted_onto_a_verbatim_current_directory() {
+    if std::env::var_os(VERBATIM_CHILD_MARKER).is_some() {
+        let system = std::env::var("SystemRoot").expect("Windows names its directory");
+        let verbatim = format!(r"\\?\{system}\System32");
+        std::env::set_current_dir(&verbatim).expect("change to the verbatim directory");
+
+        let request = OpenFile::new(Wtf16String::from(r".\kernel32.dll"))
+            .expect("build the request")
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING);
+        assert_eq!(
+            request.win32_path(),
+            request.path(),
+            "the path is left for Win32 to resolve, not joined onto a verbatim directory"
+        );
+        let opened = request
+            .perform()
+            .expect("open relative to the verbatim current directory");
+        assert!(File::from(opened).metadata().expect("metadata").is_file());
+        return;
+    }
+
+    // Spawning allocates the pipe handles, which must not reuse a value a test holding the write
+    // lock is reasoning about.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(VERBATIM_CHILD_TEST)
+        .arg("--nocapture")
+        .env(VERBATIM_CHILD_MARKER, "1")
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
