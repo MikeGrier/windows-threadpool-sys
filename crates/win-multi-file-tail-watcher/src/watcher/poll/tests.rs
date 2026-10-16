@@ -581,3 +581,116 @@ fn after_a_shutdown_a_poll_done_the_queue_refuses_is_written_once_the_caller_dra
     );
     assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
 }
+
+#[test]
+fn dropping_a_watcher_sets_the_stop_flag_whether_or_not_a_shutdown_was_made() {
+    let dir = TempDir::new("poll-drop-flag");
+    for shut_down_first in [false, true] {
+        let watcher = watcher(4);
+        let registrations = changing(&dir, &watcher, 1);
+        if shut_down_first {
+            watcher.shutdown();
+        }
+        assert_eq!(registrations[0].shared.stopping(), shut_down_first);
+        drop(watcher);
+        assert!(registrations[0].shared.stopping());
+    }
+}
+
+#[test]
+fn after_a_watcher_with_a_parked_poll_is_dropped_no_callback_of_the_crate_runs() {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    use windows_sys::Win32::System::Threading::SetEvent;
+
+    let dir = TempDir::new("poll-drop-quiet");
+    let watcher = watcher(2);
+    let registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    assert_eq!(values(&next_entries(&watcher)), [0, 1]);
+    // The events outlive the watcher through duplicates, so what runs after it can be seen.
+    let doorbell = watcher.doorbell().try_clone_to_owned().expect("duplicate");
+    let resume = watcher
+        .resume_doorbell()
+        .try_clone_to_owned()
+        .expect("duplicate");
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(watcher);
+        done.send(()).expect("report");
+    });
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("dropping the watcher waited for a poll that was only parked");
+
+    // SAFETY: a live event, owned by `resume` for the duration of the call.
+    unsafe { SetEvent(resume.as_raw_handle()) };
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !signalled_within(doorbell.as_handle(), 0),
+        "a callback ran after the watcher was dropped"
+    );
+    drop(registrations);
+}
+
+// A value whose clone waits for `release`, so a poll can be held inside the report.
+struct Gate {
+    state: std::sync::Mutex<(bool, bool)>,
+    changed: std::sync::Condvar,
+}
+
+impl Gate {
+    fn wait_until(&self, done: impl Fn(&(bool, bool)) -> bool) {
+        let mut state = self.state.lock().expect("gate");
+        while !done(&state) {
+            state = self.changed.wait(state).expect("gate");
+        }
+    }
+
+    fn set(&self, change: impl FnOnce(&mut (bool, bool))) {
+        change(&mut self.state.lock().expect("gate"));
+        self.changed.notify_all();
+    }
+}
+
+struct Blocker(std::sync::Arc<Gate>);
+
+impl Clone for Blocker {
+    fn clone(&self) -> Self {
+        self.0.set(|state| state.0 = true);
+        self.0.wait_until(|state| state.1);
+        Self(std::sync::Arc::clone(&self.0))
+    }
+}
+
+#[test]
+fn dropping_a_watcher_waits_for_a_poll_that_is_running_and_returns_when_it_does() {
+    let dir = TempDir::new("poll-drop-waits");
+    let gate = std::sync::Arc::new(Gate {
+        state: std::sync::Mutex::new((false, false)),
+        changed: std::sync::Condvar::new(),
+    });
+    let path = dir.file("a.log", b"0123456789");
+    let watcher = Watcher::<Blocker>::new(4).expect("watcher");
+    let _registration = watcher
+        .register(&wtf(&path), 0, Blocker(std::sync::Arc::clone(&gate)))
+        .expect("register");
+    watcher.poll().expect("poll");
+    // The poll is inside `T::clone`, holding the roster lock.
+    gate.wait_until(|state| state.0);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let dropper = std::thread::spawn(move || {
+        drop(watcher);
+        done.send(()).expect("report");
+    });
+    assert!(
+        finished.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the drop returned while a poll was running"
+    );
+    gate.set(|state| state.1 = true);
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the drop did not return once the poll did");
+    dropper.join().expect("dropper");
+}

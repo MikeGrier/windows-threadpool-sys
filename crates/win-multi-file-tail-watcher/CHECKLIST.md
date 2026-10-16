@@ -81,9 +81,7 @@ its next step, which is one probe or one report.
 
 - [x] **TW-4.2** -- A shutdown stops a running or parked poll at its next step (a batch of the copy, a file probed, a change reported) and the poll goes on to poll-done, which is always delivered. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-42)
 
-- [ ] **TW-4.3** -- **`Drop` of the watcher**: sets the stop flag if no request was made, then stops
-  and drains the resume wait and waits for a running poll to return; never depends on the poll-done
-  entry having been written or read. ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
+- [x] **TW-4.3** -- Dropping a `Watcher` stops it as `shutdown` does, waits for a running poll to reach its next step and return, and never waits for poll-done or for a parked poll. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-43)
 
 - [ ] **TW-4.4** -- **Integration tests: shutdown from every state.** From the caller's doorbell
   callback on a thread-pool wait, asserting the request returns while a poll is inside a probe;

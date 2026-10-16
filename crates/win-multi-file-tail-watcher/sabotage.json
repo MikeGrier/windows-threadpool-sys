@@ -752,8 +752,8 @@
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "TW-D-9: shutdown stops the watcher for good.",
-      "find": ["        self.shared.stop.store(true, Ordering::Release);"],
-      "replace": ["        self.shared.stop.store(false, Ordering::Release);"]
+      "find": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(false, Ordering::Release);"]
     },
     {
       "name": "a poll is checked for a shutdown only after the gate",
@@ -768,8 +768,8 @@
       "file": "src/watcher.rs",
       "expect": "survives",
       "why": "A stronger ordering than release is the same flag for this reader.",
-      "find": ["        self.shared.stop.store(true, Ordering::Release);"],
-      "replace": ["        self.shared.stop.store(true, Ordering::SeqCst);"]
+      "find": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::SeqCst);"]
     },
     {
       "name": "the copy ignores a shutdown",
@@ -802,6 +802,14 @@
       "why": "Poll-done is always delivered: a poll-done the queue refuses is tried again when the caller rings.",
       "find": ["if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm"],
       "replace": ["if resumed.run() == RunOutcome::Stopped && !resumed.view.shared.stopping() {\n                    activation.rearm"]
+    },
+    {
+      "name": "dropping the watcher does not stop a poll that is running",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: Drop sets the flag itself when no request was made, so the drain it waits on is bounded by one step.",
+      "find": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks.\n        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks."]
     }
   ]
 }

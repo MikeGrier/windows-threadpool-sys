@@ -53,6 +53,11 @@ pub(crate) struct SnapshotItem {
 /// `T::clone` runs while the watcher's internal lock is held, here in [`Registration::value`] and
 /// when the crate reports a change. A `Clone` that calls back into the watcher (registering,
 /// dropping a [`Registration`], draining) deadlocks.
+///
+/// Dropping the watcher stops it as [`shutdown`](Self::shutdown) does, and then waits for the
+/// crate's own callbacks: a poll that is running reaches its next step and returns, and a poll
+/// parked on a full queue is not waited for. It never waits for poll-done to be written or read, so
+/// it may be dropped without draining. When it returns no callback of the crate runs again.
 #[derive(Debug)]
 pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
@@ -117,6 +122,14 @@ impl<T> Shared<T> {
         // `T::clone` runs under the lock but only reads; nothing under it can leave the map
         // half-changed, so a poisoned roster is still consistent.
         self.roster.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl<T: Clone> Drop for Watcher<T> {
+    fn drop(&mut self) {
+        // Set first, so a poll still running stops at its next step; the poller's fields then drain
+        // the work item and the wait, which is where this blocks.
+        self.shared.stop.store(true, Ordering::Release);
     }
 }
 

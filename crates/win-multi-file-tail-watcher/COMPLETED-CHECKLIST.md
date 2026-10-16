@@ -770,3 +770,30 @@ rest unreported; one made after the first batch of the copy ending it there; a p
 by a shutdown writing only poll-done when the caller drains and rings; and a poll-done refused after
 a shutdown, through three rings with the queue still full, being written once the caller drains and
 rings, with `poll` still refused as shut down.
+
+## Moved 2026-10-16 00:06:59 -04:00 -- TW-4.3: dropping the watcher
+
+### <a id="tw-43"></a>TW-4.3 -- Dropping a `Watcher` stops it as `shutdown` does, waits for a running poll to reach its next step and return, and never waits for poll-done or for a parked poll. *(completed 2026-10-16 00:06:59 -04:00)*
+
+Crate-internal (a `chore`): `impl Drop for Watcher` in `src/watcher.rs`, with the drain that was
+already in `Poller`'s drop since TW-3.2. The decision text is under
+[TW-D-9](DESIGN-NOTES.md#tw-d-9).
+
+- **`Drop` sets the stop flag first**, whether or not `shutdown` was called, so a poll that is
+  running stops at its next step and the wait that follows is bounded by one step. The fields then
+  drop: the work item is drained, then the resume wait, which waits for any running callback and
+  disarms, so when `Drop` returns no callback of the crate runs again.
+- **What it does not wait for**: a poll parked on a full queue has returned from its callback, so
+  there is nothing to wait for; and poll-done is never waited for, written or read. A watcher may be
+  dropped with entries still in the queue.
+- **The callbacks' own view of the shared state also runs this `Drop`**, when the work item drops
+  its closure. That only sets a flag that is already set, and happens only inside the poller's drop.
+- **The wait for a running poll is shown, not only argued.** A test holds a poll inside `T::clone`,
+  which runs under the roster lock in the report, drops the watcher on another thread, and sees the
+  drop not return until the clone does.
+
+Tested: the flag set on drop with and without a prior shutdown; a watcher with a parked poll
+returning from drop at once, and then no callback of the crate running when its resume doorbell is
+rung and its own doorbell staying quiet, both through duplicated events; and the drop waiting for a
+running poll and returning when it does. The earlier tests that poll and drop at once, and that drop
+while parked or as a poll resumes, cover the same drain.
