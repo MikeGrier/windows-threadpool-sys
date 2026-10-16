@@ -156,6 +156,11 @@ fn poll_errors_say_what_happened() {
         PollError::InFlight.to_string(),
         "a poll is already in flight"
     );
+    assert_eq!(
+        PollError::Shutdown.to_string(),
+        "the watcher has been shut down"
+    );
+    assert!(std::error::Error::source(&PollError::Shutdown).is_none());
     let io = PollError::from(std::io::Error::from_raw_os_error(5));
     assert!(io.to_string().contains("thread-pool work"));
     assert!(std::error::Error::source(&io).is_some());
@@ -469,4 +474,68 @@ fn registrations_made_and_dropped_on_other_threads_while_polls_run_cause_no_fail
         20,
         "only the original registrations remain"
     );
+}
+
+#[test]
+fn a_poll_after_shutdown_is_refused_and_the_request_may_be_repeated() {
+    let watcher = watcher(4);
+    watcher.shutdown();
+    watcher.shutdown();
+    assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
+    watcher.shutdown();
+    assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
+}
+
+#[test]
+fn shutdown_is_refused_ahead_of_in_flight_when_a_poll_is_parked() {
+    let dir = TempDir::new("poll-shutdown-parked");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    next_entries(&watcher);
+    assert!(matches!(watcher.poll(), Err(PollError::InFlight)));
+    watcher.shutdown();
+    assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
+}
+
+#[test]
+fn a_shutdown_leaves_the_watcher_usable_for_everything_but_polling() {
+    let dir = TempDir::new("poll-shutdown-usable");
+    let watcher = watcher(4);
+    let registrations = changing(&dir, &watcher, 2);
+    watcher.shutdown();
+    let path = dir.file("late.log", b"abc");
+    let late = watcher.register(&wtf(&path), 0, 7).expect("register");
+    assert_eq!(watcher.registered(), 3);
+    assert_eq!(late.value(), 7);
+    drop(registrations);
+    assert_eq!(watcher.registered(), 1);
+    assert_eq!(watcher.drain().count(), 0);
+}
+
+#[test]
+fn a_shutdown_from_another_thread_ends_a_loop_of_polls() {
+    let dir = TempDir::new("poll-shutdown-loop");
+    let watcher = watcher(4);
+    let _registrations = changing(&dir, &watcher, 3);
+    let polled = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(30));
+            watcher.shutdown();
+        });
+        let mut polled = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match watcher.poll() {
+                Ok(()) => {
+                    until_poll_done(&watcher);
+                    polled += 1;
+                }
+                Err(PollError::Shutdown) => break polled,
+                Err(error) => panic!("{error}"),
+            }
+            assert!(Instant::now() < deadline, "the shutdown never took effect");
+        }
+    });
+    assert!(polled > 0, "some polls ran before the request");
 }

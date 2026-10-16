@@ -127,11 +127,20 @@ impl<T: Clone + Send + 'static> Watcher<T> {
     ///
     /// # Errors
     ///
-    /// [`PollError::InFlight`] when a poll is in flight. [`PollError::Io`] when the thread-pool
-    /// work cannot be created, which only the first call does.
+    /// [`PollError::Shutdown`] after [`shutdown`](Self::shutdown), whether or not a poll is in
+    /// flight. [`PollError::InFlight`] when a poll is in flight. [`PollError::Io`] when the
+    /// thread-pool work cannot be created, which only the first call does.
     pub fn poll(&self) -> Result<(), PollError> {
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Err(PollError::Shutdown);
+        }
         if !self.shared.gate.begin() {
             return Err(PollError::InFlight);
+        }
+        // A shutdown that landed between the first look and the gate is refused here too.
+        if self.shared.stop.load(Ordering::Acquire) {
+            self.shared.gate.abandon();
+            return Err(PollError::Shutdown);
         }
         match self.poller() {
             Ok(poller) => {

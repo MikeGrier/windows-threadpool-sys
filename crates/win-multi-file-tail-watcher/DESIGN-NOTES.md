@@ -226,6 +226,10 @@ The drain moved to `Drop`, below.
 - **What the request does:** set the stop flag, and return. It does not drain. A queued resume
   callback sees the flag and returns at once; a running poll stops at its next step, which is one
   probe or one report.
+- **The request is `Watcher::shutdown`, and a `poll` after it is refused** with
+  `PollError::Shutdown`, which is reported ahead of "in flight" and also when a poll is parked. The
+  flag is looked at before the poll's gate is taken and again after, so a request that lands between
+  the two is refused as well. Registering and dropping registrations still work after it.
 - **Requested is not quiescent.** After the request a crate callback may still be running (a poll
   finishing its current probe) or queued (a resume callback about to see the flag).
 - **The end of polling reaches the caller as the ordinary poll-done entry**, when there is space

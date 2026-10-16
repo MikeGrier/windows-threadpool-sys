@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::os::windows::io::BorrowedHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use windows_overlapped_io_sys::EndpointObserver;
@@ -62,6 +63,8 @@ pub struct Watcher<T: Clone> {
 #[derive(Debug)]
 struct Shared<T> {
     gate: PollGate,
+    // Set by `shutdown`, for good (TW-D-9).
+    stop: AtomicBool,
     roster: Mutex<Roster<T>>,
     // Held only to hand out clones, so no writer ever waits on this lock to write.
     writer: Mutex<SqWriter<T>>,
@@ -137,6 +140,7 @@ impl<T: Clone> Watcher<T> {
             poller: OnceLock::new(),
             shared: Arc::new(Shared {
                 gate: PollGate::new(),
+                stop: AtomicBool::new(false),
                 roster: Mutex::new(Roster {
                     next_id: 0,
                     entries: BTreeMap::new(),
@@ -321,6 +325,15 @@ impl<T: Clone> Watcher<T> {
     #[must_use]
     pub fn registered(&self) -> usize {
         self.shared.roster().entries.len()
+    }
+
+    /// Stop the watcher for good: no poll starts after this returns.
+    ///
+    /// It sets a flag and returns, so it never blocks, may be called from a callback for
+    /// [`doorbell`](Self::doorbell), and may be called again. It does not wait for anything: a poll
+    /// already running is not drained by it. Dropping the watcher is what waits.
+    pub fn shutdown(&self) {
+        self.shared.stop.store(true, Ordering::Release);
     }
 }
 

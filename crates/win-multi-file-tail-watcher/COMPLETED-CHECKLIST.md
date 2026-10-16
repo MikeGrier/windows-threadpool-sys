@@ -716,3 +716,27 @@ doorbells and `drain`. This closes M3.
   callback that does not re-arm. Both fail these tests, which wait up to thirty seconds for a doorbell
   that never comes. The first run of that check hung, because a failing concurrent test left its
   churn thread running and the scope waited for it; the thread now stops when the test unwinds.
+
+## Moved 2026-10-15 23:14:12 -04:00 -- TW-4.1: the shutdown request
+
+### <a id="tw-41"></a>TW-4.1 -- `Watcher::shutdown` sets a stop flag and returns, may be repeated, and `poll` is refused with `PollError::Shutdown` after it. *(completed 2026-10-15 23:14:12 -04:00)*
+
+A `feat` of `win-multi-file-tail-watcher`: `Watcher::shutdown` and `PollError::Shutdown` (the error
+type was already `#[non_exhaustive]`, so the variant is not a break). The decision text is under
+[TW-D-9](DESIGN-NOTES.md#tw-d-9).
+
+- **The request** stores a flag in the shared state and returns. It never blocks, so it can be made
+  from a callback for the doorbell, and it may be repeated. It drains nothing.
+- **`poll` after it is refused with `Shutdown`**, ahead of `InFlight`, so a parked poll is reported
+  as shut down and not as in flight. The flag is read before the gate is taken and again after, so a
+  request that lands between the two is refused as well.
+- **Everything else still works**: registering, dropping registrations, and draining.
+- **Not here**: stopping a poll that is already running or parked is TW-4.2, and what `Drop`
+  waits for is TW-4.3. After this item a request does not yet stop a poll in flight.
+- **The second look at the flag is not verified by a sabotage.** It closes a race between the first
+  look and the gate that no test can land on demand, and removing it leaves every test green.
+
+Tested: a poll after the request refused, with the request repeated before and after; a parked poll
+refused as shut down and not as in flight; registering, dropping and draining still working; a
+shutdown from another thread ending a loop of polls after some had run; and the error's text and
+source.

@@ -746,6 +746,30 @@
       "why": "A ring between polls would then run the engine and start a poll nobody asked for.",
       "find": ["                if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm(None);\n                }"],
       "replace": ["                resumed.run();\n                activation.rearm(None);"]
+    },
+    {
+      "name": "a shutdown request sets nothing",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: shutdown stops the watcher for good.",
+      "find": ["        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["        self.shared.stop.store(false, Ordering::Release);"]
+    },
+    {
+      "name": "a poll is checked for a shutdown only after the gate",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A poll after shutdown is refused as shut down, not as in flight, even while one is parked.",
+      "find": ["        if self.shared.stop.load(Ordering::Acquire) {\n            return Err(PollError::Shutdown);\n        }\n        if !self.shared.gate.begin() {"],
+      "replace": ["        if !self.shared.gate.begin() {"]
+    },
+    {
+      "name": "control: the request is stored with sequential consistency",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "A stronger ordering than release is the same flag for this reader.",
+      "find": ["        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["        self.shared.stop.store(true, Ordering::SeqCst);"]
     }
   ]
 }

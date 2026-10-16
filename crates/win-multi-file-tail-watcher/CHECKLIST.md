@@ -77,8 +77,7 @@ Deliverable: shutdown requested from inside the caller's own doorbell callback s
 from any state without blocking, and the subsequent `Drop` waits at most for a running poll to reach
 its next step, which is one probe or one report.
 
-- [ ] **TW-4.1** -- **The shutdown request**: non-blocking, idempotent, and `poll` refused after it.
-  ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
+- [x] **TW-4.1** -- `Watcher::shutdown` sets a stop flag and returns, may be repeated, and `poll` is refused with `PollError::Shutdown` after it. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-41)
 
 - [ ] **TW-4.2** -- **Stopping the poll**: the request sets the stop flag and returns without
   draining; a queued resume callback returns at once on seeing the flag, and a running poll stops at
