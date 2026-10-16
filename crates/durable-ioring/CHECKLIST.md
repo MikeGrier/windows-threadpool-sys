@@ -375,6 +375,20 @@ option recorded by construction. The rule throughout is documented APIs only
   leaves a file behind, which is why the path check stays for a create and the handle check is the
   authority for every open.
 
+- [ ] **DI-14.6** -- **What an open can reach that is not a disk file is measured, and what this
+  crate does about it is decided from the measurements.** The request crate passes every path to
+  `CreateFileW` and is policy-free ([D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)
+  records what was measured there). A device reached by name is not stopped by the graft rules: a
+  `\\.\` path is passed through untouched, and `COM10` and above need that prefix. Measured on one
+  machine, a read on an opened serial port (`COM3`) was still blocked after 8 seconds, while `NUL`
+  returned end of file and accepted writes that go nowhere. The work: query the opened handle's type
+  (`GetFileType` is the candidate; the assistant has not tried it) and measure what it says for a
+  disk file, a directory, `NUL`, a console, a serial port, a named pipe and a raw volume; whether
+  `CancelIoEx` or `CancelSynchronousIo` can interrupt the serial read; and what `FlushFileBuffers` does
+  on `NUL`. Then decide, with the engineer, what an open of a handle that is not a disk file does: it
+  is refused, or classified and returned as such. That is a working position, not a decision, until
+  the measurements exist.
+
 ## DI-M15 -- Opening by identity, and reopening
 
 - [ ] **DI-15.1** -- **A file's identity, read from an opened file.** A `FileId` type over the

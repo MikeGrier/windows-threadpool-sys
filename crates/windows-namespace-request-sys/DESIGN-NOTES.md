@@ -785,6 +785,26 @@ file of that name when grafted, so a graft would change what the call means.
   because the documentation names them.
 - Behaviour in a process that is long-path aware was not measured; the test binary is not.
 
+**Devices, measured on 2026-10-16**, Windows 11, a Hyper-V guest, not elevated, each probe run
+with a time limit:
+
+- `NUL` opened as `\\.\NUL`, with and without the overlapped flag: a 4096-byte read returned no
+  bytes, a write was accepted, and the probe took 51 ms. It cannot hang, and what is written to it is
+  discarded while the call reports success.
+- `CON`, `CONIN$` and `CONOUT$` opened. `PRN`, `AUX`, `COM1`, `LPT1` and `CLOCK$` were not found.
+- **`COM3` opened, and a 16-byte read on it was still blocked after 8 seconds**, with no timeouts
+  set. Whether `CancelIoEx` or `CancelSynchronousIo` interrupts it was not tried.
+- The device namespace was not enumerated: a `QueryDosDeviceW` probe returned no names and was not
+  pursued. What else is reachable is therefore not measured.
+
+**A device is reachable without being grafted.** Rule 5 decides only whether a relative child is
+grafted. A path that begins with `\\.\`, and a `COM` name above 9 (which needs that prefix), is
+passed to `CreateFileW` as it is and reaches whatever device Windows names, so the rule is not a
+filter of what can be opened, and this crate does not filter (the policy is its consumers', as in
+[DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)). What to do about it is `DI-14.6` in
+[durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md); this decision schedules no work
+in this crate for it.
+
 **As implemented by `NR-3.3`:**
 
 - **The graft is computed when the request is built**, not when it is performed, and the result is
