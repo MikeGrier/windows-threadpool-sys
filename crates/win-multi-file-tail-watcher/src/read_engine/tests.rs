@@ -997,3 +997,40 @@ fn splitting_poll_done_is_poll_done_with_no_target() {
     assert_eq!(entry, SqEntry::PollDone);
     assert!(target.is_none());
 }
+
+#[test]
+fn a_run_resets_the_watchers_doorbell_before_it_looks() {
+    let dir = TempDir::new("re-wbell");
+    let mut engine = engine(16, 4);
+    let path = dir.file("a.log", &pattern(20));
+    let _registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    engine.watcher().poll_here();
+    assert!(
+        is_signalled(engine.watcher().doorbell()),
+        "the poll rang it"
+    );
+    engine.run().expect("run");
+    assert!(
+        !is_signalled(engine.watcher().doorbell()),
+        "a run resets it, and nothing rang it again"
+    );
+}
+
+#[test]
+fn entries_taken_from_the_watchers_sq_ring_its_resume_doorbell_once_the_run_ends() {
+    let dir = TempDir::new("re-wresume");
+    let mut engine = engine(16, 4);
+    let path = dir.file("a.log", &pattern(20));
+    let _registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    assert_eq!(engine.run().expect("run"), Stop::Idle);
+    assert!(
+        !is_signalled(engine.watcher().resume_doorbell()),
+        "nothing was taken, so no room was made"
+    );
+    engine.watcher().poll_here();
+    settle(&mut engine);
+    assert!(
+        is_signalled(engine.watcher().resume_doorbell()),
+        "a poll parked on a full SQ is told it can go on"
+    );
+}

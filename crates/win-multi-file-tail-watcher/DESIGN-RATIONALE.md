@@ -313,3 +313,18 @@ choice open to the engineer's correction; the decision text they sit under is
 - **A failed read is a diagnostic.** The existing sink is how a transient failure is already
   reported; an entry on the client's SQ is the larger decision, and is queued for the layer's public
   surface in [CHECKLIST.md](CHECKLIST.md) as TW-6.3.
+
+### The layer on the thread pool (TW-6.1, decided by the assistant while implementing)
+
+- **One wait per event, not one for all.** A thread-pool wait watches one handle, and the four
+  events are four handles; waiting on any of several would need a thread of the layer's own, which
+  is what the pool is here to avoid.
+- **Waits stay armed.** The checklist said "nothing armed between polls". The ring's completion
+  event cannot be detached from the ring, so one wait is armed for the ring's life whatever is
+  decided, and the other three follow it: arming one from another's callback, to arm only what a
+  stop needs, is a cross-thread arm that draining does not exclude, so a drop racing a callback could
+  leave a wait armed behind it. Each wait re-arming only itself has no such race, and an armed wait on
+  an event nobody rings is exactly the idle state [TW-D-5](DESIGN-NOTES.md#tw-d-5) calls outside its
+  requirement.
+- **The run resets, the wait does not.** Putting the reset in the engine's run rather than in each
+  callback gives every trigger the same discipline, and it is also how a synchronous driver gets it.

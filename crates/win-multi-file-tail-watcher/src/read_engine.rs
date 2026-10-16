@@ -13,8 +13,9 @@ use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
 use std::os::windows::io::{AsRawHandle, RawHandle};
+use std::sync::Arc;
 
-use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, Op, Owned, PushOptions};
+use windows_ioring_sys::{Batch, CompletionWake, IoRing, IoRingErrorExt, Op, Owned, PushOptions};
 use windows_overlapped_io_sys::EndpointObserver;
 use windows_sys::Win32::Foundation::ERROR_HANDLE_EOF;
 use wtf_string::Wtf16Str;
@@ -273,10 +274,14 @@ pub(crate) struct ReadEngine<T: Clone> {
     ring: IoRing<PoolBuffer, Pending<T>, Owned>,
     // Reads the ring holds, queued or in flight or completed and not popped, never exceed this.
     cq_size: usize,
-    sq: ReadSq<T>,
+    // Shared, so a client can drain and wait on it without the lock the layer keeps the engine under.
+    sq: Arc<ReadSq<T>>,
     pool: BufferPool,
     buffer_len: NonZeroU32,
     watcher: Watcher<Tracked<T>>,
+    // Entries were taken from the watcher's SQ since the last run ended, so a poll parked on a full
+    // SQ can continue.
+    made_room: bool,
     current: Option<Current<T>>,
     // The one entry the client's SQ refused. While it is held nothing else is taken, so entries
     // reach the client in the order they were made.
@@ -327,10 +332,11 @@ impl<T: Clone> ReadEngine<T> {
         Ok(Self {
             ring,
             cq_size,
-            sq,
+            sq: Arc::new(sq),
             pool,
             buffer_len,
             watcher,
+            made_room: false,
             current: None,
             undelivered: None,
             groups: Groups::default(),
@@ -365,6 +371,24 @@ impl<T: Clone> ReadEngine<T> {
         &self.sq
     }
 
+    /// The same SQ, to be held apart from the engine.
+    pub(crate) fn shared_sq(&self) -> Arc<ReadSq<T>> {
+        Arc::clone(&self.sq)
+    }
+
+    /// Have `on_wake` called on a thread-pool thread whenever a read may have completed, and once
+    /// now, as [`CompletionWake::new`] does for the engine's ring.
+    ///
+    /// # Errors
+    ///
+    /// As [`CompletionWake::new`].
+    pub(crate) fn attach_completion_wake(
+        &mut self,
+        on_wake: impl Fn() + Send + Sync + 'static,
+    ) -> io::Result<CompletionWake> {
+        CompletionWake::new(&mut self.ring, on_wake, None)
+    }
+
     /// The pool the reads' buffers come from.
     pub(crate) fn pool(&self) -> &BufferPool {
         &self.pool
@@ -377,9 +401,10 @@ impl<T: Clone> ReadEngine<T> {
 
     /// Do everything that can be done without waiting, and say why it stopped.
     ///
-    /// The resume doorbell and the pool's are reset first, so a ring that lands while this runs
-    /// is not lost (TW-D-6). The reading layer's doorbell is rung once at the end if entries were
-    /// written, or if the stop is a full SQ.
+    /// The resume doorbell, the pool's and the watcher's are reset first, so a ring that lands while
+    /// this runs is not lost (TW-D-6). The reading layer's doorbell is rung once at the end if
+    /// entries were written, or if the stop is a full SQ, and the watcher's resume doorbell if
+    /// entries were taken from its SQ, so a poll parked on it goes on.
     ///
     /// # Errors
     ///
@@ -388,10 +413,14 @@ impl<T: Clone> ReadEngine<T> {
     pub(crate) fn run(&mut self) -> io::Result<Stop> {
         self.sq.reset_resume();
         self.pool.reset_doorbell();
+        self.watcher.reset_doorbell();
         let mut wrote = false;
         let stop = self.run_until_stopped(&mut wrote);
         if wrote || matches!(stop, Ok(Stop::ClientFull)) {
             self.sq.ring_doorbell();
+        }
+        if std::mem::take(&mut self.made_room) {
+            self.watcher.ring_resume();
         }
         stop
     }
@@ -524,6 +553,7 @@ impl<T: Clone> ReadEngine<T> {
         let Some(entry) = self.watcher.drain().next() else {
             return Ok(Advance::Drained);
         };
+        self.made_room = true;
         let (entry, target) = split(entry);
         match plan(entry, self.buffer_len) {
             Plan::Reads(reads) => {

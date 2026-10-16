@@ -34,9 +34,11 @@ windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys"
 # The buffer contract the I/O ring takes a read's buffer by (TW-D-15). Path and version both.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
-# The ring the reading engine reads through (TW-D-15). No `threadpool` feature until the layer
-# runs on the thread pool; path and version both.
-windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys", default-features = false }
+# The ring the reading engine reads through (TW-D-15). `threadpool` is where `CompletionWake` is,
+# which runs the engine when a read completes (TW-6.1); path and version both.
+windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys", default-features = false, features = [
+	"threadpool",
+] }
 
 # The SQ is its `slotwise_mpsc`: bounded, many writers and one reader, so a poll can later be
 # sharded across threads. The crate's `experimental-permit-claim` and `dwcas` features stay off.

@@ -1014,3 +1014,37 @@ No new sabotage entries: what these tests would catch is already caught by the u
 add the real files, the real child writers and the polls running beside them.
 
 Milestone M5 is complete.
+
+## Moved 2026-10-16 15:22:15 -04:00 -- TW-6.1: the reading layer on the thread pool
+
+### <a id="tw-61"></a>TW-6.1 -- The reading engine runs on the thread pool with no thread of the caller's: the watcher's doorbell, a completed read, a chunk returned to an empty pool and the client's resume doorbell each drive it through a wait of their own, which stays armed and idle between polls. *(completed 2026-10-16 15:22:15 -04:00)*
+
+Crate-internal (a `chore`): `src/read_layer.rs`, with changes to the engine and the ring dependency's
+`threadpool` feature. The decision text is under [TW-D-15](DESIGN-NOTES.md#tw-d-15); why the waits
+stay armed is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+- **`ReadLayer`** owns the engine behind a lock and three thread-pool waits on duplicates of the
+  watcher's, the pool's and the client's resume doorbells, plus the ring's `CompletionWake`. Each
+  callback runs the engine and, for a wait, watches again. It offers `register`, `poll`, the client's
+  SQ and `take_failure`.
+- **The engine's run** now resets the watcher's doorbell too, so all three are reset before it
+  looks, and rings the watcher's resume doorbell after taking entries from its SQ, which is what
+  continues a poll parked on a full SQ. The client SQ is shared (`Arc`) so a client drains it without
+  the engine's lock.
+- **The waits stay armed.** The checklist said nothing armed between polls; the ring's completion
+  event cannot be detached, and a wait re-arming only itself avoids a cross-thread arm that draining
+  does not exclude. An armed wait on an event nobody rings wakes no thread (TW-D-5).
+- **Drop** stops and drains each wait, then the ring's wake, then releases the engine. The bound with
+  reads in flight is TW-7.1's.
+
+Tested: a poll read and delivered with no call after it, nothing to read, several files, a client that
+stops draining and the layer stalling until it rings back (the run count does not move while stalled),
+a returned chunk continuing the reads with no ring from the client, a poll parked on a watcher SQ of
+two going on as the layer drains it, nothing running between polls, a second poll reading only new
+bytes, registration ids, dropping an idle layer, and the setup run. Two engine tests cover the
+watcher's doorbell reset and its resume ring. Nine sabotage entries, each run on its own and the full
+sweep run once: eight caught and one control that survives. One entry first survived because the
+test's client was ringing the resume doorbell itself; the client now rings nothing.
+
+Still open from here: TW-6.2 tests this on children's files through a small pool and a client SQ of
+two.

@@ -884,6 +884,78 @@
       "replace": ["            true,"]
     },
     {
+      "name": "the layer does not watch the watcher's doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "The watcher's doorbell is how the layer learns a poll has written entries; unwatched, a poll's attentions sit in the watcher's SQ and nothing is read.",
+      "find": ["            engine.watcher().doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.pool().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "the layer does not watch the pool's doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "A chunk dropped is the only thing that frees a buffer for a layer stopped on an empty pool, and the client is not asked to ring for it.",
+      "find": ["            engine.pool().doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.watcher().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "the layer does not watch the client's resume doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "The resume doorbell is how a layer stopped on a full client SQ is told there is room.",
+      "find": ["            sq.resume_doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.pool().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "a completed read does not wake the layer",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "Nothing else says a read finished, so its chunk would wait for some other wake to be delivered.",
+      "find": ["            .attach_completion_wake(move || on_wake.drive())?;"],
+      "replace": ["            .attach_completion_wake(move || drop(&on_wake))?;"]
+    },
+    {
+      "name": "a wait does not watch again after it runs the engine",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "An activation consumes the arming, so a wait that does not re-arm serves one ring and no other.",
+      "find": ["            activation.rearm(None);"],
+      "replace": ["            let _ = &activation;"]
+    },
+    {
+      "name": "control: the waits are drained by name before the layer is released",
+      "file": "src/read_layer.rs",
+      "expect": "survives",
+      "why": "Equivalent: each wait's own drop disarms and drains it before the engine is released, which the field order guarantees; the explicit loop only discharges the drain the thread-pool crate reports an undrained wait for.",
+      "find": ["            wait.stop_and_drain();"],
+      "replace": ["            let _ = wait;"]
+    },
+    {
+      "name": "a run does not reset the watcher's doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Reset before it looks, a manual-reset doorbell is level-triggered, so a wait that watches again would be activated again at once and spin.",
+      "find": ["        self.watcher.reset_doorbell();"],
+      "replace": ["        let _ = &self.watcher;"]
+    },
+    {
+      "name": "entries taken from the watcher's SQ do not ring its resume doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll parked on a full SQ is continued only by that ring, and the layer is the SQ's one consumer.",
+      "find": ["            self.watcher.ring_resume();"],
+      "replace": ["            let _ = &self.watcher;"]
+    },
+    {
+      "name": "taking an entry from the watcher's SQ is not noted as making room",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "As the ring itself: without the note the ring is never made.",
+      "find": ["        self.made_room = true;"],
+      "replace": ["        self.made_room = false;"]
+    },
+    {
       "name": "control: the doorbell is rung while the lock is held",
       "file": "src/pool.rs",
       "expect": "survives",

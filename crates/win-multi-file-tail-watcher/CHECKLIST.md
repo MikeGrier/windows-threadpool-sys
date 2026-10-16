@@ -110,10 +110,7 @@ through `ThreadpoolIo`.
 
 Coarse on purpose: its scope is set when M5 is done.
 
-- [ ] **TW-6.1** -- **Run the layer on the thread pool**: ring completions through its thread-pool
-  delivery, and the layer driven by the watcher's doorbell, a completed read, a returned chunk and the
-  client's resume doorbell, with nothing armed between polls. ([TW-D-5](DESIGN-NOTES.md#tw-d-5),
-  [TW-D-15](DESIGN-NOTES.md#tw-d-15))
+- [x] **TW-6.1** -- The reading engine runs on the thread pool with no thread of the caller's: the watcher's doorbell, a completed read, a chunk returned to an empty pool and the client's resume doorbell each drive it through a wait of their own, which stays armed and idle between polls. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-61)
 
 - [ ] **TW-6.2** -- **Integration tests: polls on the thread pool over files that children write**,
   through a small pool and a client SQ of two slots.

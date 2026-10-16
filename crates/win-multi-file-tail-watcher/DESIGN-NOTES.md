@@ -398,6 +398,19 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   is answered by submitting and going on; what stops the reads is the ring holding as many reads --
   queued, in flight, or completed and not popped -- as its completion queue does, at the size the
   ring reports. A read popped makes room.
+- **On the thread pool, four events run the engine, each by a wait of its own.** They are the
+  watcher's doorbell (a poll wrote entries), the ring's completion event (a read finished), the
+  pool's doorbell (a chunk came back to an empty pool) and the client's resume doorbell (room in its
+  SQ). A wait's callback runs the engine and watches again; the run resets all three doorbells before
+  it looks ([TW-D-6](#tw-d-6)), so watching again does not spin. A run that took entries from the
+  watcher's SQ rings the watcher's resume doorbell, which is what continues a poll parked on a full
+  SQ. A run's ring error is kept for the owner and the layer goes on.
+- **The waits stay armed between polls and are idle.** The ring's completion event is attached for
+  the ring's life and cannot be detached, and a wait that is armed on an event nothing rings wakes no
+  thread, which is what [TW-D-5](#tw-d-5) asks for. Each wait re-arms only itself, because arming a
+  wait from another thread is not excluded by draining it.
+- **Dropping the layer stops and drains each wait, then releases the engine**; the bound on a drop
+  with reads in flight is [TW-7.1](CHECKLIST.md)'s.
 - **A read that returns nothing delivers nothing.** That is a read past the end of a file that
   shrank, whether reported as zero bytes or as end of file, and its buffer goes back. Any other
   failure is reported to the watcher's diagnostic sink ([TW-D-13](#tw-d-13-sink)) as
