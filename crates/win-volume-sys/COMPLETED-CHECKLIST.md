@@ -84,3 +84,20 @@ storage queries share one definition of each, and the extents sabotage entries t
 places were retargeted. Two boundaries the namespace crate's tests did not reach are now pinned, a
 reply shorter than the size it names in a buffer of exactly that size, and a more-data reply naming
 the size already given, each with a sabotage entry. What this left to do is `WV-2.5`.
+
+## Moved 2026-10-15 22:55:53 -04:00 -- WV-2.5: the dependency query
+
+### <a id="wv-25"></a>WV-2.5 -- `storage_dependency_information`, the virtdisk dependency query, with the version as an input and names copied out of the reply. *(completed 2026-10-15 22:55:53 -04:00)*
+
+Ported from `NR-2.5` of the namespace crate, as `storage_dependency_information` and
+`storage_dependency_information_with_capacity`. The request type, its builder, `Request`,
+`CapturedHandle` and the typed errors were not carried over; a status is an `io::Error` with its code
+exact, and a malformed reply is `InvalidData`. The decision is [WV-D-10](DESIGN-NOTES.md#wv-d-10),
+which supersedes `D-24`. The code is the commit that adds `src/storage_dependency.rs`.
+
+Its blind spot came with it, as stated in the decision and in the sabotage manifest's
+`notCoveredHere`: no entry has been observed from a real virtual disk, because attaching one needs an
+elevated token. The module's tests are split into `tests.rs` (the real machine, the flags and the
+shared builders), `tests/reply.rs` (what is read out of a built reply) and `tests/device.rs` (the size
+protocol against a stand-in device). With this the last of the storage-locality entries is here;
+what this left to do is `NR-2.8`, in the namespace crate.

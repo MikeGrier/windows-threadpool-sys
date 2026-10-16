@@ -45,10 +45,7 @@ the workspace's release-scope rule where the two do not have to build together.
 
   **Next:** `WV-2.5`.
 
-- [ ] **WV-2.5** -- **The dependency query.** `GetStorageDependencyInformation` (virtdisk), with the
-  version as an input and names copied out of the reply. Its blind spot comes with it, stated and
-  not hidden: no real entry has been observed, because attaching a virtual disk needs an elevated
-  token.
+- [x] **WV-2.5** -- `storage_dependency_information`, the virtdisk dependency query, with the version as an input and names copied out of the reply. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-25)
 
   **Next:** [NR-2.8](../windows-namespace-request-sys/CHECKLIST.md), which deletes the originals.
 
