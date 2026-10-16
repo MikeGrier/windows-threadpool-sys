@@ -923,3 +923,35 @@ SQ; the two doorbells separate, starting unrung, staying rung for every waiter u
 writers on their own threads each landing every entry in order; the SQ and entries crossing threads.
 Four new sabotage entries, and the one entry whose target line moved was retargeted; each run on its
 own, with the other three that target `sq.rs`.
+
+## Moved 2026-10-16 12:46:12 -04:00 -- TW-5.4: planning reads from the watcher's entries
+
+### <a id="tw-54"></a>TW-5.4 -- Each of the watcher's entries is planned without a ring: growth as reads of at most one buffer each, computed as they are taken, a shrink as a shrink entry, a terminal entry passed through, and poll-done kept for the engine. *(completed 2026-10-16 12:46:12 -04:00)*
+
+Crate-internal (a `chore`): `src/read_plan.rs`. The decision text is under
+[TW-D-15](DESIGN-NOTES.md#tw-d-15).
+
+- **`plan(entry, buffer_len) -> Plan<T>`** matches the watcher's `SqEntry` with no wildcard arm, so a
+  kind the watcher adds does not compile here until it is planned. An attention whose length grew is
+  `Plan::Reads`; one that shrank is `Plan::Deliver(ReadEntry::Shrink)`; a terminal entry is
+  `Plan::Deliver(ReadEntry::Terminal)` unchanged; poll-done is `Plan::PollDone`, its own variant
+  because the engine must hold it until every read of its poll has been delivered. An attention with
+  an unchanged length, which the watcher does not write, plans no reads.
+- **`buffer_len` is a `NonZeroU32`**, so a zero-length read cannot be planned, and a read's length
+  fits the ring's `u32` by type. The engine takes it from the pool, whose lengths are 1 to
+  `u32::MAX` (TW-5.2).
+- **`Reads<T>` is computed as it is taken**: `front` names the next read and leaves it planned, and
+  the iterator's `next` takes it. That is the shape the engine needs, since an empty pool or a full
+  ring SQ stops it holding a read it has not submitted. Any range costs the same to plan, up to
+  `0..u64::MAX`.
+
+Tested: growth shorter than, equal to, and one byte past a buffer; whole numbers of buffers; reads
+starting at the length last reported; one-byte buffers; every growth of 1 to 40 bytes against every
+buffer of 1 to 17 bytes from five starting lengths, contiguous, in order, none longer than a buffer,
+and the expected count; growth past `u32::MAX` split at the largest buffer; growth ending at
+`u64::MAX`; `front` not taking, `remaining` shrinking per read, a finished plan staying finished; the
+largest range planned without walking it; shrinks including to nothing and by one byte; a terminal
+entry unchanged; poll-done. Six sabotage entries, each run on its own: five caught, and an equivalent
+spelling of the empty check as a control that survives. The truncation mutant was at first caught
+only by a hang, the test collecting billions of short reads; that test now takes at most four reads,
+and the mutant fails it outright.

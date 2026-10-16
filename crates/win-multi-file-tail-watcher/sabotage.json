@@ -922,6 +922,54 @@
       "why": "Two directions, two events: a ring meant for the client would wake the layer.",
       "find": ["        self.resume.ring();"],
       "replace": ["        self.doorbell.ring();"]
+    },
+    {
+      "name": "an unchanged length is planned as a shrink",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "Only a shorter file is a shrink. An attention whose length did not change is not one the watcher writes, but if it arrives it plans no reads, not a shrink the client must interpret.",
+      "find": ["        }) if current < last_known => Plan::Deliver(ReadEntry::Shrink(Shrink {"],
+      "replace": ["        }) if current <= last_known => Plan::Deliver(ReadEntry::Shrink(Shrink {"]
+    },
+    {
+      "name": "a shrink's two lengths are swapped",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "Swapped, a shrink reads as growth over the same range, and a client reading it would ask for bytes the file no longer has.",
+      "find": ["            last_known,\n            current,\n        })),"],
+      "replace": ["            last_known: current,\n            current: last_known,\n        })),"]
+    },
+    {
+      "name": "the reads start at the current length",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "The bytes to read are the ones the attention announced, from the length last reported. Starting at the current length reads nothing.",
+      "find": ["            remaining: last_known..current,"],
+      "replace": ["            remaining: current..current,"]
+    },
+    {
+      "name": "a read is not clamped to the bytes left",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "The last read of a growth that is not a whole number of buffers must stop at the growth's end, or it reads past what was announced.",
+      "find": ["            .map_or(buffer_len, |left| left.min(buffer_len));"],
+      "replace": ["            .map_or(buffer_len, |_| buffer_len);"]
+    },
+    {
+      "name": "the bytes left are truncated to 32 bits",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "A growth past u32::MAX truncated to 32 bits plans a short read where a full buffer belongs, and its remainder is lost from the plan's arithmetic.",
+      "find": ["        let len = u32::try_from(self.remaining.end - self.remaining.start)"],
+      "replace": ["        let len = Ok::<u32, ()>((self.remaining.end - self.remaining.start) as u32)"]
+    },
+    {
+      "name": "control: an empty plan tested by its bounds",
+      "file": "src/read_plan.rs",
+      "expect": "survives",
+      "why": "Equivalent: the plan's range never has its start past its end, so is_empty and start >= end agree. Surviving shows the tests bind to the plan's reads, not to how emptiness is spelled.",
+      "find": ["        if self.remaining.is_empty() {"],
+      "replace": ["        if self.remaining.start >= self.remaining.end {"]
     }
   ]
 }

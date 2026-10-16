@@ -100,9 +100,7 @@ through `ThreadpoolIo`.
 
 - [x] **TW-5.3** -- The reading layer's SQ, made by the same function and capacity rule as the watcher's, carries data entries whose range is computed from their chunk, shrink, terminal and poll-done entries, with its own doorbell pair. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-53)
 
-- [ ] **TW-5.4** -- **Planning reads from the watcher's entries**: `last_known..current` split into
-  reads of one buffer each; a shrink becomes a shrink entry with no read; a terminal entry passes
-  through. Pure, and unit-tested without a ring. ([TW-D-15](DESIGN-NOTES.md#tw-d-15))
+- [x] **TW-5.4** -- Each of the watcher's entries is planned without a ring: growth as reads of at most one buffer each, computed as they are taken, a shrink as a shrink entry, a terminal entry passed through, and poll-done kept for the engine. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-54)
 
 - [ ] **TW-5.5** -- **The reading engine, driven synchronously against a ring.** It drains the
   watcher's SQ, submits the planned reads (the handle addressed raw, an observer in each read's
