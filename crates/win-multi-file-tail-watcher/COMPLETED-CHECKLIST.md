@@ -522,3 +522,31 @@ unmarked and retried; a transient failure going to the sink with the registratio
 every batch size from 1 to past the list; the lock free in each pause; a drop in a pause; 600
 changes through a capacity of 64; and new polls after completion. The sabotage manifest retargets the
 three entries that named the old `Watcher::mark_terminal` and adds eight for the engine and a control.
+
+## Moved 2026-10-15 21:09:16 -04:00 -- TW-2.8: timing the passes
+
+### <a id="tw-28"></a>TW-2.8 -- Timings of each pass against roster sizes from 1,000 to 50,000 are captured by ignored tests, with the roster map measured alone; no constant is changed by it. *(completed 2026-10-15 21:09:16 -04:00)*
+
+Crate-internal (a `chore`): `src/watcher/engine/bench.rs`, and the capture
+[bench-captures/2026-10-15.txt](bench-captures/2026-10-15.txt), three consecutive runs with the host
+and base commit in its header. The figures live there and are not restated here.
+
+- **Run** with `cargo test --release -p win-multi-file-tail-watcher --lib bench -- --ignored
+  --nocapture --test-threads=1`. The tests are ignored, so the ordinary run does not pay for them,
+  and they sit inside the crate because the passes are private.
+- **Populations** are 1,000, 5,000, 20,000 (the stated top end, in [DESIGN-NOTES.md](DESIGN-NOTES.md)) and 50,000 as headroom. At most 4,096 distinct files are
+  created and registered round-robin, so a large roster is not a large directory.
+- **Measured per size**: registering; the snapshot with the span of each batch's lock hold; the
+  probe with every file a change; the report with every change written and the span of each batch's
+  hold; a whole poll in which nothing changed; a whole poll through an SQ of 64, drained at each
+  stop; a random replace-one churn; and dropping everything in random order. The permutation is a
+  fixed LCG, so a run is repeatable.
+- **The roster map alone**, with an entry-sized value and no file behind it: append, batched range
+  walk and random remove, so the map's share of the figures above can be told from the file's.
+- **What it does not show**: all files share one host, one disk and one run of three; growth is not
+  appended between polls, so no figure is for a mixed changed/unchanged population; the probe is
+  single-threaded, so nothing here bears on [TW-D-5](DESIGN-NOTES.md#tw-d-5)'s thread count except
+  the single-thread cost per file.
+- **No constant was changed.** `SNAPSHOT_BATCH`, `REPORT_BATCH`, the chunk size, the roster map and
+  the buffers' retention are decisions the engineer makes from the capture; each stays provisional
+  until then.

@@ -15,6 +15,8 @@ use crate::chunked::Chunked;
 use crate::sq::{Attention, SqEntry, SqPushError, SqWriter, Terminal};
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
 
 /// How many changes the report pass writes per acquisition of the roster lock. Provisional: TW-2.8

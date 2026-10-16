@@ -37,13 +37,13 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.7** -- The report pass writes the changed list to the SQ a batch at a time under the roster lock, a refused write stops the pass without waiting, and the engine continues from the kept index. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-27)
 
-- [ ] **TW-2.8** -- **Benchmark the passes against population size**, from 1,000 files to the
-  expected top end, each pass separately: the snapshot (the lock hold per batch and in total), the
-  probe, and the report; and the roster's walk and churn under appended registrations and random
-  removals. The numbers choose the batch size, the chunk size, whether the roster's `BTreeMap`
-  stays, and whether the buffers should give chunks back after an unusually large poll. They also inform the thread count, which [TW-D-5](DESIGN-NOTES.md#tw-d-5) leaves open;
-  sharding the probe pass is deliberately not scheduled until a measurement calls for it.
-  Comparison against per-file timers is out of scope ([TW-D-1](DESIGN-NOTES.md#tw-d-1)).
+- [x] **TW-2.8** -- Timings of each pass against roster sizes from 1,000 to 50,000 are captured by ignored tests, with the roster map measured alone; no constant is changed by it. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-28)
+
+- [ ] **TW-2.8.1** -- **Choose from the capture** [bench-captures/2026-10-15.txt](bench-captures/2026-10-15.txt)
+  the snapshot and report batch sizes, the chunk size, whether the roster's `BTreeMap` stays, and
+  whether the buffers give chunks back after an unusually large poll; record each as a decision in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) and replace the "Provisional" comments. Blocked on the
+  engineer's reading of the capture, not on any further work.
 
 - [ ] **TW-2.9** -- **Integration tests: the engine over real files.** Hundreds of files, some
   grown and some shrunk by child processes between runs, against an SQ far smaller than the number
