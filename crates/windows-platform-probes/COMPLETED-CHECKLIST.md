@@ -1755,3 +1755,27 @@ missed:
 
 Sabotage-verified: replacing the derived widths with the constant they had before fails the corpus
 case, naming the table and the overrun line.
+
+## Moved 2026-10-16 13:22:38 -04:00 -- M6.1: the request_cost probe follows the request crate
+
+### <a id="m61"></a>M6.1 -- Rewrite the `request_cost` probe against the new request path design. *(completed 2026-10-16 13:22:38 -04:00)*
+
+The decision, and what it did with the old figures, is
+[DESIGN-NOTES.md](DESIGN-NOTES.md#d-request-cost-follows-the-request-crate). The item came from the
+request crate's `NR-3.7`, which is done with it.
+
+The probe's rows are now the two kinds of build (a path kept as given, at two lengths, and a path
+grafted onto the current directory), the owned string a build is handed on its own, a clone of a
+finished request of each kind, an open performed against a real file and a request built and
+performed, and the handle duplication and close it already had. Its row keys were renamed and the
+old ones are gone; the key mapping and the label census are the ones the table-against-row test
+already derives from, so that test needed no change of its own. The test that asserted a path with
+no volume behind its drive letter prepares was rewritten to assert that a request for it builds and
+keeps the path as given.
+
+Two sabotage entries were added to the crate's manifest, for the two sample paths the rows are named
+for: a relative sample that is not relative, and a long absolute one that would be grafted. Each
+fails the run through the probe's own check of its samples.
+
+The probe's report prose was rewritten with it. It states the figures and the mechanism of the
+difference between the two builds, and does not say whether the graft matters.
