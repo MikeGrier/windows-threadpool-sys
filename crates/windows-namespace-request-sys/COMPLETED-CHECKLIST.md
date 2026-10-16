@@ -190,3 +190,18 @@ disk needs an elevated token, which this machine's account does not have. The en
 against replies built from the structure's declared layout and a fake device, 25 sabotages pin them in
 [sabotage.json](sabotage.json) (all caught), and `D-24` and the manifest's `notCoveredHere` say what an elevated
 run on a machine that can attach a VHD would settle. What this left to do in this crate is `NR-2.6`.
+
+## Moved 2026-10-15 20:38:00 -04:00 -- NR-2.6: where the storage-locality entries live
+
+### <a id="nr-26"></a>NR-2.6 -- Decided 2026-10-15: the storage-locality entries and their helper belong in `win-volume-sys`, so the duplicate is closed by moving them there and deleting this crate's copies. *(completed 2026-10-15 20:38:00 -04:00)*
+
+The item asked whether `win-volume-sys`' `control()` or this crate's helper should survive. It was
+answered by a different question, the crate they belong in. The engineer ruled that volume-oriented
+operations belong in the volume crate, and that its scope is the storage stack under a file system
+(physical disks, partitions, raw partition access, volume management). This crate's charter is
+namespace operations, and `NR-2.1` to `NR-2.5` and `NR-2.7` are not those: they went here because the
+checklist placed them here, and that placement was not questioned when it should have been. The
+decision is [WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5), and a handle that must be shared is a
+`SharedHandle` ([WV-D-6](../win-volume-sys/DESIGN-NOTES.md#wv-d-6)). What this left to do is the move,
+which is [WV-M2](../win-volume-sys/CHECKLIST.md#wv-m2----take-in-the-storage-locality-entries), and
+the deletion, which is `NR-2.8`.

@@ -20,6 +20,24 @@ changes four others. This is the order across all of them. **No status is kept h
 item's own checkbox is the status and a copy would go stale; this list is only the order and the
 links. Each item below also ends with a `Next:` line pointing at the step after it.
 
+**Step 0, added 2026-10-15, before step 1** (the engineer ruled that volume operations belong in the
+volume crate and that the error codes become one shared type; see
+[WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5) and
+[WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1)):
+
+- 0.1. [WE-1.1 to WE-1.3](../win-error-codes/CHECKLIST.md) -- the new `win-error-codes` crate.
+- 0.2. In any order, each needing only `WE-1.1`:
+  [NR-4.1](../windows-namespace-request-sys/CHECKLIST.md) (request crate adopts it),
+  [ERR-1](../windows-file-enumeration-sys/CHECKLIST.md) (enumeration crate adopts it), and
+  [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) (the volume crate takes in the storage-locality
+  entries, in that order).
+- 0.3. [NR-2.8](../windows-namespace-request-sys/CHECKLIST.md) -- the request crate deletes the
+  originals. **It must land before step 4's release**, or the entries are published from the crate
+  they do not belong in. `NR-4.1` should land before it too, so that release carries the
+  `io::Error` fix.
+
+Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; step 4 does.
+
 1. [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the captured root and the
    graft, as one internal type. Additive; nothing breaks.
 2. [NR-3.4](../windows-namespace-request-sys/CHECKLIST.md),

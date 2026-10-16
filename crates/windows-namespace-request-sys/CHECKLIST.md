@@ -34,12 +34,41 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.5** -- `GetStorageDependencyInformation` (virtdisk) on a volume, root directory or disk handle, with the version as an input and names copied out of the reply. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-25)
 
-- [ ] **NR-2.6** -- **Decide between `win-volume-sys`' `control()` and this crate's helper**
-  ([D-20](DESIGN-NOTES.md#d-20)). The two are the same overlapped-and-event shape, built
-  separately on purpose so the working crate was not disturbed while this one was proven. Decide
-  now that `NR-2.3` and `NR-2.4` have used the helper (it is unblocked): move `win-volume-sys` onto it,
-  or delete one, or keep both and say why. The duplicate is two things, not one: `control()` against the helper, and
-  `volume_disk_extents` against [D-21](DESIGN-NOTES.md#d-21)'s entry. A duplicate nobody came back to is the failure this item exists to prevent.
+- [x] **NR-2.6** -- Decided 2026-10-15: the storage-locality entries and their helper belong in `win-volume-sys`, so the duplicate is closed by moving them there and deleting this crate's copies. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-26)
+
+- [ ] **NR-2.8** -- **Delete the storage-locality entries and the helper from this crate**, after
+  `WV-2.1` to `WV-2.5` have landed: `QueryVolumeNumaInfo`, `QueryVolumeDiskExtents`, the
+  storage-property entries, `QueryStorageDependencyInformation`, the `device_control` module, their
+  tests, their entries in [sabotage.json](sabotage.json), the "Storage-locality entries" table in
+  [README.md](README.md), the `Win32_Storage_Vhd`, `Win32_System_IO`, `Win32_System_Ioctl` and
+  `Win32_System_Pipes` features nothing else needs, and `D-20` to `D-24`, each replaced in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) by a pointer to the `WV-D` it became (marked superseded at the
+  top of the row, per the notes convention). Check for a consumer of each entry before deleting it.
+  **It must land before this crate's next release** (step 4 of [the order across
+  crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up)),
+  or the entries are published from the wrong crate.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) in
+  > `crates/win-volume-sys`.
+
+  **Next:** [NR-3.3](#nr-3----what-durable-iorings-open-surface-needs-of-this-crate), then `NR-4.1`
+  in any order with it.
+
+## NR-4 -- Adopt `win-error-codes`
+
+Opened 2026-10-15. This crate has its own `Win32Error`, which converts a code of 2^31 or more to
+`io::Error` without keeping the code (the documentation says it survives). See
+[WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1).
+
+> **-> CROSS-COMPONENT PREREQUISITE:** [WE-1.1](../win-error-codes/CHECKLIST.md) in
+> `crates/win-error-codes`.
+
+- [ ] **NR-4.1** -- **`Win32Error` is `win_error_codes::Win32Error`.** Delete this crate's type and
+  re-export the shared one under the same name, so every existing path keeps working. The
+  snapshot-after-the-call guarantee of `perform` stays here and builds the value with `from_code`;
+  `out_of_memory` stays. A test shows `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` survives
+  `to_io_error().raw_os_error()`, which it does not today. It should land before this crate's next
+  release so the release carries the fix.
 
 ## NR-3 -- What durable-ioring's open surface needs of this crate
 
