@@ -1,23 +1,14 @@
 # Checklist: win-error-codes
 
-**Planned, not built** -- this directory holds a plan and no code, and becomes a crate when `WE-1.1`
-begins. What the crate is for and what was decided about it: [DESIGN-NOTES.md](DESIGN-NOTES.md).
-Opened 2026-10-15.
+What the crate is for and what was decided about it: [DESIGN-NOTES.md](DESIGN-NOTES.md). Opened
+2026-10-15.
 
 ## WE-M1 -- The three types
 
 Dependency order. Each item carries its own tests and its own entries in the crate's
 `sabotage.json`, per the workspace's sabotage convention, and ends with a `Next:` line.
 
-- [ ] **WE-1.1** -- **Create the crate, with `Win32Error`.** A `u32` newtype: `from_code`, `code`,
-  `is_success` and `into_result` (a zero code is `ERROR_SUCCESS`), `from_io` and `to_io_error`
-  that are exact for **every** code, a `last()` through `io::Error::last_os_error` so the crate
-  needs no `unsafe`, `Display`, and `Error`. The `io::Error` conversion is a bit-preserving cast
-  at std's `i32` boundary and nothing else; the codes `0xC03A0015` and above are the tests that
-  show it ([D-1](DESIGN-NOTES.md#we-d-1)). The same commit does the creation plumbing so the
-  workspace stays green: workspace member, release-please package, the publish trigger that
-  `tools/check-publishable.ps1` checks, README, and the portable CI job if the crate is made
-  portable (decided here, see [the working position](DESIGN-NOTES.md#working-positions)).
+- [x] **WE-1.1** -- Create the crate, with `Win32Error`, an `io::Error` bridge that is exact for every code, and the workspace plumbing. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#we-11)
 
   **Next:** `WE-1.2`.
 

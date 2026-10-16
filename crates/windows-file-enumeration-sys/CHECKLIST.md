@@ -41,7 +41,8 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
   always fits in an i32")`, which panics for a code of 2^31 or more (the virtdisk errors are such
   codes, see [WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1)); and `from_io` returns `0` for an
   error with no OS code behind it, and `0` is `ERROR_SUCCESS`, so a fabricated error reads as success.
-  Decide what the shared type does in that case in `WE-1.1`, and apply it here. A published crate:
+  The shared type's `from_io` returns `None` for such an error ([WE-D-4](../win-error-codes/DESIGN-NOTES.md#we-d-4)),
+  so each caller here decides what an error with no code means to it. A published crate:
   the re-export keeps the path, and this item says in its commit whether any behaviour a caller could
   see changed.
 
