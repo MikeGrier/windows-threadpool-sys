@@ -10,7 +10,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "The numbers Windows reports failure in, as types: a Win32 error code with an exact io::Error round trip for every code, including those above 2^31. No unsafe code and no native API surface."
+description = "The numbers Windows reports failure in, as types: Win32 error codes, the signed LSTATUS, HRESULT and NTSTATUS, with an exact io::Error round trip for every Win32 code, including those above 2^31. No unsafe code and no native API surface."
 keywords = ["windows", "error", "win32", "hresult", "errorcode"]
 categories = ["os::windows-apis", "api-bindings"]
 
