@@ -5,6 +5,7 @@ use std::io::Write;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_FILE_INVALID, ERROR_HANDLE_EOF, ERROR_INVALID_HANDLE,
@@ -1079,6 +1080,85 @@ fn a_terminal_read_failure_is_a_terminal_entry_on_the_client_s_sq_and_also_a_dia
 }
 
 #[test]
+fn a_registration_is_made_terminal_once_by_its_first_terminal_read_failure() {
+    let dir = TempDir::new("re-terminal-once");
+    let sink = RecordingSink::wanting();
+    let mut engine = engine_with(16, 4, 8, 8, 16, Some(sink.clone()));
+    let path = dir.file("a.log", &pattern(40));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    let mut got = Vec::new();
+    for (offset, code) in [(0, ERROR_INVALID_HANDLE), (8, ERROR_FILE_INVALID)] {
+        let (buffer, pending) = lent(&mut engine, &registration.value(), offset, 8);
+        engine.finish_read(
+            buffer,
+            pending,
+            Err(io::Error::from_raw_os_error(code.cast_signed())),
+        );
+        engine.groups.close_open();
+        got.extend(settle(&mut engine));
+    }
+    assert_eq!(
+        got,
+        [
+            Got::Terminal {
+                value: 7,
+                win32_code: ERROR_INVALID_HANDLE,
+                last_known: 0
+            },
+            Got::PollDone,
+            Got::PollDone
+        ],
+        "the second failure is not reported again, and keeps its poll-done"
+    );
+    assert_eq!(sink.seen().len(), 2, "both reached the sink");
+    assert_eq!(registration.terminal_code(), Some(ERROR_INVALID_HANDLE));
+}
+
+#[test]
+fn a_read_failure_of_a_registration_a_probe_made_terminal_is_not_reported_again() {
+    let dir = TempDir::new("re-terminal-probed");
+    let mut engine = engine(16, 2);
+    let path = dir.file("a.log", &pattern(40));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    assert!(
+        engine
+            .watcher()
+            .mark_terminal(registration.id(), ERROR_FILE_INVALID)
+    );
+    let (buffer, pending) = lent(&mut engine, &registration.value(), 0, 8);
+    engine.finish_read(
+        buffer,
+        pending,
+        Err(io::Error::from_raw_os_error(
+            ERROR_INVALID_HANDLE.cast_signed(),
+        )),
+    );
+    assert!(engine.undelivered.is_none());
+    assert_eq!(registration.terminal_code(), Some(ERROR_FILE_INVALID));
+}
+
+#[test]
+fn a_terminal_read_failure_of_a_registration_since_dropped_reaches_the_sink_alone() {
+    let dir = TempDir::new("re-terminal-dropped");
+    let sink = RecordingSink::wanting();
+    let mut engine = engine_with(16, 2, 8, 8, 16, Some(sink.clone()));
+    let path = dir.file("a.log", &pattern(40));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    let tracked = registration.value();
+    drop(registration);
+    let (buffer, pending) = lent(&mut engine, &tracked, 0, 8);
+    engine.finish_read(
+        buffer,
+        pending,
+        Err(io::Error::from_raw_os_error(
+            ERROR_INVALID_HANDLE.cast_signed(),
+        )),
+    );
+    assert!(engine.undelivered.is_none());
+    assert_eq!(sink.seen().len(), 1);
+}
+
+#[test]
 fn a_transient_read_failure_reaches_the_diagnostic_sink_alone() {
     let dir = TempDir::new("re-transient-read");
     let sink = RecordingSink::wanting();
@@ -1157,6 +1237,60 @@ fn after_a_stop_attentions_are_skipped_and_poll_done_and_terminal_entries_are_st
         ]
     );
     assert_eq!(engine.in_flight(), 0, "nothing was read");
+}
+
+#[test]
+fn a_stop_that_lands_while_reads_are_being_pushed_ends_the_pushing_at_the_next_read() {
+    // A value whose clone, which the engine makes for each read it pushes, requests the stop.
+    struct Spy {
+        stop: Arc<AtomicBool>,
+        clones_left: Arc<AtomicUsize>,
+    }
+    impl Clone for Spy {
+        fn clone(&self) -> Self {
+            if self.clones_left.load(Ordering::SeqCst) > 0
+                && self.clones_left.fetch_sub(1, Ordering::SeqCst) == 1
+            {
+                self.stop.store(true, Ordering::SeqCst);
+            }
+            Self {
+                stop: Arc::clone(&self.stop),
+                clones_left: Arc::clone(&self.clones_left),
+            }
+        }
+    }
+    let dir = TempDir::new("re-stop-mid-push");
+    let watcher = Watcher::new(1024).expect("a watcher");
+    let pool = BufferPool::new(8, 8).expect("a pool");
+    let mut engine = match ReadEngine::<Spy>::new(watcher, pool, 64, 64, 128) {
+        Ok(engine) => engine,
+        Err(error) => panic!("no engine: {error}"),
+    };
+    let path = dir.file("a.log", &pattern(64));
+    let clones_left = Arc::new(AtomicUsize::new(0));
+    let spy = Spy {
+        stop: engine.stop_flag(),
+        clones_left: Arc::clone(&clones_left),
+    };
+    let _registration = engine.register(&wtf(&path), 0, spy).expect("register");
+    engine.watcher().poll_here();
+    // Takes the attention and plans its eight reads, submitting none.
+    assert!(matches!(
+        engine.advance().expect("advance"),
+        Advance::Progress
+    ));
+    assert!(engine.current.is_some());
+    // The second clone from here, the second read's, requests the stop.
+    clones_left.store(2, Ordering::SeqCst);
+    assert!(matches!(
+        engine.submit_reads().expect("submit"),
+        Submitted::Done
+    ));
+    assert_eq!(
+        engine.in_flight(),
+        2,
+        "the read being pushed when the stop landed went in, and no read after it"
+    );
 }
 
 #[test]

@@ -808,8 +808,8 @@
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "TW-D-9: Drop sets the flag itself when no request was made, so the drain it waits on is bounded by one step.",
-      "find": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks.\n        self.shared.stop.store(true, Ordering::Release);"],
-      "replace": ["        // Set first, so a poll still running stops at its next step; the poller's fields then drain\n        // the work item and the wait, which is where this blocks."]
+      "find": ["        if !self.view {\n            self.shared.stop.store(true, Ordering::Release);\n        }"],
+      "replace": ["        if !self.view {}"]
     },
     {
       "name": "a buffer of no bytes is accepted",
@@ -972,12 +972,36 @@
       "replace": ["                            last_known: 0,"]
     },
     {
+      "name": "dropping a callback's view stops the watcher",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A poller that cannot be made drops its view; if that stopped the watcher, the failure the caller was told about would be followed by Shutdown on every retry.",
+      "find": ["        if !self.view {\n            self.shared.stop.store(true, Ordering::Release);\n        }"],
+      "replace": ["        self.shared.stop.store(true, Ordering::Release);"]
+    },
+    {
+      "name": "a terminal read failure does not make its registration terminal",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once per registration; without the mark every terminal read failure of it is delivered again, and a probe's report is repeated by a read's.",
+      "find": ["                        && self.watcher.mark_terminal(pending.registration, win32_code)\n"],
+      "replace": [""]
+    },
+    {
       "name": "a stop does not abandon what was planned",
       "file": "src/read_engine.rs",
       "expect": "caught",
       "why": "After a stop no read is submitted, so a plan that was part way through is dropped; kept, it goes on reading the file the layer is shutting down.",
       "find": ["        if stopping {\n            self.current = None;\n        }"],
       "replace": ["        if !stopping {\n            self.current = None;\n        }"]
+    },
+    {
+      "name": "a stop that lands while reads are pushed does not end the pushing",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A stop that arrives between two reads of one plan must not be followed by more submissions, which would spend the pool and the completion queue on a layer shutting down.",
+      "find": ["                if stopping.load(Ordering::Acquire) {\n                    break Ended::Abandoned;\n                }\n"],
+      "replace": [""]
     },
     {
       "name": "shutdown does not stop the engine",

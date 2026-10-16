@@ -1137,3 +1137,33 @@ Four tests in `src/read_layer/child_tests.rs`, no production change. Each states
 leaves behind: poll-done delivered after reads in flight come back, a refused poll after shutdown,
 `Drop` returning with chunks still held by the client (which may be dropped afterwards), and every
 file deletable once the layer is gone. This completes M7.
+
+## Moved 2026-10-16 18:44:16 -04:00 -- TW-8.1 to TW-8.3: the findings of the pre-merge review
+
+### <a id="tw-81"></a>TW-8.1 -- A stop request that lands while a plan's reads are being pushed ends the pushing at the next read, and the reads left are abandoned. *(completed 2026-10-16 18:44:16 -04:00)*
+
+`src/read_engine.rs`. The stop flag is read before each read of a batch, so one that lands between two
+reads is no longer followed by more submissions that spend the pool and the completion queue. The
+read being pushed when it landed goes in; the plan is dropped as an `advance` after a stop drops it.
+Tested with a value whose `clone`, which the engine makes for each read, requests the stop; one
+sabotage entry, caught. Found by the pre-merge review: the earlier tests stopped only between
+`advance` calls.
+
+### <a id="tw-82"></a>TW-8.2 -- A poller that cannot be made leaves the watcher usable: dropping the callbacks' view of the shared state no longer stops it, so a poll after the failure is retried rather than refused with `Shutdown`. *(completed 2026-10-16 18:44:16 -04:00)*
+
+`src/watcher.rs`, `src/watcher/poll.rs`. A `Watcher` made by `view` is marked, and its `Drop` does not set
+the stop flag; a watcher a caller holds still does. The failure itself cannot be made on demand
+(the event duplication and the thread-pool objects), so the test drops a view and shows the
+watcher polls afterwards, which is the cause of the failure's symptom. One sabotage entry, caught.
+
+### <a id="tw-83"></a>TW-8.3 -- A terminal read failure makes its registration terminal once: a later terminal failure of it, one after a probe reported it, and one of a registration since dropped reach the diagnostic sink alone. *(completed 2026-10-16 18:44:16 -04:00)*
+
+`src/read_engine.rs`, `src/watcher.rs`. The read-side terminal entry is the same transition a probe's
+is: `Watcher::mark_terminal` (no longer test-only) returns whether it was the first, and only then
+is the entry delivered, which is what the `Terminal` payload documents. This answers the question
+the review raised, whether read failures are per-read notifications or a registration transition:
+the engineer's TW-6.3 answer says terminal errors appear in the SQ, and the payload says once, so it
+is the transition. [DESIGN-NOTES.md](DESIGN-NOTES.md) records it under TW-D-15. Three tests and one
+sabotage entry, caught.
+
+TW-8.1 to TW-8.3 are one commit because the three changes were made together; none depends on another.

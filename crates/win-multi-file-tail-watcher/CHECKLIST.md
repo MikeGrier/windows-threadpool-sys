@@ -123,3 +123,13 @@ Coarse on purpose: its scope is set when M6 is done.
 - [x] **TW-7.1** -- Shutdown and `Drop` with reads in flight: shutdown is a non-blocking, repeatable request that stops reads being planned or submitted, reads in flight complete and are delivered, every poll-done is still delivered, and `Drop` waits only for the reads already in flight. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-71)
 
 - [x] **TW-7.2** -- Integration tests over children's files: shutdown with reads in flight, while the children still write, while stalled on kept chunks, and of an idle layer, each returning and releasing every file. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-72)
+
+## M8 -- Findings of the pre-merge review
+
+A review of the branch against origin/main, 2026-10-16, found three defects in M5 to M7.
+
+- [x] **TW-8.1** -- A stop request that lands while a plan's reads are being pushed ends the pushing at the next read, and the reads left are abandoned. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-81)
+
+- [x] **TW-8.2** -- A poller that cannot be made leaves the watcher usable: dropping the callbacks' view of the shared state no longer stops it, so a poll after the failure is retried rather than refused with `Shutdown`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-82)
+
+- [x] **TW-8.3** -- A terminal read failure makes its registration terminal once: a later terminal failure of it, one after a probe reported it, and one of a registration since dropped reach the diagnostic sink alone. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-83)

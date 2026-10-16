@@ -203,6 +203,7 @@ impl<T: Clone + Send + 'static> Watcher<T> {
         Self {
             shared,
             poller: OnceLock::new(),
+            view: true,
         }
     }
 }

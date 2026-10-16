@@ -63,6 +63,8 @@ pub struct Watcher<T: Clone> {
     shared: Arc<Shared<T>>,
     // Made by the first `poll`; a watcher that is never polled makes none.
     poller: OnceLock<Poller>,
+    // The callbacks' view of the shared state, not a watcher a caller holds: dropping it stops nothing.
+    view: bool,
 }
 
 #[derive(Debug)]
@@ -128,8 +130,11 @@ impl<T> Shared<T> {
 impl<T: Clone> Drop for Watcher<T> {
     fn drop(&mut self) {
         // Set first, so a poll still running stops at its next step; the poller's fields then drain
-        // the work item and the wait, which is where this blocks.
-        self.shared.stop.store(true, Ordering::Release);
+        // the work item and the wait, which is where this blocks. A callback's view is also dropped
+        // when a poller that could not be made is abandoned, and the watcher it served goes on.
+        if !self.view {
+            self.shared.stop.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -156,6 +161,7 @@ impl<T: Clone> Watcher<T> {
         let (writer, reader) = sq::queue(sq_capacity)?;
         Ok(Self {
             poller: OnceLock::new(),
+            view: false,
             shared: Arc::new(Shared {
                 gate: PollGate::new(),
                 stop: AtomicBool::new(false),
@@ -351,7 +357,6 @@ impl<T: Clone> Watcher<T> {
 
     /// Note that the registration `id` can never be probed again, `code` being why. Returns whether
     /// it did: `false` when there is no such registration, or it was already terminal.
-    #[cfg(test)]
     pub(crate) fn mark_terminal(&self, id: u64, code: u32) -> bool {
         self.shared
             .roster()

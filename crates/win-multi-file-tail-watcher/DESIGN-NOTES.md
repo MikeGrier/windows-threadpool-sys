@@ -411,7 +411,9 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   wait from another thread is not excluded by draining it.
 - **Shutdown stops the reads and nothing else** ([TW-D-9](#tw-d-9)). It is a request that does not
   block and may be repeated: it shuts the watcher down, stops the engine from planning or submitting
-  any read, and wakes the engine. What was planned and not submitted is abandoned, reads in flight
+  any read, and wakes the engine. What was planned and not submitted is abandoned, as is what is
+  left of a plan being submitted when the request lands: the check is made before each read, so
+  the one being pushed goes in and none after it. Reads in flight
   are left to complete and are delivered, attentions that arrive afterwards are not read, and
   terminal and shrink entries and every poll-done are still delivered, so a poll's poll-done is
   never lost to shutdown. The request needs no lock the engine holds, because a callback may hold it
@@ -432,7 +434,10 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   `Diagnostic::ReadFailed` ([TW-D-13](#tw-d-13-sink)); a terminal one is also delivered as the
   layer's terminal entry, with the Win32 code, and with `last_known` the offset the failed read began
   at, since the bytes from there are not read again and a client registers again at it. The bytes of
-  a failed read are not announced again either way.
+  a failed read are not announced again either way. A registration is made terminal once, by
+  whichever terminal failure reaches it first, a probe's or a read's ([TW-D-13](#tw-d-13)), and the
+  entry is that transition: a later terminal failure of it, from another read already in flight or
+  after a probe reported it, and one of a registration since dropped, reach the sink alone.
 - **Possibility, not a plan: a recurring transient read failure may enter the SQ.** The engineer,
   2026-10-16: the first occurrence probably would not, but a recurrence might, and most recurring
   transient errors are suspected to be terminal. Nothing here schedules work for it: an actual case

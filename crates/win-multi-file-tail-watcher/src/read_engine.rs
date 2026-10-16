@@ -263,6 +263,8 @@ enum Advance {
 /// Why one batch of pushes ended.
 enum Ended {
     Planned,
+    // A stop request landed while the batch was being pushed: the reads left are abandoned.
+    Abandoned,
     Stopped(Stop),
     RingSqFull,
     Refused(io::Error),
@@ -523,7 +525,9 @@ impl<T: Clone> ReadEngine<T> {
     /// shrink. End of file is not a failure and reads nothing. Any other failure is reported to the
     /// watcher's diagnostic sink, and if its code is one that means the handle can never answer
     /// again ([`classify_code`], TW-D-13) it is also delivered as a terminal entry, with the offset
-    /// the read began at; a transient one reaches the sink alone.
+    /// the read began at; a transient one reaches the sink alone. A registration is made terminal
+    /// once, by whichever failure reaches it first, a probe's or a read's: a later terminal failure
+    /// of it, and one of a registration since dropped, reach the sink alone.
     fn finish_read(&mut self, buffer: PoolBuffer, pending: Pending<T>, result: io::Result<usize>) {
         assert!(
             self.undelivered.is_none(),
@@ -544,6 +548,7 @@ impl<T: Clone> ReadEngine<T> {
                         });
                     if let Some(win32_code) = code
                         && classify_code(code).is_terminal()
+                        && self.watcher.mark_terminal(pending.registration, win32_code)
                     {
                         self.undelivered = Some(ReadEntry::Terminal(Terminal {
                             value: pending.value,
@@ -606,7 +611,8 @@ impl<T: Clone> ReadEngine<T> {
 
     /// Submit the current plan's reads until it is done or something stops it, a batch at a time:
     /// the ring's SQ is drained by a submit, so one that refuses a push is submitted and the push
-    /// goes on, and only a ring that refuses with nothing queued stops it.
+    /// goes on, and only a ring that refuses with nothing queued stops it. A stop request ends it
+    /// too, at the next read: the reads already pushed are submitted and the rest are abandoned.
     fn submit_reads(&mut self) -> io::Result<Submitted> {
         let Self {
             ring,
@@ -615,6 +621,7 @@ impl<T: Clone> ReadEngine<T> {
             groups,
             unsubmitted,
             cq_size,
+            stop: stopping,
             ..
         } = self;
         let current = current.as_mut().expect("reads are planned");
@@ -627,6 +634,9 @@ impl<T: Clone> ReadEngine<T> {
                 let Some(read) = current.reads.front() else {
                     break Ended::Planned;
                 };
+                if stopping.load(Ordering::Acquire) {
+                    break Ended::Abandoned;
+                }
                 if outstanding >= *cq_size {
                     break Ended::Stopped(Stop::RingFull);
                 }
@@ -675,6 +685,7 @@ impl<T: Clone> ReadEngine<T> {
             }
             match ended {
                 Ended::Planned => return Ok(Submitted::Done),
+                Ended::Abandoned => return Ok(Submitted::Done),
                 Ended::Stopped(stop) => return Ok(Submitted::Blocked(stop)),
                 // The submit made room.
                 Ended::RingSqFull if pushed > 0 => {}

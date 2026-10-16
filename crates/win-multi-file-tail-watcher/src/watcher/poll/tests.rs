@@ -598,6 +598,18 @@ fn dropping_a_watcher_sets_the_stop_flag_whether_or_not_a_shutdown_was_made() {
 }
 
 #[test]
+fn dropping_a_callbacks_view_of_the_watcher_stops_nothing() {
+    // What a poller that could not be made leaves behind to drop: the view its callbacks ran on.
+    let dir = TempDir::new("poll-drop-view");
+    let watcher = watcher(4);
+    let _registrations = changing(&dir, &watcher, 1);
+    drop(Watcher::view(std::sync::Arc::clone(&watcher.shared)));
+    assert!(!watcher.shared.stopping());
+    watcher.poll().expect("a poll after the view was dropped");
+    assert_eq!(values(&until_poll_done(&watcher)), [0]);
+}
+
+#[test]
 fn after_a_watcher_with_a_parked_poll_is_dropped_no_callback_of_the_crate_runs() {
     use std::os::windows::io::{AsHandle, AsRawHandle};
     use windows_sys::Win32::System::Threading::SetEvent;
