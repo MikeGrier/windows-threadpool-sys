@@ -23,7 +23,7 @@ pub use dioring::{
     DeliveryMode, Dioring, FromClock, InterruptStamps, Setup, SetupError, SetupRefusal,
     TargetSetup, TimeBase, WinInstant, WindowsIds,
 };
-pub use error_code::error_code_of;
+pub use error_code::{error_code_from_win32, error_code_of, win32_code_of};
 pub use readiness::{ReadinessFailure, check_readiness};
 
 // The portable crate's API, so a consumer needs no direct dependency on it to use this driver.

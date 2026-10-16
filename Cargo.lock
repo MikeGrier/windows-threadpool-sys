@@ -122,6 +122,7 @@ dependencies = [
  "durable-ioring",
  "io-buffers",
  "win-durable-ioring",
+ "win-error-codes",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",

@@ -167,7 +167,7 @@ fn an_armed_commit_failure_reports_the_code() {
     let failed = run(&mut backend, commit(2, ADDED));
     let fault = failed.result.expect_err("armed");
     assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
-    assert_eq!(fault.code.and_then(crate::ErrorCode::win32), Some(1117));
+    assert_eq!(fault.code.and_then(crate::win32_code_of), Some(1117));
     assert_eq!(
         run(&mut backend, commit(3, ADDED)).result,
         Ok(0),
@@ -623,7 +623,7 @@ fn a_submit_that_fails_leaves_what_was_pushed_queued_and_is_reported_and_reissue
         panic!("an error no ring condition names is of unknown cause");
     };
     assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
-    assert_eq!(fault.code.and_then(crate::ErrorCode::win32), Some(1117));
+    assert_eq!(fault.code.and_then(crate::win32_code_of), Some(1117));
     assert!(
         backend.pop().expect("pop").is_none(),
         "a failed submit leaves it queued"
@@ -863,10 +863,7 @@ fn a_short_read_is_transferred_whatever_was_requested() {
 fn a_failed_completion_is_the_rings_fault_with_its_code() {
     let fault = transfer(Err(io::Error::from_raw_os_error(1117)), true, 8).expect_err("failed");
     assert_eq!(fault.source, crate::error_code::WINDOWS_IORING);
-    assert_eq!(
-        fault.code,
-        Some(durable_ioring::ErrorCode::from_win32(1117))
-    );
+    assert_eq!(fault.code, Some(crate::error_code_from_win32(1117)));
 }
 
 /// A failed completion with no code relays the error with none: the code is optional (DI-D-50).

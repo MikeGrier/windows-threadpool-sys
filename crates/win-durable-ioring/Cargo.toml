@@ -40,6 +40,9 @@ win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
 windows-namespace-request-sys = { version = "0.3.0", path = "../windows-namespace-request-sys" }
 # The path type that crate takes, and the flags and access constants an open is made from.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
+# The rule that wraps a Win32 code as an `HRESULT` and reads one back out (DI-9.7.11): this crate
+# owns the numbering of the codes it reports, and that crate owns the rule.
+win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
 
 [dependencies.windows-sys]
 version = "0.61.2"

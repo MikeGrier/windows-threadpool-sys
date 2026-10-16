@@ -126,6 +126,38 @@
       "replace": ["        code: None,\n"]
     },
     {
+      "name": "DI-9.7.11: a Win32 code is wrapped as the number it is",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "The wrapping is HRESULT_FROM_WIN32's, owned by win-error-codes; passing the code through unwrapped would report 1117 where 0x8007045D is meant, and every Win32 code a fault carries would be misnumbered.",
+      "find": ["    ErrorCode::from_hresult(HResult::from_win32(Win32Error::from_code(code)).raw())\n"],
+      "replace": ["    ErrorCode::from_hresult(code.cast_signed())\n"]
+    },
+    {
+      "name": "DI-9.7.11: a wrapped Win32 code is never read back",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "The reading is how a consumer asks which Win32 error a fault was; answering none for all of them removes the question.",
+      "find": ["        .map(Win32Error::code)\n"],
+      "replace": ["        .and(None)\n"]
+    },
+    {
+      "name": "DI-9.7.11: an OS error's code is taken as an HRESULT already",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "An error carrying a Win32 code, as io::Error::from_raw_os_error makes, is wrapped; taking its number as the HRESULT would name a different, unrelated code.",
+      "find": ["        .map(|code| error_code_from_win32(code.cast_unsigned()))\n"],
+      "replace": ["        .map(|code| ErrorCode::from_hresult(code))\n"]
+    },
+    {
+      "name": "CONTROL: the Win32 code is read back through a closure",
+      "file": "src/error_code.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. A closure that calls the same method names the same function, so the file changes and no behaviour.",
+      "find": ["        .map(Win32Error::code)\n"],
+      "replace": ["        .map(|error| error.code())\n"]
+    },
+    {
       "name": "DI-3.10.3.2: a short write is reported as transferred",
       "file": "src/windows_backend.rs",
       "expect": "caught",

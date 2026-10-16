@@ -40,7 +40,7 @@ fn cause_of(error: &std::io::Error) -> &RefusalCause {
 fn is_the_armed_failure(cause: &RefusalCause) -> bool {
     matches!(
         cause,
-        RefusalCause::Unknown(fault) if fault.code.and_then(crate::ErrorCode::win32) == Some(1117)
+        RefusalCause::Unknown(fault) if fault.code.and_then(crate::win32_code_of) == Some(1117)
     )
 }
 
@@ -259,7 +259,7 @@ fn a_ring_that_cannot_be_read_sets_the_readiness_signal_and_the_pop_reports_it_o
     );
     let error = harness.ring.pop().expect_err("nothing to return, and why");
     assert_eq!(
-        fault_of(&error).code.and_then(crate::ErrorCode::win32),
+        fault_of(&error).code.and_then(crate::win32_code_of),
         Some(1117)
     );
     assert!(
@@ -292,7 +292,7 @@ fn a_pumped_instance_whose_ring_could_not_be_read_reads_it_at_the_next_pump() {
         .pop()
         .expect_err("the unreadable ring, reported");
     assert_eq!(
-        fault_of(&error).code.and_then(crate::ErrorCode::win32),
+        fault_of(&error).code.and_then(crate::win32_code_of),
         Some(1117)
     );
     let Entry::Op(done) = pumped_next(&mut harness) else {
