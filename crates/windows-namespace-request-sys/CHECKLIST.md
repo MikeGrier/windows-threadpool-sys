@@ -36,20 +36,7 @@ Win32 outcomes without interpreting them. The file-to-volume hop already exists:
 
 - [x] **NR-2.6** -- Decided 2026-10-15: the storage-locality entries and their helper belong in `win-volume-sys`, so the duplicate is closed by moving them there and deleting this crate's copies. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-26)
 
-- [ ] **NR-2.8** -- **Delete the storage-locality entries and the helper from this crate**, after
-  `WV-2.1` to `WV-2.5` have landed: `QueryVolumeNumaInfo`, `QueryVolumeDiskExtents`, the
-  storage-property entries, `QueryStorageDependencyInformation`, the `device_control` module, their
-  tests, their entries in [sabotage.json](sabotage.json), the "Storage-locality entries" table in
-  [README.md](README.md), the `Win32_Storage_Vhd`, `Win32_System_IO`, `Win32_System_Ioctl` and
-  `Win32_System_Pipes` features nothing else needs, and `D-20` to `D-24`, each replaced in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) by a pointer to the `WV-D` it became (marked superseded at the
-  top of the row, per the notes convention). Check for a consumer of each entry before deleting it.
-  **It must land before this crate's next release** (step 4 of [the order across
-  crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up)),
-  or the entries are published from the wrong crate.
-
-  > **-> CROSS-COMPONENT PREREQUISITE:** [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) in
-  > `crates/win-volume-sys`.
+- [x] **NR-2.8** -- The storage-locality entries and the device-control helper are deleted from this crate, and `D-20` to `D-24` are pointers at the `WV-D` rows they became. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-28)
 
   **Next:** [NR-3.3](#nr-3----what-durable-iorings-open-surface-needs-of-this-crate), then `NR-4.1`
   in any order with it.

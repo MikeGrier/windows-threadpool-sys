@@ -47,12 +47,8 @@ the workspace's release-scope rule where the two do not have to build together.
 
 - [x] **WV-2.5** -- `storage_dependency_information`, the virtdisk dependency query, with the version as an input and names copied out of the reply. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-25)
 
-  **Next:** [NR-2.8](../windows-namespace-request-sys/CHECKLIST.md), which deletes the originals.
-
-> **-> CROSS-COMPONENT HANDOFF:** next work is in component `windows-namespace-request-sys` ->
-> `NR-2` -> `NR-2.8` (delete the storage-locality entries). It must land **before the request
-> crate's release**, or the entries are published from the wrong crate. See
-> [the order across crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+  **Next:** nothing further in this milestone; the order across crates is in
+  [durable-ioring's checklist](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
 
 ## M-inf -- Parked
 

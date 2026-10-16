@@ -205,3 +205,25 @@ decision is [WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5), and a handle tha
 `SharedHandle` ([WV-D-6](../win-volume-sys/DESIGN-NOTES.md#wv-d-6)). What this left to do is the move,
 which is [WV-M2](../win-volume-sys/CHECKLIST.md#wv-m2----take-in-the-storage-locality-entries), and
 the deletion, which is `NR-2.8`.
+
+## Moved 2026-10-15 23:09:28 -04:00 -- NR-2.8: the storage-locality entries leave this crate
+
+### <a id="nr-28"></a>NR-2.8 -- The storage-locality entries and the device-control helper are deleted from this crate, and `D-20` to `D-24` are pointers at the `WV-D` rows they became. *(completed 2026-10-15 23:09:28 -04:00)*
+
+Deleted after [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) landed: `QueryVolumeNumaInfo`,
+`QueryVolumeDiskExtents`, the storage-property entries (unique id, disk NUMA, the generic query),
+`QueryStorageDependencyInformation`, and the `device_control` module, with their tests, their
+sabotage entries, the README table, and the `windows-sys` features nothing else needs
+(`Win32_Storage_Vhd`, `Win32_System_IO`, `Win32_System_Ioctl`, and `Win32_System_Pipes` for tests). A
+search for each name found no consumer outside this crate, and the workspace builds without them.
+`D-20` to `D-24` in [DESIGN-NOTES.md](DESIGN-NOTES.md) are marked superseded at the top of the row and
+point at [WV-D-7](../win-volume-sys/DESIGN-NOTES.md#wv-d-7), `WV-D-3`, `WV-D-9` (for both `D-22` and
+`D-23`) and `WV-D-10`; their reasoning stays in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The code is
+the commit that deletes `src/device_control.rs`.
+
+None of the entries was in a release: they were added after `windows-namespace-request-sys-v0.3.1`.
+The `feat(namespace-request)` commits that added them will still be read by release-please when this
+crate is next released, so its changelog would list features that are not in the crate; the release
+pull request needs those lines removed or overridden. That is a release action, not a checklist item.
+The sabotage manifest here no longer has a control entry of its own, and the one remaining `survives`
+entry is a declared blind spot and not a control.
