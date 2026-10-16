@@ -34,3 +34,23 @@ that pends. It did not: the sabotage that drops the `OVERLAPPED` survived the wh
 manifest says why. Without one, that control blocks inside `DeviceIoControl` until the oplock breaks
 and answers the same. The entry stays `survives`, with the measured reason in place of the assumed one.
 What this left to do is `WV-2.2`.
+
+## Moved 2026-10-15 22:17:09 -04:00 -- WV-2.2: disk extents
+
+### <a id="wv-22"></a>WV-22 -- `volume_disk_extents` takes the stricter checks of the namespace crate's entry, and `WV-D-3` and `D-21` are one decision. *(completed 2026-10-15 22:17:09 -04:00)*
+
+The two implementations were the same algorithm with the same constants, so what moved was two checks
+and the tests that pin them, not a rewrite. A call that claims to have written more than the buffer it
+was given is now `InvalidData`, where this function would have sliced past the buffer; and a reply that
+needs more room but counts none is asked again with room for one extent, not none, because a smaller
+buffer is `ERROR_INVALID_PARAMETER` (measured). The decision is
+[WV-D-3](DESIGN-NOTES.md#wv-d-3), which supersedes `D-21` of the namespace crate. The code is `7790bae8`.
+
+Ported from the namespace crate with the checks: the measured refusal of every buffer below one extent
+(against the real volume), a refusal that ends the attempts, the count of none, and the oversized byte
+count; and sabotage entries for the control code, the first answer's room, the count of none, the
+attempt bound, a retried refusal, the oversized byte count and a negative length. The older entry that
+recognised `ERROR_MORE_DATA` now mutates `is_more_data`, which reads the code through `win-error-codes`.
+The namespace crate's typed `Malformed` and `Unstable` errors were not carried over: both are
+`InvalidData` here, as the rest of this crate reports an answer that does not hold what it says. What this
+left to do is `WV-2.3`.

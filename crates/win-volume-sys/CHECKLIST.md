@@ -33,11 +33,7 @@ the workspace's release-scope rule where the two do not have to build together.
 
   **Next:** `WV-2.2`.
 
-- [ ] **WV-2.2** -- **Disk extents.** `volume_disk_extents` takes the stricter reply checks of the
-  namespace crate's `QueryVolumeDiskExtents` (a count the bytes cannot hold, the bounded
-  `ERROR_MORE_DATA` regrow, a first buffer never below one extent) in place of its own, keeping the
-  two entries' tests and their sabotage entries. The older [WV-D-3](DESIGN-NOTES.md#wv-d-3) and
-  `D-21` are reconciled into one decision.
+- [x] **WV-2.2** -- `volume_disk_extents` takes the stricter checks of the namespace crate's entry, and `WV-D-3` and `D-21` are one decision. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-22)
 
   **Next:** `WV-2.3`.
 
