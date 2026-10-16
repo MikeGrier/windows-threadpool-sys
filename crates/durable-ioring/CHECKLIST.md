@@ -59,7 +59,10 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.7`, `DI-13.1`, `DI-13.3`, `DI-13.4`, `DI-M14`, `DI-M15`, and `DI-10.3` last.
+7. Added 2026-10-16: [NR-5.1 to NR-5.4](../windows-namespace-request-sys/CHECKLIST.md) -- request
+   crate: the path-form classifier that `DI-13.7`'s syntactic refusal uses. Additive, so a new minor
+   release; `DI-13.7` takes it.
+8. Then, here: `DI-13.7`, `DI-13.1`, `DI-13.3`, `DI-13.4`, `DI-M14`, `DI-M15`, and `DI-10.3` last.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -276,6 +279,18 @@ option recorded by construction. The rule throughout is documented APIs only
   `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, long paths made verbatim, std's combination checks);
   none of that is Win32's, so the rework is `DI-13.7`, which waits on the questions above.
 
+  **Ruled 2026-10-16, in conversation.** (a) `open` takes a `Wtf16String` only; the caller converts.
+  Passing an empty path to Win32 was proposed with it and not separately ruled. (b) The only check
+  before the open is syntactic, on the path handed to Win32, and only for the forms a string alone
+  shows remote (UNC and verbatim UNC): no drive-type query and nothing that opens the path. Every
+  other validation is made on the opened handle, so an unbuffered create refused there has already
+  created the file, which is documented and not prevented. (c) Nothing refuses a path for being able
+  to block. A blocking `CreateFileW` is answered by the request crate: a request is built on one
+  thread and performed on another, and `open` becomes that two-phase shape (`DI-13.7`). Whether
+  `CancelSynchronousIo` interrupts a create changes nothing in the design; the engineer expects it
+  cannot. The request crate's part is [NR-5](../windows-namespace-request-sys/CHECKLIST.md). (d),
+  (e), (f) and (g) are still open.
+
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
 - [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the
@@ -322,7 +337,18 @@ option recorded by construction. The rule throughout is documented APIs only
   difference" principle is amended and its list of differences rewritten. Waits on the request
   crate's coupled commit (step 2 of the order at the top of this file), which adapts this crate only
   enough to build, and on the answers to the parked questions in `DI-13.1` (a), (e) and (f).
+  **The shape, from the rulings of 2026-10-16 (`DI-13.1` (a) to (c)):** `open` is split into a build
+  and a perform. The build is made on the submitting thread and holds the `Wtf16String`, the typed
+  options, and the request crate's captured path; what fails there fails where the caller can see
+  it, including the syntactic refusal of a path that is evidently remote. `perform` runs on whatever
+  thread the caller chooses, makes the call, and then checks the opened handle (`DI-14.5`),
+  closing it if it is refused. `open` stays as the two run inline, documented as blocking for as
+  long as `CreateFileW` does. The request is typed by its buffering mode, as `OpenedFile<B>` is.
   **Next:** `DI-13.1` (the table is written from the answers), then `DI-13.3`.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** the syntactic refusal needs the path-form classifier of
+  > `windows-namespace-request-sys` -> `NR-5` (`NR-5.1` to `NR-5.4`), released. See
+  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
@@ -361,7 +387,9 @@ option recorded by construction. The rule throughout is documented APIs only
   in which a link can be swapped. A documented query of the handle closes it, and it is also what an
   open by ID needs, since it has no path. The assistant must say which documented handle queries it
   checked and which it chose. A file created on a remote device before the check can refuse it
-  leaves a file behind, which is why the path check stays for a create and the handle check is the
+  leaves a file behind; that is accepted and documented (`DI-13.1` ruling (b), 2026-10-16). The only
+  check before the open is syntactic, on the path handed to Win32, for the forms a string alone
+  shows remote ([NR-5](../windows-namespace-request-sys/CHECKLIST.md)); the handle check is the
   authority for every open.
 
 - [ ] **DI-14.6** -- **What an open can reach that is not a disk file is measured, and what this
