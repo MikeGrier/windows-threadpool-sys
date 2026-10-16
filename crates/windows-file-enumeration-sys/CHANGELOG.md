@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.1.4...windows-file-enumeration-sys-v0.2.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **file-enumeration:** Win32Error::from_io returns Option<Win32Error>.
+
+### Bug Fixes
+
+* **file-enumeration:** Win32Error is win_error_codes::Win32Error, which keeps a code of 2^31 or more ([5f014f5](https://github.com/MikeGrier/windows-threadpool-sys/commit/5f014f59dde27fab31a269cc5ab9cfa5a87ebcea))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-error-codes bumped from 0.1.0 to 0.0.2
+
 ## [0.1.4](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.1.3...windows-file-enumeration-sys-v0.1.4) (2026-10-15)
 
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.3.1...windows-namespace-request-sys-v0.4.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace-request:** OpenFile::new, WatchDirectory::new and ResolveFullPath::new take a Wtf16String and return a Result; prepare, PreparedPath, PathError, PathFailure and the path module are removed.
+
+### Features
+
+* **namespace-request:** add GetStorageDependencyInformation entry ([0306fda](https://github.com/MikeGrier/windows-threadpool-sys/commit/0306fda0b46d4f48b6518bbaadc5e9add2058f2f))
+* **namespace-request:** add QueryStorageDeviceNumaNode ([f46d95f](https://github.com/MikeGrier/windows-threadpool-sys/commit/f46d95feb2036ab9f43802d309aa43d60bfb8aba))
+* **namespace-request:** add QueryStorageDeviceUniqueId ([29a02f6](https://github.com/MikeGrier/windows-threadpool-sys/commit/29a02f6eec090b1ba15c6a96ba1bbad9b27d9c38))
+* **namespace-request:** add QueryStorageProperty, the generic storage property query ([7aec7e8](https://github.com/MikeGrier/windows-threadpool-sys/commit/7aec7e859d6847e8da24ddc5f3d3b2afe17fdbec))
+* **namespace-request:** add QueryVolumeDiskExtents, and give the DeviceIoControl helper an input buffer ([0b20b59](https://github.com/MikeGrier/windows-threadpool-sys/commit/0b20b59adc01b588c1e9bb8085a47f8fd6aa4d51))
+* **namespace-request:** add QueryVolumeNumaInfo and the one overlapped-safe DeviceIoControl helper ([2d6b757](https://github.com/MikeGrier/windows-threadpool-sys/commit/2d6b757a2c181440d00d66067b58b4523e7a92ea))
+* **namespace-request:** add the ReOpenFile entry ([b558570](https://github.com/MikeGrier/windows-threadpool-sys/commit/b55857076135ab41a4985680517b4c49b8218b8d))
+* **namespace-request:** open, watch and resolve by a Wtf16String, and retire prepare ([3083c05](https://github.com/MikeGrier/windows-threadpool-sys/commit/3083c050319c9bbee663c1f784ebbdd6084c2be2))
+* **namespace-request:** SecurityDescriptor::from_sddl and to_sddl ([d618a6f](https://github.com/MikeGrier/windows-threadpool-sys/commit/d618a6f900c84d0d912624797e0040758c4b82e2))
+
+
+### Bug Fixes
+
+* **namespace-request:** do not graft a child onto a verbatim or device current directory ([7e95094](https://github.com/MikeGrier/windows-threadpool-sys/commit/7e95094af63cb5759fd7e24d584cee033f7c9e57))
+* **namespace-request:** Win32Error is win_error_codes::Win32Error, which keeps a code of 2^31 or more ([0f9474c](https://github.com/MikeGrier/windows-threadpool-sys/commit/0f9474c15e61325cd6c605ae6157c031f62947a3))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-error-codes bumped from 0.1.0 to 0.0.2
+
 ## [0.3.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.3.0...windows-namespace-request-sys-v0.3.1) (2026-10-15)
 
 

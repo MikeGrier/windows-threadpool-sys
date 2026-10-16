@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026.1016.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1015.1...windows-platform-probes-v2026.1016.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace-request:** OpenFile::new, WatchDirectory::new and ResolveFullPath::new take a Wtf16String and return a Result; prepare, PreparedPath, PathError, PathFailure and the path module are removed.
+
+### Features
+
+* **namespace-request:** open, watch and resolve by a Wtf16String, and retire prepare ([3083c05](https://github.com/MikeGrier/windows-threadpool-sys/commit/3083c050319c9bbee663c1f784ebbdd6084c2be2))
+* **platform-probes:** rewrite the request_cost probe for the request crate's path design ([8e8327c](https://github.com/MikeGrier/windows-threadpool-sys/commit/8e8327ca2c6b875b6479f42aaa57692faa5732b9))
+
 ## [2026.1015.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1015.0...windows-platform-probes-v2026.1015.1) (2026-10-15)
 
 ## [2026.1015.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1004.0...windows-platform-probes-v2026.1015.0) (2026-10-15)

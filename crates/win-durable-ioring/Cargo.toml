@@ -2,7 +2,7 @@
 
 [package]
 name = "win-durable-ioring"
-version = "0.1.0"
+version = "0.2.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 # The contract, the core and the traits this crate drives and implements (DI-D-50). A version and a
 # path, as `cargo publish` requires: the version is the release that carries the split.
-durable-ioring = { version = "0.1.0", path = "../durable-ioring" }
+durable-ioring = { version = "0.2.0", path = "../durable-ioring" }
 # The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
 # ring, `leave_queued` and the registrations this driver is built on.
 windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys" }
@@ -37,12 +37,12 @@ win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
 # The open of a file (DI-13.2): every parameter of `CreateFileW`, made safe and decided by no one,
 # so what an open means is decided here and this crate has no `unsafe` of its own for it. The
 # handle it returns is plain and unassociated, as the ring needs.
-windows-namespace-request-sys = { version = "0.3.0", path = "../windows-namespace-request-sys" }
+windows-namespace-request-sys = { version = "0.4.0", path = "../windows-namespace-request-sys" }
 # The path type that crate takes, and the flags and access constants an open is made from.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 # The rule that wraps a Win32 code as an `HRESULT` and reads one back out (DI-9.7.11): this crate
 # owns the numbering of the codes it reports, and that crate owns the rule.
-win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
 [dependencies.windows-sys]
 version = "0.61.2"
