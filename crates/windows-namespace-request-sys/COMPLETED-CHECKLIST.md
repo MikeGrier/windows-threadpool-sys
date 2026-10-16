@@ -197,8 +197,8 @@ run on a machine that can attach a VHD would settle. What this left to do in thi
 
 The item asked whether `win-volume-sys`' `control()` or this crate's helper should survive. It was
 answered by a different question, the crate they belong in. The engineer ruled that volume-oriented
-operations belong in the volume crate, and that its scope is the storage stack under a file system
-(physical disks, partitions, raw partition access, volume management). This crate's charter is
+operations belong in the volume crate, and that its scope is physical disks, partition management,
+raw partition access and volume management. This crate's charter is
 namespace operations, and `NR-2.1` to `NR-2.5` and `NR-2.7` are not those: they went here because the
 checklist placed them here, and that placement was not questioned when it should have been. The
 decision is [WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5), and a handle that must be shared is a
