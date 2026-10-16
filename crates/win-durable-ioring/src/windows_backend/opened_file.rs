@@ -23,7 +23,8 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
+    OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
 };
 
 use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
@@ -136,6 +137,8 @@ pub struct FileOptions {
     create: bool,
     create_new: bool,
     truncate: bool,
+    random_access: bool,
+    sequential_scan: bool,
 }
 
 impl FileOptions {
@@ -171,6 +174,33 @@ impl FileOptions {
     /// Truncate the file to nothing on opening.
     pub fn truncate(mut self, truncate: bool) -> Self {
         self.truncate = truncate;
+        self
+    }
+
+    /// Hint that the file will be accessed at random (`FILE_FLAG_RANDOM_ACCESS`), which the system
+    /// may use to tune its caching.
+    ///
+    /// It is passed to an unbuffered file as well as a cached one, and is never refused. The
+    /// `CreateFileW` documentation says the flag "has no effect if the file system does not support
+    /// cached I/O and `FILE_FLAG_NO_BUFFERING`", which can be read two ways, so what it does to an
+    /// unbuffered file is the kernel's to say. Measured on Windows 11 build 26300: every combination
+    /// of the two hints, cached and unbuffered, opens and carries a sector-aligned write and read,
+    /// and an unbuffered one also runs through the ring. Whether a hint changes the system's caching
+    /// was not measured, and nothing about the warranty class, the alignment or write-through
+    /// depends on it. Asking for this and [`sequential_scan`](Self::sequential_scan) together is
+    /// the documentation's "self-defeating", and is passed on all the same.
+    pub fn random_access(mut self, random_access: bool) -> Self {
+        self.random_access = random_access;
+        self
+    }
+
+    /// Hint that the file will be read sequentially from beginning to end
+    /// (`FILE_FLAG_SEQUENTIAL_SCAN`), which the system may use to tune its caching. The
+    /// documentation says it should not be used if reverse scans will be.
+    ///
+    /// Passed through and documented as [`random_access`](Self::random_access) is.
+    pub fn sequential_scan(mut self, sequential_scan: bool) -> Self {
+        self.sequential_scan = sequential_scan;
         self
     }
 
@@ -210,10 +240,17 @@ impl FileOptions {
         } else {
             0
         };
+        let mut hints = 0;
+        if self.random_access {
+            hints |= FILE_FLAG_RANDOM_ACCESS;
+        }
+        if self.sequential_scan {
+            hints |= FILE_FLAG_SEQUENTIAL_SCAN;
+        }
         Ok(open_request::Parameters {
             access,
             disposition,
-            flags: flags | reparse,
+            flags: flags | reparse | hints,
             truncate_after,
         })
     }

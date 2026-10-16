@@ -43,6 +43,12 @@ write-through. A consumer that needs the stronger warranty asks for `OpenedFile<
 own signature, and a cached file cannot be passed. A handle opened elsewhere cannot be given to a
 target in this version.
 
+`FileOptions::random_access` and `FileOptions::sequential_scan` are the two cache hints
+(`FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`). They are passed to an unbuffered file as
+well as a cached one, never refused, and change nothing a target claims: the class, the alignment and
+what it offers follow from the buffering mode alone. What the `CreateFileW` documentation says about them
+on an unbuffered file can be read two ways, and the methods' own documentation says what was measured.
+
 ```rust
 use win_durable_ioring::windows_backend::{
     Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,

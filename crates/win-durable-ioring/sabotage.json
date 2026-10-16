@@ -1179,6 +1179,46 @@
       "why": "std shared every file for reading, writing and deletion, and the share mode is the open's own to state now that std no longer does.",
       "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
       "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
+    },
+    {
+      "name": "DI-14.1: the random-access hint sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The hint is the flag it names, so a request for it that reaches CreateFileW with no flag is a hint that was dropped without a word. Caught by the test of the flags the options produce.",
+      "find": ["            hints |= FILE_FLAG_RANDOM_ACCESS;\n"],
+      "replace": ["            hints |= FILE_FLAG_RANDOM_ACCESS & 0;\n"]
+    },
+    {
+      "name": "DI-14.1: the sequential-scan hint is dropped when both are asked for",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Both together is the documentation's self-defeating pair and is passed on, not refused and not narrowed to one of them.",
+      "find": ["        if self.sequential_scan {\n"],
+      "replace": ["        if self.sequential_scan && !self.random_access {\n"]
+    },
+    {
+      "name": "DI-14.1: a hint replaces the flags the buffering mode opens with",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A hint is added to FILE_FLAG_NO_BUFFERING and to a new file's reparse flag. In place of them, an unbuffered file with a hint would be a cached one that still claims SharedDevice.",
+      "find": ["            flags: flags | reparse | hints,\n"],
+      "replace": ["            flags: if hints == 0 { flags | reparse } else { hints | reparse },\n"]
+    },
+    {
+      "name": "DI-14.1: a hint is refused on an unbuffered file",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The engineer ruled (DI-13.1 (f)) that a hint is passed to an unbuffered file and documented there, not refused. Caught by the tests that open every pair against the kernel and the ring.",
+      "find": ["        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;\n"],
+      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(invalid_input(\"a hint is not offered to an unbuffered file\"));\n        }\n        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;\n"]
+    },
+    {
+      "name": "DI-14.1 control: the hint flags start from a typed zero",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same value with a stated type, which no test can tell apart from the original, so a harness that reports it caught is reporting something other than the tests.",
+      "find": ["        let mut hints = 0;\n"],
+      "replace": ["        let mut hints = 0u32;\n"]
     }
   ]
 }

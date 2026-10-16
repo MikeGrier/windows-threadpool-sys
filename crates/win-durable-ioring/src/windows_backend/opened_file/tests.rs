@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 
 use std::fs::{self, File};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::path::{Path, PathBuf};
 
@@ -9,15 +9,17 @@ use io_buffers::AlignedBuf;
 
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
+    OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
 };
 
+use super::super::Win32FileTarget;
 use super::{
     Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
     final_location, names_a_remote_device, open_request,
 };
 use crate::dioring::tests::TempFile;
-use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
+use durable_ioring::{Capabilities, Geometry, GeometryError, IoTarget, WarrantyClass};
 
 /// `ERROR_INVALID_PARAMETER`, which an unbuffered file answers an unaligned transfer with.
 const INVALID_PARAMETER: i32 = 87;
@@ -103,6 +105,120 @@ fn an_aligned_write_to_an_unbuffered_file_succeeds() {
         fs::metadata(&temp.0).expect("metadata").len(),
         sector as u64
     );
+}
+
+#[test]
+fn a_hint_sets_its_own_flag_and_nothing_else() {
+    let read = FileOptions::new().read(true);
+    let flags = |options: FileOptions, mode: u32| options.parameters(mode).expect("valid").flags;
+
+    assert_eq!(flags(read, 0), 0, "no hint, no flag");
+    assert_eq!(flags(read.random_access(true), 0), FILE_FLAG_RANDOM_ACCESS);
+    assert_eq!(
+        flags(read.sequential_scan(true), 0),
+        FILE_FLAG_SEQUENTIAL_SCAN
+    );
+    assert_eq!(
+        flags(read.random_access(true).sequential_scan(true), 0),
+        FILE_FLAG_RANDOM_ACCESS | FILE_FLAG_SEQUENTIAL_SCAN,
+        "both together are passed on, not refused"
+    );
+    assert_eq!(
+        flags(read.random_access(true).random_access(false), 0),
+        0,
+        "a hint can be taken back"
+    );
+    // Added to the mode's own flags and to the one a new file carries, never in place of them.
+    assert_eq!(
+        flags(read.random_access(true), FILE_FLAG_NO_BUFFERING),
+        FILE_FLAG_NO_BUFFERING | FILE_FLAG_RANDOM_ACCESS
+    );
+    assert_eq!(
+        flags(
+            FileOptions::new()
+                .write(true)
+                .create_new(true)
+                .sequential_scan(true),
+            0
+        ),
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN
+    );
+}
+
+/// The four ways of asking for the two hints.
+const HINTS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+/// Opens a file in mode `B` with the hints, writes one aligned sector through it and reads it
+/// back, which is what the kernel does with the pair, judged by the kernel and not by a flag this
+/// crate recorded.
+fn open_write_and_read_back<B: Buffering>(
+    temp: &TempFile,
+    (random, sequential): (bool, bool),
+) -> io::Result<()> {
+    let options = read_write()
+        .random_access(random)
+        .sequential_scan(sequential);
+    let opened = OpenedFile::<B>::open(&temp.0, options)?;
+    let sector = Unbuffered::DEFAULT_SECTOR_SIZE as usize;
+    let written = AlignedBuf::from_bytes(&vec![0x5a; sector], sector).expect("an aligned buffer");
+    let mut through = io_through(&opened);
+    through.seek(SeekFrom::Start(0))?;
+    through.write_all(written.as_slice())?;
+    through.seek(SeekFrom::Start(0))?;
+    let mut read = AlignedBuf::zeroed(sector, sector).expect("an aligned buffer");
+    through.read_exact(read.as_mut_slice())?;
+    assert_eq!(read.as_slice(), written.as_slice());
+    Ok(())
+}
+
+#[test]
+fn the_kernel_takes_each_hint_on_a_cached_file() {
+    for hints in HINTS {
+        let temp = TempFile::new("of-hint-cached");
+        open_write_and_read_back::<Cached>(&temp, hints)
+            .unwrap_or_else(|error| panic!("cached, hints {hints:?}: {error}"));
+    }
+}
+
+// Passed to an unbuffered file and not refused (`DI-14.1`). The `CreateFileW` page says the hints
+// "have no effect if the file system does not support cached I/O and FILE_FLAG_NO_BUFFERING", which
+// can be read two ways, so this is the measurement: every pair opens and does aligned I/O.
+#[test]
+fn the_kernel_takes_each_hint_on_an_unbuffered_file() {
+    for hints in HINTS {
+        let temp = TempFile::new("of-hint-unbuffered");
+        open_write_and_read_back::<Unbuffered>(&temp, hints)
+            .unwrap_or_else(|error| panic!("unbuffered, hints {hints:?}: {error}"));
+    }
+}
+
+#[test]
+fn a_hint_changes_neither_the_class_nor_the_alignment_nor_what_is_offered() {
+    // Judged on the target made from each file, which is what a consumer reads.
+    let claims = |options: FileOptions| {
+        let (unbuffered, cached) = (TempFile::new("of-claims-u"), TempFile::new("of-claims-c"));
+        let u = Win32FileTarget::new(
+            OpenedFile::<Unbuffered>::open(&unbuffered.0, options).expect("open unbuffered"),
+        );
+        let c = Win32FileTarget::new(
+            OpenedFile::<Cached>::open(&cached.0, options).expect("open cached"),
+        );
+        (
+            (u.warranty(), u.geometry(), u.capabilities()),
+            (c.warranty(), c.geometry(), c.capabilities()),
+        )
+    };
+    let plain = claims(read_write());
+    for (random, sequential) in HINTS {
+        let hinted = claims(
+            read_write()
+                .random_access(random)
+                .sequential_scan(sequential),
+        );
+        assert_eq!(hinted, plain, "hints {random}, {sequential}");
+    }
+    assert_eq!(plain.0.0, WarrantyClass::SharedDevice);
+    assert_eq!(plain.1.0, WarrantyClass::BestEffort);
 }
 
 #[test]

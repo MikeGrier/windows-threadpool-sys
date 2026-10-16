@@ -21,15 +21,16 @@ const BOUND: Duration = Duration::from_secs(10);
 
 type AlignedRing = Dioring<AlignedBuf, u64, u32>;
 
-fn unbuffered(temp: &TempFile) -> Win32FileTarget {
-    Win32FileTarget::new(
-        OpenedFile::<Unbuffered>::open(&temp.0, FileOptions::new().read(true).write(true))
-            .expect("open unbuffered"),
-    )
+fn unbuffered(temp: &TempFile, options: FileOptions) -> Win32FileTarget {
+    Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&temp.0, options).expect("open unbuffered"))
 }
 
 fn instance(temp: &TempFile) -> (AlignedRing, LineageHandle) {
-    let target = unbuffered(temp);
+    instance_with(temp, FileOptions::new().read(true).write(true))
+}
+
+fn instance_with(temp: &TempFile, options: FileOptions) -> (AlignedRing, LineageHandle) {
+    let target = unbuffered(temp, options);
     assert_eq!(target.warranty(), WarrantyClass::SharedDevice);
     assert!(target.capabilities().write_through());
     AlignedRing::new(Setup {
@@ -60,6 +61,40 @@ fn completion(ring: &mut AlignedRing) -> OpCompletion<crate::WindowsIds<u64>, Al
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
+    }
+}
+
+// A cache hint is passed to an unbuffered file and not refused (`DI-14.1`), so the ring has to be
+// able to run it: every way of asking for the two hints, against the kernel and through the ring.
+#[test]
+fn an_unbuffered_file_opened_with_cache_hints_runs_through_the_ring() {
+    for (random, sequential) in [(false, false), (true, false), (false, true), (true, true)] {
+        let temp = TempFile::new("unbuffered-hints");
+        let options = FileOptions::new()
+            .read(true)
+            .write(true)
+            .random_access(random)
+            .sequential_scan(sequential);
+        let (mut ring, lineage) = instance_with(&temp, options);
+        ring.write_with(
+            FILE,
+            0,
+            sector(3),
+            lineage.at(1),
+            8,
+            WriteOptions::new().caching(WriteCaching::WriteThrough),
+        )
+        .expect("push an aligned write-through write");
+        let done = completion(&mut ring);
+        assert!(
+            matches!(done.outcome, Outcome::Transferred(n) if n as usize == SECTOR),
+            "hints {random}, {sequential}: {:?}",
+            done.outcome
+        );
+        assert_eq!(
+            std::fs::read(&temp.0).expect("read back")[..SECTOR],
+            vec![3u8; SECTOR]
+        );
     }
 }
 
