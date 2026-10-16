@@ -21,8 +21,13 @@
 //! `cfg(windows)`, because off Windows a raw OS error is an `errno` and reading one as a Win32
 //! code would be a wrong answer and not a missing feature.
 
+mod lstatus;
 mod win32_error;
 
+#[cfg(test)]
+mod test_codes;
+
+pub use lstatus::LStatus;
 pub use win32_error::Win32Error;
 
 // The README carries runnable examples, so they are compiled and a change to the API that breaks

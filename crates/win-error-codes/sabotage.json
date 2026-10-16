@@ -5,6 +5,83 @@
   "testArgs": ["-p", "win-error-codes", "--lib", "--locked"],
   "sabotages": [
     {
+      "name": "WE-1.2: a raw value is altered on its way in",
+      "file": "src/lstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: STATUS.raw() == -1_069_940_715",
+      "why": "LStatus carries whatever the call returned, a negative LONG included. The constructor is a const fn and a const assertion in the tests evaluates it, so the alteration does not build.",
+      "find": ["        Self(raw)\n"],
+      "replace": ["        Self(raw & 0x7FFF_FFFF)\n"]
+    },
+    {
+      "name": "WE-1.2: control, the conversion written through bytes",
+      "file": "src/lstatus.rs",
+      "expect": "survives",
+      "why": "A control: the same bit cast written through the native-endian bytes changes the file and no behaviour, so a sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Win32Error::from_code(self.0.cast_unsigned())\n"],
+      "replace": ["        Win32Error::from_code(u32::from_ne_bytes(self.0.to_ne_bytes()))\n"]
+    },
+    {
+      "name": "WE-1.2: success is a non-positive value",
+      "file": "src/lstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: !STATUS.is_success()",
+      "why": "Only zero is ERROR_SUCCESS; a negative LONG is a code above 2^31 and a failure. is_success is a const fn and a const assertion in the tests evaluates it with a negative value.",
+      "find": ["        self.to_win32().is_success()\n"],
+      "replace": ["        self.0 <= 0\n"]
+    },
+    {
+      "name": "WE-1.2: a failure becomes Ok",
+      "file": "src/lstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: LStatus::from_raw(0).into_result().is_ok()",
+      "why": "A nonzero value must reach the caller as the error, or a failed registry call reads as success. into_result is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["        self.to_win32().into_result()\n"],
+      "replace": ["        if self.is_success() {\n            Err(self.to_win32())\n        } else {\n            Ok(())\n        }\n"]
+    },
+    {
+      "name": "WE-1.2: a negative value is taken as its magnitude",
+      "file": "src/lstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: STATUS.to_win32().code() == NOT_A_VIRTUAL_DISK",
+      "why": "The cast from LONG to DWORD is a bit cast: a negative value is a code above 2^31, not its absolute value. to_win32 is a const fn and a const assertion in the tests evaluates it with a code above 2^31.",
+      "find": ["        Win32Error::from_code(self.0.cast_unsigned())\n"],
+      "replace": ["        Win32Error::from_code(self.0.unsigned_abs())\n"]
+    },
+    {
+      "name": "WE-1.2: a code above 2^31 is clamped on its way to the signed carrier",
+      "file": "src/lstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: STATUS.to_win32().to_lstatus().raw() == STATUS.raw()",
+      "why": "A code above 2^31 is a negative LONG, and clamping it to the largest positive one loses the code. to_lstatus is a const fn and a const assertion in the tests round-trips a code above 2^31.",
+      "find": ["        LStatus::from_raw(self.code().cast_signed())\n"],
+      "replace": ["        LStatus::from_raw(if self.code() > i32::MAX.cast_unsigned() {\n            i32::MAX\n        } else {\n            self.code().cast_signed()\n        })\n"]
+    },
+    {
+      "name": "WE-1.2: the From impl to a code loses the value",
+      "file": "src/lstatus.rs",
+      "expect": "caught",
+      "why": "The From impl is the conversion the rest of the workspace will write; a wrong one there is wrong everywhere, and it is not const, so only a run notices.",
+      "find": ["        status.to_win32()\n"],
+      "replace": ["        Win32Error::from_code(status.raw().unsigned_abs())\n"]
+    },
+    {
+      "name": "WE-1.2: the From impl to the signed carrier loses the value",
+      "file": "src/lstatus.rs",
+      "expect": "caught",
+      "why": "As the other direction: the From impl is not const, so only a run notices.",
+      "find": ["        error.to_lstatus()\n"],
+      "replace": ["        LStatus::from_raw(0)\n"]
+    },
+    {
+      "name": "WE-1.2: the display shows the raw signed value",
+      "file": "src/lstatus.rs",
+      "expect": "caught",
+      "why": "The signed carrier has no rendering of its own: a code above 2^31 is shown as the code it is, in decimal and hex, and not as a negative number a reader would have to convert.",
+      "find": ["        fmt::Display::fmt(&self.to_win32(), f)\n"],
+      "replace": ["        write!(f, \"{}\", self.0)\n"]
+    },
+    {
       "name": "WE-1.1: a code is altered on its way in",
       "file": "src/win32_error.rs",
       "expect": "refused-by-build",

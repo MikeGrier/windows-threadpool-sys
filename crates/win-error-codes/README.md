@@ -13,12 +13,18 @@ which exist: the virtdisk errors, such as `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, are
 
 - **`Win32Error`**, a `u32`: the code unaltered, `is_success` and `into_result` (zero is
   `ERROR_SUCCESS`), and on Windows `to_io_error`, `from_io` and `last`.
+- **`LStatus`**, an `i32`: the same number space in the signed `LONG` that registry calls return,
+  converting to and from `Win32Error` by a bit cast that loses nothing, a code above 2^31 being a
+  negative value.
 
 ```rust
-use win_error_codes::Win32Error;
+use win_error_codes::{LStatus, Win32Error};
 
 // A call that returns its code directly: zero is success.
 assert_eq!(Win32Error::from_code(0).into_result(), Ok(()));
+
+// A registry call returns the same thing as a signed LONG.
+assert_eq!(LStatus::from_raw(2).into_result(), Err(Win32Error::from_code(2)));
 
 // ERROR_VIRTDISK_NOT_VIRTUAL_DISK, a code above 2^31, keeps its value through io::Error.
 # #[cfg(windows)] {

@@ -1,60 +1,11 @@
 // Copyright (c) Mike Grier.
 
-//! Tests for `Win32Error`.
-//!
-//! The codes below are chosen to cover the places a conversion goes wrong: zero, the ordinary
-//! small codes, the 16-bit edge, the 31-bit edge, and codes that need the top bit, which std holds
-//! as negative numbers and which the earlier per-crate types lost or panicked on.
+//! Tests for `Win32Error`. The codes are the crate's shared set, in `crate::test_codes`.
 
 use std::collections::HashSet;
 
 use super::Win32Error;
-
-/// `ERROR_SUCCESS`.
-const SUCCESS: u32 = 0;
-/// `ERROR_INVALID_FUNCTION`, the first nonzero code.
-const INVALID_FUNCTION: u32 = 1;
-/// `ERROR_FILE_NOT_FOUND`.
-const FILE_NOT_FOUND: u32 = 2;
-/// `ERROR_ACCESS_DENIED`.
-const ACCESS_DENIED: u32 = 5;
-/// `ERROR_INVALID_PARAMETER`.
-const INVALID_PARAMETER: u32 = 87;
-/// `ERROR_INSUFFICIENT_BUFFER`.
-const INSUFFICIENT_BUFFER: u32 = 122;
-/// `ERROR_IO_PENDING`.
-const IO_PENDING: u32 = 997;
-/// `ERROR_IO_DEVICE`.
-const IO_DEVICE: u32 = 1117;
-/// The largest value a 16-bit code holds.
-const LARGEST_16_BIT: u32 = 0xFFFF;
-/// The first value above 16 bits.
-const FIRST_ABOVE_16_BIT: u32 = 0x1_0000;
-/// The largest value an `i32` holds, so the last code std keeps as a non-negative number.
-const LARGEST_NON_NEGATIVE: u32 = 0x7FFF_FFFF;
-/// The first code std keeps as a negative number.
-const FIRST_NEGATIVE: u32 = 0x8000_0000;
-/// `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, a `WIN32_ERROR` above 2^31 that a real call returned.
-const NOT_A_VIRTUAL_DISK: u32 = 0xC03A_0015;
-/// Every bit set.
-const ALL_BITS: u32 = u32::MAX;
-
-const SAMPLES: [u32; 14] = [
-    SUCCESS,
-    INVALID_FUNCTION,
-    FILE_NOT_FOUND,
-    ACCESS_DENIED,
-    INVALID_PARAMETER,
-    INSUFFICIENT_BUFFER,
-    IO_PENDING,
-    IO_DEVICE,
-    LARGEST_16_BIT,
-    FIRST_ABOVE_16_BIT,
-    LARGEST_NON_NEGATIVE,
-    FIRST_NEGATIVE,
-    NOT_A_VIRTUAL_DISK,
-    ALL_BITS,
-];
+use crate::test_codes::*;
 
 #[test]
 fn a_code_is_carried_unaltered() {
