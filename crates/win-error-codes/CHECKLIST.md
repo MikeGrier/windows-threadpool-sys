@@ -9,5 +9,5 @@ further is planned in this crate. The work it leads to is in other crates:
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in components `windows-namespace-request-sys` ->
 > `NR-4` -> `NR-4.1`, `windows-file-enumeration-sys` -> `ERR` -> `ERR-1`, and `win-volume-sys` ->
-> `WV-M2` -> `WV-2.1`; and the decision about durable-ioring's `ErrorCode` is
+> `WV-M2` -> `WV-2.1`; and durable-ioring's `ErrorCode` helpers are
 > [DI-9.7.11](../durable-ioring/CHECKLIST.md). See [the order across crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
