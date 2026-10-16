@@ -2889,3 +2889,25 @@ The authoritative text is [DI-D-62](DESIGN-NOTES.md#di-d-62). The engineer asked
 ### <a id="di-132"></a>DI-13.2 -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. *(completed 2026-10-15 14:07:15 -04:00)*
 
 The authoritative text is [DI-D-63](DESIGN-NOTES.md#di-d-63). The item was written as "name the unsafe home for opening"; the workspace already had a memory-safe, un-narrowed wrapper for the open calls in `windows-namespace-request-sys`, so the engineer chose to depend on it instead of building a second one, and asked for two checks (a synchronous `perform` is acceptable, and the handle is plain and unassociated), which DI-D-63 records. What the item left over, a `SecurityDescriptor` from SDDL and a `ReOpenFile` entry that the request crate lacks, became `DI-13.5` and `DI-13.6`, and the request crate's `NR-3`.
+
+## Moved 2026-10-16 13:37:10 -04:00 -- DI-9.7.11: ErrorCode's Windows helpers leave the portable core
+
+### <a id="di-9711"></a>DI-9.7.11 -- DECIDED (c): `ErrorCode`'s `from_win32` and `win32` move out of the portable core into `win-durable-ioring`, built on `HResult`. *(completed 2026-10-16 13:37:10 -04:00)*
+
+The item asked what becomes of two helpers that were a second copy of the rule `HResult` in
+`win-error-codes` owns, with three options. The engineer, 2026-10-16: "I would go with c", against the
+assistant's lean to (b). (c) is the cleaner layering and a breaking change to the core's public
+surface; the amendment is recorded on [DI-D-50](DESIGN-NOTES.md#di-d-50).
+
+`ErrorCode` keeps `from_hresult`, `hresult`, equality and its two renderings, and no longer
+interprets the number. `win-durable-ioring` gained `error_code_from_win32` and `win32_code_of`, both
+delegating to `HResult`, and `error_code_of` uses the first for an `io::Error` that carries an OS
+code. The portable core's own tests and test support, which built codes with `from_win32`, take a
+number as it is: the layer they stand in for is none, so no code is wrapped. The core takes no new
+dependency, so (b)'s consequences, a portable crate depending on a `win-*` one and a release order,
+do not arise; `win-durable-ioring` depends on `win-error-codes`, which is unpublished.
+
+The sabotage entry that masked a Win32 code to sixteen bits left the core's manifest with the code it
+covered; the rule is covered by `win-error-codes`' own entries, and `win-durable-ioring`'s manifest
+gained entries for the three ways its helpers can go wrong, with a control. The tests that pinned
+the three facts moved with the helpers and gained one that the wrapping agrees with `HResult`.

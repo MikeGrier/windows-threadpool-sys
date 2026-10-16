@@ -71,7 +71,7 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
 
     let coded = || IoFault {
         source: "test",
-        code: Some(ErrorCode::from_win32(1117)),
+        code: Some(ErrorCode::from_hresult(1117)),
         error: Arc::new(io::Error::other("told")),
     };
     let cases = [
@@ -82,12 +82,12 @@ fn a_refusal_fault_carries_its_cause_and_the_backends_code() {
         (
             RefusalCause::Unusable(coded()),
             io::ErrorKind::Other,
-            Some(ErrorCode::from_win32(1117)),
+            Some(ErrorCode::from_hresult(1117)),
         ),
         (
             RefusalCause::Unknown(coded()),
             io::ErrorKind::Other,
-            Some(ErrorCode::from_win32(1117)),
+            Some(ErrorCode::from_hresult(1117)),
         ),
     ];
     for (cause, kind, code) in cases {
