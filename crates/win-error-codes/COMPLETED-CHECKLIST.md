@@ -69,3 +69,21 @@ assertion was shortened with a named constant.
 crates ([NR-4.1](../windows-namespace-request-sys/CHECKLIST.md),
 [ERR-1](../windows-file-enumeration-sys/CHECKLIST.md),
 [WV-2.1](../win-volume-sys/CHECKLIST.md)).
+
+## Moved 2026-10-15 21:37:12 -04:00 -- WE-2.1: NtStatus
+
+### <a id="we-21"></a>WE-2.1 -- `NtStatus`, an `i32` newtype for an `NTSTATUS` with `ntstatus.h`'s semantics, and `HRESULT_FROM_NT`. *(completed 2026-10-15 21:37:12 -04:00)*
+
+Asked for by the engineer on 2026-10-15 ("add NtStatus also with the obvious semantics") after `WE-M1`
+had closed, so it was planned as a milestone of one item and archived with it. `NtStatus` has
+`NtSeverity`, `NT_SUCCESS` and the other three predicates, `into_result`, `code`, `facility`,
+`is_customer`, and `Display` and `Debug` in hex; `HResult` gained `from_ntstatus` (`HRESULT_FROM_NT`)
+and `ntstatus`. The decision is [WE-D-7](DESIGN-NOTES.md#we-d-7). The code is `5697f152`.
+
+Two of the choices are the assistant's and are open to override: the twelve-bit facility, which
+excludes the customer bit and the `HRESULT_FROM_NT` bit where `HResult::facility`'s thirteen include
+them, and `HResult::ntstatus`, which is this crate's own inverse because Windows has no macro for it
+and which is not exact for a status that already has the bit set. There is no conversion to a Win32
+code, because that is an `Rtl*` call. One earlier `WE-1.3` sabotage, a wrong bit read in
+`is_ntstatus_mapped`, is now rejected at build time by a const assertion in `NtStatus`'s tests, and
+is re-declared `refused-by-build`.

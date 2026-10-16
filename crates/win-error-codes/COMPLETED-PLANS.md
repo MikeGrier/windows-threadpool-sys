@@ -6,4 +6,4 @@ finished. Individual milestones are archived in [COMPLETED-CHECKLIST.md](COMPLET
 
 | Path to CHECKLIST.md | Completion Date | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | 2026-10-15 | The Win32 error, `LStatus` and `HResult` types, one per number space, with an exact `io::Error` round trip for every code, built to replace the per-crate copies that disagreed about a code of 2^31 or more. The crates that adopt them are planned in their own checklists. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | 2026-10-15 | The Win32 error, `LStatus`, `HResult` and `NtStatus` types, one per number space, with an exact `io::Error` round trip for every code, built to replace the per-crate copies that disagreed about a code of 2^31 or more. The crates that adopt them are planned in their own checklists. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
