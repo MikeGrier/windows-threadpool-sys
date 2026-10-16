@@ -234,6 +234,62 @@
       "why": "A control: where the end would overflow, the start is past the buffer anyway and get returns None, so saturating changes the file and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;\n"],
       "replace": ["    let bytes = buffer.get(offset..offset.saturating_add(size_of::<u32>()))?;\n"]
+    },
+    {
+      "name": "WV-2.3: the NUMA control sends a different code",
+      "file": "src/volume_numa.rs",
+      "expect": "survives",
+      "why": "Declared blind spot. Only a volume that answers tells the control code apart from a wrong one, since a wrong code and a volume with no answer are both a refusal; the machine measured answers (node 0), but a test that required it would fail on one that does not, so none does.",
+      "find": ["    let written = device_control(handle, FSCTL_QUERY_VOLUME_NUMA_INFO, &[], &mut output)?;\n"],
+      "replace": ["    let written = device_control(handle, FSCTL_QUERY_VOLUME_NUMA_INFO + 4, &[], &mut output)?;\n"]
+    },
+    {
+      "name": "WV-2.3: the NUMA control is told its output buffer is empty",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "The call is made with exactly the room the structure needs; with none, a device refuses for want of room whether or not it has an answer.",
+      "find": ["    let written = device_control(handle, FSCTL_QUERY_VOLUME_NUMA_INFO, &[], &mut output)?;\n"],
+      "replace": ["    let written = device_control(handle, FSCTL_QUERY_VOLUME_NUMA_INFO, &[], &mut output[..0])?;\n"]
+    },
+    {
+      "name": "WV-2.3: a reply larger than the structure is read as the node",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "A reply of any size but the structure's is refused and not read, because a value taken from a buffer the device did not fill would read as a node.",
+      "find": ["    if written != OUTPUT_SIZE {\n"],
+      "replace": ["    if written < OUTPUT_SIZE {\n"]
+    },
+    {
+      "name": "WV-2.3: a reply smaller than the structure is read as the node",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "The other half of the size check: a short reply leaves the buffer's remainder as it was, and reading it would report a node the device never named.",
+      "find": ["    if written != OUTPUT_SIZE {\n"],
+      "replace": ["    if written > OUTPUT_SIZE {\n"]
+    },
+    {
+      "name": "WV-2.3: the node is read from the first byte alone",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "The node is a whole ULONG, carried unaltered; a value above 255 would be truncated.",
+      "find": ["    Ok(u32::from_ne_bytes(output))\n"],
+      "replace": ["    Ok(u32::from_ne_bytes([output[0], 0, 0, 0]))\n"]
+    },
+    {
+      "name": "WV-2.3: a reply that is not the structure is some other kind of error",
+      "file": "src/volume_numa.rs",
+      "expect": "caught",
+      "why": "A malformed reply is InvalidData, as for every other answer in this crate that does not hold what it says; a caller tells it from a device's refusal by the kind.",
+      "find": ["            io::ErrorKind::InvalidData,\n            format!(\n"],
+      "replace": ["            io::ErrorKind::Other,\n            format!(\n"]
+    },
+    {
+      "name": "WV-2.3: control, the size check written as two comparisons",
+      "file": "src/volume_numa.rs",
+      "expect": "survives",
+      "why": "A control: not-equal is less-or-greater, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    if written != OUTPUT_SIZE {\n"],
+      "replace": ["    if written < OUTPUT_SIZE || written > OUTPUT_SIZE {\n"]
     }
   ]
 }

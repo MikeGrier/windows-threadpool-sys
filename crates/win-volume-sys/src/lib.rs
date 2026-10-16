@@ -10,7 +10,9 @@ mod geometry;
 mod lock;
 #[cfg(test)]
 mod test_support;
+mod volume_numa;
 
 pub use extents::{DiskExtent, volume_disk_extents};
 pub use geometry::bytes_per_sector;
 pub use lock::{lock_volume, unlock_volume};
+pub use volume_numa::volume_numa_node;

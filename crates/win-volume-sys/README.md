@@ -13,6 +13,9 @@ promise, as the workspace's naming decision defines it.
 - **`bytes_per_sector`** -- the sector size a volume is addressed in
   (`IOCTL_DISK_GET_DRIVE_GEOMETRY`), which an unbuffered volume handle's transfers must be a multiple
   of and aligned to. A handle to a whole physical disk answers it too (tried on one opened for reading and writing by an administrator).
+- **`volume_numa_node`** -- the NUMA node the volume a file, a directory or the volume itself is on
+  resides on (`FSCTL_QUERY_VOLUME_NUMA_INFO`), as the device wrote it. A volume that advertises no
+  proximity domain answers with its own error, and no value is taken to mean "no node".
 - **`lock_volume`** and **`unlock_volume`** -- `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`: until
   released, or until the handle closes, no other handle can use the volume.
 
