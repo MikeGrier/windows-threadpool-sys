@@ -1,0 +1,36 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-error-codes"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "The numbers Windows reports failure in, as types: a Win32 error code with an exact io::Error round trip for every code, including those above 2^31. No unsafe code and no native API surface."
+keywords = ["windows", "error", "win32", "hresult", "errorcode"]
+categories = ["os::windows-apis", "api-bindings"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root); see
+# WE-D-2 in this crate's DESIGN-NOTES.md for why a crate that calls no Windows API takes it. No
+# `-sys`: it layers over no call and contains no `unsafe`.
+
+[dependencies]
+# None. The crate is numbers, std's `io::Error`, and nothing more.
+
+# `SetLastError`, to put a known code in the calling thread's last-error slot and show that
+# `Win32Error::last` reads it. Test-only, and only on Windows: the types are portable, and this is
+# the one test that needs the Windows thread state.
+[target.'cfg(windows)'.dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation"]
+
+[package.metadata.docs.rs]
+# The `io::Error` bridge is `cfg(windows)`, so docs.rs must build on a Windows target or it would
+# leave out the half of the crate that touches `std::io`.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

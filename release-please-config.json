@@ -29,6 +29,10 @@
       "package-name": "win-numa-sys",
       "component": "win-numa-sys"
     },
+        "crates/win-error-codes": {
+            "package-name": "win-error-codes",
+            "component": "win-error-codes"
+        },
         "crates/win-shared-os-owned-handle": {
             "package-name": "win-shared-os-owned-handle",
             "component": "win-shared-os-owned-handle"

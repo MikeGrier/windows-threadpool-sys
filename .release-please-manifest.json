@@ -7,6 +7,7 @@
   "crates/windows-ioring-sys": "0.7.1",
   "crates/durable-ioring": "0.1.0",
   "crates/win-numa-sys": "0.1.1",
+  "crates/win-error-codes": "0.0.1",
   "crates/win-shared-os-owned-handle": "0.1.0",
   "crates/io-buffers": "0.1.0",
   "crates/win-durable-ioring": "0.1.0",

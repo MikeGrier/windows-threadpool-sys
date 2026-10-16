@@ -1,0 +1,90 @@
+{
+  "package": "win-error-codes",
+  "description": "Sabotages for win-error-codes' Win32Error (WE-1.1): the code is carried unaltered, zero is the only success, and the io::Error conversion is exact for every code including those above 2^31. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Win32Error::last's fallback for a last_os_error that carries no code (zero) is not reachable: std's last_os_error is always an OS error. The Display's message half is std's io::Error rendering, which this crate does not edit and does not test beyond its prefix and that it is present. The crate is built and tested on Linux and macOS by the repository's portable CI job, which no local run reaches.",
+  "testArgs": ["-p", "win-error-codes", "--lib", "--locked"],
+  "sabotages": [
+    {
+      "name": "WE-1.1: a code is altered on its way in",
+      "file": "src/win32_error.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: ERROR.code() == NOT_A_VIRTUAL_DISK",
+      "why": "The type carries whatever Windows said; any alteration, a mask to 16 bits included, names a different error. The constructor is a const fn and a const assertion in the tests evaluates it, so the alteration does not build.",
+      "find": ["    pub const fn from_code(code: u32) -> Self {\n        Self(code)\n"],
+      "replace": ["    pub const fn from_code(code: u32) -> Self {\n        Self(code & 0xFFFF)\n"]
+    },
+    {
+      "name": "WE-1.1: control, the success comparison with its operands swapped",
+      "file": "src/win32_error.rs",
+      "expect": "survives",
+      "why": "A control: the same comparison written the other way round changes the file and no behaviour, so a sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        self.0 == ERROR_SUCCESS\n"],
+      "replace": ["        ERROR_SUCCESS == self.0\n"]
+    },
+    {
+      "name": "WE-1.1: success is any code below two",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "ERROR_SUCCESS is zero and only zero; one is ERROR_INVALID_FUNCTION.",
+      "find": ["        self.0 == ERROR_SUCCESS\n"],
+      "replace": ["        self.0 <= 1\n"]
+    },
+    {
+      "name": "WE-1.1: a failure becomes Ok",
+      "file": "src/win32_error.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: Win32Error::from_code(SUCCESS).into_result().is_ok()",
+      "why": "A nonzero code must reach the caller as the error, or a failed call reads as success. into_result is a const fn and a const assertion in the tests evaluates it, so the inversion does not build.",
+      "find": ["        if self.is_success() { Ok(()) } else { Err(self) }\n"],
+      "replace": ["        if self.is_success() { Err(self) } else { Ok(()) }\n"]
+    },
+    {
+      "name": "WE-1.1: a code above 2^31 is clamped on its way into io::Error",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "The defect the crate exists to remove: std holds a code above 2^31 as a negative number, and a conversion that refuses or clamps it loses the code.",
+      "find": ["        io::Error::from_raw_os_error(self.0.cast_signed())\n"],
+      "replace": ["        io::Error::from_raw_os_error(i32::try_from(self.0).unwrap_or(i32::MAX))\n"]
+    },
+    {
+      "name": "WE-1.1: a negative OS error is taken as its magnitude",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "The cast back from std's i32 is bit-preserving; a negative number is a code above 2^31, not its absolute value.",
+      "find": ["        error.raw_os_error().map(|raw| Self(raw.cast_unsigned()))\n"],
+      "replace": ["        error.raw_os_error().map(|raw| Self(raw.unsigned_abs()))\n"]
+    },
+    {
+      "name": "WE-1.1: an io::Error with no OS code is zero",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "Zero is ERROR_SUCCESS; an error that carries no code must not come back as a success.",
+      "find": ["        error.raw_os_error().map(|raw| Self(raw.cast_unsigned()))\n"],
+      "replace": ["        Some(Self(error.raw_os_error().map_or(ERROR_SUCCESS, i32::cast_unsigned)))\n"]
+    },
+    {
+      "name": "WE-1.1: the last error is not read from the thread",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "last() is the calling thread's last error; a constant would pass any test that does not set one first.",
+      "find": ["            io::Error::last_os_error()\n"],
+      "replace": ["            io::Error::from_raw_os_error(0)\n"]
+    },
+    {
+      "name": "WE-1.1: the display drops the hex form",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "winerror.h writes the codes above 2^31 in hex, so the display carries both forms.",
+      "find": ["        write!(f, \"Win32 error {} (0x{:08X})\", self.0, self.0)?;\n"],
+      "replace": ["        write!(f, \"Win32 error {}\", self.0)?;\n"]
+    },
+    {
+      "name": "WE-1.1: the display's hex form is not zero padded",
+      "file": "src/win32_error.rs",
+      "expect": "caught",
+      "why": "The hex form is eight digits, as winerror.h writes a code, so a small code and a large one line up and a search for 0x00000005 finds it.",
+      "find": ["(0x{:08X})\", self.0, self.0)?;"],
+      "replace": ["(0x{:X})\", self.0, self.0)?;"]
+    }
+  ]
+}
