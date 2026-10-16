@@ -54,3 +54,16 @@ recognised `ERROR_MORE_DATA` now mutates `is_more_data`, which reads the code th
 The namespace crate's typed `Malformed` and `Unstable` errors were not carried over: both are
 `InvalidData` here, as the rest of this crate reports an answer that does not hold what it says. What this
 left to do is `WV-2.3`.
+
+## Moved 2026-10-15 22:25:25 -04:00 -- WV-2.3: volume NUMA
+
+### <a id="wv-23"></a>WV-2.3 -- `volume_numa_node`, the NUMA node a volume resides on (`FSCTL_QUERY_VOLUME_NUMA_INFO`), as the device wrote it. *(completed 2026-10-15 22:25:25 -04:00)*
+
+Ported from `NR-2.1` of the namespace crate. The entry became a function returning the `u32`, with
+the reply check and the tests that pin it; the request type, its `Display` and its typed error were
+not carried over. The decision is [WV-D-8](DESIGN-NOTES.md#wv-d-8). The code is the commit that adds
+`src/volume_numa.rs`.
+
+Sabotage entries cover the output buffer's room, both halves of the size check, a node read from one
+byte, and the kind of a malformed reply, with a control. The control code is a declared survivor, for
+the reason in `WV-D-8`. What this left to do is `WV-2.4`.

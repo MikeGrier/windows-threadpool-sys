@@ -37,7 +37,7 @@ the workspace's release-scope rule where the two do not have to build together.
 
   **Next:** `WV-2.3`.
 
-- [ ] **WV-2.3** -- **Volume NUMA.** `FSCTL_QUERY_VOLUME_NUMA_INFO` on a file or directory handle.
+- [x] **WV-2.3** -- `volume_numa_node`, the NUMA node a volume resides on (`FSCTL_QUERY_VOLUME_NUMA_INFO`), as the device wrote it. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-23)
 
   **Next:** `WV-2.4`.
 
