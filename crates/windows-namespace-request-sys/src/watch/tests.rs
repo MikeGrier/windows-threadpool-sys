@@ -18,7 +18,6 @@ use wtf_string::Wtf16String;
 
 use super::{ChangeNotification, NotifyFilter, WatchDirectory};
 use crate::handle::tests::{Fixture, handle_allocation};
-use crate::prepare;
 
 /// Long enough that a working watch signals well inside it, short enough that a
 /// broken one fails the suite rather than hanging it.
@@ -30,7 +29,8 @@ fn watch_for(fixture: &Fixture, filter: NotifyFilter) -> WatchDirectory {
         .to_str()
         .expect("the fixture path is valid UTF-8");
 
-    WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the fixture path"))
+    WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
         .with_filter(filter)
 }
 
@@ -175,7 +175,8 @@ fn a_missing_directory_reports_the_raw_code() {
     let absent = fixture.directory().join("no-such-directory");
     let text = absent.to_str().expect("the fixture path is valid UTF-8");
 
-    let outcome = WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
+    let outcome = WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
         .with_filter(NotifyFilter::FILE_NAME)
         .perform();
 
@@ -239,7 +240,7 @@ fn a_new_request_watches_nothing_recursively() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let request = WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"));
+    let request = WatchDirectory::new(Wtf16String::from(text)).expect("build the request");
 
     assert!(!request.subtree());
     assert_eq!(request.filter(), NotifyFilter::NONE);
@@ -323,17 +324,103 @@ fn an_unconfigured_watch_reads_back_as_the_narrowest_one() {
     // The other half: the defaults are what `new` documents rather than what an
     // accessor invents, and asserting them is what stops the test above from
     // being satisfied by an accessor that always reports the configured shape.
-    let fixture = Fixture::new("watch-defaults");
+    // Its own label: a fixture is a directory named by it, and two tests sharing one removed and
+    // recreated each other's directory.
+    let fixture = Fixture::new("watch-defaults-readback");
     let text = fixture
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let request =
-        WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the fixture path"));
+    let request = WatchDirectory::new(Wtf16String::from(text)).expect("build the request");
 
     assert!(
         !request.subtree(),
         "watching a whole tree is the expensive choice and must be asked for"
     );
     assert_eq!(request.filter(), NotifyFilter::default());
+}
+
+// --- The path: as given, and as handed to Win32 ------------------------------------------------
+
+#[test]
+fn a_relative_path_is_fixed_to_the_current_directory_when_the_request_is_built() {
+    // Whether anything of this name exists is not at issue here, so no directory is assumed to; the
+    // child-process test below performs one.
+    let directory = std::env::current_dir().expect("a current directory");
+    let directory = directory.to_str().expect("a UTF-8 current directory");
+    let request = WatchDirectory::new(Wtf16String::from("src")).expect("build the request");
+
+    assert_eq!(request.path().to_string_lossy(), "src");
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        format!(r"{}\src", directory.trim_end_matches('\\'))
+    );
+}
+
+#[test]
+fn an_absolute_path_is_handed_to_win32_as_given() {
+    let fixture = Fixture::new("watch-absolute");
+    let request = watch_for(&fixture, NotifyFilter::FILE_NAME);
+
+    assert_eq!(request.path(), request.win32_path());
+}
+
+#[test]
+fn a_path_with_an_interior_nul_is_refused_when_the_request_is_built() {
+    let error = WatchDirectory::new(Wtf16String::from_units(&[0x0061, 0x0000, 0x0062]))
+        .expect_err("a NUL truncates the path");
+
+    assert!(matches!(error, crate::PathCaptureError::InteriorNul));
+}
+
+const CHILD_MARKER: &str = "WNRS_WATCH_CHILD";
+const CHILD_TEST: &str =
+    "watch::tests::a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes";
+
+// As for `open::tests`: a test that changes the process current directory runs in a child process.
+#[test]
+fn a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes() {
+    const NAME: &str = "wnrs-watch-relative";
+
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let request = WatchDirectory::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_filter(NotifyFilter::FILE_NAME);
+        let elsewhere = std::env::var_os("SystemRoot").expect("Windows names its directory");
+        std::env::set_current_dir(elsewhere).expect("change the current directory");
+
+        let _watching = request
+            .perform()
+            .expect("watch the directory fixed when the request was built");
+
+        // The same name given now is a different path, which is what the graft prevents.
+        let later = WatchDirectory::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_filter(NotifyFilter::FILE_NAME);
+        assert!(later.perform().is_err(), "no such directory here");
+        return;
+    }
+
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("watch-relative-child");
+    std::fs::create_dir(fixture.directory().join(NAME)).expect("create the directory");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(CHILD_TEST)
+        .arg("--nocapture")
+        .env(CHILD_MARKER, "1")
+        .current_dir(fixture.directory())
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

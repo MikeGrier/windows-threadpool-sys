@@ -31,22 +31,21 @@
 //! # Scope: entries, not capture
 //!
 //! This governs the Win32 call an entry *performs*. It does not govern capture
-//! failures -- [`crate::handle`], [`crate::security`], and [`crate::path`]
+//! failures -- [`crate::handle`], [`crate::security`], and [`PathCaptureError`](crate::PathCaptureError)
 //! report a named stage plus a code, because there the useful question is which
 //! part of building the request went wrong. Those happen on the calling thread,
 //! before any entry runs.
 
-use std::fmt;
-use std::io;
-
 use windows_sys::Win32::Foundation::{
-    ERROR_NOT_ENOUGH_MEMORY, FALSE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR,
+    ERROR_NOT_ENOUGH_MEMORY, FALSE, HANDLE, INVALID_HANDLE_VALUE,
 };
 
-/// A raw Win32 error code, exactly as Windows produced it.
+/// A raw Win32 error code, exactly as Windows produced it: [`win_error_codes::Win32Error`], which
+/// carries a code of 2^31 or more through its `io::Error` form, where this crate's own earlier type
+/// did not.
 ///
-/// Deliberately not an enum: the point of this type is that it carries whatever
-/// Windows said, including codes this crate has never heard of.
+/// Re-exported under the name this crate has always used, so every path keeps working. See the
+/// shared type for its documentation.
 ///
 /// # Example
 ///
@@ -58,66 +57,18 @@ use windows_sys::Win32::Foundation::{
 /// assert_eq!(error.code(), ERROR_FILE_NOT_FOUND);
 ///
 /// // The io::Error form is a re-presentation, not a reclassification: the raw
-/// // code survives it.
+/// // code survives it, however large.
 /// assert_eq!(error.to_io_error().raw_os_error(), Some(ERROR_FILE_NOT_FOUND as i32));
-///
-/// // A code this crate has never heard of is carried just the same.
-/// let unknown = Win32Error::from_code(0x0BAD_F00D);
-/// assert_eq!(unknown.code(), 0x0BAD_F00D);
+/// let virtdisk = Win32Error::from_code(0xC03A_0015);
+/// assert_eq!(Win32Error::from_io(&virtdisk.to_io_error()), Some(virtdisk));
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Win32Error(WIN32_ERROR);
+pub use win_error_codes::Win32Error;
 
-impl Win32Error {
-    /// Wraps a raw `WIN32_ERROR`.
-    #[must_use]
-    pub fn from_code(code: WIN32_ERROR) -> Self {
-        Self(code)
-    }
-
-    /// Snapshots the calling thread's last error.
-    ///
-    /// Call this only immediately after the failing Win32 call. Prefer
-    /// [`perform`], which makes that ordering structural.
-    fn last() -> Self {
-        // SAFETY: GetLastError only reads the calling thread's own error slot.
-        Self(unsafe { GetLastError() })
-    }
-
-    /// This crate's own report that it could not allocate memory for a call, which was then
-    /// not made: `ERROR_NOT_ENOUGH_MEMORY`. It is the one code here that the call did not
-    /// produce.
-    pub(crate) fn out_of_memory() -> Self {
-        Self(ERROR_NOT_ENOUGH_MEMORY)
-    }
-
-    /// The raw code, unaltered.
-    #[must_use]
-    pub fn code(self) -> WIN32_ERROR {
-        self.0
-    }
-
-    /// The same failure as a standard [`io::Error`], for callers that funnel
-    /// everything through `std::io`.
-    ///
-    /// This is a re-presentation, not a reclassification: the raw code survives
-    /// as [`io::Error::raw_os_error`].
-    #[must_use]
-    pub fn to_io_error(self) -> io::Error {
-        i32::try_from(self.0).map_or_else(
-            |_| io::Error::other(format!("Win32 error {}", self.0)),
-            io::Error::from_raw_os_error,
-        )
-    }
+/// This crate's own report that it could not allocate memory for a call, which was then not made:
+/// `ERROR_NOT_ENOUGH_MEMORY`. It is the one code here that the call did not produce.
+pub(crate) fn out_of_memory() -> Win32Error {
+    Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY)
 }
-
-impl fmt::Display for Win32Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Win32 error {}: {}", self.0, self.to_io_error())
-    }
-}
-
-impl std::error::Error for Win32Error {}
 
 /// What an entry's Win32 call produced: its result, or the raw code.
 pub type Outcome<T> = Result<T, Win32Error>;

@@ -17,12 +17,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::Wtf16String;
 
 use super::{ConsumingRequest, Request};
+use crate::Win32Error;
 use crate::close::CloseRequest;
 use crate::handle::tests::{Fixture, handle_allocation};
 use crate::open::OpenFile;
 use crate::outcome::Outcome;
 use crate::watch::{NotifyFilter, WatchDirectory};
-use crate::{Win32Error, prepare};
 
 /// Stands in for consumer code written against the seam.
 fn attempt_twice<R: Request>(request: &R) -> usize {
@@ -88,7 +88,8 @@ fn a_real_entry_drives_the_same_consumer_code() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let request = OpenFile::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
+    let request = OpenFile::new(Wtf16String::from(text))
+        .expect("build the request")
         .with_desired_access(FILE_LIST_DIRECTORY)
         .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .with_creation_disposition(OPEN_EXISTING)
@@ -111,7 +112,8 @@ fn the_watch_entry_fits_the_same_trait() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let request = WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
+    let request = WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
         .with_filter(NotifyFilter::FILE_NAME);
 
     assert_eq!(attempt_twice(&request), 2);
@@ -151,7 +153,8 @@ fn the_trait_method_and_the_inherent_method_agree() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let request = OpenFile::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
+    let request = OpenFile::new(Wtf16String::from(text))
+        .expect("build the request")
         .with_desired_access(FILE_LIST_DIRECTORY)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)

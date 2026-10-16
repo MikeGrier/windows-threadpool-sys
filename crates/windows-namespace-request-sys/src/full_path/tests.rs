@@ -12,6 +12,7 @@ use windows_sys::Win32::Foundation::{
 use wtf_string::Wtf16String;
 
 use super::{FullPathError, ResolveFullPath};
+use crate::anchored::PathCaptureError;
 use crate::handle::tests::handle_allocation;
 use crate::outcome::Win32Error;
 
@@ -19,6 +20,7 @@ mod drive_entry;
 
 fn resolve(path: &str) -> String {
     ResolveFullPath::new(Wtf16String::from(path))
+        .expect("the path has no NUL")
         .perform()
         .expect("resolve the path")
         .to_string_lossy()
@@ -134,7 +136,9 @@ fn a_deeply_nested_path_beyond_the_first_attempt_still_resolves() {
 
 #[test]
 fn an_empty_path_reports_the_raw_code() {
-    let outcome = ResolveFullPath::new(Wtf16String::new()).perform();
+    let outcome = ResolveFullPath::new(Wtf16String::new())
+        .expect("an empty path has no NUL")
+        .perform();
 
     // Specifically the Win32 variant, not merely "an error". The point of the
     // split is that a caller can tell a refusal by Windows from this crate's own
@@ -192,16 +196,38 @@ fn only_a_win32_failure_carries_a_source() {
 
 #[test]
 fn the_request_reports_the_path_it_was_built_from() {
-    let request = ResolveFullPath::new(Wtf16String::from(r"C:\Windows"));
+    let request =
+        ResolveFullPath::new(Wtf16String::from(r"C:\Windows")).expect("the path has no NUL");
 
     assert_eq!(request.path().to_string_lossy(), r"C:\Windows");
+}
+
+#[test]
+fn an_interior_nul_is_refused_where_the_request_is_built() {
+    // Win32 reads a path up to its first NUL, so the call would resolve a shorter path than the one
+    // named and report success. A NUL anywhere in the content is refused, and the string's own
+    // terminator is not content.
+    for units in [
+        &[0x0043, 0x003A, 0x005C, 0x0000, 0x0061][..],
+        &[0x0000, 0x0061][..],
+        &[0x0061, 0x0000][..],
+        &[0x0000][..],
+    ] {
+        let error =
+            ResolveFullPath::new(Wtf16String::from_units(units)).expect_err("a NUL truncates");
+        assert!(matches!(error, PathCaptureError::InteriorNul), "{units:?}");
+    }
+
+    assert!(ResolveFullPath::new(Wtf16String::new()).is_ok());
+    assert!(ResolveFullPath::new(Wtf16String::from(r"C:\a")).is_ok());
 }
 
 #[test]
 fn a_request_is_cloneable_and_resolves_the_same_way() {
     // Unlike the handle-taking entries, this one owns no handle, so an
     // infallible Clone is honest here.
-    let request = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\.\System32"));
+    let request = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\.\System32"))
+        .expect("the path has no NUL");
     let clone = request.clone();
 
     assert_eq!(
@@ -224,7 +250,8 @@ fn a_resolution_performs_the_same_way_on_another_thread() {
     assert_send::<ResolveFullPath>();
     assert_sync::<ResolveFullPath>();
 
-    let request = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\.\System32"));
+    let request = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\.\System32"))
+        .expect("the path has no NUL");
 
     let resolved = std::thread::spawn(move || {
         request

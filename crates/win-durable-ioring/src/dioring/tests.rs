@@ -3,7 +3,6 @@
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::OwnedHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,7 +11,7 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{InterruptTime, TimePoint};
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
-use crate::windows_backend::Win32FileTarget;
+use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
@@ -41,6 +40,12 @@ mod ending;
 mod pumped;
 mod signalled;
 mod submits;
+// A whole raw disk, through an instance, against an unpartitioned scratch virtual disk: DI-D-62.
+mod raw_disk;
+// A raw volume, through an instance, against a scratch virtual disk: DI-D-61.
+mod raw_volume;
+// A file opened unbuffered, through an instance: DI-D-60.
+mod unbuffered;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
@@ -112,13 +117,9 @@ impl TempFile {
         Self(path)
     }
 
-    pub(crate) fn open(&self) -> SharedHandle {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.0)
-            .expect("open the temporary file");
-        SharedHandle::new(OwnedHandle::from(file))
+    pub(crate) fn open(&self) -> OpenedFile {
+        OpenedFile::open(&self.0, FileOptions::new().read(true).write(true))
+            .expect("open the temporary file")
     }
 
     /// Whether any handle to the file is open: an exclusive open fails exactly then.
@@ -152,9 +153,9 @@ fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
     }
 }
 
-/// A target over `handle`, declared with `domains`.
-pub(crate) fn target(handle: SharedHandle, domains: &[&str]) -> Win32FileTarget {
-    Win32FileTarget::new(handle).with_domains(domains.iter().map(|d| domain(d)))
+/// A target over `file`, declared with `domains`.
+pub(crate) fn target(file: OpenedFile, domains: &[&str]) -> Win32FileTarget {
+    Win32FileTarget::new(file).with_domains(domains.iter().map(|d| domain(d)))
 }
 
 /// A provider that serves fixed domains and is never asked for anything here.

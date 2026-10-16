@@ -462,14 +462,6 @@
       "replace": ["            return Err(Violation::AbandonedSuspectChanged { failure });\n        }\n        if false {\n"]
     },
     {
-      "name": "DI-3.2.4.2: a Win32 code is not masked to sixteen bits when wrapped",
-      "file": "src/error_code.rs",
-      "expect": "caught",
-      "why": "HRESULT_FROM_WIN32 keeps only the low sixteen bits; carrying more would set facility bits and name a different code.",
-      "find": ["            Self(((code & WIN32_CODE) | FROM_WIN32).cast_signed())\n"],
-      "replace": ["            Self((code | FROM_WIN32).cast_signed())\n"]
-    },
-    {
       "name": "CONTROL: a covered write is recognised with its conditions reordered",
       "file": "src/durability/providers.rs",
       "expect": "survives",

@@ -11,12 +11,14 @@
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, FALSE, GetLastError, HANDLE,
-    INVALID_HANDLE_VALUE, SetLastError, TRUE,
+    ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_VIRTDISK_NOT_VIRTUAL_DISK, FALSE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    SetLastError, TRUE,
 };
 
 use super::{
-    Win32Error, perform, perform_bool, perform_handle, perform_nonnull_handle, perform_nonzero,
+    Win32Error, out_of_memory, perform, perform_bool, perform_handle, perform_nonnull_handle,
+    perform_nonzero,
 };
 
 /// A stand-in for a Win32 call that fails with `code`, setting the thread's
@@ -191,6 +193,30 @@ fn an_unknown_code_is_carried_rather_than_rejected() {
     let outcome = perform_bool(fails_with(unknown, FALSE));
 
     assert_eq!(outcome.expect_err("FALSE is a failure").code(), unknown);
+}
+
+#[test]
+fn a_code_of_two_to_the_thirty_first_or_more_survives_the_io_error_form() {
+    // `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, which std holds as a negative number and which this crate's
+    // own earlier type turned into a message with no code. Taken through `perform`, as an entry
+    // takes it, and cleanup that would overwrite it runs before it is read.
+    let outcome = perform_bool(fails_with(ERROR_VIRTDISK_NOT_VIRTUAL_DISK, FALSE));
+    clobber_last_error();
+    let error = outcome.expect_err("FALSE is a failure");
+
+    assert_eq!(error.code(), ERROR_VIRTDISK_NOT_VIRTUAL_DISK);
+    let io_error = error.to_io_error();
+    assert_eq!(
+        io_error.raw_os_error(),
+        Some(ERROR_VIRTDISK_NOT_VIRTUAL_DISK.cast_signed()),
+        "the code is in the io::Error, not replaced by a message"
+    );
+    assert_eq!(Win32Error::from_io(&io_error), Some(error));
+}
+
+#[test]
+fn this_crates_own_out_of_memory_report_is_the_code_for_it() {
+    assert_eq!(out_of_memory().code(), ERROR_NOT_ENOUGH_MEMORY);
 }
 
 #[test]

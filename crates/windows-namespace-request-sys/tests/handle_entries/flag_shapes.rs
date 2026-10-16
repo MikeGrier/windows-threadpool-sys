@@ -5,15 +5,14 @@
 
 use std::fs::File;
 
-use windows_namespace_request_sys::OpenFile;
 use windows_namespace_request_sys::close::CloseRequest;
-use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
+use windows_namespace_request_sys::watch::NotifyFilter;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_SHARE_READ,
     OPEN_EXISTING,
 };
 
-use crate::support::{AUDITED_SHARE, Tree, prepared, unassociated_directory};
+use crate::support::{AUDITED_SHARE, Tree, open_file, unassociated_directory, watch_directory};
 
 #[test]
 fn the_enumeration_shape_opens_a_real_directory() {
@@ -51,7 +50,7 @@ fn the_watcher_shape_opens_the_same_directory_with_the_overlapped_flag() {
 fn the_file_shape_opens_an_ordinary_file() {
     let tree = Tree::new("shape-file");
 
-    let handle = OpenFile::new(prepared(&tree.file(0)))
+    let handle = open_file(&tree.file(0))
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
@@ -80,7 +79,7 @@ fn all_three_shapes_open_the_same_tree_concurrently() {
         .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)
         .perform()
         .expect("the watcher shape opens alongside it");
-    let file = OpenFile::new(prepared(&tree.file(1)))
+    let file = open_file(&tree.file(1))
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(AUDITED_SHARE)
         .with_creation_disposition(OPEN_EXISTING)
@@ -104,7 +103,7 @@ fn a_notification_handle_needs_its_own_close_routine() {
     let directory = unassociated_directory(tree.root())
         .perform()
         .expect("open the tree root");
-    let notification = WatchDirectory::new(prepared(tree.root()))
+    let notification = watch_directory(tree.root())
         .with_filter(NotifyFilter::FILE_NAME)
         .perform()
         .expect("watch the tree root");
@@ -128,7 +127,7 @@ fn a_missing_directory_fails_in_every_shape_with_the_raw_code() {
     let overlapped = unassociated_directory(&absent)
         .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)
         .perform();
-    let watch = WatchDirectory::new(prepared(&absent))
+    let watch = watch_directory(&absent)
         .with_filter(NotifyFilter::FILE_NAME)
         .perform();
 

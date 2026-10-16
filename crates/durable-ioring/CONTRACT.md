@@ -214,15 +214,21 @@ the guarantee holds for a target only as far as its class says.
 | Class | What it reports | Backings that can claim it |
 |---|---|---|
 | `Complete` | every failure affecting its writes | a device held exclusively, with nothing else on it; a layered target whose every lower target is `Complete` and which relays all they report |
-| `SharedDevice` | every failure of its own, but not a failure of another writer sharing its device's volatile cache | a Win32 file opened unbuffered; a raw volume whose disks also hold other volumes |
-| `BestEffort` | may report success for a commit over data already lost | a Win32 file opened for cached I/O, whose system write-back can fail without telling its writer |
+| `SharedDevice` | every failure of its own, but not a failure of another writer sharing its device's volatile cache | a Win32 file, raw volume or physical disk opened unbuffered, where another writer may share the device |
+| `BestEffort` | may report success for a commit over data already lost | a Win32 file, raw volume or physical disk opened for cached I/O, whose system write-back can fail without telling its writer |
 
 A layered target -- a window over part of another, or a virtual disk built on other targets -- can
 claim no more than the weakest target it rests on, and relays what they report, translated into its
 own terms, as its own faults.
 
 How a backing meets the obligations is its own concern. A Win32 file target takes its handle in an
-owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)). Every target is named in
+owning form, never as a raw handle ([DI-D-4](DESIGN-NOTES.md#di-d-4)), and is made from a file the
+Windows driver opened itself, so the warranty class above follows from how the file was opened
+rather than from a declaration ([DI-D-60](DESIGN-NOTES.md#di-d-60)). A raw volume is the same, and
+its flush domains are found from its disks by the driver ([DI-D-61](DESIGN-NOTES.md#di-d-61)); it
+claims `SharedDevice` when opened unbuffered and `BestEffort` when opened for cached I/O, never
+`Complete`, since a handle cannot show that nothing else writes the disks. A whole
+physical disk is the same, and is its own flush domain ([DI-D-62](DESIGN-NOTES.md#di-d-62)). Every target is named in
 failure reports by the key the consumer gave it, so a report stays usable after the target is gone
 ([DI-D-11](DESIGN-NOTES.md#di-d-11)).
 

@@ -27,6 +27,10 @@ use windows_sys::Win32::Security::{
 
 use io_buffers::AlignedBuf;
 
+mod sddl;
+
+pub use sddl::SecurityInformation;
+
 /// A self-relative security descriptor must be DWORD-aligned.
 ///
 /// Windows states this as a requirement on the buffer a self-relative
@@ -65,6 +69,14 @@ pub enum SecurityCaptureFailure {
     /// The error's code is `ERROR_NOT_ENOUGH_MEMORY`, which this crate supplies; no Win32 call
     /// produced it.
     Allocate,
+    /// Windows refused an SDDL string. The error's code is Windows' own.
+    InvalidSddl,
+    /// An SDDL string contained an interior NUL, which Windows would read as its end. Refused
+    /// before any call is made; the error's code is `ERROR_INVALID_PARAMETER`, which this crate
+    /// supplies.
+    InteriorNul,
+    /// Windows refused to write a descriptor as SDDL. The error's code is Windows' own.
+    ToSddl,
 }
 
 /// A synchronous failure while capturing a caller's security attributes.
@@ -122,6 +134,13 @@ impl fmt::Display for SecurityCaptureError {
             SecurityCaptureFailure::InvalidCopy => "IsValidSecurityDescriptor (captured copy)",
             SecurityCaptureFailure::ReadAcl => "GetSecurityDescriptorDacl",
             SecurityCaptureFailure::Allocate => "allocating the descriptor copy",
+            SecurityCaptureFailure::InvalidSddl => {
+                "ConvertStringSecurityDescriptorToSecurityDescriptorW"
+            }
+            SecurityCaptureFailure::InteriorNul => "an SDDL string with an interior NUL",
+            SecurityCaptureFailure::ToSddl => {
+                "ConvertSecurityDescriptorToStringSecurityDescriptorW"
+            }
         };
 
         write!(f, "{stage}: {}", self.source)

@@ -22,7 +22,7 @@ static IO_DEVICE: LazyLock<IoFault> = LazyLock::new(|| fault(1117));
 fn fault(code: u32) -> IoFault {
     IoFault {
         source: crate::test_support::SOURCE,
-        code: Some(ErrorCode::from_win32(code)),
+        code: Some(ErrorCode::from_hresult(code.cast_signed())),
         error: Arc::new(io::Error::from_raw_os_error(code.cast_signed())),
     }
 }

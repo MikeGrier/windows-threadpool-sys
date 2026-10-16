@@ -4,9 +4,46 @@ The crate's implementation milestones are M5 through M7 in the workspace
 [CHECKLIST.md](../../CHECKLIST.md). This file holds work owned by the crate
 itself. Status is tracked in [PLANS.md](PLANS.md).
 
+## PATH -- One path contract across the namespace crates
+
+- [ ] **PATH-1** -- **Consume the namespace request crate's path contract, and delete this crate's
+  older copy of the preparation.** This is the merge-or-delete decision of the workspace checklist's
+  `M26+.3` ([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)) and of
+  [D-9](../windows-namespace-request-sys/DESIGN-NOTES.md#d-9) in the request crate, made on
+  2026-10-15 at the engineer's request as: this crate depends on `windows-namespace-request-sys` and
+  its [path.rs](src/path.rs) preparation is deleted. The request crate is released, and the layering
+  D-9 recorded puts this crate above it, so the dependency runs the right way. What changes for this
+  crate, to be read before it is done and not assumed: [D-7](DESIGN-NOTES.md#d-7)'s `MAX_PATH` cap
+  on an ordinary path goes, as it does in the request crate
+  ([D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)); an enumeration request captures the
+  current directory when it is built and grafts a clearly safe child onto it when it is performed,
+  instead of storing a `GetFullPathNameW`-resolved path; `EnumerationRequest::path()`, which is `pub`
+  and returns the stored resolved form, has to say what it returns now (the path as given, with a
+  second accessor for the path that will be handed to Win32, as the request crate's `NR-3.4` does);
+  an interior NUL is refused. A `feat!` of a published crate. `REVIEW-1` below is re-read against the
+  new contract when this is done, and may close, since the contract no longer caps ordinary paths or
+  rewrites any path to a `\\?\` form.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** waits on `NR-3.3` to `NR-3.6` in
+  > `crates/windows-namespace-request-sys` ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)),
+  > released. This item is done when the older copy is deleted, and the request crate's `NR-3.8` and
+  > the workspace's `M26+.3` are done with it.
+
+  **Next:** `REVIEW-1` below is re-read against the new contract. After that nothing further in this
+  crate; the order across the crates is at the top of
+  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+
+## ERR -- One error code type across the crates
+
+- [x] **ERR-1** -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#err-1)
+
 ## M-inf -- Horizon (ungated)
 
 - [ ] **REVIEW-1** -- Review the request path contract against a traversal layer, before one is built.
+  **Re-read after [PATH-1](#path----one-path-contract-across-the-namespace-crates):** that item
+  replaces the contract below (no `MAX_PATH` cap, no `\\?\` rewriting, a graft onto a captured root),
+  so most of its questions are about a contract that no longer exists, and this review may close
+  with a note of which still stand.
   **This is a review item: it schedules no change.** Its output is an answer -- possibly "no change
   needed" -- and any work it turns out to imply becomes its own item afterwards. Raised from the
   `windows-file-watcher` side while recording

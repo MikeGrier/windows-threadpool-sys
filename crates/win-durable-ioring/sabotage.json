@@ -90,16 +90,16 @@
       "file": "src/delivery.rs",
       "expect": "caught",
       "why": "DI-D-28: a waiter pops to None after every wake. Stopping early leaves entries that no later wake announces.",
-      "find": ["        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        (*handler)(entry, &inner.handle);\n        break;\n"]
+      "find": ["        (*handler)(event, &inner.handle);\n"],
+      "replace": ["        (*handler)(event, &inner.handle);\n        break;\n"]
     },
     {
       "name": "DI-3.2.2.2: the handler runs with the instance's lock held",
       "file": "src/delivery.rs",
       "expect": "caught",
-      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop.",
-      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(entry, &inner.handle);\n"],
-      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(entry, &inner.handle));\n"]
+      "why": "DI-2.3 point 3: the handler runs with no lock held, so it may call back in. Held, its own push waits on a lock its thread holds. Caught by the push-from-the-handler test, which leaks the front end on failure so the deadlocked callback fails the test instead of hanging its drop. Measured: the sweep scores this one as a hang past its limit, not as a failed suite, so what catches it is the harness's timeout.",
+      "find": ["        let mut handler = lock(&inner.handler);\n        (*handler)(event, &inner.handle);\n"],
+      "replace": ["        let mut handler = lock(&inner.handler);\n        inner.handle.with(|_| (*handler)(event, &inner.handle));\n"]
     },
     {
       "name": "DI-3.2.4: a failed flush is reported as a success",
@@ -124,6 +124,38 @@
       "why": "The ring reports every failure with its code, and the Windows path relays it in each IoFault (DI-D-47, DI-D-50); dropping it records that an operation failed but not how. The Windows backend's unit tests and the ring test reading a failed commit's code both see it missing.",
       "find": ["        code: error_code_of(&error),\n"],
       "replace": ["        code: None,\n"]
+    },
+    {
+      "name": "DI-9.7.11: a Win32 code is wrapped as the number it is",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "The wrapping is HRESULT_FROM_WIN32's, owned by win-error-codes; passing the code through unwrapped would report 1117 where 0x8007045D is meant, and every Win32 code a fault carries would be misnumbered.",
+      "find": ["    ErrorCode::from_hresult(HResult::from_win32(Win32Error::from_code(code)).raw())\n"],
+      "replace": ["    ErrorCode::from_hresult(code.cast_signed())\n"]
+    },
+    {
+      "name": "DI-9.7.11: a wrapped Win32 code is never read back",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "The reading is how a consumer asks which Win32 error a fault was; answering none for all of them removes the question.",
+      "find": ["        .map(Win32Error::code)\n"],
+      "replace": ["        .and(None)\n"]
+    },
+    {
+      "name": "DI-9.7.11: an OS error's code is taken as an HRESULT already",
+      "file": "src/error_code.rs",
+      "expect": "caught",
+      "why": "An error carrying a Win32 code, as io::Error::from_raw_os_error makes, is wrapped; taking its number as the HRESULT would name a different, unrelated code.",
+      "find": ["        .map(|code| error_code_from_win32(code.cast_unsigned()))\n"],
+      "replace": ["        .map(|code| ErrorCode::from_hresult(code))\n"]
+    },
+    {
+      "name": "CONTROL: the Win32 code is read back through a closure",
+      "file": "src/error_code.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. A closure that calls the same method names the same function, so the file changes and no behaviour.",
+      "find": ["        .map(Win32Error::code)\n"],
+      "replace": ["        .map(|error| error.code())\n"]
     },
     {
       "name": "DI-3.10.3.2: a short write is reported as transferred",
@@ -875,6 +907,278 @@
       "why": "A handle for a live lineage that something else made has a count of one, so ending or retiring through it abandons epochs while the genuine handles are live, and the genuine last release then finds the lineage gone.",
       "find": ["        handle.is_homed_at(&self.hub)"],
       "replace": ["        handle.lineage().instance == self.default.lineage().instance"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file is opened without the flag that makes it so",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The class an unbuffered file claims is only true if the kernel treats it as unbuffered; the test that writes unaligned through it and sees the kernel refuse does not read this crate's own record.",
+      "find": ["    const FLAGS: u32 = FILE_FLAG_NO_BUFFERING;"],
+      "replace": ["    const FLAGS: u32 = 0;"]
+    },
+    {
+      "name": "DI-10.1: a cached file is opened unbuffered",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The opposite error: a file that claims BestEffort and no alignment but that the kernel holds to a sector would refuse the operations its target accepts.",
+      "find": ["    const FLAGS: u32 = 0;"],
+      "replace": ["    const FLAGS: u32 = FILE_FLAG_NO_BUFFERING;"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file claims no more than best effort",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The class is what the type exists to carry; an unbuffered file understating itself is the safe direction, and still wrong.",
+      "find": ["    const WARRANTY: WarrantyClass = WarrantyClass::SharedDevice;"],
+      "replace": ["    const WARRANTY: WarrantyClass = WarrantyClass::BestEffort;"]
+    },
+    {
+      "name": "DI-10.1: an unbuffered file is allowed on a remote device",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A remote file cannot keep the claim that makes a file unbuffered. The behavioural test that opens one over the administrative share is ignored by default, so the constant that gates the check is what a default run holds.",
+      "find": ["    const LOCAL_DEVICE_ONLY: bool = true;"],
+      "replace": ["    const LOCAL_DEVICE_ONLY: bool = false;"]
+    },
+    {
+      "name": "DI-10.1: the default sector size is the smaller one",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "4096 is chosen because every smaller sector size divides it and so no device refuses it; 512 would be refused by a 4096-sector device on the first transfer.",
+      "find": ["    pub const DEFAULT_SECTOR_SIZE: u32 = 4096;"],
+      "replace": ["    pub const DEFAULT_SECTOR_SIZE: u32 = 512;"]
+    },
+    {
+      "name": "DI-10.1: a stated sector size is ignored",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The caller's sector size is the only way to be offered less alignment than the default, and a size that is not a power of two must be refused.",
+      "find": ["        self.geometry = Geometry::uniform(sector_size)?;"],
+      "replace": ["        self.geometry = Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE)?;"]
+    },
+    {
+      "name": "DI-10.1: the verbatim form of a share is read as local",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "canonicalize returns a share in its verbatim form, \\\\?\\UNC\\..., which is the form the check sees in practice; only matching the plain form would miss every real one.",
+      "find": ["            if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))"],
+      "replace": ["            if matches!(prefix.kind(), Prefix::UNC(..))"]
+    },
+    {
+      "name": "DI-10.1: a new file's remote check is skipped by looking nowhere",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A path that does not exist yet is judged by the directory it would be created in; without that, creating an unbuffered file fails or goes unchecked.",
+      "find": ["        Err(error) if error.kind() == io::ErrorKind::NotFound => {"],
+      "replace": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {"]
+    },
+    {
+      "name": "DI-10.1: a target takes its class from a declaration instead of its file",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The class must come from how the file was opened, never from the target.",
+      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            domains: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+    },
+    {
+      "name": "DI-10.1: a target drops what its file offers",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "An unbuffered file's write-through capability is what lets a consumer ask for it; the kernel refuses it on a cached file.",
+      "find": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: B::CAPABILITIES,\n"],
+      "replace": ["            domains: Vec::new(),\n            warranty: B::WARRANTY,\n            capabilities: Capabilities::NONE,\n"]
+    },
+    {
+      "name": "DI-10.1: a target takes no alignment from its file",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The alignment the backend enforces is the file's; without it an unbuffered file's operations reach the kernel unaligned.",
+      "find": ["            geometry: file.geometry(),"],
+      "replace": ["            geometry: Geometry::UNALIGNED,"]
+    },
+    {
+      "name": "DI-10.2: a volume's disks are counted once each per extent",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "A volume with two runs on one disk has one flush domain; a domain repeated is a domain a consumer would see twice.",
+      "find": ["    disks.dedup();"],
+      "replace": ["    disks.len();"]
+    },
+    {
+      "name": "DI-10.2: a volume's domains are left in the order the device gave",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Two volumes on the same disks report the same domains in the same order, which a comparison of them relies on.",
+      "find": ["    disks.sort_unstable();"],
+      "replace": ["    disks.len();"]
+    },
+    {
+      "name": "DI-10.2: a disk is named some other way than a file's declaration would name it",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Two targets share a domain exactly when their bytes agree, so a volume and a file on the same disk fail together only if both name it as \\\\.\\PhysicalDriveN.",
+      "find": ["    FlushDomain::new(format!(r\"\\\\.\\PhysicalDrive{disk_number}\").into_bytes())"],
+      "replace": ["    FlushDomain::new(format!(r\"\\\\.\\Disk{disk_number}\").into_bytes())"]
+    },
+    {
+      "name": "DI-10.2: a digit is taken for a drive letter",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "Only the forms that name a volume are accepted; \\\\.\\1: names nothing.",
+      "find": ["        if letter.is_ascii_alphabetic() {"],
+      "replace": ["        if letter.is_ascii_alphanumeric() {"]
+    },
+    {
+      "name": "DI-10.2: a GUID group of any shorter length is accepted",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "caught",
+      "why": "A volume GUID path is opened as given, so a malformed one must be refused here rather than opened as whatever it names.",
+      "find": ["                group.len() == length && group.chars().all(|c| c.is_ascii_hexdigit())"],
+      "replace": ["                group.len() <= length && group.chars().all(|c| c.is_ascii_hexdigit())"]
+    },
+    {
+      "name": "DI-10.2: an unbuffered volume needs its sector in the buffer's address only as one byte",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An unbuffered transfer's buffer must start on a sector; a geometry that says otherwise lets a misaligned buffer reach the kernel.",
+      "find": ["        Geometry::uniform(sector_size)\n    }\n"],
+      "replace": ["        Geometry::new(sector_size, sector_size, 1)\n    }\n"]
+    },
+    {
+      "name": "DI-10.2: a cached volume needs its sector in the buffer's address too",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The cache is what lets a cached transfer start anywhere; requiring more only refuses what the kernel would take.",
+      "find": ["        Geometry::new(sector_size, sector_size, 1)\n    }\n"],
+      "replace": ["        Geometry::uniform(sector_size)\n    }\n"]
+    },
+    {
+      "name": "DI-10.2: declaring domains on a volume removes the ones its disks gave",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A backing that finds its own domains makes that its own obligation; a consumer's declaration adds to them and never takes one away, or a missing domain would leave a failure unreported.",
+      "find": ["        self.domains = self.found.clone();"],
+      "replace": ["        self.domains = Vec::new();"]
+    },
+    {
+      "name": "DI-10.2: a volume's target reports no domains of its own finding",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The disks the volume sits on are what a commit failure can reach; a target that finds none shares fate with no one it should.",
+      "find": ["        let found = volume.flush_domains();"],
+      "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
+    },
+    {
+      "name": "DI-10.2: a volume's target claims the class of a complete device",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A lock keeps other handles off the volume, not other writers off its disks, so a volume is never Complete.",
+      "find": ["            geometry: volume.geometry(),\n            handle: volume.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            geometry: volume.geometry(),\n            handle: volume.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+    },
+    {
+      "name": "DI-10.2: the lock is asked for and not taken",
+      "file": "src/windows_backend/opened_volume.rs",
+      "expect": "survives",
+      "why": "A declared blind spot of the default run: only the elevated raw-volume tests, which need an administrator and are ignored by default, can tell a lock that was taken from one that was not, since the volume's flag is set from the options either way.",
+      "find": ["        if options.lock {\n            lock_volume(&file)?;\n        }\n"],
+      "replace": ["        if options.lock {\n            let _ = &file;\n        }\n"]
+    },
+    {
+      "name": "DI-10.4: a disk is named by some other form than the one that names a disk",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "caught",
+      "why": "The path is the one form that names a physical disk; any other opens something else with the write access a disk is opened with.",
+      "find": ["        format!(r\"\\\\.\\PhysicalDrive{}\", self.0)"],
+      "replace": ["        format!(r\"\\\\.\\Disk{}\", self.0)"]
+    },
+    {
+      "name": "DI-10.4: a disk's target reports no flush domain",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The disk is the domain a commit failure on it can reach; a target that reports none shares fate with every target, which over-reports, and with no domain of its own, so a consumer cannot declare a file on the same disk against it.",
+      "find": ["        let found = vec![disk.flush_domain()];"],
+      "replace": ["        let found: Vec<FlushDomain> = Vec::new();"]
+    },
+    {
+      "name": "DI-10.4: a disk's target claims the class of a complete device",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Opening a whole disk directly keeps no other writer off it, so a disk is never Complete, as a volume is not.",
+      "find": ["            geometry: disk.geometry(),\n            handle: disk.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: B::WARRANTY,\n"],
+      "replace": ["            geometry: disk.geometry(),\n            handle: disk.handle().clone(),\n            domains: found.clone(),\n            found,\n            declared: Vec::new(),\n            warranty: WarrantyClass::Complete,\n"]
+    },
+    {
+      "name": "DI-10.4: a disk's target takes no alignment from its disk",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The alignment the backend enforces is the disk's sector; without it an unbuffered transfer reaches the kernel unaligned.",
+      "find": ["            geometry: disk.geometry(),\n"],
+      "replace": ["            geometry: Geometry::UNALIGNED,\n"]
+    },
+    {
+      "name": "DI-10.4: an opened disk ignores the sector size the device reported",
+      "file": "src/windows_backend/opened_disk.rs",
+      "expect": "survives",
+      "why": "A declared blind spot of the default run: only the elevated raw-disk tests open a real disk and read its sector size, so a geometry that ignores it is seen there and not here.",
+      "find": ["        let geometry = B::sector_geometry(sector)\n"],
+      "replace": ["        let geometry = B::sector_geometry(sector.max(1) * 0 + 4096)\n"]
+    },
+    {
+      "name": "DI-10.4: the scratch disk helper takes the output for any file",
+      "file": "src/scratch_volume.rs",
+      "expect": "caught",
+      "why": "This is what keeps a test that writes to a disk from writing to one it did not make: the number must come from output that names the file the test created.",
+      "find": ["    if !name.eq_ignore_ascii_case(&vhd.display().to_string()) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "DI-10.4: the scratch disk helper accepts disk 0",
+      "file": "src/scratch_volume.rs",
+      "expect": "caught",
+      "why": "Disk 0 is the one a machine starts from; a scratch disk is never it, whatever diskpart prints.",
+      "find": ["        Ok(0) => Err(\"the associated disk is disk 0, which is never a scratch disk\".to_owned()),\n"],
+      "replace": ["        Ok(0) => Ok(0),\n"]
+    },
+    {
+      "name": "DI-13.2: a created-and-truncated file is not emptied",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "With CREATE_ALWAYS avoided, OPEN_ALWAYS plus an emptying call is the whole of create-and-truncate; without the call an existing file keeps its content.",
+      "find": ["            (true, true, false) => (OPEN_ALWAYS, true),\n"],
+      "replace": ["            (true, true, false) => (OPEN_ALWAYS, false),\n"]
+    },
+    {
+      "name": "DI-13.2: a new file is created through a link that is already there",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "std added FILE_FLAG_OPEN_REPARSE_POINT for a new file, so CREATE_NEW does not follow a link; the open moved off std and keeps that.",
+      "find": ["        let reparse = if self.create_new {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
+      "replace": ["        let reparse = if self.create_new {\n            0\n"]
+    },
+    {
+      "name": "DI-13.2: the emptying step is skipped",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The emptying happens after the open, so it is tried on the call itself and not only on the parameters that ask for it.",
+      "find": ["    if !parameters.truncate_after {\n"],
+      "replace": ["    if true {\n"]
+    },
+    {
+      "name": "DI-13.2: a path longer than an ordinary one is handed over as it was",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The request crate refuses a path past MAX_PATH by design, and std did not, so the verbatim form is what keeps a long path opening.",
+      "find": ["    Ok(verbatim(&absolute))\n"],
+      "replace": ["    Ok(path.to_path_buf())\n"]
+    },
+    {
+      "name": "DI-13.2: a file is no longer shared for deletion",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "std shared every file for reading, writing and deletion, and the share mode is the open's own to state now that std no longer does.",
+      "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
+      "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
     }
   ]
 }

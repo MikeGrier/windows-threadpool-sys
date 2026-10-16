@@ -19,7 +19,7 @@ use wtf_string::Wtf16String;
 use super::OpenFile;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
 use crate::security::tests::Absolute;
-use crate::{CapturedHandle, SecurityAttributes, SecurityDescriptor, prepare};
+use crate::{CapturedHandle, SecurityAttributes, SecurityDescriptor};
 
 /// The share mode all three audited consumers use: a watcher or an enumerator
 /// is an observer and must not stop anyone else touching the directory.
@@ -27,7 +27,7 @@ const AUDITED_SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELET
 
 fn request_for(path: &std::path::Path) -> OpenFile {
     let text = path.to_str().expect("the fixture path is valid UTF-8");
-    OpenFile::new(prepare(&Wtf16String::from(text)).expect("prepare the fixture path"))
+    OpenFile::new(Wtf16String::from(text)).expect("build the request")
 }
 
 /// The two audited consumers that open a directory without an overlapped
@@ -480,4 +480,192 @@ fn an_unset_parameter_reads_back_as_nothing_rather_than_as_a_plausible_open() {
     assert_eq!(request.creation_disposition(), 0);
     assert_eq!(request.flags_and_attributes(), 0);
     assert!(request.security().is_none());
+}
+
+// --- The path: as given, and as handed to Win32 ------------------------------------------------
+
+#[test]
+fn an_absolute_path_is_handed_to_win32_as_given() {
+    let fixture = Fixture::new("open-absolute");
+    let request = request_for(fixture.directory());
+
+    assert_eq!(request.path(), request.win32_path());
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        fixture.directory().to_str().expect("a UTF-8 fixture path")
+    );
+}
+
+#[test]
+fn a_relative_path_is_fixed_to_the_current_directory_when_the_request_is_built() {
+    // Whether anything of this name exists is not at issue here, so no file is assumed to; the
+    // child-process test below performs one.
+    let directory = std::env::current_dir().expect("a current directory");
+    let directory = directory.to_str().expect("a UTF-8 current directory");
+    let request = OpenFile::new(Wtf16String::from("Cargo.toml")).expect("build the request");
+
+    assert_eq!(request.path().to_string_lossy(), "Cargo.toml");
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        format!(r"{}\Cargo.toml", directory.trim_end_matches('\\'))
+    );
+}
+
+#[test]
+fn paths_that_are_not_plain_relative_ones_are_left_as_given() {
+    for path in [
+        r"\\?\C:\a",
+        r"\\.\PhysicalDrive0",
+        r"\\server\share\a",
+        r"\a\b",
+        "C:a",
+        "name:stream",
+        "NUL",
+        "con",
+        "",
+    ] {
+        let request = OpenFile::new(Wtf16String::from(path)).expect("build the request");
+        assert_eq!(request.win32_path().to_string_lossy(), path);
+    }
+}
+
+#[test]
+fn a_path_with_an_interior_nul_is_refused_when_the_request_is_built() {
+    // Win32 reads a path up to its first NUL, so the open would be of a shorter path than the one
+    // named, and a success would be for the wrong file.
+    let error = OpenFile::new(Wtf16String::from_units(&[0x0061, 0x0000, 0x0062]))
+        .expect_err("a NUL truncates the path");
+
+    assert!(matches!(error, crate::PathCaptureError::InteriorNul));
+}
+
+#[test]
+fn a_request_that_is_copied_keeps_the_path_as_given_and_as_handed_over() {
+    let directory = std::env::current_dir().expect("a current directory");
+    let request = OpenFile::new(Wtf16String::from("Cargo.toml")).expect("build the request");
+
+    let copy = request.try_clone().expect("copy the request");
+
+    assert_eq!(copy.path(), request.path());
+    assert_eq!(copy.win32_path(), request.win32_path());
+    assert_ne!(
+        copy.win32_path(),
+        copy.path(),
+        "{directory:?} was grafted on"
+    );
+}
+
+const CHILD_MARKER: &str = "WNRS_OPEN_CHILD";
+const CHILD_TEST: &str =
+    "open::tests::a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes";
+
+// The process current directory is shared by every test in the process, so a test that changes it
+// runs in a child process of its own, as `anchored::tests` does.
+#[test]
+fn a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes() {
+    const NAME: &str = "wnrs-open-relative.t";
+
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let request = OpenFile::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING);
+        let elsewhere = std::env::var_os("SystemRoot").expect("Windows names its directory");
+        std::env::set_current_dir(elsewhere).expect("change the current directory");
+
+        // Performed after the move, it still opens the file the directory it was built in held.
+        let opened = request
+            .perform()
+            .expect("open by the path fixed when it was built");
+        assert!(File::from(opened).metadata().expect("metadata").is_file());
+
+        // The same name given now is a different path, which is what the graft prevents.
+        let later = OpenFile::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING);
+        let refused = later
+            .perform()
+            .expect_err("the file is not in this directory");
+        assert_eq!(refused.code(), ERROR_FILE_NOT_FOUND);
+        return;
+    }
+
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("open-relative-child");
+    std::fs::write(fixture.directory().join(NAME), b"contents").expect("create the file");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(CHILD_TEST)
+        .arg("--nocapture")
+        .env(CHILD_MARKER, "1")
+        .current_dir(fixture.directory())
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+const VERBATIM_CHILD_MARKER: &str = "WNRS_OPEN_VERBATIM_CHILD";
+const VERBATIM_CHILD_TEST: &str =
+    "open::tests::a_relative_path_is_not_grafted_onto_a_verbatim_current_directory";
+
+// A verbatim current directory is one Win32 does not normalise, so a child joined onto it is read
+// literally: `.\kernel32.dll` opens relative to the directory and `<directory>\.\kernel32.dll` does
+// not. The process current directory is shared, so this runs in a child process.
+#[test]
+fn a_relative_path_is_not_grafted_onto_a_verbatim_current_directory() {
+    if std::env::var_os(VERBATIM_CHILD_MARKER).is_some() {
+        let system = std::env::var("SystemRoot").expect("Windows names its directory");
+        let verbatim = format!(r"\\?\{system}\System32");
+        std::env::set_current_dir(&verbatim).expect("change to the verbatim directory");
+
+        let request = OpenFile::new(Wtf16String::from(r".\kernel32.dll"))
+            .expect("build the request")
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING);
+        assert_eq!(
+            request.win32_path(),
+            request.path(),
+            "the path is left for Win32 to resolve, not joined onto a verbatim directory"
+        );
+        let opened = request
+            .perform()
+            .expect("open relative to the verbatim current directory");
+        assert!(File::from(opened).metadata().expect("metadata").is_file());
+        return;
+    }
+
+    // Spawning allocates the pipe handles, which must not reuse a value a test holding the write
+    // lock is reasoning about.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(VERBATIM_CHILD_TEST)
+        .arg("--nocapture")
+        .env(VERBATIM_CHILD_MARKER, "1")
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -36,6 +36,10 @@ windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys"
 # Paths and returned names remain native-width WTF-16 without lossy conversion.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps a
+# code of 2^31 or more, where this crate's own earlier type panicked on one (WE-D-1).
+win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
