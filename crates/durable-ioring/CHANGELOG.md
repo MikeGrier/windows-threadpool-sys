@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-v0.1.0...durable-ioring-v0.2.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **durable-ioring:** ErrorCode::from_win32 and ErrorCode::win32 are removed.
+
+### Features
+
+* **durable-ioring:** ErrorCode no longer wraps or reads Win32 codes ([5291eaa](https://github.com/MikeGrier/windows-threadpool-sys/commit/5291eaacaafa42294559621694efd0a995c48948))
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/durable-ioring-v0.0.1...durable-ioring-v0.1.0) (2026-10-15)
 
 

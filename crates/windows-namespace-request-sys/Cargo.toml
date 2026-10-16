@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-namespace-request-sys"
-version = "0.3.1" # x-release-please-version
+version = "0.4.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -33,7 +33,7 @@ wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps
 # a code of 2^31 or more, which this crate's own earlier type did not (WE-D-1).
-win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
 # The aligned buffer the query results and captured security descriptors are held in,
 # re-exported as `AlignedBuf` because it appears in public signatures (IB-2+.4 in

@@ -20,7 +20,7 @@ categories = ["api-bindings", "os::windows-apis", "filesystem"]
 [dependencies]
 # The Win32 error code, so an error from a control carries its code exactly, including a code of
 # 2^31 or more, which std's `io::Error` holds as a negative number.
-win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 
 # The dependency query's names are `Wtf16String`s, copied out of the reply and owned; a reply is read
 # from an aligned buffer, `io_buffers::AlignedBuf`, because the structure holds pointers.
