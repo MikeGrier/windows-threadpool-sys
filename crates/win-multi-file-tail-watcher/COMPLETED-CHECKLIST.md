@@ -405,3 +405,36 @@ in another order (survives, as the control). Its `testArgs` has no `--lib`: the 
 pre-build doctests, so that manifest runs the whole suite per entry and is kept to what only a
 doctest can catch. The first version of the control did not survive: moving a variant without its
 documentation left the other undocumented, and the crate denies missing documentation.
+
+## Moved 2026-10-15 20:12:57 -04:00 -- TW-2.6.4: the terminal state on a roster entry
+
+### <a id="tw-264"></a>TW-2.6.4 -- A roster entry has a terminal state, holding the Win32 code, which the snapshot skips and which `mark_terminal` sets once. *(completed 2026-10-15 20:12:57 -04:00)*
+
+Crate-internal (a `chore`), in `src/watcher.rs`. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- **The state is `terminal: Option<u32>` on the entry**: the Win32 code that made it terminal, so the
+  reason is kept with the fact. A terminal entry stays registered, with its `T`, until its
+  registration is dropped.
+- **`Watcher::mark_terminal(id, code)`** sets it, returns `true` when it did, and `false` when the
+  registration is not there or is already terminal, so the first code stays and a second report
+  cannot overwrite it. The report pass (TW-2.7) calls it once the terminal entry is written, which
+  is why it is crate-internal and carries an `expect(dead_code)`. It takes the roster lock itself;
+  if TW-2.7 needs the lookup, the write and the mark under one hold of the lock it will restructure
+  this, and nothing else depends on its shape.
+- **The snapshot skips a terminal entry, and counts it as looked at.** The first version counted only
+  what it copied, so a batch holding terminal entries looked short and ended the pass with live
+  registrations unvisited. The count is now of entries scanned, skipped or not, and tests put runs
+  of terminal entries at the start, between live ones and at every batch size.
+
+Tested: a new registration is not terminal; marking sets the code once and the first stays;
+marking a dropped or unknown id does nothing; a snapshot without the terminal ones and with the
+others in order; runs of terminal entries at the start and between live ones for every batch size
+up to past the roster's; a roster that is wholly terminal giving an empty snapshot; a terminal
+registration staying registered, keeping its value and last known length, and leaving every later
+snapshot; an entry marked between batches skipped if not yet reached and kept if already copied; and
+eight threads marking the same fifty entries marking each exactly once.
+
+The sabotage manifest gains a terminal entry snapshotted, a pass that counts only what it copied
+(the defect above), a second mark overwriting, a mark that records no code, and a mark of an absent
+registration reporting success; the count written out survives as the control. The entry for the
+lock held across the pause is updated for the renamed variable.

@@ -82,6 +82,9 @@ struct Entry<T> {
     file: HeldFile,
     // The length last reported for this registration (TW-D-4). It starts at the starting offset.
     last_known: u64,
+    // The Win32 code that made this registration terminal (TW-D-13), set once the caller has been
+    // told. A terminal entry is no longer probed or snapshotted, and stays until dropped.
+    terminal: Option<u32>,
 }
 
 impl<T> Shared<T> {
@@ -240,6 +243,7 @@ impl<T: Clone> Watcher<T> {
                 value,
                 file,
                 last_known,
+                terminal: None,
             },
         );
         drop(roster);
@@ -249,8 +253,9 @@ impl<T: Clone> Watcher<T> {
         })
     }
 
-    /// Append to `out` the id, last known length and an observer of every registration, in
-    /// registration order, taking the roster lock once per batch and never across the whole roster.
+    /// Append to `out` the id, last known length and an observer of every registration that can
+    /// still be probed, in registration order, taking the roster lock once per batch and never
+    /// across the whole roster. A terminal registration is skipped.
     ///
     /// A registration made while the pass runs is seen if the pass has not yet reached the end of
     /// the roster; one dropped is skipped if the pass has not yet reached it, and its observer
@@ -278,25 +283,47 @@ impl<T: Clone> Watcher<T> {
         assert!(batch > 0, "a batch of nothing never finishes");
         let mut after = None;
         loop {
-            let copied = {
+            // Counts entries looked at, skipped or not: a batch of terminal ones is a full batch.
+            let scanned = {
                 let roster = self.shared.roster();
                 let from = after.map_or(Bound::Unbounded, Bound::Excluded);
-                let mut copied = 0;
+                let mut scanned = 0;
                 for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(batch) {
-                    out.push(SnapshotItem {
-                        id,
-                        last_known: entry.last_known,
-                        observer: entry.file.observer(),
-                    });
+                    if entry.terminal.is_none() {
+                        out.push(SnapshotItem {
+                            id,
+                            last_known: entry.last_known,
+                            observer: entry.file.observer(),
+                        });
+                    }
                     after = Some(id);
-                    copied += 1;
+                    scanned += 1;
                 }
-                copied
+                scanned
             };
-            if copied < batch {
+            if scanned < batch {
                 return;
             }
             between();
+        }
+    }
+
+    /// Note that the registration `id` can never be probed again, `code` being why. Returns whether
+    /// it did: `false` when there is no such registration, or it was already terminal.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the report pass (TW-2.7) marks an entry once it has written its terminal entry"
+        )
+    )]
+    pub(crate) fn mark_terminal(&self, id: u64, code: u32) -> bool {
+        match self.shared.roster().entries.get_mut(&id) {
+            Some(entry) if entry.terminal.is_none() => {
+                entry.terminal = Some(code);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -341,6 +368,11 @@ impl<T: Clone> Registration<T> {
     #[cfg(test)]
     pub(crate) fn last_known(&self) -> u64 {
         self.with_entry(|entry| entry.last_known)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn terminal_code(&self) -> Option<u32> {
+        self.with_entry(|entry| entry.terminal)
     }
 
     fn with_entry<R>(&self, read: impl FnOnce(&Entry<T>) -> R) -> R {

@@ -291,3 +291,187 @@ fn registrations_and_drops_on_other_threads_never_break_a_snapshot() {
         }
     });
 }
+
+#[test]
+fn a_new_registration_is_not_terminal() {
+    let dir = TempDir::new("t-new");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 3, 1);
+    assert!(registrations.iter().all(|r| r.terminal_code().is_none()));
+}
+
+#[test]
+fn marking_sets_the_code_once_and_the_first_code_stays() {
+    let dir = TempDir::new("t-once");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 2, 1);
+    let id = registrations[0].id();
+    assert!(watcher.mark_terminal(id, 6));
+    assert_eq!(registrations[0].terminal_code(), Some(6));
+    assert!(!watcher.mark_terminal(id, 1006));
+    assert_eq!(registrations[0].terminal_code(), Some(6));
+    assert_eq!(registrations[1].terminal_code(), None);
+}
+
+#[test]
+fn marking_a_registration_that_is_not_there_does_nothing() {
+    let dir = TempDir::new("t-gone");
+    let watcher = watcher();
+    let mut registrations = register_files(&dir, &watcher, 2, 1);
+    let dropped = registrations.remove(0);
+    let id = dropped.id();
+    drop(dropped);
+    assert!(!watcher.mark_terminal(id, 6));
+    assert!(!watcher.mark_terminal(u64::MAX, 6));
+    assert_eq!(registrations[0].terminal_code(), None);
+}
+
+#[test]
+fn a_terminal_registration_is_not_snapshotted_and_the_others_are() {
+    let dir = TempDir::new("t-skip");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 6, 1);
+    let skipped = [registrations[1].id(), registrations[4].id()];
+    for id in skipped {
+        assert!(watcher.mark_terminal(id, 6));
+    }
+    let found = ids(&snapshot_of(&watcher, 100));
+    let expected: Vec<_> = registrations
+        .iter()
+        .map(crate::Registration::id)
+        .filter(|id| !skipped.contains(id))
+        .collect();
+    assert_eq!(found, expected);
+}
+
+#[test]
+fn a_run_of_terminal_registrations_does_not_end_the_pass_early() {
+    let dir = TempDir::new("t-run");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 10, 1);
+    for registration in &registrations[..5] {
+        assert!(watcher.mark_terminal(registration.id(), 6));
+    }
+    let expected: Vec<_> = registrations[5..]
+        .iter()
+        .map(crate::Registration::id)
+        .collect();
+    for batch in 1..=12 {
+        assert_eq!(
+            ids(&snapshot_of(&watcher, batch)),
+            expected,
+            "batch {batch}"
+        );
+    }
+}
+
+#[test]
+fn terminal_registrations_between_live_ones_do_not_end_the_pass_early() {
+    let dir = TempDir::new("t-between");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 12, 1);
+    for registration in registrations.iter().skip(1).step_by(3) {
+        assert!(watcher.mark_terminal(registration.id(), 6));
+    }
+    let expected: Vec<_> = registrations
+        .iter()
+        .enumerate()
+        .filter(|(n, _)| n % 3 != 1)
+        .map(|(_, r)| r.id())
+        .collect();
+    for batch in 1..=13 {
+        assert_eq!(
+            ids(&snapshot_of(&watcher, batch)),
+            expected,
+            "batch {batch}"
+        );
+    }
+}
+
+#[test]
+fn when_every_registration_is_terminal_the_snapshot_is_empty() {
+    let dir = TempDir::new("t-all");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 7, 1);
+    for registration in &registrations {
+        assert!(watcher.mark_terminal(registration.id(), 1006));
+    }
+    for batch in [1, 2, 7, 8, 256] {
+        assert!(snapshot_of(&watcher, batch).is_empty(), "batch {batch}");
+    }
+}
+
+#[test]
+fn a_terminal_registration_stays_registered_until_it_is_dropped() {
+    let dir = TempDir::new("t-registered");
+    let watcher = watcher();
+    let mut registrations = register_files(&dir, &watcher, 3, 1);
+    assert!(watcher.mark_terminal(registrations[0].id(), 6));
+    assert_eq!(watcher.registered(), 3);
+    assert_eq!(registrations[0].value(), 0);
+    drop(registrations.remove(0));
+    assert_eq!(watcher.registered(), 2);
+}
+
+#[test]
+fn marking_does_not_change_the_last_known_length() {
+    let dir = TempDir::new("t-last");
+    let path = dir.file("a.log", b"0123456789");
+    let watcher = watcher();
+    let registration = watcher.register(&wtf(&path), 4, 0).expect("register");
+    assert!(watcher.mark_terminal(registration.id(), 6));
+    assert_eq!(registration.last_known(), 4);
+}
+
+#[test]
+fn a_terminal_registration_stays_out_of_every_later_snapshot() {
+    let dir = TempDir::new("t-stays");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 4, 1);
+    assert!(watcher.mark_terminal(registrations[2].id(), 6));
+    for _ in 0..3 {
+        let found = ids(&snapshot_of(&watcher, 2));
+        assert_eq!(found.len(), 3);
+        assert!(!found.contains(&registrations[2].id()));
+    }
+}
+
+#[test]
+fn an_entry_marked_between_batches_is_skipped_if_not_yet_reached_and_kept_if_copied() {
+    let dir = TempDir::new("t-hook");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 6, 1);
+    let (copied, ahead) = (registrations[0].id(), registrations[4].id());
+    let mut out = Chunked::new();
+    watcher.snapshot_batches(&mut out, 2, || {
+        watcher.mark_terminal(copied, 6);
+        watcher.mark_terminal(ahead, 6);
+    });
+    let found = ids(&out);
+    assert!(found.contains(&copied));
+    assert!(!found.contains(&ahead));
+    assert_eq!(found.len(), 5);
+}
+
+#[test]
+fn many_threads_marking_the_same_entries_mark_each_exactly_once() {
+    let dir = TempDir::new("t-race");
+    let watcher = watcher();
+    let registrations = register_files(&dir, &watcher, 50, 1);
+    let marked = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for thread in 0..8u32 {
+            let (watcher, registrations, marked) = (&watcher, &registrations, &marked);
+            scope.spawn(move || {
+                for registration in registrations {
+                    if watcher.mark_terminal(registration.id(), 6 + thread) {
+                        marked.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            });
+        }
+    });
+    assert_eq!(marked.load(Ordering::SeqCst), 50);
+    assert!(registrations.iter().all(|r| r.terminal_code().is_some()));
+    assert!(snapshot_of(&watcher, 7).is_empty());
+}

@@ -31,9 +31,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.6.3** -- `SqEntry::Terminal` is a third entry kind carrying a clone of `T`, the Win32 code and the last length reported, and `SqEntry` is `#[non_exhaustive]`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-263)
 
-- [ ] **TW-2.6.4** -- **A terminal state on a roster entry**, which the snapshot skips and which is
-  set only by the report pass once the terminal entry is written.
-  ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+- [x] **TW-2.6.4** -- A roster entry has a terminal state, holding the Win32 code, which the snapshot skips and which `mark_terminal` sets once. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-264)
 
 - [ ] **TW-2.6** -- **The probe pass.** Reads each snapshotted observer's current length with no
   lock held, drops each observer as soon as it has been read, and keeps the id, last known and

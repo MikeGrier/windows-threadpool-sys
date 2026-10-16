@@ -280,8 +280,56 @@
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "Everything is copied correctly and a registration made in the pause waits for the whole pass.",
-      "find": ["            let copied = {\n                let roster = self.shared.roster();"],
-      "replace": ["            let roster = self.shared.roster();\n            let copied = {"]
+      "find": ["            let scanned = {\n                let roster = self.shared.roster();"],
+      "replace": ["            let roster = self.shared.roster();\n            let scanned = {"]
+    },
+    {
+      "name": "a terminal registration is snapshotted",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-13: a terminal entry is no longer probed. Every other property of the snapshot holds when it still is.",
+      "find": ["                    if entry.terminal.is_none() {"],
+      "replace": ["                    if true {"]
+    },
+    {
+      "name": "a pass counts only what it copied",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A batch that held terminal entries then looks short, and the pass ends there with live registrations unvisited.",
+      "find": ["                    scanned += 1;"],
+      "replace": ["                    if entry.terminal.is_none() {\n                        scanned += 1;\n                    }"]
+    },
+    {
+      "name": "an entry is marked terminal a second time",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once. Marking again would let a second report overwrite the code of the first.",
+      "find": ["            Some(entry) if entry.terminal.is_none() => {"],
+      "replace": ["            Some(entry) => {"]
+    },
+    {
+      "name": "marking records no code",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The state is kept with its reason, so that the code is not lost after the entry has been written.",
+      "find": ["                entry.terminal = Some(code);"],
+      "replace": ["                entry.terminal = Some(0);"]
+    },
+    {
+      "name": "marking a registration that is not there reports success",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The report pass writes the terminal entry and then marks it; a dropped registration must not read as marked.",
+      "find": ["            _ => false,"],
+      "replace": ["            _ => true,"]
+    },
+    {
+      "name": "control: the scanned count is written out",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "`+= 1` and `= x + 1` are the same count.",
+      "find": ["                    scanned += 1;"],
+      "replace": ["                    scanned = scanned + 1;"]
     },
     {
       "name": "control: the cursor bound is written as a match",
