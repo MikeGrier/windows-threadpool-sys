@@ -15,6 +15,7 @@ mod open_error;
 mod poll_error;
 mod pool;
 mod probe_failure;
+mod read_sq;
 mod sq;
 #[cfg(test)]
 mod test_support;

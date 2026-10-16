@@ -110,41 +110,47 @@ impl From<CapacityError> for SqCapacityError {
 
 /// Why an entry was not written. The entry comes back with it.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum SqPushError<T> {
+pub(crate) enum PushFailure<E> {
     /// Every slot holds an entry the caller has not drained.
-    Full(SqEntry<T>),
+    Full(E),
     /// The reading side is gone.
-    Closed(SqEntry<T>),
+    Closed(E),
 }
 
-/// The writing side of the SQ. One handle per writing thread: a handle is cloned, not shared.
-#[derive(Debug)]
-pub(crate) struct SqWriter<T>(slotwise_mpsc::Producer<SqEntry<T>>);
+/// Why a watcher's entry was not written.
+pub(crate) type SqPushError<T> = PushFailure<SqEntry<T>>;
 
-impl<T> Clone for SqWriter<T> {
+/// The writing side of an SQ of `E`. One handle per writing thread: a handle is cloned, not shared.
+#[derive(Debug)]
+pub(crate) struct QueueWriter<E>(slotwise_mpsc::Producer<E>);
+
+impl<E> Clone for QueueWriter<E> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T> SqWriter<T> {
+impl<E> QueueWriter<E> {
     /// Write `entry` without waiting.
-    pub(crate) fn push(&self, entry: SqEntry<T>) -> Result<(), SqPushError<T>> {
+    pub(crate) fn push(&self, entry: E) -> Result<(), PushFailure<E>> {
         self.0.push(entry).map_err(|error| match error {
-            PushError::Full(entry) => SqPushError::Full(entry),
+            PushError::Full(entry) => PushFailure::Full(entry),
             // `Disconnected`, and any refusal the queue's crate adds: none of them is retryable.
-            other => SqPushError::Closed(other.into_inner()),
+            other => PushFailure::Closed(other.into_inner()),
         })
     }
 }
 
-/// The reading side of the SQ.
-#[derive(Debug)]
-pub(crate) struct SqReader<T>(slotwise_mpsc::Consumer<SqEntry<T>>);
+/// The writing side of the watcher's SQ.
+pub(crate) type SqWriter<T> = QueueWriter<SqEntry<T>>;
 
-impl<T> SqReader<T> {
+/// The reading side of an SQ of `E`.
+#[derive(Debug)]
+pub(crate) struct QueueReader<E>(slotwise_mpsc::Consumer<E>);
+
+impl<E> QueueReader<E> {
     /// The next entry, or `None` when there is none now, or when no writer is left to add one.
-    pub(crate) fn pop(&self) -> Option<SqEntry<T>> {
+    pub(crate) fn pop(&self) -> Option<E> {
         self.0.pop().ok()
     }
 
@@ -153,10 +159,21 @@ impl<T> SqReader<T> {
     }
 }
 
-/// A new SQ holding `capacity` entries.
-pub(crate) fn queue<T>(capacity: usize) -> Result<(SqWriter<T>, SqReader<T>), SqCapacityError> {
+/// The reading side of the watcher's SQ.
+pub(crate) type SqReader<T> = QueueReader<SqEntry<T>>;
+
+/// A new SQ holding `capacity` entries of `E`. Every SQ in the crate is made here, so they share
+/// one capacity rule.
+pub(crate) fn queue_of<E>(
+    capacity: usize,
+) -> Result<(QueueWriter<E>, QueueReader<E>), SqCapacityError> {
     let (writer, reader) = slotwise_mpsc::bounded(capacity)?;
-    Ok((SqWriter(writer), SqReader(reader)))
+    Ok((QueueWriter(writer), QueueReader(reader)))
+}
+
+/// A new watcher's SQ holding `capacity` entries.
+pub(crate) fn queue<T>(capacity: usize) -> Result<(SqWriter<T>, SqReader<T>), SqCapacityError> {
+    queue_of(capacity)
 }
 
 /// The entries the SQ holds, taken in the order they were written, until there are none.

@@ -882,3 +882,44 @@ another thread giving its buffer back and ringing; lent buffers outliving the po
 taking and giving back with no buffer lost or gained; the errors' text and sources; and the types
 being `Send` and `Sync`. Ten sabotage entries, nine caught and one control that survives, each run
 on its own.
+
+## Moved 2026-10-16 12:33:29 -04:00 -- TW-5.3: the reading layer's SQ and its entries
+
+### <a id="tw-53"></a>TW-5.3 -- The reading layer's SQ, made by the same function and capacity rule as the watcher's, carries data entries whose range is computed from their chunk, shrink, terminal and poll-done entries, with its own doorbell pair. *(completed 2026-10-16 12:33:29 -04:00)*
+
+Crate-internal (a `chore`): `src/read_sq.rs`, and `src/sq.rs` made generic over the entry type. The
+decision text is under [TW-D-15](DESIGN-NOTES.md#tw-d-15).
+
+- **One queue, one capacity rule.** `sq.rs`'s writer, reader, push error and constructor are now
+  generic over the entry (`QueueWriter<E>`, `QueueReader<E>`, `PushFailure<E>`, `queue_of`), and the
+  watcher's names are aliases of them, so no caller changed. `ReadSq::new` is made by the same
+  `queue_of`, so the two SQs cannot disagree about which capacities are valid; a test compares their
+  errors capacity by capacity.
+- **`ReadEntry<T>`**: `Data`, `Shrink`, `Terminal` (the watcher's own type, passed through) and
+  `PollDone`, `#[non_exhaustive]`. **`Data` computes its range from the chunk**, so a range that
+  does not cover exactly the bytes delivered cannot be made; its fields are private with accessors and
+  `into_parts`. A range that would end past `u64::MAX` panics rather than wraps.
+- **`ReadSq<T>`** holds the queue and the two manual-reset doorbells, with the watcher's discipline
+  (TW-D-6): `writer`, `push`, `drain`, `capacity`, and ring and reset on each doorbell. A refused
+  entry comes back whole, its chunk still lent; entries left in a dropped SQ give their buffers back.
+- **Not public yet.** Everything is `pub(crate)` under `expect(dead_code)` until the reading layer
+  hands the SQ to a client, and the names (`ReadEntry`, `Data`, `Shrink`, `ReadSq`, `ReadDrain`) are
+  working names until the layer's own is chosen. The `#[non_exhaustive]` matters only once they are
+  public, so its compile-fail doctest is left for then.
+- **A sabotage note: an abort, not a memory fault.** "A full queue is reported as closed" now ends
+  the suite with a deliberate abort rather than exit 101: since TW-3.1 a poll on the thread pool
+  reaches the engine's `unreachable!` for a closed SQ, and a panic cannot unwind out of the
+  `extern "system"` callback, so Rust aborts ("panic in a function that cannot unwind"). Rust aborts
+  on Windows through `__fastfail`, which the OS reports for every cause as `0xC0000409`
+  (`STATUS_STACK_BUFFER_OVERRUN`, a name left over from the stack-cookie check); no buffer overran.
+  The panic message preceding the abort in the run's stderr is what tells the two apart. The SQ's own
+  tests still fail on the mutant deterministically; the abort only ends the run first.
+
+Tested: capacities refused and accepted by the watcher's rule, with equal errors; a data entry's range
+from its chunk, empty, and ending at `u64::MAX`, and one that would overflow panicking; `into_parts`;
+every kind drained in the order written, and the SQ empty after; a full SQ handing back an entry with
+its chunk still lent; chunks given back when their entries drop, including entries left in a dropped
+SQ; the two doorbells separate, starting unrung, staying rung for every waiter until reset; four
+writers on their own threads each landing every entry in order; the SQ and entries crossing threads.
+Four new sabotage entries, and the one entry whose target line moved was retargeted; each run on its
+own, with the other three that target `sq.rs`.

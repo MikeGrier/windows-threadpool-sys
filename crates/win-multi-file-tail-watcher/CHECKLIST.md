@@ -98,9 +98,7 @@ through `ThreadpoolIo`.
 
 - [x] **TW-5.2** -- A pool of owned buffers of one size, all allocated and zeroed when it is made, lends each as a buffer a ring read can take and a chunk of the bytes read, both given back on drop, with a doorbell for a starved reader. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-52)
 
-- [ ] **TW-5.3** -- **The client's SQ and its entries**: data (a clone of `T`, the file byte range, the
-  chunk), shrink, terminal, and poll-done; `#[non_exhaustive]`, with the watcher's capacity rule and
-  doorbell pair. ([TW-D-15](DESIGN-NOTES.md#tw-d-15), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+- [x] **TW-5.3** -- The reading layer's SQ, made by the same function and capacity rule as the watcher's, carries data entries whose range is computed from their chunk, shrink, terminal and poll-done entries, with its own doorbell pair. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-53)
 
 - [ ] **TW-5.4** -- **Planning reads from the watcher's entries**: `last_known..current` split into
   reads of one buffer each; a shrink becomes a shrink entry with no read; a terminal entry passes

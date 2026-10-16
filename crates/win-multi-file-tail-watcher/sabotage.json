@@ -128,8 +128,8 @@
       "file": "src/sq.rs",
       "expect": "caught",
       "why": "The two are told apart because only one is worth retrying, and the poll's stop-and-resume (TW-D-7) depends on which it got.",
-      "find": ["            PushError::Full(entry) => SqPushError::Full(entry),"],
-      "replace": ["            PushError::Full(entry) => SqPushError::Closed(entry),"]
+      "find": ["            PushError::Full(entry) => PushFailure::Full(entry),"],
+      "replace": ["            PushError::Full(entry) => PushFailure::Closed(entry),"]
     },
     {
       "name": "the capacity error names the smallest valid capacity as the request",
@@ -890,6 +890,38 @@
       "why": "Ringing outside the lock is for latency, not correctness: the starved flag is cleared under it either way.",
       "find": ["            mem::replace(&mut free.starved, false)\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"],
       "replace": ["            let was = mem::replace(&mut free.starved, false);\n            if was {\n                self.doorbell.ring();\n            }\n            false\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"]
+    },
+    {
+      "name": "a data entry's range is not the chunk's length",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "The range is what lets a client put chunks that arrive in any order back in place (TW-D-15).",
+      "find": ["            range: offset..end,"],
+      "replace": ["            range: offset..end.saturating_sub(1),"]
+    },
+    {
+      "name": "a data entry's range wraps instead of panicking",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "A range that wraps would claim bytes at the start of the file.",
+      "find": ["        let end = offset\n            .checked_add(len)\n            .expect(\"a file range ends before u64::MAX\");"],
+      "replace": ["        let end = offset.wrapping_add(len);"]
+    },
+    {
+      "name": "the reading layer's SQ has a capacity rule of its own",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "Every SQ in the crate is made by one function, so the two cannot disagree about which capacities are valid.",
+      "find": ["        let (writer, reader) = queue_of(capacity)?;"],
+      "replace": ["        let (writer, reader) = queue_of(capacity.max(2))?;"]
+    },
+    {
+      "name": "the resume doorbell is the reading layer's own doorbell",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "Two directions, two events: a ring meant for the client would wake the layer.",
+      "find": ["        self.resume.ring();"],
+      "replace": ["        self.doorbell.ring();"]
     }
   ]
 }
