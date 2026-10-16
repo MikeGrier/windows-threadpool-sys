@@ -26,3 +26,20 @@ assertion in the tests evaluates them, so an alteration does not build, which is
 One first attempt, a change of the hex digits' case, was reported inert by the sweep, which compares
 text without regard to case, so it was replaced by an unpadded-hex mutation. What this left to do is
 `WE-1.2`.
+
+## Moved 2026-10-15 21:14:58 -04:00 -- WE-1.2: LStatus
+
+### <a id="we-12"></a>WE-1.2 -- `LStatus`, an `i32` newtype for the signed carrier, converting to and from `Win32Error` by a lossless bit cast. *(completed 2026-10-15 21:14:58 -04:00)*
+
+`LStatus` is the `LONG` that `LSTATUS` is: `from_raw`, `raw`, `is_success` and `into_result` (which
+carries the code as a `Win32Error`), and the two conversions, `to_win32` and `Win32Error::to_lstatus`,
+as `const` inherent methods with a `From` impl each. The decision is
+[WE-D-5](DESIGN-NOTES.md#we-d-5). The code is `9de86126`.
+
+It is the same number space as `Win32Error` ([WE-D-1](DESIGN-NOTES.md#we-d-1)), so a negative value is
+a code above 2^31 and not its magnitude, and the round trip is exact for every value in both
+directions. It is not an `Error`, since a value of zero is success. Most of its sabotages are
+declared `refused-by-build`, because the methods are `const fn` and a const assertion in the tests
+evaluates them with a code that needs the sign bit; the two `From` impls cannot be `const`, so their
+sabotages are `caught` by a run. The sample codes the tests share moved to one test-only module, so
+the next type reuses the set. What this left to do is `WE-1.3`.

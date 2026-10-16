@@ -12,8 +12,7 @@ Dependency order. Each item carries its own tests and its own entries in the cra
 
   **Next:** `WE-1.2`.
 
-- [ ] **WE-1.2** -- **`LStatus`.** An `i32` newtype for the signed carrier, converting to and from
-  `Win32Error` by a bit cast in both directions, with `is_success` and `into_result`.
+- [x] **WE-1.2** -- `LStatus`, an `i32` newtype for the signed carrier, converting to and from `Win32Error` by a lossless bit cast. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#we-12)
 
   **Next:** `WE-1.3`.
 
