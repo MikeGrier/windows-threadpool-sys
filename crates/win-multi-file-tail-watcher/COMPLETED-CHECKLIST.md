@@ -1128,3 +1128,12 @@ control that survives, since the order of a drop's shutdown request against a ca
 its drain cannot be arranged by a test.
 
 M7 is not complete: TW-7.2 is its tests.
+
+## Moved 2026-10-16 18:10:29 -04:00 -- TW-7.2: shutdown from every state of a read
+
+### <a id="tw-72"></a>TW-7.2 -- Integration tests over children's files: shutdown with reads in flight, while the children still write, while stalled on kept chunks, and of an idle layer, each returning and releasing every file. *(completed 2026-10-16 18:10:29 -04:00)*
+
+Four tests in `src/read_layer/child_tests.rs`, no production change. Each states what shutdown
+leaves behind: poll-done delivered after reads in flight come back, a refused poll after shutdown,
+`Drop` returning with chunks still held by the client (which may be dropped afterwards), and every
+file deletable once the layer is gone. This completes M7.

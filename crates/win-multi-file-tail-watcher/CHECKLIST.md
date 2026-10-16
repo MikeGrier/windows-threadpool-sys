@@ -122,4 +122,4 @@ Coarse on purpose: its scope is set when M6 is done.
 
 - [x] **TW-7.1** -- Shutdown and `Drop` with reads in flight: shutdown is a non-blocking, repeatable request that stops reads being planned or submitted, reads in flight complete and are delivered, every poll-done is still delivered, and `Drop` waits only for the reads already in flight. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-71)
 
-- [ ] **TW-7.2** -- **Integration tests: shutdown from every state of a read.**
+- [x] **TW-7.2** -- Integration tests over children's files: shutdown with reads in flight, while the children still write, while stalled on kept chunks, and of an idle layer, each returning and releasing every file. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-72)

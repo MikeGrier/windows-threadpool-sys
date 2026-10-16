@@ -196,3 +196,96 @@ fn a_layer_dropped_with_reads_in_flight_returns_and_releases_the_files() {
         std::fs::remove_file(path).expect("a closed file can be deleted");
     }
 }
+
+// Shutdown from each state a read can be in, over files children write.
+
+#[test]
+fn shutdown_with_reads_in_flight_still_delivers_poll_done_and_drop_returns() {
+    let dir = TempDir::new("rl-child-sd-inflight");
+    let layer = layer_with(8, 4, 2);
+    let mut writers = Writers::start(&dir, &layer, 20, 10);
+    writers.finish();
+    layer.poll().expect("poll");
+    assert!(signalled_within(layer.read_sq().doorbell(), 10_000));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(layer.core.engine().in_flight() > 0, "reads are in flight");
+    layer.shutdown();
+    // The poll's reads that were in flight come back, then its poll-done.
+    let mut taken = Taken::default();
+    take_until(&layer, &mut taken, 1);
+    assert_eq!(taken.poll_dones, 1);
+    drop(writers._registrations);
+    drop(layer);
+    for (_, path) in &writers.files {
+        std::fs::remove_file(path).expect("a closed file can be deleted");
+    }
+}
+
+#[test]
+fn shutdown_while_the_children_are_still_writing_ends_the_polls_and_releases_the_files() {
+    let dir = TempDir::new("rl-child-sd-writing");
+    let layer = layer_with(8, 4, 2);
+    let mut writers = Writers::start(&dir, &layer, 40, 200);
+    layer.poll().expect("poll");
+    layer.shutdown();
+    let mut taken = Taken::default();
+    take_until(&layer, &mut taken, 1);
+    assert!(matches!(layer.poll(), Err(crate::PollError::Shutdown)));
+    drop(std::mem::take(&mut writers._registrations));
+    drop(layer);
+    writers.finish();
+    for (_, path) in &writers.files {
+        std::fs::remove_file(path).expect("a closed file can be deleted");
+    }
+}
+
+#[test]
+fn shutdown_while_stalled_on_kept_chunks_returns_and_the_chunks_may_be_dropped_after() {
+    let dir = TempDir::new("rl-child-sd-held");
+    let layer = layer_with(64, 4, 8);
+    let mut writers = Writers::start(&dir, &layer, 12, 20);
+    writers.finish();
+    layer.poll().expect("poll");
+    let mut held = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held.len() < 4 {
+        assert!(Instant::now() < deadline, "the layer never delivered");
+        signalled_within(layer.read_sq().doorbell(), 100);
+        layer.read_sq().reset_doorbell();
+        held.extend(layer.read_sq().drain());
+    }
+    layer.shutdown();
+    drop(writers._registrations);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(layer);
+        done.send(()).expect("the test is waiting");
+    });
+    finished
+        .recv_timeout(Duration::from_secs(30))
+        .expect("dropping a stalled layer did not return");
+    // Chunks outlive the layer that lent them.
+    drop(held);
+    for (_, path) in &writers.files {
+        std::fs::remove_file(path).expect("a closed file can be deleted");
+    }
+}
+
+#[test]
+fn shutdown_of_an_idle_layer_after_its_polls_releases_the_files() {
+    let dir = TempDir::new("rl-child-sd-idle");
+    let layer = layer_with(8, 4, 2);
+    let mut writers = Writers::start(&dir, &layer, 10, 5);
+    writers.finish();
+    layer.poll().expect("poll");
+    let mut taken = Taken::default();
+    take_until(&layer, &mut taken, 1);
+    writers.assert_delivered_once(&mut taken);
+    layer.shutdown();
+    layer.shutdown();
+    drop(writers._registrations);
+    drop(layer);
+    for (_, path) in &writers.files {
+        std::fs::remove_file(path).expect("a closed file can be deleted");
+    }
+}
