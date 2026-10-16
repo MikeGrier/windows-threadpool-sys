@@ -880,3 +880,45 @@ observed.
 
 **Scheduled work:** none in this crate. [DI-13.5](../durable-ioring/CHECKLIST.md) takes the release
 that carries this.
+
+## <a id="d-26"></a>D-26: `ReOpenFile` is one entry that owns a duplicate of the original, and nothing in it is defaulted
+
+**Status: decided and implemented** by `NR-3.2` (`src/reopen.rs`).
+
+**What is decided.**
+
+- **One entry for one call** ([D-3](#d-3)): `ReOpenFile`, a new handle to what an open handle already
+  names, with the access, the share mode and the flags stated anew. It names nothing by path or
+  identifier, so it is a third open primitive beside `OpenFile` and `OpenFileByIdentifier`.
+- **The request owns a duplicate of the original**, as `OpenFileByIdentifier` does for its volume
+  hint ([D-8](#d-8)): the request is built on one thread and performed on another, and cannot be
+  left naming a handle its originator has closed. `try_clone` duplicates it and is fallible, so the
+  request is not `Clone`.
+- **All three parameters start at zero and are carried verbatim** ([D-12](#d-12)). There is no
+  default access, share mode or flag; which flags `ReOpenFile` accepts is the call's to say.
+- **Every refusal is the call's own code**, unaltered. No sharing violation or access denial is
+  inferred from, mapped, or retried here.
+- **`perform` returns an `OwnedHandle`**, a new handle on every call however often the request is
+  performed.
+
+**Measured on 2026-10-15**, Windows 11, a Hyper-V guest, not elevated:
+
+- An access the original's sharing does not allow (a read-only original sharing read, reopened for
+  writing), a share mode that does not allow the original's access (an original open for writing,
+  reopened sharing read only), and a share mode of zero against an original open for reading are
+  each `ERROR_SHARING_VIOLATION`. The same requests with a compatible share mode succeed.
+- Access is not limited to the original's: a read-only original is reopened for writing when the
+  sharing allows it, and the write is seen through the original.
+- Access zero with a share mode of all three and no flags succeeds; `DELETE` access succeeds;
+  `FILE_FLAG_OVERLAPPED` is accepted; the `NUL` device reopens.
+- `FILE_FLAG_NO_BUFFERING` added to a handle opened without it takes effect: an unaligned read that
+  succeeds through the original is `ERROR_INVALID_PARAMETER` through the reopened handle, and an
+  aligned one succeeds.
+- **A directory handle was refused with `ERROR_ACCESS_DENIED` for every combination tried**,
+  whatever the access, share mode and flags, for the directory handles tried (opened for
+  `FILE_LIST_DIRECTORY` with `FILE_FLAG_BACKUP_SEMANTICS`, among them). No working directory reopen
+  was found, and why is not established.
+  The entry does not special-case it.
+
+**Scheduled work:** none in this crate. [DI-13.6](../durable-ioring/CHECKLIST.md) takes the release
+that carries this.

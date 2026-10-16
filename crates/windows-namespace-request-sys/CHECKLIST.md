@@ -69,16 +69,11 @@ commit, and `NR-3.1` and `NR-3.2` independently of both. Each item ends with a `
 
 - [x] **NR-3.1** -- `SecurityDescriptor::from_sddl` and `to_sddl`, the SDDL conversion public in both directions. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-31-sddl)
 
-  **Next:** `NR-3.2`, or `NR-3.3` if the path work comes first.
+  **Next:** `NR-3.3`.
 
-- [ ] **NR-3.2** -- **A `ReOpenFile` entry**, beside `OpenFile` and `OpenFileByIdentifier`, one entry
-  for one call ([D-3](DESIGN-NOTES.md#d-3)): an owned duplicate of the original handle, as this crate
-  does for every handle a request names, with access, share mode and flags, all caller-supplied and
-  none defaulted. `perform` returns the new handle and the raw Win32 outcome. Documented to fail on
-  an access or sharing that conflicts with a previous open still open, which is the kernel's error
-  and passes through. Tests: each documented conflict; a reopen with `FILE_FLAG_NO_BUFFERING` added to
-  a handle opened without it. A `feat`, released on its own. Independent of `NR-3.3` to `NR-3.6`.
-  **Next:** the release of this crate once `NR-3.1` to `NR-3.6` are all done; see the order at the top
+- [x] **NR-3.2** -- A `ReOpenFile` entry beside `OpenFile` and `OpenFileByIdentifier`, owning a duplicate of the original handle with nothing defaulted. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-32-reopen)
+
+  **Next:** `NR-3.3`; the release of this crate once `NR-3.1` to `NR-3.6` are all done; see the order at the top
   of [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
 
 The path work is **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the

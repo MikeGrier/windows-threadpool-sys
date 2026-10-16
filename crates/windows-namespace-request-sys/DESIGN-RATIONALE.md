@@ -552,3 +552,21 @@ needs no length.
 extends (labels, attributes, scopes, the protected and unprotected DACL bits), so the five parts the
 documentation names are constants and the rest travel through `from_bits`, as the flag types of
 [D-12](DESIGN-NOTES.md#d-12) do.
+
+## D-26: `ReOpenFile`
+
+**A borrowed handle.** The request could have borrowed the original for the lifetime of the request,
+as a `BorrowedHandle`. That ties every request to the scope that built it, and a request here is
+built on one thread and performed on another ([D-8](DESIGN-NOTES.md#d-8)); an owned duplicate costs
+one `DuplicateHandle` and removes the lifetime, which is what the volume hint of
+`OpenFileByIdentifier` already does.
+
+**Defaults.** The calls that reopen are usually made to change one thing about how a file is open,
+which suggests defaulting the others to the original's. `ReOpenFile` has no such mode: the three
+values are the new open's, and a share mode of zero is an exclusive one. A default chosen here would
+be a policy about which opens to allow, which this crate leaves to its consumers
+([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)).
+
+**Directories.** Every directory attempt was refused with access denied, across access masks, flags
+and share modes, and across the directory handles tried. The measurement is recorded and a test
+asserts it, so that a change in what Windows answers is seen rather than assumed.

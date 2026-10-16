@@ -273,3 +273,20 @@ Thirteen sabotage entries cover it, two of them declared blind spots: that the m
 is freed, and the kind reported when Windows refuses to write text, which no input was found to
 provoke. A control entry is included. What this left to do is `NR-3.2`, and the release that
 [DI-13.5](../durable-ioring/CHECKLIST.md) waits on.
+
+## Moved 2026-10-16 00:06:41 -04:00 -- NR-3.2: the ReOpenFile entry
+
+### <a id="nr-32-reopen"></a>NR-3.2 -- A `ReOpenFile` entry beside `OpenFile` and `OpenFileByIdentifier`, owning a duplicate of the original handle with nothing defaulted. *(completed 2026-10-16 00:06:41 -04:00)*
+
+This is the NR-3.2 of the open-surface milestone. The decision is [D-26](DESIGN-NOTES.md#d-26). The code
+is the commit that adds `src/reopen.rs`.
+
+The request owns a duplicate of the handle it reopens, and the access, the share mode and the flags
+all start at zero and are carried verbatim. Each refusal is the call's own code. The tests assert what
+was measured: the three share-mode conflicts, access wider than the original's, `FILE_FLAG_NO_BUFFERING`
+added to a handle opened without it, the `NUL` device, and the access denied that every directory
+handle tried was answered with, which is recorded as measured and unexplained.
+
+Thirteen sabotage entries cover it, a control among them; none is a declared blind spot. What this left
+to do is `NR-3.3` and the path work, and the release that
+[DI-13.6](../durable-ioring/CHECKLIST.md) waits on.
