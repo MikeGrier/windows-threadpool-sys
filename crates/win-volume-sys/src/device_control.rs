@@ -29,7 +29,7 @@ use std::ptr;
 
 use win_error_codes::Win32Error;
 use windows_sys::Win32::Foundation::{
-    ERROR_IO_PENDING, ERROR_NOT_ENOUGH_MEMORY, FALSE, HANDLE, TRUE, WAIT_FAILED,
+    ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NOT_ENOUGH_MEMORY, FALSE, HANDLE, TRUE, WAIT_FAILED,
 };
 use windows_sys::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
@@ -157,6 +157,17 @@ pub(crate) fn overlapped_call(
 /// `what`.
 fn length(len: usize, what: &'static str) -> io::Result<u32> {
     u32::try_from(len).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, what))
+}
+
+/// An answer that does not hold what it says it holds: [`io::ErrorKind::InvalidData`] naming `what`.
+pub(crate) fn invalid_data(what: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, what)
+}
+
+/// Whether `error` is the device's `ERROR_MORE_DATA`: the buffer held the size a control reports
+/// first and not the reply, which a control that is sized by its own answer asks again for.
+pub(crate) fn is_more_data(error: &io::Error) -> bool {
+    Win32Error::from_io(error).is_some_and(|code| code.code() == ERROR_MORE_DATA)
 }
 
 /// A zeroed buffer of `size` bytes for a control's reply, or `ERROR_NOT_ENOUGH_MEMORY` if the

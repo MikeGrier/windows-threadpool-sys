@@ -47,3 +47,22 @@ pub(crate) fn ordinary_file(tag: &str) -> (File, std::path::PathBuf) {
         .expect("create an ordinary file");
     (file, path)
 }
+
+/// The numbers of the disks the system volume is on, in the order the device reports them.
+pub(crate) fn system_disk_numbers() -> Vec<u32> {
+    crate::volume_disk_extents(&open_volume(&system_volume_path(), false))
+        .expect("the system volume's disks")
+        .iter()
+        .map(|extent| extent.disk_number)
+        .collect()
+}
+
+/// Disk `number`, opened with no access, which an ordinary account can do; overlapped if asked.
+pub(crate) fn open_disk(number: u32, overlapped: bool) -> File {
+    open_volume(&format!(r"\\.\PhysicalDrive{number}"), overlapped)
+}
+
+/// The first disk the system volume is on, opened with no access.
+pub(crate) fn system_disk(overlapped: bool) -> File {
+    open_disk(system_disk_numbers()[0], overlapped)
+}

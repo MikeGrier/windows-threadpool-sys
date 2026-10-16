@@ -5,12 +5,10 @@ use std::io;
 use std::mem::{offset_of, size_of};
 use std::os::windows::io::AsHandle;
 
-use win_error_codes::Win32Error;
-use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
 use windows_sys::Win32::Storage::FileSystem::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS;
 use windows_sys::Win32::System::Ioctl::{DISK_EXTENT, VOLUME_DISK_EXTENTS};
 
-use crate::device_control::{device_control, u32_at, zeroed_output};
+use crate::device_control::{device_control, invalid_data, is_more_data, u32_at, zeroed_output};
 
 #[cfg(test)]
 mod tests;
@@ -69,28 +67,24 @@ fn extents_via(
         match ask(&mut buffer) {
             Ok(written) => {
                 // A byte count beyond the buffer is the call's claim and not a fact.
-                let written = buffer
-                    .get(..written)
-                    .ok_or_else(|| invalid("a call that wrote more than it was given room for"))?;
+                let written = buffer.get(..written).ok_or_else(|| {
+                    invalid_data("a call that wrote more than it was given room for")
+                })?;
                 return parse(written);
             }
             Err(error) if is_more_data(&error) => {
                 // The header is written even when the extents do not fit: it says how many. A
                 // count of none still leaves room for the one extent the device requires.
-                let needed = count(&buffer).ok_or_else(|| invalid("an answer with no count"))?;
+                let needed =
+                    count(&buffer).ok_or_else(|| invalid_data("an answer with no count"))?;
                 capacity = usize::try_from(needed)
-                    .map_err(|_| invalid("a count too large"))?
+                    .map_err(|_| invalid_data("a count too large"))?
                     .max(1);
             }
             Err(error) => return Err(error),
         }
     }
-    Err(invalid("a volume whose extents kept changing"))
-}
-
-/// Whether `error` is the device's `ERROR_MORE_DATA`: the buffer held the count and not the extents.
-fn is_more_data(error: &io::Error) -> bool {
-    Win32Error::from_io(error).is_some_and(|code| code.code() == ERROR_MORE_DATA)
+    Err(invalid_data("a volume whose extents kept changing"))
 }
 
 /// The size of an answer holding `extents` extents.
@@ -98,11 +92,7 @@ fn answer_size(extents: usize) -> io::Result<usize> {
     extents
         .checked_mul(size_of::<DISK_EXTENT>())
         .and_then(|runs| runs.checked_add(offset_of!(VOLUME_DISK_EXTENTS, Extents)))
-        .ok_or_else(|| invalid("a count too large"))
-}
-
-fn invalid(what: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, what)
+        .ok_or_else(|| invalid_data("a count too large"))
 }
 
 fn i64_at(buffer: &[u8], offset: usize) -> Option<i64> {
@@ -118,10 +108,10 @@ fn count(buffer: &[u8]) -> Option<u32> {
 /// The extents in an answer, checked against what the answer says it holds: a count the bytes
 /// cannot hold is refused, so a damaged answer never reads outside its buffer.
 fn parse(buffer: &[u8]) -> io::Result<Vec<DiskExtent>> {
-    let declared = count(buffer).ok_or_else(|| invalid("an answer shorter than its count"))?;
-    let declared = usize::try_from(declared).map_err(|_| invalid("a count too large"))?;
+    let declared = count(buffer).ok_or_else(|| invalid_data("an answer shorter than its count"))?;
+    let declared = usize::try_from(declared).map_err(|_| invalid_data("a count too large"))?;
     if answer_size(declared)? > buffer.len() {
-        return Err(invalid("an answer shorter than the extents it counts"));
+        return Err(invalid_data("an answer shorter than the extents it counts"));
     }
     let first = offset_of!(VOLUME_DISK_EXTENTS, Extents);
     (0..declared)
@@ -134,10 +124,10 @@ fn parse(buffer: &[u8]) -> io::Result<Vec<DiskExtent>> {
                 (Some(disk_number), Some(start), Some(length)) => Ok(DiskExtent {
                     disk_number,
                     starting_offset: u64::try_from(start)
-                        .map_err(|_| invalid("a negative offset"))?,
-                    length: u64::try_from(length).map_err(|_| invalid("a negative length"))?,
+                        .map_err(|_| invalid_data("a negative offset"))?,
+                    length: u64::try_from(length).map_err(|_| invalid_data("a negative length"))?,
                 }),
-                _ => Err(invalid("an extent cut short")),
+                _ => Err(invalid_data("an extent cut short")),
             }
         })
         .collect()

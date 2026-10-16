@@ -16,6 +16,13 @@ promise, as the workspace's naming decision defines it.
 - **`volume_numa_node`** -- the NUMA node the volume a file, a directory or the volume itself is on
   resides on (`FSCTL_QUERY_VOLUME_NUMA_INFO`), as the device wrote it. A volume that advertises no
   proximity domain answers with its own error, and no value is taken to mean "no node".
+- **`storage_device_unique_id`** and **`storage_device_numa`** -- a disk's device unique identifier
+  and the NUMA node it is attached to, through `IOCTL_STORAGE_QUERY_PROPERTY`. They take a handle to
+  a disk (`\\.\PhysicalDriveN`), opened with no access, and report what the device gave: the
+  identifier's sections as bytes, not parsed, and the node unaltered.
+- **`query_storage_property`** -- the same control for any property and any kind of query, with
+  the reply as the bytes the device gave, so a property this crate has no typed function for is one
+  call away.
 - **`lock_volume`** and **`unlock_volume`** -- `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`: until
   released, or until the handle closes, no other handle can use the volume.
 
