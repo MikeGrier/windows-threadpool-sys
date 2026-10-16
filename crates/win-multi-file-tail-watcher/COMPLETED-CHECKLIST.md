@@ -797,3 +797,34 @@ returning from drop at once, and then no callback of the crate running when its 
 rung and its own doorbell staying quiet, both through duplicated events; and the drop waiting for a
 running poll and returning when it does. The earlier tests that poll and drop at once, and that drop
 while parked or as a poll resumes, cover the same drain.
+
+## Moved 2026-10-16 00:16:06 -04:00 -- TW-4.4: shutdown from every state
+
+### <a id="tw-44"></a>TW-4.4 -- Shutdown requested from the caller's own callback on a thread-pool wait is tested from a parked poll, a poll inside its probe and a poll held inside the report, with repeated requests, drops bounded by a step, and nothing running after `Drop`. *(completed 2026-10-16 00:16:06 -04:00)*
+
+Crate-internal (a `chore`): `tests/shutdown_every_state.rs`, public API only. This closes M4.
+
+- **The caller's callback** is a thread-pool wait on a duplicate of the watcher's doorbell, from
+  windows-threadpool-sys, whose callback calls `shutdown()` and reports how long the call took. The
+  doorbell is also rung by hand on a duplicate where the poll would not ring it itself.
+- **Parked on a full queue**: the queue fills, the doorbell rings, the callback requests; the request
+  returns inside a second, the caller drains and rings, and poll-done is delivered, with `poll` then
+  refused as shut down.
+- **Inside the probe**: twenty thousand files registered at their length, so a poll is all probe and
+  reports nothing; the doorbell is rung by hand just after `poll`, and the poll reaches poll-done in
+  less than half the time a whole pass took, measured on the same watcher first. A probe that
+  ignored the flag fails this, which the earlier tests of the probe could not show because the copy
+  stops first.
+- **Held inside the report**: a value whose `Clone` blocks holds the poll inside the report with the
+  roster lock held. The request from the callback returns without waiting for it; once released the
+  poll writes the one change it had in hand and abandons the rest, and delivers poll-done.
+- **Repeated requests**: five from the callback, four hundred from four other threads, and more
+  after; `poll` stays refused.
+- **Drop bounded by a step**: during a poll over twenty thousand files, with and without a prior
+  request, the drop returns in well under half a pass. Measured while writing it, a pass was about
+  seventy milliseconds and a drop under two hundred microseconds. The comparison is skipped on a
+  machine where a pass is under ten milliseconds, since there it shows nothing.
+- **Nothing runs after `Drop`**: with a poll parked, the watcher is dropped, then its resume doorbell
+  is rung through a duplicate; its own doorbell, also duplicated, stays quiet.
+- **Checked against three mutants** by hand: `Drop` not setting the flag, the probe ignoring it, and
+  the report ignoring it. Each fails these tests.

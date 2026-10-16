@@ -83,11 +83,7 @@ its next step, which is one probe or one report.
 
 - [x] **TW-4.3** -- Dropping a `Watcher` stops it as `shutdown` does, waits for a running poll to reach its next step and return, and never waits for poll-done or for a parked poll. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-43)
 
-- [ ] **TW-4.4** -- **Integration tests: shutdown from every state.** From the caller's doorbell
-  callback on a thread-pool wait, asserting the request returns while a poll is inside a probe;
-  while parked on a full SQ; during a running poll over a large roster; repeated requests; `Drop`
-  with and without a prior shutdown, each bounded by one step; no crate callback runs after `Drop`
-  returns.
+- [x] **TW-4.4** -- Shutdown requested from the caller's own callback on a thread-pool wait is tested from a parked poll, a poll inside its probe and a poll held inside the report, with repeated requests, drops bounded by a step, and nothing running after `Drop`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-44)
 
 ## M4+ -- Reads on the thread pool (parked behind M4)
 
