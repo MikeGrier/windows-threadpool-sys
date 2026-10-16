@@ -42,8 +42,11 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 - [ ] **TW-2.8.1** -- **Choose from the capture** [bench-captures/2026-10-15.txt](bench-captures/2026-10-15.txt)
   the snapshot and report batch sizes, the chunk size, whether the roster's `BTreeMap` stays, and
   whether the buffers give chunks back after an unusually large poll; record each as a decision in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) and replace the "Provisional" comments. Blocked on the
-  engineer's reading of the capture, not on any further work.
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) and replace the "Provisional" comments. Also read
+  [bench-captures/2026-10-15-query-threads.txt](bench-captures/2026-10-15-query-threads.txt), the bare
+  kernel call and the probe across threads, against [TW-D-5](DESIGN-NOTES.md#tw-d-5)'s open thread
+  count and its deferral of sharding the probe pass. Blocked on the engineer's reading of the
+  captures, not on any further work.
 
 - [ ] **TW-2.9** -- **Integration tests: the engine over real files.** Hundreds of files, some
   grown and some shrunk by child processes between runs, against an SQ far smaller than the number
