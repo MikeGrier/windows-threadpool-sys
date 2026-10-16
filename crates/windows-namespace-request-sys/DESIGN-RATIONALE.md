@@ -570,3 +570,29 @@ be a policy about which opens to allow, which this crate leaves to its consumers
 **Directories.** Every directory attempt was refused with access denied, across access masks, flags
 and share modes, and across the directory handles tried. The measurement is recorded and a test
 asserts it, so that a change in what Windows answers is seen rather than assumed.
+
+## D-27: the path entries are built fallibly
+
+**Where an interior NUL is reported.** `NR-3.5` left two places open: the constructors, or `perform`.
+`perform` returns `Outcome<T>`, whose error is the raw Win32 code and nothing else, so reporting the
+NUL there needs either a new error on every entry's `Request` impl or a code Windows did not
+produce, and the crate does not invent codes (see `FullPathError::Unstable`, which exists for that
+reason). The constructors were already going to be fallible for `OpenFile` and `WatchDirectory`,
+since reading the current directory can fail and the graft is computed there, and a caller who can
+still act on a bad path is on the submitting thread, which is where a handle that cannot be captured
+is failed too ([D-7](DESIGN-NOTES.md#d-7)). So the choice was one error type at construction against
+two places for one kind of failure.
+
+**`ResolveFullPath::new` fallible for one variant.** It reads no directory, so only `InteriorNul` can
+come out of it, and a `Result` whose error type has variants it never produces is a small
+untidiness. The alternative was adding an `InteriorNul` variant to `FullPathError`, which is already
+`#[non_exhaustive]` and already the error of its `perform`, so it would not break a caller. That
+leaves a NUL to be found on whatever thread performs the call, a worker that submitted nothing, and
+it makes this one entry the odd one out in where the three report the same thing. The shared type
+was preferred, and the variant that can only come from the other two is documented on the
+constructor.
+
+**An empty path is not refused.** `prepare` refused it with its own failure. A request that does
+refuse it adds a check this crate's other entries do not have, and `CreateFileW` already answers an
+empty path with a code. `win-durable-ioring`'s open keeps refusing it, as invalid input, because it
+did before and a caller of that crate must not see a difference.

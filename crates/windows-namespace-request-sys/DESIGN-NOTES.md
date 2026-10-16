@@ -718,9 +718,8 @@ The drafts themselves, and why each failed, are Tier 2:
 
 ## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
 
-**Status: decided by the engineer on 2026-10-15; the graft is implemented** by `NR-3.3`
-(`src/anchored.rs`), and no entry uses it yet: `NR-3.4` to `NR-3.6` in [CHECKLIST.md](CHECKLIST.md)
-wire it in. It supersedes the mechanism of [D-9](#d-9) and the decision of
+**Status: decided by the engineer on 2026-10-15; implemented** by `NR-3.3` (`src/anchored.rs`) and
+wired into the entries by `NR-3.4` to `NR-3.6`; what those settled is [D-27](#d-27). It supersedes the mechanism of [D-9](#d-9) and the decision of
 [D-18](#d-18); D-18's measurements stand.
 
 **What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
@@ -823,10 +822,10 @@ in this crate for it.
   includes a verbatim one. That is wider than a UNC path and errs toward not grafting.
 - **A failure to read the directory is its own error**, with the retry shape and vocabulary of
   [`ResolveFullPath`](src/full_path.rs): Windows' code unaltered, or that the size kept changing.
-- **An interior NUL is not refused here.** `NR-3.5` decides where it is.
+- **An interior NUL is refused when the request is built**, which is [D-27](#d-27).
 
-**Scheduled work:** `NR-3.4` to `NR-3.6` wire the type into the entries. `DI-13.2`'s rework in
-`win-durable-ioring` waits on them.
+**Scheduled work:** none here. `DI-13.2`'s rework in `win-durable-ioring` was waiting on the entries
+taking a `Wtf16String`.
 
 ## <a id="d-20"></a>D-20: Every device control goes through one overlapped-safe helper
 
@@ -964,3 +963,47 @@ that carries this.
 
 **Scheduled work:** none in this crate. [DI-13.6](../durable-ioring/CHECKLIST.md) takes the release
 that carries this.
+
+## <a id="d-27"></a>D-27: The path entries take a `Wtf16String`, are built fallibly, and refuse an interior NUL where the request is built
+
+**Status: implemented** by `NR-3.4`, `NR-3.5` and `NR-3.6` (`src/open.rs`, `src/watch.rs`,
+`src/full_path.rs`, `src/anchored.rs`). The fallible construction is the assistant's recommendation,
+written into `NR-3.5` as such, and was implemented on the engineer's instruction to implement
+`NR-3.4`; it has not been ruled on separately.
+
+**What is decided.**
+
+- **`OpenFile::new`, `WatchDirectory::new` and `ResolveFullPath::new` take a `Wtf16String` and return
+  a `Result<Self, PathCaptureError>`.** `prepare`, `PreparedPath`, `PathError`, `PathFailure` and the
+  `path` module are removed. A request holds no preparation of its own; the contract of the paths is
+  [D-19](#d-19).
+- **`PathCaptureError` has three variants**: `InteriorNul`, `CurrentDirectory(Win32Error)` and
+  `CurrentDirectoryUnstable { attempts }`. The second and third are the failure of reading the
+  current directory, with Windows' code unaltered and the retry shape of
+  [`ResolveFullPath`](src/full_path.rs); only `OpenFile` and `WatchDirectory` can produce them.
+- **An interior NUL is refused where the request is built**, in all three entries. `Wtf16String` does
+  not exclude one, and Win32 reads a path up to its first NUL, so a call would act on a shorter path
+  than the one named and report success for it. The check is the one the `SAFETY` comments in the
+  entries rest on.
+- **`path()` is the path as given and `win32_path()` is the path handed to the call**, on `OpenFile`
+  and `WatchDirectory`. They are equal unless the path was grafted ([D-19](#d-19)), so a caller or
+  a test can see what the graft did.
+- **`ResolveFullPath` keeps the path exactly as given and grafts nothing.** It is the call; a caller
+  who wants a path fixed to the current directory when the request is built uses `OpenFile` or
+  `WatchDirectory`.
+- **Nothing else about a path is checked.** An empty path, a path longer than `MAX_PATH`, and a
+  verbatim path that is not fully qualified all reach the call and are its to answer. Those refusals
+  belonged to `prepare` and went with it.
+
+**Measured on 2026-10-16**, Windows 11:
+
+- A relative name given to a request, with the process current directory then moved elsewhere,
+  is opened (`OpenFile`) and watched (`WatchDirectory`) at the directory it was built in. The same
+  name given to a request built after the move is `ERROR_FILE_NOT_FOUND` for the open and is
+  refused for the watch. Both are tested in a child process, so the current directory of the test
+  process is not changed.
+
+**Scheduled work:** none in this crate. [NR-3.7](CHECKLIST.md) and `M6.1` in
+[windows-platform-probes' CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) rewrite the probe
+that measured `prepare`. `win-durable-ioring`'s open was adapted only far enough to build, and its
+rework is [DI-13.7](../durable-ioring/CHECKLIST.md).

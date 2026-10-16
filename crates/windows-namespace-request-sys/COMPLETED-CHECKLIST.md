@@ -309,3 +309,38 @@ path whose shape refuses a graft, which no test can observe) and one a control. 
 the process current directory re-runs the test binary as a child, as `tests/unc_current_directory.rs` does.
 What this left to do is `NR-3.4` to `NR-3.6`, one commit, which wire the type into `OpenFile` and
 `WatchDirectory` and retire `prepare`.
+
+## Moved 2026-10-16 12:56:56 -04:00 -- NR-3.4 to NR-3.6: the path entries take a `Wtf16String`
+
+These three items were one commit, as the checklist said they would be, because
+`win-durable-ioring` and `windows-platform-probes` reach `prepare` through path dependencies and a
+commit that removed it without adapting them would not have built. The decisions are
+[D-19](DESIGN-NOTES.md#d-19) and [D-27](DESIGN-NOTES.md#d-27). The code is the commit titled
+`feat(namespace-request)!: open, watch and resolve by a Wtf16String, and retire prepare`.
+
+### <a id="nr-34-entries"></a>NR-3.4 -- `OpenFile` and `WatchDirectory` take a `Wtf16String` and hold the graft type, with the path as given and the path handed to Win32 as two accessors. *(completed 2026-10-16 12:56:56 -04:00)*
+
+Both hold an `AnchoredPath`; `path()` is the path as given and `win32_path()` the one handed to the
+call. A test that moves the process current directory after building a request runs in a child
+process, and shows that the request still names the directory it was built in. The crate's own
+tests, doctests and README example were rewritten to the new constructors, and the integration tests
+build their requests through two helpers in place of the old `prepared`.
+
+### <a id="nr-35-nul"></a>NR-3.5 -- An interior NUL is refused where a request is built, in every entry that takes a path including `ResolveFullPath`, as a fallible constructor. *(completed 2026-10-16 12:56:56 -04:00)*
+
+The item left open whether the constructors become fallible or `perform` reports it; the assistant's
+recommendation, fallible constructors, was implemented on the engineer's instruction to implement
+`NR-3.4`, and the reasons are in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The error is
+`PathCaptureError`. The `SAFETY` comment in `full_path.rs` that claimed `Wtf16String` excludes an
+interior NUL was wrong and is corrected.
+
+### <a id="nr-36-retire"></a>NR-3.6 -- `prepare`, `PreparedPath`, `PathError`, `PathFailure` and the `path` module are retired, with the documentation that described them. *(completed 2026-10-16 12:56:56 -04:00)*
+
+The module and its tests are deleted, and the lib documentation, the README example and the
+references from `full_path.rs`, `close.rs` and `outcome.rs` follow. `D-9` and `D-18` already carried
+a status line pointing at `D-19`.
+
+Sabotage entries cover the accessors, the pointer handed to the call and the refusal of a NUL, with a
+control among them, and the whole manifest was swept. `win-durable-ioring`'s open kept its empty-path refusal and its verbatim conversion, and the
+`request_cost` probe keeps measuring `GetFullPathNameW` through a local stand-in for the retired
+function. What this left to do is `NR-3.7` and the release of this crate.

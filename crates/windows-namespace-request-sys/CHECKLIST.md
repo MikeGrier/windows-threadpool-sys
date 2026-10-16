@@ -78,46 +78,23 @@ commit, and `NR-3.1` and `NR-3.2` independently of both. Each item ends with a `
 
 The path work is **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the
 whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and split into
-`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile` and `WatchDirectory`, which
-take a `PreparedPath` from `prepare` and open it, and `ResolveFullPath`, which already takes a
-`Wtf16String` and hands it to `GetFullPathNameW` as it is. Every other entry takes a handle, an
-identifier or a class. After this work all three take a `Wtf16String`, and none has a length limit,
-a validation of its own, or a `\\?\` rewrite.
+`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile`, `WatchDirectory` and
+`ResolveFullPath`. Every other entry takes a handle, an identifier or a class. All three take a
+`Wtf16String`, and none has a length limit, a validation of its own beyond an interior NUL, or a
+`\\?\` rewrite.
 
 - [x] **NR-3.3** -- The captured root and the graft, as one internal type (`AnchoredPath`), additive and used by nothing yet. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-33-graft)
 
-  **Next:** `NR-3.4`.
+  **Next:** `NR-3.4` to `NR-3.6`, as one commit.
 
-- [ ] **NR-3.4** -- **`OpenFile` and `WatchDirectory` take a `Wtf16String`** and hold the type from
-  `NR-3.3`; `OpenFile::path` and `WatchDirectory::path` return the path as it was given, and a second
-  accessor returns the path that will be handed to Win32, so a test or a caller can see what the
-  graft did. A `feat!` of a published crate. The crate's own tests, doctests and README examples that
-  call `prepare` are rewritten. **`NR-3.4`, `NR-3.5` and `NR-3.6` are one commit**, an acknowledged
-  coupling and not three: `win-durable-ioring` and `windows-platform-probes` reach `prepare` through
-  path dependencies, so the commit that changes the constructors and removes `prepare` also adapts
-  both of them just enough to build (`OpenedFile::open` and the `request_cost` probe keep behaving as
-  they did; their rework is `DI-13.7` and `M6.1`, after it), and the commit cites all three IDs.
-  **Next:** `NR-3.5`, in the same commit.
+- [x] **NR-3.4** -- `OpenFile` and `WatchDirectory` take a `Wtf16String` and hold the graft type, with the path as given and the path handed to Win32 as two accessors. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-34-entries)
 
-- [ ] **NR-3.5** -- **An interior NUL is refused in every entry that takes a path, including
-  `ResolveFullPath`.** `Wtf16String` does not exclude one (its documentation: a terminated pointer to
-  a string with one is *truncated*, and a no-NUL guarantee is "a reserved seam for a future
-  release"), so `ResolveFullPath::new` today passes a truncated path to `GetFullPathNameW` without
-  saying so, and the `SAFETY` comment in [full_path.rs](src/full_path.rs) that claims "no interior
-  NUL by Wtf16String's own invariant" is wrong and is corrected. Open, to be decided: whether the
-  constructors become fallible (the assistant's recommendation, as [D-7](DESIGN-NOTES.md#d-7) fails a
-  handle that cannot be captured at construction, where the caller can still act) or `perform` reports
-  it, which needs an error that is not a raw Win32 code. `ResolveFullPath` stays a faithful entry with
-  no graft: it is the Win32 call that resolves against the current directory when performed, and a
-  caller who wants a path fixed at construction uses `OpenFile` or `WatchDirectory`.
-  **Next:** `NR-3.6`, in the same commit.
+- [x] **NR-3.5** -- An interior NUL is refused where a request is built, in every entry that takes a path including `ResolveFullPath`, as a fallible constructor. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-35-nul)
 
-- [ ] **NR-3.6** -- **Retire `prepare`, `PreparedPath`, `PathError` and `PathFailure`**, and the
-  `path` module's public surface, with the documentation that describes them: [lib.rs](src/lib.rs),
-  [README.md](README.md), [D-9](DESIGN-NOTES.md#d-9) and [D-18](DESIGN-NOTES.md#d-18) already carry a
-  status line pointing at `D-19`. A breaking removal from a published crate.
-  **Next:** `NR-3.1` and `NR-3.2` if not already done; then the release of this crate (a
-  release-please pull request, a new minor), after which `NR-3.8` and
+- [x] **NR-3.6** -- `prepare`, `PreparedPath`, `PathError`, `PathFailure` and the `path` module are retired, with the documentation that described them. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-36-retire)
+
+  **Next:** `NR-3.7`, which is in another crate; and the release of this crate (a release-please pull
+  request, a new minor), after which `NR-3.8` and
   [DI-13.5 and DI-13.6](../durable-ioring/CHECKLIST.md).
 
 - [ ] **NR-3.7** -- **The `request_cost` probe in `windows-platform-probes` is rewritten, not
