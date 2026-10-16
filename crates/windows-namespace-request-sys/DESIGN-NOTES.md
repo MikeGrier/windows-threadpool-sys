@@ -718,8 +718,9 @@ The drafts themselves, and why each failed, are Tier 2:
 
 ## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
 
-**Status: decided by the engineer on 2026-10-15; not yet implemented** -- the work is `NR-3.3` in
-[CHECKLIST.md](CHECKLIST.md). It supersedes the mechanism of [D-9](#d-9) and the decision of
+**Status: decided by the engineer on 2026-10-15; the graft is implemented** by `NR-3.3`
+(`src/anchored.rs`), and no entry uses it yet: `NR-3.4` to `NR-3.6` in [CHECKLIST.md](CHECKLIST.md)
+wire it in. It supersedes the mechanism of [D-9](#d-9) and the decision of
 [D-18](#d-18); D-18's measurements stand.
 
 **What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
@@ -728,8 +729,8 @@ and no check of this crate's own beyond the one that cannot be avoided, an inter
 need to fix the meaning of a relative path when the request is built, because the process current
 directory is shared and mutable and a request is performed later, on any thread. That is done by
 capturing the current directory when the request is built (`GetCurrentDirectoryW`, which does no
-I/O) and resolving a relative path against it **textually** when the request is performed, even after
-the current directory has changed.
+I/O) and resolving a relative path against it **textually**, so that it still names that directory
+when the request is performed, after the current directory has changed.
 
 **The graft is concatenation:** the captured directory, a backslash unless it already ends in one (a
 drive root does), then the child. There is no combine call, no flag, and no canonicalisation:
@@ -784,7 +785,28 @@ file of that name when grafted, so a graft would change what the call means.
   because the documentation names them.
 - Behaviour in a process that is long-path aware was not measured; the test binary is not.
 
-**Scheduled work:** `NR-3.3`. `DI-13.2`'s rework in `win-durable-ioring` waits on it.
+**As implemented by `NR-3.3`:**
+
+- **The graft is computed when the request is built**, not when it is performed, and the result is
+  stored beside the path as given. The path handed to Win32 is the same either way and is fixed to
+  the directory of the moment of construction; `perform` allocates nothing, and the root is not
+  kept after it has been used.
+- **The current directory is read only for a child that rules 1, 2, 3 and 5 allow**, since only rule 4
+  needs it. A path that is absolute, a device, a stream or empty makes no call.
+- **`NUL` is not grafted.** It is among rule 5's names, and the rule errs toward not grafting; the
+  checklist item had listed `NUL` among the names that graft, which disagreed with the rule as
+  numbered. The rule governs. `NUL` opens the same device grafted or not, so nothing observable turns
+  on it.
+- **Rule 5 also names `COM` and `LPT` followed by the superscripts `U+00B9`, `U+00B2` and `U+00B3`**,
+  which the documentation lists after the ASCII digits. The comparison folds ASCII case only.
+- **A directory is UNC for rule 4 when it begins with two separators of either kind**, which
+  includes a verbatim one. That is wider than a UNC path and errs toward not grafting.
+- **A failure to read the directory is its own error**, with the retry shape and vocabulary of
+  [`ResolveFullPath`](src/full_path.rs): Windows' code unaltered, or that the size kept changing.
+- **An interior NUL is not refused here.** `NR-3.5` decides where it is.
+
+**Scheduled work:** `NR-3.4` to `NR-3.6` wire the type into the entries. `DI-13.2`'s rework in
+`win-durable-ioring` waits on them.
 
 ## <a id="d-20"></a>D-20: Every device control goes through one overlapped-safe helper
 

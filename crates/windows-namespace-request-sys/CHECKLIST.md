@@ -84,17 +84,8 @@ take a `PreparedPath` from `prepare` and open it, and `ResolveFullPath`, which a
 identifier or a class. After this work all three take a `Wtf16String`, and none has a length limit,
 a validation of its own, or a `\\?\` rewrite.
 
-- [ ] **NR-3.3** -- **The captured root and the graft, as one internal type.** A type that holds the
-  path as the caller gave it and the current directory captured when it was built
-  (`GetCurrentDirectoryW`, no I/O), and produces the path to hand to Win32 when the request is
-  performed: the child grafted onto the root by concatenation (a backslash unless the root ends in
-  one) if all five rules of [D-19](DESIGN-NOTES.md#d-19) hold, and the path unchanged otherwise.
-  Nothing is rewritten to a `\\?\` form. Tests: each rule, both ways (a child that meets it is
-  grafted, a child that breaks only that rule is not); the graft still names the captured directory
-  after the process current directory has changed; a drive root as the captured directory makes no
-  doubled backslash; `NUL` grafts and `CON`, `CONIN$` and `CONOUT$` do not; a UNC root with a `..`
-  child is not grafted. Replaces `path.rs`'s `prepare`, `resolve` and `validate_verbatim`, though
-  nothing is removed until `NR-3.6`, so this item breaks nothing.
+- [x] **NR-3.3** -- The captured root and the graft, as one internal type (`AnchoredPath`), additive and used by nothing yet. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-33-graft)
+
   **Next:** `NR-3.4`.
 
 - [ ] **NR-3.4** -- **`OpenFile` and `WatchDirectory` take a `Wtf16String`** and hold the type from

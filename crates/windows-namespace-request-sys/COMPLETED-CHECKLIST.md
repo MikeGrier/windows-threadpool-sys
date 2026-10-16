@@ -290,3 +290,22 @@ handle tried was answered with, which is recorded as measured and unexplained.
 Thirteen sabotage entries cover it, a control among them; none is a declared blind spot. What this left
 to do is `NR-3.3` and the path work, and the release that
 [DI-13.6](../durable-ioring/CHECKLIST.md) waits on.
+
+## Moved 2026-10-16 00:18:28 -04:00 -- NR-3.3: the captured root and the graft
+
+### <a id="nr-33-graft"></a>NR-3.3 -- The captured root and the graft, as one internal type (`AnchoredPath`), additive and used by nothing yet. *(completed 2026-10-16 00:18:28 -04:00)*
+
+This is the NR-3.3 of the open-surface milestone. The decision is [D-19](DESIGN-NOTES.md#d-19), with what
+the implementation settled written at its end. The code is the commit that adds `src/anchored.rs`.
+
+The item asked for a type that holds the path as given and the current directory captured when it was
+built, and produces the path to hand to Win32. It grafts a clearly safe relative child onto the directory
+at construction and stores the result beside the path as given, so `perform` allocates nothing. The
+item's test list said `NUL` grafts; D-19's rule 5 lists it among the names that do not, and the rule
+governs, which is recorded in D-19.
+
+Thirty-two sabotage entries cover it, one a declared blind spot (that the directory is not read for a
+path whose shape refuses a graft, which no test can observe) and one a control. The test that must change
+the process current directory re-runs the test binary as a child, as `tests/unc_current_directory.rs` does.
+What this left to do is `NR-3.4` to `NR-3.6`, one commit, which wire the type into `OpenFile` and
+`WatchDirectory` and retire `prepare`.
