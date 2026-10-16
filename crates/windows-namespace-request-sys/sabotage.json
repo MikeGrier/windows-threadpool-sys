@@ -626,7 +626,7 @@
       "name": "NR-2.5: a status is altered on its way out",
       "file": "src/storage_dependency.rs",
       "expect": "caught",
-      "why": "The status is carried as the call returned it; an NTSTATUS value is not a Win32 error and is not truncated to look like one.",
+      "why": "The code is carried as the call returned it; the virtdisk errors have values above 16 bits, and one truncated to 16 bits names a different error.",
       "find": ["            other => return Err(Win32Error::from_code(other).into()),\n"],
       "replace": ["            other => return Err(Win32Error::from_code(other & 0xFFFF).into()),\n"]
     },

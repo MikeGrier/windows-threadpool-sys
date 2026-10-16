@@ -17,7 +17,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle};
 use io_buffers::AlignedBuf;
 use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_LEVEL, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
-    ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_NOT_ENOUGH_MEMORY, ERROR_VIRTDISK_NOT_VIRTUAL_DISK,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -38,9 +38,8 @@ use crate::request::Request;
 use crate::storage_property::tests::system_disk;
 use crate::{CapturedHandle, Win32Error};
 
-/// The status a handle that is not on a virtual disk gets for `HOST_VOLUMES`: an `NTSTATUS`
-/// value, which the call returns as it is.
-const NOT_A_VIRTUAL_DISK: u32 = 0xC03A_0015;
+/// What a handle that is not on a virtual disk gets for `HOST_VOLUMES`.
+const NOT_A_VIRTUAL_DISK: u32 = ERROR_VIRTDISK_NOT_VIRTUAL_DISK;
 
 const FIRST_ENTRY: usize = offset_of!(STORAGE_DEPENDENCY_INFO, Anonymous);
 const ENTRY_1: usize = size_of::<STORAGE_DEPENDENCY_INFO_TYPE_1>();
@@ -302,8 +301,7 @@ fn a_version_the_device_does_not_have_is_the_devices_to_refuse() {
 
 #[test]
 fn the_host_direction_on_a_handle_that_is_not_virtual_is_the_raw_status() {
-    // The status is an NTSTATUS value, not a Win32 error code, and is carried as the call
-    // returned it. A system volume that is itself on a virtual disk answers with its host
+    // A system volume that is itself on a virtual disk answers with its host
     // instead, which is the other thing this call is for.
     let _allocating = handle_allocation().read().expect("not poisoned");
     let volume = system_volume();

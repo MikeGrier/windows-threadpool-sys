@@ -24,10 +24,10 @@
 //! names; the names are pointers, which this entry reads only where they lie within the reply and
 //! copies out, so nothing a caller holds points into the buffer.
 //!
-//! The return value is the status itself, not a Win32 error followed by `GetLastError`, and it is
-//! not always a Win32 error code: a handle that is not on a virtual disk fails with `0xC03A0015`,
-//! which is an `NTSTATUS` value. It is carried **unaltered** in [`Win32Error`], as every failure of
-//! this crate's is, and not converted: converting an `NTSTATUS` is an `Rtl*` call.
+//! The return value is the Win32 error code itself, not `BOOL` followed by `GetLastError`. A handle
+//! that is not on a virtual disk fails with `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` (`0xC03A0015`); the
+//! virtdisk errors are defined with values in that range. It is carried **unaltered** in
+//! [`Win32Error`], as every failure of this crate's is.
 //!
 //! # What was and was not observed
 //!
@@ -362,10 +362,9 @@ impl StorageDependencyInfo {
 pub enum StorageDependencyError {
     /// Windows refused the call, with the raw status unaltered.
     ///
-    /// It is not always a Win32 error code: a handle that is not on a virtual disk is
-    /// `0xC03A0015`, an `NTSTATUS` value. `ERROR_NOT_ENOUGH_MEMORY` is also reported this way when
-    /// the buffer for a size the call named could not be allocated, in which case the call was not
-    /// made again.
+    /// A handle that is not on a virtual disk is `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` (`0xC03A0015`).
+    /// `ERROR_NOT_ENOUGH_MEMORY` is also reported this way when the buffer for a size the call
+    /// named could not be allocated, in which case the call was not made again.
     Win32(Win32Error),
     /// The call succeeded, or named a size, but the bytes do not hold what they say.
     ///

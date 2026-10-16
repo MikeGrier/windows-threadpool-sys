@@ -1036,10 +1036,11 @@ and is not a deferral.
   (`windows-sys` feature `Win32_Storage_Vhd`), so [D-20](#d-20)'s helper is not involved and the call is made
   directly. It returns its status as the return value, not as `BOOL` followed by `GetLastError`, and the entry
   reads it that way.
-- **The status is carried unaltered.** A handle that is not on a virtual disk gets `0xC03A0015` for
-  `HOST_VOLUMES`, which is an `NTSTATUS` value and not a Win32 error code. It is reported as the call returned
-  it in `StorageDependencyError::Win32`; turning it into a Win32 code is an `Rtl*` call, which the repository's
-  rule on documented interfaces excludes.
+- **The code is carried unaltered.** A handle that is not on a virtual disk gets `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`
+  (`0xC03A0015`) for `HOST_VOLUMES`. It is a named Win32 error constant (`windows-sys` carries it); the virtdisk
+  errors are defined with values in that range. It is reported as the call returned it in
+  `StorageDependencyError::Win32`. An earlier revision of this record called it an `NTSTATUS` and not a Win32
+  code; that was wrong, and was corrected on 2026-10-15 once the constant was found.
 - **The version is an input.** The call fails with `ERROR_INVALID_LEVEL` unless the buffer's version field is
   1 or 2 when it is made. The entry sets it, defaults to 2 (the version with the names), and lets
   `StorageDependencyVersion::from_raw` carry any other value to the device to refuse.

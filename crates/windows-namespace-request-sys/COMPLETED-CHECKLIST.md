@@ -184,7 +184,7 @@ it: the link from a virtual disk to the file that backs it, for durable-ioring's
 is `0306fda0`.
 
 The feature is `Win32_Storage_Vhd`. The call returns its status directly, and one status measured here is an
-`NTSTATUS` value (`0xC03A0015`), which is carried raw. The version is an input, and a buffer under 72 bytes is
+Win32 error (`ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, `0xC03A0015`), which is carried as returned. The version is an input, and a buffer under 72 bytes is
 `ERROR_INVALID_PARAMETER`, so the first size is raised to 72. **No entry was ever observed**: attaching a virtual
 disk needs an elevated token, which this machine's account does not have. The entries and names are tested
 against replies built from the structure's declared layout and a fake device, 25 sabotages pin them in

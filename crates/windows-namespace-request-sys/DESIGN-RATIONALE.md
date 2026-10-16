@@ -503,10 +503,11 @@ were `ERROR_INVALID_PARAMETER` and not the `ERROR_INSUFFICIENT_BUFFER` that a si
 a loop that started small would have been refused instead of told a size. The raised first size follows from
 that.
 
-**The code `0xC03A0015` was a surprise worth keeping.** `HOST_VOLUMES` on a volume that is not virtual returned
-3225026581, which no Win32 constant names; it is an `NTSTATUS`. Converting it would have been an `Rtl*` call, and
-that is excluded, so it is carried raw. A consumer that wants to say "not a virtual disk" compares against the
-value, which the test names.
+**The code `0xC03A0015` looked foreign and was not.** `HOST_VOLUMES` on a volume that is not virtual returned
+3225026581, and the first reading was that no Win32 constant names a value that large, so it was recorded as an
+`NTSTATUS`. That was wrong: `ERROR_VIRTDISK_NOT_VIRTUAL_DISK` is that value, and the virtdisk errors are defined
+in that range. The reading was formed without searching `windows-sys` for the number, which is the check that
+would have settled it. It is carried as the call returned it, and the test compares against the named constant.
 
 **Names, and the choice not to trust the buffer.** The structure's name fields are pointers. Reading them
 directly would have been simplest and would have trusted a reply this machine could never produce, so each
