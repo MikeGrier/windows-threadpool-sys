@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use super::{
-    associated_disk, create_disk_script, create_script, detach_script, free_letter, online_script,
+    associated_disk, create_disk_script, create_script, detach_script, free_letter,
+    letter_is_taken, online_script, scratch_directory,
 };
 
 #[test]
@@ -34,7 +35,31 @@ fn the_detach_script_selects_the_disk_it_detaches() {
 fn a_free_letter_is_one_nothing_is_mounted_at() {
     let letter = free_letter().expect("some letter is free");
     assert!(letter.is_ascii_uppercase());
-    assert!(!Path::new(&format!("{letter}:\\")).exists());
+    assert!(!letter_is_taken(letter));
+}
+
+#[test]
+fn the_system_drive_is_taken_and_a_free_letter_is_not() {
+    let system = std::env::var("SystemDrive").expect("Windows names its drive");
+    let letter = system.chars().next().expect("a drive letter");
+    assert!(letter_is_taken(letter));
+    assert!(letter_is_taken(letter.to_ascii_lowercase()));
+    let free = free_letter().expect("some letter is free");
+    assert_ne!(free.to_ascii_uppercase(), letter.to_ascii_uppercase());
+}
+
+#[test]
+fn the_scratch_directory_is_a_plain_path_that_names_itself_in_full() {
+    let directory = scratch_directory();
+    let text = directory.display().to_string();
+    assert!(!text.starts_with(r"\\?\"), "{text}");
+    assert!(directory.is_dir(), "{text}");
+    let canonical = std::fs::canonicalize(&directory).expect("it exists");
+    assert_eq!(
+        canonical.display().to_string().trim_start_matches(r"\\?\"),
+        text,
+        "the name is already the long form, so naming it in full changes nothing"
+    );
 }
 
 #[test]

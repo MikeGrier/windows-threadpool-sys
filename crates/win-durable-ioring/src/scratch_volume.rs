@@ -76,12 +76,40 @@ fn run_diskpart(script: &str, tag: &str) -> io::Result<String> {
     }
 }
 
+/// Whether anything is mounted at `letter`. A raw volume has no file system, so `X:\` does not
+/// exist for it, and only opening the volume itself shows it is there.
+fn letter_is_taken(letter: char) -> bool {
+    Path::new(&format!("{letter}:\\")).exists()
+        || OpenOptions::new()
+            .access_mode(0)
+            .open(format!(r"\\.\{letter}:"))
+            .is_ok()
+}
+
 /// A drive letter nothing is mounted at, from the end of the alphabet.
 fn free_letter() -> io::Result<char> {
     ('D'..='Z')
         .rev()
-        .find(|letter| !Path::new(&format!("{letter}:\\")).exists())
+        .find(|letter| !letter_is_taken(*letter))
         .ok_or_else(|| io::Error::other("no free drive letter"))
+}
+
+/// The temporary directory in the long form the system names it by, which is the form `diskpart`
+/// prints back for a file made in it. `TEMP` can hold a short (8.3) form, such as `RUNNER~1`, and
+/// `diskpart` prints a name as it was given.
+pub(crate) fn scratch_directory() -> PathBuf {
+    let given = std::env::temp_dir();
+    match std::fs::canonicalize(&given) {
+        Ok(canonical) => {
+            let text = canonical.display().to_string();
+            match text.strip_prefix(r"\\?\") {
+                // Only a drive path loses its prefix; `\\?\UNC\...` is not one.
+                Some(plain) if plain.as_bytes().get(1) == Some(&b':') => PathBuf::from(plain),
+                _ => canonical,
+            }
+        }
+        Err(_) => given,
+    }
 }
 
 /// A virtual disk attached with one raw partition, and the volume path that names it.
@@ -95,13 +123,18 @@ impl ScratchVolume {
     pub(crate) fn create(megabytes: u32) -> io::Result<Self> {
         let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
         let letter = free_letter()?;
-        let vhd = std::env::temp_dir().join(format!(
+        let vhd = scratch_directory().join(format!(
             "dioring-scratch-{}-{}.vhdx",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&vhd);
-        run_diskpart(&create_script(&vhd, megabytes, letter), "create")?;
+        if let Err(error) = run_diskpart(&create_script(&vhd, megabytes, letter), "create") {
+            // Whatever was attached before the failure is detached, and the file removed.
+            let _ = run_diskpart(&detach_script(&vhd), "detach");
+            let _ = std::fs::remove_file(&vhd);
+            return Err(error);
+        }
         let volume = Self { vhd, letter };
         volume.wait_until_mounted()?;
         Ok(volume)
@@ -214,14 +247,14 @@ impl ScratchDisk {
     /// A disk of `megabytes`, attached, online and writable.
     pub(crate) fn create(megabytes: u32) -> io::Result<Self> {
         let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
-        let vhd = std::env::temp_dir().join(format!(
+        let vhd = scratch_directory().join(format!(
             "dioring-scratch-disk-{}-{}.vhdx",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&vhd);
-        // Made, and then named in full by the system, so the name compared below is the long one
-        // diskpart prints and not a short form of the temporary directory.
+        // Made in the long form of the temporary directory, and then named in full by the system,
+        // so the name compared below is the long one diskpart prints and not a short form.
         let printed = run_diskpart(&create_disk_script(&vhd, megabytes), "create-disk");
         let named = std::fs::canonicalize(&vhd).map(|path| {
             path.display()
