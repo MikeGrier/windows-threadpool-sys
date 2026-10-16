@@ -44,9 +44,7 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 [dev-dependencies]
 windows-thread-ambient-sys = { version = "0.3.0", path = "../windows-thread-ambient-sys" }
 
-# Test-only. `Win32_System_Pipes` is for the named pipe whose overlapped read pends on demand,
-# which is how the device-control helper's pending path is run (`device_control/tests.rs`).
-# `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
+# Test-only. `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
 # they are the state `GetFullPathNameW` reads and rewrites when it roots a
 # drive-relative path, so a test that does not control them can only bound that
@@ -59,7 +57,7 @@ default-features = false
 # below: reading an entry has to clear and re-read the last error to tell an
 # empty value from an absent one, and a test target must not depend on a
 # feature staying enabled for a reason unrelated to it.
-features = ["Win32_Foundation", "Win32_System_Environment", "Win32_System_Pipes"]
+features = ["Win32_Foundation", "Win32_System_Environment"]
 
 [dependencies.windows-sys]
 version = "0.61.2"
@@ -68,8 +66,5 @@ features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
-	"Win32_Storage_Vhd",
-	"Win32_System_IO",
-	"Win32_System_Ioctl",
 	"Win32_System_Threading",
 ]

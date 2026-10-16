@@ -127,23 +127,11 @@ Deletion, rename, directory creation, attribute setting, link creation, and the
 consumer calls them. [DESIGN-NOTES.md](DESIGN-NOTES.md) records the full list so
 a considered omission is distinguishable from an unexamined one.
 
-## Storage-locality entries
+## Volume and disk operations are not here
 
-Added after round one, for [durable-ioring](../durable-ioring/CHECKLIST.md)'s flush domains,
-which need to know where storage is. Each is one call. The `DeviceIoControl` ones are made through
-one overlapped-safe helper, so each is the same call on a handle opened overlapped or not and
-posts nothing to a completion port the handle belongs to; `GetStorageDependencyInformation` is a
-virtdisk call that takes its own path and returns its status directly. The checklist's `NR-2`
-milestone lists the entries still to come.
-
-| Win32 call | Type |
-|---|---|
-| `DeviceIoControl` with `FSCTL_QUERY_VOLUME_NUMA_INFO` | `QueryVolumeNumaInfo` |
-| `DeviceIoControl` with `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` | `QueryVolumeDiskExtents` |
-| `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceUniqueIdProperty`) | `QueryStorageDeviceUniqueId` |
-| `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceNumaProperty`) | `QueryStorageDeviceNumaNode` |
-| `DeviceIoControl` with `IOCTL_STORAGE_QUERY_PROPERTY` (any property, reply as bytes) | `QueryStorageProperty` |
-| `GetStorageDependencyInformation` (virtdisk) | `QueryStorageDependencyInformation` |
+Device controls against volumes and disks, and the virtdisk dependency query, are not namespace
+operations. They are in [win-volume-sys](../win-volume-sys/README.md), which is where this crate's
+storage-locality work was first built and from where it was moved.
 
 ## Testing your own code against these entries
 

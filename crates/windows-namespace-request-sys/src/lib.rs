@@ -60,9 +60,9 @@
 //! One entry per Win32 call; a consumer needing two makes two requests and
 //! sequences them itself. The round-one entry list is audited from three real
 //! consumers rather than chosen by taste, and its omissions are deliberate and
-//! written down. The storage-locality entries added after round one for
-//! durable-ioring (`DeviceIoControl` and the rest) are listed in the README. See
-//! `DESIGN-NOTES.md` in the crate root.
+//! written down. Volume and disk operations are not namespace operations and are in
+//! `win-volume-sys`, not here. See `DESIGN-NOTES.md` in the crate
+//! root.
 //!
 //! # Example
 //!
@@ -109,7 +109,6 @@
 #![warn(missing_docs)]
 
 pub mod close;
-mod device_control;
 pub mod file_info;
 pub mod final_path;
 pub mod full_path;
@@ -121,14 +120,7 @@ pub mod path;
 pub mod query;
 pub mod request;
 pub mod security;
-pub mod storage_dependency;
-pub mod storage_numa;
-pub mod storage_property;
-pub mod storage_query;
-pub mod storage_unique_id;
 pub mod volume;
-pub mod volume_extents;
-pub mod volume_numa;
 pub mod watch;
 
 pub use close::{CloseFn, CloseRequest};
@@ -155,17 +147,5 @@ mod tests;
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
-pub use storage_dependency::{
-    QueryStorageDependencyInformation, StorageDependency, StorageDependencyError,
-    StorageDependencyFlags, StorageDependencyInfo, StorageDependencyVersion,
-};
-pub use storage_numa::{QueryStorageDeviceNumaNode, StorageDeviceNuma};
-pub use storage_property::StoragePropertyError;
-pub use storage_query::{
-    QueryStorageProperty, StoragePropertyId, StoragePropertyReply, StorageQueryType,
-};
-pub use storage_unique_id::{QueryStorageDeviceUniqueId, StorageDeviceUniqueId};
 pub use volume::{QueryVolumeInformation, VolumeInformation};
-pub use volume_extents::{DiskExtent, DiskExtentsError, QueryVolumeDiskExtents};
-pub use volume_numa::{NumaInfoError, QueryVolumeNumaInfo, VolumeNumaInfo};
 pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};
