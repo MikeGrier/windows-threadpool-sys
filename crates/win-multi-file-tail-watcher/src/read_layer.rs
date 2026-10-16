@@ -22,6 +22,9 @@ use crate::read_engine::{ReadEngine, Tracked};
 use crate::read_sq::ReadSq;
 use crate::{OpenError, PollError, Registration};
 
+// Here and not in `tests/` because the layer is not public.
+#[cfg(test)]
+mod child_tests;
 #[cfg(test)]
 mod tests;
 

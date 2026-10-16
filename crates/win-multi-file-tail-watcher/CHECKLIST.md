@@ -112,8 +112,7 @@ Coarse on purpose: its scope is set when M5 is done.
 
 - [x] **TW-6.1** -- The reading engine runs on the thread pool with no thread of the caller's: the watcher's doorbell, a completed read, a chunk returned to an empty pool and the client's resume doorbell each drive it through a wait of their own, which stays armed and idle between polls. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-61)
 
-- [ ] **TW-6.2** -- **Integration tests: polls on the thread pool over files that children write**,
-  through a small pool and a client SQ of two slots.
+- [x] **TW-6.2** -- The layer is tested on the thread pool over files that child processes write, through a pool of four small buffers and a client SQ of two: polls repeated while the children write, every byte delivered once, a stall on kept chunks that dropping them continues, and a drop that releases every file. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-62)
 
 - [ ] **TW-6.3** -- **Decide whether a failed read is an entry of the client's SQ.** Today it is a
   `Diagnostic::ReadFailed` and nothing else, and the bytes it was to read are not announced again

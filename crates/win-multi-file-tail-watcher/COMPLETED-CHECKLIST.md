@@ -1048,3 +1048,27 @@ test's client was ringing the resume doorbell itself; the client now rings nothi
 
 Still open from here: TW-6.2 tests this on children's files through a small pool and a client SQ of
 two.
+
+## Moved 2026-10-16 15:55:03 -04:00 -- TW-6.2: the layer on the thread pool over children's files
+
+### <a id="tw-62"></a>TW-6.2 -- The layer is tested on the thread pool over files that child processes write, through a pool of four small buffers and a client SQ of two: polls repeated while the children write, every byte delivered once, a stall on kept chunks that dropping them continues, and a drop that releases every file. *(completed 2026-10-16 15:55:03 -04:00)*
+
+Tests only (a `test`): `src/read_layer/child_tests.rs`, in the crate and not in `tests/` because the layer
+is not public. The helpers of the layer's unit tests are shared with it, and the child-process
+helpers come from `test_support.rs`.
+
+- **Polls while children write:** a hundred and fifty children each append thirty lines to a file of
+  their own, and `ReadLayer::poll` is called again as each poll's poll-done arrives, through a
+  watcher SQ of eight (so polls park and are continued), four buffers of eight bytes and a client SQ
+  of two. Each file's pieces meet by range from offset 0 and equal the file's bytes, each file is read
+  to its length, and there is one poll-done for each poll.
+- **Chunks kept:** the client keeps a chunk for each of four buffers; the layer stops and its run
+  count does not move; dropping the chunks is all that continues it, with no ring from the client.
+- **Drop:** after its polls the layer is dropped with its registrations, and every file can then be
+  deleted and made again, so no handle of the layer's is left open.
+
+No new sabotage entries: the layer's unit tests already catch each mutant that matters here, and
+these add real files, real writers and many polls, which is what catches a stall or a lost
+wake-up under load. They were run three times in a row against flakiness.
+
+M6 is not complete: [TW-6.3](CHECKLIST.md) is a decision awaiting the engineer.

@@ -16,19 +16,19 @@ use crate::test_support::{TempDir, signalled_within, wtf};
 
 const BUFFER_LEN: usize = 8;
 
-struct Piece {
-    range: Range<u64>,
-    bytes: Vec<u8>,
+pub(super) struct Piece {
+    pub(super) range: Range<u64>,
+    pub(super) bytes: Vec<u8>,
 }
 
 #[derive(Default)]
-struct Taken {
-    pieces: BTreeMap<u32, Vec<Piece>>,
-    poll_dones: usize,
+pub(super) struct Taken {
+    pub(super) pieces: BTreeMap<u32, Vec<Piece>>,
+    pub(super) poll_dones: usize,
 }
 
 impl Taken {
-    fn drain(&mut self, layer: &ReadLayer<u32>) {
+    pub(super) fn drain(&mut self, layer: &ReadLayer<u32>) {
         for entry in layer.read_sq().drain() {
             match entry {
                 ReadEntry::Data(data) => {
@@ -45,7 +45,7 @@ impl Taken {
     }
 
     /// The bytes of `value` from `from`, which must be delivered once, in pieces that meet.
-    fn bytes_from(&mut self, value: u32, from: u64) -> Vec<u8> {
+    pub(super) fn bytes_from(&mut self, value: u32, from: u64) -> Vec<u8> {
         let pieces = self.pieces.entry(value).or_default();
         pieces.sort_by_key(|piece| piece.range.start);
         let mut at = from;
@@ -59,7 +59,11 @@ impl Taken {
     }
 }
 
-fn layer_with(watcher_capacity: usize, buffers: usize, client_capacity: usize) -> ReadLayer<u32> {
+pub(super) fn layer_with(
+    watcher_capacity: usize,
+    buffers: usize,
+    client_capacity: usize,
+) -> ReadLayer<u32> {
     let watcher = Watcher::new(watcher_capacity).expect("watcher");
     let pool = BufferPool::new(BUFFER_LEN, buffers).expect("pool");
     let engine = ReadEngine::new(watcher, pool, client_capacity, 16, 32).expect("engine");
@@ -70,7 +74,7 @@ fn layer() -> ReadLayer<u32> {
     layer_with(64, 8, 64)
 }
 
-fn pattern(len: usize) -> Vec<u8> {
+pub(super) fn pattern(len: usize) -> Vec<u8> {
     (0..len)
         .map(|n| u8::try_from(n % 251).expect("below 251"))
         .collect()
@@ -85,7 +89,7 @@ fn take(layer: &ReadLayer<u32>, taken: &mut Taken) {
     layer.read_sq().ring_resume();
 }
 
-fn take_until(layer: &ReadLayer<u32>, taken: &mut Taken, poll_dones: usize) {
+pub(super) fn take_until(layer: &ReadLayer<u32>, taken: &mut Taken, poll_dones: usize) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while taken.poll_dones < poll_dones {
         assert!(Instant::now() < deadline, "the layer never finished");
@@ -93,7 +97,7 @@ fn take_until(layer: &ReadLayer<u32>, taken: &mut Taken, poll_dones: usize) {
     }
 }
 
-fn runs(layer: &ReadLayer<u32>) -> usize {
+pub(super) fn runs(layer: &ReadLayer<u32>) -> usize {
     layer.core.runs.load(Ordering::Relaxed)
 }
 
