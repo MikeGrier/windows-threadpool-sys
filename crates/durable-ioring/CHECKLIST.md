@@ -176,6 +176,19 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-9.7.10** -- The buffer crate and the core's tests. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-9710)
 
+- [ ] **DI-9.7.11** -- **DECIDE:** what becomes of `ErrorCode`'s two Windows helpers, `from_win32` and
+  `win32`, now that [`HResult` in `win-error-codes`](../win-error-codes/DESIGN-NOTES.md#we-d-6) owns
+  the same rule. Today they are a second copy: `ErrorCode`'s own tests pin the three facts `HResult`
+  has (`S_OK` wraps no error, a positive code keeps only its low 16 bits, a value that is not
+  positive is taken as an `HRESULT` already). Options: **(a)** leave both and add a test that they
+  agree, with `win-error-codes` as a dev-dependency; **(b)** have the two helpers delegate to
+  `HResult`, so the portable core depends on `win-error-codes`, which is portable and has no
+  dependencies of its own; **(c)** remove the two helpers from `ErrorCode` and put them in
+  `win-durable-ioring`, where the `HRESULT` is the backend's own numbering
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), a breaking change to the core's public surface. The lean is
+  **(b)**: it removes the duplicate and keeps `DI-D-50`'s surface as it is, where (c) is the cleaner
+  end state at the cost of a break. It gates nothing.
+
 ### DI-9.8 -- Owed by the assistant
 
 - [x] **DI-9.8.1** -- Each declared blind spot is covered, or records what would cover it. -> [completed 2026-10-13](COMPLETED-CHECKLIST.md#di-981)

@@ -43,3 +43,29 @@ declared `refused-by-build`, because the methods are `const fn` and a const asse
 evaluates them with a code that needs the sign bit; the two `From` impls cannot be `const`, so their
 sabotages are `caught` by a run. The sample codes the tests share moved to one test-only module, so
 the next type reuses the set. What this left to do is `WE-1.3`.
+
+## Moved 2026-10-15 21:34:00 -04:00 -- WE-1.3: HResult, and WE-M1 complete
+
+### <a id="we-13"></a>WE-1.3 -- `HResult`, an `i32` newtype for an `HRESULT`, with `HRESULT_FROM_WIN32`'s rule stated and the `ErrorCode` question decided. *(completed 2026-10-15 21:34:00 -04:00)*
+
+`HResult` has `is_failure` and `is_success`, `into_result`, `code` and `facility` as `winerror.h`'s
+macros take them, `is_customer` and `is_ntstatus_mapped`, `from_win32` and `win32`, and `Display` and
+`Debug` in hex. The decision is [WE-D-6](DESIGN-NOTES.md#we-d-6). The code is `85a2681b`.
+
+Two things the work found that the item did not say. The facility is 13 bits in the macro, not the 11
+the documentation draws: `FACILITY_DXGI`, 0x87A, needs 12, so a test pins it and a sabotage that
+narrows the mask to 11 is caught. And durable-ioring's `ErrorCode` already tests the reading this
+type takes for `S_OK` (`win32()` is `None`, "S_OK is no error"), so `HResult::win32` follows it and the
+round trip is exact for the codes 1 to 65535 and not for zero. The `ErrorCode` question the item left
+to be decided here is decided as: not changed by this crate, queued as
+[DI-9.7.11](../durable-ioring/CHECKLIST.md) because its `from_win32` and `win32` are a second copy of
+this rule and that is a durable-ioring decision.
+
+The `refused-by-build` entries the const assertions give are in [sabotage.json](sabotage.json); one
+first attempt failed to match because rustc breaks a long assertion message across lines, so the
+assertion was shortened with a named constant.
+
+**`WE-M1` is complete.** Its three items are archived above, and the crate's adoptions are in other
+crates ([NR-4.1](../windows-namespace-request-sys/CHECKLIST.md),
+[ERR-1](../windows-file-enumeration-sys/CHECKLIST.md),
+[WV-2.1](../win-volume-sys/CHECKLIST.md)).

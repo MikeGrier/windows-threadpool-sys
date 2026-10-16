@@ -3,32 +3,11 @@
 What the crate is for and what was decided about it: [DESIGN-NOTES.md](DESIGN-NOTES.md). Opened
 2026-10-15.
 
-## WE-M1 -- The three types
-
-Dependency order. Each item carries its own tests and its own entries in the crate's
-`sabotage.json`, per the workspace's sabotage convention, and ends with a `Next:` line.
-
-- [x] **WE-1.1** -- Create the crate, with `Win32Error`, an `io::Error` bridge that is exact for every code, and the workspace plumbing. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#we-11)
-
-  **Next:** `WE-1.2`.
-
-- [x] **WE-1.2** -- `LStatus`, an `i32` newtype for the signed carrier, converting to and from `Win32Error` by a lossless bit cast. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#we-12)
-
-  **Next:** `WE-1.3`.
-
-- [ ] **WE-1.3** -- **`HResult`.** An `i32` newtype: severity, facility and code accessors,
-  `is_failure` and `is_success`, `from_win32` with `HRESULT_FROM_WIN32`'s rule (zero or a value with
-  the high bit set is already an `HRESULT`), `win32() -> Option<Win32Error>` for a wrapped Win32
-  code, and `Display` as `0x8007045D`. Compare against
-  [durable-ioring's `ErrorCode`](../durable-ioring/src/error_code.rs), which has the same
-  `from_win32` and `win32` helpers; whether that type is rebuilt on this one is decided here and
-  recorded, not left.
-
-  **Next:** the adoptions, in any order, each in its own crate:
-  [NR-4.1](../windows-namespace-request-sys/CHECKLIST.md),
-  [ERR-1](../windows-file-enumeration-sys/CHECKLIST.md), and
-  [WV-2.1](../win-volume-sys/CHECKLIST.md) (which needs `WE-1.1` only).
+`WE-M1`, the three types (`WE-1.1` to `WE-1.3`), is complete and archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Nothing further is planned in this crate. The work
+it leads to is in other crates:
 
 > **-> CROSS-COMPONENT HANDOFF:** next work is in components `windows-namespace-request-sys` ->
 > `NR-4` -> `NR-4.1`, `windows-file-enumeration-sys` -> `ERR` -> `ERR-1`, and `win-volume-sys` ->
-> `WV-M2` -> `WV-2.1`. See [the order across crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+> `WV-M2` -> `WV-2.1`; and the decision about durable-ioring's `ErrorCode` is
+> [DI-9.7.11](../durable-ioring/CHECKLIST.md). See [the order across crates](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
