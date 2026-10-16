@@ -141,24 +141,22 @@ What this milestone deliberately does not change, each a working position and no
   `CancelSynchronousIo` interrupts a create is not something any design here depends on.
 - `perform` keeps taking `&self`, so one captured request can be performed more than once.
 
-- [ ] **NR-5.1** -- **The decision, from measurements, before the type exists.** The next decision in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) (with its Tier 2 entry): the list of forms the classifier names,
-  taken from Microsoft's "Naming Files, Paths, and Namespaces" and measured on this machine where
-  the documentation leaves it open. The forms are relative, rooted (`\a`), drive-relative (`C:a`),
-  drive-absolute (`C:\a`), UNC (`\\server\share`), verbatim drive (`\\?\C:\`), verbatim UNC
-  (`\\?\UNC\`), verbatim other (a volume GUID path, for one), and device (`\\.\`). Measured first,
-  with the result recorded as measured: what the NT-style `\??\` prefix is taken as, whether forward
-  slashes make a verbatim or device prefix (D-19 rule 6 says only backslashes do; say where that was
-  measured), whether `UNC` is matched without regard to case, and whether `\\.\UNC\` is a UNC form.
-  What the form means to a caller is not decided here.
+- [x] **NR-5.1** -- The decision for the path-form classifier, from measurements, before the type exists: [D-28](DESIGN-NOTES.md#d-28). -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-51-forms)
 
-- [ ] **NR-5.2** -- **`PathForm` and `PathForm::of`**, additive and public, over a `Wtf16Str`. At
-  least ten ordinary cases and every edge the measurements name (empty, a lone separator, `\\`
-  alone, `\\?\` alone, a lone surrogate in the string, mixed slashes). Sabotage entries with a
-  `survives` control, per the usual harness.
+- [ ] **NR-5.2** -- **`PathForm` and `PathForm::of`**, additive and public, over a `Wtf16Str`,
+  specified by the table in [D-28](DESIGN-NOTES.md#d-28): each row of it is pinned by a test, so the
+  forms and the UNC marker are the readings `CreateFileW` gives and not `GetFullPathNameW`'s. At
+  least ten ordinary cases besides, and every edge the measurements name (empty, a lone separator,
+  `\\` alone, `\\?\` alone, `\\?\UNC` with no separator, a lone surrogate in the string, mixed
+  slashes). Sabotage entries with a `survives` control, per the usual harness.
 
 - [ ] **NR-5.3** -- **The graft rules 2, 4 and 6 are derived from the classifier**, so a form is
-  decided at one site. No behaviour changes: every existing test in the crate passes unchanged. The
+  decided at one site. **Awaiting a ruling from the engineer before this starts:** rule 6 refuses to
+  graft onto a `\\?\` or a `\\.\` directory, and [D-28](DESIGN-NOTES.md#d-28) measured that Win32
+  normalises a `\\.\` path, so for that prefix the rule is wider than its reason. Either it is derived
+  as it stands (no behaviour changes: every existing test in the crate passes unchanged, and the
+  corrected reason is the only edit), or it is narrowed to the exactly-backslash verbatim form (a graft
+  now applies to a `\\.\` directory, which is a change in behaviour with its own tests). The
   sabotage that shows it is a derivation and not a second copy: changing the classifier's answer for
   one form changes whether a path is grafted.
 

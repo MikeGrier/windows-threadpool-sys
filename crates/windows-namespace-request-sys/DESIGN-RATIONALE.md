@@ -596,3 +596,40 @@ constructor.
 refuse it adds a check this crate's other entries do not have, and `CreateFileW` already answers an
 empty path with a code. `win-durable-ioring`'s open keeps refusing it, as invalid input, because it
 did before and a caller of that crate must not see a difference.
+
+## D-28: the forms of a path
+
+**Why not `GetFullPathNameW`'s output.** It is the call this crate already makes to resolve a path, it
+is documented, and it does no I/O in the common case, so it was the first thing to try as the
+oracle: classify a string by what it returns. The run showed it cannot be one. It normalises an
+exactly-backslash `\\?\` path that `CreateFileW` leaves alone, it reads `\??\` as a rooted path on the
+current drive where `CreateFileW` takes it as an NT path, and it turns a `/` after `UNC` into a
+backslash where `CreateFileW` keeps it as a name character. A consumer that refused a path because
+`GetFullPathNameW` called it local would be wrong in each of those cases, and the cases are the
+ones that reach the network.
+
+**Why not `PathCch*`.** They are lexical, they do not read `\??\` at all, and they were already ruled
+out for the graft by [D-19](DESIGN-NOTES.md#d-19) for returning a drive-relative path unresolved.
+
+**Why not the function `CreateFileW` itself uses.** The conversion of a DOS path to an NT path is
+done below `CreateFileW` by a routine that is not a documented Win32 function, and this repository
+does not bind one (the rule on documented APIs only), so its answers are reached by behaviour, which
+is what the table is.
+
+**Why measure the open and not the documentation.** The documentation names `\\?\`, `\\.\` and UNC
+paths. What it leaves for a measurement is the spelling: whether `//?/` is a verbatim prefix, whether
+`UNC` is matched without regard to case, whether a slash after `UNC` is a separator, and whether a
+`.` under each prefix is removed. Those are exactly the questions a refusal that is made on a string
+has to get right, and a wrong answer to the first or fourth is a path that reaches the network with
+nothing to stop it.
+
+**Why the example asserts nothing.** What it prints is what one machine did. A test that asserted it
+would fail on another Windows build for a reason that is a finding, not a defect, and `NR-5.2`'s
+classifier tests are what pin the rows. The example is the means of redoing the measurement when a
+row is in doubt.
+
+**The `\??\` form is recognised to refuse, and for nothing else.** It is the one row whose behaviour
+this repository found rather than read, and the platform-integrity rule says to bind to specified
+behaviour. Recognising it only ever refuses a path earlier, which errs toward safety, and the check on
+the opened handle is the authority, so a change in what Windows does with `\??\` can make the early
+refusal miss but cannot make an open unsafe.

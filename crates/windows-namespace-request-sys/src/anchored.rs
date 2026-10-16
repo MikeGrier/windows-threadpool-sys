@@ -26,10 +26,11 @@
 //! 5. no component of the child is a reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM` or
 //!    `LPT` with a digit, `CONIN$` or `CONOUT$`, compared without regard to ASCII case, after
 //!    removing everything from the first `.` and any trailing spaces;
-//! 6. the captured directory does not begin with `\\?\` or `\\.\`. A path with either prefix is not
-//!    normalised by Win32, so a child joined onto one would be taken literally, `.` and `..`
+//! 6. the captured directory does not begin with `\\?\` or `\\.\`. A path with the `\\?\` prefix is
+//!    not normalised by Win32, so a child joined onto one would be taken literally, `.` and `..`
 //!    components, forward slashes and trailing dots and spaces among what would then mean something
-//!    else than they meant relative to that directory.
+//!    else than they meant relative to that directory. A `\\.\` path is normalised (measured, in
+//!    D-28), so for it the rule is wider than its reason, which errs toward not grafting.
 //!
 //! The rules err toward not grafting. Where they are wider than Microsoft's list, the child is
 //! passed through, which is what happens to every form that is not grafted. The digits of rule 5

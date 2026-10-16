@@ -355,3 +355,17 @@ and the item is archived there as
 [M6.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m61). The probe was first adapted just
 enough to build by the commit of `NR-3.4` to `NR-3.6`, as this item said it would be, and then
 rewritten.
+
+## Moved 2026-10-16 18:52:01 -04:00 -- NR-5.1: the forms of a path, measured
+
+### <a id="nr-51-forms"></a>NR-5.1 -- The decision for the path-form classifier, from measurements, before the type exists. *(completed 2026-10-16 18:52:01 -04:00)*
+
+The decision and the table of measurements are [D-28](DESIGN-NOTES.md#d-28), with its Tier 2 entry in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). They were made with
+[examples/path_form_measurements.rs](examples/path_form_measurements.rs), which reproduces them.
+The four questions this item named are answered there: the NT prefix `\??\` is read by `CreateFileW` as
+an NT path and not normalised, and by `GetFullPathNameW` as a rooted path; forward slashes in a
+verbatim prefix make it normalised, so only the exactly-backslash form suppresses normalisation (the
+claim of `D-19` rule 6, measured here for the first time); `UNC` is matched without regard to ASCII case;
+and `\\.\UNC\` is a UNC form. The run also showed that `\\.\` is normalised, which corrects the reason
+given for rule 6, and that `GetFullPathNameW` cannot be the oracle.

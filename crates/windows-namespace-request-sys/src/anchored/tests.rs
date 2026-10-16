@@ -173,8 +173,9 @@ fn rule_4_a_unc_directory_is_one_that_begins_with_two_separators() {
 
 #[test]
 fn rule_6_a_verbatim_or_device_directory_is_not_grafted_onto() {
-    // Win32 does not normalise a path with either prefix, so `.` and `..`, a forward slash and
-    // trailing dots and spaces in the child would be read literally after the join.
+    // Win32 does not normalise a `\\?\` path, so `.` and `..`, a forward slash and trailing dots and
+    // spaces in the child would be read literally after the join. It does normalise a `\\.\` path
+    // (D-28), so for that prefix the rule is wider than its reason, and errs toward not grafting.
     for root in [
         r"\\?\C:\work",
         r"\\?\C:\",

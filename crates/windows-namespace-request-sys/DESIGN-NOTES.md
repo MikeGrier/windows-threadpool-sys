@@ -722,6 +722,9 @@ The drafts themselves, and why each failed, are Tier 2:
 wired into the entries by `NR-3.4` to `NR-3.6`; what those settled is [D-27](#d-27). It supersedes the mechanism of [D-9](#d-9) and the decision of
 [D-18](#d-18); D-18's measurements stand.
 
+**Amended by [D-28](#d-28): the reason given for rule 6 below is corrected there, and whether the rule
+stays as wide as it is is an open choice in `NR-5.3`.**
+
 **What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
 and no check of this crate's own beyond the one that cannot be avoided, an interior NUL, which a
 `PCWSTR` cannot carry. `OpenFile::new` takes the `Wtf16String` directly. What is kept from D-9 is the
@@ -746,9 +749,10 @@ decides whether a long result is acceptable to the host. Nothing here prefixes `
    with a digit, `CONIN$`, `CONOUT$` -- compared without regard to case, after removing everything from
    the first `.` and any trailing spaces. The list is the one in Microsoft's "Naming Files, Paths, and
    Namespaces", and the rule errs toward not grafting;
-6. the captured directory does not begin with `\\?\` or `\\.\`. Win32 does not normalise a path with
-   either prefix, so a grafted `.\a` would be read literally and name a file that is not there, where
-   the same `.\a` handed to Win32 resolves against that directory. It was found by review, which
+6. the captured directory does not begin with `\\?\` or `\\.\`. Win32 does not normalise a `\\?\` path,
+   so a grafted `.\a` would be read literally and name a file that is not there, where the same `.\a`
+   handed to Win32 resolves against that directory. A `\\.\` path it does normalise ([D-28](#d-28)), so
+   for that prefix the rule is wider than its reason. It was found by review, which
    reported that a process whose current directory is verbatim opens `.\kernel32.dll` and could not open
    the grafted form; the child-process test in the open tests shows it against Win32.
 
@@ -1013,3 +1017,96 @@ written into `NR-3.5` as such, and was implemented on the engineer's instruction
 [windows-platform-probes' CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) rewrite the probe
 that measured `prepare`. `win-durable-ioring`'s open was adapted only far enough to build, and its
 rework is [DI-13.7](../durable-ioring/CHECKLIST.md).
+
+## <a id="d-28"></a>D-28: The forms of a path are the readings `CreateFileW` gives its prefix, measured, and `GetFullPathNameW` is not the oracle for them
+
+**Status: measured on 2026-10-16 by `NR-5.1`; the type that carries it is `NR-5.2`.** It corrects the
+reason given for rule 6 of [D-19](#d-19), and settles what that rule may be derived from in `NR-5.3`.
+
+**What is decided.** A classifier of path forms, which `NR-5.2` writes, answers *how `CreateFileW`
+reads the start of this string*. It does not answer what `GetFullPathNameW` makes of it, because the
+two disagree (below), and the call that matters to a consumer is the one that opens. The table below
+is its specification, row by row; `NR-5.2` pins each row with a test and the example that produced
+the rows reproduces them. The classifier is pure: no call into the OS, and no policy about what a form
+means to a caller.
+
+**How it was measured.** `cargo run --example path_form_measurements`
+([examples/path_form_measurements.rs](examples/path_form_measurements.rs)) puts each spelling to both
+calls through this crate's own entries. The open is of a file that exists, with a `.` component in the
+middle of its path, so that it succeeds only if the path was normalised, or of a share on `localhost`
+that does not exist, so that a path read as UNC fails with a network error (67) and one that is not
+fails with a local one. Run on Windows 11 build 26300, not elevated, with the process current drive
+`Q:`.
+
+| Start of the string | `GetFullPathNameW` | `CreateFileW` reads it as |
+|---|---|---|
+| `C:\a`, with `/` or `\` | slashes made backslashes, `.` removed | an ordinary path; opened |
+| exactly `\\?\` | prefix kept, **`.` removed** | **verbatim, not normalised**: the `.` stayed and the open failed with 3 |
+| `//?/`, `\/?\`, `/\?\`, `\\?/`, `//?\` | prefix made `\\?\`, `.` removed | normalised first, then verbatim: opened |
+| `\\.\`, `//./`, `\/.\`, `/\.\`, `\\./`, `//.\` | prefix made `\\.\`, `.` removed | **normalised**: opened |
+| exactly `\??\` | a rooted path on the current drive (`Q:\??\...`) | **an NT path, not normalised**: a drive path without a `.` opened, one with a `.` failed with 3 |
+| `/??/`, `\??/`, `/??\` | a rooted path on the current drive | a rooted ordinary path: failed with 123 |
+| two leading separators, any mix of `\` and `/`, then a name: `\\`, `//`, `\/`, `/\` | `\\server\share`, slashes made backslashes | UNC: error 67 |
+| `\\?\` then `UNC\`, `UNC` in any ASCII case (`UNC`, `unc`, `Unc` tried) | kept | UNC: error 67 |
+| `//?/UNC/` and `//?/UNC\`, a forward slash in the prefix | prefix made `\\?\` | UNC: error 67 |
+| `\\.\` then `UNC\` or `UNC/`, any case, any slash mix in the prefix | prefix made `\\.\` | UNC: error 67 |
+| `\??\` then `UNC\`, any case | a rooted path on the current drive | UNC: error 67 |
+| `\\?\UNC/` or `\??\UNC/`, a forward slash after `UNC` | slashes made backslashes | **not UNC**: failed with 2, the slash kept as a name character |
+| `\\?\UNC` then a name with no separator | kept | not UNC: failed with 3 |
+| `\\??\` then a drive path | unchanged | UNC, with `??` as the server: failed with 53 |
+
+Three things the table shows that a reading of `GetFullPathNameW` alone would miss.
+**`GetFullPathNameW` normalises an exactly-backslash `\\?\` path**, removing the `.`, where
+`CreateFileW` does not. **`\??\` is a form `CreateFileW` reads and `GetFullPathNameW` does not**: the
+second calls it a rooted path on the current drive, and the first treats it as an NT path and reaches
+the network through `\??\UNC\`. **And `GetFullPathNameW` changes a `/` that `CreateFileW` keeps**,
+after `UNC` under an exactly-backslash `\\?\` or `\??\`. A classifier built from `GetFullPathNameW`'s
+output would be wrong about all three.
+
+From the same run: `GetFullPathNameW` of the empty string fails with 123, of `\` is the root of the
+current drive, of `\\?` and `\\.` (with no separator after them) gives the prefix with a separator
+added, and of `C:` is the current directory of that drive.
+
+**The forms, as the readings above give them.**
+
+- **Ordinary**, which Win32 normalises (`.`, `..`, slashes of either kind): relative, drive-relative
+  (`C:a`), drive-absolute (`C:\a`), and rooted (`\a`, and the forward-slash spellings of `\??\`).
+- **UNC**, which Win32 normalises and which reaches the network: two leading separators of either kind
+  that are not a verbatim or device prefix.
+- **Verbatim**, spelled with backslashes only (`\\?\`): not normalised, a `/` is a name character.
+  Spelled with a forward slash anywhere in its four characters it is normalised first and is then
+  handed on as `\\?\`.
+- **Device** (`\\.\`, any slash mix): normalised.
+- **NT** (`\??\`, backslashes only): not normalised.
+- **A UNC marker** inside the last three: the component `UNC`, in any ASCII case, followed by a
+  separator, which is a backslash for the two that are not normalised and either kind for the rest.
+  It makes the path UNC, which reaches the network.
+
+**What "remote by its string" therefore is**, for the refusal that
+[DI-13.1 (b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131) puts before an open: UNC, and a
+verbatim, device or NT path with a UNC marker. Nothing else can be shown remote by its string, which is
+why the check on the opened handle remains the authority.
+
+**Not measured, stated as such.**
+
+- UNC matched against non-ASCII lookalikes of `UNC`, and any case folding beyond ASCII.
+- Trailing dots and spaces, and short (8.3) names, in or after a prefix.
+- A UNC marker followed by the server on a path whose share does exist; a share that does not exist
+  was used so that nothing remote is contacted.
+- Whether `\??\` is documented by Microsoft. It was found by measurement. A consumer binds to
+  documented behaviour ([copilot-instructions.md](../../.github/copilot-instructions.md), platform
+  integrity), so the form is recognised only to refuse a path earlier, which errs the safe way, and
+  never to decide that a path is local or safe to graft onto.
+- The behaviour on other Windows builds.
+
+**Consequence for [D-19](#d-19) rule 6.** Rule 6 gave as its reason that Win32 does not normalise a
+path with either the `\\?\` or the `\\.\` prefix. This measurement shows that holds for `\\?\` and not
+for `\\.\`, which is normalised, so a child grafted onto a `\\.\` directory would be read as it should
+be. The rule is as it was implemented, wider than its reason, and errs toward not grafting. Whether
+`NR-5.3` keeps it as it is or narrows it to the exactly-backslash verbatim form is **not decided**: it
+is a change in behaviour for a process whose current directory has the device prefix, and it is the
+engineer's to rule on. The same run confirms that only a backslash-only `\\?\` suppresses
+normalisation, the claim rule 6 made with no measurement recorded.
+
+**Scheduled work:** `NR-5.2` to `NR-5.4` in [CHECKLIST.md](CHECKLIST.md), and the choice above in
+`NR-5.3`.
