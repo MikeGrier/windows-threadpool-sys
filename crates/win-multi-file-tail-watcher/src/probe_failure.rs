@@ -49,7 +49,13 @@ pub(crate) fn win32_code(error: &io::Error) -> Option<u32> {
 /// Whether a probe that failed with `error` is worth repeating. A code that is not listed as
 /// terminal, and an error with no code, are transient.
 pub(crate) fn classify(error: &io::Error) -> FailureClass {
-    match win32_code(error) {
+    classify_code(win32_code(error))
+}
+
+/// [`classify`] for a failure whose code is already known, which a read's is: the ring reports it
+/// inside an `HRESULT`.
+pub(crate) fn classify_code(code: Option<u32>) -> FailureClass {
+    match code {
         Some(code) if TERMINAL_CODES.contains(&code) => FailureClass::Terminal,
         _ => FailureClass::Transient,
     }

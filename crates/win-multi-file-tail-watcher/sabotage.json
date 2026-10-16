@@ -956,6 +956,22 @@
       "replace": ["        self.made_room = false;"]
     },
     {
+      "name": "a terminal read failure is not delivered to the client",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A handle that can never answer again is the client's to know of; the diagnostic sink alone leaves a client waiting for bytes that will not come.",
+      "find": ["                        && classify_code(code).is_terminal()"],
+      "replace": ["                        && !classify_code(code).is_terminal()"]
+    },
+    {
+      "name": "a terminal read failure names the wrong offset",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The offset the failed read began at is what tells a client where to register again.",
+      "find": ["                            last_known: pending.offset,"],
+      "replace": ["                            last_known: 0,"]
+    },
+    {
       "name": "control: the doorbell is rung while the lock is held",
       "file": "src/pool.rs",
       "expect": "survives",

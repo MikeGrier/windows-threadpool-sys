@@ -21,6 +21,7 @@ use windows_sys::Win32::Foundation::ERROR_HANDLE_EOF;
 use wtf_string::Wtf16Str;
 
 use crate::pool::{BufferPool, PoolBuffer};
+use crate::probe_failure::classify_code;
 use crate::read_plan::{Plan, Reads, plan};
 use crate::read_sq::{Data, ReadEntry, ReadSq};
 use crate::sq::{Attention, PushFailure, SqEntry, Terminal};
@@ -499,13 +500,14 @@ impl<T: Clone> ReadEngine<T> {
     }
 
     /// Settle a read from what it returned. Bytes become the one entry awaiting delivery; a read
-    /// that returned none, or failed, returns its buffer and delivers nothing.
+    /// that returned none returns its buffer and delivers nothing.
     ///
     /// A short read is delivered as the bytes it read, labelled with that range: the rest of what
     /// was announced is not read again, since a file that shrank under the read is the next poll's
     /// shrink. End of file is not a failure and reads nothing. Any other failure is reported to the
-    /// watcher's diagnostic sink, which is the one place a client can learn that bytes it was told
-    /// of will not arrive.
+    /// watcher's diagnostic sink, and if its code is one that means the handle can never answer
+    /// again ([`classify_code`], TW-D-13) it is also delivered as a terminal entry, with the offset
+    /// the read began at; a transient one reaches the sink alone.
     fn finish_read(&mut self, buffer: PoolBuffer, pending: Pending<T>, result: io::Result<usize>) {
         assert!(
             self.undelivered.is_none(),
@@ -524,6 +526,15 @@ impl<T: Clone> ReadEngine<T> {
                             len: pending.len,
                             win32_code: code,
                         });
+                    if let Some(win32_code) = code
+                        && classify_code(code).is_terminal()
+                    {
+                        self.undelivered = Some(ReadEntry::Terminal(Terminal {
+                            value: pending.value,
+                            win32_code,
+                            last_known: pending.offset,
+                        }));
+                    }
                     return;
                 }
             },

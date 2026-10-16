@@ -6,7 +6,9 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_HANDLE_EOF};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_FILE_INVALID, ERROR_HANDLE_EOF, ERROR_INVALID_HANDLE,
+};
 
 use super::{
     Current, EngineError, Groups, Pending, ReadEngine, Stop, Submitted, Tracked, split, win32_code,
@@ -1033,4 +1035,63 @@ fn entries_taken_from_the_watchers_sq_ring_its_resume_doorbell_once_the_run_ends
         is_signalled(engine.watcher().resume_doorbell()),
         "a poll parked on a full SQ is told it can go on"
     );
+}
+
+#[test]
+fn a_terminal_read_failure_is_a_terminal_entry_on_the_client_s_sq_and_also_a_diagnostic() {
+    for code in [ERROR_INVALID_HANDLE, ERROR_FILE_INVALID] {
+        let dir = TempDir::new("re-terminal-read");
+        let sink = RecordingSink::wanting();
+        let mut engine = engine_with(16, 2, 8, 8, 16, Some(sink.clone()));
+        let path = dir.file("a.log", &pattern(40));
+        let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+        let (buffer, pending) = lent(&mut engine, &registration.value(), 24, 8);
+        engine.finish_read(
+            buffer,
+            pending,
+            Err(io::Error::from_raw_os_error(code.cast_signed())),
+        );
+        engine.groups.close_open();
+        assert_eq!(
+            settle(&mut engine),
+            [
+                Got::Terminal {
+                    value: 7,
+                    win32_code: code,
+                    last_known: 24
+                },
+                Got::PollDone
+            ],
+            "the terminal entry comes before its poll's poll-done"
+        );
+        assert_eq!(
+            sink.seen(),
+            [Diagnostic::ReadFailed {
+                registration: registration.id(),
+                offset: 24,
+                len: 8,
+                win32_code: Some(code),
+            }]
+        );
+        assert_eq!(engine.pool().available(), 2, "the buffer went back");
+    }
+}
+
+#[test]
+fn a_transient_read_failure_reaches_the_diagnostic_sink_alone() {
+    let dir = TempDir::new("re-transient-read");
+    let sink = RecordingSink::wanting();
+    let mut engine = engine_with(16, 2, 8, 8, 16, Some(sink.clone()));
+    let path = dir.file("a.log", &pattern(40));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    for failure in [
+        io::Error::from_raw_os_error(ERROR_ACCESS_DENIED.cast_signed()),
+        io::Error::other("no code"),
+    ] {
+        let (buffer, pending) = lent(&mut engine, &registration.value(), 0, 8);
+        engine.finish_read(buffer, pending, Err(failure));
+        assert!(engine.undelivered.is_none());
+    }
+    assert_eq!(sink.seen().len(), 2);
+    assert_eq!(drain_got(&engine), []);
 }

@@ -115,3 +115,24 @@ fn an_error_with_no_code_reads_back_as_none() {
     assert_eq!(win32_code(&io::Error::other("no code")), None);
     assert_eq!(win32_code(&io::Error::from(io::ErrorKind::TimedOut)), None);
 }
+
+#[test]
+fn a_known_code_is_classified_as_the_error_carrying_it_is() {
+    for code in
+        TERMINAL_CODES
+            .iter()
+            .copied()
+            .chain([ERROR_ACCESS_DENIED, ERROR_NOT_READY, 0, u32::MAX])
+    {
+        assert_eq!(
+            super::classify_code(Some(code)),
+            classify(&win32(code)),
+            "code {code}"
+        );
+    }
+}
+
+#[test]
+fn no_code_is_transient_by_code_as_it_is_by_error() {
+    assert_eq!(super::classify_code(None), FailureClass::Transient);
+}

@@ -412,9 +412,19 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
 - **Dropping the layer stops and drains each wait, then releases the engine**; the bound on a drop
   with reads in flight is [TW-7.1](CHECKLIST.md)'s.
 - **A read that returns nothing delivers nothing.** That is a read past the end of a file that
-  shrank, whether reported as zero bytes or as end of file, and its buffer goes back. Any other
-  failure is reported to the watcher's diagnostic sink ([TW-D-13](#tw-d-13-sink)) as
-  `Diagnostic::ReadFailed` and nothing is delivered. Neither is read again.
+  shrank, whether reported as zero bytes or as end of file, and its buffer goes back. Neither is read
+  again.
+- **A failed read is classified as a failed probe is** ([TW-D-13](#tw-d-13), by the same predicate).
+  The engineer, 2026-10-16: terminal errors must appear in the SQ, and transient ones go to the
+  diagnostic channel only at this time. Either way the sink is told, as
+  `Diagnostic::ReadFailed` ([TW-D-13](#tw-d-13-sink)); a terminal one is also delivered as the
+  layer's terminal entry, with the Win32 code, and with `last_known` the offset the failed read began
+  at, since the bytes from there are not read again and a client registers again at it. The bytes of
+  a failed read are not announced again either way.
+- **Possibility, not a plan: a recurring transient read failure may enter the SQ.** The engineer,
+  2026-10-16: the first occurrence probably would not, but a recurrence might, and most recurring
+  transient errors are suspected to be terminal. Nothing here schedules work for it: an actual case
+  of one is wanted first.
 - **Registered buffers are not built.** They would need windows-ioring-sys to lend one registered
   buffer to another thread while the ring fills its neighbours, which its `RegisteredBuffers::get`
   does not (it borrows the whole registration mutably). This decision schedules no work for them, so
@@ -441,10 +451,6 @@ bind to them as settled.
   count when the layer is created, with any defaults left to measurement.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
-- **A failed read reaches the diagnostic sink and nowhere else.** The bytes it was to read were
-  already counted as reported, so a client that needs them registers again at their offset. Whether
-  the client's SQ should carry a failed read as an entry of its own is open, and is not decided
-  here.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
   demand, so no test reaches `submit_queued`'s work; it is written and not exercised.
 - **`Drop` with reads in flight waits for at most one read to finish or be cancelled**, which is

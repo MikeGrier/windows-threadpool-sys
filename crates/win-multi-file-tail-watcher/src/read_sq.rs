@@ -30,7 +30,9 @@ pub(crate) enum ReadEntry<T> {
     Data(Data<T>),
     /// A registration's file got shorter; nothing was read.
     Shrink(Shrink<T>),
-    /// A registration can no longer be probed, and no longer will be (TW-D-13).
+    /// A registration can no longer be probed, and no longer will be (TW-D-13), or a read of it
+    /// failed in a way that means its handle never will answer. For a failed read `last_known` is
+    /// the offset the read began at, and the bytes from there are not read again.
     Terminal(Terminal<T>),
     /// Every read of a poll has been delivered.
     PollDone,

@@ -310,9 +310,10 @@ choice open to the engineer's correction; the decision text they sit under is
   its queue size already bounds how many.
 - **Zero bytes delivers nothing.** An empty chunk says nothing a poll-done does not, and every client
   would have to skip it.
-- **A failed read is a diagnostic.** The existing sink is how a transient failure is already
-  reported; an entry on the client's SQ is the larger decision, and is queued for the layer's public
-  surface in [CHECKLIST.md](CHECKLIST.md) as TW-6.3.
+- **A failed read is classified as a failed probe is.** The engineer decided it, 2026-10-16:
+  terminal ones appear in the SQ and transient ones go to the diagnostic channel only. The assistant's
+  first reading, a diagnostic for every failure, left a client waiting on bytes from a handle that
+  would never answer.
 
 ### The layer on the thread pool (TW-6.1, decided by the assistant while implementing)
 

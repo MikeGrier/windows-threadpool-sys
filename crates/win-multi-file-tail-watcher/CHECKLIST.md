@@ -114,9 +114,7 @@ Coarse on purpose: its scope is set when M5 is done.
 
 - [x] **TW-6.2** -- The layer is tested on the thread pool over files that child processes write, through a pool of four small buffers and a client SQ of two: polls repeated while the children write, every byte delivered once, a stall on kept chunks that dropping them continues, and a drop that releases every file. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-62)
 
-- [ ] **TW-6.3** -- **Decide whether a failed read is an entry of the client's SQ.** Today it is a
-  `Diagnostic::ReadFailed` and nothing else, and the bytes it was to read are not announced again
-  ([TW-D-15](DESIGN-NOTES.md#tw-d-15), working positions).
+- [x] **TW-6.3** -- A failed read is classified as a failed probe is: a terminal one is delivered on the client's SQ as a terminal entry and reaches the diagnostic sink, a transient one reaches the sink alone. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-63)
 
 ## M7 -- Shutdown with reads in flight
 

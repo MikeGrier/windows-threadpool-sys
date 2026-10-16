@@ -1072,3 +1072,30 @@ these add real files, real writers and many polls, which is what catches a stall
 wake-up under load. They were run three times in a row against flakiness.
 
 M6 is not complete: [TW-6.3](CHECKLIST.md) is a decision awaiting the engineer.
+
+## Moved 2026-10-16 16:23:46 -04:00 -- TW-6.3: a failed read is classified as a failed probe is
+
+### <a id="tw-63"></a>TW-6.3 -- A failed read is classified as a failed probe is: a terminal one is delivered on the client's SQ as a terminal entry and reaches the diagnostic sink, a transient one reaches the sink alone. *(completed 2026-10-16 16:23:46 -04:00)*
+
+Crate-internal (a `feat` in effect, but nothing public changed): `src/read_engine.rs` and
+`src/probe_failure.rs`. The decision is the engineer's, 2026-10-16, and is in
+[TW-D-15](DESIGN-NOTES.md#tw-d-15): terminal errors must appear in the SQ, transient ones go to the
+diagnostic channel only for now.
+
+- **One predicate.** `classify_code` is `classify` for a code already known, which a read's is (the
+  ring reports it inside an `HRESULT`), and `classify` now calls it, so a read and a probe cannot
+  disagree about which codes are terminal.
+- **A terminal read failure** becomes the layer's terminal entry: the Win32 code, the registration's
+  value, and `last_known` the offset the read began at. It is delivered before its poll's poll-done,
+  and the sink is told as well.
+- **A transient one** reaches the sink alone, as before.
+- **The possibility the engineer named** -- a recurring transient failure entering the SQ, though
+  not its first occurrence -- is recorded in the design notes and schedules nothing: an actual case
+  is wanted first.
+
+Tested: each listed terminal code delivers the entry before poll-done with the sink told and the
+buffer returned; a transient code and a code-less error deliver nothing; `classify_code` agrees with
+`classify` over the terminal set and neighbours, and a missing code is transient. Two sabotage
+entries, each run on its own and caught.
+
+Milestone M6 is complete.
