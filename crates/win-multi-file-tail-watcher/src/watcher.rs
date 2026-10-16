@@ -24,7 +24,7 @@ mod probe;
 #[cfg(test)]
 mod snapshot_tests;
 
-/// How many roster entries the snapshot copies per lock acquisition. Provisional: TW-2.8 chooses.
+/// How many roster entries the snapshot copies per lock acquisition (TW-D-14).
 const SNAPSHOT_BATCH: usize = 256;
 
 /// What the snapshot pass copies from a roster entry (TW-D-7).

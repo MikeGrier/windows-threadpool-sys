@@ -550,3 +550,17 @@ and base commit in its header. The figures live there and are not restated here.
 - **No constant was changed.** `SNAPSHOT_BATCH`, `REPORT_BATCH`, the chunk size, the roster map and
   the buffers' retention are decisions the engineer makes from the capture; each stays provisional
   until then.
+
+## Moved 2026-10-15 21:32:55 -04:00 -- TW-2.8.1: the sizes chosen from the captures
+
+### <a id="tw-281"></a>TW-2.8.1 -- The batch sizes, the chunk size and the roster map are chosen from the captures, and sharding the probe is recorded as an available remedy that is not built. *(completed 2026-10-15 21:32:55 -04:00)*
+
+Recorded as [TW-D-14](DESIGN-NOTES.md#tw-d-14), with its reasoning in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Crate-internal (a `chore`): the "Provisional" comments in
+`src/watcher.rs` and `src/watcher/engine.rs` now cite the decision.
+
+- **Chosen**: batches of 256 for the snapshot and the report, chunks of at most 64 KiB, the roster
+  stays a `BTreeMap`. All three are the values already in the code.
+- **Sharding the probe is not built and nothing is queued for it**; the decision says so.
+- **Retention was not decided** and moved to TW-2+.2 in [CHECKLIST.md](CHECKLIST.md), because the
+  captures have no roster that shrinks.

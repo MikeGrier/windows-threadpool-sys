@@ -19,8 +19,7 @@ mod bench;
 #[cfg(test)]
 mod tests;
 
-/// How many changes the report pass writes per acquisition of the roster lock. Provisional: TW-2.8
-/// chooses.
+/// How many changes the report pass writes per acquisition of the roster lock (TW-D-14).
 const REPORT_BATCH: usize = 256;
 
 /// How a run of the engine ended.

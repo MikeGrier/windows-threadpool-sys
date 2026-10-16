@@ -225,6 +225,20 @@ one example of terminal. Recording it raised three points, which the engineer th
 Defaulting an unlisted code to transient was chosen as the failure that keeps watching.
 `ERROR_FILE_INVALID` was added to the terminal set by the assistant and accepted.
 
+## TW-D-14
+
+- **Why the choices are recorded without a table.** The figures live in the two captures, with host
+  and commit; copying them here would make a second copy that nobody re-checks. The decision names
+  the captures and what each measured.
+- **Why sharding is a remedy and not a plan.** The engineer: with very little effort the probe of a
+  20,000-file roster could be brought much lower by threading it, so no normal update frequency
+  should miss its deadline, and it need not be built now, only known to be available. What it
+  would take (a changed-list buffer per thread, a merge in roster order, a fan-out in the poll on
+  the thread pool) is why it is not a constant to change.
+- **Why the earlier checklist item to choose them was closed rather than kept.** It was queued by the
+  assistant so that the decision would not live only in prose, and the decision was made when the
+  engineer read the captures.
+
 ## TW-D-11 and TW-D-12
 
 The first sketch named layers (endpoint, cursor, registry, reader); the engineer pointed out that

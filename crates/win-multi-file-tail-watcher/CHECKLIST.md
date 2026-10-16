@@ -39,14 +39,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.8** -- Timings of each pass against roster sizes from 1,000 to 50,000 are captured by ignored tests, with the roster map measured alone; no constant is changed by it. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-28)
 
-- [ ] **TW-2.8.1** -- **Choose from the capture** [bench-captures/2026-10-15.txt](bench-captures/2026-10-15.txt)
-  the snapshot and report batch sizes, the chunk size, whether the roster's `BTreeMap` stays, and
-  whether the buffers give chunks back after an unusually large poll; record each as a decision in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) and replace the "Provisional" comments. Also read
-  [bench-captures/2026-10-15-query-threads.txt](bench-captures/2026-10-15-query-threads.txt), the bare
-  kernel call and the probe across threads, against [TW-D-5](DESIGN-NOTES.md#tw-d-5)'s open thread
-  count and its deferral of sharding the probe pass. Blocked on the engineer's reading of the
-  captures, not on any further work.
+- [x] **TW-2.8.1** -- The batch sizes, the chunk size and the roster map are chosen from the captures, and sharding the probe is recorded as an available remedy that is not built. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-281)
 
 - [ ] **TW-2.9** -- **Integration tests: the engine over real files.** Hundreds of files, some
   grown and some shrunk by child processes between runs, against an SQ far smaller than the number
@@ -65,6 +58,8 @@ Parked, not pending: the milestone that is next after M2 pulls these in.
   crate's layering; the decision is to merge it or to delete the question, and is made when there
   is more than one event to compare. durable-ioring's `StderrDiagnostics` and `FanOutDiagnostics`
   were not mirrored, so shared machinery would bring them here. ([TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- [ ] **TW-2+.2** -- **Decide whether the buffers give chunks back after an unusually large poll**, and how many they keep. Needs a measurement the captures do not have: a roster that grows and then shrinks, polled across the change. ([TW-D-14](DESIGN-NOTES.md#tw-d-14))
 
 ## M3 -- The poll on the thread pool
 

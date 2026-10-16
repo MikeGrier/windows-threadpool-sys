@@ -27,6 +27,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
 | <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
+| <a id="tw-d-14"></a>TW-D-14 | **The passes work in batches of 256 under the roster lock, the buffers in chunks of at most 64 KiB, and the roster stays a `BTreeMap`; sharding the probe across threads is a known remedy that is not built.** |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -110,9 +111,10 @@ Reporting the attention makes the current length the new last known length.
   ([TW-D-9](#tw-d-9)), is refused. Because a poll outlives the call that started it, this is a
   runtime check, not an exclusive borrow. One poll at a time gives a single resume position
   ([TW-D-7](#tw-d-7)) and a single writer for each registration's last known length.
-- **Threads: the fewest that finish a poll within a reasonable beat.** The cost of one length query
-  and the beat interval are not yet known, so no thread count is fixed. The design must leave the
-  querying itself shardable across threads without committing to it.
+- **Threads: the fewest that finish a poll within a reasonable beat.** The beat interval is not
+  known, so no thread count is fixed. The design leaves the querying itself shardable across threads
+  without committing to it; what is known of the query's cost and of sharding it is in
+  [TW-D-14](#tw-d-14).
 - **No thread wakeups between polls.** The process should quiesce as far as possible. State that
   sits still -- held handles, the roster, memory, an idle thread-pool wait -- is not what this
   requirement is about.
@@ -163,7 +165,8 @@ can wait on something outside the crate. The reasoning, and the engineer's origi
 
 - **Pass 1, copy.** Under the roster lock, in batches by id range, copy each entry's id, last known
   length and an observer of its handle ([TW-D-10](#tw-d-10)) into a chunked buffer. The lock is
-  taken per batch, so it is held for a bounded amount of map work. The batch size is not chosen.
+  taken per batch, so it is held for a bounded amount of map work. The batch size is chosen in
+  [TW-D-14](#tw-d-14).
 - **Pass 2, probe.** With no lock held, read each observer's current length, drop the observer, and
   keep the id, last known and current length of those that differ, in id order.
 - **Pass 3, report.** From a kept index into that list, per batch under the roster lock: look the id
@@ -282,6 +285,26 @@ The engineer, 2026-10-15: a failed probe's error code is inspected to decide wha
   watcher. The shape is mirrored, not shared: durable-ioring's event and kind enums are its own.
   Whether the machinery moves to a crate both use is a later decision, tracked in
   [CHECKLIST.md](CHECKLIST.md).
+
+## TW-D-14: batch and chunk sizes, the roster map, and sharding
+
+The engineer, 2026-10-15, from the captures [bench-captures/2026-10-15.txt](bench-captures/2026-10-15.txt)
+and [bench-captures/2026-10-15-query-threads.txt](bench-captures/2026-10-15-query-threads.txt).
+
+- **A batch is 256 entries**, for the snapshot (`SNAPSHOT_BATCH`) and for the report
+  (`REPORT_BATCH`). The capture records the roster lock's hold per batch for both.
+- **A chunk holds at most 64 KiB** ([TW-D-7](#tw-d-7)); unchanged.
+- **The roster stays a `BTreeMap`.** The capture times the map alone, beside the file opens and
+  closes that registration and unregistration cost.
+- **Sharding the probe pass across threads is not built.** The capture times a bare
+  `GetFileInformationByHandleEx(FileStandardInfo)` loop, the same loop through `file_len`, and both
+  across 1 to 16 threads over the same handles. It is the remedy to reach for if a poll is found too
+  long for its beat, and the SQ already admits many writers ([TW-D-6](#tw-d-6)). This decision
+  schedules no work: nothing is queued for it, so that its absence from the checklist is
+  intentional.
+- **Retention is not decided**: whether the buffers give chunks back after an unusually large poll.
+  The captures include no roster that shrinks, so they say nothing about it; it is
+  [TW-2+.2](CHECKLIST.md).
 
 ## Working positions (not decisions)
 

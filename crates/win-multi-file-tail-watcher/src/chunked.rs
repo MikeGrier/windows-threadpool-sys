@@ -18,7 +18,7 @@ const CHUNK_BYTES: usize = 64 * 1024;
 ///
 /// [`clear`](Self::clear) and [`truncate`](Self::truncate) keep the chunks they empty, so a buffer
 /// that has been filled once is refilled without allocating. How many to keep after an unusually
-/// large fill is not decided.
+/// large fill is not decided (TW-2+.2).
 #[derive(Debug)]
 pub(crate) struct Chunked<T> {
     // Every chunk is allocated at `PER_CHUNK` and never grows. Chunks before the one holding the
