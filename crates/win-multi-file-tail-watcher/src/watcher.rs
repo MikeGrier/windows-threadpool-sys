@@ -18,6 +18,7 @@ use crate::{CreateError, HeldFile, OpenError};
 #[cfg(test)]
 mod tests;
 
+mod engine;
 mod probe;
 
 #[cfg(test)]
@@ -30,7 +31,7 @@ const SNAPSHOT_BATCH: usize = 256;
 #[derive(Debug)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll engine (TW-2.7) reads it")
+    expect(dead_code, reason = "the poll engine (TW-3.1) reads it")
 )]
 pub(crate) struct SnapshotItem {
     pub(crate) id: u64,
@@ -87,6 +88,18 @@ struct Entry<T> {
     // The Win32 code that made this registration terminal (TW-D-13), set once the caller has been
     // told. A terminal entry is no longer probed or snapshotted, and stays until dropped.
     terminal: Option<u32>,
+}
+
+impl<T> Entry<T> {
+    /// Note that this registration can never be probed again, `code` being why. Returns whether it
+    /// did: `false` when it was already terminal, so the first code stays.
+    fn mark_terminal(&mut self, code: u32) -> bool {
+        if self.terminal.is_some() {
+            return false;
+        }
+        self.terminal = Some(code);
+        true
+    }
 }
 
 impl<T> Shared<T> {
@@ -202,7 +215,7 @@ impl<T: Clone> Watcher<T> {
     /// Report an event to the watcher's sink if it wants `kind`; `make` builds the event only then.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the probe pass (TW-2.6) reports through it")
+        expect(dead_code, reason = "the poll engine (TW-3.1) reports through it")
     )]
     pub(crate) fn diagnose(&self, kind: DiagnosticKind, make: impl FnOnce() -> Diagnostic) {
         self.shared.diagnostics.emit(kind, make);
@@ -211,7 +224,7 @@ impl<T: Clone> Watcher<T> {
     /// A writing handle for one thread of the crate's own.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the report pass (TW-2.7) writes through it")
+        expect(dead_code, reason = "the poll engine (TW-3.1) writes through it")
     )]
     pub(crate) fn sq_writer(&self) -> SqWriter<T> {
         self.shared
@@ -264,7 +277,7 @@ impl<T: Clone> Watcher<T> {
     /// keeps the file open if it has.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the poll engine (TW-2.7) runs it")
+        expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
     )]
     pub(crate) fn snapshot(&self, out: &mut Chunked<SnapshotItem>) {
         self.snapshot_batches(out, SNAPSHOT_BATCH, || {});
@@ -274,7 +287,7 @@ impl<T: Clone> Watcher<T> {
     // check can go, and where a test can change the roster.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the poll engine (TW-2.7) runs it")
+        expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
     )]
     fn snapshot_batches(
         &self,
@@ -312,21 +325,13 @@ impl<T: Clone> Watcher<T> {
 
     /// Note that the registration `id` can never be probed again, `code` being why. Returns whether
     /// it did: `false` when there is no such registration, or it was already terminal.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the report pass (TW-2.7) marks an entry once it has written its terminal entry"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn mark_terminal(&self, id: u64, code: u32) -> bool {
-        match self.shared.roster().entries.get_mut(&id) {
-            Some(entry) if entry.terminal.is_none() => {
-                entry.terminal = Some(code);
-                true
-            }
-            _ => false,
-        }
+        self.shared
+            .roster()
+            .entries
+            .get_mut(&id)
+            .is_some_and(|entry| entry.mark_terminal(code))
     }
 
     /// How many registrations are live.

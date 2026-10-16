@@ -483,3 +483,42 @@ The sabotage manifest gains an unchanged length reported, only growth reported, 
 the current length as the last known one, a terminal failure not told apart, one that loses its code,
 a transient failure not reported, and a snapshot left full; the observer dropped by name survives as
 the control.
+
+## Moved 2026-10-15 20:59:44 -04:00 -- TW-2.7: the report pass and the stop point
+
+### <a id="tw-27"></a>TW-2.7 -- The report pass writes the changed list to the SQ a batch at a time under the roster lock, a refused write stops the pass without waiting, and the engine continues from the kept index. *(completed 2026-10-15 20:59:44 -04:00)*
+
+Crate-internal (a `chore`): `src/watcher/engine.rs`. ([TW-D-4](DESIGN-NOTES.md#tw-d-4),
+[TW-D-6](DESIGN-NOTES.md#tw-d-6), [TW-D-7](DESIGN-NOTES.md#tw-d-7),
+[TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- **`Engine` owns the two buffers, the SQ writer and the kept index**, and takes the watcher per
+  call. `run` starts a poll when none is in flight (snapshot, then probe) and then reports; a poll
+  that stopped is continued by calling `run` again, which skips the copy and the probe and resumes at
+  the kept index. It returns `RunOutcome::Complete` or `Stopped`.
+- **Per batch, under one hold of the roster lock**: look the id up (a dropped registration, or one
+  already terminal, is skipped), clone `T`, write the attention or terminal entry, and on success make
+  the reported length the entry's last known one or mark it terminal. The lookup, write and mark are
+  one hold, so `mark_terminal` is now a method of the roster `Entry`; the `Watcher` method of the
+  same name is test-only.
+- **A refused write stops the pass without waiting.** The index stays at that change, the entry is
+  neither advanced nor marked, and the `T` cloned for it is dropped after the lock is released. A
+  terminal entry that is refused is therefore written again on the next run.
+- **Poll-done follows the last change and needs room like any entry**; when there is none the pass
+  stops with the index at the end.
+- **A pause between batches runs with the lock released** (a parameter of the inner function, so a
+  test can look at the lock and drop a registration in it).
+- **`SqPushError::Closed` is `unreachable!`**: the watcher holds the SQ's reader.
+- **Not done here**: ringing the doorbell is the thread-pool poll's, after the lock is released
+  (TW-3.1). The report batch is provisional until TW-2.8.
+
+Tested: empty and unchanged watchers; attentions in registration order then poll-done; no repeats
+and the last known length current; growth reported from the length last reported; a shrink; a
+capacity-2 SQ stopping and continuing across runs; poll-done waiting for room; a pass probed before
+a stop and a later poll seeing the growth since; a registration dropped or added while stopped; the
+refused clone dropped; no observer held while stopped; terminal entries written once, marked, and
+not probed again; one made terminal after the probe not reported; a refused terminal entry staying
+unmarked and retried; a transient failure going to the sink with the registration probed again;
+every batch size from 1 to past the list; the lock free in each pause; a drop in a pause; 600
+changes through a capacity of 64; and new polls after completion. The sabotage manifest retargets the
+three entries that named the old `Watcher::mark_terminal` and adds eight for the engine and a control.

@@ -2,7 +2,7 @@
 //! An append-only sequence held in fixed-size chunks, for the poll's per-poll copies.
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll engine (TW-2.7) uses it")
+    expect(dead_code, reason = "the poll engine (TW-3.1) uses it")
 )]
 
 use std::mem::size_of;

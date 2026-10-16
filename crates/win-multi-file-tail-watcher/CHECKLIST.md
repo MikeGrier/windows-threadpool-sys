@@ -35,17 +35,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.6** -- The probe pass reads each snapshotted observer's length with no lock held, drops each observer as read, and keeps the changes and terminal failures in a second chunked buffer. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-26)
 
-- [ ] **TW-2.7** -- **The report pass and the stop point.** Walks the changed list from a recorded
-  index. Per batch, under the roster lock: look the id up (a dropped registration is skipped), clone
-  `T`, write the attention to the SQ, and on success make the reported length the entry's last known
-  one. A terminal failure in the list is written the same way as a terminal entry, and on success
-  marks the roster entry terminal. A refused write stops the pass without waiting and keeps the
-  index; a clone made for a refused write is dropped after the lock is released. The poll-done entry follows the last
-  attention, needs room like any entry, and stops the pass the same way when there is none. The
-  engine runs to a stop or to completion and says which; continuing is calling it again from the
-  kept index. `T::clone` runs under the lock, so a `Clone` that calls back into the watcher would
-  deadlock; the public documentation says so. ([TW-D-4](DESIGN-NOTES.md#tw-d-4),
-  [TW-D-6](DESIGN-NOTES.md#tw-d-6), [TW-D-7](DESIGN-NOTES.md#tw-d-7))
+- [x] **TW-2.7** -- The report pass writes the changed list to the SQ a batch at a time under the roster lock, a refused write stops the pass without waiting, and the engine continues from the kept index. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-27)
 
 - [ ] **TW-2.8** -- **Benchmark the passes against population size**, from 1,000 files to the
   expected top end, each pass separately: the snapshot (the lock hold per batch and in total), the

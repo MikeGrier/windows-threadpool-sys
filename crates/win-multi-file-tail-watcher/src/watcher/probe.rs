@@ -2,7 +2,7 @@
 //! The probe pass: read each snapshotted length with no lock held (TW-D-7, TW-D-13).
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll engine (TW-2.7) runs it")
+    expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
 )]
 
 use std::io;
@@ -51,7 +51,7 @@ impl<T: Clone> Watcher<T> {
     }
 
     // `read` is the probe itself, so that a test can make one fail.
-    fn probe_with(
+    pub(super) fn probe_with(
         &self,
         snapshot: &mut Chunked<SnapshotItem>,
         changed: &mut Chunked<Change>,

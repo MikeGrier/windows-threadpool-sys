@@ -304,24 +304,96 @@
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "A terminal entry is reported once. Marking again would let a second report overwrite the code of the first.",
-      "find": ["            Some(entry) if entry.terminal.is_none() => {"],
-      "replace": ["            Some(entry) => {"]
+      "find": ["        if self.terminal.is_some() {\n            return false;\n        }\n"],
+      "replace": [""]
     },
     {
       "name": "marking records no code",
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "The state is kept with its reason, so that the code is not lost after the entry has been written.",
-      "find": ["                entry.terminal = Some(code);"],
-      "replace": ["                entry.terminal = Some(0);"]
+      "find": ["        self.terminal = Some(code);"],
+      "replace": ["        self.terminal = Some(0);"]
     },
     {
       "name": "marking a registration that is not there reports success",
       "file": "src/watcher.rs",
       "expect": "caught",
       "why": "The report pass writes the terminal entry and then marks it; a dropped registration must not read as marked.",
-      "find": ["            _ => false,"],
-      "replace": ["            _ => true,"]
+      "find": [".is_some_and(|entry| entry.mark_terminal(code))"],
+      "replace": [".is_none_or(|entry| entry.mark_terminal(code))"]
+    },
+    {
+      "name": "a refused write advances past the change",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A change the SQ refused is lost unless the pass resumes at it.",
+      "find": ["                        refused = Some(unwritten);\n                        break false;"],
+      "replace": ["                        refused = Some(unwritten);\n                        *next += 1;\n                        break false;"]
+    },
+    {
+      "name": "a written change does not update the last known length",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Without it the same growth is reported on every later poll.",
+      "find": ["                Outcome::Changed { current } => entry.last_known = current,"],
+      "replace": ["                Outcome::Changed { .. } => {}"]
+    },
+    {
+      "name": "a written terminal entry is not marked",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The entry would be probed and reported again on every poll.",
+      "find": ["                    entry.mark_terminal(win32_code);"],
+      "replace": ["                    let _ = win32_code;"]
+    },
+    {
+      "name": "a poll-done the SQ refuses completes the poll",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The consumer would never see the end of that poll.",
+      "find": ["                    Err(SqPushError::Full(_)) => RunOutcome::Stopped,"],
+      "replace": ["                    Err(SqPushError::Full(_)) => RunOutcome::Complete,"]
+    },
+    {
+      "name": "the report batch is not honoured",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The roster lock would be held for the whole pass.",
+      "find": ["                    if listed == batch {"],
+      "replace": ["                    if false {"]
+    },
+    {
+      "name": "the roster lock is held across the pause",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Everything is written correctly and a registration made in the pause waits for the whole pass.",
+      "find": ["        loop {\n            let mut refused = None;\n            let mut listed = 0;\n            let exhausted = {\n                let mut roster = self.shared.roster();"],
+      "replace": ["        let mut roster = self.shared.roster();\n        loop {\n            let mut refused = None;\n            let mut listed = 0;\n            let exhausted = {"]
+    },
+    {
+      "name": "the value cloned for a refused write is kept",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The caller's value would leak with every refusal.",
+      "find": ["                drop(refused);"],
+      "replace": ["                std::mem::forget(refused);"]
+    },
+    {
+      "name": "a registration already terminal is reported",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once; a change probed before it was marked must not be a second report.",
+      "find": ["                        && entry.terminal.is_none()\n"],
+      "replace": [""]
+    },
+    {
+      "name": "control: the refused entry is dropped explicitly",
+      "file": "src/watcher/engine.rs",
+      "expect": "survives",
+      "why": "`drop` and a binding that goes out of scope are the same.",
+      "find": ["                drop(refused);"],
+      "replace": ["                let _gone = refused;"]
     },
     {
       "name": "an unchanged length is reported as a change",
