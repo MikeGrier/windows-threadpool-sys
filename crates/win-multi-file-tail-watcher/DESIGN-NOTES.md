@@ -409,8 +409,20 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   the ring's life and cannot be detached, and a wait that is armed on an event nothing rings wakes no
   thread, which is what [TW-D-5](#tw-d-5) asks for. Each wait re-arms only itself, because arming a
   wait from another thread is not excluded by draining it.
-- **Dropping the layer stops and drains each wait, then releases the engine**; the bound on a drop
-  with reads in flight is [TW-7.1](CHECKLIST.md)'s.
+- **Shutdown stops the reads and nothing else** ([TW-D-9](#tw-d-9)). It is a request that does not
+  block and may be repeated: it shuts the watcher down, stops the engine from planning or submitting
+  any read, and wakes the engine. What was planned and not submitted is abandoned, reads in flight
+  are left to complete and are delivered, attentions that arrive afterwards are not read, and
+  terminal and shrink entries and every poll-done are still delivered, so a poll's poll-done is
+  never lost to shutdown. The request needs no lock the engine holds, because a callback may hold it
+  for a step.
+- **Reads are completed, not cancelled.** The ring the layer owns holds only operations it holds
+  buffers for, and cancelling one needs a ring that can also hold operations it holds nothing for,
+  which is the thing that ring was made not to be. A read of a file ends on its own.
+- **Dropping the layer stops and drains each wait, then releases the engine**, having requested
+  shutdown first. What it waits for is a running engine step, a running poll reaching its next step,
+  and the reads already in flight, which complete in parallel: it never waits for a read that was
+  not submitted, nor for the client to drain or to take a poll-done.
 - **A read that returns nothing delivers nothing.** That is a read past the end of a file that
   shrank, whether reported as zero bytes or as end of file, and its buffer goes back. Neither is read
   again.
@@ -453,5 +465,3 @@ bind to them as settled.
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
   demand, so no test reaches `submit_queued`'s work; it is written and not exercised.
-- **`Drop` with reads in flight waits for at most one read to finish or be cancelled**, which is
-  [TW-D-9](#tw-d-9)'s bound restated for the reading layer; it is settled in M7.

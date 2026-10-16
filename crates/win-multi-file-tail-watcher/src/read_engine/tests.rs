@@ -11,7 +11,8 @@ use windows_sys::Win32::Foundation::{
 };
 
 use super::{
-    Current, EngineError, Groups, Pending, ReadEngine, Stop, Submitted, Tracked, split, win32_code,
+    Advance, Current, EngineError, Groups, Pending, ReadEngine, Stop, Submitted, Tracked, split,
+    win32_code,
 };
 use crate::pool::{BufferPool, PoolBuffer};
 use crate::read_plan::{Plan, plan};
@@ -1094,4 +1095,77 @@ fn a_transient_read_failure_reaches_the_diagnostic_sink_alone() {
     }
     assert_eq!(sink.seen().len(), 2);
     assert_eq!(drain_got(&engine), []);
+}
+
+#[test]
+fn after_a_stop_no_read_is_submitted_and_the_reads_in_flight_are_delivered_with_poll_done() {
+    let dir = TempDir::new("re-stop");
+    let mut engine = engine(8, 4);
+    let content = pattern(64);
+    let path = dir.file("a.log", &content);
+    let _registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    engine.watcher().poll_here();
+    // Four reads go in flight, the pool's four buffers, and four more are planned and not submitted.
+    loop {
+        match engine.advance().expect("advance") {
+            Advance::Progress => {}
+            Advance::Blocked(stop) => {
+                assert_eq!(stop, Stop::PoolEmpty);
+                break;
+            }
+            Advance::Drained => panic!("eight reads do not fit four buffers"),
+        }
+    }
+    assert_eq!(engine.in_flight(), 4);
+    engine.stop();
+    let got = settle(&mut engine);
+    let (start, bytes) = reassembled(&got, 7);
+    assert_eq!((start, bytes), (0, content[..32].to_vec()));
+    assert_eq!(
+        poll_dones(&got),
+        [got.len() - 1],
+        "poll-done is delivered, last"
+    );
+    assert!(engine.current.is_none(), "what was planned is abandoned");
+}
+
+#[test]
+fn after_a_stop_attentions_are_skipped_and_poll_done_and_terminal_entries_are_still_delivered() {
+    let dir = TempDir::new("re-stop-skip");
+    let mut engine = engine(8, 4);
+    let path = dir.file("a.log", &pattern(64));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    engine.stop();
+    engine.watcher().poll_here();
+    push(
+        &engine,
+        SqEntry::Terminal(Terminal {
+            value: registration.value(),
+            win32_code: ERROR_INVALID_HANDLE,
+            last_known: 5,
+        }),
+    );
+    assert_eq!(
+        settle(&mut engine),
+        [
+            Got::PollDone,
+            Got::Terminal {
+                value: 7,
+                win32_code: ERROR_INVALID_HANDLE,
+                last_known: 5
+            }
+        ]
+    );
+    assert_eq!(engine.in_flight(), 0, "nothing was read");
+}
+
+#[test]
+fn a_stop_leaves_the_watcher_working() {
+    let dir = TempDir::new("re-stop-watcher");
+    let engine = engine(8, 4);
+    engine.stop();
+    let path = dir.file("a.log", b"abc");
+    let _registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    engine.watcher().poll_here();
+    assert!(engine.watcher().drain().next().is_some());
 }

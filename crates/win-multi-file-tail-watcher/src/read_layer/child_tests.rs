@@ -170,3 +170,29 @@ fn a_layer_dropped_after_its_polls_releases_the_children_files() {
         std::fs::write(path, b"again").expect("and made again");
     }
 }
+
+#[test]
+fn a_layer_dropped_with_reads_in_flight_returns_and_releases_the_files() {
+    const COUNT: u32 = 20;
+    let dir = TempDir::new("rl-child-inflight");
+    let layer = layer_with(8, 4, 2);
+    let mut writers = Writers::start(&dir, &layer, COUNT, 10);
+    writers.finish();
+    layer.poll().expect("poll");
+    // The client's SQ of two fills and the layer stops with reads still held by its ring.
+    assert!(signalled_within(layer.read_sq().doorbell(), 10_000));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(layer.core.engine().in_flight() > 0, "reads are in flight");
+    drop(writers._registrations);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(layer);
+        done.send(()).expect("the test is waiting");
+    });
+    finished
+        .recv_timeout(Duration::from_secs(30))
+        .expect("dropping the layer with reads in flight did not return");
+    for (_, path) in &writers.files {
+        std::fs::remove_file(path).expect("a closed file can be deleted");
+    }
+}

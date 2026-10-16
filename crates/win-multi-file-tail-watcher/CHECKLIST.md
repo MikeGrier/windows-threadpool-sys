@@ -120,8 +120,6 @@ Coarse on purpose: its scope is set when M5 is done.
 
 Coarse on purpose: its scope is set when M6 is done.
 
-- [ ] **TW-7.1** -- **Shutdown and `Drop` with reads in flight**: the reads cancelled or completed, the
-  ring run down, poll-done always delivered, and the bound on `Drop` settled for reads.
-  ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
+- [x] **TW-7.1** -- Shutdown and `Drop` with reads in flight: shutdown is a non-blocking, repeatable request that stops reads being planned or submitted, reads in flight complete and are delivered, every poll-done is still delivered, and `Drop` waits only for the reads already in flight. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-71)
 
 - [ ] **TW-7.2** -- **Integration tests: shutdown from every state of a read.**

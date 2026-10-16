@@ -1099,3 +1099,32 @@ buffer returned; a transient code and a code-less error deliver nothing; `classi
 entries, each run on its own and caught.
 
 Milestone M6 is complete.
+
+## Moved 2026-10-16 16:53:21 -04:00 -- TW-7.1: shutdown and drop with reads in flight
+
+### <a id="tw-71"></a>TW-7.1 -- Shutdown and `Drop` with reads in flight: shutdown is a non-blocking, repeatable request that stops reads being planned or submitted, reads in flight complete and are delivered, every poll-done is still delivered, and `Drop` waits only for the reads already in flight. *(completed 2026-10-16 16:53:21 -04:00)*
+
+Crate-internal (a `chore`): `src/read_engine.rs`, `src/read_layer.rs` and a stop handle in
+`src/watcher.rs`. The decisions are under [TW-D-15](DESIGN-NOTES.md#tw-d-15), restating
+[TW-D-9](DESIGN-NOTES.md#tw-d-9) for reads; the alternatives are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+- **`ReadLayer::shutdown`** sets the engine's stop flag and the watcher's stop request, both without
+  the engine's lock, and wakes the engine. After a stop the engine abandons what was planned and
+  plans no read from an attention that arrives; every other entry goes on, so each poll-done is
+  still delivered after the reads of its own poll.
+- **Reads are completed, not cancelled**: the ring is `Owned`, which has no raw cancel.
+- **`Drop` requests shutdown first**, then drains the waits and releases the engine, whose ring runs
+  down the reads already in flight. The working position that said "at most one read to finish or be
+  cancelled" is replaced by that.
+
+Tested: after a stop four reads in flight are delivered with poll-done and no more are submitted;
+attentions after a stop are skipped while terminal entries and poll-done go through; a stop leaves
+the watcher working; shutdown refuses polls, repeats, and returns while another thread holds the
+engine's lock; shutdown while stalled on kept chunks delivers poll-done once they return with fewer
+bytes than the files hold; a layer dropped with reads in flight returns and every file can then be
+deleted. Four sabotage entries, each run on its own and the full sweep once: three caught and one
+control that survives, since the order of a drop's shutdown request against a callback running during
+its drain cannot be arranged by a test.
+
+M7 is not complete: TW-7.2 is its tests.

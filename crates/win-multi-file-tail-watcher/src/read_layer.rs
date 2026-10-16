@@ -12,6 +12,7 @@
 
 use std::io;
 use std::os::windows::io::OwnedHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use windows_ioring_sys::CompletionWake;
@@ -20,6 +21,7 @@ use wtf_string::Wtf16Str;
 
 use crate::read_engine::{ReadEngine, Tracked};
 use crate::read_sq::ReadSq;
+use crate::watcher::StopHandle;
 use crate::{OpenError, PollError, Registration};
 
 // Here and not in `tests/` because the layer is not public.
@@ -31,6 +33,10 @@ mod tests;
 /// What every callback runs: the engine, and the first error it returned.
 struct Core<T: Clone> {
     engine: Mutex<ReadEngine<T>>,
+    // A request to stop reading and a request to shut the watcher down, both without the engine's
+    // lock, which a running callback may hold for a step.
+    stop: Arc<AtomicBool>,
+    watcher_stop: StopHandle<Tracked<T>>,
     failure: Mutex<Option<io::Error>>,
     // How many times the engine has been driven, so a test can see that nothing drives it between
     // polls.
@@ -86,6 +92,8 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
     /// completion event.
     pub(crate) fn new(engine: ReadEngine<T>) -> io::Result<Self> {
         let sq = engine.shared_sq();
+        let stop = engine.stop_flag();
+        let watcher_stop = engine.watcher().stop_handle();
         let events = [
             engine.watcher().doorbell().try_clone_to_owned()?,
             engine.pool().doorbell().try_clone_to_owned()?,
@@ -93,6 +101,8 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
         ];
         let core = Arc::new(Core {
             engine: Mutex::new(engine),
+            stop,
+            watcher_stop,
             failure: Mutex::new(None),
             #[cfg(test)]
             runs: std::sync::atomic::AtomicUsize::new(0),
@@ -145,6 +155,18 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
         &self.sq
     }
 
+    /// Stop for good, without blocking and as often as asked: no poll starts, a poll running stops at
+    /// its next step, no read is planned or submitted, reads in flight complete and are delivered,
+    /// and every poll-done is still delivered (TW-D-9). Registering and dropping registrations go on
+    /// working. Dropping the layer is what waits.
+    pub(crate) fn shutdown(&self) {
+        self.core.stop.store(true, Ordering::Release);
+        self.core.watcher_stop.request();
+        // Wakes the engine, which has nothing else to tell it, so it abandons what it planned and
+        // delivers the poll-dones it owes.
+        self.sq.ring_resume();
+    }
+
     /// The first error the ring returned to a run, if one has, taken. The layer goes on.
     pub(crate) fn take_failure(&self) -> Option<io::Error> {
         self.core
@@ -157,6 +179,9 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
 
 impl<T: Clone + Send + 'static> Drop for ReadLayer<T> {
     fn drop(&mut self) {
+        // Requested first, so a poll still running stops at its next step, no read is submitted
+        // from here on, and what is in flight is all the ring's rundown waits for.
+        self.shutdown();
         // Nothing arms a wait after construction but the wait's own callback, which the drain
         // suppresses, so each is idle when this returns.
         for wait in &self.waits {

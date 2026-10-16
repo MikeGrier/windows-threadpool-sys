@@ -387,6 +387,23 @@ impl<T: Clone> Watcher<T> {
     pub fn shutdown(&self) {
         self.shared.stop.store(true, Ordering::Release);
     }
+
+    /// A handle that makes the same request as [`shutdown`](Self::shutdown) without a borrow of the
+    /// watcher, for an owner that keeps the watcher under a lock a request must not wait for.
+    pub(crate) fn stop_handle(&self) -> StopHandle<T> {
+        StopHandle(Arc::clone(&self.shared))
+    }
+}
+
+/// See [`Watcher::stop_handle`]. It keeps the watcher's shared state, files included, alive, so an
+/// owner drops it with the watcher.
+pub(crate) struct StopHandle<T>(Arc<Shared<T>>);
+
+impl<T> StopHandle<T> {
+    /// As [`Watcher::shutdown`]: set a flag, and return.
+    pub(crate) fn request(&self) {
+        self.0.stop.store(true, Ordering::Release);
+    }
 }
 
 /// One file's registration with a [`Watcher`]. Dropping it unregisters the file.

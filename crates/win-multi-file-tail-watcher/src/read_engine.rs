@@ -14,6 +14,7 @@ use std::io;
 use std::num::NonZeroU32;
 use std::os::windows::io::{AsRawHandle, RawHandle};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_ioring_sys::{Batch, CompletionWake, IoRing, IoRingErrorExt, Op, Owned, PushOptions};
 use windows_overlapped_io_sys::EndpointObserver;
@@ -283,6 +284,9 @@ pub(crate) struct ReadEngine<T: Clone> {
     // Entries were taken from the watcher's SQ since the last run ended, so a poll parked on a full
     // SQ can continue.
     made_room: bool,
+    // Set by a stop request: no read is planned or submitted from then on. Shared so a request needs
+    // no lock.
+    stop: Arc<AtomicBool>,
     current: Option<Current<T>>,
     // The one entry the client's SQ refused. While it is held nothing else is taken, so entries
     // reach the client in the order they were made.
@@ -338,6 +342,7 @@ impl<T: Clone> ReadEngine<T> {
             buffer_len,
             watcher,
             made_room: false,
+            stop: Arc::new(AtomicBool::new(false)),
             current: None,
             undelivered: None,
             groups: Groups::default(),
@@ -375,6 +380,17 @@ impl<T: Clone> ReadEngine<T> {
     /// The same SQ, to be held apart from the engine.
     pub(crate) fn shared_sq(&self) -> Arc<ReadSq<T>> {
         Arc::clone(&self.sq)
+    }
+
+    /// The stop flag, to be set apart from the engine: see [`stop`](Self::stop).
+    pub(crate) fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
+    /// Stop reading for good: no read is planned or submitted after this, the reads in flight are
+    /// left to complete, and every poll-done is still delivered. Does not shut the watcher down.
+    pub(crate) fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
     }
 
     /// Have `on_wake` called on a thread-pool thread whenever a read may have completed, and once
@@ -550,8 +566,14 @@ impl<T: Clone> ReadEngine<T> {
     }
 
     /// Take the next piece of work: submit the current plan's reads, or take the next entry from
-    /// the watcher and plan it.
+    /// the watcher and plan it. After a stop no read is planned or submitted, and what was planned
+    /// and not submitted is abandoned; everything else goes on, so each poll's poll-done is still
+    /// delivered (TW-D-9).
     fn advance(&mut self) -> io::Result<Advance> {
+        let stopping = self.stop.load(Ordering::Acquire);
+        if stopping {
+            self.current = None;
+        }
         if self.current.is_some() {
             return Ok(match self.submit_reads()? {
                 Submitted::Done => {

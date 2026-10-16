@@ -307,3 +307,77 @@ fn a_new_layer_with_nothing_to_do_runs_the_engine_once_for_its_setup_and_then_no
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(runs(&layer), settled);
 }
+
+#[test]
+fn shutdown_refuses_polls_and_may_be_repeated() {
+    let dir = TempDir::new("rl-shut");
+    let layer = layer();
+    let path = dir.file("a.log", &pattern(40));
+    let _registration = layer.register(&wtf(&path), 0, 7).expect("register");
+    layer.shutdown();
+    layer.shutdown();
+    assert!(matches!(layer.poll(), Err(crate::PollError::Shutdown)));
+    // Registering still works, as for the watcher.
+    let _again = layer.register(&wtf(&path), 0, 8).expect("register");
+}
+
+#[test]
+fn shutdown_does_not_wait_for_a_busy_engine() {
+    let layer = layer();
+    let busy = layer.core.engine();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            layer.shutdown();
+            done.send(()).expect("the test is waiting");
+        });
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("shutdown waited for the engine's lock");
+    });
+    drop(busy);
+}
+
+#[test]
+fn shutdown_while_stalled_on_kept_chunks_delivers_poll_done_once_they_return() {
+    let dir = TempDir::new("rl-shut-held");
+    let layer = layer_with(64, 4, 8);
+    let mut registrations = Vec::new();
+    for n in 0..12_u32 {
+        let path = dir.file(format!("f{n}.log"), &pattern(40));
+        registrations.push(layer.register(&wtf(&path), 0, n).expect("register"));
+    }
+    layer.poll().expect("poll");
+    let mut held = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held.len() < 4 {
+        assert!(Instant::now() < deadline, "the layer never delivered");
+        signalled_within(layer.read_sq().doorbell(), 100);
+        layer.read_sq().reset_doorbell();
+        held.extend(layer.read_sq().drain());
+    }
+    layer.shutdown();
+    assert!(matches!(layer.poll(), Err(crate::PollError::Shutdown)));
+    let mut taken = Taken::default();
+    for entry in held {
+        let ReadEntry::Data(data) = entry else {
+            panic!("only data was kept");
+        };
+        let (value, range, chunk) = data.into_parts();
+        taken.pieces.entry(value).or_default().push(Piece {
+            range,
+            bytes: chunk.to_vec(),
+        });
+    }
+    // Every chunk is back, nothing more is read, and the poll-done is delivered all the same.
+    take_until(&layer, &mut taken, 1);
+    let total: usize = taken
+        .pieces
+        .values()
+        .flatten()
+        .map(|piece| piece.bytes.len())
+        .sum();
+    assert!(total >= 32, "what was in flight was delivered: {total}");
+    assert!(total < 12 * 40, "reads stopped: {total}");
+    assert!(layer.take_failure().is_none());
+}

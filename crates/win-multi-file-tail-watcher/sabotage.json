@@ -972,6 +972,38 @@
       "replace": ["                            last_known: 0,"]
     },
     {
+      "name": "a stop does not abandon what was planned",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "After a stop no read is submitted, so a plan that was part way through is dropped; kept, it goes on reading the file the layer is shutting down.",
+      "find": ["        if stopping {\n            self.current = None;\n        }"],
+      "replace": ["        if !stopping {\n            self.current = None;\n        }"]
+    },
+    {
+      "name": "shutdown does not stop the engine",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "Reads not yet submitted are what shutdown leaves unread, and what a drop then does not wait for.",
+      "find": ["        self.core.stop.store(true, Ordering::Release);"],
+      "replace": ["        let _ = &self.core.stop;"]
+    },
+    {
+      "name": "shutdown does not shut the watcher down",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "A poll started after shutdown would find attentions nothing will read, and a running one would not stop at its next step.",
+      "find": ["        self.core.watcher_stop.request();"],
+      "replace": ["        let _ = &self.core.watcher_stop;"]
+    },
+    {
+      "name": "control: a drop requests shutdown before it drains",
+      "file": "src/read_layer.rs",
+      "expect": "survives",
+      "why": "Not equivalent in every interleaving -- it stops a poll and the reads a callback running during the drain would submit -- but no test can order that, since the waits' callbacks and the drop race; the watcher's own drop sets its flag as well.",
+      "find": ["        self.shutdown();\n        // Nothing arms"],
+      "replace": ["        // Nothing arms"]
+    },
+    {
       "name": "control: the doorbell is rung while the lock is held",
       "file": "src/pool.rs",
       "expect": "survives",

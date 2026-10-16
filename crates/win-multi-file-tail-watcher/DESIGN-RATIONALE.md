@@ -329,3 +329,16 @@ choice open to the engineer's correction; the decision text they sit under is
   requirement.
 - **The run resets, the wait does not.** Putting the reset in the engine's run rather than in each
   callback gives every trigger the same discipline, and it is also how a synchronous driver gets it.
+
+### Shutdown and drop with reads in flight (TW-7.1, decided by the assistant while implementing)
+
+- **Complete, not cancel.** The checklist allowed either. Cancelling needs a raw cancel on the ring,
+  which only an `Open` ring has, and the engine's ring is `Owned` so that every operation it holds
+  has a buffer to hand back. Making it `Open` for a bound that a read of a file already has would
+  trade that guarantee away.
+- **A stop flag and a handle, not the lock.** A shutdown that took the engine's lock would wait for a
+  callback's step, which TW-D-9 forbids of a request; the flag and the watcher's stop handle are set
+  with no lock.
+- **Poll-done survives shutdown.** Abandoning only reads, and letting every other entry through, is
+  what keeps the group accounting (a poll's poll-done waits for its reads) true after a stop with no
+  special case.
