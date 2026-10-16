@@ -205,6 +205,110 @@
       "why": "A control: a pointer is null when its address is zero, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        if !self.0.is_null() {\n"],
       "replace": ["        if self.0.addr() != 0 {\n"]
+    },
+    {
+      "name": "NR-3.2: the reopen is made on no handle at all",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "The original is the one input that says what is reopened; a null handle is refused by the call.",
+      "find": ["                    self.original.raw(),\n"],
+      "replace": ["                    core::ptr::null_mut(),\n"]
+    },
+    {
+      "name": "NR-3.2: the access asked for is not the access passed",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "The access is the point of reopening; passing none gives a handle that cannot write.",
+      "find": ["                    self.desired_access,\n"],
+      "replace": ["                    0,\n"]
+    },
+    {
+      "name": "NR-3.2: the share mode asked for is not the share mode passed",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "Sharing nothing conflicts with the original, which is open and shares more.",
+      "find": ["                    self.share_mode,\n"],
+      "replace": ["                    0,\n"]
+    },
+    {
+      "name": "NR-3.2: the flags asked for are not the flags passed",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "A reopen that drops FILE_FLAG_NO_BUFFERING returns a buffered handle, which accepts the unaligned transfer the test shows an unbuffered one refusing.",
+      "find": ["                    self.flags_and_attributes,\n"],
+      "replace": ["                    0,\n"]
+    },
+    {
+      "name": "NR-3.2: the access getter answers the share mode",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "Each getter reads back its own parameter; the values in the test are all different.",
+      "find": ["        self.desired_access\n    }\n"],
+      "replace": ["        self.share_mode\n    }\n"]
+    },
+    {
+      "name": "NR-3.2: the share-mode getter answers the access",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "The other direction of the swap above.",
+      "find": ["        self.share_mode\n    }\n"],
+      "replace": ["        self.desired_access\n    }\n"]
+    },
+    {
+      "name": "NR-3.2: a new request starts with an access",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "Nothing is defaulted: a request that says nothing carries nothing.",
+      "find": ["            desired_access: 0,\n"],
+      "replace": ["            desired_access: 1,\n"]
+    },
+    {
+      "name": "NR-3.2: a new request starts with a share mode",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "As for the access: a default share mode would be a choice made for the caller.",
+      "find": ["            share_mode: 0,\n"],
+      "replace": ["            share_mode: 1,\n"]
+    },
+    {
+      "name": "NR-3.2: a new request starts with flags",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "As for the access: a default flag would be a choice made for the caller.",
+      "find": ["            flags_and_attributes: 0,\n"],
+      "replace": ["            flags_and_attributes: 1,\n"]
+    },
+    {
+      "name": "NR-3.2: a copy forgets the access",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "A copy is the same request.",
+      "find": ["            desired_access: self.desired_access,\n"],
+      "replace": ["            desired_access: 0,\n"]
+    },
+    {
+      "name": "NR-3.2: a copy forgets the share mode",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "A copy is the same request.",
+      "find": ["            share_mode: self.share_mode,\n"],
+      "replace": ["            share_mode: 0,\n"]
+    },
+    {
+      "name": "NR-3.2: a copy forgets the flags",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "A copy is the same request.",
+      "find": ["            flags_and_attributes: self.flags_and_attributes,\n"],
+      "replace": ["            flags_and_attributes: 0,\n"]
+    },
+    {
+      "name": "NR-3.2: control, the zero share mode of a new request written as hexadecimal",
+      "file": "src/reopen.rs",
+      "expect": "survives",
+      "why": "A control: 0x0 is 0, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            share_mode: 0,\n"],
+      "replace": ["            share_mode: 0x0,\n"]
     }
   ]
 }
