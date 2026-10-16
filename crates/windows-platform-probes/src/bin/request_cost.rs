@@ -69,16 +69,17 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{:<26} {:>10} {:>14} {:>16}",
         "operation", "ns/op", "x an atomic", "x a doorbell"
     );
-    // Says what the first four rows include, because their names do not. Each
-    // is a construct-and-DESTROY cycle: `time_loop` drops the value it is
-    // handed at the end of the timed statement, so the free is inside the
-    // figure. `capture_handle` and `close_handle` are the exception and are
-    // timed apart, because dropping a `CapturedHandle` calls `CloseHandle` and
-    // that is a second kernel transition rather than a free.
+    // Says what the rows include, because their names do not. Each is a
+    // construct-and-DESTROY cycle: `time_loop` drops the value it is handed at
+    // the end of the timed statement, so the free is inside the figure, and for
+    // the two `perform` rows the drop is the `CloseHandle` of the handle the
+    // open returned. `capture_handle` and `close_handle` are the exception and
+    // are timed apart, because dropping a `CapturedHandle` calls `CloseHandle`
+    // and that is a second kernel transition rather than a free.
     let _ = writeln!(
         out,
-        "  (the first four are construct-and-drop cycles; capture and close are\n   \
-         timed separately)"
+        "  (every row but the last two is a construct-and-drop cycle, and the perform\n   \
+         rows are an open-and-close cycle; capture and close are timed separately)"
     );
     for timing in &observation.timings {
         let _ = writeln!(
@@ -99,20 +100,29 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     let _ = writeln!(out, "\ninterpretation:");
 
-    let build = observation.get("build_open_request");
+    // Every label read here is recorded unconditionally by `measure`, and the
+    // census at the end of this function asserts it, so a lookup that misses
+    // means a label was renamed on one side and not the other.
+    let string_clone = observation.get("clone_path_string");
+    let build = observation.get("build_request_kept");
+    let grafted = observation.get("build_request_grafted");
+    let clone_kept = observation.get("clone_request_kept");
+    let clone_grafted = observation.get("clone_request_grafted");
+    let perform = observation.get("perform_open");
+    let build_and_perform = observation.get("build_and_perform_open");
     let capture = observation.get("capture_handle");
 
     if let Some(build) = build {
         // The ratio names its own reference, because the two numbers do not
         // come from the same machine. `build` was measured on this host just
         // now; the doorbell figure is a constant captured once on the
-        // Snapdragon X2 (ARM64) development machine. This probe now runs on
-        // hosted CI runners, which are a heterogeneous fleet, so a ratio printed
-        // as though both halves were local can be wrong even when the
-        // measurement is sound.
+        // Snapdragon X2 (ARM64) development machine. This probe runs on hosted
+        // CI runners, which are a heterogeneous fleet, so a ratio printed as
+        // though both halves were local can be wrong even when the measurement
+        // is sound.
         let _ = writeln!(
             out,
-            "  building a pathed request costs {build:.0} ns, which is {:.1}x one",
+            "  building a request for an absolute path costs {build:.0} ns, which is {:.1}x one",
             build / DOORBELL_NS_REFERENCE
         );
         let _ = writeln!(
@@ -134,15 +144,15 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  heaviest payload the queue carries -- it resolves a path through"
+            "  heaviest payload the queue carries -- it carries a path and may"
         );
         let _ = writeln!(
             out,
-            "  Win32 and may duplicate a handle -- and it ends in a CreateFileW"
+            "  duplicate a handle -- and it ends in a CreateFileW costing"
         );
         let _ = writeln!(
             out,
-            "  costing microseconds regardless. A registered-buffer read, which is"
+            "  microseconds regardless. A registered-buffer read, which is"
         );
         let _ = writeln!(
             out,
@@ -169,22 +179,11 @@ fn render(out: &mut dyn std::fmt::Write) {
         let _ = writeln!(out, "  time measures none of them.");
         let _ = writeln!(out);
         // States the COMPARISON and refuses the verdict, because this probe
-        // does not measure a doorbell.
-        //
-        // This read "What it does support: for an open-heavy workload, doorbell
-        // tuning would be optimizing the small half" -- a design conclusion
-        // whose truth depends entirely on which of the two is larger, decided
-        // against a constant measured on the Snapdragon X2 (ARM64) development
-        // machine. It INVERTS on the x86_64 host measured during review, where
-        // `probe-doorbell-cost` reported a ~531 ns cycle against ~210 ns to
-        // build a request, so the doorbell is the large half there and tuning
-        // it would optimize the large one. Both probes run in the same
-        // CI job, so the sentence was contradicted a few lines further down the
-        // same log.
-        //
-        // The caveats above cover the printed ratio and the operation-type
-        // scope; neither guarded this, because it was phrased as what the run
-        // supports rather than as a ratio.
+        // does not measure a doorbell. Which half is larger inverts between
+        // hosts: the doorbell is the small half on the Snapdragon X2 (ARM64)
+        // development machine and the large one on the x86_64 host measured
+        // during review, so a sentence naming either would be contradicted a
+        // few lines further down the same CI log.
         let _ = writeln!(
             out,
             "  WHICH HALF IS LARGER IS NOT ESTABLISHED HERE. Whether doorbell"
@@ -210,6 +209,85 @@ fn render(out: &mut dyn std::fmt::Write) {
             "  between hosts, so a conclusion about OPERATION MIX belongs to a"
         );
         let _ = writeln!(out, "  reader holding both figures from one machine.");
+    }
+
+    // What the graft adds, as figures and the mechanism, and no verdict on
+    // whether it matters. The two builds are the same request but for the path:
+    // an absolute path is kept as given and no directory is read, and a relative
+    // one is grafted onto the current directory the build reads.
+    if let Some(build) = build
+        && let Some(grafted) = grafted
+    {
+        let _ = writeln!(
+            out,
+            "\n  A path Win32 would resolve against the current directory is fixed to it"
+        );
+        let _ = writeln!(
+            out,
+            "  when the request is built. Building one costs {grafted:.0} ns, against {build:.0} ns for"
+        );
+        let _ = writeln!(
+            out,
+            "  an absolute path, which is kept as given. The difference spans the"
+        );
+        let _ = writeln!(
+            out,
+            "  GetCurrentDirectoryW call, the concatenation, and the allocations they"
+        );
+        let _ = writeln!(
+            out,
+            "  need; this run does not separate them, and does not establish whether"
+        );
+        let _ = writeln!(out, "  the call enters the kernel.");
+        if let Some(string_clone) = string_clone {
+            let _ = writeln!(
+                out,
+                "  Both builds include {string_clone:.0} ns to clone the sample string that hands the"
+            );
+            let _ = writeln!(out, "  request an owned path.");
+        }
+    }
+
+    // Recycling a request, as the two costs side by side. A clone keeps the
+    // directory its original captured, so it pays neither the read nor the
+    // concatenation again.
+    if let Some(build) = build
+        && let Some(grafted) = grafted
+        && let Some(clone_kept) = clone_kept
+        && let Some(clone_grafted) = clone_grafted
+    {
+        let _ = writeln!(
+            out,
+            "\n  Cloning a built request instead costs {clone_kept:.0} ns for an absolute path"
+        );
+        let _ = writeln!(
+            out,
+            "  and {clone_grafted:.0} ns for a relative one, against {build:.0} and {grafted:.0} ns to build them."
+        );
+        let _ = writeln!(
+            out,
+            "  A clone keeps the directory its original captured. A request that is"
+        );
+        let _ = writeln!(
+            out,
+            "  grafted holds two strings, the path as given and the path handed to"
+        );
+        let _ = writeln!(out, "  Win32, where one that is kept as given holds one.");
+    }
+
+    // The call the request carries, so the build can be read beside it.
+    if let Some(perform) = perform {
+        let _ = writeln!(
+            out,
+            "\n  Performing the open of a real file (kernel32.dll) and closing the handle it"
+        );
+        let _ = writeln!(out, "  returns costs {perform:.0} ns.");
+        if let Some(both) = build_and_perform {
+            let _ = writeln!(
+                out,
+                "  Building the request and performing it costs {both:.0} ns together."
+            );
+        }
     }
 
     if let Some(capture) = capture {
@@ -240,171 +318,25 @@ fn render(out: &mut dyn std::fmt::Write) {
             let _ = writeln!(out, "  above is the duplication alone.");
         }
         if let Some(build) = build {
-            if capture > build {
-                let _ = writeln!(
-                    out,
-                    "  It is {:.1}x the cost of building the pathed request itself, so a",
-                    capture / build
-                );
-                let _ = writeln!(
-                    out,
-                    "  request carrying a handle is dominated by the duplication, and"
-                );
-                let _ = writeln!(
-                    out,
-                    "  any allocation tuning on the path would be optimizing the wrong"
-                );
-                let _ = writeln!(out, "  half.");
-            } else {
-                // The ratio without a verdict. This branch fires on `capture <=
-                // build`, which is every ratio from 0.99 down to 0.01, and it
-                // said "the two are comparable and neither dominates" for all
-                // of them -- a claim about closeness drawn from a test for
-                // order. Whether two figures are comparable needs a range, and
-                // this probe was given one only by accident of which arm it
-                // landed in.
-                let _ = writeln!(
-                    out,
-                    "  It is {:.2}x the pathed request. Which of the two dominates, if",
-                    capture / build
-                );
-                let _ = writeln!(
-                    out,
-                    "  either does, is for a reader with a threshold in mind; this run"
-                );
-                let _ = writeln!(out, "  establishes only the two costs and their ratio.");
-            }
+            let _ = writeln!(
+                out,
+                "  It is {:.2}x the cost of building a request for an absolute path.",
+                capture / build
+            );
         }
     }
 
-    // The split that decides whether an allocator change can help at all.
-    if let Some(build) = build
-        && let Some(clone) = observation.get("clone_prepared_units")
-        && build > clone
-    {
-        let _ = writeln!(
-            out,
-            "\n  WHERE THE TIME ACTUALLY GOES, and it is not only the allocator:"
-        );
-        // "resolves against process state" -- not "a syscall", and not
-        // "lexical" either.
-        //
-        // The first was wrong because a timing loop cannot establish a kernel
-        // transition. The second, which replaced it, is wrong for a symmetric
-        // reason: `GetFullPathNameW` consults the process current directory,
-        // and for a drive-relative path naming a drive OTHER than the current
-        // one the per-drive current directory held in the `=C:` environment
-        // variables, so it is not pure string work. (On the current drive that
-        // entry makes no difference to the result; whether it is read is not
-        // observable and is not claimed. The qualifier was missing here for two
-        // rounds after the module doc above gained it -- the sweep reached the
-        // module doc and the emitted report and stopped short of this inline
-        // comment.) A
-        // genuinely lexical canonicalizer is a different call
-        // (`PathCchCanonicalizeEx`), and it is deliberately NOT the one
-        // `prepare` wants -- resolving against the CWD at submission is the
-        // property the namespace design is buying.
-        //
-        // What this run established is the cost. The mechanism it did not, and
-        // two successive attempts to name one were each wrong in the same way.
-        let _ = writeln!(
-            out,
-            "  `prepare` calls GetFullPathNameW, which roots MOST paths that are not fully"
-        );
-        let _ = writeln!(
-            out,
-            "  qualified against process state -- most, because a legacy device name such"
-        );
-        let _ = writeln!(
-            out,
-            "  as CON short-circuits rooting entirely. The CWD is mutable by any thread, so"
-        );
-        let _ = writeln!(
-            out,
-            "  resolving later would be racy. BOTH SAMPLES HERE ARE FULLY QUALIFIED, so"
-        );
-        let _ = writeln!(
-            out,
-            "  that rooting is the motivation for resolving at submission and is not"
-        );
-        let _ = writeln!(out, "  what these numbers measure.");
-        let _ = writeln!(
-            out,
-            "  The gap between building and cloning bounds the resolution step from"
-        );
-        let _ = writeln!(
-            out,
-            "  above. It is not the call's own cost: it also spans ONE NET allocation"
-        );
-        let _ = writeln!(
-            out,
-            "  of this crate's own -- prepare allocates twice against the clone's once,"
-        );
-        let _ = writeln!(
-            out,
-            "  so the subtraction cancels one -- and the builder chain."
-        );
-        let _ = writeln!(
-            out,
-            "  Whether any of it enters the kernel is not something this run measured."
-        );
-        let _ = writeln!(
-            out,
-            "  Two different schemes recover different things, and this said"
-        );
-        let _ = writeln!(
-            out,
-            "  one number for both. RECYCLING a resolved path pays {clone:.0} ns instead"
-        );
-        let _ = writeln!(
-            out,
-            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the",
-            build - clone
-        );
-        let _ = writeln!(
-            out,
-            "  RESOLUTION STEP plus that net allocation, and only a caller that can"
-        );
-        let _ = writeln!(
-            out,
-            "  reuse a resolved path gets it. INLINE STORAGE removes the allocation and"
-        );
-        let _ = writeln!(
-            out,
-            "  copy instead, which is what the {clone:.0} ns clone measures, so it"
-        );
-        let _ = writeln!(
-            out,
-            "  recovers at most that and cannot touch the resolution at all."
-        );
-        let _ = writeln!(
-            out,
-            "  A caller with a fresh path each time pays the resolution regardless."
-        );
-    }
-
-    // `expect`, not `null`. Every label below is recorded unconditionally by
-    // `measure`, so a lookup that misses means a label was renamed on one side
-    // and not the other -- a defect in this probe, not a condition of the host.
-    //
-    // `null` is the right answer for a value that can legitimately be absent,
-    // and none of these can be. Letting them say "absent" would have produced a
-    // partially populated record that parses cleanly and reads, to a mining
-    // pass, as a host on which the measurement did not apply.
     // Built by walking the SAME `timings` the prose table walked, with
     // `json_key` deciding only what each entry is called here.
     //
-    // This replaces six hand-named fields and the `get` closure that fetched
-    // them. Both are gone for the same reason: naming each figure separately
-    // made prose and NDJSON independent restatements of one measurement, so
-    // nothing stopped them disagreeing or one omitting a figure the other
-    // showed.
+    // This replaces hand-named fields. They were two independent restatements
+    // of one measurement, so nothing stopped them disagreeing or one omitting a
+    // figure the other showed.
     //
-    // The `expect`-per-field the closure existed for is NOT gone -- it moved,
-    // and it had to. Iterating what was measured cannot ask for something
-    // absent, so this loop cannot fail on a missing label; it just emits one
-    // key fewer, shrinking the schema with nothing saying so. `main` caught
-    // that per field. The census below is the same guard in one place.
+    // Iterating what was measured cannot ask for something absent, so this loop
+    // cannot fail on a missing label; it just emits one key fewer, shrinking the
+    // schema with nothing saying so. The census below is the guard, in one
+    // place.
     let mut fields = String::new();
     for timing in &observation.timings {
         let _ = write!(

@@ -59,8 +59,8 @@ fn a_manual_clock_never_reads_less_than_before() {
 fn a_fault_names_the_test_source_and_the_code_an_os_error_carries() {
     let fault = fault(io::Error::from_raw_os_error(1117));
     assert_eq!(fault.source, SOURCE);
-    assert_eq!(fault.code, Some(ErrorCode::from_win32(1117)));
-    assert_eq!(fault.code.and_then(ErrorCode::win32), Some(1117));
+    assert_eq!(fault.code, Some(ErrorCode::from_hresult(1117)));
+    assert_eq!(fault.code.map(ErrorCode::hresult), Some(1117));
     assert_eq!(fault.error.raw_os_error(), Some(1117));
 }
 

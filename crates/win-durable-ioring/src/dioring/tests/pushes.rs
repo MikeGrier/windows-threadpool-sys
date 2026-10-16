@@ -6,10 +6,9 @@
 //! Waits poll the queue under a bound; the readiness signal has its own check.
 
 use std::fs;
-use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 use std::time::{Duration, Instant};
 
-use win_shared_os_owned_handle::SharedHandle;
 use windows_ioring_sys::RegisteredSpan;
 
 use super::{TempFile, V, empty, setup};
@@ -21,7 +20,7 @@ fn length(len: usize) -> u32 {
 use crate::InterruptStamps;
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::readiness::check_readiness;
-use crate::windows_backend::Win32FileTarget;
+use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
 use durable_ioring::IoTarget;
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::oracle::ConformanceOracle;
@@ -52,12 +51,8 @@ pub(super) fn temp(content: &[u8]) -> TempFile {
     temp
 }
 
-pub(super) fn read_only(temp: &TempFile) -> SharedHandle {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .open(&temp.0)
-        .expect("open read-only");
-    SharedHandle::new(OwnedHandle::from(file))
+pub(super) fn read_only(temp: &TempFile) -> OpenedFile {
+    OpenedFile::open(&temp.0, FileOptions::new().read(true)).expect("open read-only")
 }
 
 pub(super) fn instance(files: Vec<TargetSetup>, buffers: Vec<Vec<u8>>) -> Ring {

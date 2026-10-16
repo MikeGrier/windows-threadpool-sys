@@ -21,7 +21,7 @@ env:
 # union and the minimal default (no-feature) configuration are exercised: the
 # default set is a supported, published configuration, and a feature-union-only
 # build can hide a missing `cfg` or an item that depends on an opt-in feature.
-# `wtf-string`, `io-buffers` and `durable-ioring` are portable, so they are additionally built, tested, and
+# `wtf-string`, `io-buffers`, `durable-ioring` and `win-error-codes` are portable, so they are additionally built, tested, and
 # linted on Linux and macOS (the `portable` job) to keep their non-Windows support verified.
 jobs:
   probe-release-tests:
@@ -276,6 +276,29 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-namespace-request-sys --locked --test unc_current_directory -- --include-ignored
+      # The same share, for the one test that opens a file on it: an unbuffered file is refused on
+      # a remote device, which no in-memory test can show (DI-D-60). Ignored by default for the
+      # reason above, and a failure here is a result in the same way.
+      - name: cargo test (win-durable-ioring, unbuffered file on a remote device)
+        if: ${{ matrix.isolated }}
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored an_unbuffered_file_is_refused_on_a_remote_device
+      # A raw volume against a real one: a scratch virtual disk, created and attached with diskpart,
+      # which the runner's administrator account can do and a developer's usually cannot (DI-D-61).
+      # Nothing here is real storage; each test detaches and deletes its own disk. A failure here is
+      # a result: if the runner stops being able to attach a virtual disk, the answer is to say so,
+      # not to delete the tests.
+      #
+      # Two sets: a raw volume on a scratch disk with a partition, and a whole raw disk with none
+      # (DI-D-62). The disk tests write only to the disk diskpart reports for the file each makes.
+      - name: cargo test (win-durable-ioring, raw volume and raw disk on scratch virtual disks)
+        if: ${{ matrix.isolated }}
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p win-durable-ioring --locked --lib -- --include-ignored raw_volume raw_disk
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
       # the `--workspace` steps above unify that feature onto
@@ -1021,11 +1044,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo build (portable crates)
-        run: cargo build -p wtf-string -p io-buffers -p durable-ioring --all-targets --locked
+        run: cargo build -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes --all-targets --locked
       - name: cargo test (portable crates)
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p wtf-string -p io-buffers -p durable-ioring --locked --no-fail-fast
+        run: cargo test -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes --locked --no-fail-fast
       - name: cargo clippy (portable crates)
-        run: cargo clippy -p wtf-string -p io-buffers -p durable-ioring --all-targets --locked -- -D warnings
+        run: cargo clippy -p wtf-string -p io-buffers -p durable-ioring -p win-error-codes --all-targets --locked -- -D warnings

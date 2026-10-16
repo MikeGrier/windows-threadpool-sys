@@ -32,8 +32,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
 };
 
+use wtf_string::{Wtf16Str, Wtf16String};
+
+use crate::anchored::{AnchoredPath, PathCaptureError};
 use crate::outcome::{Outcome, perform_bool, perform_handle};
-use crate::path::PreparedPath;
 
 /// An owned change-notification handle.
 ///
@@ -78,7 +80,6 @@ impl ChangeNotification {
     /// ```
     /// use std::fs;
     ///
-    /// use windows_namespace_request_sys::prepare;
     /// use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
     /// use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     /// use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -89,7 +90,7 @@ impl ChangeNotification {
     /// fs::create_dir_all(&directory)?;
     ///
     /// let text = directory.to_str().expect("a temporary path is valid UTF-8");
-    /// let notification = WatchDirectory::new(prepare(&Wtf16String::from(text))?)
+    /// let notification = WatchDirectory::new(Wtf16String::from(text))?
     ///     .with_filter(NotifyFilter::FILE_NAME)
     ///     .perform()?;
     ///
@@ -227,14 +228,13 @@ impl std::ops::BitOr for NotifyFilter {
 /// # Example
 ///
 /// ```
-/// use windows_namespace_request_sys::prepare;
 /// use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
 /// use wtf_string::Wtf16String;
 ///
 /// let directory = std::env::temp_dir();
 /// let text = directory.to_str().expect("the temporary directory is valid UTF-8");
 ///
-/// let request = WatchDirectory::new(prepare(&Wtf16String::from(text))?)
+/// let request = WatchDirectory::new(Wtf16String::from(text))?
 ///     .with_subtree(true)
 ///     .with_filter(NotifyFilter::FILE_NAME | NotifyFilter::DIR_NAME);
 ///
@@ -247,7 +247,7 @@ impl std::ops::BitOr for NotifyFilter {
 #[derive(Clone, Debug)]
 #[must_use = "an unperformed request watches nothing"]
 pub struct WatchDirectory {
-    path: PreparedPath,
+    path: AnchoredPath,
     subtree: bool,
     filter: NotifyFilter,
 }
@@ -255,14 +255,26 @@ pub struct WatchDirectory {
 impl WatchDirectory {
     /// Begins a request to watch `path`.
     ///
+    /// The path reaches the call as it was given, except that one Win32 would resolve against the
+    /// current directory is fixed to the current directory **as it is now**, so that it still names
+    /// the same place when the request is performed on another thread after the directory has
+    /// changed; see [`OpenFile::new`](crate::open::OpenFile::new) and `D-19` in the crate's
+    /// `DESIGN-NOTES.md`. [`path`](Self::path) is the path as given and
+    /// [`win32_path`](Self::win32_path) is the one handed to the call.
+    ///
     /// The watch starts non-recursive and watching for nothing; both are set
     /// explicitly, as everywhere else in this crate.
-    pub fn new(path: PreparedPath) -> Self {
-        Self {
-            path,
+    ///
+    /// # Errors
+    ///
+    /// [`PathCaptureError::InteriorNul`] if the path contains a NUL, which Win32 would read as its
+    /// end, and the failure of `GetCurrentDirectoryW` if it had to be read and could not be.
+    pub fn new(path: Wtf16String) -> Result<Self, PathCaptureError> {
+        Ok(Self {
+            path: AnchoredPath::new(path)?,
             subtree: false,
             filter: NotifyFilter::NONE,
-        }
+        })
     }
 
     /// Sets `bWatchSubtree`.
@@ -277,10 +289,17 @@ impl WatchDirectory {
         self
     }
 
-    /// The prepared path this request will watch.
+    /// The path as it was given.
     #[must_use]
-    pub fn path(&self) -> &PreparedPath {
-        &self.path
+    pub fn path(&self) -> &Wtf16Str {
+        self.path.given()
+    }
+
+    /// The path that is handed to `FindFirstChangeNotificationW`: the one given, or that one fixed
+    /// to the current directory of the moment the request was built.
+    #[must_use]
+    pub fn win32_path(&self) -> &Wtf16Str {
+        self.path.win32()
     }
 
     /// Whether the watch covers the whole subtree.
@@ -302,11 +321,12 @@ impl WatchDirectory {
     /// Returns the raw Win32 code, unaltered.
     pub fn perform(&self) -> Outcome<ChangeNotification> {
         let raw = perform_handle(|| {
-            // SAFETY: the path is NUL-terminated and outlives the call, and
-            // both remaining arguments are plain values.
+            // SAFETY: the path has no interior NUL, since the request refused one when it was
+            // built, is NUL-terminated and outlives the call, and both remaining arguments are
+            // plain values.
             unsafe {
                 FindFirstChangeNotificationW(
-                    self.path.as_wtf16_terminated(),
+                    self.path.win32_terminated(),
                     i32::from(self.subtree),
                     self.filter.bits(),
                 )

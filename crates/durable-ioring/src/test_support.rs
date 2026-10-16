@@ -60,14 +60,12 @@ impl StampClock for ManualClock {
 pub(crate) const SOURCE: &str = "test";
 
 /// A fault for `error`, as a backend would relay it: `SOURCE` for the layer, and the code an
-/// error carrying an OS code names, read as a Win32 code is. An error with no OS code carries
-/// none.
+/// error carrying an OS code names, taken as the number it is: this layer is no real one and
+/// numbers its codes as it likes. An error with no OS code carries none.
 pub(crate) fn fault(error: io::Error) -> IoFault {
     IoFault {
         source: SOURCE,
-        code: error
-            .raw_os_error()
-            .map(|code| ErrorCode::from_win32(code.cast_unsigned())),
+        code: error.raw_os_error().map(ErrorCode::from_hresult),
         error: Arc::new(error),
     }
 }

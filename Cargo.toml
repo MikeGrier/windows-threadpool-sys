@@ -4,6 +4,7 @@
 members = [
 	"crates/durable-ioring",
 	"crates/io-buffers",
+	"crates/win-error-codes",
 	"crates/win-job-launcher",
 	"crates/win-multi-file-tail-watcher",
 	"crates/win-numa-sys",
@@ -11,6 +12,7 @@ members = [
 	"crates/win-shared-os-owned-handle",
 	"crates/win-sync-sys",
 	"crates/win-time-sys",
+	"crates/win-volume-sys",
 	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-file-watcher-example-test-harness",

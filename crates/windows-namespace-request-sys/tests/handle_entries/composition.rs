@@ -13,13 +13,13 @@ use std::time::Duration;
 use windows_namespace_request_sys::CapturedHandle;
 use windows_namespace_request_sys::close::CloseRequest;
 use windows_namespace_request_sys::open_by_id::{FileIdentifier, OpenFileByIdentifier};
-use windows_namespace_request_sys::watch::{ChangeNotification, NotifyFilter, WatchDirectory};
+use windows_namespace_request_sys::watch::{ChangeNotification, NotifyFilter};
 use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use crate::support::{
-    AUDITED_SHARE, Tree, file_id_of, open_directory, prepared, unassociated_directory,
+    AUDITED_SHARE, Tree, file_id_of, open_directory, unassociated_directory, watch_directory,
 };
 
 /// Long enough that a working watch signals well inside it, short enough that a
@@ -119,8 +119,7 @@ fn the_whole_chain_runs_on_a_worker_that_saw_none_of_its_inputs() {
     .with_desired_access(FILE_LIST_DIRECTORY)
     .with_share_mode(AUDITED_SHARE)
     .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS);
-    let watch_request =
-        WatchDirectory::new(prepared(tree.root())).with_filter(NotifyFilter::FILE_NAME);
+    let watch_request = watch_directory(tree.root()).with_filter(NotifyFilter::FILE_NAME);
 
     drop(hint);
 
@@ -186,7 +185,7 @@ fn many_requests_from_one_capture_run_across_concurrent_workers() {
 fn a_watch_and_an_open_observe_the_same_directory_at_once() {
     let tree = Tree::new("compose-watch-open");
 
-    let notification = WatchDirectory::new(prepared(tree.root()))
+    let notification = watch_directory(tree.root())
         .with_filter(NotifyFilter::FILE_NAME)
         .with_subtree(true)
         .perform()

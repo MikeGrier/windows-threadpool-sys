@@ -50,3 +50,12 @@ them to a number, which `M34.7` in [CHECKLIST.md](CHECKLIST.md) owns.
   rather than only in a design note. Until it is settled, a fix to either copy must be applied to both.
   See [crates/windows-namespace-request-sys/DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md)
   -> `D-9`.
+
+  **Decided 2026-10-15, at the engineer's request: the enumeration crate consumes the request crate's
+  path contract and deletes its older copy.** The branch has merged with `main`, which was the gate.
+  The work is `PATH-1` in [crates/windows-file-enumeration-sys/CHECKLIST.md](crates/windows-file-enumeration-sys/CHECKLIST.md),
+  after the request crate's `NR-3.3` to `NR-3.6`
+  ([CHECKLIST.md](crates/windows-namespace-request-sys/CHECKLIST.md)); this item is done when `PATH-1`
+  is. The request crate's path contract is itself replaced by
+  [D-19](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-19), so what the enumeration crate
+  consumes is that one, not the copy that was made.

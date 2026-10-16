@@ -21,65 +21,18 @@ use windows_impersonation_token_sys::{ApplyError, CaptureError, ImpersonationTok
 
 use crate::request::EnumerationRequest;
 
-/// A raw Win32 error code, kept in the currency it arrived in.
+/// A raw Win32 error code, kept in the currency it arrived in: [`win_error_codes::Win32Error`].
 ///
 /// Every failing API this crate calls is a classic last-error API, so a code is
 /// always a `WIN32_ERROR` rather than an `HRESULT`. Keeping the raw value beside
 /// the crate's own classification means a caller can act on either.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Win32Error(u32);
-
-impl Win32Error {
-    /// Wrap a raw `WIN32_ERROR`.
-    #[must_use]
-    pub const fn from_code(code: u32) -> Self {
-        Self(code)
-    }
-
-    /// Take the code from an OS error, or `0` if it carries none.
-    ///
-    /// A last-error API always sets one, so `0` covers only a fabricated
-    /// [`io::Error`] with no OS error behind it.
-    #[must_use]
-    pub fn from_io(error: &io::Error) -> Self {
-        Self(
-            error
-                .raw_os_error()
-                .and_then(|code| u32::try_from(code).ok())
-                .unwrap_or(0),
-        )
-    }
-
-    /// The last error of the calling thread.
-    ///
-    /// Call immediately after the failing Win32 call, before anything else can
-    /// overwrite the thread's last error.
-    #[must_use]
-    pub(crate) fn last() -> Self {
-        Self::from_io(&io::Error::last_os_error())
-    }
-
-    /// The raw `WIN32_ERROR` value.
-    #[must_use]
-    pub const fn code(self) -> u32 {
-        self.0
-    }
-
-    /// The same failure as a standard [`io::Error`], for callers that funnel
-    /// everything through `std::io`.
-    #[must_use]
-    pub fn to_io_error(self) -> io::Error {
-        io::Error::from_raw_os_error(
-            i32::try_from(self.0).expect("a WIN32_ERROR always fits in an i32"),
-        )
-    }
-}
-
-impl fmt::Display for Win32Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Win32 error {} ({})", self.0, self.to_io_error())
-    }
-}
+///
+/// Re-exported from the shared crate under the name this crate has always used. Unlike this
+/// crate's earlier type of the same name, its `io::Error` form keeps a code of 2^31 or more and
+/// does not panic on one, and [`from_io`](win_error_codes::Win32Error::from_io) returns `None` for
+/// an error with no OS code behind it, where the earlier one returned the code `0`, which is
+/// `ERROR_SUCCESS`.
+pub use win_error_codes::Win32Error;
 
 /// Why a request could not be built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

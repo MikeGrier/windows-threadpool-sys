@@ -2865,3 +2865,49 @@ Draft PR 126 gave the branch a pull request, which is what [ci.yml](../../.githu
 ### <a id="di-124"></a>DI-12.4 -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. *(completed 2026-10-14 21:11:41 -04:00)*
 
 The item was meant to land before the first release PR merged, and did not: the release merged first, `publish-crate` refused `win-durable-ioring` 0.1.0 for a dependency with no version, and its tag points at that commit. The pins landed afterwards: `durable-ioring`, `windows-ioring-sys`, `win-sync-sys`, `windows-threadpool-sys` and `win-time-sys`, each at the version release-please published or was asked to. `win-time-sys` had not been released at all, which stalled every crate waiting on it, so it was published by the `workflow_dispatch` escape hatch at the version its manifest declares. `win-durable-ioring` 0.1.0 cannot publish from its tag, so it is published by the same dispatch from the commit that carries the pins.
+
+## Moved 2026-10-14 22:38:28 -04:00 -- DI-10.1: the Win32 file object as a target backing
+
+### <a id="di-101"></a>DI-10.1 -- A Win32 file target is made from a file this crate opened, so its class, alignment and write-through follow from how it was opened and not from a declaration. *(completed 2026-10-14 22:38:28 -04:00)*
+
+The authoritative text is [DI-D-60](DESIGN-NOTES.md#di-d-60). The item asked what a Win32 file target warrants by buffering class and whether dioring reads the class from the handle; the engineer ruled that no `Nt*` call may be made from this repository, which removed the only call that reports a handle's open mode, and that provenance be structural, so `OpenedFile<Cached>` and `OpenedFile<Unbuffered>` are opened by this crate and a `Win32FileTarget` is made from nothing else. Foreign handles are queued as `DI-10.3`.
+
+## Moved 2026-10-15 12:00:26 -04:00 -- DI-10.2: a raw partition as a target backing
+
+### <a id="di-102"></a>DI-10.2 -- A raw volume is a file target made from a volume this crate opened, with its disks found and never `Complete`. *(completed 2026-10-15 12:00:26 -04:00)*
+
+The authoritative text is [DI-D-61](DESIGN-NOTES.md#di-d-61). The item asked for one volume handle with regions in it, one commit per volume, failure sharing found from the volume's disks and optionally the volume lock; the engineer ruled that the target is the whole volume and regions are the consumer's offsets, and that the unsafe device controls live in a new crate, `win-volume-sys`, whose own checklist and notes are in [crates/win-volume-sys/](../win-volume-sys/CHECKLIST.md).
+
+## Moved 2026-10-15 12:22:00 -04:00 -- DI-10.4: a whole physical disk as a target backing
+
+### <a id="di-104"></a>DI-10.4 -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. *(completed 2026-10-15 12:22:00 -04:00)*
+
+The authoritative text is [DI-D-62](DESIGN-NOTES.md#di-d-62). The engineer asked for the raw-volume work to be repeated against the disk itself rather than a partition on it; it was not a numbered item, so it is recorded here. `OpenedDisk<B>` is opened from a `DiskPath` and `Win32FileTarget::from_disk` takes it and nothing else. The elevated tests run against an unpartitioned scratch VHDX whose disk number is taken only from `diskpart`'s report of the file the helper made.
+
+## Moved 2026-10-15 14:07:15 -04:00 -- DI-13.2: a file is opened through windows-namespace-request-sys
+
+### <a id="di-132"></a>DI-13.2 -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. *(completed 2026-10-15 14:07:15 -04:00)*
+
+The authoritative text is [DI-D-63](DESIGN-NOTES.md#di-d-63). The item was written as "name the unsafe home for opening"; the workspace already had a memory-safe, un-narrowed wrapper for the open calls in `windows-namespace-request-sys`, so the engineer chose to depend on it instead of building a second one, and asked for two checks (a synchronous `perform` is acceptable, and the handle is plain and unassociated), which DI-D-63 records. What the item left over, a `SecurityDescriptor` from SDDL and a `ReOpenFile` entry that the request crate lacks, became `DI-13.5` and `DI-13.6`, and the request crate's `NR-3`.
+
+## Moved 2026-10-16 13:37:10 -04:00 -- DI-9.7.11: ErrorCode's Windows helpers leave the portable core
+
+### <a id="di-9711"></a>DI-9.7.11 -- DECIDED (c): `ErrorCode`'s `from_win32` and `win32` move out of the portable core into `win-durable-ioring`, built on `HResult`. *(completed 2026-10-16 13:37:10 -04:00)*
+
+The item asked what becomes of two helpers that were a second copy of the rule `HResult` in
+`win-error-codes` owns, with three options. The engineer, 2026-10-16: "I would go with c", against the
+assistant's lean to (b). (c) is the cleaner layering and a breaking change to the core's public
+surface; the amendment is recorded on [DI-D-50](DESIGN-NOTES.md#di-d-50).
+
+`ErrorCode` keeps `from_hresult`, `hresult`, equality and its two renderings, and no longer
+interprets the number. `win-durable-ioring` gained `error_code_from_win32` and `win32_code_of`, both
+delegating to `HResult`, and `error_code_of` uses the first for an `io::Error` that carries an OS
+code. The portable core's own tests and test support, which built codes with `from_win32`, take a
+number as it is: the layer they stand in for is none, so no code is wrapped. The core takes no new
+dependency, so (b)'s consequences, a portable crate depending on a `win-*` one and a release order,
+do not arise; `win-durable-ioring` depends on `win-error-codes`, which is unpublished.
+
+The sabotage entry that masked a Win32 code to sixteen bits left the core's manifest with the code it
+covered; the rule is covered by `win-error-codes`' own entries, and `win-durable-ioring`'s manifest
+gained entries for the three ways its helpers can go wrong, with a control. The tests that pinned
+the three facts moved with the helpers and gained one that the wrapping agrees with `HResult`.

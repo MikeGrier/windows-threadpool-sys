@@ -14,9 +14,9 @@ use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_HANDLE, FALSE, H
 use wtf_string::Wtf16String;
 
 use super::CloseRequest;
+use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
 use crate::watch::{NotifyFilter, WatchDirectory};
-use crate::{CapturedHandle, prepare};
 
 /// Closes a raw handle directly, to observe whether it was still open.
 ///
@@ -127,11 +127,11 @@ fn a_change_notification_closes_with_its_own_routine() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let notification =
-        WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
-            .with_filter(NotifyFilter::FILE_NAME)
-            .perform()
-            .expect("start a watch");
+    let notification = WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
+        .with_filter(NotifyFilter::FILE_NAME)
+        .perform()
+        .expect("start a watch");
 
     CloseRequest::for_change_notification(notification)
         .perform()
@@ -148,11 +148,11 @@ fn a_dropped_notification_request_still_closes() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let notification =
-        WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
-            .with_filter(NotifyFilter::FILE_NAME)
-            .perform()
-            .expect("start a watch");
+    let notification = WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
+        .with_filter(NotifyFilter::FILE_NAME)
+        .perform()
+        .expect("start a watch");
 
     // Must not double close: the notification's own Drop is suppressed when the
     // request takes it over.
@@ -169,11 +169,11 @@ fn the_two_routines_are_distinguishable() {
         .directory()
         .to_str()
         .expect("the fixture path is valid UTF-8");
-    let notification =
-        WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the path"))
-            .with_filter(NotifyFilter::FILE_NAME)
-            .perform()
-            .expect("start a watch");
+    let notification = WatchDirectory::new(Wtf16String::from(text))
+        .expect("build the request")
+        .with_filter(NotifyFilter::FILE_NAME)
+        .perform()
+        .expect("start a watch");
 
     let ordinary = format!(
         "{:?}",

@@ -4468,36 +4468,29 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
     );
 }
 
-// --- what `prepare` needs from a drive letter -------------------------------
+// --- what building a request needs from a drive letter -----------------------
 //
-// `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
-// two review passes read that as a portability bug: a machine with no `C:`
-// volume would panic on the `expect` rather than measure. It does not -- and
-// that, the observable outcome, is the whole of what is claimed here.
+// `request_cost::measure` builds its long-path sample on a hard-coded `C:`. A
+// machine with no `C:` volume would panic on an `expect` if building a request
+// for that path could fail for want of a volume. It cannot, and that, the
+// observable outcome, is the whole of what is claimed here.
 //
-// That was an argument, and an argument is what a reviewer had to disbelieve.
-// This is the measurement.
-//
-// **It pins less than two earlier versions of this comment claimed.** The first
-// said it pinned "touches no filesystem"; the second said it showed the volume
-// was "never consulted". Neither follows. A black-box success is equally
-// compatible with a consultation whose failure is ignored, so nothing here
-// reaches the mechanism -- which is the overreach the owning crate's `D-18`
-// exists to remove, committed twice in the comment describing it.
-//
-// What this pins is the observable outcome, and it is exactly what the probe
-// needs: the absence of a volume does not make preparation fail.
+// What this pins is the outcome and not the mechanism: a black-box success is
+// equally compatible with a consultation whose failure is ignored, so nothing
+// here says whether a device is consulted. It is exactly what the probe needs:
+// the absence of a volume does not make building a request fail, and the path
+// is kept as the caller gave it.
 
 #[test]
-fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
+fn building_a_request_needs_no_volume_behind_its_drive_letter() {
     // A bitmask, not 23 `Path::exists()` calls. Probing each root touches real
     // devices: an offline mapped network drive makes `exists()` block until the
-    // redirector times out, so the original form could stall this test for
-    // minutes on exactly the CI machine most likely to have one.
-    // `GetLogicalDrives` answers from a snapshot without going near a device,
-    // and answers the sharper question too -- a letter absent from the mask has
-    // no volume, where `exists()` also returns false for a drive that is
-    // present but has no media.
+    // redirector times out, so that form could stall this test for minutes on
+    // exactly the CI machine most likely to have one. `GetLogicalDrives`
+    // answers from a snapshot without going near a device, and answers the
+    // sharper question too -- a letter absent from the mask has no volume,
+    // where `exists()` also returns false for a drive that is present but has
+    // no media.
     //
     // SAFETY: no preconditions.
     let used = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
@@ -4505,14 +4498,8 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     // `GetLogicalDrives` returns 0 on failure, which is also a perfectly valid
     // mask meaning "no drives at all" -- so an unchecked zero would be read as
     // "every letter is free", and the search would pick a letter that may well
-    // be mounted. The test would then prepare a path on a REAL volume and pass,
-    // proving nothing, which is worse than failing.
-    //
-    // That this test in particular could go vacuous is the sharp edge: it is
-    // the one pinning the claim that no volume is needed. It is also a plain
-    // instance of the workspace standard -- a failable call has its failure
-    // handled -- introduced by the switch away from `Path::exists()`, which
-    // could not fail this way.
+    // be mounted. The test would then build a request for a path on a REAL
+    // volume and pass, proving nothing, which is worse than failing.
     assert!(
         used != 0,
         "GetLogicalDrives failed: {}",
@@ -4520,28 +4507,18 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     );
 
     // The whole alphabet. The mask already excludes anything mounted, so there
-    // is no letter worth reserving by hand: starting at `D` only narrowed the
-    // search on a machine with many mapped drives, for no benefit, since `C`
-    // being in use is exactly what the mask reports.
-    // Fails rather than skips when no letter is free, which is deliberate and
-    // has been raised in review, so the reasoning is recorded here.
+    // is no letter worth reserving by hand.
     //
-    // libtest has no runtime skip: a test that "skips" is a test that PASSES.
-    // This is the test pinning the claim that `prepare` needs no volume, so a
-    // pass that established nothing is the one outcome worth avoiding -- the
-    // same vacuous-green hazard as the unchecked `GetLogicalDrives` above, which
-    // is what made the explicit check necessary in the first place.
-    //
-    // It also matches how this crate already handles the identical condition:
+    // Fails rather than skips when no letter is free, which is deliberate:
+    // libtest has no runtime skip, and a test that "skips" is a test that
+    // PASSES, so a pass that established nothing is the outcome to avoid. It
+    // also matches how this crate already handles the identical condition:
     // `impersonation_changes_which_device_map_a_drive_letter_resolves_in` and
     // its sibling both `panic!("no free drive letter on this host, so the probe
-    // cannot run")`, and they search only `H..=Z`. This search covers all 26, so
-    // it fails strictly less often than sites that already chose to fail.
-    //
-    // The condition needs every letter mounted including `A` and `B`, which are
-    // floppy-era and essentially never assigned. A host in that state is worth
-    // hearing about loudly, and the message says plainly that it is the
-    // environment rather than the code.
+    // cannot run")`. The condition needs every letter mounted including `A` and
+    // `B`, which are floppy-era and essentially never assigned, so a host in
+    // that state is worth hearing about loudly, and the message says plainly
+    // that it is the environment rather than the code.
     let absent = (b'A'..=b'Z')
         .find(|&byte| used & (1 << u32::from(byte - b'A')) == 0)
         .map(char::from)
@@ -4554,12 +4531,15 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let path = wtf_string::Wtf16String::from(text.as_str());
 
-    assert!(
-        windows_namespace_request_sys::prepare(&path).is_ok(),
-        "preparing {text} must succeed with no {absent}: volume mounted. That \
-         outcome is the whole claim -- this says nothing about whether a device \
-         is consulted, because a black-box success cannot -- and it is what \
-         `request_cost` depends on for its hard-coded long-path sample"
+    let request = windows_namespace_request_sys::OpenFile::new(path)
+        .unwrap_or_else(|error| panic!("building a request for {text} failed: {error}"));
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        text,
+        "a path with a drive letter is kept as given, with no {absent}: volume mounted. That \
+         outcome is the whole claim -- this says nothing about whether a device is consulted, \
+         because a black-box success cannot -- and it is what `request_cost` depends on for \
+         its hard-coded long-path sample"
     );
 }
 

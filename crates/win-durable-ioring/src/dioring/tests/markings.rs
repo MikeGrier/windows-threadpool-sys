@@ -137,7 +137,7 @@ fn a_failed_flushs_code_reads_without_the_ring_crate() {
             let code = fault
                 .code
                 .expect("a commit the ring answered carries a code");
-            assert_eq!(code.win32(), Some(IO_DEVICE));
+            assert_eq!(crate::win32_code_of(code), Some(IO_DEVICE));
             assert_eq!(
                 crate::error_code_of(&fault.error),
                 Some(code),

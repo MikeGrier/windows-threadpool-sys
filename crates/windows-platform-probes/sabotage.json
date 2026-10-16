@@ -112,6 +112,30 @@
       "replace": [
         "    if observation.online_processors >= 0 && observation.packages == 0 {"
       ]
+    },
+    {
+      "name": "request_cost: the grafted row is given a path that is not grafted",
+      "file": "src/request_cost.rs",
+      "expect": "caught",
+      "why": "The row is named for what the build does with its path. A relative sample that stopped being relative would leave build_request_grafted timing a path kept as given under the wrong name, and nothing in the report would say so; the probe checks its own samples, and that check fails the run.",
+      "find": [
+        "    let relative = Wtf16String::from(\"kernel32.dll\");"
+      ],
+      "replace": [
+        "    let relative = kept.clone();"
+      ]
+    },
+    {
+      "name": "request_cost: the long kept row is given a path that would be grafted",
+      "file": "src/request_cost.rs",
+      "expect": "caught",
+      "why": "The other direction: a sample meant to be kept as given that is in fact grafted would leave build_request_kept_long timing the graft under the name of the other case.",
+      "find": [
+        "    let kept_long = Wtf16String::from(long_text.as_str());"
+      ],
+      "replace": [
+        "    let kept_long = Wtf16String::from(\"directory\");"
+      ]
     }
   ]
 }

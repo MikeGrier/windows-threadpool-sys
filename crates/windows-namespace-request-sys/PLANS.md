@@ -17,5 +17,6 @@ it, one row per plan.
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
 | [CHECKLIST.md](CHECKLIST.md) | not started | `NR-2`: storage-locality queries for durable-ioring's flush domains, one entry per call | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | not started | `NR-3`: a `SecurityDescriptor` from SDDL and a `ReOpenFile` entry, which durable-ioring's open surface needs | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
 | [CHECKLIST.md](CHECKLIST.md) | not started | Parked on the horizon: `NR-inf.1`, sharing the caller's handle as a `SharedHandle` instead of duplicating it. | [DESIGN-NOTES.md](DESIGN-NOTES.md#d-4) |
 | [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | **This crate's part (M24-M26) is complete**: the foundations (owned handle duplication, security attributes, path preparation, the faithful-execution contract), the four handle-producing entries, the five query entries, a test seam, and an acceptance pass over both operation and scenario coverage. The checklist itself stays open for M27 (`windows-platform-probes`) and the `M26+` items gated on this branch merging with `main` -- including `M26+.3`, the merge-or-delete decision on this crate's duplicated path preparation. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

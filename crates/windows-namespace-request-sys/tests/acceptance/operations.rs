@@ -13,6 +13,7 @@
 use std::fs::File;
 use std::os::windows::io::AsHandle;
 
+use windows_namespace_request_sys::CapturedHandle;
 use windows_namespace_request_sys::close::CloseRequest;
 use windows_namespace_request_sys::file_info::QueryFileInformationByHandle;
 use windows_namespace_request_sys::final_path::{FinalPathFlags, QueryFinalPath};
@@ -20,8 +21,7 @@ use windows_namespace_request_sys::full_path::ResolveFullPath;
 use windows_namespace_request_sys::open_by_id::{FileIdentifier, OpenFileByIdentifier};
 use windows_namespace_request_sys::query::{FileInformationClass, QueryFileInformation};
 use windows_namespace_request_sys::volume::QueryVolumeInformation;
-use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
-use windows_namespace_request_sys::{CapturedHandle, OpenFile};
+use windows_namespace_request_sys::watch::NotifyFilter;
 use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_LIST_DIRECTORY,
@@ -29,7 +29,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use wtf_string::Wtf16String;
 
-use crate::support::{AUDITED_SHARE, Tree, audited_directory_open, open_directory, prepared};
+use crate::support::{
+    AUDITED_SHARE, Tree, audited_directory_open, open_directory, open_file, watch_directory,
+};
 
 fn captured(file: &File) -> CapturedHandle {
     CapturedHandle::capture(file.as_handle()).expect("capture the handle")
@@ -71,7 +73,7 @@ fn globazog_canonicalize_shape_is_reachable() {
     // through std::fs::canonicalize, on its submitting thread, per root.
     let tree = Tree::new("op-globazog-canonicalize");
 
-    let handle = OpenFile::new(prepared(tree.root()))
+    let handle = open_file(tree.root())
         .with_desired_access(0)
         .with_share_mode(AUDITED_SHARE)
         .with_creation_disposition(OPEN_EXISTING)
@@ -121,7 +123,7 @@ fn watcher_findfirstchangenotification_shape_is_reachable() {
     // coarse.rs:54 -- path, subtree flag, FILE_NOTIFY_CHANGE_* mask.
     let tree = Tree::new("op-watcher-notify");
 
-    let notification = WatchDirectory::new(prepared(tree.root()))
+    let notification = watch_directory(tree.root())
         .with_subtree(true)
         .with_filter(
             NotifyFilter::FILE_NAME
@@ -149,7 +151,7 @@ fn both_close_routines_are_reachable() {
     let ordinary = audited_directory_open(tree.root())
         .perform()
         .expect("open a directory");
-    let notification = WatchDirectory::new(prepared(tree.root()))
+    let notification = watch_directory(tree.root())
         .with_filter(NotifyFilter::FILE_NAME)
         .perform()
         .expect("start a watch");
@@ -283,6 +285,7 @@ fn enumeration_getfullpathname_shape_is_reachable() {
     // "enumeration native.rs" citations already use this form for the same
     // reason.
     let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
+        .expect("the path has no NUL")
         .perform()
         .expect("the enumeration crate's resolution shape")
         .to_string_lossy();
@@ -300,7 +303,7 @@ fn the_unused_createfilew_parameters_are_still_expressible() {
     let tree = Tree::new("op-unused-params");
     let template_source = File::open(tree.file(0)).expect("open a file");
 
-    let request = OpenFile::new(prepared(&tree.file(1)))
+    let request = open_file(&tree.file(1))
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)

@@ -1,7 +1,7 @@
 // Copyright (c) Mike Grier.
 
-//! What does it cost to build a namespace request, against the queue that would
-//! carry it?
+//! What does it cost to build a namespace request, against the queue that
+//! would carry it?
 //!
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. Do not call them from production code, and
@@ -29,10 +29,10 @@
 //! construction cost of the queue's *heaviest* payload. Two distinctions the
 //! result must not be stretched across:
 //!
-//!   - **Operation type.** A namespace open resolves a path through Win32 and
-//!     may duplicate a handle. A registered-buffer read -- the hot path -- does
-//!     neither: its descriptor is a slot index and an offset, and there the
-//!     queue's own mechanics are the whole per-operation cost.
+//!   - **Operation type.** A namespace open carries a path and may duplicate a
+//!     handle. A registered-buffer read -- the hot path -- does neither: its
+//!     descriptor is a slot index and an offset, and there the queue's own
+//!     mechanics are the whole per-operation cost.
 //!   - **Overhead against efficiency.** Throughput under contention, the ring's
 //!     cache behaviour, batching amortization, and backpressure under load are
 //!     what make a queue good or bad. A single uncontended construction time
@@ -45,7 +45,25 @@
 //! other. The comparison inverts between machines: the Snapdragon X2 (ARM64)
 //! development machine had the doorbell at roughly a third of a build, and an
 //! x86_64 host measured during review had it at roughly two and a half times
-//! one. A sentence naming a small half would therefore be wrong on one of them.
+//! one.
+//!
+//! # What building a request does
+//!
+//! An `OpenFile` is handed an owned path and keeps it as given. When the path
+//! is a plain relative one -- the rules are
+//! [D-19](../../windows-namespace-request-sys/DESIGN-NOTES.md#d-19) -- the
+//! request also reads the process current directory when it is built and holds
+//! the path grafted onto it, by concatenation, so it names the same place when
+//! it is performed on another thread. Any other path, an absolute one among
+//! them, is kept as given and no directory is read. Nothing is resolved,
+//! length-checked or rewritten either way.
+//!
+//! So there are two build costs worth separating, and this probe times both:
+//! a path **kept as given** (an absolute one, at two lengths) and a path
+//! **grafted** (a relative one). The string a build is handed is cloned inside
+//! each timed build, because a caller must supply an owned path; `clone_path_string`
+//! is that clone on its own, so a reader can see how much of a build it is.
+//!
 //! # Handle duplication is the part that is easy to under-count
 //!
 //! A request that carries a handle -- a template handle for an open, or the
@@ -55,73 +73,11 @@
 //! copy. So "what does a request cost" is not only an allocation question, and
 //! measuring only the path would understate it.
 //!
-//! # Preparing a path is a Win32 call as well as an allocation
+//! # Performing is timed too, against a real file
 //!
-//! This probe was written expecting `prepare` to be an allocation and a copy.
-//! It is not *only* that -- the qualifier matters, because the decomposition
-//! below charges the measured gap with one net allocation, so a heading saying
-//! flatly "not an allocation" contradicts it. This heading said exactly that
-//! for two rounds after the sentence you are reading was written to explain why
-//! it must not: the correction went into the prose and stopped one line short
-//! of the heading above it. What `prepare` additionally does is call
-//! **`GetFullPathNameW`** to resolve the path against the
-//! process working directory, because [the namespace session] settled that the
-//! path is resolved at submission -- the process CWD is mutable by any thread,
-//! so even perfect remoting would be racy.
-//!
-//! That call reads **process state** when it has to root a path -- the current
-//! directory, or for a drive-relative path naming a drive OTHER than the
-//! current one the entry recorded for that drive in the `=C:` environment
-//! variables -- on the current drive that entry makes no difference and the
-//! process directory wins. **Neither sample here is rooted**: both are
-//! fully qualified, so the rooting is why resolution happens at submission and
-//! is not what these timings contain.
-//!
-//! So the measured remainder is the **resolution step**, which is an upper
-//! bound on the call and not the call itself: it also spans one net allocation
-//! of this crate's own and the builder chain. **Net**, because the subtraction
-//! cancels one -- `prepare` allocates twice, an input copy and a `MAX_PATH`
-//! output buffer, against the clone's one, so what survives the subtraction is
-//! the difference and not both. Calling it "two allocations", as a draft did,
-//! charges the gap with allocator work the subtraction has already removed.
-//! Saying the remainder *is* the resolution,
-//! as an earlier revision did, hands the call credit for the allocator work the
-//! same sentence sets out to exclude.
-//!
-//! Naming a *mechanism* for it has now been got wrong repeatedly. A *syscall
-//! cost* claimed a kernel transition a timing loop cannot establish; *lexical*,
-//! which replaced it, claimed pure string work it equally is not. A genuinely
-//! lexical canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
-//! deliberately not the one wanted here, because resolving against the CWD at
-//! submission is the property being bought. What survives either way is the
-//! part that matters: an allocator cannot remove all of it.
-//!
-//! The owning crate now settles both halves rather than leaving them to be
-//! re-derived from a probe: see `windows-namespace-request-sys`'
-//! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
-//! `D-18`, which states what the call actually does and records keeping it over
-//! the canonicalizers that do not root. It claims no cost comparison against
-//! those alternatives, because nothing here measures them -- but it does settle
-//! the mechanism question this module once left open: resolving a
-//! drive-relative path for another drive checks that drive's recorded entry
-//! against the filesystem, and writes the entry back **when that check rejects
-//! it** -- an accepted entry is left alone, so the write is conditional rather
-//! than part of every such resolution.
-//!
-//! The two schemes that might reduce it recover different halves. **Inline
-//! storage** removes the allocation and copy, which is what
-//! `clone_prepared_units` measures, and cannot touch the resolution at all.
-//! **Recycling** a resolved path skips the resolution, paying the clone in
-//! place of the whole build, so it recovers the difference between them. Naming
-//! one figure for both -- as this did -- credits an allocator with work it
-//! cannot remove. Knowing which half is which is the point of measuring both.
-//!
-//! A link-reference definition has to be its own block: abutting the paragraph
-//! above, CommonMark folds it in, so rustdoc rendered this line as literal text
-//! and left the reference to it unlinked. Pre-existing, and fixed here because
-//! this module doc is being rewritten around it.
-//!
-//! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
+//! `perform_open` and `build_and_perform_open` open `kernel32.dll` for reading,
+//! so the cost of building can be read beside the cost of the call it carries.
+//! The file is opened and closed, never read.
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
 //! the **ratios against the doorbell and the atomic** are the finding.
@@ -130,7 +86,7 @@ use std::time::Instant;
 
 use wtf_string::Wtf16String;
 
-use windows_namespace_request_sys::{CapturedHandle, OpenFile, prepare};
+use windows_namespace_request_sys::{CapturedHandle, OpenFile};
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -159,6 +115,9 @@ pub struct Timing {
 /// unchecked here, and deriving both from one source makes the disagreement
 /// unrepresentable rather than merely detectable.
 ///
+/// The suffix says what the figure is: `_cycle_ns` is a construct-and-drop
+/// cycle, and `_ns` is a single operation timed apart from its drop.
+///
 /// # Panics
 ///
 /// Panics on a label it does not know, so a timing added to `measure` without a
@@ -167,10 +126,14 @@ pub struct Timing {
 #[must_use]
 pub fn json_key(label: &str) -> &'static str {
     match label {
-        "prepare_short_path" => "prepare_short_cycle_ns",
-        "prepare_long_path" => "prepare_long_cycle_ns",
-        "build_open_request" => "build_open_request_cycle_ns",
-        "clone_prepared_units" => "clone_prepared_units_cycle_ns",
+        "clone_path_string" => "clone_path_string_cycle_ns",
+        "build_request_kept" => "build_request_kept_cycle_ns",
+        "build_request_kept_long" => "build_request_kept_long_cycle_ns",
+        "build_request_grafted" => "build_request_grafted_cycle_ns",
+        "clone_request_kept" => "clone_request_kept_cycle_ns",
+        "clone_request_grafted" => "clone_request_grafted_cycle_ns",
+        "perform_open" => "perform_open_cycle_ns",
+        "build_and_perform_open" => "build_and_perform_open_cycle_ns",
         "capture_handle" => "capture_handle_ns",
         "close_handle" => "close_handle_ns",
         other => panic!(
@@ -182,17 +145,22 @@ pub fn json_key(label: &str) -> &'static str {
 
 /// Every label [`measure`] records, in the order the report renders them.
 ///
-/// All six are unconditional -- unlike `doorbell_cost`, nothing here is gated on
-/// a platform capability -- so this list needs no presence marker. It exists for
-/// the direction a renderer that walks [`Observation::timings`] cannot check:
-/// iterating what was measured cannot notice that something *stopped* being
-/// measured, so a dropped timing would quietly shrink the NDJSON schema. `main`
-/// caught that with a per-field panic; this is the same guard, stated once.
-pub const EVERY_LABEL: [&str; 6] = [
-    "prepare_short_path",
-    "prepare_long_path",
-    "build_open_request",
-    "clone_prepared_units",
+/// All of them are unconditional -- unlike `doorbell_cost`, nothing here is
+/// gated on a platform capability -- so this list needs no presence marker. It
+/// exists for the direction a renderer that walks [`Observation::timings`]
+/// cannot check: iterating what was measured cannot notice that something
+/// *stopped* being measured, so a dropped timing would quietly shrink the
+/// NDJSON schema. `main` caught that with a per-field panic; this is the same
+/// guard, stated once.
+pub const EVERY_LABEL: [&str; 10] = [
+    "clone_path_string",
+    "build_request_kept",
+    "build_request_kept_long",
+    "build_request_grafted",
+    "clone_request_kept",
+    "clone_request_grafted",
+    "perform_open",
+    "build_and_perform_open",
     "capture_handle",
     "close_handle",
 ];
@@ -219,10 +187,11 @@ impl Observation {
 ///
 /// **The drop is inside the timed region, and for the heap-owning values below
 /// that is a construct-and-destroy cycle rather than a construction cost.**
-/// `black_box` takes the value and it falls at the end of the statement, so
-/// `prepare_*`, `build_open_request` and `clone_prepared_units` each include
-/// freeing the `Wtf16String` they built. On a clone measured near 50 ns a free
-/// is a visible share of the figure.
+/// `black_box` takes the value and it falls at the end of the statement, so the
+/// string, build and clone rows each include freeing what they built. On a
+/// clone measured near 50 ns a free is a visible share of the figure. For the
+/// two `perform` rows the drop is the `CloseHandle` of the handle the open
+/// returned, so those are an open-and-close cycle.
 ///
 /// It is reported this way rather than restructured, and the reason is that the
 /// obvious alternative is not more truthful. Retaining each value -- what the
@@ -254,81 +223,143 @@ fn time_loop<T>(label: &'static str, iterations: u32, mut body: impl FnMut() -> 
     }
 }
 
-/// Time request construction, path preparation, and handle duplication.
+/// A request to open `path` for reading, the shape the performed rows use.
+///
+/// Takes the path by reference and clones it, because the request owns its
+/// path and a caller has to supply one: that clone is part of every build this
+/// probe times, and `clone_path_string` is it alone.
+fn open_request(path: &Wtf16String) -> OpenFile {
+    OpenFile::new(path.clone())
+        .expect("the fixed sample paths have no NUL")
+        .with_desired_access(GENERIC_READ)
+        .with_share_mode(FILE_SHARE_READ)
+        .with_creation_disposition(OPEN_EXISTING)
+}
+
+/// Time request construction, request cloning, performing an open, and handle
+/// duplication.
 ///
 /// # Panics
 ///
-/// Panics if the fixed test paths fail to prepare, which would mean
-/// `prepare` rejects an ordinary absolute path and nothing here is meaningful.
+/// Panics if a fixed sample path cannot build a request, or `kernel32.dll`
+/// cannot be opened, which would mean nothing here is meaningful.
 #[must_use]
 pub fn measure() -> Observation {
     const ITERATIONS: u32 = 100_000;
+    // An open and a close are kernel calls, so these are timed over fewer
+    // iterations than the loops that only allocate.
+    const PERFORM_ITERATIONS: u32 = 20_000;
     const HANDLE_ITERATIONS: u32 = 50_000;
 
     // Resolved, not assumed. Windows is not always on `C:` -- a valid
     // installation can sit on any volume -- and hard-coding it made this probe
-    // panic on such a machine rather than measure it. The same path is used for
-    // the prepared request and the real open below, so the two stay consistent.
+    // panic on such a machine rather than measure it. The same file is built
+    // into a request and really opened below, so the two stay consistent.
     // Wide the whole way, with no UTF-8 in the middle. `Wtf16String` exists
     // precisely to carry what Windows hands back, and routing a Windows path
     // through `str` gives up that property twice over: `to_str` panics on a
     // path that is not valid UTF-8, and the `from_utf16_lossy` this once used
     // inside `system_directory` silently replaced any unpaired surrogate before
-    // it ever got here. Neither is reachable on a normal install, and neither
-    // has any business being on the path from a Win32 call to a WTF-16 string.
+    // it ever got here.
     let system_dll = system_directory().join("kernel32.dll");
-    let short = Wtf16String::from_os_str(system_dll.as_os_str());
+    let kept = Wtf16String::from_os_str(system_dll.as_os_str());
+
+    // The same file as a relative name, so a build grafts it onto the current
+    // directory. It is only ever built, never performed: the file need not be in
+    // the current directory.
+    let relative = Wtf16String::from("kernel32.dll");
+
     // Synthetic, and hard-coded on purpose -- the opposite requirement to the
     // path above, which is why the two do not match and must not be made to.
-    // `short` names a file that is really opened, so it has to exist and is
-    // resolved. This one is only ever normalized, so it must NOT need to exist:
-    // a fixed 24-component path keeps the length identical on every host, and a
-    // length that varied with the local system directory would make the figure
+    // `kept` names a file that is really opened, so it has to exist. This one is
+    // only ever built into a request, so it must NOT need to exist: a fixed
+    // 24-component path keeps the length identical on every host, and a length
+    // that varied with the local system directory would make the figure
     // incomparable between the machines the report asks a reader to compare.
     //
     // The `C:` is safe, and what makes it safe is an OUTCOME, not a mechanism:
-    // preparation succeeds with no volume behind the drive letter. Whether a
-    // device is consulted is neither established here nor needed. A black-box
-    // success is equally compatible with a consultation whose failure is
-    // ignored, so claiming the letter is "normalized without consulting a
-    // device" -- as this comment did -- reaches past its evidence, which is the
-    // one overreach the owning crate's `D-18` exists to remove.
-    //
-    // Two review passes read this as the portability bug fixed above, so the
+    // building a request succeeds with no volume behind the drive letter.
+    // Whether a device is consulted is neither established here nor needed. The
     // outcome is measured rather than argued -- see
-    // `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
+    // `building_a_request_needs_no_volume_behind_its_drive_letter`.
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
-    let long = Wtf16String::from(long_text.as_str());
+    let kept_long = Wtf16String::from(long_text.as_str());
 
     let mut timings = Vec::new();
 
-    // The allocation and normalization a path costs, at two lengths, because
-    // the common case and the worst case allocate differently.
-    timings.push(time_loop("prepare_short_path", ITERATIONS, || {
-        prepare(&short).expect("an absolute path prepares")
+    // The owned string a build is handed, on its own. Every build below
+    // includes this clone, so it is what to subtract to read the rest.
+    timings.push(time_loop("clone_path_string", ITERATIONS, || kept.clone()));
+
+    // A request whose path is kept as given: an absolute path, at two lengths.
+    // No directory is read.
+    timings.push(time_loop("build_request_kept", ITERATIONS, || {
+        open_request(&kept)
     }));
-    timings.push(time_loop("prepare_long_path", ITERATIONS, || {
-        prepare(&long).expect("an absolute path prepares")
+    timings.push(time_loop("build_request_kept_long", ITERATIONS, || {
+        open_request(&kept_long)
     }));
 
-    // A whole request, which is a prepared path plus the builder chain. This is
-    // what the queue would actually carry.
-    timings.push(time_loop("build_open_request", ITERATIONS, || {
-        let path = prepare(&short).expect("an absolute path prepares");
-        OpenFile::new(path)
-            .with_desired_access(GENERIC_READ)
-            .with_share_mode(FILE_SHARE_READ)
-            .with_creation_disposition(OPEN_EXISTING)
+    // A request whose path is grafted onto the current directory, which the
+    // build reads.
+    timings.push(time_loop("build_request_grafted", ITERATIONS, || {
+        open_request(&relative)
     }));
 
-    // Cloning the prepared path alone, which is what a request-recycling scheme
-    // would avoid paying.
-    let prepared_units = prepare(&short)
-        .expect("an absolute path prepares")
-        .into_wtf16();
-    timings.push(time_loop("clone_prepared_units", ITERATIONS, || {
-        prepared_units.clone()
+    // Cloning a finished request, which is what a request-recycling scheme would
+    // pay in place of a build. A grafted request holds two strings -- the path as
+    // given and the path handed to Win32 -- where a kept one holds the one.
+    let kept_request = open_request(&kept);
+    let grafted_request = open_request(&relative);
+
+    // The rows are named for what the path does, so the samples are checked to do
+    // it: a sample that stopped being grafted, or one that began to be, would
+    // leave a row measuring the other case under the wrong name.
+    assert_eq!(
+        kept_request.win32_path(),
+        kept_request.path(),
+        "the absolute sample is meant to be kept as given"
+    );
+    let kept_long_request = open_request(&kept_long);
+    assert_eq!(
+        kept_long_request.win32_path(),
+        kept_long_request.path(),
+        "the long absolute sample is meant to be kept as given"
+    );
+    assert_ne!(
+        grafted_request.win32_path(),
+        grafted_request.path(),
+        "the relative sample is meant to be grafted onto the current directory"
+    );
+
+    timings.push(time_loop("clone_request_kept", ITERATIONS, || {
+        kept_request
+            .try_clone()
+            .expect("a request with no handle or security copies")
     }));
+    timings.push(time_loop("clone_request_grafted", ITERATIONS, || {
+        grafted_request
+            .try_clone()
+            .expect("a request with no handle or security copies")
+    }));
+
+    // The call a request carries, against a real file: a built request
+    // performed, and a request built and performed. The returned handle is
+    // dropped inside the timed region, so each is an open-and-close cycle.
+    timings.push(time_loop("perform_open", PERFORM_ITERATIONS, || {
+        kept_request
+            .perform()
+            .expect("kernel32.dll opens for reading")
+    }));
+    timings.push(time_loop(
+        "build_and_perform_open",
+        PERFORM_ITERATIONS,
+        || {
+            open_request(&kept)
+                .perform()
+                .expect("kernel32.dll opens for reading")
+        },
+    ));
 
     // The kernel transition a captured handle costs. Measured against a handle
     // this process already owns, so nothing here depends on the filesystem.

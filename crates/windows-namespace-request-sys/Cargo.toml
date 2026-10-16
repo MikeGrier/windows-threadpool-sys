@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-namespace-request-sys"
-version = "0.3.1" # x-release-please-version
+version = "0.4.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -31,6 +31,10 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps
+# a code of 2^31 or more, which this crate's own earlier type did not (WE-D-1).
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
+
 # The aligned buffer the query results and captured security descriptors are held in,
 # re-exported as `AlignedBuf` because it appears in public signatures (IB-2+.4 in
 # io-buffers' COMPLETED-CHECKLIST.md). The version is the one io-buffers' first release is fixed to.
@@ -44,7 +48,7 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 [dev-dependencies]
 windows-thread-ambient-sys = { version = "0.3.0", path = "../windows-thread-ambient-sys" }
 
-# Test-only, for the hidden `=X:` per-drive current-directory entries. Rust's
+# Test-only. `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
 # they are the state `GetFullPathNameW` reads and rewrites when it roots a
 # drive-relative path, so a test that does not control them can only bound that
@@ -65,6 +69,8 @@ default-features = false
 features = [
 	"Win32_Foundation",
 	"Win32_Security",
+	"Win32_Security_Authorization",
 	"Win32_Storage_FileSystem",
+	"Win32_System_Environment",
 	"Win32_System_Threading",
 ]

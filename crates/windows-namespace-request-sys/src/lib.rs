@@ -60,7 +60,9 @@
 //! One entry per Win32 call; a consumer needing two makes two requests and
 //! sequences them itself. The round-one entry list is audited from three real
 //! consumers rather than chosen by taste, and its omissions are deliberate and
-//! written down. See `DESIGN-NOTES.md` in the crate root.
+//! written down. Volume and disk operations are not namespace operations and are in
+//! `win-volume-sys`, not here. See `DESIGN-NOTES.md` in the crate
+//! root.
 //!
 //! # Example
 //!
@@ -73,17 +75,18 @@
 //! use std::os::windows::io::AsHandle;
 //! use std::thread;
 //!
-//! use windows_namespace_request_sys::{CapturedHandle, prepare};
+//! use windows_namespace_request_sys::{CapturedHandle, OpenFile};
 //! use wtf_string::Wtf16String;
 //!
 //! let path = std::env::temp_dir().join(format!("wnrs-doc-{}.tmp", std::process::id()));
 //! fs::write(&path, b"example")?;
 //!
-//! // Resolved here, not on the worker: the process current directory is
-//! // shared mutable state that any thread can change in between.
+//! // Built here, not on the worker: a relative path is fixed to the process
+//! // current directory now, which is shared mutable state that any thread can
+//! // change in between. This one is absolute, so it is handed over as given.
 //! let text = path.to_str().expect("a temporary path is valid UTF-8");
-//! let prepared = prepare(&Wtf16String::from(text))?;
-//! assert_eq!(prepared.as_wtf16().to_string_lossy(), text);
+//! let request = OpenFile::new(Wtf16String::from(text))?;
+//! assert_eq!(request.win32_path().to_string_lossy(), text);
 //!
 //! // An owned duplicate, so the captured parameters cannot be left pointing
 //! // at a handle the caller has since closed.
@@ -106,6 +109,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod anchored;
 pub mod close;
 pub mod file_info;
 pub mod final_path;
@@ -114,13 +118,14 @@ pub mod handle;
 pub mod open;
 pub mod open_by_id;
 pub mod outcome;
-pub mod path;
 pub mod query;
+pub mod reopen;
 pub mod request;
 pub mod security;
 pub mod volume;
 pub mod watch;
 
+pub use anchored::PathCaptureError;
 pub use close::{CloseFn, CloseRequest};
 pub use file_info::QueryFileInformationByHandle;
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
@@ -130,8 +135,8 @@ pub use io_buffers::AlignedBuf;
 pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
 pub use outcome::{Outcome, Win32Error};
-pub use path::{PathError, PathFailure, PreparedPath, prepare};
 pub use query::{FileInformationClass, QueryFileInformation};
+pub use reopen::ReOpenFile;
 pub use request::{ConsumingRequest, Request};
 /// Compiles the README's examples, so a contract change breaks the build
 /// rather than silently teaching the old answer.
@@ -144,6 +149,7 @@ mod tests;
 
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
+    SecurityInformation,
 };
 pub use volume::{QueryVolumeInformation, VolumeInformation};
 pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};

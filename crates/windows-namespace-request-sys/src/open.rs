@@ -31,9 +31,11 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE,
 };
 
+use wtf_string::{Wtf16Str, Wtf16String};
+
+use crate::anchored::{AnchoredPath, PathCaptureError};
 use crate::handle::{CapturedHandle, HandleCaptureError};
 use crate::outcome::{Outcome, perform_handle};
-use crate::path::PreparedPath;
 use crate::security::SecurityAttributes;
 
 /// An owned, marshalable parameter set for `CreateFileW`.
@@ -50,19 +52,18 @@ use crate::security::SecurityAttributes;
 /// use std::fs;
 ///
 /// use windows_namespace_request_sys::open::OpenFile;
-/// use windows_namespace_request_sys::prepare;
-/// use wtf_string::Wtf16String;
 /// use windows_sys::Win32::Storage::FileSystem::{
 ///     FILE_GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
 /// };
+/// use wtf_string::Wtf16String;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-open-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 ///
 /// // Built on this thread, where the current directory still means what the
-/// // caller thinks it means.
+/// // caller thinks it means: a relative path would be fixed to it here.
 /// let text = path.to_str().expect("a temporary path is valid UTF-8");
-/// let request = OpenFile::new(prepare(&Wtf16String::from(text))?)
+/// let request = OpenFile::new(Wtf16String::from(text))?
 ///     .with_desired_access(FILE_GENERIC_READ)
 ///     .with_share_mode(FILE_SHARE_READ)
 ///     .with_creation_disposition(OPEN_EXISTING);
@@ -77,7 +78,7 @@ use crate::security::SecurityAttributes;
 #[derive(Debug)]
 #[must_use = "an unperformed request opens nothing"]
 pub struct OpenFile {
-    path: PreparedPath,
+    path: AnchoredPath,
     desired_access: u32,
     share_mode: FILE_SHARE_MODE,
     security: Option<SecurityAttributes>,
@@ -89,21 +90,35 @@ pub struct OpenFile {
 impl OpenFile {
     /// Begins a request against `path`.
     ///
+    /// The path reaches `CreateFileW` as it was given, with no length limit and no check of this
+    /// crate's own, with one exception: a path that Win32 would resolve against the current
+    /// directory is fixed to the current directory **as it is now**, by concatenation, so that it
+    /// still names the same place when the request is performed on another thread after the
+    /// directory has changed. A path that is not clearly a plain relative one is left exactly as
+    /// given, and Win32 resolves it when the call is made; the rules, and what they leave out, are
+    /// those of `D-19` in the crate's `DESIGN-NOTES.md`. [`path`](Self::path) is the path as given
+    /// and [`win32_path`](Self::win32_path) is the one handed to the call.
+    ///
     /// Every other parameter starts at the value that means "the caller said
     /// nothing": no access, no sharing, no security attributes, a zero creation
     /// disposition, no flags, and no template. They are set explicitly rather
     /// than defaulted to a plausible-looking open, because a plausible default
     /// is exactly what a caller cannot see they got.
-    pub fn new(path: PreparedPath) -> Self {
-        Self {
-            path,
+    ///
+    /// # Errors
+    ///
+    /// [`PathCaptureError::InteriorNul`] if the path contains a NUL, which Win32 would read as its
+    /// end, and the failure of `GetCurrentDirectoryW` if it had to be read and could not be.
+    pub fn new(path: Wtf16String) -> Result<Self, PathCaptureError> {
+        Ok(Self {
+            path: AnchoredPath::new(path)?,
             desired_access: 0,
             share_mode: 0,
             security: None,
             creation_disposition: 0,
             flags_and_attributes: 0,
             template: None,
-        }
+        })
     }
 
     /// Sets `dwDesiredAccess`.
@@ -160,10 +175,17 @@ impl OpenFile {
         self
     }
 
-    /// The prepared path this request will open.
+    /// The path as it was given.
     #[must_use]
-    pub fn path(&self) -> &PreparedPath {
-        &self.path
+    pub fn path(&self) -> &Wtf16Str {
+        self.path.given()
+    }
+
+    /// The path that is handed to `CreateFileW`: the one given, or that one fixed to the current
+    /// directory of the moment the request was built.
+    #[must_use]
+    pub fn win32_path(&self) -> &Wtf16Str {
+        self.path.win32()
     }
 
     /// The requested access mask.
@@ -260,14 +282,15 @@ impl OpenFile {
             .map_or(ptr::null_mut(), |handle| handle.raw());
 
         let raw = perform_handle(|| {
-            // SAFETY: the path is NUL-terminated and outlives the call; the
+            // SAFETY: the path has no interior NUL, since the request refused one when it was
+            // built, is NUL-terminated and outlives the call; the
             // security attributes, when present, are a live struct pointing at
             // a self-relative descriptor this request owns; the template, when
             // present, is a duplicate this request owns. Every other argument
             // is a plain value.
             unsafe {
                 CreateFileW(
-                    self.path.as_wtf16_terminated(),
+                    self.path.win32_terminated(),
                     self.desired_access,
                     self.share_mode,
                     attributes_ptr,

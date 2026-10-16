@@ -2276,3 +2276,51 @@ under it without anything failing.
 
 Both are the same lesson this milestone keeps producing: the failure mode of a
 check is to pass.
+
+## The request_cost probe times what a request does with its path, and carries none of the old figures
+
+<a id="d-request-cost-follows-the-request-crate"></a>
+
+**Status: decided and implemented** by `M6.1`.
+
+The probe was written against `windows_namespace_request_sys::prepare`, which copied a path and
+resolved it through `GetFullPathNameW` into a buffer of `MAX_PATH`. That function is gone; a request now keeps the
+path it is given and, for a plain relative one, also holds it grafted onto the current directory
+read when the request is built
+([D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19),
+[D-27](../windows-namespace-request-sys/DESIGN-NOTES.md#d-27)). So the probe measures what a build
+does now, and the rows are named for it:
+
+- **Two build costs, told apart by the path.** A path kept as given (an absolute one, at two
+  lengths) and a path grafted (a relative one). Only the public constructors are reachable from
+  here, so the probe cannot call the graft on its own; each sample is checked to be what its row
+  says it is, by comparing the path as given with the path handed to Win32, and the run fails if a
+  sample is not. Without that, a sample that stopped being relative would leave the grafted row
+  timing a kept path under the wrong name, and nothing in the report would say so.
+- **The owned string a build is handed is timed alone** (`clone_path_string`), since every build
+  includes cloning the sample into the string the request owns.
+- **A clone of a finished request, kept and grafted,** is what a request-recycling scheme would
+  pay in place of a build.
+- **A real open is timed beside the build**, against `kernel32.dll`, as a built request performed
+  and as a request built and performed, so the cost of building can be read against the call it
+  carries. Each is an open-and-close cycle, because the handle the open returns is dropped inside
+  the timed region.
+- **Handle duplication and its close are unchanged.**
+
+**The figures the old probe produced are not carried.** The row keys `prepare_short_cycle_ns`,
+`prepare_long_cycle_ns`, `build_open_request_cycle_ns` and `clone_prepared_units_cycle_ns` are
+gone, and nothing replaces them under the same name, because each named a measurement of a function
+that no longer exists and a successor under the old name would read as a continuation of a series
+it is not part of. What they measured is in the
+[2026-08-30 design session](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+which is Tier 3 history, and in the git history of the probe. Nothing in the repository reads the
+row apart from the test that compares it with the table, and that test derives its keys from the
+probe.
+
+**The test that a drive letter needs no volume** now asserts that building a request for a path
+under an unmounted letter succeeds and keeps the path as given. It pins the outcome and not a
+mechanism, as before: a request does not resolve an absolute path, and whether a device is
+consulted is neither established nor needed.
+
+**Scheduled work:** none in this crate. The probe's own checklist item is archived with this
+decision, and the request crate's `NR-3.7` is done with it.

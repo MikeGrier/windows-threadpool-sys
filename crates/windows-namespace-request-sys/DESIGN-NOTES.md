@@ -276,6 +276,8 @@ declares it. Why the buffer is fallible and clone-less is
 
 ## <a id="d-9"></a>D-9: Path preparation is duplicated from the enumeration crate, deliberately and temporarily
 
+**Superseded in part by [D-19](#d-19).** The mechanism below -- resolving with `GetFullPathNameW` when the request is built, refusing a path past `MAX_PATH`, validating a verbatim path -- is replaced by a graft onto a captured root. The need to fix a relative path's meaning at construction, and the duplication with the enumeration crate and its scheduled merge-or-delete decision, stand; once `NR-3.3` lands the two copies differ, so that decision is no longer a plain de-duplication.
+
 Path preparation resolves a caller's path **on the calling thread, when the
 request is built**, because the process current directory is shared mutable
 state that any thread can change between submission and execution. That is not
@@ -566,6 +568,8 @@ to one side alone.
 
 ## <a id="d-18"></a>D-18: `GetFullPathNameW` is not lexical, and the genuinely lexical alternative is the wrong call
 
+**Its decision, to keep `GetFullPathNameW` at construction, is superseded by [D-19](#d-19); its measurements stand.** D-18 weighed only the canonicalisers, which leave a relative path relative; the lexical joins `PathAllocCombine` and `PathCchCombineEx` were not weighed, and are measured in D-19.
+
 **The correction.** This crate described `GetFullPathNameW` as **lexical** in
 **nine places across five files**, in a sentence that then went on to say it
 resolves against the process current directory. Those two claims disagree, and
@@ -711,3 +715,301 @@ The drafts themselves, and why each failed, are Tier 2:
   Binding to it rather than writing a second one therefore needs it published or
   extracted; duplicating it is the option this repository's mono-repo policy
   rejects.
+
+## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
+
+**Status: decided by the engineer on 2026-10-15; implemented** by `NR-3.3` (`src/anchored.rs`) and
+wired into the entries by `NR-3.4` to `NR-3.6`; what those settled is [D-27](#d-27). It supersedes the mechanism of [D-9](#d-9) and the decision of
+[D-18](#d-18); D-18's measurements stand.
+
+**What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
+and no check of this crate's own beyond the one that cannot be avoided, an interior NUL, which a
+`PCWSTR` cannot carry. `OpenFile::new` takes the `Wtf16String` directly. What is kept from D-9 is the
+need to fix the meaning of a relative path when the request is built, because the process current
+directory is shared and mutable and a request is performed later, on any thread. That is done by
+capturing the current directory when the request is built (`GetCurrentDirectoryW`, which does no
+I/O) and resolving a relative path against it **textually**, so that it still names that directory
+when the request is performed, after the current directory has changed.
+
+**The graft is concatenation:** the captured directory, a backslash unless it already ends in one (a
+drive root does), then the child. There is no combine call, no flag, and no canonicalisation:
+`CreateFileW` normalises `.`, `..` and trailing dots and spaces on the final path itself, and Win32
+decides whether a long result is acceptable to the host. Nothing here prefixes `\\?\`, ever.
+
+**Only a clearly safe child is grafted.** All of these must hold:
+
+1. it is not empty;
+2. it does not begin with `\` or `/` (that rules out root-relative, UNC, `\\?\` and `\\.\`);
+3. it contains no `:` (that rules out drive-relative `C:a` and `C:`, and a stream `name:stream`);
+4. if the captured directory is a UNC path, the child has no `..` component;
+5. no component of the child is a reserved device name -- `CON`, `PRN`, `AUX`, `NUL`, `COM` and `LPT`
+   with a digit, `CONIN$`, `CONOUT$` -- compared without regard to case, after removing everything from
+   the first `.` and any trailing spaces. The list is the one in Microsoft's "Naming Files, Paths, and
+   Namespaces", and the rule errs toward not grafting;
+6. the captured directory does not begin with `\\?\` or `\\.\`. Win32 does not normalise a path with
+   either prefix, so a grafted `.\a` would be read literally and name a file that is not there, where
+   the same `.\a` handed to Win32 resolves against that directory. It was found by review, which
+   reported that a process whose current directory is verbatim opens `.\kernel32.dll` and could not open
+   the grafted form; the child-process test in the open tests shows it against Win32.
+
+A child that is not grafted is passed through untouched, and Win32 resolves it when the call is
+made, against whatever the current directory is then. For those forms the race D-9 closed stays
+open, and is documented as open. A root-relative child (`\a\b`) is among them: grafting it needs the
+root of the captured directory, a parse this version does not do, and no work is scheduled for it.
+
+**Why not the alternatives**, measured on 2026-10-15 on Windows 11 with the process current directory
+set to `C:\Windows\System32` (the full table is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) ->
+`D-19`):
+
+- **`GetFullPathNameW` at construction (D-9, D-18).** It is exact for every form, but for a
+  drive-relative path on another drive it reads, validates against the filesystem, and may write the
+  hidden `=X:` entry (D-18), on the submitting thread; and its output buffer is what imposed the
+  `MAX_PATH` limit.
+- **`PathAllocCombine` / `PathCchCombineEx` (a lexical join).** Exact for relative and root-relative
+  paths, and also not safe to hand every path: it returns a drive-relative path unresolved and turns
+  `C:` into `C:\`; it returns an empty path as the base; it drops the `\\?\` prefix and collapses `.`
+  and `..` inside a verbatim path; and it drops the `\\.\` prefix, so `\\.\PhysicalDrive0` becomes
+  `\\PhysicalDrive0`. Its long-path flags are Win32's, not this crate's, and
+  `PATHCCH_ALLOW_LONG_PATHS` alone **rewrites a result longer than `MAX_PATH` into a `\\?\` path**,
+  which is the prefixing this decision refuses. So the call needs a classification of the path first
+  anyway, and once the child is known to be a plain relative one, concatenation does the same job
+  with none of that.
+
+**Device names are why rule 5 exists.** `NUL` is a device whatever precedes it, so a graft changes
+nothing for it. `CON`, `con`, `CONIN$` and `CONOUT$` open as devices when bare and as a lookup of a
+file of that name when grafted, so a graft would change what the call means.
+
+**Not verified**, and stated as such:
+
+- Concatenation is not measured against Win32's own resolution of the same relative path; it follows
+  from the join's measured equality with `GetFullPathNameW` for the relative forms.
+- `GetCurrentDirectoryW` with a current directory longer than `MAX_PATH` was not measured.
+- `PRN`, `AUX`, `COM1`, `COM2` and `LPT1` open as nothing in any spelling on the machine measured,
+  so whether they behave as `CON` does when a device is present is unknown; they are on the list
+  because the documentation names them.
+- Behaviour in a process that is long-path aware was not measured; the test binary is not.
+
+**Devices, measured on 2026-10-16**, Windows 11, a Hyper-V guest, not elevated, each probe run
+with a time limit:
+
+- `NUL` opened as `\\.\NUL`, with and without the overlapped flag: a 4096-byte read returned no
+  bytes, a write was accepted, and the probe took 51 ms. It cannot hang, and what is written to it is
+  discarded while the call reports success.
+- `CON`, `CONIN$` and `CONOUT$` opened. `PRN`, `AUX`, `COM1`, `LPT1` and `CLOCK$` were not found.
+- **`COM3` opened, and a 16-byte read on it was still blocked after 8 seconds**, with no timeouts
+  set. Whether `CancelIoEx` or `CancelSynchronousIo` interrupts it was not tried.
+- The device namespace was not enumerated: a `QueryDosDeviceW` probe returned no names and was not
+  pursued. What else is reachable is therefore not measured.
+
+**A device is reachable without being grafted.** Rule 5 decides only whether a relative child is
+grafted. A path that begins with `\\.\`, and a `COM` name above 9 (which needs that prefix), is
+passed to `CreateFileW` as it is and reaches whatever device Windows names, so the rule is not a
+filter of what can be opened, and this crate does not filter (the policy is its consumers', as in
+[DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)). What to do about it is `DI-14.6` in
+[durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md); this decision schedules no work
+in this crate for it.
+
+**As implemented by `NR-3.3`:**
+
+- **The graft is computed when the request is built**, not when it is performed, and the result is
+  stored beside the path as given. The path handed to Win32 is the same either way and is fixed to
+  the directory of the moment of construction; `perform` allocates nothing, and the root is not
+  kept after it has been used.
+- **The current directory is read only for a child that rules 1, 2, 3 and 5 allow**, since only rules 4
+  and 6 need it. A path that is absolute, a device, a stream or empty makes no call.
+- **`NUL` is not grafted.** It is among rule 5's names, and the rule errs toward not grafting; the
+  checklist item had listed `NUL` among the names that graft, which disagreed with the rule as
+  numbered. The rule governs. `NUL` opens the same device grafted or not, so nothing observable turns
+  on it.
+- **Rule 5 also names `COM` and `LPT` followed by the superscripts `U+00B9`, `U+00B2` and `U+00B3`**,
+  which the documentation lists after the ASCII digits. The comparison folds ASCII case only.
+- **A directory is UNC for rule 4 when it begins with two separators of either kind.** That is wider
+  than a UNC path and errs toward not grafting. A verbatim or device directory is decided earlier, by
+  rule 6, and is not grafted at all.
+- **A failure to read the directory is its own error**, with the retry shape and vocabulary of
+  [`ResolveFullPath`](src/full_path.rs): Windows' code unaltered, or that the size kept changing.
+- **An interior NUL is refused when the request is built**, which is [D-27](#d-27).
+
+**Scheduled work:** none here. `DI-13.2`'s rework in `win-durable-ioring` was waiting on the entries
+taking a `Wtf16String`.
+
+## <a id="d-20"></a>D-20: Every device control goes through one overlapped-safe helper
+
+**Superseded by [WV-D-7](../win-volume-sys/DESIGN-NOTES.md#wv-d-7).** The helper and the volume NUMA
+entry that was its first user ([WV-D-8](../win-volume-sys/DESIGN-NOTES.md#wv-d-8)) moved to
+`win-volume-sys` by `NR-2.8`, because a device control against a volume is not a namespace
+operation. This crate has no `DeviceIoControl` call. The decision this row recorded is no longer
+this crate's, and its reasoning is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+## <a id="d-21"></a>D-21: The disk-extents entry reads the reply and refuses one that is not what it counts
+
+**Superseded by [WV-D-3](../win-volume-sys/DESIGN-NOTES.md#wv-d-3).** Moved to `win-volume-sys` by
+`NR-2.8`, where the two implementations of this call were reconciled into one.
+
+## <a id="d-22"></a>D-22: Storage properties are one call with a typed entry each, and a reply is reported as bytes the device gave
+
+**Superseded by [WV-D-9](../win-volume-sys/DESIGN-NOTES.md#wv-d-9).** Moved to `win-volume-sys` by
+`NR-2.8`.
+
+## <a id="d-23"></a>D-23: A disk's NUMA node is its own entry, carried unaltered, and the size protocol is a property's
+
+**Superseded by [WV-D-9](../win-volume-sys/DESIGN-NOTES.md#wv-d-9).** Moved to `win-volume-sys` by
+`NR-2.8`, with the storage-property decision it built on.
+
+## <a id="d-24"></a>D-24: The dependency query is its own entry, the version is an input, and names are copied out of the reply
+
+**Superseded by [WV-D-10](../win-volume-sys/DESIGN-NOTES.md#wv-d-10).** Moved to `win-volume-sys` by
+`NR-2.8`, with its declared blind spot: no real entry has been observed, because attaching a
+virtual disk needs an elevated token.
+
+## <a id="d-25"></a>D-25: The SDDL conversion is public in both directions, and the length Windows reports for the text is not trusted
+
+**Status: decided and implemented** by `NR-3.1` (`src/security/sddl.rs`).
+
+**What is decided.**
+
+- **Both directions are public methods of `SecurityDescriptor`**: `from_sddl`, which takes SDDL text
+  and returns the descriptor, and `to_sddl`, which writes the parts a `SecurityInformation` mask
+  selects as text. They are the documented `ConvertStringSecurityDescriptorToSecurityDescriptorW` and
+  `ConvertSecurityDescriptorToStringSecurityDescriptorW`. Hiding one form so that no conversion is
+  exposed was considered and set aside: the binary form is already public (`capture`, `as_ptr`,
+  `as_bytes`) in a published crate, so hiding it would be a breaking removal and would still convert
+  inside. The engineer, 2026-10-15: "go forward with the conversion functions as public".
+- **The input is a `Wtf16String`**, which is what the crate's other entries take for text, and a
+  string with an interior NUL is refused **before the call** as `InteriorNul`, with
+  `ERROR_INVALID_PARAMETER`: Windows reads up to the NUL and would accept what is before it, which is
+  a different descriptor than the string says.
+- **Nothing is parsed or defaulted here.** Windows decides what the text means. There is no revision
+  parameter, since `SDDL_REVISION_1` is the only revision defined, and the mask is a newtype over the
+  raw bits ([D-12](#d-12)), with the five documented parts named and `from_bits` for the rest.
+- **A string Windows refuses is `InvalidSddl` with Windows' own code**, read in the statement after
+  the call; a refusal to write is `ToSddl`. Both are new variants of the existing
+  `#[non_exhaustive]` `SecurityCaptureFailure`, so nothing breaks.
+- **What Windows returns is copied and freed.** Both calls return `LocalAlloc` memory. The descriptor
+  is copied into the crate's own self-relative blob by the existing `capture`, and the text into a
+  `Wtf16String`; the original is freed by a guard on every path, so no raw pointer reaches the caller
+  ([D-8](#d-8)).
+- **The length Windows reports for the text is not used.** The text is read up to the terminator the
+  documentation promises.
+
+**The text form is not canonical.** Two strings can name one descriptor (a rights mask and its alias),
+and what `to_sddl` returns is Windows' rendering, not necessarily the string a descriptor was built
+from. Descriptors compare by their bytes.
+
+**Measured on 2026-10-15**, Windows 11:
+
+- The length reported with the written text is the string's length plus one for some strings (the
+  documented figure, the terminator counted), plus two for others, and plus none for others
+  (`D:P(A;;GA;;;WD)` is 15 characters and reports 16; `D:(A;;GA;;;WD)(A;;GR;;;BA)` is 26 and reports
+  28; `O:BA` is 4 and reports 4), so a copy that trusted it would end in a NUL or lose the last
+  character.
+- Refusals: text that is not SDDL, and lower-case parts and aliases (`d:p(a;;ga;;;wd)`), are
+  `ERROR_INVALID_PARAMETER`; an unknown ACE type is `ERROR_INVALID_DATATYPE`; an unknown SID alias is
+  `ERROR_INVALID_SID`; a DACL of 6000 entries is `ERROR_INVALID_ACL`, where 1500 is accepted; an
+  unpaired surrogate is `ERROR_INVALID_PARAMETER` and does not panic.
+- An empty string is accepted and is a descriptor with no parts. `D:` is an empty DACL,
+  `D:NO_ACCESS_CONTROL` a NULL one, and `O:BA` has no DACL, so the three grants `AclState` keeps apart
+  are all reachable from text.
+- A mask selects what is written: owner, group and DACL separately and together; a part the
+  descriptor lacks, and an empty mask, write nothing.
+- A descriptor written as text and read back is equal to the original for every canonical string
+  tried, an owner, a group, a DACL, a SACL and a NULL DACL among them. A SACL is written with no
+  privilege, since the descriptor is in memory.
+- A file created with a descriptor from text is given its DACL, read back through `GetSecurityInfo`.
+  A generic right is stored as the file rights it maps to (`GA` reads back as `FA`), which is the
+  file system's, not this conversion's.
+
+**Not established.** Whether any descriptor and mask make Windows refuse to write text was not found,
+so `ToSddl`'s kind is reached by no test ([sabotage.json](sabotage.json) says so). Whether every
+binary descriptor survives the round trip was not tried beyond the strings above: ACEs of types SDDL
+has no name for were not. That the memory Windows allocated is freed is read from the code, not
+observed.
+
+**Scheduled work:** none in this crate. [DI-13.5](../durable-ioring/CHECKLIST.md) takes the release
+that carries this.
+
+## <a id="d-26"></a>D-26: `ReOpenFile` is one entry that owns a duplicate of the original, and nothing in it is defaulted
+
+**Status: decided and implemented** by `NR-3.2` (`src/reopen.rs`).
+
+**What is decided.**
+
+- **One entry for one call** ([D-3](#d-3)): `ReOpenFile`, a new handle to what an open handle already
+  names, with the access, the share mode and the flags stated anew. It names nothing by path or
+  identifier, so it is a third open primitive beside `OpenFile` and `OpenFileByIdentifier`.
+- **The request owns a duplicate of the original**, as `OpenFileByIdentifier` does for its volume
+  hint ([D-8](#d-8)): the request is built on one thread and performed on another, and cannot be
+  left naming a handle its originator has closed. `try_clone` duplicates it and is fallible, so the
+  request is not `Clone`.
+- **All three parameters start at zero and are carried verbatim** ([D-12](#d-12)). There is no
+  default access, share mode or flag; which flags `ReOpenFile` accepts is the call's to say.
+- **Every refusal is the call's own code**, unaltered. No sharing violation or access denial is
+  inferred from, mapped, or retried here.
+- **`perform` returns an `OwnedHandle`**, a new handle on every call however often the request is
+  performed.
+
+**Measured on 2026-10-15**, Windows 11, a Hyper-V guest, not elevated:
+
+- An access the original's sharing does not allow (a read-only original sharing read, reopened for
+  writing), a share mode that does not allow the original's access (an original open for writing,
+  reopened sharing read only), and a share mode of zero against an original open for reading are
+  each `ERROR_SHARING_VIOLATION`. The same requests with a compatible share mode succeed.
+- Access is not limited to the original's: a read-only original is reopened for writing when the
+  sharing allows it, and the write is seen through the original.
+- Access zero with a share mode of all three and no flags succeeds; `DELETE` access succeeds;
+  `FILE_FLAG_OVERLAPPED` is accepted; the `NUL` device reopens.
+- `FILE_FLAG_NO_BUFFERING` added to a handle opened without it takes effect: an unaligned read that
+  succeeds through the original is `ERROR_INVALID_PARAMETER` through the reopened handle, and an
+  aligned one succeeds.
+- **A directory handle was refused with `ERROR_ACCESS_DENIED` for every combination tried**,
+  whatever the access, share mode and flags, for the directory handles tried (opened for
+  `FILE_LIST_DIRECTORY` with `FILE_FLAG_BACKUP_SEMANTICS`, among them). No working directory reopen
+  was found, and why is not established.
+  The entry does not special-case it.
+
+**Scheduled work:** none in this crate. [DI-13.6](../durable-ioring/CHECKLIST.md) takes the release
+that carries this.
+
+## <a id="d-27"></a>D-27: The path entries take a `Wtf16String`, are built fallibly, and refuse an interior NUL where the request is built
+
+**Status: implemented** by `NR-3.4`, `NR-3.5` and `NR-3.6` (`src/open.rs`, `src/watch.rs`,
+`src/full_path.rs`, `src/anchored.rs`). The fallible construction is the assistant's recommendation,
+written into `NR-3.5` as such, and was implemented on the engineer's instruction to implement
+`NR-3.4`; it has not been ruled on separately.
+
+**What is decided.**
+
+- **`OpenFile::new`, `WatchDirectory::new` and `ResolveFullPath::new` take a `Wtf16String` and return
+  a `Result<Self, PathCaptureError>`.** `prepare`, `PreparedPath`, `PathError`, `PathFailure` and the
+  `path` module are removed. A request holds no preparation of its own; the contract of the paths is
+  [D-19](#d-19).
+- **`PathCaptureError` has three variants**: `InteriorNul`, `CurrentDirectory(Win32Error)` and
+  `CurrentDirectoryUnstable { attempts }`. The second and third are the failure of reading the
+  current directory, with Windows' code unaltered and the retry shape of
+  [`ResolveFullPath`](src/full_path.rs); only `OpenFile` and `WatchDirectory` can produce them.
+- **An interior NUL is refused where the request is built**, in all three entries. `Wtf16String` does
+  not exclude one, and Win32 reads a path up to its first NUL, so a call would act on a shorter path
+  than the one named and report success for it. The check is the one the `SAFETY` comments in the
+  entries rest on.
+- **`path()` is the path as given and `win32_path()` is the path handed to the call**, on `OpenFile`
+  and `WatchDirectory`. They are equal unless the path was grafted ([D-19](#d-19)), so a caller or
+  a test can see what the graft did.
+- **`ResolveFullPath` keeps the path exactly as given and grafts nothing.** It is the call; a caller
+  who wants a path fixed to the current directory when the request is built uses `OpenFile` or
+  `WatchDirectory`.
+- **Nothing else about a path is checked.** An empty path, a path longer than `MAX_PATH`, and a
+  verbatim path that is not fully qualified all reach the call and are its to answer. Those refusals
+  belonged to `prepare` and went with it.
+
+**Measured on 2026-10-16**, Windows 11:
+
+- A relative name given to a request, with the process current directory then moved elsewhere,
+  is opened (`OpenFile`) and watched (`WatchDirectory`) at the directory it was built in. The same
+  name given to a request built after the move is `ERROR_FILE_NOT_FOUND` for the open and is
+  refused for the watch. Both are tested in a child process, so the current directory of the test
+  process is not changed.
+
+**Scheduled work:** none in this crate. [NR-3.7](CHECKLIST.md) and `M6.1` in
+[windows-platform-probes' CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) rewrite the probe
+that measured `prepare`. `win-durable-ioring`'s open was adapted only far enough to build, and its
+rework is [DI-13.7](../durable-ioring/CHECKLIST.md).

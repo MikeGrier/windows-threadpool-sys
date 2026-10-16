@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.1.0...win-durable-ioring-v0.2.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace-request:** OpenFile::new, WatchDirectory::new and ResolveFullPath::new take a Wtf16String and return a Result; prepare, PreparedPath, PathError, PathFailure and the path module are removed.
+* **win-durable-ioring:** Win32FileTarget::new takes an OpenedFile, not a SharedHandle, and the warranty, geometry and capabilities setters are removed.
+
+### Features
+
+* **namespace-request:** open, watch and resolve by a Wtf16String, and retire prepare ([3083c05](https://github.com/MikeGrier/windows-threadpool-sys/commit/3083c050319c9bbee663c1f784ebbdd6084c2be2))
+* **win-durable-ioring:** a file target is made from a file this crate opened ([b49d421](https://github.com/MikeGrier/windows-threadpool-sys/commit/b49d4212150c67d2fc67bd9da96b2e9511798557))
+* **win-durable-ioring:** a raw volume is a file target, opened here and its disks found ([81dbdb7](https://github.com/MikeGrier/windows-threadpool-sys/commit/81dbdb78ca7a21927ae226de9db3794fa42656a5))
+* **win-durable-ioring:** add a whole physical disk as a file target ([fd281df](https://github.com/MikeGrier/windows-threadpool-sys/commit/fd281df87aeed800348d406657497ddf659c3898))
+* **win-durable-ioring:** add error_code_from_win32 and win32_code_of ([0758381](https://github.com/MikeGrier/windows-threadpool-sys/commit/075838108d3fe8765f6ba293b1375739411c0946))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * durable-ioring bumped from 0.1.0 to 0.2.0
+    * windows-namespace-request-sys bumped from 0.3.0 to 0.4.0
+    * win-error-codes bumped from 0.1.0 to 0.0.2
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.0.1...win-durable-ioring-v0.1.0) (2026-10-15)
 
 

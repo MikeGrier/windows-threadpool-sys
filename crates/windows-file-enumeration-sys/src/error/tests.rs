@@ -13,13 +13,24 @@ fn a_win32_code_round_trips_through_io_error() {
         code.to_io_error().raw_os_error(),
         Some(ERROR_ACCESS_DENIED as i32)
     );
-    assert_eq!(Win32Error::from_io(&code.to_io_error()), code);
+    assert_eq!(Win32Error::from_io(&code.to_io_error()), Some(code));
 }
 
 #[test]
-fn an_io_error_without_an_os_code_becomes_zero() {
+fn a_code_of_two_to_the_thirty_first_or_more_neither_panics_nor_loses_its_code() {
+    // `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`: this crate's earlier type panicked converting it.
+    let code = Win32Error::from_code(0xC03A_0015);
+    let io_error = code.to_io_error();
+
+    assert_eq!(io_error.raw_os_error(), Some(0xC03A_0015_u32.cast_signed()));
+    assert_eq!(Win32Error::from_io(&io_error), Some(code));
+}
+
+#[test]
+fn an_io_error_without_an_os_code_has_no_code_and_is_not_success() {
+    // The earlier type returned the code `0` here, which is `ERROR_SUCCESS`.
     let fabricated = io::Error::other("no OS error behind this");
-    assert_eq!(Win32Error::from_io(&fabricated).code(), 0);
+    assert_eq!(Win32Error::from_io(&fabricated), None);
 }
 
 #[test]

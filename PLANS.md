@@ -3,10 +3,12 @@
 Master tracker for every active checklist in the repository. Each source-component also keeps its own
 plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 [crates/io-buffers/PLANS.md](crates/io-buffers/PLANS.md),
+[crates/win-error-codes/PLANS.md](crates/win-error-codes/PLANS.md),
 [crates/win-multi-file-tail-watcher/PLANS.md](crates/win-multi-file-tail-watcher/PLANS.md),
 [crates/win-shared-os-owned-handle/PLANS.md](crates/win-shared-os-owned-handle/PLANS.md),
 [crates/win-sync-sys/PLANS.md](crates/win-sync-sys/PLANS.md),
 [crates/win-time-sys/PLANS.md](crates/win-time-sys/PLANS.md),
+[crates/win-volume-sys/PLANS.md](crates/win-volume-sys/PLANS.md),
 [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-file-enumeration-sys/PLANS.md),
 [crates/windows-file-watcher/PLANS.md](crates/windows-file-watcher/PLANS.md),
 [crates/windows-file-watcher-example-test-harness/PLANS.md](crates/windows-file-watcher-example-test-harness/PLANS.md),
@@ -40,6 +42,7 @@ plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 | [crates/win-shared-os-owned-handle/CHECKLIST.md](crates/win-shared-os-owned-handle/CHECKLIST.md) | in progress | A shared owner of a Windows handle: std's `OwnedHandle` behind a reference count, which std lacks and crates here had each wrapped under their own name. The crate itself is complete and published; what remains is its adoption by those crates. | [crates/win-shared-os-owned-handle/DESIGN-NOTES.md](crates/win-shared-os-owned-handle/DESIGN-NOTES.md) |
 | [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Windows `IoRing` submission/completion ring, as a new crate. M1-M19 are complete (0.2.0 shipped 2026-08-30, restoring availability after all three 0.1.x versions were yanked); M1-M19 are archived. **M20** queues documentation and policy-test repairs from the 2026-08-30 NUMA-sharding measurement, and the pinned-thread `M6+` work stays parked. M21-M24 (epoch-log review, arena and submission, and making the unit suite hermetic) are complete; M23, M25 and M26 are open, and **M27 was added 2026-09-23 as the first milestone queued by intent, and re-planned the same day**: the adaptivity the [adoption thesis](DESIGN-NOTES.md#the-adoption-thesis) asks for is owned by [topology-planner](crates/topology-planner/COMPONENT.md), so M27 is now what this crate owes a realizer rather than a policy surface of its own. | [crates/windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md) |
 | [crates/win-time-sys/CHECKLIST.md](crates/win-time-sys/CHECKLIST.md) | in progress | Safe Rust over the Windows clocks, in two layers -- timelines (a tick and what zero means) and the getters that read them -- so the workspace reads its one time base, interrupt time, in one place. Created because durable-ioring forbids `unsafe` and the only reader was `windows-threadpool-sys`' crate-private one. The cycle counter is parked. | [crates/win-time-sys/DESIGN-NOTES.md](crates/win-time-sys/DESIGN-NOTES.md) |
+| [crates/win-volume-sys/CHECKLIST.md](crates/win-volume-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 volume device controls: the disks a volume sits on, its sector size and its lock, which durable-ioring's raw volume backing is built on. | [crates/win-volume-sys/DESIGN-NOTES.md](crates/win-volume-sys/DESIGN-NOTES.md) |
 | [crates/win-sync-sys/CHECKLIST.md](crates/win-sync-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 synchronization API, which began with `Event`; `windows-threadpool-sys` builds its wait targets on it, and durable-ioring's readiness event is the reason it exists now. The other kernel objects follow. | [crates/win-sync-sys/DESIGN-NOTES.md](crates/win-sync-sys/DESIGN-NOTES.md) |
 
 Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or any crate's.

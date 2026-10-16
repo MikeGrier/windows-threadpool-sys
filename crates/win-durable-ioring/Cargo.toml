@@ -2,7 +2,7 @@
 
 [package]
 name = "win-durable-ioring"
-version = "0.1.0"
+version = "0.2.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 # The contract, the core and the traits this crate drives and implements (DI-D-50). A version and a
 # path, as `cargo publish` requires: the version is the release that carries the split.
-durable-ioring = { version = "0.1.0", path = "../durable-ioring" }
+durable-ioring = { version = "0.2.0", path = "../durable-ioring" }
 # The ring crate (DI-D-16 in durable-ioring's DESIGN-NOTES.md): the release that carries the typed
 # ring, `leave_queued` and the registrations this driver is built on.
 windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys" }
@@ -31,6 +31,23 @@ windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys"
 # This driver's one time base, interrupt time (DI-D-37), read through `InterruptClock`: the crate
 # forbids `unsafe`, so it cannot call `QueryInterruptTime` itself.
 win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
+# The disks a raw volume sits on, its sector size and its lock: device controls that need `unsafe`,
+# which this crate forbids (DI-D-61).
+win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
+# The open of a file (DI-13.2): every parameter of `CreateFileW`, made safe and decided by no one,
+# so what an open means is decided here and this crate has no `unsafe` of its own for it. The
+# handle it returns is plain and unassociated, as the ring needs.
+windows-namespace-request-sys = { version = "0.4.0", path = "../windows-namespace-request-sys" }
+# The path type that crate takes, and the flags and access constants an open is made from.
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+# The rule that wraps a Win32 code as an `HRESULT` and reads one back out (DI-9.7.11): this crate
+# owns the numbering of the codes it reports, and that crate owns the rule.
+win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_Storage_FileSystem"]
 
 [features]
 # The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by
@@ -49,6 +66,9 @@ win-durable-ioring = { path = ".", features = ["fault-injection"] }
 # included (the ring crate's D-85), and `sys::submit_faults` is its safe form, so this crate's
 # `forbid(unsafe_code)` stands (DI-D-4). A dev-dependency's features reach test builds only.
 windows-ioring-sys = { path = "../windows-ioring-sys", features = ["kernel-seam"] }
+# Aligned buffers, for the tests that write to an unbuffered file, whose buffers must start on a
+# sector (DI-D-60).
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
 # A blocking push, built on the public API as a helper to use or adapt (DI-7.4, DI-D-56). Its own
 # tests run with the crate's: without `test = true` cargo builds an example and never runs them.

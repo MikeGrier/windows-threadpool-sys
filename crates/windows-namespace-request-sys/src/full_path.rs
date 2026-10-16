@@ -90,7 +90,7 @@
 //! | `X:x` | rooted | rooted |
 //!
 //! So a *fully qualified* path can still resolve to a device, which is the
-//! part worth knowing: `prepare(r"C:\NUL")` yields `\\.\NUL`, and a caller
+//! part worth knowing: resolving `C:\NUL` yields `\\.\NUL`, and a caller
 //! treating a rooted path as proof it names a file on that volume is wrong for
 //! this one name. Only a suffix (`NUL.txt`, `NUL:x`) takes it out.
 //!
@@ -219,13 +219,12 @@
 //! cloning an already-resolved path at roughly 45 ns. The ~165 ns between them
 //! is what recycling a resolved path recovers, and that is all it is.
 //!
-//! **That probe exercises [`crate::path::prepare`], not this module**, and the
-//! two have different allocation shapes -- which is itself why the gap cannot be
-//! read as this call's cost. `prepare` copies the input and then allocates a
-//! `MAX_PATH` output buffer, so two allocations against the clone's one, and the
-//! builder chain sits on top. [`ResolveFullPath`] takes its input already owned
-//! and allocates one buffer per attempt instead. Either way the allocator work
-//! is the crate's, not `GetFullPathNameW`'s, and attributing the gap to the call
+//! **That probe does not time this module**, and its path preparation has a
+//! different allocation shape -- which is itself why the gap cannot be read as
+//! this call's cost: it spans that preparation's allocations and the builder
+//! chain on top. [`ResolveFullPath`] takes its input already owned and
+//! allocates one buffer per attempt. Either way the allocator work is the
+//! crate's, not `GetFullPathNameW`'s, and attributing the gap to the call
 //! -- as a draft of this doc did -- credits it with the work the same sentence
 //! is busy excluding.
 //!
@@ -252,6 +251,7 @@ use std::fmt;
 use windows_sys::Win32::Storage::FileSystem::GetFullPathNameW;
 use wtf_string::{Wtf16Str, Wtf16String};
 
+use crate::anchored::PathCaptureError;
 use crate::outcome::{Win32Error, perform_nonzero};
 
 /// How many times the buffer is grown before giving up.
@@ -325,7 +325,7 @@ impl From<Win32Error> for FullPathError {
 ///
 /// // `.` and `..` are collapsed as string work, with no component verified:
 /// // this holds whether or not `C:\Windows\System32` exists.
-/// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
+/// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))?
 ///     .perform()?
 ///     .to_string_lossy();
 ///
@@ -342,7 +342,7 @@ impl From<Win32Error> for FullPathError {
 /// // A path to nothing resolves perfectly happily, because the call
 /// // does not verify it. A consumer wanting a verified path wants an open
 /// // plus GetFinalPathNameByHandleW instead.
-/// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\no-such-directory\..\file.txt"))
+/// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\no-such-directory\..\file.txt"))?
 ///     .perform()?
 ///     .to_string_lossy();
 ///
@@ -358,11 +358,21 @@ pub struct ResolveFullPath {
 impl ResolveFullPath {
     /// Begins a request to resolve `path`.
     ///
-    /// Takes a raw path rather than a [`crate::path::PreparedPath`], because
-    /// preparation is what this call *performs*. Handing it an already-prepared
-    /// path would be resolving twice.
-    pub fn new(path: Wtf16String) -> Self {
-        Self { path }
+    /// The path is kept exactly as given: this entry is the call, and fixes nothing to the current
+    /// directory at construction, which is what [`OpenFile`](crate::open::OpenFile) and
+    /// [`WatchDirectory`](crate::watch::WatchDirectory) do. A caller who wants a path fixed when
+    /// the request is built uses one of those.
+    ///
+    /// # Errors
+    ///
+    /// [`PathCaptureError::InteriorNul`] if the path contains a NUL. Win32 reads a path up to its
+    /// first NUL, so the call would resolve a shorter path than the one named and say nothing of
+    /// it. No other variant arises here, since nothing is read at construction.
+    pub fn new(path: Wtf16String) -> Result<Self, PathCaptureError> {
+        if path.has_interior_nul() {
+            return Err(PathCaptureError::InteriorNul);
+        }
+        Ok(Self { path })
     }
 
     /// The path this request will resolve.
@@ -376,9 +386,9 @@ impl ResolveFullPath {
     /// Resolution happens against the current directory of **whichever thread
     /// performs this**, which is the one thing a caller must keep in mind: a
     /// request built on a submitter and performed on a worker resolves against
-    /// the process current directory as it stands at *performance* time.
-    /// [`crate::path::prepare`] is the function for pinning that at
-    /// construction.
+    /// the process current directory as it stands at *performance* time. To
+    /// pin that at construction, build an [`OpenFile`](crate::open::OpenFile) or
+    /// a [`WatchDirectory`](crate::watch::WatchDirectory) instead.
     ///
     /// # Errors
     ///
@@ -392,8 +402,8 @@ impl ResolveFullPath {
             let requested = u32::try_from(capacity).unwrap_or(u32::MAX);
 
             let written = perform_nonzero(|| {
-                // SAFETY: the input has no interior NUL by Wtf16String's own
-                // invariant for a terminated pointer, and the buffer is
+                // SAFETY: the input has no interior NUL, since `new` refused one
+                // (Wtf16String does not exclude one itself), and the buffer is
                 // writable for `requested` characters. The buffer's invariant
                 // is restored below before it is observed.
                 unsafe {
