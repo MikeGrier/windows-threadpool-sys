@@ -108,6 +108,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod anchored;
 pub mod close;
 pub mod file_info;
 pub mod final_path;

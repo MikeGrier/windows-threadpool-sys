@@ -309,6 +309,262 @@
       "why": "A control: 0x0 is 0, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["            share_mode: 0,\n"],
       "replace": ["            share_mode: 0x0,\n"]
+    },
+    {
+      "name": "NR-3.3: an empty child is grafted",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Rule 1: an empty path names nothing, and the root with a backslash after it names the directory.",
+      "find": ["    let Some(first) = child.first() else {\n        return false;\n"],
+      "replace": ["    let Some(first) = child.first() else {\n        return true;\n"]
+    },
+    {
+      "name": "NR-3.3: a child that begins with a separator is grafted",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Rule 2: root-relative, UNC, verbatim and device paths are not relative to the directory.",
+      "find": ["    if is_separator(*first) || child.contains(&COLON) {\n"],
+      "replace": ["    if child.contains(&COLON) {\n"]
+    },
+    {
+      "name": "NR-3.3: a child with a colon is grafted",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Rule 3: a drive-relative path and a stream name are resolved by Win32 from state this graft does not read.",
+      "find": ["    if is_separator(*first) || child.contains(&COLON) {\n"],
+      "replace": ["    if is_separator(*first) {\n"]
+    },
+    {
+      "name": "NR-3.3: a separator is only a backslash",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Win32 reads a forward slash as a separator in an ordinary path, for the first unit and for every component.",
+      "find": ["    unit == BACKSLASH || unit == SLASH\n"],
+      "replace": ["    unit == BACKSLASH\n"]
+    },
+    {
+      "name": "NR-3.3: components are split at backslashes only",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "A reserved name or a `..` after a forward slash is a component of its own.",
+      "find": ["    path.split(|unit| is_separator(*unit))\n"],
+      "replace": ["    path.split(|unit| *unit == BACKSLASH)\n"]
+    },
+    {
+      "name": "NR-3.3: a parent component is refused whatever the directory",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Rule 4 is about a UNC directory only: under a drive-rooted one the `..` is collapsed by Win32 on the grafted path and means what it said.",
+      "find": ["    if is_unc(root) && has_parent_component(child) {\n"],
+      "replace": ["    if is_unc(root) || has_parent_component(child) {\n"]
+    },
+    {
+      "name": "NR-3.3: a UNC directory is one that begins with either separator",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Two separators begin a UNC path; one is root-relative, and a drive-rooted directory is neither.",
+      "find": ["    matches!(root, [first, second, ..] if is_separator(*first) && is_separator(*second))\n"],
+      "replace": ["    matches!(root, [first, second, ..] if is_separator(*first) || is_separator(*second))\n"]
+    },
+    {
+      "name": "NR-3.3: a parent component is any component that begins with two dots",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`..a` and `...` are names, not the parent.",
+      "find": ["    components(child).any(|component| component == [DOT, DOT])\n"],
+      "replace": ["    components(child).any(|component| component.starts_with(&[DOT, DOT]))\n"]
+    },
+    {
+      "name": "NR-3.3: a separator is added whether or not the root ends in one",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "A drive root and a root with a trailing backslash would be given a doubled one.",
+      "find": ["    let needs_separator = root.last() != Some(&BACKSLASH);\n"],
+      "replace": ["    let needs_separator = true;\n"]
+    },
+    {
+      "name": "NR-3.3: a separator is added only when the root ends in one",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The other direction: the root and the child would be run together.",
+      "find": ["    let needs_separator = root.last() != Some(&BACKSLASH);\n"],
+      "replace": ["    let needs_separator = root.last() == Some(&BACKSLASH);\n"]
+    },
+    {
+      "name": "NR-3.3: a root with nothing in it is grafted onto",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The join would be `\\child`, which is root-relative and names something else.",
+      "find": ["    if root.is_empty() || !has_graftable_shape(child) {\n"],
+      "replace": ["    if !has_graftable_shape(child) {\n"]
+    },
+    {
+      "name": "NR-3.3: the extension is not removed before the name is compared",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`CON.txt` is the device.",
+      "find": ["    let stem = component.split(|unit| *unit == DOT).next().unwrap_or(&[]);\n"],
+      "replace": ["    let stem = component;\n"]
+    },
+    {
+      "name": "NR-3.3: the trailing spaces are cut one short",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The end of the name is one past its last character that is not a space; a cut one short loses a letter, and no name matches.",
+      "find": ["        .map_or(0, |last| last + 1);\n"],
+      "replace": ["        .map_or(0, |last| last);\n"]
+    },
+    {
+      "name": "NR-3.3: the name is compared exactly, not without regard to case",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`con` is the device.",
+      "find": ["            u8::try_from(*unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(expected))\n"],
+      "replace": ["            u8::try_from(*unit).is_ok_and(|unit| unit == *expected)\n"]
+    },
+    {
+      "name": "NR-3.3: a unit is compared by its low byte",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "A unit that is not ASCII is not a letter, whatever its low byte is.",
+      "find": ["            u8::try_from(*unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(expected))\n"],
+      "replace": ["            ((*unit & 0xFF) as u8).eq_ignore_ascii_case(expected)\n"]
+    },
+    {
+      "name": "NR-3.3: the digits stop short of nine",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`COM9` and `LPT9` are devices.",
+      "find": ["    let is_digit = (DIGIT_ZERO..=DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(digit);\n"],
+      "replace": ["    let is_digit = (DIGIT_ZERO..DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(digit);\n"]
+    },
+    {
+      "name": "NR-3.3: the digits start above zero",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`COM0` and `LPT0` are in Microsoft's list.",
+      "find": ["    let is_digit = (DIGIT_ZERO..=DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(digit);\n"],
+      "replace": ["    let is_digit = (DIGIT_ZERO + 1..=DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(digit);\n"]
+    },
+    {
+      "name": "NR-3.3: the superscript digits are not digits",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Microsoft's list names `COM\u00b9`, `COM\u00b2` and `COM\u00b3` too.",
+      "find": ["    let is_digit = (DIGIT_ZERO..=DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(digit);\n"],
+      "replace": ["    let is_digit = (DIGIT_ZERO..=DIGIT_NINE).contains(digit) || SUPERSCRIPT_DIGITS.contains(&0);\n"]
+    },
+    {
+      "name": "NR-3.3: any name that ends in a digit is a device",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Only `COM` and `LPT` take a digit; `CON1` and `AUX1` are names.",
+      "find": ["    is_digit\n        && RESERVED_NAMES_WITH_DIGIT\n"],
+      "replace": ["    is_digit\n        || RESERVED_NAMES_WITH_DIGIT\n"]
+    },
+    {
+      "name": "NR-3.3: NUL is not a reserved name",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "D-19 lists it, and the rule errs toward not grafting.",
+      "find": ["b\"AUX\", b\"NUL\", b\"CONIN$\""],
+      "replace": ["b\"AUX\", b\"NUX\", b\"CONIN$\""]
+    },
+    {
+      "name": "NR-3.3: CONOUT$ is spelled without its dollar sign",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The name is `CONOUT$`, and `CONOUT` is a file name.",
+      "find": ["b\"CONIN$\", b\"CONOUT$\"]"],
+      "replace": ["b\"CONIN$\", b\"CONOUT\"]"]
+    },
+    {
+      "name": "NR-3.3: LPT is not a name that takes a digit",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`LPT1` to `LPT9` are devices.",
+      "find": ["[b\"COM\", b\"LPT\"]"],
+      "replace": ["[b\"COM\", b\"LPX\"]"]
+    },
+    {
+      "name": "NR-3.3: the path handed to Win32 is the one given",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The graft is the whole point: a path that says nothing of the directory is resolved when the call is made.",
+      "find": ["    pub(crate) fn win32(&self) -> &Wtf16Str {\n        self.grafted.as_ref().unwrap_or(&self.given)\n"],
+      "replace": ["    pub(crate) fn win32(&self) -> &Wtf16Str {\n        &self.given\n"]
+    },
+    {
+      "name": "NR-3.3: the terminated pointer is to the path as given",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The pointer is what the call reads, and it must be to the grafted path.",
+      "find": ["        self.grafted\n            .as_ref()\n            .unwrap_or(&self.given)\n            .as_terminated_ptr()\n"],
+      "replace": ["        self.given.as_terminated_ptr()\n"]
+    },
+    {
+      "name": "NR-3.3: the path as given is the one handed to Win32",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "`given` is what the caller said, and a caller or test reads it to see what the graft did.",
+      "find": ["    pub(crate) fn given(&self) -> &Wtf16Str {\n        &self.given\n"],
+      "replace": ["    pub(crate) fn given(&self) -> &Wtf16Str {\n        self.win32()\n"]
+    },
+    {
+      "name": "NR-3.3: a path that was grafted says it was not",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The flag is how a caller tells the two cases apart.",
+      "find": ["        self.grafted.is_some()\n"],
+      "replace": ["        self.grafted.is_none()\n"]
+    },
+    {
+      "name": "NR-3.3: the directory is read into a buffer of one character",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The size passed is the size of the buffer; a smaller one is reported as written and the rest is not.",
+      "find": ["            unsafe { GetCurrentDirectoryW(capacity, buffer.as_mut_ptr()) }\n"],
+      "replace": ["            unsafe { GetCurrentDirectoryW(1, buffer.as_mut_ptr()) }\n"]
+    },
+    {
+      "name": "NR-3.3: a size that fits is taken for one that does not",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The call answers the characters written when they fit, and the size needed when they do not.",
+      "find": ["        if written < buffer.len() {\n"],
+      "replace": ["        if written > buffer.len() {\n"]
+    },
+    {
+      "name": "NR-3.3: the buffer is not grown to the size the call asked for",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "A directory longer than the first buffer would never fit, and the retry would give up.",
+      "find": ["        buffer.resize(written, 0);\n"],
+      "replace": ["        buffer.resize(FIRST_ATTEMPT_CHARS, 0);\n"]
+    },
+    {
+      "name": "NR-3.3: the failure of the directory call has no source",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "The Win32 code is the cause and is reached through `source`.",
+      "find": ["            Self::Win32(error) => Some(error),\n"],
+      "replace": ["            Self::Win32(_) => None,\n"]
+    },
+    {
+      "name": "NR-3.3: BLIND SPOT: the directory is read for a path that cannot be grafted",
+      "file": "src/anchored.rs",
+      "expect": "survives",
+      "why": "Declared blind spot, not a control. A path that rules 1, 2, 3 and 5 refuse is returned as given either way, so a call that need not have been made is not observable from a test; the skip is read from the code.",
+      "find": ["        if !has_graftable_shape(given.as_units()) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3.3: control, the end of a name written with the operands of the sum swapped",
+      "file": "src/anchored.rs",
+      "expect": "survives",
+      "why": "A control: addition commutes, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .map_or(0, |last| last + 1);\n"],
+      "replace": ["        .map_or(0, |last| 1 + last);\n"]
     }
   ]
 }
