@@ -9,7 +9,7 @@ use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
 use windows_sys::Win32::Storage::FileSystem::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS;
 use windows_sys::Win32::System::Ioctl::{DISK_EXTENT, VOLUME_DISK_EXTENTS};
 
-use crate::control::control;
+use crate::device_control::{device_control, u32_at, zeroed_output};
 
 #[cfg(test)]
 mod tests;
@@ -46,7 +46,7 @@ pub struct DiskExtent {
 /// [`io::ErrorKind::InvalidData`] for an answer that does not hold the extents it counts.
 pub fn volume_disk_extents(volume: &impl AsHandle) -> io::Result<Vec<DiskExtent>> {
     extents_via(FIRST_EXTENTS, |buffer| {
-        control(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, buffer)
+        device_control(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, &[], buffer)
     })
 }
 
@@ -61,7 +61,7 @@ fn extents_via(
 ) -> io::Result<Vec<DiskExtent>> {
     let mut capacity = first.max(1);
     for _ in 0..ATTEMPTS {
-        let mut buffer = vec![0u8; answer_size(capacity)?];
+        let mut buffer = zeroed_output(answer_size(capacity)?)?;
         match ask(&mut buffer) {
             Ok(written) => return parse(&buffer[..written]),
             Err(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {
@@ -85,11 +85,6 @@ fn answer_size(extents: usize) -> io::Result<usize> {
 
 fn invalid(what: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what)
-}
-
-fn u32_at(buffer: &[u8], offset: usize) -> Option<u32> {
-    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;
-    Some(u32::from_ne_bytes(bytes.try_into().ok()?))
 }
 
 fn i64_at(buffer: &[u8], offset: usize) -> Option<i64> {

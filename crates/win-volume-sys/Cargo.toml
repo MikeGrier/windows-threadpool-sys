@@ -18,6 +18,10 @@ categories = ["api-bindings", "os::windows-apis", "filesystem"]
 # safe layer more or less directly over a Win32 API area, the volume device controls.
 
 [dependencies]
+# The Win32 error code, so an error from a control carries its code exactly, including a code of
+# 2^31 or more, which std's `io::Error` holds as a negative number.
+win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+
 # `default-features = false` matches every other crate in the workspace.
 #
 # `Win32_System_IO` is `DeviceIoControl` and `GetOverlappedResult`; `Win32_System_Ioctl` is
@@ -33,6 +37,13 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Ioctl",
 	"Win32_System_Threading",
 ] }
+
+# Test-only. `Win32_System_Pipes` is for the named pipe whose overlapped read pends on demand,
+# which is how the device-control helper's pending path is run (`device_control/tests.rs`).
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_System_Pipes"]
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it

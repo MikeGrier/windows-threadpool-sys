@@ -6,7 +6,7 @@ use std::os::windows::io::AsHandle;
 
 use windows_sys::Win32::System::Ioctl::{FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME};
 
-use crate::control::control;
+use crate::device_control::device_control;
 
 #[cfg(test)]
 mod tests;
@@ -24,7 +24,7 @@ mod tests;
 /// The device's own error. A volume anything else has open, or has a file open on, cannot be
 /// locked, and says so with an access or sharing error; nothing is changed then.
 pub fn lock_volume(volume: &impl AsHandle) -> io::Result<()> {
-    control(volume, FSCTL_LOCK_VOLUME, &mut []).map(|_| ())
+    device_control(volume, FSCTL_LOCK_VOLUME, &[], &mut []).map(|_| ())
 }
 
 /// Release the lock `volume`'s handle holds.
@@ -33,5 +33,5 @@ pub fn lock_volume(volume: &impl AsHandle) -> io::Result<()> {
 ///
 /// The device's own error, such as `ERROR_NOT_LOCKED` for a handle that holds no lock.
 pub fn unlock_volume(volume: &impl AsHandle) -> io::Result<()> {
-    control(volume, FSCTL_UNLOCK_VOLUME, &mut []).map(|_| ())
+    device_control(volume, FSCTL_UNLOCK_VOLUME, &[], &mut []).map(|_| ())
 }

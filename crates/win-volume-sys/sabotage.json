@@ -1,7 +1,7 @@
 {
   "package": "win-volume-sys",
   "description": "Sabotages for win-volume-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one.",
+  "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one. The device-control helper's pending path is run through its seam, overlapped_call, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well. The OVERLAPPED the control is made with is a declared blind spot (see its survives entry): a control made without one answers the same on every handle tried, FSCTL_REQUEST_OPLOCK included. The abort when the wait for a pending call fails is not reachable: the event is the helper's own. The failure of CreateEventW is not reachable either.",
   "sabotages": [
     {
       "name": "WV-1.1: an extent's offset is read from where its length is",
@@ -52,12 +52,132 @@
       "replace": ["        u32::MAX => Err(io::Error::new(\n"]
     },
     {
-      "name": "WV-1.3: the call is made without the OVERLAPPED it waits on",
-      "file": "src/control.rs",
+      "name": "WV-2.1: the control is made without the OVERLAPPED it waits on",
+      "file": "src/device_control.rs",
       "expect": "survives",
-      "why": "A declared blind spot: on an overlapped handle a call with no OVERLAPPED is undefined, and the volumes the tests open take it without incident, so no test can tell the two apart. The OVERLAPPED is there for the handle this crate is lent and cannot inspect.",
-      "find": ["            &mut overlapped,\n"],
-      "replace": ["            ptr::null_mut(),\n"]
+      "why": "A declared blind spot, measured and not assumed: on an overlapped handle a call with no OVERLAPPED is undefined, but the controls the tests reach take it without incident. That includes FSCTL_REQUEST_OPLOCK, the one control that pends: with no OVERLAPPED it blocks inside DeviceIoControl until the oplock breaks and answers the same, so no test can tell the two apart. The OVERLAPPED is there for the handle this crate is lent and cannot inspect.",
+      "find": ["                written,\n                overlapped,\n"],
+      "replace": ["                written,\n                {\n                    let _ = overlapped;\n                    ptr::null_mut()\n                },\n"]
+    },
+    {
+      "name": "WV-2.1: the event handed to an overlapped control does not suppress the completion packet",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A handle on a completion port gets a packet when an overlapped call completes unless the event's low bit is set. Without it a control would reach a consumer's loop as a completion it never asked for.",
+      "find": ["map_addr(|address| address | 1)"],
+      "replace": ["map_addr(|address| address | 0)"]
+    },
+    {
+      "name": "WV-2.1: a control is told its output buffer is empty",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The buffer length the device is given is the buffer's own; a shorter one makes every control fail for want of room.",
+      "find": ["                buffer.cast(),\n                length,\n"],
+      "replace": ["                buffer.cast(),\n                length - length,\n"]
+    },
+    {
+      "name": "WV-2.1: a control's input is not passed to the device",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "An oplock request is refused without its input structure, so a helper that drops the input fails the control that takes one; none of the no-input controls could tell.",
+      "find": ["        input.as_ptr().cast()\n"],
+      "replace": ["        ptr::null()\n"]
+    },
+    {
+      "name": "WV-2.1: a control that completed reports no bytes written",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The byte count is what a caller checks the reply's size by; a count of nothing would read as an empty reply.",
+      "find": ["    if started != FALSE {\n        return Ok(written);\n"],
+      "replace": ["    if started != FALSE {\n        return Ok(written - written);\n"]
+    },
+    {
+      "name": "WV-2.1: a failure that is not pending is not returned",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "Every failure but ERROR_IO_PENDING is the call's answer; treating the pending code as one reports a call that is still running as a failure while the device writes into a buffer about to be freed.",
+      "find": ["    if error.code() != ERROR_IO_PENDING {\n"],
+      "replace": ["    if error.code() != ERROR_IO_PENDING || error.code() == ERROR_IO_PENDING {\n"]
+    },
+    {
+      "name": "WV-2.1: the wait for a call still running does not wait",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The result is read without waiting, so a call that has not completed is reported as ERROR_IO_INCOMPLETE and the device is left writing.",
+      "find": ["WaitForSingleObject(event.as_raw_handle(), INFINITE)"],
+      "replace": ["WaitForSingleObject(event.as_raw_handle(), 0)"]
+    },
+    {
+      "name": "WV-2.1: a call that completed after pending reports no bytes written",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The count a call that completed asynchronously wrote is read from GetOverlappedResult, and it is what a caller checks a reply's size by.",
+      "find": ["    Ok(written)\n}\n\n/// `len` as"],
+      "replace": ["    Ok(written - written)\n}\n\n/// `len` as"]
+    },
+    {
+      "name": "WV-2.1: a call that failed after pending is reported as a success",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A call that pends and then fails reports its own code through GetOverlappedResult; discarding it would report success with whatever count was left.",
+      "find": ["    if finished == FALSE {\n        return Err(Win32Error::last().into());\n    }\n"],
+      "replace": ["    if finished == FALSE {}\n"]
+    },
+    {
+      "name": "WV-2.1: a failure's code is clamped to what an i32 holds",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A code of 2^31 or more, such as the virtdisk errors, must reach the caller as the code it is; clamping or masking it names a different error. This is the defect win-error-codes exists to remove.",
+      "find": ["    let error = Win32Error::last();\n"],
+      "replace": ["    let error = Win32Error::from_code(Win32Error::last().code() & 0x7FFF_FFFF);\n"]
+    },
+    {
+      "name": "WV-2.1: a failure is reported without its code",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The error is the device's own code, so a caller can read it with Win32Error::from_io; an error that carries none is not.",
+      "find": ["        return Err(error.into());\n"],
+      "replace": ["        return Err(io::Error::other(\"failed\"));\n"]
+    },
+    {
+      "name": "WV-2.1: a buffer longer than a u32 counts is truncated and not refused",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A length that does not fit is refused, since passing its low bits would tell the device a different size from the buffer's own.",
+      "find": ["    u32::try_from(len).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, what))\n"],
+      "replace": ["    let _ = what;\n    Ok(len as u32)\n"]
+    },
+    {
+      "name": "WV-2.1: a buffer the machine cannot supply is reported under another code",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "The size is the device's to name, so a buffer for it may not be allocatable; that is ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'.",
+      "find": ["Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY).to_io_error()"],
+      "replace": ["Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY + 1).to_io_error()"]
+    },
+    {
+      "name": "WV-2.1: a reply buffer is not zeroed",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A reply is read only as far as the device wrote, and what it did not write must be zero and not whatever the allocation held.",
+      "find": ["    buffer.resize(size, 0);\n"],
+      "replace": ["    buffer.resize(size, 0xFF);\n"]
+    },
+    {
+      "name": "WV-2.1: a u32 is read two bytes wide",
+      "file": "src/device_control.rs",
+      "expect": "caught",
+      "why": "A u32 is four bytes; a read two bytes wide fails to convert and every field is absent.",
+      "find": ["    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;\n"],
+      "replace": ["    let bytes = buffer.get(offset..offset.checked_add(size_of::<u16>())?)?;\n"]
+    },
+    {
+      "name": "WV-2.1: control, the end of a u32 read is saturated and not checked",
+      "file": "src/device_control.rs",
+      "expect": "survives",
+      "why": "A control: where the end would overflow, the start is past the buffer anyway and get returns None, so saturating changes the file and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    let bytes = buffer.get(offset..offset.checked_add(size_of::<u32>())?)?;\n"],
+      "replace": ["    let bytes = buffer.get(offset..offset.saturating_add(size_of::<u32>()))?;\n"]
     }
   ]
 }

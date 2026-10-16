@@ -177,6 +177,7 @@ dependencies = [
 name = "win-volume-sys"
 version = "0.1.0"
 dependencies = [
+ "win-error-codes",
  "windows-sys",
 ]
 

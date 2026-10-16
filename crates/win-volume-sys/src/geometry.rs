@@ -7,7 +7,7 @@ use std::os::windows::io::AsHandle;
 
 use windows_sys::Win32::System::Ioctl::{DISK_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY};
 
-use crate::control::control;
+use crate::device_control::device_control;
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +26,7 @@ mod tests;
 /// size, or one that says zero.
 pub fn bytes_per_sector(volume: &impl AsHandle) -> io::Result<u32> {
     let mut buffer = [0u8; size_of::<DISK_GEOMETRY>()];
-    let written = control(volume, IOCTL_DISK_GET_DRIVE_GEOMETRY, &mut buffer)?;
+    let written = device_control(volume, IOCTL_DISK_GET_DRIVE_GEOMETRY, &[], &mut buffer)?;
     sector_size(&buffer[..written])
 }
 

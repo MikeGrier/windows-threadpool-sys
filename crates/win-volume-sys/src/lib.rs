@@ -4,7 +4,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-mod control;
+mod device_control;
 mod extents;
 mod geometry;
 mod lock;
