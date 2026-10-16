@@ -198,6 +198,7 @@ dependencies = [
 name = "windows-file-enumeration-sys"
 version = "0.1.4"
 dependencies = [
+ "win-error-codes",
  "windows-impersonation-token-sys",
  "windows-sys",
  "windows-threadpool-sys",
