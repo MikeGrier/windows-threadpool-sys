@@ -52,9 +52,9 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    the `ReOpenFile` entry. Additive, independent of steps 1 and 2; may be done first.
 4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
    so a new minor. This is a release action and not a checklist item.
-5. After step 2, in any order: [DI-13.1's parked questions](#di-131-open-questions) are yours to
-   rule on (no code waits on you to ask them, but [DI-13.7](#di-137-rework) and `DI-13.3` onward
-   wait on the answers).
+5. [DI-13.1's parked questions](#di-131-open-questions) were ruled on 2026-10-16, so the table can
+   be written from them; [DI-13.7](#di-137-rework) and `DI-13.3` onward wait on that table and on
+   step 7.
 6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
@@ -251,10 +251,10 @@ option recorded by construction. The rule throughout is documented APIs only
   `CreateFileW` has, `CREATE_ALWAYS` included. None of the "not in v1" rulings schedules work;
   a consumer or a measurement reopens each, not this checklist.
 
-  <a id="di-131-open-questions"></a>**Open, parked 2026-10-15 while the path contract is settled in
+  <a id="di-131-open-questions"></a>**Parked 2026-10-15 while the path contract was settled in
   [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)** (the engineer: "I want to work through
-  this before we continue on to subsequent items"). These are questions, not decisions, and the
-  table waits on them. (a) The public signature for a path: `&Wtf16Str` only, or anything that
+  this before we continue on to subsequent items"). All seven were ruled on 2026-10-16, in the
+  paragraph after this one; what follows is the question as it was put. (a) The public signature for a path: `&Wtf16Str` only, or anything that
   converts to one, and whether an empty path is passed to Win32 or refused. (b) The remote-device
   check: with paths opaque the pre-open check, which uses `fs::canonicalize` and so itself opens the
   path, cannot stay; the check moves onto the opened handle (`DI-14.5`), and an unbuffered create on
@@ -288,8 +288,15 @@ option recorded by construction. The rule throughout is documented APIs only
   to block. A blocking `CreateFileW` is answered by the request crate: a request is built on one
   thread and performed on another, and `open` becomes that two-phase shape (`DI-13.7`). Whether
   `CancelSynchronousIo` interrupts a create changes nothing in the design; the engineer expects it
-  cannot. The request crate's part is [NR-5](../windows-namespace-request-sys/CHECKLIST.md). (d),
-  (e), (f) and (g) are still open.
+  cannot. The request crate's part is [NR-5](../windows-namespace-request-sys/CHECKLIST.md).
+  (d) What an `OpenedFile` claims when its path names a device is measured before anything is
+  decided: it is part of `DI-14.6`, and nothing changes for it until then. (e) The assistant's
+  recommendation, adopted: `CaptureSet`-style typed sets for rights, share mode and attributes, an
+  enum for the disposition, builder methods for flags, and `create`, `create_new` and `truncate`
+  removed outright, a breaking change to `win-durable-ioring` that ships as a new minor. (f) A cache
+  hint on an unbuffered file is passed through and documented, not refused (`DI-14.1`). (g) The
+  evidence-only test of the ring on an overlapped handle is `DI-14.7`. All of (a) to (g) are now
+  ruled, so the table can be written from them.
 
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
@@ -353,16 +360,16 @@ option recorded by construction. The rule throughout is documented APIs only
 ## DI-M14 -- Opening a file: flags, attributes, security
 
 - [ ] **DI-14.1** -- **Cache hints.** `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`,
-  each with what `DI-13.1` ruled it warrants. A hint that only means something to a cached file is
-  not offered to an unbuffered one, by type where the buffering mode is in the type and by a typed
-  error where it is not. Handle-level `FILE_FLAG_WRITE_THROUGH` is not offered in v1 by the
+  each with what `DI-13.1` ruled it warrants. A hint is passed through to an unbuffered file as well
+  and documented there, in place of being refused (the engineer, `DI-13.1` ruling (f), 2026-10-16),
+  with a test on this machine that shows what the kernel does with each pair. Handle-level `FILE_FLAG_WRITE_THROUGH` is not offered in v1 by the
   engineer's ruling (`DI-13.1`); the per-write flag is unaffected, and is known to fail with error
   509 on a cached handle even one opened with that flag (a kept test).
 
 - [ ] **DI-14.2** -- **Namespace and lifetime flags.** `FILE_FLAG_DELETE_ON_CLOSE`,
   `FILE_FLAG_OPEN_REPARSE_POINT`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
-  `FILE_FLAG_OVERLAPPED` if the ring turns out to need or refuse it (settled by a test on the ring,
-  not by recollection). The remote-device check in `DI-14.5` must see a reparse point's target, not
+  `FILE_FLAG_OVERLAPPED` if the ring turns out to need or refuse it (settled by the test in
+  `DI-14.7`, not by recollection). The remote-device check in `DI-14.5` must see a reparse point's target, not
   the reparse point. Tests: delete-on-close removes the file when the last handle closes; a reparse
   point opened with the flag is the point and without it is the target.
 
@@ -405,6 +412,28 @@ option recorded by construction. The rule throughout is documented APIs only
   on `NUL`. Then decide, with the engineer, what an open of a handle that is not a disk file does: it
   is refused, or classified and returned as such. That is a working position, not a decision, until
   the measurements exist.
+
+  **Added 2026-10-16, `DI-13.1` ruling (d):** the same measurements also say whether a documented
+  device control, one that succeeds on a volume or disk handle and fails on a file, tells the two
+  apart. It is tried over the same set of handle kinds (a disk file, a directory, a volume, a
+  physical disk, `NUL`, a console, a serial port and a named pipe) and its answer for each is
+  recorded as measured. What an `OpenedFile` claims for a path that names a device is decided from
+  that. Today it gets a file's default geometry and no flush domains, and that stays until then.
+
+- [ ] **DI-14.7** -- **Evidence: the ring on an overlapped handle, with the flag not exposed.**
+  The engineer's direction, 2026-10-16 (`DI-13.1` ruling (g)). `FILE_FLAG_OVERLAPPED` stays out of
+  v1, and this settles by running, not by recollection, whether that costs anything. A file is
+  opened through the request crate's `OpenFile` with the flag set in the raw flags, which the typed
+  surface does not offer, and the same sequence is driven through the ring as for a handle opened
+  without it: a read, a write, a flush, a read past the end of the file, and an operation that
+  fails, each on a cached and on an unbuffered handle. What is compared is the completion result,
+  the status and information values, the order of completions, and whether the ring refuses or
+  accepts a handle opened either way. Each difference, or the absence of one, is recorded as
+  measured, with the machine and the ring's version. The test asserts what was measured, so a
+  changed result fails it. The outcome is the input to `DI-14.2`, and whether the flag stays out of
+  v1 is then the engineer's to rule on; nothing is decided here. It needs no administrator and only
+  what already exists, so it is independent of the rest of this milestone and may be done at any
+  point.
 
 ## DI-M15 -- Opening by identity, and reopening
 
