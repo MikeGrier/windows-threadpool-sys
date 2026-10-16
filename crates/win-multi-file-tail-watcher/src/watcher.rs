@@ -260,10 +260,27 @@ impl<T: Clone> Watcher<T> {
         offset: u64,
         value: T,
     ) -> Result<Registration<T>, OpenError> {
+        self.register_with(path, offset, |_, _| value)
+    }
+
+    /// As [`register`](Self::register), the value made by `make` from the file once it is open and
+    /// the id the registration will have. `make` runs with the roster lock held, so it must not
+    /// call back into the watcher.
+    ///
+    /// # Errors
+    ///
+    /// As [`register`](Self::register); `make` is not called then.
+    pub(crate) fn register_with(
+        &self,
+        path: &Wtf16Str,
+        offset: u64,
+        make: impl FnOnce(&HeldFile, u64) -> T,
+    ) -> Result<Registration<T>, OpenError> {
         let file = HeldFile::open_at(path, offset)?;
         let mut roster = self.shared.roster();
         let id = roster.next_id;
         roster.next_id += 1;
+        let value = make(&file, id);
         let last_known = file.start_offset();
         roster.entries.insert(
             id,
@@ -347,6 +364,16 @@ impl<T: Clone> Watcher<T> {
     #[must_use]
     pub fn registered(&self) -> usize {
         self.shared.roster().entries.len()
+    }
+
+    /// Run a poll on the calling thread, to completion, for tests: the SQ must have room for it.
+    #[cfg(test)]
+    pub(crate) fn poll_here(&self) {
+        assert_eq!(
+            engine::Engine::new(self).run(self),
+            engine::RunOutcome::Complete,
+            "the SQ had no room for the poll"
+        );
     }
 
     /// Stop the watcher for good: no poll starts after this returns.

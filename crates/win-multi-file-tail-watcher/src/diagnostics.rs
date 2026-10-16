@@ -19,6 +19,8 @@ mod tests;
 pub enum DiagnosticKind {
     /// A probe of a registration failed in a way that may not recur.
     ProbeFailed,
+    /// A read of bytes an attention announced failed.
+    ReadFailed,
 }
 
 /// One event the watcher reports. Open to further kinds, so match it with a wildcard arm.
@@ -34,6 +36,19 @@ pub enum Diagnostic {
         /// The Win32 code the failure carried, if it carried one.
         win32_code: Option<u32>,
     },
+    /// A read of bytes an attention announced failed. Nothing is delivered for that range and it
+    /// is not read again: the attention already made its end the registration's last known
+    /// length, so a client that needs the bytes registers again at `offset`.
+    ReadFailed {
+        /// The registration, by [`Registration::id`](crate::Registration::id).
+        registration: u64,
+        /// Where in the file the read began.
+        offset: u64,
+        /// How many bytes it asked for.
+        len: u32,
+        /// The Win32 code the failure carried, if it carried one.
+        win32_code: Option<u32>,
+    },
 }
 
 impl Diagnostic {
@@ -42,6 +57,7 @@ impl Diagnostic {
     pub fn kind(&self) -> DiagnosticKind {
         match self {
             Self::ProbeFailed { .. } => DiagnosticKind::ProbeFailed,
+            Self::ReadFailed { .. } => DiagnosticKind::ReadFailed,
         }
     }
 }
@@ -63,6 +79,25 @@ impl fmt::Display for Diagnostic {
                 f,
                 "probing registration {registration} failed with an error that carries no Win32 code; it will be probed again"
             ),
+            Self::ReadFailed {
+                registration,
+                offset,
+                len,
+                win32_code,
+            } => {
+                write!(
+                    f,
+                    "reading {len} bytes at offset {offset} of registration {registration} failed"
+                )?;
+                match win32_code {
+                    Some(code) => {
+                        write!(f, " with Win32 code {code}; the bytes are not read again")
+                    }
+                    None => f.write_str(
+                        " with an error that carries no Win32 code; the bytes are not read again",
+                    ),
+                }
+            }
         }
     }
 }

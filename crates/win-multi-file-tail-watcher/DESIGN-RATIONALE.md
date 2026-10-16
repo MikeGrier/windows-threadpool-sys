@@ -280,3 +280,36 @@ sides, thread-pool completion delivery, and no buffer pool anywhere -- and put t
   consumer, which the range on every chunk allows.
 - **Whether a CQ is needed.** Only the end of a chunk's use flows back, and ownership already says it:
   dropping the chunk returns the buffer. A CQ would have made the client post what the drop does.
+
+### How the engine was built (TW-5.5, decided by the assistant while implementing)
+
+Choices the engineer was not asked about, because the plan did not reach them. Each is a working
+choice open to the engineer's correction; the decision text they sit under is
+[TW-D-15](DESIGN-NOTES.md#tw-d-15).
+
+- **How a read finds its file.** The planner is given an attention, which carries the caller's `T`
+  and two lengths and nothing that names a file. Considered:
+  - *Add the registration's id to the attention and look the file up in the roster when the read is
+    planned.* Rejected: it changes a public type the watcher's own clients read, touches every test
+    that compares an attention whole, and takes the roster lock once per attention. It also loses the
+    file when the registration is dropped between the write and the lookup, which TW-D-10's amendment
+    says must not stop a read.
+  - *A value the layer builds before the file is open, completed afterwards.* Rejected: an attention
+    can be written between the two, so a read could find the value empty.
+  - *Build the value from the open file, under the watcher's roster lock, as the registration is
+    made* -- chosen. It needed one crate-internal registration that hands the file and the id to the
+    caller's closure, and nothing else outside the layer. The cost is that the layer is generic over a
+    wrapped value and its clients register through it.
+- **The window on a lent buffer.** A ring read fills the whole buffer. Reading a full buffer and
+  keeping the planned part was considered and rejected: it reads bytes the next poll announces again,
+  and it reads them for nothing.
+- **Poll-done ordering.** A counter per poll was chosen over one global count of reads in flight: a
+  global count makes poll-done wait for the reads of a poll that started after it.
+- **A full client SQ stops popping.** Popping completions into a queue the client has not drained
+  would hold every buffer there and leave the pool empty for nothing; the ring holds them as well and
+  its queue size already bounds how many.
+- **Zero bytes delivers nothing.** An empty chunk says nothing a poll-done does not, and every client
+  would have to skip it.
+- **A failed read is a diagnostic.** The existing sink is how a transient failure is already
+  reported; an entry on the client's SQ is the larger decision, and is queued for the layer's public
+  surface in [CHECKLIST.md](CHECKLIST.md) as TW-6.3.

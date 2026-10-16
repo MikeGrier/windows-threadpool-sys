@@ -175,6 +175,7 @@ impl BufferPool {
         let mut free = self.shared.free();
         match free.buffers.pop() {
             Some(bytes) => Some(PoolBuffer {
+                window: bytes.len(),
                 bytes,
                 shared: Arc::clone(&self.shared),
             }),
@@ -204,20 +205,36 @@ impl BufferPool {
 pub(crate) struct PoolBuffer {
     // Always the full buffer, until `drop` takes it to give back.
     bytes: Box<[u8]>,
+    // How many of its first bytes a read is asked to fill: all of them until `limit_to`.
+    window: usize,
     shared: Arc<Shared>,
 }
 
 impl PoolBuffer {
+    /// Ask a read for only the first `len` bytes, so it cannot read past what was wanted.
+    ///
+    /// # Panics
+    ///
+    /// When `len` is 0 or longer than the buffer.
+    pub(crate) fn limit_to(&mut self, len: usize) {
+        assert!(
+            (1..=self.bytes.len()).contains(&len),
+            "a window of {len} bytes in a buffer of {}",
+            self.bytes.len()
+        );
+        self.window = len;
+    }
+
     /// Keep the first `len` bytes as what was read.
     ///
     /// # Panics
     ///
-    /// When `len` is longer than the buffer.
+    /// When `len` is longer than the window.
     pub(crate) fn into_chunk(self, len: usize) -> Chunk {
         assert!(
-            len <= self.bytes.len(),
-            "{len} bytes read into a buffer of {}",
-            self.bytes.len()
+            len <= self.window,
+            "{len} bytes read into a window of {}",
+            self.window
         );
         Chunk { buffer: self, len }
     }
@@ -246,7 +263,7 @@ unsafe impl IoBuf for PoolBuffer {
     }
 
     fn bytes_len(&self) -> usize {
-        self.bytes.len()
+        self.window
     }
 }
 

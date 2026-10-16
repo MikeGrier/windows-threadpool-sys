@@ -102,12 +102,7 @@ through `ThreadpoolIo`.
 
 - [x] **TW-5.4** -- Each of the watcher's entries is planned without a ring: growth as reads of at most one buffer each, computed as they are taken, a shrink as a shrink entry, a terminal entry passed through, and poll-done kept for the engine. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-54)
 
-- [ ] **TW-5.5** -- **The reading engine, driven synchronously against a ring.** It drains the
-  watcher's SQ, submits the planned reads (the handle addressed raw, an observer in each read's
-  sidecar), pops completions, and writes a data entry for each read as it completes. A short read is
-  labelled with the bytes actually read. Poll-done follows the last read of its poll. An empty pool,
-  a full ring SQ and a full client SQ each stop it without waiting, and it continues from where it
-  stopped. ([TW-D-15](DESIGN-NOTES.md#tw-d-15), [TW-D-10](DESIGN-NOTES.md#tw-d-10))
+- [x] **TW-5.5** -- The reading engine, driven synchronously against a ring, drains the watcher's SQ, reads each attention's announced bytes into pool buffers with the handle addressed raw and an observer in the sidecar, delivers a data entry per read as it completes, and stops without waiting on an empty pool, a full ring or a full client SQ and continues from where it stopped. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-55)
 
 - [ ] **TW-5.6** -- **Integration tests: the reading engine over real files.** Hundreds of files
   written by child processes through inherited handles, a pool of a few buffers and a client SQ of
@@ -126,6 +121,10 @@ Coarse on purpose: its scope is set when M5 is done.
 
 - [ ] **TW-6.2** -- **Integration tests: polls on the thread pool over files that children write**,
   through a small pool and a client SQ of two slots.
+
+- [ ] **TW-6.3** -- **Decide whether a failed read is an entry of the client's SQ.** Today it is a
+  `Diagnostic::ReadFailed` and nothing else, and the bytes it was to read are not announced again
+  ([TW-D-15](DESIGN-NOTES.md#tw-d-15), working positions).
 
 ## M7 -- Shutdown with reads in flight
 

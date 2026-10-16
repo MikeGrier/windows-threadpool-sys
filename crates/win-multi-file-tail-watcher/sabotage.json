@@ -880,7 +880,7 @@
       "file": "src/pool.rs",
       "expect": "caught",
       "why": "A length past the buffer is a bug in the caller, which must not be clipped silently.",
-      "find": ["            len <= self.bytes.len(),"],
+      "find": ["            len <= self.window,"],
       "replace": ["            true,"]
     },
     {
@@ -970,6 +970,174 @@
       "why": "Equivalent: the plan's range never has its start past its end, so is_empty and start >= end agree. Surviving shows the tests bind to the plan's reads, not to how emptiness is spelled.",
       "find": ["        if self.remaining.is_empty() {"],
       "replace": ["        if self.remaining.start >= self.remaining.end {"]
+    },
+    {
+      "name": "a read is not limited to what was announced",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A ring read fills the whole buffer it is given. Without the window, a read of the last piece of an announced range reads past it, and the next poll announces those bytes again.",
+      "find": ["                buffer.limit_to(usize::try_from(read.len).expect(\"a u32 fits usize\"));"],
+      "replace": ["                let _ = usize::try_from(read.len).expect(\"a u32 fits usize\");"]
+    },
+    {
+      "name": "a short read is labelled with the bytes asked for",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A range that claims more bytes than the read returned delivers a zeroed tail as file content.",
+      "find": ["            buffer.into_chunk(read),"],
+      "replace": ["            buffer.into_chunk(usize::try_from(pending.len).expect(\"a u32 fits usize\")),"]
+    },
+    {
+      "name": "poll-done does not wait for the reads of its poll",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Poll-done follows every read of its poll (TW-D-15). Delivered when the poll closes, it overtakes reads still in flight.",
+      "find": ["            .is_some_and(|group| group.closed && group.outstanding == 0)"],
+      "replace": ["            .is_some_and(|group| group.closed)"]
+    },
+    {
+      "name": "every attention opens a group of its own",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll's reads share one group, which poll-done closes. A group per attention leaves all but the last open for good, so their poll-done is never delivered.",
+      "find": ["        if self.list.back().is_none_or(|group| group.closed) {"],
+      "replace": ["        if true {"]
+    },
+    {
+      "name": "a poll with no reads gets no group",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll that announced nothing still ends with its own poll-done, in order after the polls before it.",
+      "find": ["            _ => self.list.push_back(Group {\n                outstanding: 0,\n                closed: true,\n            }),"],
+      "replace": ["            _ => {}"]
+    },
+    {
+      "name": "the reads in flight are not held to the completion queue",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Everything the ring holds counts against its completion queue, which overflows if more are pushed than it holds.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if outstanding >= usize::MAX {"]
+    },
+    {
+      "name": "the reads pushed in a batch are not counted against the queue",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The ring's own count does not move while a batch holds it, so the batch counts what it has pushed or one batch overfills the queue.",
+      "find": ["                        outstanding += 1;"],
+      "replace": ["                        outstanding += 0;"]
+    },
+    {
+      "name": "a full ring SQ stops the reads even after a submit made room",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A submit drains the ring's SQ, so a refusal after queued pushes is answered by submitting and going on, not by stopping.",
+      "find": ["                Ended::RingSqFull if pushed > 0 => {}"],
+      "replace": ["                Ended::RingSqFull if pushed > 0 => return Ok(Submitted::Blocked(Stop::RingFull)),"]
+    },
+    {
+      "name": "an empty pool is reported as a full ring",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The stops say what is waited for: a buffer coming back is the client's, a completion is the ring's.",
+      "find": ["                    break Ended::Stopped(Stop::PoolEmpty);"],
+      "replace": ["                    break Ended::Stopped(Stop::RingFull);"]
+    },
+    {
+      "name": "the client's SQ refusing an entry drops it",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The entry a full SQ refused is a chunk the client was owed. Dropping it loses bytes the watcher already counted as reported.",
+      "find": ["                    self.undelivered = Some(entry);\n                    return false;"],
+      "replace": ["                    drop(entry);\n                    return false;"]
+    },
+    {
+      "name": "a read that returned nothing is delivered as an empty entry",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A read past the end of a file that shrank has nothing to deliver, and an empty chunk is noise for every client.",
+      "find": ["        if read == 0 {"],
+      "replace": ["        if read == usize::MAX {"]
+    },
+    {
+      "name": "end of file is reported as a failure",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Reading at the end of a file is how a tail finds there is nothing new, not a fault to report.",
+      "find": ["                Some(ERROR_HANDLE_EOF) => 0,"],
+      "replace": ["                Some(u32::MAX) => 0,"]
+    },
+    {
+      "name": "a failed read is reported under the probe's kind",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A sink says which kinds it wants before an event is built, so an event asked about under another kind is never built for a sink that wanted only this one.",
+      "find": ["                        .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {"],
+      "replace": ["                        .diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ReadFailed {"]
+    },
+    {
+      "name": "a settled read stays outstanding in its group",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Poll-done waits for the group's reads to settle, so one that never does holds it back for good.",
+      "find": ["        self.groups.settled(pending.group);"],
+      "replace": ["        let _ = pending.group;"]
+    },
+    {
+      "name": "a run does not reset the resume doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The resume doorbell is reset before the run looks (TW-D-6), so a ring that lands during the run is seen by the next one and not erased after it.",
+      "find": ["        self.sq.reset_resume();"],
+      "replace": ["        let _ = &self.sq;"]
+    },
+    {
+      "name": "a run does not reset the pool's doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "As the resume doorbell: a buffer given back after the reset rings it again, which is how a waiter on it is woken once.",
+      "find": ["        self.pool.reset_doorbell();"],
+      "replace": ["        let _ = &self.pool;"]
+    },
+    {
+      "name": "the client's doorbell is not rung for entries written",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The doorbell is how a client waiting on the SQ learns there are entries to drain.",
+      "find": ["        if wrote || matches!(stop, Ok(Stop::ClientFull)) {"],
+      "replace": ["        if matches!(stop, Ok(Stop::ClientFull)) {"]
+    },
+    {
+      "name": "a registration's tracked value names registration zero",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A failed read is reported by the registration's id, which the diagnostic's reader looks up.",
+      "find": ["            .register_with(path, offset, |file, id| Tracked::new(value, file, id))"],
+      "replace": ["            .register_with(path, offset, |file, _| Tracked::new(value, file, 0))"]
+    },
+    {
+      "name": "a buffer's window is its whole length",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The window is how much a ring read is asked to fill. Reporting the whole buffer asks for bytes past what was announced.",
+      "find": ["    fn bytes_len(&self) -> usize {\n        self.window\n    }"],
+      "replace": ["    fn bytes_len(&self) -> usize {\n        self.bytes.len()\n    }"]
+    },
+    {
+      "name": "a window of nothing is allowed",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A read of no bytes is not a read; the planner never plans one, and a window of none would make the ring one.",
+      "find": ["            (1..=self.bytes.len()).contains(&len),"],
+      "replace": ["            (0..=self.bytes.len()).contains(&len),"]
+    },
+    {
+      "name": "a chunk may be longer than its window",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "Bytes past the window were not read into the buffer by this read, so a chunk claiming them shows another read's.",
+      "find": ["            len <= self.window,"],
+      "replace": ["            len <= self.bytes.len(),"]
     }
   ]
 }

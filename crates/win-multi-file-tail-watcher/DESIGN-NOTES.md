@@ -380,6 +380,28 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   Each continues from where it stopped when a chunk drops, a read completes, or the client rings
   back, as a poll does on a full SQ ([TW-D-7](#tw-d-7)).
 - **Who submits the reads** is in [TW-D-10](#tw-d-10).
+- **Each read finds its file in the attention it plans from.** Files are registered through the
+  reading layer, and the value the watcher is made over is the caller's `T` together with the
+  registration's id, the handle's value and an observer of the handle, all taken when the file is
+  opened. The watcher's public entries do not change, and nothing is looked up when a read is
+  planned. The observer travels with the attention and then with the read, so a registration
+  dropped after its attention was written still has its bytes read.
+- **A read asks for exactly the bytes planned.** A ring read fills the whole buffer it is given, so
+  the buffer is lent with a window of the planned length, and a read can never run past what was
+  announced and be announced again by the next poll.
+- **Delivery is in the order entries are made, one at a time.** An entry the client's SQ refuses is
+  kept, and while it is held nothing else is taken, so a full SQ also leaves completions in the ring,
+  where the buffers they hold are accounted for, and the layer holds at most one entry the client has
+  not taken. Poll-done is delivered after every read of its own poll is settled, and after the
+  poll-dones before it; the reads of a later poll may be delivered before it.
+- **"The ring is full" is its completion queue.** A submit empties the ring's SQ, so a refused push
+  is answered by submitting and going on; what stops the reads is the ring holding as many reads --
+  queued, in flight, or completed and not popped -- as its completion queue does, at the size the
+  ring reports. A read popped makes room.
+- **A read that returns nothing delivers nothing.** That is a read past the end of a file that
+  shrank, whether reported as zero bytes or as end of file, and its buffer goes back. Any other
+  failure is reported to the watcher's diagnostic sink ([TW-D-13](#tw-d-13-sink)) as
+  `Diagnostic::ReadFailed` and nothing is delivered. Neither is read again.
 - **Registered buffers are not built.** They would need windows-ioring-sys to lend one registered
   buffer to another thread while the ring fills its neighbours, which its `RegisteredBuffers::get`
   does not (it borrows the whole registration mutably). This decision schedules no work for them, so
@@ -406,5 +428,11 @@ bind to them as settled.
   count when the layer is created, with any defaults left to measurement.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
+- **A failed read reaches the diagnostic sink and nowhere else.** The bytes it was to read were
+  already counted as reported, so a client that needs them registers again at their offset. Whether
+  the client's SQ should carry a failed read as an entry of its own is open, and is not decided
+  here.
+- **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
+  demand, so no test reaches `submit_queued`'s work; it is written and not exercised.
 - **`Drop` with reads in flight waits for at most one read to finish or be cancelled**, which is
   [TW-D-9](#tw-d-9)'s bound restated for the reading layer; it is settled in M7.

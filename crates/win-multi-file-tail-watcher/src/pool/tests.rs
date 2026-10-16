@@ -151,10 +151,64 @@ fn a_chunk_may_be_empty_or_the_whole_buffer() {
 }
 
 #[test]
-#[should_panic(expected = "9 bytes read into a buffer of 8")]
+#[should_panic(expected = "9 bytes read into a window of 8")]
 fn a_chunk_longer_than_its_buffer_panics() {
     let pool = pool(8, 1);
     let _ = pool.take().expect("a buffer").into_chunk(9);
+}
+
+#[test]
+fn a_window_is_what_a_read_is_asked_to_fill_and_the_address_does_not_move() {
+    let pool = pool(64, 2);
+    let mut buffer = pool.take().expect("a buffer");
+    let address = buffer.stable_ptr();
+    for len in [1, 7, 63, 64] {
+        buffer.limit_to(len);
+        assert_eq!(buffer.bytes_len(), len);
+        assert_eq!(buffer.stable_ptr(), address);
+        assert_eq!(buffer.stable_mut_ptr().cast_const(), address);
+    }
+}
+
+#[test]
+fn a_window_does_not_outlive_the_lending() {
+    let pool = pool(16, 1);
+    let mut buffer = pool.take().expect("a buffer");
+    buffer.limit_to(3);
+    drop(buffer);
+    assert_eq!(pool.take().expect("a buffer").bytes_len(), 16);
+}
+
+#[test]
+fn a_chunk_may_be_as_long_as_its_window_and_no_longer() {
+    let pool = pool(16, 1);
+    let mut buffer = pool.take().expect("a buffer");
+    buffer.limit_to(5);
+    fill(&mut buffer, b"12345");
+    assert_eq!(&*buffer.into_chunk(5), b"12345");
+}
+
+#[test]
+#[should_panic(expected = "6 bytes read into a window of 5")]
+fn a_chunk_longer_than_its_window_panics() {
+    let pool = pool(16, 1);
+    let mut buffer = pool.take().expect("a buffer");
+    buffer.limit_to(5);
+    let _ = buffer.into_chunk(6);
+}
+
+#[test]
+#[should_panic(expected = "a window of 0 bytes in a buffer of 8")]
+fn a_window_of_nothing_panics() {
+    let pool = pool(8, 1);
+    pool.take().expect("a buffer").limit_to(0);
+}
+
+#[test]
+#[should_panic(expected = "a window of 9 bytes in a buffer of 8")]
+fn a_window_longer_than_the_buffer_panics() {
+    let pool = pool(8, 1);
+    pool.take().expect("a buffer").limit_to(9);
 }
 
 #[test]

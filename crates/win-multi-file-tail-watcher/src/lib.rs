@@ -15,6 +15,7 @@ mod open_error;
 mod poll_error;
 mod pool;
 mod probe_failure;
+mod read_engine;
 mod read_plan;
 mod read_sq;
 mod sq;

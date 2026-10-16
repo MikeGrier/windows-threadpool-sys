@@ -955,3 +955,37 @@ entry unchanged; poll-done. Six sabotage entries, each run on its own: five caug
 spelling of the empty check as a control that survives. The truncation mutant was at first caught
 only by a hang, the test collecting billions of short reads; that test now takes at most four reads,
 and the mutant fails it outright.
+
+## Moved 2026-10-16 14:06:07 -04:00 -- TW-5.5: the reading engine, driven synchronously against a ring
+
+### <a id="tw-55"></a>TW-5.5 -- The reading engine, driven synchronously against a ring, drains the watcher's SQ, reads each attention's announced bytes into pool buffers with the handle addressed raw and an observer in the sidecar, delivers a data entry per read as it completes, and stops without waiting on an empty pool, a full ring or a full client SQ and continues from where it stopped. *(completed 2026-10-16 14:06:07 -04:00)*
+
+Crate-internal (a `chore`): `src/read_engine.rs`, a dependency on windows-ioring-sys, and small
+changes to the pool, the watcher and the diagnostics. The decision text is under
+[TW-D-15](DESIGN-NOTES.md#tw-d-15); the choices made while building it, and what was set aside, are
+in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+- **`ReadEngine::run`** does everything that can be done without waiting and returns why it stopped:
+  `Idle`, `PoolEmpty`, `RingFull` or `ClientFull`. It resets the resume and pool doorbells first and
+  rings the client's once at the end if it wrote.
+- **Files are registered through the engine**, whose watcher is over a `Tracked<T>` built from the
+  open file by the new crate-internal `Watcher::register_with`, so each attention carries what its
+  reads need and no public type changed.
+- **A lent buffer has a window** (`PoolBuffer::limit_to`), because a ring read fills the whole buffer
+  it is given and a read must not pass what was announced.
+- **A new `Diagnostic::ReadFailed`** reports a read that failed; a read of nothing, or end of file,
+  delivers nothing and is no failure.
+- **Not exercised:** the submit a failed submit left queued, since `SubmitIoRing` cannot be made to
+  fail on demand; said so at the definition and in the design notes.
+- **TW-6.3 added**, for whether a failed read should be an entry on the client's SQ.
+
+Tested: whole growths in one and many buffers, the starting offset, several files, no change, a
+second poll, two polls queued together with poll-done after every read of its own, shrink, terminal,
+a short read, a read limited to the announced range, a read past the end, a registration dropped
+after its attention, the means to read taken from the open file, each way a read settles, an empty
+pool and a returned buffer, a full client SQ and its refused entry, the reads held to the ring's
+queue, a ring SQ that fills, the doorbells, creation errors, and the poll groups and the split as
+pure functions. Twenty-two sabotage entries, each run on its own and caught; the one that first
+survived (a batch not counting its own pushes) needed a test that starts a batch part way through the
+queue, since the engine pops every available completion before it submits more. An existing pool
+entry was retargeted at the window.
