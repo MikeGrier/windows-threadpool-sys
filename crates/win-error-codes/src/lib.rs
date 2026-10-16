@@ -4,7 +4,8 @@
 //!
 //! Windows reports a failure as a number, and which number space it is in is not in the number.
 //! A `DWORD` from `GetLastError` is one; a `LONG` from a registry call is the same space in a
-//! signed carrier; an `HRESULT` is another, signed and carrying severity and facility bits.
+//! signed carrier; an `HRESULT` is another, signed and carrying severity and facility bits; and an
+//! `NTSTATUS` is a third, signed, with a two-bit severity and a facility of its own.
 //! Crates here each kept a bare `u32` or wrote a `Win32Error` of their own, and the two that did
 //! disagreed about what to do with a code of 2^31 or more -- which exist: the virtdisk errors are
 //! `WIN32_ERROR`s such as `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, 3225026581.
@@ -23,6 +24,7 @@
 
 mod hresult;
 mod lstatus;
+mod ntstatus;
 mod win32_error;
 
 #[cfg(test)]
@@ -30,6 +32,7 @@ mod test_codes;
 
 pub use hresult::HResult;
 pub use lstatus::LStatus;
+pub use ntstatus::{NtSeverity, NtStatus};
 pub use win32_error::Win32Error;
 
 // The README carries runnable examples, so they are compiled and a change to the API that breaks

@@ -5,6 +5,163 @@
   "testArgs": ["-p", "win-error-codes", "--lib", "--locked"],
   "sabotages": [
     {
+      "name": "WE-2.1: a raw status is altered on its way in",
+      "file": "src/ntstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: ERROR.raw() == 0xC000_0005_u32.cast_signed()",
+      "why": "NtStatus carries whatever the call returned. The constructor is a const fn and a const assertion in the tests evaluates it, so the alteration does not build.",
+      "find": ["        Self(raw)\n"],
+      "replace": ["        Self(raw & !1)\n"]
+    },
+    {
+      "name": "WE-2.1: control, NT_SUCCESS written as is_negative",
+      "file": "src/ntstatus.rs",
+      "expect": "survives",
+      "why": "A control: NT_SUCCESS is status >= 0, and the negation of is_negative is the same test, so the file changes and no behaviour does. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        self.0 >= 0\n"],
+      "replace": ["        !self.0.is_negative()\n"]
+    },
+    {
+      "name": "WE-2.1: the severity is read from the wrong place",
+      "file": "src/ntstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: matches!(ERROR.severity(), NtSeverity::Error)",
+      "why": "The severity is the top two bits. severity is a const fn and a const assertion in the tests evaluates it on an error.",
+      "find": ["        match (self.0.cast_unsigned() >> SEVERITY_SHIFT) & SEVERITY_MASK {\n"],
+      "replace": ["        match (self.0.cast_unsigned() >> 29) & SEVERITY_MASK {\n"]
+    },
+    {
+      "name": "WE-2.1: an informational status reads as a success",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "Severity 1 is informational and is not severity 0. The const assertions use a status of severity 0, 2 and 3, so only a run notices.",
+      "find": ["            1 => NtSeverity::Informational,\n"],
+      "replace": ["            1 => NtSeverity::Success,\n"]
+    },
+    {
+      "name": "WE-2.1: zero is not a success",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "NT_SUCCESS is status >= 0, so STATUS_SUCCESS, which is zero, is a success. The const assertions use STATUS_PENDING, so only a run notices.",
+      "find": ["        self.0 >= 0\n"],
+      "replace": ["        self.0 > 0\n"]
+    },
+    {
+      "name": "WE-2.1: an informational status is not a success",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "NT_SUCCESS is status >= 0, which includes severity 1; a test of severity 0 alone fails the informational statuses.",
+      "find": ["        self.0 >= 0\n"],
+      "replace": ["        matches!(self.severity(), NtSeverity::Success)\n"]
+    },
+    {
+      "name": "WE-2.1: NT_INFORMATION tests for a warning",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "Each predicate names its own severity.",
+      "find": ["        matches!(self.severity(), NtSeverity::Informational)\n"],
+      "replace": ["        matches!(self.severity(), NtSeverity::Warning)\n"]
+    },
+    {
+      "name": "WE-2.1: NT_ERROR tests for a warning",
+      "file": "src/ntstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: ERROR.is_error()",
+      "why": "Each predicate names its own severity. is_error is a const fn and a const assertion in the tests evaluates it on an error.",
+      "find": ["        matches!(self.severity(), NtSeverity::Error)\n"],
+      "replace": ["        matches!(self.severity(), NtSeverity::Warning)\n"]
+    },
+    {
+      "name": "WE-2.1: a success becomes an error",
+      "file": "src/ntstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: PENDING_STATUS.into_result().is_ok()",
+      "why": "A success must reach the caller as Ok, and a failure as the error. into_result is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["        if self.is_success() { Ok(()) } else { Err(self) }\n"],
+      "replace": ["        if self.is_success() { Err(self) } else { Ok(()) }\n"]
+    },
+    {
+      "name": "WE-2.1: the code is eight bits",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "The code is the low sixteen bits; STATUS_PENDING's is 0x103. The const assertion uses 5, which eight bits also hold, so only a run notices.",
+      "find": ["        (self.0.cast_unsigned() & CODE_MASK) as u16\n"],
+      "replace": ["        (self.0.cast_unsigned() & 0xFF) as u16\n"]
+    },
+    {
+      "name": "WE-2.1: the facility is eleven bits",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "The facility is twelve bits; a facility of 0xFFF is read as 0x7FF with eleven.",
+      "find": ["const FACILITY_MASK: u32 = 0x0FFF;"],
+      "replace": ["const FACILITY_MASK: u32 = 0x07FF;"]
+    },
+    {
+      "name": "WE-2.1: the facility takes in the bit HRESULT_FROM_NT sets",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "The facility is the twelve bits; the bit above them is not part of it, and a status with that bit set would read a facility of 0x1000.",
+      "find": ["const FACILITY_MASK: u32 = 0x0FFF;"],
+      "replace": ["const FACILITY_MASK: u32 = 0x1FFF;"]
+    },
+    {
+      "name": "WE-2.1: the customer bit is read from the bit HRESULT_FROM_NT sets",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "Each bit is read from where the layout has it.",
+      "find": ["const CUSTOMER_BIT: u32 = 0x2000_0000;"],
+      "replace": ["const CUSTOMER_BIT: u32 = 0x1000_0000;"]
+    },
+    {
+      "name": "WE-2.1: HRESULT_FROM_NT drops the bit",
+      "file": "src/ntstatus.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: CONVERTED.raw() == 0xD000_0005_u32.cast_signed()",
+      "why": "HRESULT_FROM_NT sets the bit that marks an HRESULT made from a status. from_ntstatus is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["        Self::from_raw((status.raw().cast_unsigned() | crate::hresult::NTSTATUS_BIT).cast_signed())\n"],
+      "replace": ["        Self::from_raw(status.raw())\n"]
+    },
+    {
+      "name": "WE-2.1: HRESULT_FROM_NT flips the bit instead of setting it",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "Setting and flipping agree for a status without the bit, which the const assertion uses, and differ for one with it.",
+      "find": ["        Self::from_raw((status.raw().cast_unsigned() | crate::hresult::NTSTATUS_BIT).cast_signed())\n"],
+      "replace": ["        Self::from_raw((status.raw().cast_unsigned() ^ crate::hresult::NTSTATUS_BIT).cast_signed())\n"]
+    },
+    {
+      "name": "WE-2.1: an HRESULT that was not made from a status gives one",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "Only an HRESULT with the bit set was made from a status; a failure without it is not one. The const assertion asks only whether a converted value gives one, so only a run notices.",
+      "find": ["        if self.is_ntstatus_mapped() {\n"],
+      "replace": ["        if self.is_ntstatus_mapped() || self.is_failure() {\n"]
+    },
+    {
+      "name": "WE-2.1: the status is not recovered by clearing the bit",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "The status is the HRESULT with the bit that HRESULT_FROM_NT set cleared; leaving it set gives a different status.",
+      "find": ["                (self.raw().cast_unsigned() & !crate::hresult::NTSTATUS_BIT).cast_signed(),\n"],
+      "replace": ["                (self.raw().cast_unsigned() & u32::MAX).cast_signed(),\n"]
+    },
+    {
+      "name": "WE-2.1: the display has no 0x",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "ntstatus.h writes a status as 0xC0000005, and a bare eight digits is ambiguous in a message.",
+      "find": ["        write!(f, \"{:#010X}\", self.0.cast_unsigned())\n"],
+      "replace": ["        write!(f, \"{:08X}\", self.0.cast_unsigned())\n"]
+    },
+    {
+      "name": "WE-2.1: the debug shows the negative number",
+      "file": "src/ntstatus.rs",
+      "expect": "caught",
+      "why": "A status is read in hex; the i32 it is held in is not what a reader of a failed assertion should see.",
+      "find": ["        write!(f, \"NtStatus({self})\")\n"],
+      "replace": ["        write!(f, \"NtStatus({})\", self.0)\n"]
+    },
+    {
       "name": "WE-1.3: a raw value is altered on its way in",
       "file": "src/hresult.rs",
       "expect": "refused-by-build",
@@ -84,8 +241,9 @@
     {
       "name": "WE-1.3: the NTSTATUS bit is read from the customer bit",
       "file": "src/hresult.rs",
-      "expect": "caught",
-      "why": "Each bit is read from where the layout has it.",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: CONVERTED.ntstatus().is_some()",
+      "why": "Each bit is read from where the layout has it. is_ntstatus_mapped is a const fn, and since HResult::ntstatus is built on it, a const assertion in NtStatus's tests evaluates it on a converted status, so the wrong bit does not build.",
       "find": ["        self.0.cast_unsigned() & NTSTATUS_BIT != 0\n"],
       "replace": ["        self.0.cast_unsigned() & CUSTOMER_BIT != 0\n"]
     },

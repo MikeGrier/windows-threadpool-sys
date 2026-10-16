@@ -12,7 +12,7 @@ const SEVERITY_BIT: u32 = 0x8000_0000;
 /// The customer bit: set for a code a third party defined and not Microsoft.
 const CUSTOMER_BIT: u32 = 0x2000_0000;
 /// `FACILITY_NT_BIT`: set on an `HRESULT` made from an `NTSTATUS` by `HRESULT_FROM_NT`.
-const NTSTATUS_BIT: u32 = 0x1000_0000;
+pub(crate) const NTSTATUS_BIT: u32 = 0x1000_0000;
 /// Where the facility starts.
 const FACILITY_SHIFT: u32 = 16;
 /// `HRESULT_FACILITY`'s mask, 13 bits: wider than the 11 bits the documentation draws, because the

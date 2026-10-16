@@ -19,9 +19,12 @@ which exist: the virtdisk errors, such as `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, are
 - **`HResult`**, an `i32`: the signed `HRESULT`, with `is_failure` and `is_success`, `code`,
   `facility`, `from_win32` (`HRESULT_FROM_WIN32`'s rule, which keeps only the low 16 bits of a
   positive code) and `win32` (the inverse for the codes from 1 to 65535).
+- **`NtStatus`**, an `i32`: the signed `NTSTATUS`, with its `NtSeverity`, `NT_SUCCESS` and the other
+  three predicates, `code`, `facility`, and `HResult::from_ntstatus` (`HRESULT_FROM_NT`). There is
+  no conversion to a Win32 code: that is an `Rtl*` call.
 
 ```rust
-use win_error_codes::{HResult, LStatus, Win32Error};
+use win_error_codes::{HResult, LStatus, NtStatus, Win32Error};
 
 // A call that returns its code directly: zero is success.
 assert_eq!(Win32Error::from_code(0).into_result(), Ok(()));
@@ -33,6 +36,11 @@ assert_eq!(LStatus::from_raw(2).into_result(), Err(Win32Error::from_code(2)));
 let hresult = HResult::from_win32(Win32Error::from_code(1117));
 assert_eq!(hresult.to_string(), "0x8007045D");
 assert_eq!(hresult.win32(), Some(Win32Error::from_code(1117)));
+
+// STATUS_ACCESS_VIOLATION: an error, and not a success. HRESULT_FROM_NT sets one bit.
+let status = NtStatus::from_raw(0xC000_0005_u32.cast_signed());
+assert!(!status.is_success());
+assert_eq!(HResult::from_ntstatus(status).raw().cast_unsigned(), 0xD000_0005);
 
 // ERROR_VIRTDISK_NOT_VIRTUAL_DISK, a code above 2^31, keeps its value through io::Error.
 # #[cfg(windows)] {
