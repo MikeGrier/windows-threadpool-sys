@@ -989,3 +989,28 @@ pure functions. Twenty-two sabotage entries, each run on its own and caught; the
 survived (a batch not counting its own pushes) needed a test that starts a batch part way through the
 queue, since the engine pops every available completion before it submits more. An existing pool
 entry was retargeted at the window.
+
+## Moved 2026-10-16 14:25:50 -04:00 -- TW-5.6: the reading engine over real files
+
+### <a id="tw-56"></a>TW-5.6 -- The reading engine is tested over real files that child processes write through inherited handles, through a pool of a few buffers and a client SQ of two: every byte delivered once, chunks the client keeps stopping the reads and dropping them resuming them, and registrations dropped with reads in flight. *(completed 2026-10-16 14:25:50 -04:00)*
+
+Tests only (a `test`): `src/read_engine/child_tests.rs`. They are in the crate and not in
+`tests/` because the engine is not public, as for the poll engine's
+[child_tests.rs](src/watcher/engine/child_tests.rs); the child-process helpers they share moved to
+`test_support.rs`, and that module now uses them from there.
+
+- **Reassembly:** two hundred children each append thirty lines to a file of their own, polled while
+  they write, read through four buffers of eight bytes (shorter than a line) and a client SQ of two.
+  Each file's pieces meet by range with no gap or overlap from offset 0, are exactly the bytes the
+  file holds, and there is one poll-done for each poll.
+- **Chunks kept:** with four buffers, the client keeps each chunk it takes. The engine stops with
+  `PoolEmpty` and nothing in flight, and stays stopped; dropping the chunks gives the buffers back
+  and the reads go on to the file's end.
+- **Registrations dropped in flight:** reads are submitted for sixty files with the pool empty and
+  reads in flight, every registration is dropped, and the reads still complete with every byte of
+  every file delivered once.
+
+No new sabotage entries: what these tests would catch is already caught by the unit tests, and they
+add the real files, the real child writers and the polls running beside them.
+
+Milestone M5 is complete.

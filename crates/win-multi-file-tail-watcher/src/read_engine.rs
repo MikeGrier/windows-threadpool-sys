@@ -25,6 +25,9 @@ use crate::read_sq::{Data, ReadEntry, ReadSq};
 use crate::sq::{Attention, PushFailure, SqEntry, Terminal};
 use crate::{CreateError, Diagnostic, DiagnosticKind, HeldFile, OpenError, Registration, Watcher};
 
+// Here and not in `tests/` because the engine is not public.
+#[cfg(test)]
+mod child_tests;
 #[cfg(test)]
 mod tests;
 

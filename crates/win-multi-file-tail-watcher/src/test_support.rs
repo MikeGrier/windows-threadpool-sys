@@ -98,3 +98,48 @@ impl crate::DiagnosticSink for RecordingSink {
         self.seen.lock().expect("the record").push(*event);
     }
 }
+
+/// Kills and reaps the child processes it holds when it drops.
+pub(crate) struct Children(pub(crate) Vec<std::process::Child>);
+
+impl Drop for Children {
+    fn drop(&mut self) {
+        for child in &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A `cmd.exe` whose stdout is the file at `path`, opened here and inherited, which is how a parent
+/// gives a child its stdout file. Gated, it appends `line` for each line read on its stdin; ungated,
+/// it appends it `passes` times as fast as it can.
+pub(crate) fn start_writer(
+    path: &Path,
+    line: &str,
+    passes: u64,
+    gated: bool,
+) -> std::process::Child {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let stdout = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .expect("open the child's stdout file");
+    let echo = format!("echo {}", line.trim_end());
+    let body = if gated {
+        format!("(set /p x=)&({echo})")
+    } else {
+        echo
+    };
+    Command::new("cmd")
+        .raw_arg(format!("/q /c \"for /l %i in (1,1,{passes}) do ({body})\""))
+        .stdin(if gated { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start cmd.exe")
+}

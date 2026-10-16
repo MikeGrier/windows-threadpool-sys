@@ -104,11 +104,7 @@ through `ThreadpoolIo`.
 
 - [x] **TW-5.5** -- The reading engine, driven synchronously against a ring, drains the watcher's SQ, reads each attention's announced bytes into pool buffers with the handle addressed raw and an observer in the sidecar, delivers a data entry per read as it completes, and stops without waiting on an empty pool, a full ring or a full client SQ and continues from where it stopped. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-55)
 
-- [ ] **TW-5.6** -- **Integration tests: the reading engine over real files.** Hundreds of files
-  written by child processes through inherited handles, a pool of a few buffers and a client SQ of
-  two slots: the bytes reassembled by range equal what the children wrote, each delivered once; chunks
-  the client keeps stop the reads, and dropping them resumes them; a registration dropped while its
-  reads are in flight is safe, and those reads complete.
+- [x] **TW-5.6** -- The reading engine is tested over real files that child processes write through inherited handles, through a pool of a few buffers and a client SQ of two: every byte delivered once, chunks the client keeps stopping the reads and dropping them resuming them, and registrations dropped with reads in flight. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-56)
 
 ## M6 -- The reading layer on the thread pool
 

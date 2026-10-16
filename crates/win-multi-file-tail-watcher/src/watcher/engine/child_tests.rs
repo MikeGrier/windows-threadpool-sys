@@ -5,54 +5,18 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::path::PathBuf;
+use std::process::ChildStdin;
 use std::time::{Duration, Instant};
 
 use super::{Engine, RunOutcome};
-use crate::test_support::{TempDir, wtf};
+use crate::test_support::{Children, TempDir, start_writer, wtf};
 use crate::{Attention, Registration, SqEntry, Watcher};
 
 // What each pass of a child's loop appends to its file.
 const LINE: &str = "123456789ab\r\n";
 const LINE_LEN: u64 = LINE.len() as u64;
 const PASSES: u64 = 5;
-
-struct Children(Vec<Child>);
-
-impl Drop for Children {
-    fn drop(&mut self) {
-        for child in &mut self.0 {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-// A `cmd.exe` whose stdout is the file at `path`, opened here and inherited. Gated, it appends one
-// line for each line read on its stdin; ungated, it appends `passes` lines as fast as it can.
-fn start(path: &Path, passes: u64, gated: bool) -> Child {
-    let stdout = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .expect("open the child's stdout file");
-    let echo = format!("echo {}", LINE.trim_end());
-    let body = if gated {
-        format!("(set /p x=)&({echo})")
-    } else {
-        echo
-    };
-    Command::new("cmd")
-        .raw_arg(format!("/q /c \"for /l %i in (1,1,{passes}) do ({body})\""))
-        .stdin(if gated { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start cmd.exe")
-}
 
 struct Fixture {
     watcher: Watcher<u32>,
@@ -87,7 +51,7 @@ impl Fixture {
         for value in 0..total {
             if value % every == every - 1 {
                 let path = dir.0.join(format!("w{value}.log"));
-                let mut child = start(&path, passes, gated);
+                let mut child = start_writer(&path, LINE, passes, gated);
                 if gated {
                     fixture.stdins.push(child.stdin.take().expect("stdin"));
                 }
