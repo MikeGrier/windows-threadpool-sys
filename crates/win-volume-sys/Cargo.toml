@@ -22,17 +22,24 @@ categories = ["api-bindings", "os::windows-apis", "filesystem"]
 # 2^31 or more, which std's `io::Error` holds as a negative number.
 win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
 
+# The dependency query's names are `Wtf16String`s, copied out of the reply and owned; a reply is read
+# from an aligned buffer, `io_buffers::AlignedBuf`, because the structure holds pointers.
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
 # `default-features = false` matches every other crate in the workspace.
 #
 # `Win32_System_IO` is `DeviceIoControl` and `GetOverlappedResult`; `Win32_System_Ioctl` is
 # `DISK_GEOMETRY`, `DISK_EXTENT`, `VOLUME_DISK_EXTENTS` and the `FSCTL_*` and `IOCTL_DISK_*`
 # codes; `Win32_Storage_FileSystem` is `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`. `Win32_System_Threading`
 # is the event a call waits on, and `Win32_Security` is there only because `CreateEventW`'s
-# attributes parameter is a `SECURITY_ATTRIBUTES` pointer.
+# attributes parameter is a `SECURITY_ATTRIBUTES` pointer. `Win32_Storage_Vhd` is
+# `GetStorageDependencyInformation` and the structures it fills.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
+	"Win32_Storage_Vhd",
 	"Win32_System_IO",
 	"Win32_System_Ioctl",
 	"Win32_System_Threading",

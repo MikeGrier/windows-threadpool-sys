@@ -23,6 +23,12 @@ promise, as the workspace's naming decision defines it.
 - **`query_storage_property`** -- the same control for any property and any kind of query, with
   the reply as the bytes the device gave, so a property this crate has no typed function for is one
   call away.
+- **`storage_dependency_information`** -- how a virtual disk relates to the file that backs it
+  (`GetStorageDependencyInformation`): for a volume on a VHD, the volume that holds the file, whose
+  disks are the ones that matter. The version of the reply is an input, and the names in a version 2
+  reply are copied out, so nothing a caller holds points into a buffer. No entry has been observed
+  from a real virtual disk, because attaching one needs an elevated token; the entries are tested
+  against replies built from the structure's declared layout.
 - **`lock_volume`** and **`unlock_volume`** -- `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`: until
   released, or until the handle closes, no other handle can use the volume.
 

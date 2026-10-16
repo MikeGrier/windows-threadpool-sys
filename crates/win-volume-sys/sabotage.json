@@ -1,7 +1,7 @@
 {
   "package": "win-volume-sys",
   "description": "Sabotages for win-volume-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one. The device-control helper's pending path is run through its seam, overlapped_call, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well. The OVERLAPPED the control is made with is a declared blind spot (see its survives entry): a control made without one answers the same on every handle tried, FSCTL_REQUEST_OPLOCK included. The abort when the wait for a pending call fails is not reachable: the event is the helper's own. The failure of CreateEventW is not reachable either.",
+  "notCoveredHere": "A lock that succeeds is not tried, so FSCTL_LOCK_VOLUME and FSCTL_UNLOCK_VOLUME swapped for one another are not caught: a successful lock would hold a real volume against its users, and needs an administrator. The tests show only that each control reaches the device with no buffer and returns its own error. A volume on more than one disk is not available on a development machine, so the answer that needs a second call is had from a stand-in device (extents_via), not from a real one. The device-control helper's pending path is run through its seam, overlapped_call, with an overlapped ReadFile on a named pipe, because no file-system control pends on demand; the one call that makes it a control, the DeviceIoControl argument list, is pinned by the controls themselves, and FSCTL_REQUEST_OPLOCK, which takes input and pends until another handle writes, reaches DeviceIoControl through the pending path as well. The OVERLAPPED the control is made with is a declared blind spot (see its survives entry): a control made without one answers the same on every handle tried, FSCTL_REQUEST_OPLOCK included. The abort when the wait for a pending call fails is not reachable: the event is the helper's own. The failure of CreateEventW is not reachable either. The dependency query has never answered with an entry on a machine these tests ran on, because attaching a virtual disk needs an elevated token: its entries, their names and the reply to a buffer too small for them are tested against replies built from the structure's declared layout and a stand-in device, and whether a real entry's names lie inside the buffer the caller gave is not shown at all.",
   "sabotages": [
     {
       "name": "WV-2.2: the extents control sends a different code",
@@ -562,6 +562,198 @@
       "why": "As for the node: each field is read from where the structure has it.",
       "find": ["            version: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, Version))?,\n"],
       "replace": ["            version: read(offset_of!(STORAGE_DEVICE_NUMA_PROPERTY, NumaNode))?,\n"]
+    },
+    {
+      "name": "WV-2.5: the version is not put in the buffer",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The version is an input: the call refuses a buffer whose version field is not 1 or 2, so a function that does not set it is refused on every machine.",
+      "find": ["            .copy_from_slice(&version.raw().to_ne_bytes());\n"],
+      "replace": ["            .copy_from_slice(&0_i32.to_ne_bytes());\n"]
+    },
+    {
+      "name": "WV-2.5: a first size below the structure is not raised",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A buffer under the structure's own size is ERROR_INVALID_PARAMETER, so asking at a configured smaller size would fail where raising it succeeds.",
+      "find": ["    let mut capacity = first.max(MIN_BYTES);\n"],
+      "replace": ["    let mut capacity = first;\n"]
+    },
+    {
+      "name": "WV-2.5: a size no larger than the one given is asked for again",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A reply that needs more room and names the room it already had is not going to be answered by asking the same question again.",
+      "find": ["                if needed <= capacity {\n"],
+      "replace": ["                if needed < capacity {\n"]
+    },
+    {
+      "name": "WV-2.5: the buffer is regrown to a size other than the one named",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The size the call names is the size it was measured to need; asking for a different one is a guess.",
+      "find": ["                capacity = needed;\n"],
+      "replace": ["                capacity = needed + 1;\n"]
+    },
+    {
+      "name": "WV-2.5: ERROR_MORE_DATA is not a reason to ask again",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Which of the two a buffer too small for the entries returns is unverified, so both are followed.",
+      "find": ["            ERROR_INSUFFICIENT_BUFFER | ERROR_MORE_DATA => {\n"],
+      "replace": ["            ERROR_INSUFFICIENT_BUFFER => {\n"]
+    },
+    {
+      "name": "WV-2.5: only one attempt is made",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A reply that needs more room than the first buffer has is only answered by asking again.",
+      "find": ["const MAX_ATTEMPTS: usize = 4;\n"],
+      "replace": ["const MAX_ATTEMPTS: usize = 1;\n"]
+    },
+    {
+      "name": "WV-2.5: a status is altered on its way out",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The code is carried as the call returned it; the virtdisk errors have values above 16 bits, and one truncated to 16 bits names a different error.",
+      "find": ["            other => return Err(Win32Error::from_code(other).to_io_error()),\n"],
+      "replace": ["            other => return Err(Win32Error::from_code(other & 0xFFFF).to_io_error()),\n"]
+    },
+    {
+      "name": "WV-2.5: the real call is given a size of nothing",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The size is how much the call may write; the real calls are the only test of the argument list.",
+      "find": ["        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"],
+      "replace": ["        let size = 0;\n"]
+    },
+    {
+      "name": "WV-2.5: the real call is not given the flags",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The flags are which way the query looks; without them the host direction is never asked for.",
+      "find": ["                flags.bits(),\n"],
+      "replace": ["                0,\n"]
+    },
+    {
+      "name": "WV-2.5: HOST_VOLUMES also sets the disk-handle bit",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Each flag is its own bit; a flag that also says the handle is a disk asks a different question.",
+      "find": ["    pub const HOST_VOLUMES: Self = Self(GET_STORAGE_DEPENDENCY_FLAG_HOST_VOLUMES);\n"],
+      "replace": ["    pub const HOST_VOLUMES: Self =\n        Self(GET_STORAGE_DEPENDENCY_FLAG_HOST_VOLUMES | GET_STORAGE_DEPENDENCY_FLAG_DISK_HANDLE);\n"]
+    },
+    {
+      "name": "WV-2.5: a reply that used more than it was given is read",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The call says how many bytes it used; a number beyond the buffer is a reply that cannot be trusted, and slicing by it would read outside the buffer.",
+      "find": ["        .filter(|used| *used <= buffer.len())\n"],
+      "replace": ["        .filter(|used| *used <= buffer.len() + 8)\n"]
+    },
+    {
+      "name": "WV-2.5: a version one reply is read with version two's entry size",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The entries of each version have their own size, and the second entry of a reply is found by it.",
+      "find": ["    let entry_size = if version == StorageDependencyVersion::V1 {\n        size_of::<STORAGE_DEPENDENCY_INFO_TYPE_1>()\n"],
+      "replace": ["    let entry_size = if version == StorageDependencyVersion::V1 {\n        size_of::<STORAGE_DEPENDENCY_INFO_TYPE_2>()\n"]
+    },
+    {
+      "name": "WV-2.5: a count the reply cannot hold is accepted up front",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The count is checked against the bytes the call used before any entry is read, so the refusal names the count and not whichever entry was reached first.",
+      "find": ["        .filter(|end| *end <= reply.len())\n"],
+      "replace": ["        .filter(|end| *end <= reply.len() + 64)\n"]
+    },
+    {
+      "name": "WV-2.5: the ancestor level is read from the provider flags",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it.",
+      "find": ["            AncestorLevel\n"],
+      "replace": ["            ProviderSpecificFlags\n"]
+    },
+    {
+      "name": "WV-2.5: the type flags are read from the provider flags",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it.",
+      "find": ["        DependencyTypeFlags\n"],
+      "replace": ["        ProviderSpecificFlags\n"]
+    },
+    {
+      "name": "WV-2.5: the device id is read from the vendor field",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Each field is read from where the structure has it.",
+      "find": ["        storage_type_at + offset_of!(VIRTUAL_STORAGE_TYPE, DeviceId),\n"],
+      "replace": ["        storage_type_at + offset_of!(VIRTUAL_STORAGE_TYPE, VendorId),\n"]
+    },
+    {
+      "name": "WV-2.5: the vendor is read from one byte late",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The vendor GUID is the sixteen bytes at its own offset.",
+      "find": ["        .get(vendor_at..vendor_at + 16)\n"],
+      "replace": ["        .get(vendor_at + 1..vendor_at + 17)\n"]
+    },
+    {
+      "name": "WV-2.5: the host volume is read from the dependent volume's pointer",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Each name is read from the pointer the structure has for it, and the four are distinct.",
+      "find": ["        entry.host_volume_name = name(offset_of!(STORAGE_DEPENDENCY_INFO_TYPE_2, HostVolumeName))?;\n"],
+      "replace": ["        entry.host_volume_name = name(offset_of!(STORAGE_DEPENDENCY_INFO_TYPE_2, DependentVolumeName))?;\n"]
+    },
+    {
+      "name": "WV-2.5: a version one reply is read for names",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "Names exist only in version two; reading them from a version one entry reads the next entry's bytes as pointers.",
+      "find": ["    if version == StorageDependencyVersion::V2 {\n        let pointer"],
+      "replace": ["    if version != StorageDependencyVersion::V2 {\n        let pointer"]
+    },
+    {
+      "name": "WV-2.5: a null name pointer is not none",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A null pointer is an absent name, not an address to refuse.",
+      "find": ["    if pointer == 0 {\n"],
+      "replace": ["    if pointer == 1 {\n"]
+    },
+    {
+      "name": "WV-2.5: a name pointer at the end of the reply is taken as inside it",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A pointer at the first byte past the reply is outside it, and is refused for that and not for what reading there would find.",
+      "find": ["        .filter(|offset| *offset < reply.len())\n"],
+      "replace": ["        .filter(|offset| *offset <= reply.len())\n"]
+    },
+    {
+      "name": "WV-2.5: a name with no room for its terminator is accepted",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "A string that runs to the end of the bytes used has no terminator within them, and what follows is not the call's.",
+      "find": ["    let terminated = offset + (units.len() + 1) * size_of::<u16>() <= reply.len();\n"],
+      "replace": ["    let terminated = offset + units.len() * size_of::<u16>() <= reply.len();\n"]
+    },
+    {
+      "name": "WV-2.5: a name ending exactly at the end of the reply is refused",
+      "file": "src/storage_dependency.rs",
+      "expect": "caught",
+      "why": "The boundary the previous entry is one past: a terminator in the last two bytes used is within them.",
+      "find": ["    let terminated = offset + (units.len() + 1) * size_of::<u16>() <= reply.len();\n"],
+      "replace": ["    let terminated = offset + (units.len() + 1) * size_of::<u16>() < reply.len();\n"]
+    },
+    {
+      "name": "WV-2.5: control, the two statuses that ask again written the other way round",
+      "file": "src/storage_dependency.rs",
+      "expect": "survives",
+      "why": "A control: an or-pattern's alternatives are unordered, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            ERROR_INSUFFICIENT_BUFFER | ERROR_MORE_DATA => {\n"],
+      "replace": ["            ERROR_MORE_DATA | ERROR_INSUFFICIENT_BUFFER => {\n"]
     }
   ]
 }

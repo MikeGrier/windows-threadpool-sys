@@ -177,8 +177,10 @@ dependencies = [
 name = "win-volume-sys"
 version = "0.1.0"
 dependencies = [
+ "io-buffers",
  "win-error-codes",
  "windows-sys",
+ "wtf-string",
 ]
 
 [[package]]
