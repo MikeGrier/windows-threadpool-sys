@@ -35,19 +35,7 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
 
 ## ERR -- One error code type across the crates
 
-- [ ] **ERR-1** -- **`Win32Error` is `win_error_codes::Win32Error`.** Delete this crate's copy in
-  [error.rs](src/error.rs) and re-export the shared one under the same name. Two things in the copy
-  are read before it goes and not carried over by default: `to_io_error` calls `.expect("a WIN32_ERROR
-  always fits in an i32")`, which panics for a code of 2^31 or more (the virtdisk errors are such
-  codes, see [WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1)); and `from_io` returns `0` for an
-  error with no OS code behind it, and `0` is `ERROR_SUCCESS`, so a fabricated error reads as success.
-  The shared type's `from_io` returns `None` for such an error ([WE-D-4](../win-error-codes/DESIGN-NOTES.md#we-d-4)),
-  so each caller here decides what an error with no code means to it. A published crate:
-  the re-export keeps the path, and this item says in its commit whether any behaviour a caller could
-  see changed.
-
-  > **-> CROSS-COMPONENT PREREQUISITE:** [WE-1.1](../win-error-codes/CHECKLIST.md) in
-  > `crates/win-error-codes`.
+- [x] **ERR-1** -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#err-1)
 
 ## M-inf -- Horizon (ungated)
 
