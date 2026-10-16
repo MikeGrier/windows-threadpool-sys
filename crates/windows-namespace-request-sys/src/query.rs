@@ -83,7 +83,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use io_buffers::AlignedBuf;
 
 use crate::handle::{CapturedHandle, HandleCaptureError};
-use crate::outcome::{Outcome, Win32Error, perform_bool};
+use crate::outcome::{Outcome, out_of_memory, perform_bool};
 
 /// The alignment a directory-information batch requires.
 ///
@@ -295,8 +295,8 @@ impl QueryFileInformation {
     /// the machine, or refused by the allocator. The call was not made, and a smaller capacity
     /// can be tried.
     pub fn perform(&self) -> Outcome<AlignedBuf> {
-        let mut buffer = AlignedBuf::zeroed(self.capacity, BATCH_ALIGNMENT)
-            .map_err(|_| Win32Error::out_of_memory())?;
+        let mut buffer =
+            AlignedBuf::zeroed(self.capacity, BATCH_ALIGNMENT).map_err(|_| out_of_memory())?;
         let size = u32::try_from(self.capacity).unwrap_or(u32::MAX);
 
         perform_bool(|| {

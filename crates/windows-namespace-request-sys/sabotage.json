@@ -9,8 +9,8 @@
       "file": "src/outcome.rs",
       "expect": "caught",
       "why": "A query whose buffer cannot be allocated reports ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'. Any other code would read as the call's own failure.",
-      "find": ["        Self(ERROR_NOT_ENOUGH_MEMORY)\n"],
-      "replace": ["        Self(0)\n"]
+      "find": ["    Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY)\n"],
+      "replace": ["    Win32Error::from_code(0)\n"]
     },
     {
       "name": "NR-3: a descriptor allocation failure is reported as an invalid copy",
@@ -85,6 +85,22 @@
       "why": "Declared blind spot, not a control. SecurityDescriptor::try_clone allocates exactly the size of a buffer that already exists, so no test can make it fail; the failure it would report is the shared `allocation()`, whose result the other entries pin.",
       "find": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::allocation())\n"],
       "replace": ["            .map(|blob| Self { blob })\n            .map_err(|_| SecurityCaptureError::last_os(SecurityCaptureFailure::InvalidCopy))\n"]
+    },
+    {
+      "name": "NR-4.1: a failed call's code is not the one the thread held",
+      "file": "src/outcome.rs",
+      "expect": "caught",
+      "why": "The error an entry reports is the thread's last error, snapshotted in the statement after the call; any other value is a code the call did not produce.",
+      "find": ["        return Err(Win32Error::last());\n"],
+      "replace": ["        return Err(Win32Error::from_code(0x0BAD_F00D));\n"]
+    },
+    {
+      "name": "NR-4.1: control, the out-of-memory code written as its value",
+      "file": "src/outcome.rs",
+      "expect": "survives",
+      "why": "A control: ERROR_NOT_ENOUGH_MEMORY is 8, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY)\n"],
+      "replace": ["    Win32Error::from_code(8)\n"]
     }
   ]
 }

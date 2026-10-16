@@ -31,6 +31,10 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps
+# a code of 2^31 or more, which this crate's own earlier type did not (WE-D-1).
+win-error-codes = { version = "0.1.0", path = "../win-error-codes" }
+
 # The aligned buffer the query results and captured security descriptors are held in,
 # re-exported as `AlignedBuf` because it appears in public signatures (IB-2+.4 in
 # io-buffers' COMPLETED-CHECKLIST.md). The version is the one io-buffers' first release is fixed to.
