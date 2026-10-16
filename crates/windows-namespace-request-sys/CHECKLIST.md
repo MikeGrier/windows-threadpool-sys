@@ -93,22 +93,10 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
 
 - [x] **NR-3.6** -- `prepare`, `PreparedPath`, `PathError`, `PathFailure` and the `path` module are retired, with the documentation that described them. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-36-retire)
 
-  **Next:** `NR-3.7`, which is in another crate; and the release of this crate (a release-please pull
-  request, a new minor), after which `NR-3.8` and
-  [DI-13.5 and DI-13.6](../durable-ioring/CHECKLIST.md).
+- [x] **NR-3.7** -- The `request_cost` probe in `windows-platform-probes` is rewritten against the new path design, not retired; done with that crate's `M6.1`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-37-probe)
 
-- [ ] **NR-3.7** -- **The `request_cost` probe in `windows-platform-probes` is rewritten, not
-  retired.** It measures `prepare` (a short and a long path), building a whole request, and cloning a
-  prepared path, and its premise ("`prepare` allocates twice, an input copy and a `MAX_PATH`
-  buffer") stops holding when `NR-3.3` to `NR-3.6` land. The engineer, 2026-10-15: schedule rewriting
-  it. It is rewritten to measure what the new design costs, which is `windows-platform-probes`'s
-  `M6.1`; this item is done when that one is. The assistant's reading of the probe is from its
-  comments and has not been checked against its code. The probe is adapted just enough to build by
-  the coupled commit of `NR-3.4` to `NR-3.6`, and rewritten after it.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-platform-probes` ->
-  > `M6` -> `M6.1` (rewrite the `request_cost` probe). See
-  > [CHECKLIST.md](../windows-platform-probes/CHECKLIST.md).
+  **Next:** the release of this crate (a release-please pull request, a new minor), after which
+  `NR-3.8` and [DI-13.5 and DI-13.6](../durable-ioring/CHECKLIST.md).
 
 - [ ] **NR-3.8** -- **The enumeration crate's duplicate of the path preparation is resolved.** The
   engineer, 2026-10-15: schedule resolving it. This is the merge-or-delete decision of the workspace

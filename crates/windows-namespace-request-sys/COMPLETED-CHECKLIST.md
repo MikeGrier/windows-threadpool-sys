@@ -344,3 +344,14 @@ Sabotage entries cover the accessors, the pointer handed to the call and the ref
 control among them, and the whole manifest was swept. `win-durable-ioring`'s open kept its empty-path refusal and its verbatim conversion, and the
 `request_cost` probe keeps measuring `GetFullPathNameW` through a local stand-in for the retired
 function. What this left to do is `NR-3.7` and the release of this crate.
+
+## Moved 2026-10-16 13:22:38 -04:00 -- NR-3.7: the request_cost probe
+
+### <a id="nr-37-probe"></a>NR-3.7 -- The `request_cost` probe in `windows-platform-probes` is rewritten against the new path design, not retired; done with that crate's `M6.1`. *(completed 2026-10-16 13:22:38 -04:00)*
+
+The work and its decision are in
+[windows-platform-probes' DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-request-cost-follows-the-request-crate),
+and the item is archived there as
+[M6.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m61). The probe was first adapted just
+enough to build by the commit of `NR-3.4` to `NR-3.6`, as this item said it would be, and then
+rewritten.

@@ -54,7 +54,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    so a new minor. This is a release action and not a checklist item.
 5. After step 2, in any order: [DI-13.1's parked questions](#di-131-open-questions) are yours to
    rule on (no code waits on you to ask them, but [DI-13.7](#di-137-rework) and `DI-13.3` onward
-   wait on the answers); [M6.1](../windows-platform-probes/CHECKLIST.md), the probe rewrite.
+   wait on the answers).
 6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
