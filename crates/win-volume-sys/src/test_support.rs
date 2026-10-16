@@ -15,12 +15,23 @@ pub(crate) fn system_volume_path() -> String {
     format!(r"\\.\{drive}")
 }
 
+/// The drive of a local path, such as `C:`, whether the path is plain (`C:\x`) or has the verbatim
+/// or device prefix (`\\?\C:\x`, `\\.\C:\x`). A UNC path, plain or verbatim, has none.
+fn drive_of(path: &str) -> Option<&str> {
+    let plain = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\\.\"))
+        .unwrap_or(path);
+    let bytes = plain.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':').then(|| &plain[..2])
+}
+
 /// The volume the temporary directory is on, as a device path: not always the system's.
 pub(crate) fn temp_volume_path() -> String {
     let temp = std::env::temp_dir();
     let drive = temp
         .to_str()
-        .and_then(|text| text.get(..2))
+        .and_then(drive_of)
         .expect("a temp directory with a drive letter");
     format!(r"\\.\{drive}")
 }
@@ -66,3 +77,6 @@ pub(crate) fn open_disk(number: u32, overlapped: bool) -> File {
 pub(crate) fn system_disk(overlapped: bool) -> File {
     open_disk(system_disk_numbers()[0], overlapped)
 }
+
+#[cfg(test)]
+mod tests;
