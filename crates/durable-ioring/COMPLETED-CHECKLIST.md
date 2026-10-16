@@ -2911,3 +2911,41 @@ The sabotage entry that masked a Win32 code to sixteen bits left the core's mani
 covered; the rule is covered by `win-error-codes`' own entries, and `win-durable-ioring`'s manifest
 gained entries for the three ways its helpers can go wrong, with a control. The tests that pinned
 the three facts moved with the helpers and gained one that the wrapping agrees with `HResult`.
+
+## Moved 2026-10-16 18:40:00 -04:00 -- DI-13.1, DI-13.5 and DI-13.6: the open surface written down, and the request crate's release taken
+
+### <a id="di-131"></a>DI-13.1 -- The open surface, written down as a table over every parameter of the open calls, with the engineer's rulings (a) to (g). *(completed 2026-10-16 18:40:00 -04:00)*
+
+The table, its sources, what was not verified and the calls awaiting the engineer's confirmation are
+[DI-D-64](DESIGN-NOTES.md#di-d-64). The rulings of 2026-10-15 are in its Ruling column. The
+rulings of 2026-10-16, recorded here because the checklist item that carried them is archived:
+
+- (a) `open` takes a `Wtf16String` only; the caller converts. Passing an empty path to Win32 was
+  proposed with it and not separately ruled.
+- (b) The only check before the open is syntactic, on the path handed to Win32, and only for the forms
+  a string alone shows remote (UNC and verbatim UNC): no drive-type query and nothing that opens the
+  path. Every other validation is made on the opened handle, so an unbuffered create refused there has
+  already created the file, which is documented and not prevented.
+- (c) Nothing refuses a path for being able to block. A blocking `CreateFileW` is answered by the
+  request crate: a request is built on one thread and performed on another, and `open` becomes that
+  two-phase shape (`DI-13.7`). Whether `CancelSynchronousIo` interrupts a create changes nothing in the
+  design; the engineer expects it cannot.
+- (d) What an `OpenedFile` claims when its path names a device is measured before anything is decided,
+  as part of `DI-14.6`.
+- (e) The assistant's recommendation, adopted: `CaptureSet`-style typed sets for rights, share mode
+  and attributes, an enum for the disposition, builder methods for flags, and `create`, `create_new` and
+  `truncate` removed outright, a breaking change to `win-durable-ioring` that ships as a new minor.
+- (f) A cache hint on an unbuffered file is passed through and documented, not refused (`DI-14.1`).
+- (g) The evidence-only test of the ring on an overlapped handle is `DI-14.7`.
+
+### <a id="di-135"></a>DI-13.5 -- `SecurityDescriptor` from SDDL, taken from `windows-namespace-request-sys`. *(completed 2026-10-16 18:40:00 -04:00)*
+
+Done when this crate depends on the release that carries the constructor. `win-durable-ioring`
+depends on `windows-namespace-request-sys` 0.4.0, and that release's tag carries
+`SecurityDescriptor::from_sddl` and `to_sddl` (`NR-3.1`), checked against the tag's source on
+2026-10-16. `DI-14.3` uses it.
+
+### <a id="di-136"></a>DI-13.6 -- A `ReOpenFile` entry, taken from `windows-namespace-request-sys`. *(completed 2026-10-16 18:40:00 -04:00)*
+
+As `DI-13.5`: the same release's tag carries the `ReOpenFile` entry (`NR-3.2`), checked against the
+tag's source on 2026-10-16. `DI-15.4` uses it.

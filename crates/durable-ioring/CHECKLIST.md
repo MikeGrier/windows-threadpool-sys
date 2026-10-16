@@ -52,9 +52,8 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    the `ReOpenFile` entry. Additive, independent of steps 1 and 2; may be done first.
 4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
    so a new minor. This is a release action and not a checklist item.
-5. [DI-13.1's parked questions](#di-131-open-questions) were ruled on 2026-10-16, so the table can
-   be written from them; [DI-13.7](#di-137-rework) and `DI-13.3` onward wait on that table and on
-   step 7.
+5. `DI-13.1` is done: its table is [DI-D-64](DESIGN-NOTES.md#di-d-64), and `DI-13.3` onward build on
+   it. [DI-13.7](#di-137-rework) also waits on step 7.
 6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
@@ -62,7 +61,9 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
 7. Added 2026-10-16: [NR-5.1 to NR-5.4](../windows-namespace-request-sys/CHECKLIST.md) -- request
    crate: the path-form classifier that `DI-13.7`'s syntactic refusal uses. Additive, so a new minor
    release; `DI-13.7` takes it.
-8. Then, here: `DI-13.7`, `DI-13.1`, `DI-13.3`, `DI-13.4`, `DI-M14`, `DI-M15`, and `DI-10.3` last.
+8. Then, here: `DI-13.3` and `DI-13.4` (neither needs step 7), `DI-13.7` (after step 7), `DI-M14`,
+   `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
+   done at any point.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -220,88 +221,12 @@ Widening what this crate can open is the structural answer: every option a consu
 option recorded by construction. The rule throughout is documented APIs only
 ([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
 
-- [ ] **DI-13.1** -- **The surface, written down before any of it is built.** One decision in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md), with a table over every parameter of the documented open
-  calls -- `CreateFileW`, which the open goes through ([DI-D-63](DESIGN-NOTES.md#di-d-63)), and
-  `CreateFile2`, which has the same parameters, `OpenFileById`, `ReOpenFile` -- saying for each
-  whether it is exposed (and as which type) or excluded (and the analytic reason, per the option
-  integrity rule: it computes the wrong answer, not that no consumer is in sight). Each row also says
-  what the option does to a target's claims: class, alignment, write-through, offsets. Rulings by the
-  engineer on 2026-10-15, to be recorded in the table with their reasons. **The principle: this
-  crate reflects Win32, not the Rust standard library.** A disposition, a share mode and an access
-  right are the call's own, mapped into structured Rust types and not a word of flags to OR, and no
-  default or combination check is added that Win32 does not make. **Paths are opaque:** a
-  `Wtf16String` passed through untouched for Win32 to interpret (`\\?\`, long paths where enabled,
-  `/` against `\`); the one possible exception is a path whose open can block without being
-  cancellable, which is to be identified before anything is refused. **Excluded:** append-only access
-  (it does not fit this crate's use pattern, and as the assistant reads the documentation
-  `FILE_APPEND_DATA` without `FILE_WRITE_DATA` lands a write at end of file whatever offset it names,
-  which the core addresses by, so it would compute the wrong answer); `CreateFileTransacted` (a
-  transacted write is durable at the transaction's commit, so the epoch's warranty would mean
-  nothing); `hTemplateFile`; `FILE_ATTRIBUTE_ENCRYPTED` (it brings a set of certificate problems this
-  crate does not take on); the security quality-of-service flags, `SECURITY_SQOS_PRESENT` and what
-  it enables. **Not in v1, each a v1 ruling and not a rejection:** handle-level
-  `FILE_FLAG_WRITE_THROUGH` (what it can warrant is unclear); inheritable handles (no call this
-  crate makes chooses inheritance, and that is not a structural restriction on the request crate);
-  `FILE_FLAG_BACKUP_SEMANTICS` (there is no reason against it, it serves backup and restore
-  applications); `FILE_FLAG_SESSION_AWARE` (the session-specific part of the device namespace is a
-  small interest and hard to test); `FILE_FLAG_OVERLAPPED`, unless the ring turns out to require it.
-  **Exposed:** `FILE_FLAG_OPEN_REPARSE_POINT` (if the caller wants to follow a reparse point, so be
-  it); access as the table lists it, passed through; every share mode; every creation disposition
-  `CreateFileW` has, `CREATE_ALWAYS` included. None of the "not in v1" rulings schedules work;
-  a consumer or a measurement reopens each, not this checklist.
-
-  <a id="di-131-open-questions"></a>**Parked 2026-10-15 while the path contract was settled in
-  [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)** (the engineer: "I want to work through
-  this before we continue on to subsequent items"). All seven were ruled on 2026-10-16, in the
-  paragraph after this one; what follows is the question as it was put. (a) The public signature for a path: `&Wtf16Str` only, or anything that
-  converts to one, and whether an empty path is passed to Win32 or refused. (b) The remote-device
-  check: with paths opaque the pre-open check, which uses `fs::canonicalize` and so itself opens the
-  path, cannot stay; the check moves onto the opened handle (`DI-14.5`), and an unbuffered create on
-  a remote path then creates the file before it is refused, unless the engineer names a path-based
-  check as the one exception. (c) Which paths can block an open without being cancellable, from
-  documentation and not recollection: dead remote shares and oplock breaks are the candidates; the
-  answer decides between documenting that `open` blocks (and that it can be run on a worker) and
-  refusing specific forms. (d) What an `OpenedFile` claims when its path names a device, which gets
-  a file's default geometry and no flush domains; whether a documented handle query can tell a
-  raw disk from a file is unmeasured. (e) The shape of the structured types: the workspace's
-  `CaptureSet` pattern (a typed set with named constants, `union` and `contains`) for rights, share
-  mode and attributes, an enum for the disposition, builder methods for flags, and whether
-  `create`, `create_new` and `truncate` go entirely (a breaking change to a 0.1.0 crate). (f) Cache
-  hints on an unbuffered file: pass and document, in place of refusing. (g) Whether to run an
-  evidence-only test of the ring on an overlapped handle, without exposing the flag. Standing unless
-  the engineer objects: our calls pass a non-inheritable handle explicitly;
-  `FILE_ATTRIBUTE_TEMPORARY`, the object-ID kind of `OpenFileById` and the four lesser access rights
-  (`ACCESS_SYSTEM_SECURITY`, `FILE_EXECUTE`, `SYNCHRONIZE`, extended attributes) are exposed;
-  `FILE_FLAG_FIRST_PIPE_INSTANCE` is excluded, for it is for pipes. **Superseded by these
-  rulings and still to be reworked:** commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63)
-  made the open match std (create plus truncate as `OPEN_ALWAYS` and an emptying, an automatic
-  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, long paths made verbatim, std's combination checks);
-  none of that is Win32's, so the rework is `DI-13.7`, which waits on the questions above.
-
-  **Ruled 2026-10-16, in conversation.** (a) `open` takes a `Wtf16String` only; the caller converts.
-  Passing an empty path to Win32 was proposed with it and not separately ruled. (b) The only check
-  before the open is syntactic, on the path handed to Win32, and only for the forms a string alone
-  shows remote (UNC and verbatim UNC): no drive-type query and nothing that opens the path. Every
-  other validation is made on the opened handle, so an unbuffered create refused there has already
-  created the file, which is documented and not prevented. (c) Nothing refuses a path for being able
-  to block. A blocking `CreateFileW` is answered by the request crate: a request is built on one
-  thread and performed on another, and `open` becomes that two-phase shape (`DI-13.7`). Whether
-  `CancelSynchronousIo` interrupts a create changes nothing in the design; the engineer expects it
-  cannot. The request crate's part is [NR-5](../windows-namespace-request-sys/CHECKLIST.md).
-  (d) What an `OpenedFile` claims when its path names a device is measured before anything is
-  decided: it is part of `DI-14.6`, and nothing changes for it until then. (e) The assistant's
-  recommendation, adopted: `CaptureSet`-style typed sets for rights, share mode and attributes, an
-  enum for the disposition, builder methods for flags, and `create`, `create_new` and `truncate`
-  removed outright, a breaking change to `win-durable-ioring` that ships as a new minor. (f) A cache
-  hint on an unbuffered file is passed through and documented, not refused (`DI-14.1`). (g) The
-  evidence-only test of the ring on an overlapped handle is `DI-14.7`. All of (a) to (g) are now
-  ruled, so the table can be written from them.
+- [x] **DI-13.1** -- The open surface, written down as a table over every parameter of the open calls, with the engineer's rulings (a) to (g), in [DI-D-64](DESIGN-NOTES.md#di-d-64). -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-131)
 
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
 - [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the
-  documented file access rights the table in `DI-13.1` exposes (data read and write; attributes;
+  documented file access rights the table in [DI-D-64](DESIGN-NOTES.md#di-d-64) exposes (data read and write; attributes;
   `DELETE`; the security rights; append-only if ruled in), with no raw `u32`. A target needs a data
   right, which is checked when the file is opened and not when the first operation fails. Tests: each
   right opens and is exercised; a right the file's security refuses reaches the caller as the
@@ -312,23 +237,9 @@ option recorded by construction. The rule throughout is documented APIs only
   violation is a typed error that names which side conflicted where the kernel says. Tests with two
   opens: each combination the table lists is accepted or refused as `CreateFileW` documents.
 
-- [ ] **DI-13.5** -- **`SecurityDescriptor` from SDDL, taken from `windows-namespace-request-sys`.**
-  That crate has no constructor from text; [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md)
-  adds one. This item is done when this crate depends on the release that carries it. `DI-14.3`
-  needs it. **Next:** `DI-13.6`.
+- [x] **DI-13.5** -- `SecurityDescriptor` from SDDL, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-135)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
-  > -> `NR-3` -> `NR-3.1` (`SecurityDescriptor` from SDDL). See
-  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
-
-- [ ] **DI-13.6** -- **A `ReOpenFile` entry, taken from `windows-namespace-request-sys`.** That crate
-  has no entry for it; [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) adds one. This item is
-  done when this crate depends on the release that carries it. `DI-15.4` needs it.
-  **Next:** `DI-13.7`, then `DI-13.1`.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys`
-  > -> `NR-3` -> `NR-3.2` (`ReOpenFile` entry). See
-  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
+- [x] **DI-13.6** -- A `ReOpenFile` entry, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-136)
 
 - [ ] **DI-13.7** -- **Rework `OpenedFile::open` to reflect Win32, and amend `DI-D-63`.** <a id="di-137-rework"></a>
   Commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63) made the open match `std::fs::OpenOptions`
@@ -343,15 +254,15 @@ option recorded by construction. The rule throughout is documented APIs only
   added with `DI-13.2` pin the std behaviours and are replaced; `DI-D-63`'s "a caller sees no
   difference" principle is amended and its list of differences rewritten. Waits on the request
   crate's coupled commit (step 2 of the order at the top of this file), which adapts this crate only
-  enough to build, and on the answers to the parked questions in `DI-13.1` (a), (e) and (f).
-  **The shape, from the rulings of 2026-10-16 (`DI-13.1` (a) to (c)):** `open` is split into a build
+  enough to build, and now follows [DI-D-64](DESIGN-NOTES.md#di-d-64).
+  **The shape, from the rulings of 2026-10-16 ([DI-13.1](COMPLETED-CHECKLIST.md#di-131) (a) to (c)):** `open` is split into a build
   and a perform. The build is made on the submitting thread and holds the `Wtf16String`, the typed
   options, and the request crate's captured path; what fails there fails where the caller can see
   it, including the syntactic refusal of a path that is evidently remote. `perform` runs on whatever
   thread the caller chooses, makes the call, and then checks the opened handle (`DI-14.5`),
   closing it if it is refused. `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode, as `OpenedFile<B>` is.
-  **Next:** `DI-13.1` (the table is written from the answers), then `DI-13.3`.
+  **Next:** `DI-13.3`.
 
   > **-> CROSS-COMPONENT PREREQUISITE:** the syntactic refusal needs the path-form classifier of
   > `windows-namespace-request-sys` -> `NR-5` (`NR-5.1` to `NR-5.4`), released. See
