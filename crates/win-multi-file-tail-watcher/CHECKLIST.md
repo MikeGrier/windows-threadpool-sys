@@ -85,12 +85,63 @@ its next step, which is one probe or one report.
 
 - [x] **TW-4.4** -- Shutdown requested from the caller's own callback on a thread-pool wait is tested from a parked poll, a poll inside its probe and a poll held inside the report, with repeated requests, drops bounded by a step, and nothing running after `Drop`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-44)
 
-## M4+ -- Reads on the thread pool (parked behind M4)
+## M5 -- Reading the announced bytes through an I/O ring, driven synchronously
 
-Coarse on purpose: its scope is set when M4 is done.
+Deliverable: the reading layer, driven directly with no thread pool, over hundreds of files that
+child processes write and a pool far smaller than the bytes announced, delivers every announced byte
+exactly once across chunks labelled with their ranges, and then poll-done. Driven synchronously first
+for the same reason as M2: every stop and continuation can then be tested deterministically
+([TW-D-15](DESIGN-NOTES.md#tw-d-15)). These items replace TW-4+.1 and TW-4+.2, which planned the reads
+through `ThreadpoolIo`.
 
-- [ ] **TW-4+.1** -- **Bind each kept endpoint to the thread pool** (`ThreadpoolIo`), with probes
-  continuing through observers. ([TW-D-10](DESIGN-NOTES.md#tw-d-10))
+- [ ] **TW-5.1** -- **Hold each file's endpoint as an `EndpointHandle`**, consumed from the
+  `UnassociatedEndpoint` when the file is opened. Observers, probes and `HeldFile`'s queries are
+  unchanged. ([TW-D-10](DESIGN-NOTES.md#tw-d-10))
 
-- [ ] **TW-4+.2** -- **Asynchronous reads of announced bytes, completed on the thread pool.**
-  ([TW-D-11](DESIGN-NOTES.md#tw-d-11))
+- [ ] **TW-5.2** -- **The buffer pool and the chunk.** Owned buffers of one size, the size and count
+  set by the caller when the layer is created. A taken buffer is lent as a chunk that dereferences to
+  the bytes read into it, and returns the buffer when dropped, waking a reader that is waiting for
+  one. An empty pool refuses; it never allocates past its count. ([TW-D-15](DESIGN-NOTES.md#tw-d-15))
+
+- [ ] **TW-5.3** -- **The client's SQ and its entries**: data (a clone of `T`, the file byte range, the
+  chunk), shrink, terminal, and poll-done; `#[non_exhaustive]`, with the watcher's capacity rule and
+  doorbell pair. ([TW-D-15](DESIGN-NOTES.md#tw-d-15), [TW-D-6](DESIGN-NOTES.md#tw-d-6))
+
+- [ ] **TW-5.4** -- **Planning reads from the watcher's entries**: `last_known..current` split into
+  reads of one buffer each; a shrink becomes a shrink entry with no read; a terminal entry passes
+  through. Pure, and unit-tested without a ring. ([TW-D-15](DESIGN-NOTES.md#tw-d-15))
+
+- [ ] **TW-5.5** -- **The reading engine, driven synchronously against a ring.** It drains the
+  watcher's SQ, submits the planned reads (the handle addressed raw, an observer in each read's
+  sidecar), pops completions, and writes a data entry for each read as it completes. A short read is
+  labelled with the bytes actually read. Poll-done follows the last read of its poll. An empty pool,
+  a full ring SQ and a full client SQ each stop it without waiting, and it continues from where it
+  stopped. ([TW-D-15](DESIGN-NOTES.md#tw-d-15), [TW-D-10](DESIGN-NOTES.md#tw-d-10))
+
+- [ ] **TW-5.6** -- **Integration tests: the reading engine over real files.** Hundreds of files
+  written by child processes through inherited handles, a pool of a few buffers and a client SQ of
+  two slots: the bytes reassembled by range equal what the children wrote, each delivered once; chunks
+  the client keeps stop the reads, and dropping them resumes them; a registration dropped while its
+  reads are in flight is safe, and those reads complete.
+
+## M6 -- The reading layer on the thread pool
+
+Coarse on purpose: its scope is set when M5 is done.
+
+- [ ] **TW-6.1** -- **Run the layer on the thread pool**: ring completions through its thread-pool
+  delivery, and the layer driven by the watcher's doorbell, a completed read, a returned chunk and the
+  client's resume doorbell, with nothing armed between polls. ([TW-D-5](DESIGN-NOTES.md#tw-d-5),
+  [TW-D-15](DESIGN-NOTES.md#tw-d-15))
+
+- [ ] **TW-6.2** -- **Integration tests: polls on the thread pool over files that children write**,
+  through a small pool and a client SQ of two slots.
+
+## M7 -- Shutdown with reads in flight
+
+Coarse on purpose: its scope is set when M6 is done.
+
+- [ ] **TW-7.1** -- **Shutdown and `Drop` with reads in flight**: the reads cancelled or completed, the
+  ring run down, poll-done always delivered, and the bound on `Drop` settled for reads.
+  ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
+
+- [ ] **TW-7.2** -- **Integration tests: shutdown from every state of a read.**

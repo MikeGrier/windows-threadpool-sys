@@ -23,11 +23,12 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-7"></a>TW-D-7 | **A poll is three passes -- copy, probe, report -- and a full SQ stops the third without waiting, to continue from a kept position when the caller rings back; the roster lock is never held across a probe or a doorbell ring.** Amended 2026-10-15: was a roster position and "no lock across a probe, an SQ write, or a doorbell". |
 | <a id="tw-d-8"></a>TW-D-8 | **Registration and unregistration are legal during a poll, and neither waits for it.** |
 | <a id="tw-d-9"></a>TW-D-9 | **Cancellation is shutdown: an explicit, non-blocking, idempotent request; `Drop` drains the crate's own callbacks and is allowed to block, which after a request means at most a running poll reaching its next step.** Amended 2026-10-15: said `Drop` afterwards had nothing to wait for. |
-| <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. |
-| <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads on the thread pool come next.** |
+| <a id="tw-d-10"></a>TW-D-10 | **One crate. Each file is opened as a windows-overlapped-io-sys endpoint, and probed through that endpoint's observers.** Amended 2026-10-14: was a bare `SharedHandle`. Amended 2026-10-16: the reading layer holds the endpoint as an `EndpointHandle` and is its only submitter, through an I/O ring. |
+| <a id="tw-d-11"></a>TW-D-11 | **Built in iterations: the first reads no bytes; reads through an I/O ring come next.** Amended 2026-10-16: was reads completed on the thread pool. |
 | <a id="tw-d-12"></a>TW-D-12 | **Fixtures are Rust only.** |
 | <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
 | <a id="tw-d-14"></a>TW-D-14 | **The passes work in batches of 256 under the roster lock, the buffers in chunks of at most 64 KiB, and the roster stays a `BTreeMap`; sharding the probe across threads is a known remedy that is not built.** |
+| <a id="tw-d-15"></a>TW-D-15 | **A layer above the watcher reads the bytes each poll announces through an I/O ring, into owned buffers from a pool it keeps, and delivers them as chunks on an SQ of its own, as the reads complete.** No CQ: a chunk's `Drop` returns its buffer. |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -253,11 +254,23 @@ The drain moved to `Drop`, below.
 **Amended 2026-10-14:** this decision first held each handle as a bare `SharedHandle`; M16.1 in
 windows-overlapped-io-sys replaced that with observers, below.
 
+**Amended 2026-10-16:** who submits I/O on the handle, below, now that reads go through an I/O ring
+([TW-D-15](#tw-d-15)).
+
 - **Everything is one crate**, whatever its internal layers. Changes it drives in other crates are
   acceptable.
 - **Each file is opened as an endpoint of [windows-overlapped-io-sys](../windows-overlapped-io-sys/)**,
   and the crate keeps that endpoint. From the reads iteration on it is the only thing that submits
   I/O on the handle.
+- **The reading layer ([TW-D-15](#tw-d-15)) is that submitter, and the I/O ring is its backend.**
+  Each file's endpoint is held as an `EndpointHandle`, the form an endpoint takes when it is consumed
+  into a backend, as windows-threadpool-sys' `ThreadpoolIo` holds it; it still hands out observers,
+  so probes are unchanged. A read addresses the handle by its raw value and carries an observer in
+  its sidecar, so the handle stays open until the read's completion is popped even if the
+  registration is dropped meanwhile; that observer is what discharges the raw address's contract.
+  Neither windows-overlapped-io-sys nor windows-ioring-sys changes for this. Decided by the
+  assistant at the engineer's request ("you decide!"); the alternatives are in
+  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
 - **Probes run through the endpoint's *observers*.** An observer shares the handle (that crate keeps
   it in a `SharedHandle` from [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), queries
   the file's length, and can never become a second endpoint. A poll takes its own observer, which is
@@ -271,11 +284,14 @@ windows-overlapped-io-sys replaced that with observers, below.
 
 ## TW-D-11: iterations
 
+**Amended 2026-10-16:** the next iteration reads through an I/O ring ([TW-D-15](#tw-d-15)), not
+through `ThreadpoolIo` as first planned.
+
 - **Iteration 1 reads no bytes.** It opens, probes and reports; only tests read the bytes an
   attention announces.
-- **The next iteration probably adds asynchronous reads completed on the Windows thread pool**,
-  which is why handles are opened overlapped now ([TW-D-3](#tw-d-3)). Later iterations may build
-  further.
+- **The next iteration reads the announced bytes through an I/O ring** ([TW-D-15](#tw-d-15)). Handles
+  are opened overlapped for it ([TW-D-3](#tw-d-3)): on a handle without `FILE_FLAG_OVERLAPPED` a ring
+  read completes inline during submit. Later iterations may build further.
 - **The pieces are built as layers, each usable without the ones above it.** Their names and
   boundaries are not yet chosen; they emerge as the work proceeds.
 
@@ -331,6 +347,39 @@ and [bench-captures/2026-10-15-query-threads.txt](bench-captures/2026-10-15-quer
   The captures include no roster that shrinks, so they say nothing about it; it is
   [TW-2+.2](CHECKLIST.md).
 
+## TW-D-15: reading the announced bytes through an I/O ring
+
+The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first planned.
+
+- **A layer above the watcher reads what each poll announces**, through an I/O ring from
+  [windows-ioring-sys](../windows-ioring-sys/). It owns a `Watcher<T>` and is that watcher's only
+  consumer; the watcher keeps its own SQ and doorbells and stays usable without it
+  ([TW-D-11](#tw-d-11)). The layer's name is not chosen.
+- **What is read is what the attention announced**: `last_known..current`, split into reads of one
+  buffer each. A shrink is reported with no read, and a terminal entry passes through. Growth after
+  the probe is the next poll's, as it is for attentions ([TW-D-7](#tw-d-7)).
+- **Owned buffers from a pool the layer keeps** (the engineer: "owned buffers I would say"). Each read
+  moves a buffer into the ring, which hands it back with the completion. An empty pool submits no
+  read until a buffer comes back; it never allocates past its size.
+- **The client receives the bytes on an SQ of the layer's own**, with the watcher's doorbell
+  discipline ([TW-D-6](#tw-d-6)). A data entry carries a clone of `T`, the byte range of the file, and
+  a chunk that holds the buffer and dereferences to the bytes read into it. Shrink and terminal
+  entries pass the watcher's through, and poll-done follows every read of its poll and is always
+  delivered ([TW-D-9](#tw-d-9)).
+- **Chunks are delivered as their reads complete**, not in file order (the engineer: "deliver as they
+  complete, consumers can deal with reordering instead of us"). Each carries its range, which is what
+  reordering needs.
+- **No CQ.** The one thing that flows back is that the client is done with a buffer, and the chunk's
+  `Drop` carries it: the buffer returns to the pool, and a layer waiting for one is woken.
+- **Three things stop the reads without waiting**: an empty pool, a full ring SQ, a full client SQ.
+  Each continues from where it stopped when a chunk drops, a read completes, or the client rings
+  back, as a poll does on a full SQ ([TW-D-7](#tw-d-7)).
+- **Who submits the reads** is in [TW-D-10](#tw-d-10).
+- **Registered buffers are not built.** They would need windows-ioring-sys to lend one registered
+  buffer to another thread while the ring fills its neighbours, which its `RegisteredBuffers::get`
+  does not (it borrows the whole registration mutably). This decision schedules no work for them, so
+  their absence from the checklist is intentional.
+
 ## Working positions (not decisions)
 
 Stated so they can be built on, and expected to be refined during implementation. Nothing should
@@ -348,3 +397,9 @@ bind to them as settled.
   Nothing here should bind to it.
 - **The expected population tops out around 20,000 files** (some 10,000 jobs, each with stdout and
   stderr), a guesstimate the engineer regards as an extreme.
+- **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15)): the buffer size and
+  count when the layer is created, with any defaults left to measurement.
+- **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
+  announced range is not retried: a file that shrank under the read is the next poll's shrink.
+- **`Drop` with reads in flight waits for at most one read to finish or be cancelled**, which is
+  [TW-D-9](#tw-d-9)'s bound restated for the reading layer; it is settled in M7.

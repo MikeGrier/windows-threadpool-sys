@@ -247,3 +247,36 @@ placeholders and the question asking for the full component graph was withdrawn.
 harness was discarded because only Rust fixtures are kept.
 [Q2](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#engineers-answer-to-q2-and-a-layer-sketch),
 [Q8](design-sessions/DESIGN-SESSION-2026-10-13-tail-watcher-inception.md#answer-to-q8-the-harness-is-discarded)
+
+## TW-D-15 and the 2026-10-16 amendments to TW-D-10 and TW-D-11
+
+The engineer proposed the shape on 2026-10-16, replacing the reads through `ThreadpoolIo` planned as
+TW-4+.1 and TW-4+.2: an I/O ring, buffers from a pool associated with it, a layer above the watcher,
+and an SQ of data chunks for the client, with a CQ only if one is needed. The assistant laid out what
+the repository already had -- reads in windows-ioring-sys, the same `SharedHandle` type on both
+sides, thread-pool completion delivery, and no buffer pool anywhere -- and put three questions.
+
+- **Who issues the reads.** The engineer left it to the assistant ("you decide!"). Four ways were
+  considered:
+  - *Hold the endpoint as an `EndpointHandle`, address the handle raw, keep an observer in each
+    read's sidecar* -- chosen. It uses only what both lower crates already publish: the
+    `EndpointHandle` is the existing route from an endpoint into a backend, and the ring is that
+    backend. The observer keeps the handle open until the completion pops, which is the raw
+    address's whole contract, so the `unsafe` is local and its argument is one sentence.
+  - *A `FileTarget` for `EndpointHandle` in windows-ioring-sys.* Safe at the call site, but it makes
+    the ring crate depend on windows-overlapped-io-sys, two crates kept apart on purpose
+    (duplicate-then-decide in the ring crate's notes). Set aside as re-coupling them for one consumer.
+  - *Expose the endpoint's `SharedHandle` from windows-overlapped-io-sys.* Its clones could become
+    second endpoints, which is exactly what that crate's observer decision made structural to avoid.
+  - *A second handle per file for the ring.* Twenty thousand more kernel objects at the top end, and
+    the engineer had already ruled the same trade the other way for probes: "a small user mode
+    allocation beats a second kernel mode allocation".
+- **Owned or registered buffers.** The engineer chose owned. Registered buffers were the more
+  natural reading of "associated with the ring", but lending one registered buffer to the client
+  while the ring fills others is something windows-ioring-sys does not offer, so they would have
+  started with a change to that crate.
+- **Order of chunks within a file.** In order would hold completed later chunks, and their buffers,
+  until earlier ones arrive. The engineer chose delivery as reads complete and left reordering to the
+  consumer, which the range on every chunk allows.
+- **Whether a CQ is needed.** Only the end of a chunk's use flows back, and ownership already says it:
+  dropping the chunk returns the buffer. A CQ would have made the client post what the drop does.
