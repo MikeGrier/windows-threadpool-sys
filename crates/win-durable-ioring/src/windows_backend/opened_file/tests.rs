@@ -42,7 +42,7 @@ fn a_cached_file_claims_best_effort_needs_no_alignment_and_has_no_write_through(
     assert_eq!(Cached::WARRANTY, WarrantyClass::BestEffort);
     assert_eq!(Cached::CAPABILITIES, Capabilities::NONE);
     assert_eq!(Cached::FLAGS, 0);
-    assert!(!Cached::LOCAL_DEVICE_ONLY);
+    const { assert!(!Cached::LOCAL_DEVICE_ONLY) };
     assert_eq!(Cached::geometry(), Geometry::UNALIGNED);
 }
 
@@ -54,7 +54,7 @@ fn an_unbuffered_file_claims_shared_device_needs_a_sector_and_offers_write_throu
         Capabilities::NONE.with_write_through()
     );
     assert_eq!(Unbuffered::FLAGS, FILE_FLAG_NO_BUFFERING);
-    assert!(Unbuffered::LOCAL_DEVICE_ONLY);
+    const { assert!(Unbuffered::LOCAL_DEVICE_ONLY) };
     assert_eq!(
         Unbuffered::geometry(),
         Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE).expect("a power of two")
