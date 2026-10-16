@@ -527,3 +527,28 @@ the regrow.
 **What was weighed.** `with_capacity` raises a size below 72 to 72 and does not refuse it: the call's own
 refusal of a smaller buffer is a fact about the call, and the request has no use for a first size it could not
 make.
+
+## D-25: the SDDL conversion
+
+**Text only, hiding the binary form.** The engineer asked whether the descriptor could be exposed only
+as SDDL, so that no conversion function is public. The binary form is already public in a published
+crate (`capture`, `as_ptr`, `as_bytes`), so hiding it would be a breaking removal that still converts
+inside, and a request has to hold the binary form anyway: `CreateFileW` takes a pointer, and a
+request is built on one thread and performed on another ([D-8](DESIGN-NOTES.md#d-8)). Storing the
+text and converting in `perform` would have moved the failure to the worker and repeated the
+conversion, and the string would still have been validated at construction. The restriction was
+pointed at durable-ioring instead, which decides which of this crate's parameters an open may use
+([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), and the engineer's ruling was that the
+conversion functions are public here.
+
+**Trusting the reported length.** The first version of `to_sddl` read the text through the length
+Windows reports, which is documented to include the terminator. A probe on strings of several shapes
+found the figure is not reliable, and the first symptom was a NUL on the end of one rendering and
+a refusal for several others that Windows had not made: the check this crate made on the length was
+what failed. Reading up to the terminator is the standard contract for a string Windows returns, and
+needs no length.
+
+**A mask newtype, not a bare integer.** The mask is over `OBJECT_SECURITY_INFORMATION`, which Windows
+extends (labels, attributes, scopes, the protected and unprotected DACL bits), so the five parts the
+documentation names are constants and the rest travel through `from_bits`, as the flag types of
+[D-12](DESIGN-NOTES.md#d-12) do.

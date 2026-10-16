@@ -814,3 +814,69 @@ this crate's, and its reasoning is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md)
 **Superseded by [WV-D-10](../win-volume-sys/DESIGN-NOTES.md#wv-d-10).** Moved to `win-volume-sys` by
 `NR-2.8`, with its declared blind spot: no real entry has been observed, because attaching a
 virtual disk needs an elevated token.
+
+## <a id="d-25"></a>D-25: The SDDL conversion is public in both directions, and the length Windows reports for the text is not trusted
+
+**Status: decided and implemented** by `NR-3.1` (`src/security/sddl.rs`).
+
+**What is decided.**
+
+- **Both directions are public methods of `SecurityDescriptor`**: `from_sddl`, which takes SDDL text
+  and returns the descriptor, and `to_sddl`, which writes the parts a `SecurityInformation` mask
+  selects as text. They are the documented `ConvertStringSecurityDescriptorToSecurityDescriptorW` and
+  `ConvertSecurityDescriptorToStringSecurityDescriptorW`. Hiding one form so that no conversion is
+  exposed was considered and set aside: the binary form is already public (`capture`, `as_ptr`,
+  `as_bytes`) in a published crate, so hiding it would be a breaking removal and would still convert
+  inside. The engineer, 2026-10-15: "go forward with the conversion functions as public".
+- **The input is a `Wtf16String`**, which is what the crate's other entries take for text, and a
+  string with an interior NUL is refused **before the call** as `InteriorNul`, with
+  `ERROR_INVALID_PARAMETER`: Windows reads up to the NUL and would accept what is before it, which is
+  a different descriptor than the string says.
+- **Nothing is parsed or defaulted here.** Windows decides what the text means. There is no revision
+  parameter, since `SDDL_REVISION_1` is the only revision defined, and the mask is a newtype over the
+  raw bits ([D-12](#d-12)), with the five documented parts named and `from_bits` for the rest.
+- **A string Windows refuses is `InvalidSddl` with Windows' own code**, read in the statement after
+  the call; a refusal to write is `ToSddl`. Both are new variants of the existing
+  `#[non_exhaustive]` `SecurityCaptureFailure`, so nothing breaks.
+- **What Windows returns is copied and freed.** Both calls return `LocalAlloc` memory. The descriptor
+  is copied into the crate's own self-relative blob by the existing `capture`, and the text into a
+  `Wtf16String`; the original is freed by a guard on every path, so no raw pointer reaches the caller
+  ([D-8](#d-8)).
+- **The length Windows reports for the text is not used.** The text is read up to the terminator the
+  documentation promises.
+
+**The text form is not canonical.** Two strings can name one descriptor (a rights mask and its alias),
+and what `to_sddl` returns is Windows' rendering, not necessarily the string a descriptor was built
+from. Descriptors compare by their bytes.
+
+**Measured on 2026-10-15**, Windows 11:
+
+- The length reported with the written text is the string's length plus one for some strings (the
+  documented figure, the terminator counted), plus two for others, and plus none for others
+  (`D:P(A;;GA;;;WD)` is 15 characters and reports 16; `D:(A;;GA;;;WD)(A;;GR;;;BA)` is 26 and reports
+  28; `O:BA` is 4 and reports 4), so a copy that trusted it would end in a NUL or lose the last
+  character.
+- Refusals: text that is not SDDL, and lower-case parts and aliases (`d:p(a;;ga;;;wd)`), are
+  `ERROR_INVALID_PARAMETER`; an unknown ACE type is `ERROR_INVALID_DATATYPE`; an unknown SID alias is
+  `ERROR_INVALID_SID`; a DACL of 6000 entries is `ERROR_INVALID_ACL`, where 1500 is accepted; an
+  unpaired surrogate is `ERROR_INVALID_PARAMETER` and does not panic.
+- An empty string is accepted and is a descriptor with no parts. `D:` is an empty DACL,
+  `D:NO_ACCESS_CONTROL` a NULL one, and `O:BA` has no DACL, so the three grants `AclState` keeps apart
+  are all reachable from text.
+- A mask selects what is written: owner, group and DACL separately and together; a part the
+  descriptor lacks, and an empty mask, write nothing.
+- A descriptor written as text and read back is equal to the original for every canonical string
+  tried, an owner, a group, a DACL, a SACL and a NULL DACL among them. A SACL is written with no
+  privilege, since the descriptor is in memory.
+- A file created with a descriptor from text is given its DACL, read back through `GetSecurityInfo`.
+  A generic right is stored as the file rights it maps to (`GA` reads back as `FA`), which is the
+  file system's, not this conversion's.
+
+**Not established.** Whether any descriptor and mask make Windows refuse to write text was not found,
+so `ToSddl`'s kind is reached by no test ([sabotage.json](sabotage.json) says so). Whether every
+binary descriptor survives the round trip was not tried beyond the strings above: ACEs of types SDDL
+has no name for were not. That the memory Windows allocated is freed is read from the code, not
+observed.
+
+**Scheduled work:** none in this crate. [DI-13.5](../durable-ioring/CHECKLIST.md) takes the release
+that carries this.

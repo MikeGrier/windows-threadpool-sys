@@ -67,14 +67,8 @@ commit, and `NR-3.1` and `NR-3.2` independently of both. Each item ends with a `
 > [DI-13.6](../durable-ioring/CHECKLIST.md) in `crates/durable-ioring` wait on `NR-3.1` and `NR-3.2`;
 > `DI-14.3` needs the first and `DI-15.4` the second.
 
-- [ ] **NR-3.1** -- **A `SecurityDescriptor` from an SDDL string.** This crate owns self-relative
-  descriptors, captured from raw pointers, and has no way to make one from text, so a caller wanting
-  to create a file with a given security has to build the descriptor itself. A constructor over the
-  documented `ConvertStringSecurityDescriptorToSecurityDescriptorW`, freeing what it returns with
-  `LocalFree`, giving this crate's own owned type with no raw pointer in the caller's hands. Tests: a
-  descriptor from a string reads back the same DACL; an invalid string is the Win32 error, unaltered;
-  a descriptor from a string is what `OpenFile::with_security` creates a file with, read back with a
-  documented query. A `feat`, released on its own. Independent of `NR-3.3` to `NR-3.6`.
+- [x] **NR-3.1** -- `SecurityDescriptor::from_sddl` and `to_sddl`, the SDDL conversion public in both directions. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#nr-31-sddl)
+
   **Next:** `NR-3.2`, or `NR-3.3` if the path work comes first.
 
 - [ ] **NR-3.2** -- **A `ReOpenFile` entry**, beside `OpenFile` and `OpenFileByIdentifier`, one entry

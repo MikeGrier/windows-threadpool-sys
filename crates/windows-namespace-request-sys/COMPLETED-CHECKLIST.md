@@ -249,3 +249,27 @@ workspace matched on the old text. Three sabotage entries cover the snapshot and
 report, with a control.
 
 What this left to do is the same swap in the enumeration crate, `ERR-1`.
+
+## Moved 2026-10-15 23:54:41 -04:00 -- NR-3.1: the SDDL conversion
+
+### <a id="nr-31-sddl"></a>NR-3.1 -- `SecurityDescriptor::from_sddl` and `to_sddl`, the SDDL conversion public in both directions. *(completed 2026-10-15 23:54:41 -04:00)*
+
+This is the NR-3.1 of the open-surface milestone. The earlier archive entry [`nr-31`](#nr-31) is a
+different item that had the same number before the milestone was renumbered, which is why this anchor
+carries a suffix.
+
+The item asked for a constructor from an SDDL string; the engineer ruled that the conversion functions
+are public, in both directions, so `to_sddl` came with it, and a `SecurityInformation` mask selects the
+parts it writes. The decision is [D-25](DESIGN-NOTES.md#d-25). The code is the commit that adds
+`src/security/sddl.rs`.
+
+Windows allocates what it returns, which is copied into the crate's own descriptor or string and freed
+on every path, so no raw pointer reaches a caller. A string Windows refuses is its own code, unaltered;
+an interior NUL is refused first. The length Windows reports for the written text was measured to be
+unreliable and is not used. A file created through `OpenFile::with_security` with a descriptor from text
+is given its DACL, read back through `GetSecurityInfo`.
+
+Thirteen sabotage entries cover it, two of them declared blind spots: that the memory Windows allocated
+is freed, and the kind reported when Windows refuses to write text, which no input was found to
+provoke. A control entry is included. What this left to do is `NR-3.2`, and the release that
+[DI-13.5](../durable-ioring/CHECKLIST.md) waits on.
