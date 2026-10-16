@@ -3,7 +3,7 @@
 
 use std::io;
 
-use windows_overlapped_io_sys::{EndpointObserver, UnassociatedEndpoint};
+use windows_overlapped_io_sys::{EndpointHandle, EndpointObserver, UnassociatedEndpoint};
 use wtf_string::Wtf16Str;
 
 use crate::OpenError;
@@ -11,17 +11,17 @@ use crate::OpenError;
 #[cfg(test)]
 mod tests;
 
-/// A file opened by path, and kept open as an endpoint of windows-overlapped-io-sys.
+/// A file opened by path, and kept open as an endpoint of windows-overlapped-io-sys, consumed into
+/// the form a completion backend holds.
 ///
 /// Opened read-only, sharing read, write and delete -- so a writer can keep writing to the file,
 /// and anyone can delete it, while it is held -- and for overlapped I/O, so reads can later
-/// complete on the thread pool. The handle closes when the `HeldFile` and every
+/// complete through an I/O ring. The handle closes when the `HeldFile` and every
 /// [`EndpointObserver`] taken from it have dropped.
 #[derive(Debug)]
 pub struct HeldFile {
-    // Kept so the handle stays open and, from the iteration that reads bytes, so the endpoint is
-    // the one thing that submits I/O on it.
-    endpoint: UnassociatedEndpoint,
+    // The endpoint as a backend holds it (TW-D-10): the reading layer is its one submitter.
+    endpoint: EndpointHandle,
     start_offset: u64,
 }
 
@@ -40,7 +40,7 @@ impl HeldFile {
     pub fn open(path: &Wtf16Str) -> io::Result<Self> {
         let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;
         Ok(Self {
-            endpoint,
+            endpoint: endpoint.into_endpoint_handle(),
             start_offset: 0,
         })
     }
@@ -92,5 +92,14 @@ impl HeldFile {
     #[must_use]
     pub fn observer(&self) -> EndpointObserver {
         self.endpoint.observer()
+    }
+
+    /// The handle as its one submitter holds it, for the reading engine to address reads to.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the reading engine (TW-5.5) submits through it")
+    )]
+    pub(crate) fn endpoint_handle(&self) -> &EndpointHandle {
+        &self.endpoint
     }
 }

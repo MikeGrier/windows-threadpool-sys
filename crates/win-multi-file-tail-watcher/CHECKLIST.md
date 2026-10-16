@@ -94,9 +94,7 @@ for the same reason as M2: every stop and continuation can then be tested determ
 ([TW-D-15](DESIGN-NOTES.md#tw-d-15)). These items replace TW-4+.1 and TW-4+.2, which planned the reads
 through `ThreadpoolIo`.
 
-- [ ] **TW-5.1** -- **Hold each file's endpoint as an `EndpointHandle`**, consumed from the
-  `UnassociatedEndpoint` when the file is opened. Observers, probes and `HeldFile`'s queries are
-  unchanged. ([TW-D-10](DESIGN-NOTES.md#tw-d-10))
+- [x] **TW-5.1** -- `HeldFile` holds its endpoint as an `EndpointHandle`, consumed from the `UnassociatedEndpoint` when the file is opened, and lends it to the crate for the reading engine. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-51)
 
 - [ ] **TW-5.2** -- **The buffer pool and the chunk.** Owned buffers of one size, the size and count
   set by the caller when the layer is created. A taken buffer is lent as a chunk that dereferences to

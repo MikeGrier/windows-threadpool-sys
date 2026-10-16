@@ -452,3 +452,30 @@ fn plain_open_starts_at_zero() {
     let held = HeldFile::open(&wtf(&dir.file("p.log", b"abc"))).expect("open");
     assert_eq!(held.start_offset(), 0);
 }
+
+#[test]
+fn the_endpoint_handle_is_the_handle_every_observer_shares() {
+    use std::os::windows::io::AsRawHandle;
+
+    let dir = TempDir::new("held-endpoint");
+    let path = dir.file("a.log", b"abc");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    let raw = held.endpoint_handle().as_raw_handle();
+    for observer in [held.observer(), held.observer()] {
+        // SAFETY: borrowed only to compare its value; nothing is issued through it.
+        let observed = unsafe { observer.handle() }.as_raw_handle();
+        assert_eq!(observed, raw);
+    }
+    let other = HeldFile::open(&wtf(&path)).expect("open again");
+    assert_ne!(other.endpoint_handle().as_raw_handle(), raw);
+}
+
+#[test]
+fn the_endpoint_handle_stays_open_while_an_observer_holds_it_after_the_file_drops() {
+    let dir = TempDir::new("held-endpoint-drop");
+    let path = dir.file("a.log", b"abcdef");
+    let held = HeldFile::open(&wtf(&path)).expect("open");
+    let observer = held.observer();
+    drop(held);
+    assert_eq!(observer.file_len().expect("still open"), 6);
+}

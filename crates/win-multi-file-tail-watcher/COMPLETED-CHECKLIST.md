@@ -828,3 +828,22 @@ Crate-internal (a `chore`): `tests/shutdown_every_state.rs`, public API only. Th
   is rung through a duplicate; its own doorbell, also duplicated, stays quiet.
 - **Checked against three mutants** by hand: `Drop` not setting the flag, the probe ignoring it, and
   the report ignoring it. Each fails these tests.
+
+## Moved 2026-10-16 00:35:34 -04:00 -- TW-5.1: the endpoint held as a backend holds it
+
+### <a id="tw-51"></a>TW-5.1 -- `HeldFile` holds its endpoint as an `EndpointHandle`, consumed from the `UnassociatedEndpoint` when the file is opened, and lends it to the crate for the reading engine. *(completed 2026-10-16 00:35:34 -04:00)*
+
+Crate-internal (a `chore`): `src/held_file.rs`. The decision is
+[TW-D-10](DESIGN-NOTES.md#tw-d-10), amended for the reads.
+
+- **The open is unchanged**: `UnassociatedEndpoint::open` with the same arguments, then
+  `into_endpoint_handle`, the route windows-overlapped-io-sys gives an endpoint into a backend.
+  Observers, probes, `len` and `open_at` are as before, and no public signature changed.
+- **`endpoint_handle`** lends the `EndpointHandle` to the crate, under `expect(dead_code)` until the
+  reading engine (TW-5.5) submits through it.
+- **What makes the change hold is the type**: an `EndpointHandle` is not `Clone` and can only be made
+  by consuming an endpoint, so there is no sabotage entry for it. The four entries that target the
+  open line were re-run against the new code and behaved as declared.
+
+Tested: the handle the `EndpointHandle` lends is the handle every observer shares, and a second hold
+of the same path has another; an observer still reads the length after the `HeldFile` drops.
