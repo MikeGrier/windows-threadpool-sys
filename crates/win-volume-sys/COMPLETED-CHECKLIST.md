@@ -67,3 +67,20 @@ not carried over. The decision is [WV-D-8](DESIGN-NOTES.md#wv-d-8). The code is 
 Sabotage entries cover the output buffer's room, both halves of the size check, a node read from one
 byte, and the kind of a malformed reply, with a control. The control code is a declared survivor, for
 the reason in `WV-D-8`. What this left to do is `WV-2.4`.
+
+## Moved 2026-10-15 22:41:25 -04:00 -- WV-2.4: storage properties
+
+### <a id="wv-24"></a>WV-2.4 -- The storage property queries (`IOCTL_STORAGE_QUERY_PROPERTY`): the shared mechanics, the generic query, the unique id and the disk NUMA node. *(completed 2026-10-15 22:41:25 -04:00)*
+
+Ported from `NR-2.3` and `NR-2.4` of the namespace crate, as `storage_device_unique_id`,
+`storage_device_numa` and `query_storage_property` over a private `storage_property` module. The
+request types, `Request`, `CapturedHandle`, the typed `Malformed` and `Unstable` errors and the
+generic query's reply wrapper were not carried over; a malformed reply is `InvalidData`, and the
+generic reply is the bytes. The decision is [WV-D-9](DESIGN-NOTES.md#wv-d-9), which supersedes `D-22`
+and `D-23`. The code is the commit that adds `src/storage_property.rs`.
+
+`invalid_data` and `is_more_data` moved into `device_control.rs`, so the extents function and the
+storage queries share one definition of each, and the extents sabotage entries that named the old
+places were retargeted. Two boundaries the namespace crate's tests did not reach are now pinned, a
+reply shorter than the size it names in a buffer of exactly that size, and a more-data reply naming
+the size already given, each with a sabotage entry. What this left to do is `WV-2.5`.

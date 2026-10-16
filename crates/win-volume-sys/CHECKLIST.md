@@ -41,9 +41,7 @@ the workspace's release-scope rule where the two do not have to build together.
 
   **Next:** `WV-2.4`.
 
-- [ ] **WV-2.4** -- **Storage properties.** The shared `IOCTL_STORAGE_QUERY_PROPERTY` mechanics, the
-  generic query, the unique-id entry and the disk NUMA entry, with the per-property short-buffer
-  table in the module documentation.
+- [x] **WV-2.4** -- The storage property queries (`IOCTL_STORAGE_QUERY_PROPERTY`): the shared mechanics, the generic query, the unique id and the disk NUMA node. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-24)
 
   **Next:** `WV-2.5`.
 
