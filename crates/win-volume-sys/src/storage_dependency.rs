@@ -368,13 +368,15 @@ impl StorageDependencyInfo {
 ///
 /// `handle` is a handle to a volume, a root directory, or with [`StorageDependencyFlags::DISK_HANDLE`]
 /// a disk, and needs no access to it: a handle opened with none is enough, which an ordinary account
-/// can open. A volume that is not on a virtual disk, and hosts none, is not an error to ask about:
-/// the entries are empty.
+/// can open. Without [`StorageDependencyFlags::HOST_VOLUMES`], a volume that hosts nothing is not an
+/// error to ask about: the entries are empty. With it, a volume that is not on a virtual disk is
+/// `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, the call's own answer that there is no host to name.
 ///
 /// # Example
 ///
-/// The volumes that host the volume `handle` names, which for a volume on a VHD is the volume
-/// holding the file. This runs anywhere, and the list is empty unless the volume is virtual:
+/// The volume that hosts the volume `handle` names, which for a volume on a VHD is the volume
+/// holding the file. A volume that is not on a virtual disk, such as an ordinary `C:`, has none, and
+/// the call says so with `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`:
 ///
 /// ```no_run
 /// use std::fs::OpenOptions;
@@ -384,18 +386,27 @@ impl StorageDependencyInfo {
 ///     StorageDependencyFlags, StorageDependencyVersion, storage_dependency_information,
 /// };
 ///
+/// /// `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`.
+/// const NOT_VIRTUAL_DISK: u32 = 0xC03A_0015;
+///
 /// let volume = OpenOptions::new()
 ///     .access_mode(0)
 ///     .share_mode(7)
 ///     .open(r"\\.\C:")?;
 ///
-/// let info = storage_dependency_information(
+/// match storage_dependency_information(
 ///     &volume,
-///     StorageDependencyFlags::NONE,
+///     StorageDependencyFlags::HOST_VOLUMES,
 ///     StorageDependencyVersion::V2,
-/// )?;
-/// for entry in info.entries() {
-///     println!("{:?}", entry.host_volume_name());
+/// ) {
+///     Ok(info) => {
+///         for entry in info.entries() {
+///             println!("{:?}", entry.host_volume_name());
+///         }
+///     }
+///     // Not on a virtual disk: nothing hosts it.
+///     Err(error) if error.raw_os_error() == Some(NOT_VIRTUAL_DISK.cast_signed()) => {}
+///     Err(error) => return Err(error),
 /// }
 /// # Ok::<(), std::io::Error>(())
 /// ```
