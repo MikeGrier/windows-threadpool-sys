@@ -4,7 +4,7 @@
 //!
 //! Each foundation already proves its own independence in its own module: a
 //! duplicated handle outlives its source, a captured descriptor outlives the
-//! absolute one it was built from, a prepared path outlives the string it came
+//! absolute one it was built from, a request's path outlives the string it came
 //! from. What only a test at this level can show is the **composite** -- one
 //! value holding all three, outliving *every* input at once and still working
 //! on a thread that never saw any of them.
@@ -19,12 +19,12 @@ use wtf_string::Wtf16String;
 
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
 use crate::security::tests::Absolute;
-use crate::{AclState, CapturedHandle, PreparedPath, SecurityAttributes, SecurityDescriptor};
+use crate::{AclState, CapturedHandle, OpenFile, SecurityAttributes, SecurityDescriptor};
 
 /// Everything an entry will hold, standing in for the entries themselves,
 /// which land with M25.
 struct Foundations {
-    path: PreparedPath,
+    path: OpenFile,
     directory: CapturedHandle,
     file: CapturedHandle,
     security: SecurityAttributes,
@@ -48,7 +48,7 @@ impl Foundations {
             .expect("capture a descriptor");
 
         Self {
-            path: crate::prepare(&Wtf16String::from(text)).expect("prepare the fixture path"),
+            path: OpenFile::new(Wtf16String::from(text)).expect("build the request"),
             directory: CapturedHandle::capture(directory.as_handle())
                 .expect("capture the directory handle"),
             file: CapturedHandle::capture(file.as_handle()).expect("capture the file handle"),
@@ -59,7 +59,7 @@ impl Foundations {
     /// Exercises every foundation, so a value that merely still exists is not
     /// mistaken for one that still works.
     fn assert_usable(&self, expected_path: &str) {
-        assert_eq!(self.path.as_wtf16().to_string_lossy(), expected_path);
+        assert_eq!(self.path.win32_path().to_string_lossy(), expected_path);
 
         let directory = File::from(
             self.directory

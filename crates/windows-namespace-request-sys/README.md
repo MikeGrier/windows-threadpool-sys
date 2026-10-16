@@ -75,17 +75,18 @@ use std::fs;
 use std::os::windows::io::AsHandle;
 use std::thread;
 
-use windows_namespace_request_sys::{CapturedHandle, prepare};
+use windows_namespace_request_sys::{CapturedHandle, OpenFile};
 use wtf_string::Wtf16String;
 
 let path = std::env::temp_dir().join(format!("wnrs-readme-{}.tmp", std::process::id()));
 fs::write(&path, b"example")?;
 
-// Resolved here rather than on the worker: the process current directory is
-// shared mutable state that any thread can change in between.
+// Built here rather than on the worker: a relative path is fixed to the process
+// current directory now, which is shared mutable state that any thread can
+// change in between. This one is absolute, so it is handed over as given.
 let text = path.to_str().expect("a temporary path is valid UTF-8");
-let prepared = prepare(&Wtf16String::from(text))?;
-assert_eq!(prepared.as_wtf16().to_string_lossy(), text);
+let request = OpenFile::new(Wtf16String::from(text))?;
+assert_eq!(request.win32_path().to_string_lossy(), text);
 
 // An owned duplicate, so the captured parameters cannot be left pointing at a
 // handle the caller has since closed.

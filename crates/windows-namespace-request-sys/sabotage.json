@@ -547,8 +547,8 @@
       "file": "src/anchored.rs",
       "expect": "caught",
       "why": "The Win32 code is the cause and is reached through `source`.",
-      "find": ["            Self::Win32(error) => Some(error),\n"],
-      "replace": ["            Self::Win32(_) => None,\n"]
+      "find": ["            Self::CurrentDirectory(error) => Some(error),\n"],
+      "replace": ["            Self::CurrentDirectory(_) => None,\n"]
     },
     {
       "name": "NR-3.3: BLIND SPOT: the directory is read for a path that cannot be grafted",
@@ -565,6 +565,78 @@
       "why": "A control: addition commutes, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        .map_or(0, |last| last + 1);\n"],
       "replace": ["        .map_or(0, |last| 1 + last);\n"]
+    },
+    {
+      "name": "NR-3.4: a path with an interior NUL is accepted",
+      "file": "src/anchored.rs",
+      "expect": "caught",
+      "why": "Win32 reads a path up to its first NUL, so the request would act on a shorter path than the one named.",
+      "find": ["        if given.has_interior_nul() {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3.4: OpenFile reports the path handed to Win32 as the path given",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The two accessors are how a caller sees what the graft did; swapped, they report nothing.",
+      "find": ["    pub fn win32_path(&self) -> &Wtf16Str {\n        self.path.win32()\n"],
+      "replace": ["    pub fn win32_path(&self) -> &Wtf16Str {\n        self.path.given()\n"]
+    },
+    {
+      "name": "NR-3.4: OpenFile reports the path given as the path handed to Win32",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The other direction of the swap above.",
+      "find": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.given()\n"],
+      "replace": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.win32()\n"]
+    },
+    {
+      "name": "NR-3.4: OpenFile hands CreateFileW the path as given and not the grafted one",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The graft is the point of capturing the directory: a relative path handed over as given is resolved when the call is made, against whatever the directory is by then. Only a test that changes the directory after building the request can tell, which is why it runs in a child process.",
+      "find": ["                    self.path.win32_terminated(),\n"],
+      "replace": ["                    Wtf16String::from_units(self.path.given().as_units()).as_terminated_ptr(),\n"]
+    },
+    {
+      "name": "NR-3.4: WatchDirectory reports the path handed to Win32 as the path given",
+      "file": "src/watch.rs",
+      "expect": "caught",
+      "why": "As for OpenFile.",
+      "find": ["    pub fn win32_path(&self) -> &Wtf16Str {\n        self.path.win32()\n"],
+      "replace": ["    pub fn win32_path(&self) -> &Wtf16Str {\n        self.path.given()\n"]
+    },
+    {
+      "name": "NR-3.4: WatchDirectory reports the path given as the path handed to Win32",
+      "file": "src/watch.rs",
+      "expect": "caught",
+      "why": "The other direction of the swap above.",
+      "find": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.given()\n"],
+      "replace": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.win32()\n"]
+    },
+    {
+      "name": "NR-3.4: WatchDirectory hands the call the path as given and not the grafted one",
+      "file": "src/watch.rs",
+      "expect": "caught",
+      "why": "As for OpenFile: observable only after the directory has changed.",
+      "find": ["                    self.path.win32_terminated(),\n"],
+      "replace": ["                    Wtf16String::from_units(self.path.given().as_units()).as_terminated_ptr(),\n"]
+    },
+    {
+      "name": "NR-3.5: ResolveFullPath accepts a path with an interior NUL",
+      "file": "src/full_path.rs",
+      "expect": "caught",
+      "why": "GetFullPathNameW would resolve the part before the NUL and report success for a path that was not the one named.",
+      "find": ["        if path.has_interior_nul() {\n            return Err(PathCaptureError::InteriorNul);\n        }\n        Ok(Self { path })\n"],
+      "replace": ["        if false {\n            return Err(PathCaptureError::InteriorNul);\n        }\n        Ok(Self { path })\n"]
+    },
+    {
+      "name": "NR-3.5: control, the NUL test written as a search of the units",
+      "file": "src/full_path.rs",
+      "expect": "survives",
+      "why": "A control: a string has an interior NUL when its units contain a zero, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        if path.has_interior_nul() {\n            return Err(PathCaptureError::InteriorNul);\n"],
+      "replace": ["        if path.as_units().contains(&0) {\n            return Err(PathCaptureError::InteriorNul);\n"]
     }
   ]
 }

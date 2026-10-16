@@ -5,7 +5,7 @@ use std::io;
 use std::os::windows::io::OwnedHandle;
 use std::path::{Path, PathBuf};
 
-use windows_namespace_request_sys::{PathFailure, prepare};
+use windows_namespace_request_sys::{OpenFile, PathCaptureError};
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{CREATE_NEW, OPEN_ALWAYS, OPEN_EXISTING};
 use wtf_string::Wtf16String;
@@ -50,7 +50,7 @@ fn a_long_path_is_made_verbatim_and_a_short_one_never_is() {
 
 #[test]
 fn a_relative_path_that_resolves_long_is_made_verbatim() {
-    // Short as given, long once rooted: the request refuses the resolved form as well.
+    // Short as given, long once rooted: the resolved form is what the limit is judged against.
     let cwd = std::env::current_dir().expect("a current directory");
     let room = 259usize.saturating_sub(cwd.as_os_str().len());
     if room < 4 {
@@ -83,17 +83,13 @@ fn verbatim_prefixes_a_drive_path_and_a_unc_path_and_leaves_the_rest_alone() {
 }
 
 #[test]
-fn a_file_under_a_path_longer_than_an_ordinary_one_opens_and_the_request_alone_would_refuse_it() {
+fn a_file_under_a_path_longer_than_an_ordinary_one_opens() {
     let temp = TempFile::new("or-long");
     let root = temp.0.with_extension("deep");
     let directory = directory_deeper_than_an_ordinary_path(&root);
     fs::create_dir_all(&directory).expect("create the deep directory");
     let file = directory.join("file.txt");
     fs::write(&file, b"deep").expect("create the file");
-
-    // The premise the conversion exists for: the request crate refuses this path as given.
-    let refused = prepare(&Wtf16String::from_os_str(file.as_os_str())).expect_err("too long");
-    assert_eq!(refused.failure(), PathFailure::PathTooLong);
 
     let handle = open(&file, read_existing()).expect("open through the verbatim form");
     assert_eq!(
@@ -160,8 +156,12 @@ fn a_path_that_cannot_name_a_file_is_invalid_input() {
     let error = open(Path::new(""), read_existing()).expect_err("empty");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 
-    let with_nul = prepare(&Wtf16String::from("a\0b")).expect_err("interior NUL");
+    let with_nul = OpenFile::new(Wtf16String::from("a\0b")).expect_err("interior NUL");
+    assert!(matches!(with_nul, PathCaptureError::InteriorNul));
     assert_eq!(path_error(with_nul).kind(), io::ErrorKind::InvalidInput);
+
+    let error = open(Path::new("a\0b"), read_existing()).expect_err("interior NUL");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[test]

@@ -5,8 +5,9 @@
 //! That crate carries every parameter of `CreateFileW` and decides none of them, so what an open
 //! means is decided here: [`Parameters`] is what [`FileOptions`](super::FileOptions) asks for, and
 //! [`open`] makes the call. Opening used to go through `std::fs::OpenOptions`, and a caller must
-//! see no difference, so the two things std does that `CreateFileW` alone does not are done here
-//! too: a path longer than `MAX_PATH` is opened as a verbatim one, and a file that is both created
+//! see no difference, so the things std does that `CreateFileW` alone does not are done here
+//! too: an empty path is refused as invalid input, a path longer than `MAX_PATH` is opened as a
+//! verbatim one, and a file that is both created
 //! and truncated is opened with `OPEN_ALWAYS` and then emptied, as std does to avoid
 //! `CREATE_ALWAYS`'s semantics (rust-lang/rust#115745).
 
@@ -17,9 +18,8 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::OwnedHandle;
 use std::path::{Path, PathBuf};
 
-use windows_namespace_request_sys::PathError;
+use windows_namespace_request_sys::PathCaptureError;
 use windows_namespace_request_sys::open::OpenFile;
-use windows_namespace_request_sys::prepare;
 use windows_sys::Win32::Foundation::MAX_PATH;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -49,8 +49,16 @@ const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u1
 /// Open `path` as `parameters` says, shared for reading, writing and deletion as std opens a file.
 pub(super) fn open(path: &Path, parameters: Parameters) -> io::Result<OwnedHandle> {
     let path = verbatim_if_long(path)?;
-    let prepared = prepare(&Wtf16String::from_os_str(path.as_os_str())).map_err(path_error)?;
-    let request = OpenFile::new(prepared)
+    // An empty path names nothing, and std reports it as invalid input; the request carries it to
+    // Win32 unaltered, which would answer with a code for a missing path instead.
+    if path.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the path was empty",
+        ));
+    }
+    let request = OpenFile::new(Wtf16String::from_os_str(path.as_os_str()))
+        .map_err(path_error)?
         .with_desired_access(parameters.access)
         .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .with_creation_disposition(parameters.disposition)
@@ -68,6 +76,9 @@ pub(super) fn open(path: &Path, parameters: Parameters) -> io::Result<OwnedHandl
 
 /// `path` as it should be handed to the request: itself, unless it or its resolved form is longer
 /// than an ordinary path may be, in which case its verbatim form, which has no such limit.
+///
+/// The request no longer limits the length of a path itself. The conversion is kept because std
+/// makes it, and an open here must not differ from one made through std.
 fn verbatim_if_long(path: &Path) -> io::Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
     let longest = MAX_PATH as usize - 1;
@@ -104,10 +115,12 @@ fn verbatim(absolute: &Path) -> PathBuf {
 
 /// A path the request refused, as the error an open reports: the Windows code if the refusal came
 /// from a call, and invalid input if the path itself could not mean a file.
-fn path_error(error: PathError) -> io::Error {
-    match error.raw_os_error() {
-        Some(code) => io::Error::from_raw_os_error(code),
-        None => io::Error::new(io::ErrorKind::InvalidInput, error),
+fn path_error(error: PathCaptureError) -> io::Error {
+    match error {
+        PathCaptureError::CurrentDirectory(code) => {
+            io::Error::from_raw_os_error(raw_code(code.code()))
+        }
+        other => io::Error::new(io::ErrorKind::InvalidInput, other),
     }
 }
 

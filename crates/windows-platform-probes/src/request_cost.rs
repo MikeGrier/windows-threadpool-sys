@@ -130,10 +130,22 @@ use std::time::Instant;
 
 use wtf_string::Wtf16String;
 
-use windows_namespace_request_sys::{CapturedHandle, OpenFile, prepare};
+use windows_namespace_request_sys::{CapturedHandle, OpenFile, ResolveFullPath};
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+/// What this probe measures as "preparing a path": the input copied and resolved through
+/// `GetFullPathNameW`, as the namespace crate's retired `prepare` did.
+///
+/// The namespace crate no longer resolves a path at construction, so this stands in for it to
+/// keep the measurement what it was until the probe is rewritten for what the crate does now.
+fn prepare(path: &Wtf16String) -> Wtf16String {
+    ResolveFullPath::new(path.clone())
+        .expect("the fixed path has no NUL")
+        .perform()
+        .expect("an absolute path resolves")
+}
 
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -305,17 +317,18 @@ pub fn measure() -> Observation {
     // The allocation and normalization a path costs, at two lengths, because
     // the common case and the worst case allocate differently.
     timings.push(time_loop("prepare_short_path", ITERATIONS, || {
-        prepare(&short).expect("an absolute path prepares")
+        prepare(&short)
     }));
     timings.push(time_loop("prepare_long_path", ITERATIONS, || {
-        prepare(&long).expect("an absolute path prepares")
+        prepare(&long)
     }));
 
     // A whole request, which is a prepared path plus the builder chain. This is
     // what the queue would actually carry.
     timings.push(time_loop("build_open_request", ITERATIONS, || {
-        let path = prepare(&short).expect("an absolute path prepares");
+        let path = prepare(&short);
         OpenFile::new(path)
+            .expect("an absolute path builds a request")
             .with_desired_access(GENERIC_READ)
             .with_share_mode(FILE_SHARE_READ)
             .with_creation_disposition(OPEN_EXISTING)
@@ -323,9 +336,7 @@ pub fn measure() -> Observation {
 
     // Cloning the prepared path alone, which is what a request-recycling scheme
     // would avoid paying.
-    let prepared_units = prepare(&short)
-        .expect("an absolute path prepares")
-        .into_wtf16();
+    let prepared_units = prepare(&short);
     timings.push(time_loop("clone_prepared_units", ITERATIONS, || {
         prepared_units.clone()
     }));

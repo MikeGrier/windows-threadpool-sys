@@ -7,7 +7,8 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
-use windows_namespace_request_sys::{OpenFile, PreparedPath, prepare};
+use windows_namespace_request_sys::OpenFile;
+use windows_namespace_request_sys::watch::WatchDirectory;
 use windows_sys::Win32::Foundation::FALSE;
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE,
@@ -65,16 +66,26 @@ impl Drop for Tree {
     }
 }
 
-/// Prepares a path the way a submitting thread would.
-pub fn prepared(path: &Path) -> PreparedPath {
+/// The path as a submitting thread would give it.
+fn wide(path: &Path) -> Wtf16String {
     let text = path.to_str().expect("the tree's paths are valid UTF-8");
-    prepare(&Wtf16String::from(text)).expect("prepare the path")
+    Wtf16String::from(text)
+}
+
+/// A request to open `path`, built the way a submitting thread would build it.
+pub fn open_file(path: &Path) -> OpenFile {
+    OpenFile::new(wide(path)).expect("build the open request")
+}
+
+/// A request to watch `path`, built the way a submitting thread would build it.
+pub fn watch_directory(path: &Path) -> WatchDirectory {
+    WatchDirectory::new(wide(path)).expect("build the watch request")
 }
 
 /// The shape `windows-file-enumeration-sys` and Globazog use: a directory
 /// opened for listing, with no overlapped flag.
 pub fn unassociated_directory(path: &Path) -> OpenFile {
-    OpenFile::new(prepared(path))
+    open_file(path)
         .with_desired_access(FILE_LIST_DIRECTORY)
         .with_share_mode(AUDITED_SHARE)
         .with_creation_disposition(OPEN_EXISTING)

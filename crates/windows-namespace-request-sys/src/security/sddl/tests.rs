@@ -25,7 +25,7 @@ use wtf_string::Wtf16String;
 
 use super::{SecurityDescriptor, SecurityInformation};
 use crate::handle::tests::{Fixture, handle_allocation};
-use crate::{AclState, OpenFile, SecurityAttributes, SecurityCaptureFailure, prepare};
+use crate::{AclState, OpenFile, SecurityAttributes, SecurityCaptureFailure};
 
 use std::os::windows::io::AsRawHandle;
 
@@ -389,7 +389,8 @@ fn dacl_of(handle: *mut c_void) -> String {
 fn create_with(fixture: &Fixture, name: &str, sddl: &str) -> std::os::windows::io::OwnedHandle {
     let path = fixture.directory().join(name);
     let path = path.to_str().expect("the fixture path is valid UTF-8");
-    OpenFile::new(prepare(&text(path)).expect("prepare the path"))
+    OpenFile::new(text(path))
+        .expect("build the request")
         .with_desired_access(FILE_GENERIC_READ | GENERIC_READ | GENERIC_WRITE)
         .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .with_creation_disposition(CREATE_NEW)

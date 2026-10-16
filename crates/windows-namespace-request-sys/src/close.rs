@@ -84,7 +84,6 @@ pub type CloseFn = unsafe extern "system" fn(HANDLE) -> BOOL;
 /// use std::fs;
 ///
 /// use windows_namespace_request_sys::close::CloseRequest;
-/// use windows_namespace_request_sys::prepare;
 /// use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
 /// use wtf_string::Wtf16String;
 ///
@@ -93,7 +92,7 @@ pub type CloseFn = unsafe extern "system" fn(HANDLE) -> BOOL;
 /// fs::create_dir_all(&directory)?;
 /// let text = directory.to_str().expect("a temporary path is valid UTF-8");
 ///
-/// let notification = WatchDirectory::new(prepare(&Wtf16String::from(text))?)
+/// let notification = WatchDirectory::new(Wtf16String::from(text))?
 ///     .with_filter(NotifyFilter::FILE_NAME)
 ///     .perform()?;
 ///

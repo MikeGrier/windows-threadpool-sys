@@ -4555,7 +4555,10 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     let path = wtf_string::Wtf16String::from(text.as_str());
 
     assert!(
-        windows_namespace_request_sys::prepare(&path).is_ok(),
+        windows_namespace_request_sys::ResolveFullPath::new(path)
+            .expect("the path has no NUL")
+            .perform()
+            .is_ok(),
         "preparing {text} must succeed with no {absent}: volume mounted. That \
          outcome is the whole claim -- this says nothing about whether a device \
          is consulted, because a black-box success cannot -- and it is what \

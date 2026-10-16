@@ -172,6 +172,7 @@ fn assert_root_relative_takes_the_share_root(placed_at: &str) {
     );
 
     let resolved = ResolveFullPath::new(Wtf16String::from(r"\foo"))
+        .expect("the path has no NUL")
         .perform()
         .expect("a root-relative path resolves");
 
@@ -203,6 +204,7 @@ fn assert_root_relative_takes_the_share_root(placed_at: &str) {
     // resolver that ignored the leading separator entirely would still satisfy
     // the equality above whenever the child happened to sit at the root.
     let relative = ResolveFullPath::new(Wtf16String::from("foo"))
+        .expect("the path has no NUL")
         .perform()
         .expect("a relative path resolves");
 

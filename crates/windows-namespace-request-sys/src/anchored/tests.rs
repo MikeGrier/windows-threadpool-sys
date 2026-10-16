@@ -335,6 +335,31 @@ fn a_path_whose_shape_refuses_a_graft_reads_no_directory() {
 }
 
 #[test]
+fn an_interior_nul_is_refused_whatever_the_shape_of_the_path() {
+    // A path that would graft, one that would not, and one that is a device: the refusal comes
+    // first and does not depend on the rules.
+    for units in [
+        &[0x0061, 0x0000, 0x0062][..],
+        &[0x0043, 0x003A, 0x005C, 0x0000, 0x0061][..],
+        &[0x0000, 0x0061][..],
+        &[0x004E, 0x0055, 0x004C, 0x0000, 0x0061][..],
+    ] {
+        let error = AnchoredPath::new(Wtf16String::from_units(units)).expect_err("a NUL truncates");
+        assert!(matches!(error, PathCaptureError::InteriorNul), "{units:?}");
+    }
+}
+
+#[test]
+fn a_nul_at_the_end_is_the_one_that_is_refused_too() {
+    // The string's own terminator is not content; a NUL the caller put last is.
+    let error = AnchoredPath::new(Wtf16String::from_units(&[0x0061, 0x0000]))
+        .expect_err("a trailing NUL is content");
+    assert!(matches!(error, PathCaptureError::InteriorNul));
+    assert!(error.to_string().contains("NUL"));
+    assert!(std::error::Error::source(&error).is_none());
+}
+
+#[test]
 fn new_grafts_onto_the_current_directory() {
     let anchored = AnchoredPath::new(Wtf16String::from(r"a\b")).expect("a directory is captured");
     let directory = std::env::current_dir().expect("a current directory");
@@ -515,7 +540,7 @@ fn a_refusal_is_reported_with_its_code_and_not_retried() {
     .expect_err("refused");
 
     assert_eq!(calls, 1);
-    assert!(matches!(error, CurrentDirectoryError::Win32(code) if code.code() == 5));
+    assert!(matches!(error, PathCaptureError::CurrentDirectory(code) if code.code() == 5));
     assert!(error.to_string().contains("GetCurrentDirectoryW"));
     assert!(std::error::Error::source(&error).is_some());
 }
@@ -532,7 +557,7 @@ fn a_size_that_keeps_changing_is_given_up_on() {
     assert_eq!(calls, MAX_ATTEMPTS);
     assert!(matches!(
         error,
-        CurrentDirectoryError::Unstable { attempts } if attempts == MAX_ATTEMPTS
+        PathCaptureError::CurrentDirectoryUnstable { attempts } if attempts == MAX_ATTEMPTS
     ));
     assert!(error.to_string().contains("changed"));
     assert!(std::error::Error::source(&error).is_none());

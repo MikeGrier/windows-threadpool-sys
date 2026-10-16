@@ -31,7 +31,7 @@
 //! # Scope: entries, not capture
 //!
 //! This governs the Win32 call an entry *performs*. It does not govern capture
-//! failures -- [`crate::handle`], [`crate::security`], and [`crate::path`]
+//! failures -- [`crate::handle`], [`crate::security`], and [`PathCaptureError`](crate::PathCaptureError)
 //! report a named stage plus a code, because there the useful question is which
 //! part of building the request went wrong. Those happen on the calling thread,
 //! before any entry runs.

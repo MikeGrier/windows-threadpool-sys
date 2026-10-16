@@ -36,18 +36,12 @@
 //! The current directory is read only when it is needed: a path that rules 1, 2, 3 and 5 already
 //! refuse makes no call.
 //!
-//! # What is not checked here
+//! # The one thing refused
 //!
-//! An interior NUL is not refused: `NR-3.5` decides where that is reported, for every entry that
-//! takes a path.
-
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the type has no entry using it until `OpenFile` and `WatchDirectory` take it (NR-3.4)"
-    )
-)]
+//! An interior NUL, which a `PCWSTR` cannot carry: Win32 would read the path as ending there and
+//! act on a shorter path than the caller named. It is refused when the request is built, where the
+//! caller can still act on it, and so is a failure to read the current directory. Nothing else about
+//! a path is checked here.
 
 use std::fmt;
 
@@ -79,27 +73,32 @@ const RESERVED_NAMES: [&[u8]; 6] = [b"CON", b"PRN", b"AUX", b"NUL", b"CONIN$", b
 /// The names that are reserved with a digit after them.
 const RESERVED_NAMES_WITH_DIGIT: [&[u8]; 2] = [b"COM", b"LPT"];
 
-/// Why the current directory could not be captured.
+/// Why a path could not be captured for a request.
 ///
-/// This mirrors [`crate::full_path::FullPathError`], which shares the retry shape and so the
-/// vocabulary.
+/// The failures are the two a path can have at construction: it cannot be carried to Win32 as it
+/// is, or the current directory it is to be fixed to could not be read. The second mirrors
+/// [`crate::full_path::FullPathError`], which shares the retry shape and so the vocabulary.
 #[derive(Debug)]
 #[non_exhaustive]
-pub(crate) enum CurrentDirectoryError {
-    /// Windows refused the call, with the raw code unaltered.
-    Win32(Win32Error),
-    /// The required size kept changing, so the retry was abandoned.
-    Unstable {
+pub enum PathCaptureError {
+    /// The path contains a NUL before its end. Win32 reads a path up to its first NUL, so it would
+    /// act on a shorter path than the one named.
+    InteriorNul,
+    /// `GetCurrentDirectoryW` was refused, with the raw code unaltered.
+    CurrentDirectory(Win32Error),
+    /// The size of the current directory kept changing, so the retry was abandoned.
+    CurrentDirectoryUnstable {
         /// How many attempts were made before giving up.
         attempts: usize,
     },
 }
 
-impl fmt::Display for CurrentDirectoryError {
+impl fmt::Display for PathCaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Win32(error) => write!(f, "GetCurrentDirectoryW: {error}"),
-            Self::Unstable { attempts } => write!(
+            Self::InteriorNul => f.write_str("the path contains an interior NUL"),
+            Self::CurrentDirectory(error) => write!(f, "GetCurrentDirectoryW: {error}"),
+            Self::CurrentDirectoryUnstable { attempts } => write!(
                 f,
                 "GetCurrentDirectoryW: the required size changed on each of {attempts} attempts"
             ),
@@ -107,24 +106,18 @@ impl fmt::Display for CurrentDirectoryError {
     }
 }
 
-impl std::error::Error for CurrentDirectoryError {
+impl std::error::Error for PathCaptureError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Win32(error) => Some(error),
-            Self::Unstable { .. } => None,
+            Self::CurrentDirectory(error) => Some(error),
+            Self::InteriorNul | Self::CurrentDirectoryUnstable { .. } => None,
         }
-    }
-}
-
-impl From<Win32Error> for CurrentDirectoryError {
-    fn from(error: Win32Error) -> Self {
-        Self::Win32(error)
     }
 }
 
 /// A path as given, and the path to hand to Win32 for it.
 ///
-/// The two are the same unless the path was grafted, and [`is_grafted`](Self::is_grafted) says which.
+/// The two are the same unless the path was grafted.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AnchoredPath {
     given: Wtf16String,
@@ -136,9 +129,13 @@ impl AnchoredPath {
     ///
     /// # Errors
     ///
-    /// Returns the failure of `GetCurrentDirectoryW`, which is made only for a path whose shape
-    /// permits a graft.
-    pub(crate) fn new(given: Wtf16String) -> Result<Self, CurrentDirectoryError> {
+    /// [`PathCaptureError::InteriorNul`] for a path with a NUL before its end, and otherwise the
+    /// failure of `GetCurrentDirectoryW`, which is called only for a path whose shape permits a
+    /// graft.
+    pub(crate) fn new(given: Wtf16String) -> Result<Self, PathCaptureError> {
+        if given.has_interior_nul() {
+            return Err(PathCaptureError::InteriorNul);
+        }
         if !has_graftable_shape(given.as_units()) {
             return Ok(Self {
                 given,
@@ -171,7 +168,7 @@ impl AnchoredPath {
     }
 
     /// Whether the path was grafted onto the captured directory.
-    #[must_use]
+    #[cfg(test)]
     pub(crate) fn is_grafted(&self) -> bool {
         self.grafted.is_some()
     }
@@ -264,7 +261,7 @@ fn equals_ascii(units: &[u16], name: &[u8]) -> bool {
         })
 }
 
-fn capture_current_directory() -> Result<Wtf16String, CurrentDirectoryError> {
+fn capture_current_directory() -> Result<Wtf16String, PathCaptureError> {
     read_current_directory(|buffer| {
         let capacity = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
         perform_nonzero(|| {
@@ -277,11 +274,11 @@ fn capture_current_directory() -> Result<Wtf16String, CurrentDirectoryError> {
 /// The retry around the call, with the call as a parameter so that its answers can be chosen.
 fn read_current_directory(
     mut call: impl FnMut(&mut [u16]) -> Result<u32, Win32Error>,
-) -> Result<Wtf16String, CurrentDirectoryError> {
+) -> Result<Wtf16String, PathCaptureError> {
     let mut buffer = vec![0_u16; FIRST_ATTEMPT_CHARS];
 
     for _ in 0..MAX_ATTEMPTS {
-        let written = call(&mut buffer)? as usize;
+        let written = call(&mut buffer).map_err(PathCaptureError::CurrentDirectory)? as usize;
         if written < buffer.len() {
             // Success: `written` excludes the terminator.
             return Ok(Wtf16String::from_units(&buffer[..written]));
@@ -290,7 +287,7 @@ fn read_current_directory(
         buffer.resize(written, 0);
     }
 
-    Err(CurrentDirectoryError::Unstable {
+    Err(PathCaptureError::CurrentDirectoryUnstable {
         attempts: MAX_ATTEMPTS,
     })
 }
