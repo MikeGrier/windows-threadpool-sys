@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::{
     associated_disk, create_disk_script, create_script, detach_script, free_letter,
-    letter_is_taken, online_script, scratch_directory,
+    letter_is_taken, online_script, release_letter, reserve_letter, scratch_directory,
 };
 
 #[test]
@@ -36,6 +36,23 @@ fn a_free_letter_is_one_nothing_is_mounted_at() {
     let letter = free_letter().expect("some letter is free");
     assert!(letter.is_ascii_uppercase());
     assert!(!letter_is_taken(letter));
+}
+
+#[test]
+fn a_reserved_letter_is_not_offered_again_until_it_is_released() {
+    let first = reserve_letter().expect("some letter is free");
+    let second = reserve_letter().expect("another letter is free");
+    assert_ne!(
+        first, second,
+        "nothing is mounted at either, yet it is held"
+    );
+    assert!(!letter_is_taken(first), "the system does not know of it");
+
+    release_letter(second);
+    release_letter(first);
+    let again = reserve_letter().expect("a letter is free");
+    assert_eq!(again, first, "released, the highest free letter is offered");
+    release_letter(again);
 }
 
 #[test]

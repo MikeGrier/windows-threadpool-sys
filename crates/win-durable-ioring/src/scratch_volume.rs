@@ -29,6 +29,11 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 /// the same one.
 static CREATING: Mutex<()> = Mutex::new(());
 
+/// The drive letters scratch volumes of this process hold, from choosing one until the volume is
+/// detached. The system is asked as well (see [`letter_is_taken`]), but this does not wait on how
+/// quickly the system shows a letter coming or going.
+static HELD: Mutex<Vec<char>> = Mutex::new(Vec::new());
+
 /// The text `diskpart` prints when a command in a script failed, which it does not say in its exit
 /// code for every kind of failure.
 const DISKPART_FAILURE: &str = "DiskPart has encountered an error";
@@ -86,12 +91,29 @@ fn letter_is_taken(letter: char) -> bool {
             .is_ok()
 }
 
-/// A drive letter nothing is mounted at, from the end of the alphabet.
+/// A drive letter nothing is mounted at and no scratch volume of this process holds, from the end
+/// of the alphabet.
 fn free_letter() -> io::Result<char> {
+    let held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
     ('D'..='Z')
         .rev()
-        .find(|letter| !letter_is_taken(*letter))
+        .find(|letter| !held.contains(letter) && !letter_is_taken(*letter))
         .ok_or_else(|| io::Error::other("no free drive letter"))
+}
+
+/// [`free_letter`], held until [`release_letter`] gives it back.
+fn reserve_letter() -> io::Result<char> {
+    let letter = free_letter()?;
+    HELD.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(letter);
+    Ok(letter)
+}
+
+fn release_letter(letter: char) {
+    HELD.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|held| *held != letter);
 }
 
 /// The temporary directory in the long form the system names it by, which is the form `diskpart`
@@ -122,7 +144,7 @@ impl ScratchVolume {
     /// A volume of `megabytes`, mounted and ready to open.
     pub(crate) fn create(megabytes: u32) -> io::Result<Self> {
         let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
-        let letter = free_letter()?;
+        let letter = reserve_letter()?;
         let vhd = scratch_directory().join(format!(
             "dioring-scratch-{}-{}.vhdx",
             std::process::id(),
@@ -133,6 +155,7 @@ impl ScratchVolume {
             // Whatever was attached before the failure is detached, and the file removed.
             let _ = run_diskpart(&detach_script(&vhd), "detach");
             let _ = std::fs::remove_file(&vhd);
+            release_letter(letter);
             return Err(error);
         }
         let volume = Self { vhd, letter };
@@ -173,6 +196,7 @@ impl Drop for ScratchVolume {
     fn drop(&mut self) {
         let _ = run_diskpart(&detach_script(&self.vhd), "detach");
         let _ = std::fs::remove_file(&self.vhd);
+        release_letter(self.letter);
     }
 }
 

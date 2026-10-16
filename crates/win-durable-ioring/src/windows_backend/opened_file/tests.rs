@@ -239,8 +239,10 @@ fn where_a_path_lands_is_itself_when_it_exists_and_its_directory_when_it_does_no
 /// default for that reason, as `windows-namespace-request-sys`'s UNC test is.
 fn admin_share(local: &Path) -> PathBuf {
     let text = local.to_str().expect("a UTF-8 temp path");
-    let drive = text.chars().next().expect("a drive letter");
-    PathBuf::from(format!(r"\\localhost\{drive}${}", &text[2..]))
+    // A temp directory named with the verbatim prefix still has its drive after it.
+    let plain = text.strip_prefix(r"\\?\").unwrap_or(text);
+    let drive = plain.chars().next().expect("a drive letter");
+    PathBuf::from(format!(r"\\localhost\{drive}${}", &plain[2..]))
 }
 
 #[test]
