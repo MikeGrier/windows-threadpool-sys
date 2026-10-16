@@ -327,3 +327,80 @@ fn it_crosses_threads_when_its_items_do() {
     fn send_sync<X: Send + Sync>() {}
     send_sync::<Chunked<u64>>();
 }
+
+#[test]
+fn drain_each_hands_over_every_item_in_order_across_chunks() {
+    let per = per_chunk::<usize>();
+    let count = 2 * per + 9;
+    let mut buffer = filled(count);
+    let mut seen = Vec::new();
+    buffer.drain_each(|n| seen.push(n));
+    assert_eq!(seen, (0..count).collect::<Vec<_>>());
+}
+
+#[test]
+fn drain_each_leaves_the_buffer_empty_and_its_chunks_in_place() {
+    let per = per_chunk::<usize>();
+    let mut buffer = filled(2 * per + 9);
+    let addresses = buffer.chunk_addresses();
+    buffer.drain_each(|_| {});
+    assert_eq!(buffer.len(), 0);
+    assert!(buffer.is_empty());
+    assert_eq!(buffer.get(0), None);
+    assert_eq!(buffer.iter().count(), 0);
+    assert_eq!(buffer.chunk_addresses(), addresses);
+}
+
+#[test]
+fn drain_each_on_an_empty_buffer_calls_nothing() {
+    let mut buffer = Chunked::<usize>::new();
+    buffer.drain_each(|_| panic!("nothing to hand over"));
+    let mut cleared = filled(5);
+    cleared.clear();
+    cleared.drain_each(|_| panic!("nothing to hand over"));
+}
+
+#[test]
+fn drain_each_drops_each_item_as_its_call_returns() {
+    let tag = Arc::new(());
+    let mut buffer = Chunked::new();
+    for _ in 0..50 {
+        buffer.push(Arc::clone(&tag));
+    }
+    let mut remaining = 51;
+    buffer.drain_each(|item| {
+        assert_eq!(Arc::strong_count(&tag), remaining);
+        drop(item);
+        remaining -= 1;
+    });
+    assert_eq!(Arc::strong_count(&tag), 1);
+}
+
+#[test]
+fn a_buffer_is_refilled_after_drain_each_with_no_new_allocation() {
+    let per = per_chunk::<usize>();
+    let mut buffer = filled(2 * per + 3);
+    let addresses = buffer.chunk_addresses();
+    buffer.drain_each(|_| {});
+    for n in 0..per + 4 {
+        buffer.push(n);
+    }
+    assert_eq!(contents(&buffer), (0..per + 4).collect::<Vec<_>>());
+    assert_eq!(buffer.chunk_addresses(), addresses);
+}
+
+#[test]
+fn clear_restores_a_buffer_whose_drain_each_panicked() {
+    let per = per_chunk::<usize>();
+    let mut buffer = filled(2 * per);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        buffer.drain_each(|n| assert!(n < per + 5, "stop part-way"));
+    }));
+    assert!(outcome.is_err());
+    buffer.clear();
+    assert!(buffer.is_empty());
+    for n in 0..per + 2 {
+        buffer.push(n);
+    }
+    assert_eq!(contents(&buffer), (0..per + 2).collect::<Vec<_>>());
+}

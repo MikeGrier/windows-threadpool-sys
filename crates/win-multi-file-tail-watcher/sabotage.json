@@ -324,6 +324,70 @@
       "replace": ["            _ => true,"]
     },
     {
+      "name": "an unchanged length is reported as a change",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "Every file would be reported on every poll, which is the per-file timer this crate exists to avoid.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {"],
+      "replace": ["                Ok(current) if true => changed.push(Change {"]
+    },
+    {
+      "name": "only growth is a change",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-4: a shrink is reported like growth, in either direction.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {"],
+      "replace": ["                Ok(current) if current > last_known => changed.push(Change {"]
+    },
+    {
+      "name": "a change reports the current length as the last known one",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The pair is the whole of an attention: one of the two numbers would be lost.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {\n                    id,\n                    last_known,"],
+      "replace": ["                Ok(current) if current != last_known => changed.push(Change {\n                    id,\n                    last_known: current,"]
+    },
+    {
+      "name": "a terminal failure is not told apart from a transient one",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-13: a handle that can never answer must reach the caller, not be probed again every beat for good.",
+      "find": ["                    (FailureClass::Terminal, Some(code)) => changed.push(Change {"],
+      "replace": ["                    (FailureClass::Terminal, Some(code)) if false => changed.push(Change {"]
+    },
+    {
+      "name": "a terminal failure loses its code",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The code is why the caller is told, and the point of a dedicated entry.",
+      "find": ["                        outcome: Outcome::Terminal { win32_code: code },"],
+      "replace": ["                        outcome: Outcome::Terminal { win32_code: 0 },"]
+    },
+    {
+      "name": "a transient failure is not reported to the sink",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-13: no corrective action, and a message. The registration is probed again either way, so only the sink can tell.",
+      "find": ["                    _ => self.diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ProbeFailed {\n                        registration: id,\n                        win32_code: win32_code(&error),\n                    }),"],
+      "replace": ["                    _ => {}"]
+    },
+    {
+      "name": "a probe leaves the snapshot full",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The probe hands over every observer and drops it; a length left behind reads stale items.",
+      "find": ["        self.len = 0;\n    }\n\n    /// Drop the items from"],
+      "replace": ["    }\n\n    /// Drop the items from"]
+    },
+    {
+      "name": "control: the observer is dropped by name after it is read",
+      "file": "src/watcher/probe.rs",
+      "expect": "survives",
+      "why": "The closure ends at the same point, so dropping the observer explicitly is the same drop.",
+      "find": ["            match read(&observer) {"],
+      "replace": ["            let result = read(&observer);\n            drop(observer);\n            match result {"]
+    },
+    {
       "name": "control: the scanned count is written out",
       "file": "src/watcher.rs",
       "expect": "survives",

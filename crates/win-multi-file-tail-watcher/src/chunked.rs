@@ -2,10 +2,7 @@
 //! An append-only sequence held in fixed-size chunks, for the poll's per-poll copies.
 #![cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "the snapshot and probe passes (TW-2.5, TW-2.6) use it"
-    )
+    expect(dead_code, reason = "the poll engine (TW-2.7) uses it")
 )]
 
 use std::mem::size_of;
@@ -84,6 +81,18 @@ impl<T> Chunked<T> {
     /// Drop every item and keep the chunks.
     pub(crate) fn clear(&mut self) {
         self.truncate(0);
+    }
+
+    /// Hand every item to `each`, oldest first, dropping each as `each` returns, and keep the
+    /// chunks. The buffer is empty afterwards. If `each` panics the buffer is inconsistent, and
+    /// [`clear`](Self::clear) makes it usable again.
+    pub(crate) fn drain_each(&mut self, mut each: impl FnMut(T)) {
+        for chunk in &mut self.chunks {
+            for item in chunk.drain(..) {
+                each(item);
+            }
+        }
+        self.len = 0;
     }
 
     /// Drop the items from `new_len` on, and keep the chunks. Does nothing when `new_len` is not

@@ -438,3 +438,48 @@ The sabotage manifest gains a terminal entry snapshotted, a pass that counts onl
 (the defect above), a second mark overwriting, a mark that records no code, and a mark of an absent
 registration reporting success; the count written out survives as the control. The entry for the
 lock held across the pause is updated for the renamed variable.
+
+## Moved 2026-10-15 20:23:37 -04:00 -- TW-2.6: the probe pass
+
+### <a id="tw-26"></a>TW-2.6 -- The probe pass reads each snapshotted observer's length with no lock held, drops each observer as read, and keeps the changes and terminal failures in a second chunked buffer. *(completed 2026-10-15 20:23:37 -04:00)*
+
+Crate-internal (a `chore`): `src/watcher/probe.rs`, with `Watcher::probe`, and `Chunked::drain_each`
+in `src/chunked.rs`. ([TW-D-7](DESIGN-NOTES.md#tw-d-7), [TW-D-13](DESIGN-NOTES.md#tw-d-13))
+
+- **`probe(&mut snapshot, &mut changed)`** reads each snapshotted observer with `file_len`, in the
+  snapshot's order, and appends a `Change { id, last_known, outcome }` for each registration whose
+  length is not the last reported one, in either direction. An unchanged one adds nothing. It holds no
+  roster lock, and a test registers a new file from inside the read to show it.
+- **`drain_each` hands each item over and drops it as the call returns**, so an observer is dropped as
+  soon as it has been read and the file is not held open by the snapshot a moment longer than the
+  probe needs. The snapshot is empty afterwards and keeps its chunks. A test shows the file open
+  to an exclusive open before the probe and free after it.
+- **`Outcome` is `Changed { current }` or `Terminal { win32_code }`**, 32 bytes in all, so a chunk of
+  the changed list holds 2,048.
+- **A failed probe is classified by the predicate of TW-2.6.1.** A transient failure is reported to the
+  sink as `Diagnostic::ProbeFailed { registration, win32_code }` and nothing is kept: the registration
+  is probed again next pass. A terminal one is kept with its code for the report pass. A failure
+  that the predicate calls terminal but that carries no code cannot occur, and would be treated as
+  transient.
+- **The probe marks nothing.** `mark_terminal` and `last_known` are the report pass's, once an entry
+  is written (TW-2.7); a test checks that a probe leaves both alone.
+- **The read is a parameter of an inner function** (`probe_with`), so that a test can make a probe
+  fail with a code. Nothing the tests can do to a real file produces `ERROR_INVALID_HANDLE`.
+
+Tested: nothing for a file at its last reported length; a file registered at zero reported from zero
+and an empty file at zero not; growth after the snapshot, read as the length at the probe; a shrink;
+a mixed set keeping only the changed ones in order; the snapshot emptied and the roster unchanged;
+observers released; nothing read for an empty snapshot and each observer read once; no roster lock
+held; a transient failure reported once to the sink with the registration and code, not kept, and
+probed again next pass; one with no code reported without one; a terminal failure kept with its code
+and not a diagnostic, for `ERROR_INVALID_HANDLE` and `ERROR_FILE_INVALID`; changes, terminal
+failures and transient ones interleaved in id order; a sink that wants nothing asked once per
+failure and given nothing; and 2,200 changes crossing a chunk of the changed list. For
+`drain_each`: items in order across chunks, the buffer empty with its chunks in place, nothing
+called on an empty buffer, each item dropped as its call returns, a refill that allocates nothing,
+and `clear` restoring a buffer whose callback panicked.
+
+The sabotage manifest gains an unchanged length reported, only growth reported, a change that reports
+the current length as the last known one, a terminal failure not told apart, one that loses its code,
+a transient failure not reported, and a snapshot left full; the observer dropped by name survives as
+the control.

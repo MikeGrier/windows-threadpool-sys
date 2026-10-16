@@ -33,13 +33,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.6.4** -- A roster entry has a terminal state, holding the Win32 code, which the snapshot skips and which `mark_terminal` sets once. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-264)
 
-- [ ] **TW-2.6** -- **The probe pass.** Reads each snapshotted observer's current length with no
-  lock held, drops each observer as soon as it has been read, and keeps the id, last known and
-  current length of those that differ, in id order, in a second chunked buffer. A probe that fails
-  is classified: a transient failure is reported through the diagnostic sink and the entry is
-  probed again next beat; a terminal one is kept in the list for the report pass to write.
-  ([TW-D-2](DESIGN-NOTES.md#tw-d-2), [TW-D-4](DESIGN-NOTES.md#tw-d-4),
-  [TW-D-13](DESIGN-NOTES.md#tw-d-13))
+- [x] **TW-2.6** -- The probe pass reads each snapshotted observer's length with no lock held, drops each observer as read, and keeps the changes and terminal failures in a second chunked buffer. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-26)
 
 - [ ] **TW-2.7** -- **The report pass and the stop point.** Walks the changed list from a recorded
   index. Per batch, under the roster lock: look the id up (a dropped registration is skipped), clone

@@ -18,6 +18,8 @@ use crate::{CreateError, HeldFile, OpenError};
 #[cfg(test)]
 mod tests;
 
+mod probe;
+
 #[cfg(test)]
 mod snapshot_tests;
 
@@ -28,7 +30,7 @@ const SNAPSHOT_BATCH: usize = 256;
 #[derive(Debug)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the probe pass (TW-2.6) reads it")
+    expect(dead_code, reason = "the poll engine (TW-2.7) reads it")
 )]
 pub(crate) struct SnapshotItem {
     pub(crate) id: u64,
