@@ -17,6 +17,8 @@ use crate::sq::{Attention, SqEntry, SqPushError, SqWriter, Terminal};
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod child_tests;
+#[cfg(test)]
 mod tests;
 
 /// How many changes the report pass writes per acquisition of the roster lock (TW-D-14).

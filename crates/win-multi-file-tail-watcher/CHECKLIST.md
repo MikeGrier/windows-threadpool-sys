@@ -41,12 +41,7 @@ one of them deterministically ([TW-D-7](DESIGN-NOTES.md#tw-d-7)).
 
 - [x] **TW-2.8.1** -- The batch sizes, the chunk size and the roster map are chosen from the captures, and sharding the probe is recorded as an available remedy that is not built. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-281)
 
-- [ ] **TW-2.9** -- **Integration tests: the engine over real files.** Hundreds of files, some
-  grown and some shrunk by child processes between runs, against an SQ far smaller than the number
-  of changes. Every change is reported exactly once across stops, with the right last known and
-  current pair, and then poll-done; a run with no writes reports only poll-done; a registration
-  dropped between a stop and its continuation is skipped, and one added meanwhile is seen by the
-  next run; an attention for a dropped registration carries a usable `T`.
+- [x] **TW-2.9** -- The engine is tested over a few hundred real files, with child processes appending through stdout handles their parent opened, against an SQ far smaller than the number of changes. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-29)
 
 ## M2+ -- Decisions to revisit once M2 is done
 

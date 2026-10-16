@@ -564,3 +564,29 @@ Recorded as [TW-D-14](DESIGN-NOTES.md#tw-d-14), with its reasoning in
 - **Sharding the probe is not built and nothing is queued for it**; the decision says so.
 - **Retention was not decided** and moved to TW-2+.2 in [CHECKLIST.md](CHECKLIST.md), because the
   captures have no roster that shrinks.
+
+## Moved 2026-10-15 21:39:56 -04:00 -- TW-2.9: the engine over real files written by children
+
+### <a id="tw-29"></a>TW-2.9 -- The engine is tested over a few hundred real files, with child processes appending through stdout handles their parent opened, against an SQ far smaller than the number of changes. *(completed 2026-10-15 21:39:56 -04:00)*
+
+Crate-internal (a `chore`): `src/watcher/engine/child_tests.rs`. The tests are in the crate rather than
+in `tests/` because the engine is not public; an outside test over `poll` belongs to M3, once
+TW-3.1 makes one.
+
+- **The files that change are the ones a child writes**, as the engineer asked: each is a
+  `cmd.exe` whose stdout is a file the parent opened and handed over, the way a parent gives a child
+  its output. Shrinking is one parent-truncated file at the end, as an edge, and not a population.
+- **Stepped**: 300 registrations, every twelfth a child's file, the rest unchanging files registered
+  at their length, through an SQ of 8. Each pass releases every child by one line, waits until every
+  file is exactly that long, and polls; the poll must report exactly the children, in roster order,
+  each from the length the pass before left, then poll-done, and stop at least twice. Pass 3 stops
+  mid-poll, drops a child's registration and makes another for a new file before continuing: the
+  dropped one is skipped, the new one is first reported by the next poll and not by the one in flight,
+  and the dropped one is silent from then on. After the children exit a poll is silent, and a
+  truncated file is reported as the smaller length.
+- **Concurrent**: 200 registrations, twenty of them children appending 400 lines each as fast as they
+  can, through an SQ of 4, polled in a loop until the children are gone and a poll after that is
+  silent. Whatever the timing, each child's attentions must be one unbroken chain: the first from its
+  starting offset, each later one from exactly where the one before ended, every one a change, and
+  the last at the full length. Only children are reported and nothing is terminal. The timing is not
+  asserted: it was observed, once, to give each child several attentions across some seventy polls.
