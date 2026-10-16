@@ -58,6 +58,10 @@ impl<T: Clone> Watcher<T> {
         read: impl Fn(&EndpointObserver) -> io::Result<u64>,
     ) {
         snapshot.drain_each(|item| {
+            // A shutdown ends the pass at its next probe; the rest are dropped unread.
+            if self.shared.stopping() {
+                return;
+            }
             let SnapshotItem {
                 id,
                 last_known,

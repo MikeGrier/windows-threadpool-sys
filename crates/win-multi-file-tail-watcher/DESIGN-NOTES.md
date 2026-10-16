@@ -230,6 +230,12 @@ The drain moved to `Drop`, below.
   `PollError::Shutdown`, which is reported ahead of "in flight" and also when a poll is parked. The
   flag is looked at before the poll's gate is taken and again after, so a request that lands between
   the two is refused as well. Registering and dropping registrations still work after it.
+- **A poll stops at its next step**: a batch of the copy, one file probed, one change reported. What
+  is left is abandoned, and the poll goes on to its ordinary poll-done, which is always delivered:
+  one the SQ refuses leaves the poll parked, and the resumed callback arms the wait again, so it is
+  written when the caller drains and rings the resume doorbell, as after any other stop. The
+  engineer, 2026-10-15: "the poll-done should always be delivered"; an earlier reading of "returns
+  at once" gave up after one refused attempt.
 - **Requested is not quiescent.** After the request a crate callback may still be running (a poll
   finishing its current probe) or queued (a resume callback about to see the flag).
 - **The end of polling reaches the caller as the ordinary poll-done entry**, when there is space

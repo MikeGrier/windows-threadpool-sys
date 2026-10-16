@@ -740,3 +740,33 @@ Tested: a poll after the request refused, with the request repeated before and a
 refused as shut down and not as in flight; registering, dropping and draining still working; a
 shutdown from another thread ending a loop of polls after some had run; and the error's text and
 source.
+
+## Moved 2026-10-15 23:25:15 -04:00 -- TW-4.2: stopping the poll
+
+### <a id="tw-42"></a>TW-4.2 -- A shutdown stops a running or parked poll at its next step (a batch of the copy, a file probed, a change reported) and the poll goes on to poll-done, which is always delivered. *(completed 2026-10-15 23:25:15 -04:00)*
+
+Crate-internal (a `chore`): behaviour of the already-public `shutdown`, in `src/watcher.rs`,
+`src/watcher/probe.rs`, `src/watcher/engine.rs` and `src/watcher/poll.rs`. The decision text is under
+[TW-D-9](DESIGN-NOTES.md#tw-d-9).
+
+- **Three stop points, each reading the flag**: the copy before each batch, the probe before each
+  file, and the report before each change. A stopped copy or probe leaves nothing to report; a
+  stopped report abandons the rest of the list, and the poll goes on to its ordinary poll-done. The
+  registrations whose changes were abandoned keep their last known length.
+- **Poll-done is always delivered, and the resume wait is armed as it is after any stop.** The
+  checklist item says a queued resume callback "returns at once on seeing the flag". The first
+  reading made one attempt and gave up if the queue refused poll-done; the engineer corrected it
+  ("the poll-done should always be delivered"). So the resumed callback runs the engine, which with
+  the flag set goes straight to poll-done, and arms the wait again when the queue refuses it: the
+  poll stays parked until the caller drains and rings, and then writes it. A shutdown makes the
+  callback quick, not absent.
+- **Not here**: what `Drop` waits for is TW-4.3. A poll parked on a full queue whose caller never
+  rings again simply stays parked until the watcher is dropped.
+
+Tested: a shutdown before the poll starts probing nothing and writing only poll-done; one made from
+inside the first probe stopping at the next file with nothing reported and no last known length
+advanced; one made after the first report batch writing that batch and poll-done and leaving the
+rest unreported; one made after the first batch of the copy ending it there; a parked poll stopped
+by a shutdown writing only poll-done when the caller drains and rings; and a poll-done refused after
+a shutdown, through three rings with the queue still full, being written once the caller drains and
+rings, with `poll` still refused as shut down.

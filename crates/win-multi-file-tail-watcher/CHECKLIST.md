@@ -79,10 +79,7 @@ its next step, which is one probe or one report.
 
 - [x] **TW-4.1** -- `Watcher::shutdown` sets a stop flag and returns, may be repeated, and `poll` is refused with `PollError::Shutdown` after it. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-41)
 
-- [ ] **TW-4.2** -- **Stopping the poll**: the request sets the stop flag and returns without
-  draining; a queued resume callback returns at once on seeing the flag, and a running poll stops at
-  its next step. The poll-done entry is written as normal when there is space.
-  ([TW-D-9](DESIGN-NOTES.md#tw-d-9))
+- [x] **TW-4.2** -- A shutdown stops a running or parked poll at its next step (a batch of the copy, a file probed, a change reported) and the poll goes on to poll-done, which is always delivered. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-42)
 
 - [ ] **TW-4.3** -- **`Drop` of the watcher**: sets the stop flag if no request was made, then stops
   and drains the resume wait and waits for a running poll to return; never depends on the poll-done

@@ -156,6 +156,10 @@ impl<T: Clone> Watcher<T> {
                     if listed == batch {
                         break false;
                     }
+                    // A shutdown abandons what is left, and the poll goes on to poll-done.
+                    if self.shared.stopping() {
+                        *next = changed.len();
+                    }
                     let Some(&change) = changed.get(*next) else {
                         break true;
                     };

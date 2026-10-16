@@ -108,6 +108,11 @@ impl<T> Entry<T> {
 }
 
 impl<T> Shared<T> {
+    // Whether `shutdown` has been called.
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
     fn roster(&self) -> MutexGuard<'_, Roster<T>> {
         // `T::clone` runs under the lock but only reads; nothing under it can leave the map
         // half-changed, so a poisoned roster is still consistent.
@@ -285,6 +290,10 @@ impl<T: Clone> Watcher<T> {
         assert!(batch > 0, "a batch of nothing never finishes");
         let mut after = None;
         loop {
+            // A shutdown ends the copy at its next batch.
+            if self.shared.stopping() {
+                return;
+            }
             // Counts entries looked at, skipped or not: a batch of terminal ones is a full batch.
             let scanned = {
                 let roster = self.shared.roster();
@@ -332,6 +341,9 @@ impl<T: Clone> Watcher<T> {
     /// It sets a flag and returns, so it never blocks, may be called from a callback for
     /// [`doorbell`](Self::doorbell), and may be called again. It does not wait for anything: a poll
     /// already running is not drained by it. Dropping the watcher is what waits.
+    ///
+    /// A poll in flight abandons what it has not yet done and still ends with its poll-done entry,
+    /// which waits for room in a full queue like any entry.
     pub fn shutdown(&self) {
         self.shared.stop.store(true, Ordering::Release);
     }

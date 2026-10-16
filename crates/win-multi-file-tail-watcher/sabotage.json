@@ -770,6 +770,38 @@
       "why": "A stronger ordering than release is the same flag for this reader.",
       "find": ["        self.shared.stop.store(true, Ordering::Release);"],
       "replace": ["        self.shared.stop.store(true, Ordering::SeqCst);"]
+    },
+    {
+      "name": "the copy ignores a shutdown",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: a running poll stops at its next step, and the copy's step is a batch.",
+      "find": ["            // A shutdown ends the copy at its next batch.\n            if self.shared.stopping() {\n                return;\n            }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "the probe ignores a shutdown",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The probe's step is one file, so a shutdown must not wait for the rest of a large roster.",
+      "find": ["            // A shutdown ends the pass at its next probe; the rest are dropped unread.\n            if self.shared.stopping() {\n                return;\n            }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "the report ignores a shutdown",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The report's step is one change; the rest are abandoned and the poll goes on to poll-done.",
+      "find": ["                    // A shutdown abandons what is left, and the poll goes on to poll-done.\n                    if self.shared.stopping() {\n                        *next = changed.len();\n                    }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a resumed callback does not arm the wait again after a shutdown",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "Poll-done is always delivered: a poll-done the queue refuses is tried again when the caller rings.",
+      "find": ["if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm"],
+      "replace": ["if resumed.run() == RunOutcome::Stopped && !resumed.view.shared.stopping() {\n                    activation.rearm"]
     }
   ]
 }

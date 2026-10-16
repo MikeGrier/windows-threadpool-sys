@@ -557,3 +557,69 @@ fn the_doorbell_is_rung_once_for_a_poll_with_nothing_to_report_and_once_for_a_st
     );
     assert_eq!(rings.get(), 1, "a full queue is news to the caller");
 }
+
+#[test]
+fn a_shutdown_before_a_poll_probes_nothing_and_writes_only_poll_done() {
+    let dir = TempDir::new("e-stop-first");
+    let watcher = watcher(16);
+    let _files = register_files(&dir, &watcher, 5, 10);
+    watcher.shutdown();
+    let mut engine = Engine::new(&watcher);
+    let reads = AtomicUsize::new(0);
+    engine.begin(&watcher, |_: &EndpointObserver| {
+        reads.fetch_add(1, Ordering::SeqCst);
+        Ok(1)
+    });
+    assert_eq!(engine.finish(&watcher, 256, || {}), RunOutcome::Complete);
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    assert_eq!(drained(&watcher), [SqEntry::PollDone]);
+}
+
+#[test]
+fn a_shutdown_during_the_probe_stops_it_at_the_next_file_and_reports_nothing() {
+    let dir = TempDir::new("e-stop-probe");
+    let watcher = watcher(16);
+    let files = register_files(&dir, &watcher, 6, 10);
+    let mut engine = Engine::new(&watcher);
+    let reads = AtomicUsize::new(0);
+    engine.begin(&watcher, |_: &EndpointObserver| {
+        reads.fetch_add(1, Ordering::SeqCst);
+        watcher.shutdown();
+        Ok(1)
+    });
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.finish(&watcher, 256, || {}), RunOutcome::Complete);
+    assert_eq!(drained(&watcher), [SqEntry::PollDone]);
+    assert!(files.registrations.iter().all(|r| r.last_known() == 0));
+}
+
+#[test]
+fn a_shutdown_during_the_report_abandons_the_rest_of_the_changes_and_writes_poll_done() {
+    let dir = TempDir::new("e-stop-report");
+    let path = dir.file("a.log", b"0123456789");
+    let watcher = watcher(1024);
+    let registrations: Vec<_> = (0..600u32)
+        .map(|n| watcher.register(&wtf(&path), 0, n).expect("register"))
+        .collect();
+    let mut engine = Engine::new(&watcher);
+    engine.begin(&watcher, EndpointObserver::file_len);
+    assert_eq!(
+        engine.finish(&watcher, 256, || watcher.shutdown()),
+        RunOutcome::Complete
+    );
+    let entries = drained(&watcher);
+    assert_eq!(entries.len(), 257, "one batch and poll-done");
+    assert_eq!(entries.last(), Some(&SqEntry::PollDone));
+    assert_eq!(registrations[255].last_known(), 10);
+    assert_eq!(registrations[256].last_known(), 0, "not reported");
+}
+
+#[test]
+fn a_shutdown_during_the_copy_ends_it_at_the_next_batch() {
+    let dir = TempDir::new("e-stop-copy");
+    let watcher = watcher(16);
+    let _files = register_files(&dir, &watcher, 10, 10);
+    let mut out = crate::chunked::Chunked::new();
+    watcher.snapshot_batches(&mut out, 4, || watcher.shutdown());
+    assert_eq!(out.len(), 4);
+}

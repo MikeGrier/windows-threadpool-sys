@@ -539,3 +539,45 @@ fn a_shutdown_from_another_thread_ends_a_loop_of_polls() {
     });
     assert!(polled > 0, "some polls ran before the request");
 }
+
+#[test]
+fn a_shutdown_stops_a_parked_poll_at_its_next_step_and_it_writes_poll_done() {
+    let dir = TempDir::new("poll-stop-parked");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 6);
+    watcher.poll().expect("poll");
+    assert_eq!(values(&next_entries(&watcher)), [0, 1]);
+    watcher.shutdown();
+    watcher.ring_resume();
+    assert_eq!(
+        next_entries(&watcher),
+        [SqEntry::PollDone],
+        "the rest of the changes were abandoned"
+    );
+}
+
+#[test]
+fn after_a_shutdown_a_poll_done_the_queue_refuses_is_written_once_the_caller_drains_and_rings() {
+    let dir = TempDir::new("poll-stop-refused");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 6);
+    watcher.poll().expect("poll");
+    // The queue is full and nobody has drained it.
+    assert!(rung(&watcher));
+    watcher.reset_doorbell();
+    watcher.shutdown();
+    // Each ring finds the queue still full, and the poll stays parked for the next one.
+    for _ in 0..3 {
+        watcher.ring_resume();
+        assert!(rung(&watcher), "the resumed callback ran");
+        watcher.reset_doorbell();
+    }
+    assert_eq!(values(&watcher.drain().collect::<Vec<_>>()), [0, 1]);
+    watcher.ring_resume();
+    assert_eq!(
+        next_entries(&watcher),
+        [SqEntry::PollDone],
+        "poll-done is always delivered"
+    );
+    assert!(matches!(watcher.poll(), Err(PollError::Shutdown)));
+}
