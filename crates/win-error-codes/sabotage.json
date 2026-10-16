@@ -5,6 +5,156 @@
   "testArgs": ["-p", "win-error-codes", "--lib", "--locked"],
   "sabotages": [
     {
+      "name": "WE-1.3: a raw value is altered on its way in",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: E_INVALID.raw() == 0x8007_0057_u32.cast_signed()",
+      "why": "HResult carries whatever the call returned. The constructor is a const fn and a const assertion in the tests evaluates it, so the alteration does not build.",
+      "find": ["        Self(raw)\n"],
+      "replace": ["        Self(raw & !1)\n"]
+    },
+    {
+      "name": "WE-1.3: control, the failure test written as is_negative",
+      "file": "src/hresult.rs",
+      "expect": "survives",
+      "why": "A control: FAILED(hr) is hr < 0, and is_negative is the same test, so the file changes and no behaviour does. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        self.0 < 0\n"],
+      "replace": ["        self.0.is_negative()\n"]
+    },
+    {
+      "name": "WE-1.3: zero is a failure",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: HResult::from_raw(0).is_success()",
+      "why": "S_OK is a success; FAILED(hr) is hr < 0 and not hr <= 0. is_failure is a const fn and a const assertion in the tests evaluates it at zero.",
+      "find": ["        self.0 < 0\n"],
+      "replace": ["        self.0 <= 0\n"]
+    },
+    {
+      "name": "WE-1.3: success and failure are the same test",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: !E_INVALID.is_success()",
+      "why": "SUCCEEDED is the negation of FAILED. is_success is a const fn and a const assertion in the tests evaluates it on a failure.",
+      "find": ["        !self.is_failure()\n"],
+      "replace": ["        self.is_failure()\n"]
+    },
+    {
+      "name": "WE-1.3: a failure becomes Ok",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: HResult::from_raw(0).into_result().is_ok()",
+      "why": "A failure must reach the caller as the error, or a failed call reads as success. into_result is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["        if self.is_success() { Ok(()) } else { Err(self) }\n"],
+      "replace": ["        if self.is_success() { Err(self) } else { Ok(()) }\n"]
+    },
+    {
+      "name": "WE-1.3: the code is eight bits",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "HRESULT_CODE is the low sixteen bits; E_FAIL's code is 0x4005. The const assertion uses 0x57, which eight bits also hold, so only a run notices.",
+      "find": ["        (self.0.cast_unsigned() & CODE_MASK) as u16\n"],
+      "replace": ["        (self.0.cast_unsigned() & 0xFF) as u16\n"]
+    },
+    {
+      "name": "WE-1.3: the facility is read from the wrong place",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: E_INVALID.facility() == 7",
+      "why": "The facility starts at bit 16. facility is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["        ((self.0.cast_unsigned() >> FACILITY_SHIFT) & FACILITY_MASK) as u16\n"],
+      "replace": ["        ((self.0.cast_unsigned() >> 15) & FACILITY_MASK) as u16\n"]
+    },
+    {
+      "name": "WE-1.3: the facility is the eleven bits the documentation draws",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "HRESULT_FACILITY's mask is thirteen bits, and FACILITY_DXGI, 0x87A, needs twelve: a facility of eleven bits reads it as 0x07A. The const assertion uses facility 7, which eleven bits also hold, so only a run notices.",
+      "find": ["const FACILITY_MASK: u32 = 0x1FFF;"],
+      "replace": ["const FACILITY_MASK: u32 = 0x07FF;"]
+    },
+    {
+      "name": "WE-1.3: the customer bit is read from the NTSTATUS bit",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "Each bit is read from where the layout has it.",
+      "find": ["        self.0.cast_unsigned() & CUSTOMER_BIT != 0\n"],
+      "replace": ["        self.0.cast_unsigned() & NTSTATUS_BIT != 0\n"]
+    },
+    {
+      "name": "WE-1.3: the NTSTATUS bit is read from the customer bit",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "Each bit is read from where the layout has it.",
+      "find": ["        self.0.cast_unsigned() & NTSTATUS_BIT != 0\n"],
+      "replace": ["        self.0.cast_unsigned() & CUSTOMER_BIT != 0\n"]
+    },
+    {
+      "name": "WE-1.3: zero is wrapped like any other code",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "HRESULT_FROM_WIN32 returns a value that is not positive as it is, so zero is S_OK. Zero wrapped is 0x80070000, a failure. The const assertion uses 1117, so only a run notices.",
+      "find": ["        if code.cast_signed() <= 0 {\n"],
+      "replace": ["        if code.cast_signed() < 0 {\n"]
+    },
+    {
+      "name": "WE-1.3: a code of 2^31 or more is wrapped and not taken as an HRESULT already",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "HRESULT_FROM_WIN32 returns a value that is not positive as it is; ERROR_VIRTDISK_NOT_VIRTUAL_DISK, 0xC03A0015, stays 0xC03A0015.",
+      "find": ["            Self(code.cast_signed())\n"],
+      "replace": ["            Self(((code & CODE_MASK) | WIN32_WRAP).cast_signed())\n"]
+    },
+    {
+      "name": "WE-1.3: a positive code keeps more than its low sixteen bits",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "HRESULT_FROM_WIN32 keeps only the low sixteen bits, so 0x0010045D and 0x0000045D give the same value. Keeping the rest would put them into the severity and facility.",
+      "find": ["            Self(((code & CODE_MASK) | WIN32_WRAP).cast_signed())\n"],
+      "replace": ["            Self((code | WIN32_WRAP).cast_signed())\n"]
+    },
+    {
+      "name": "WE-1.3: FACILITY_WIN32 is six",
+      "file": "src/hresult.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: WRAPPED.raw() == 0x8007_045D_u32.cast_signed()",
+      "why": "FACILITY_WIN32 is 7. from_win32 is a const fn and a const assertion in the tests evaluates it.",
+      "find": ["const FACILITY_WIN32: u32 = 7;"],
+      "replace": ["const FACILITY_WIN32: u32 = 6;"]
+    },
+    {
+      "name": "WE-1.3: a customer or NTSTATUS value is read as a wrapped Win32 code",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "Only the exact wrapping is a Win32 code: severity, FACILITY_WIN32 and nothing else above the code. 0xA0070005 has the customer bit set and is a customer code that happens to share a facility.",
+      "find": ["        if bits & SEVERITY_AND_FACILITY == WIN32_WRAP {\n"],
+      "replace": ["        if bits & 0x8FFF_0000 == WIN32_WRAP {\n"]
+    },
+    {
+      "name": "WE-1.3: the wrapped code is not masked on the way out",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "The Win32 code is the low sixteen bits; the high half is the wrapping and is not part of it. The const assertion only asks whether there is a code, so only a run notices.",
+      "find": ["            Some(Win32Error::from_code(bits & CODE_MASK))\n"],
+      "replace": ["            Some(Win32Error::from_code(bits))\n"]
+    },
+    {
+      "name": "WE-1.3: the display has no 0x",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "winerror.h writes an HRESULT as 0x8007045D, and a bare eight digits is ambiguous in a message.",
+      "find": ["        write!(f, \"{:#010X}\", self.0.cast_unsigned())\n"],
+      "replace": ["        write!(f, \"{:08X}\", self.0.cast_unsigned())\n"]
+    },
+    {
+      "name": "WE-1.3: the debug shows the negative number",
+      "file": "src/hresult.rs",
+      "expect": "caught",
+      "why": "An HRESULT is read in hex; the i32 it is held in is not what a reader of a failed assertion should see.",
+      "find": ["        write!(f, \"HResult({self})\")\n"],
+      "replace": ["        write!(f, \"HResult({})\", self.0)\n"]
+    },
+    {
       "name": "WE-1.2: a raw value is altered on its way in",
       "file": "src/lstatus.rs",
       "expect": "refused-by-build",

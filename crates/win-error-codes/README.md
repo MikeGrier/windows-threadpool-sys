@@ -16,15 +16,23 @@ which exist: the virtdisk errors, such as `ERROR_VIRTDISK_NOT_VIRTUAL_DISK`, are
 - **`LStatus`**, an `i32`: the same number space in the signed `LONG` that registry calls return,
   converting to and from `Win32Error` by a bit cast that loses nothing, a code above 2^31 being a
   negative value.
+- **`HResult`**, an `i32`: the signed `HRESULT`, with `is_failure` and `is_success`, `code`,
+  `facility`, `from_win32` (`HRESULT_FROM_WIN32`'s rule, which keeps only the low 16 bits of a
+  positive code) and `win32` (the inverse for the codes from 1 to 65535).
 
 ```rust
-use win_error_codes::{LStatus, Win32Error};
+use win_error_codes::{HResult, LStatus, Win32Error};
 
 // A call that returns its code directly: zero is success.
 assert_eq!(Win32Error::from_code(0).into_result(), Ok(()));
 
 // A registry call returns the same thing as a signed LONG.
 assert_eq!(LStatus::from_raw(2).into_result(), Err(Win32Error::from_code(2)));
+
+// ERROR_IO_DEVICE, wrapped as an HRESULT.
+let hresult = HResult::from_win32(Win32Error::from_code(1117));
+assert_eq!(hresult.to_string(), "0x8007045D");
+assert_eq!(hresult.win32(), Some(Win32Error::from_code(1117)));
 
 // ERROR_VIRTDISK_NOT_VIRTUAL_DISK, a code above 2^31, keeps its value through io::Error.
 # #[cfg(windows)] {
