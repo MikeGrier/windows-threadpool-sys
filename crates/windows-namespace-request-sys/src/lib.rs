@@ -146,6 +146,7 @@ mod tests;
 
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
+    SecurityInformation,
 };
 pub use volume::{QueryVolumeInformation, VolumeInformation};
 pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};

@@ -101,6 +101,110 @@
       "why": "A control: ERROR_NOT_ENOUGH_MEMORY is 8, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY)\n"],
       "replace": ["    Win32Error::from_code(8)\n"]
+    },
+    {
+      "name": "NR-3.1: a string is parsed at a revision Windows does not define",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "SDDL_REVISION_1 is the one revision there is; any other is refused, so every string would be.",
+      "find": ["                sddl.as_terminated_ptr(),\n                SDDL_REVISION_1,\n"],
+      "replace": ["                sddl.as_terminated_ptr(),\n                0,\n"]
+    },
+    {
+      "name": "NR-3.1: a descriptor is written at a revision Windows does not define",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "As for parsing: the revision names the text format, and only one is defined.",
+      "find": ["                self.as_ptr().cast_mut(),\n                SDDL_REVISION_1,\n"],
+      "replace": ["                self.as_ptr().cast_mut(),\n                0,\n"]
+    },
+    {
+      "name": "NR-3.1: a string with an interior NUL is passed to Windows",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "Windows reads up to the NUL, so the string would be accepted as a different, shorter descriptor than it says.",
+      "find": ["        if sddl.has_interior_nul() {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "NR-3.1: the interior-NUL refusal carries a different code",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "The refusal is made here, not by Windows, and its code is ERROR_INVALID_PARAMETER, which a caller reads as it would Windows' own for a malformed string.",
+      "find": ["                Win32Error::from_code(ERROR_INVALID_PARAMETER).to_io_error(),\n"],
+      "replace": ["                Win32Error::from_code(ERROR_INVALID_PARAMETER + 1).to_io_error(),\n"]
+    },
+    {
+      "name": "NR-3.1: a string Windows refuses is reported as a failure to write one",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "The two directions have their own failure, which a caller tells apart.",
+      "find": ["                SecurityCaptureFailure::InvalidSddl,\n            ));\n"],
+      "replace": ["                SecurityCaptureFailure::ToSddl,\n            ));\n"]
+    },
+    {
+      "name": "NR-3.1: BLIND SPOT: a descriptor Windows refuses to write is reported as a refused string",
+      "file": "src/security/sddl.rs",
+      "expect": "survives",
+      "why": "Declared blind spot, not a control. No descriptor and mask were found that Windows refuses to write, so the failure's kind cannot be reached from a test; the code it carries is read the same way as for parsing, which the other entries pin.",
+      "find": ["                SecurityCaptureFailure::ToSddl,\n            ));\n"],
+      "replace": ["                SecurityCaptureFailure::InvalidSddl,\n            ));\n"]
+    },
+    {
+      "name": "NR-3.1: the mask asked for is not the mask passed",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "The mask is which parts of the descriptor are written; passing another writes the wrong parts.",
+      "find": ["                information.bits(),\n"],
+      "replace": ["                SecurityInformation::DACL.bits(),\n"]
+    },
+    {
+      "name": "NR-3.1: the text includes its terminator",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "The text is the string and no more; a NUL on its end is a string no one wrote, and the reported length is not what tells it (it was measured to vary).",
+      "find": ["        let units = unsafe { slice::from_raw_parts(text, count) };\n"],
+      "replace": ["        let units = unsafe { slice::from_raw_parts(text, count + 1) };\n"]
+    },
+    {
+      "name": "NR-3.1: the text loses its last character",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "The other half: a count one short cuts the string, which a length that does not count the terminator would do.",
+      "find": ["        let units = unsafe { slice::from_raw_parts(text, count) };\n"],
+      "replace": ["        let units = unsafe { slice::from_raw_parts(text, count - 1) };\n"]
+    },
+    {
+      "name": "NR-3.1: the group is named as the owner",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "Each part has its own bit, and the names are the values Windows defines.",
+      "find": ["    pub const GROUP: Self = Self(GROUP_SECURITY_INFORMATION);\n"],
+      "replace": ["    pub const GROUP: Self = Self(GROUP_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION);\n"]
+    },
+    {
+      "name": "NR-3.1: a selection contains only what overlaps it",
+      "file": "src/security/sddl.rs",
+      "expect": "caught",
+      "why": "A selection contains another when every bit of it is set, and everything contains none.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        self.0 & other.0 != 0\n"]
+    },
+    {
+      "name": "NR-3.1: BLIND SPOT: the memory Windows allocated is not freed",
+      "file": "src/security/sddl.rs",
+      "expect": "survives",
+      "why": "Declared blind spot, not a control. A leak of this size is not observable from a test; the free is read from the code, which frees on every path through a guard.",
+      "find": ["            unsafe { LocalFree(self.0) };\n"],
+      "replace": ["            unsafe { LocalFree(ptr::null_mut()) };\n"]
+    },
+    {
+      "name": "NR-3.1: control, the null check written as a comparison of the address",
+      "file": "src/security/sddl.rs",
+      "expect": "survives",
+      "why": "A control: a pointer is null when its address is zero, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        if !self.0.is_null() {\n"],
+      "replace": ["        if self.0.addr() != 0 {\n"]
     }
   ]
 }
