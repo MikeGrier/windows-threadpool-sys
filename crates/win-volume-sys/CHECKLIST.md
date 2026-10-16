@@ -29,11 +29,7 @@ the workspace's release-scope rule where the two do not have to build together.
 > **-> CROSS-COMPONENT PREREQUISITE:** `WV-2.1` needs [WE-1.1](../win-error-codes/CHECKLIST.md)
 > (`Win32Error`), in `crates/win-error-codes`.
 
-- [ ] **WV-2.1** -- **The helper.** Bring in the overlapped-safe `DeviceIoControl` helper (an input
-  buffer, its own `OVERLAPPED` and event, the pending path tested through a named pipe's `ReadFile`
-  and through `FSCTL_REQUEST_OPLOCK`) and the two small functions it shares, and **delete
-  `control()`**; geometry and lock go through the helper. Errors are `io::Error` carrying the exact
-  Win32 code. This is where the two copies of the overlapped-and-wait logic become one.
+- [x] **WV-2.1** -- The overlapped-safe `DeviceIoControl` helper, with an input buffer and exact error codes, replacing `control()`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-21)
 
   **Next:** `WV-2.2`.
 
