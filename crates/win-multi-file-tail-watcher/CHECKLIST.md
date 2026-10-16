@@ -67,10 +67,7 @@ running between polls.
 
 - [x] **TW-3.2** -- A poll that stops on a full SQ is parked on a thread-pool wait on the resume doorbell, and the resumed callback resets it, retries from the kept index, and only then arms again. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-32)
 
-- [ ] **TW-3.3** -- **Registration and unregistration during a running poll.** Dropping a
-  registration mid-poll neither waits nor invalidates attentions already written; a registration
-  made mid-poll may or may not be seen. A registration call waits at most for one batch of map
-  work. ([TW-D-8](DESIGN-NOTES.md#tw-d-8))
+- [x] **TW-3.3** -- Registering and dropping registrations during a running or parked poll is tested on the thread pool and needed no change: neither waits for the poll, attentions already written keep their value, and a registration made mid-poll is seen by the next poll. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#tw-33)
 
 - [ ] **TW-3.4** -- **Integration tests: polls over real files on the thread pool.** Hundreds of
   changing files with child-process writers against an SQ of two slots: every change is reported

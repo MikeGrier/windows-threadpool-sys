@@ -345,3 +345,128 @@ fn att(value: u32, last_known: u64, current: u64) -> SqEntry<u32> {
         current,
     })
 }
+
+#[test]
+fn a_registration_dropped_while_its_poll_is_parked_is_skipped_when_it_resumes() {
+    let dir = TempDir::new("poll-drop-mid");
+    let watcher = watcher(2);
+    let mut registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    assert_eq!(values(&next_entries(&watcher)), [0, 1]);
+    drop(registrations.remove(3));
+    watcher.ring_resume();
+    let mut rest = driven_to_poll_done(&watcher);
+    assert_eq!(rest.pop(), Some(SqEntry::PollDone));
+    assert_eq!(values(&rest), [2, 4]);
+}
+
+#[test]
+fn an_attention_written_for_a_registration_since_dropped_still_carries_its_value() {
+    let dir = TempDir::new("poll-drop-after");
+    let path = dir.file("a.log", b"0123456789");
+    let tag = std::sync::Arc::new(());
+    let watcher = Watcher::<std::sync::Arc<()>>::new(8).expect("watcher");
+    let registrations: Vec<_> = (0..2)
+        .map(|_| {
+            watcher
+                .register(&wtf(&path), 0, std::sync::Arc::clone(&tag))
+                .expect("register")
+        })
+        .collect();
+    watcher.poll().expect("poll");
+    assert!(signalled_within(watcher.doorbell(), 10_000));
+    drop(registrations);
+    // The test's, and one for each attention in the queue; the registrations' are gone.
+    assert_eq!(std::sync::Arc::strong_count(&tag), 3);
+    let entries: Vec<_> = watcher.drain().collect();
+    assert_eq!(entries.len(), 3, "two attentions and poll-done");
+    drop(entries);
+    assert_eq!(std::sync::Arc::strong_count(&tag), 1);
+}
+
+#[test]
+fn a_registration_made_while_a_poll_is_parked_is_seen_by_the_next_poll_and_not_this_one() {
+    let dir = TempDir::new("poll-add-mid");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 3);
+    watcher.poll().expect("poll");
+    assert_eq!(values(&next_entries(&watcher)), [0, 1]);
+    let late = dir.file("late.log", &[b'y'; 40]);
+    let _late = watcher.register(&wtf(&late), 0, 99).expect("register");
+    watcher.ring_resume();
+    let mut rest = driven_to_poll_done(&watcher);
+    assert_eq!(rest.pop(), Some(SqEntry::PollDone));
+    assert_eq!(
+        values(&rest),
+        [2],
+        "this poll's list was fixed at its probe"
+    );
+    watcher.poll().expect("poll again");
+    let mut next = driven_to_poll_done(&watcher);
+    assert_eq!(next.pop(), Some(SqEntry::PollDone));
+    assert_eq!(values(&next), [99]);
+}
+
+#[test]
+fn registering_and_dropping_do_not_wait_for_a_parked_poll() {
+    let dir = TempDir::new("poll-no-wait");
+    let watcher = watcher(2);
+    let _registrations = changing(&dir, &watcher, 5);
+    watcher.poll().expect("poll");
+    next_entries(&watcher);
+    let path = dir.file("extra.log", b"abc");
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for n in 0..50 {
+                drop(watcher.register(&wtf(&path), 0, 100 + n).expect("register"));
+            }
+            done.send(()).expect("report");
+        });
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("registering and dropping waited for the parked poll");
+    });
+}
+
+#[test]
+fn registrations_made_and_dropped_on_other_threads_while_polls_run_cause_no_failure() {
+    const CHURNERS: u32 = 4;
+    const EACH: u32 = 250;
+    let dir = TempDir::new("poll-churn");
+    let watcher = watcher(4);
+    let _registrations = changing(&dir, &watcher, 20);
+    let path = dir.file("churn.log", b"0123456789");
+    let churning = std::sync::atomic::AtomicU32::new(CHURNERS);
+    std::thread::scope(|scope| {
+        for thread in 0..CHURNERS {
+            let (watcher, path, churning) = (&watcher, &path, &churning);
+            scope.spawn(move || {
+                for n in 0..EACH {
+                    let registration = watcher
+                        .register(&wtf(path), 0, 1_000 + thread * EACH + n)
+                        .expect("register");
+                    drop(registration);
+                }
+                churning.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+        let mut polls = 0;
+        while churning.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            watcher.poll().expect("poll");
+            let entries = driven_to_poll_done(&watcher);
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| matches!(entry, SqEntry::Attention(_) | SqEntry::PollDone))
+            );
+            polls += 1;
+        }
+        assert!(polls > 0);
+    });
+    assert_eq!(
+        watcher.registered(),
+        20,
+        "only the original registrations remain"
+    );
+}

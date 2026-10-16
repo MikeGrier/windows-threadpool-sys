@@ -659,3 +659,28 @@ being accepted; 600 changes through a queue of 64, each reported once and in ord
 ringing as the callback runs; the resumed callback leaving the resume doorbell clear; a ring made
 before the poll parks not lost; a ring between polls starting nothing; the watcher dropped while
 parked and as a poll resumes, twenty times each.
+
+## Moved 2026-10-15 22:42:29 -04:00 -- TW-3.3: registering and dropping during a poll
+
+### <a id="tw-33"></a>TW-3.3 -- Registering and dropping registrations during a running or parked poll is tested on the thread pool and needed no change: neither waits for the poll, attentions already written keep their value, and a registration made mid-poll is seen by the next poll. *(completed 2026-10-15 22:42:29 -04:00)*
+
+Crate-internal (a `chore`): tests only, in `src/watcher/poll/tests.rs`. The behaviour is what
+[TW-D-8](DESIGN-NOTES.md#tw-d-8) says and what the earlier items built, so there was no code to
+change; this item is the proof on the real thread-pool poll.
+
+- **Why nothing changed.** A registration's `Drop` takes the roster lock for one removal and waits
+  for nothing else; the poll holds that lock one batch at a time and never across a probe, and an
+  attention holds a clone of `T`, not a reference to the registration. The batch bound on a
+  registration call is the property the pause tests in the engine and snapshot modules already
+  establish (the lock free in each pause, and a registration made from inside a probe's read), not a
+  new one.
+- **Not measured as a latency.** A bound on how long a call waits would have to be tight enough to
+  tell one batch from a whole pass, which a unit-test budget cannot give; it is the lock-free-pause
+  tests that carry it.
+
+Tested, with the poll parked on a full queue so the moment is exact: a registration dropped before
+its attention is written is skipped when the poll resumes; one dropped after its attention is
+written leaves that attention in the queue with its value, counted through an `Arc`; a registration
+made while parked is not in this poll and is in the next; fifty registrations and drops on another
+thread complete while the poll is parked; and four threads registering and dropping 250 times each
+while polls run through a queue of four, with no failure and only the original registrations left.
