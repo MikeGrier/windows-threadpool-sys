@@ -321,8 +321,21 @@ fn a_hard_link_reports_the_name_it_was_opened_by() {
                     .expect("final_path_as"),
             )
         };
-        assert_eq!(path_of(&by_original), canonical(&original), "{form:?}");
-        assert_eq!(path_of(&by_link), canonical(&link), "{form:?}");
+        // A file with several names reports the name it was opened by with the directories as
+        // opened, not normalised, so a parent given as an 8.3 short name (a CI runner's profile
+        // directory is one) comes back short. The name is compared as reported and the parent after
+        // canonicalising it.
+        for (reported, opened) in [
+            (path_of(&by_original), &original),
+            (path_of(&by_link), &link),
+        ] {
+            assert_eq!(reported.file_name(), opened.file_name(), "{form:?}");
+            assert_eq!(
+                canonical(reported.parent().expect("a parent")),
+                canonical(opened.parent().expect("a parent")),
+                "{form:?}"
+            );
+        }
     }
     drop((by_original, by_link));
     let _ = std::fs::remove_dir_all(&dir);
