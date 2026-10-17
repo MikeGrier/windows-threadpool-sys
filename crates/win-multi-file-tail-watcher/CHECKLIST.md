@@ -188,7 +188,7 @@ fine".
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
   that child processes write: the default options, a set of larger buffers and rings, and the tiny
   set the in-crate tests use, every byte delivered once under each, one child that writes the
-  expected typical load, the shape of an Azure CLI deployment command's output
+  near-term load, the shape of an Azure CLI deployment command's output
   ([capture](bench-captures/2026-10-17-azure-cli-output-shape.txt)): a long silence, then one burst of
   indented JSON of a few hundred bytes with the occasional long line, and an error on a second file,
   with nothing written between, which the layer must deliver at once after the silence and otherwise
