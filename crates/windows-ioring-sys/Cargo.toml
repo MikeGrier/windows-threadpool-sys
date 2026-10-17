@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-ioring-sys"
-version = "0.7.1" # x-release-please-version
+version = "0.7.2" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -117,7 +117,7 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
 # event. Optional behind the default-on `threadpool` feature (D-22); nothing
 # else in the crate references it.
-windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys", optional = true }
+windows-threadpool-sys = { version = "0.2.2", path = "../windows-threadpool-sys", optional = true }
 # The buffer contract: `IoBuf`, `IoBufMut` and `RegisteredSpan`, defined once in a portable crate and
 # re-exported here at the paths they always had (IB-1.3 in io-buffers' CHECKLIST.md). The version is
 # the one io-buffers' first release is fixed to (`Release-As: 0.1.0`), so it is not a guess; that
@@ -179,7 +179,7 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # M14.1's epoch-log sample orders a non-ring `FSCTL` against ring epochs, which
 # `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot express (D-24 orders SQEs against
 # SQEs). The `device` feature supplies the `DeviceIoControl` adapter.
-windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-io-sys", features = [
+windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", features = [
 	"device",
 ] }
 
