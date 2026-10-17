@@ -314,10 +314,14 @@ option recorded by construction. The rule throughout is documented APIs only
   security descriptor.** `DI-14.3` could not read either back, because this crate forbids `unsafe` and no
   crate of the workspace offers the two queries safely (`GetHandleInformation`; `GetSecurityInfo`, which
   returns a descriptor the request crate's `SecurityDescriptor::capture` can take and `to_sddl` can print).
-  The assistant has not decided where they belong: the request crate is the candidate for the descriptor, paired with `from_sddl` and `to_sddl`,
-  and a handle's inheritability has no obvious home, since `win-shared-os-owned-handle` is deliberately
-  without a native API surface and `win-sync-sys` is scoped to synchronization. **Raised with the engineer
-  before anything is built.** When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
+  **Where they belong is a working position, not a decision.** The engineer's suggestion, 2026-10-17, hedged
+  ("perhaps"): place a safe wrapper of a platform API by the grouping Microsoft Learn documents it under,
+  going forward. Read from the two pages' metadata and not from the navigation tree, `GetSecurityInfo`
+  (`aclapi.h`) is in the security reference and `GetHandleInformation` (`handleapi.h`) is not: its page's
+  technology root is the base services, so the two do not share a home under that rule, and the
+  engineer's belief that both are under "Security and Identity" holds for the first only. Nothing is built
+  until the engineer rules on the rule and on what it implies for `SecurityDescriptor`, which today lives
+  in the request crate. When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
 
