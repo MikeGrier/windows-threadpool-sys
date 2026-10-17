@@ -60,6 +60,15 @@ is versioned and released independently. For registry crates, a `<crate>-v<versi
 `windows-overlapped-io-sys-v0.1.0`) triggers the crates.io publish workflow after
 verifying that the tag matches that crate's package version.
 
+`release-please` only examines the newest `commit-search-depth` commits of
+`main` (merge commits count), so that value in
+[release-please-config.json](release-please-config.json) must exceed the number
+of commits between the oldest unreleased change and `main`. A crate whose
+`feat` commits fall outside the window is silently not released, and a
+dependent crate released first then fails `cargo publish` against the registry
+copy of that dependency. The run's log line `Splitting N commits by path` shows
+the window in use; compare it with `git rev-list --count <last release commit>..origin/main`.
+
 The probes are binary-only releases, never crates.io packages. Their routes are
 declared in [.github/release/binary-packages.json](.github/release/binary-packages.json):
 

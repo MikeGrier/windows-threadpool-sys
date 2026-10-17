@@ -5,7 +5,7 @@
     "bump-minor-pre-major": true,
     "bump-patch-for-minor-pre-major": true,
     "release-search-depth": 100,
-    "commit-search-depth": 100,
+    "commit-search-depth": 300,
     "commit-batch-size": 5,
     "plugins": [
         "cargo-workspace"
