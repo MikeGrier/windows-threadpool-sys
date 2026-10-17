@@ -518,6 +518,16 @@ bind to them as settled.
   chunks back into lines is the client's work and the layer promises only the ranges. Because this is
   the worst case, the layer has to be correct under it; whether the default sizes also have to be
   efficient under it is not decided, and the 64-byte default was picked for the lighter load.
+- **The expected typical load is the output of an Azure CLI deployment command.** The engineer,
+  2026-10-17: the virtual machine work "will not be exactly this" but "probably a lot like that":
+  commands that run and return some JSON and errors. The
+  [capture](bench-captures/2026-10-17-azure-cli-output-shape.txt) is of the samples Microsoft Learn
+  documents, not of a run, and every size in it is a lower bound. What it shows is small: a result of
+  a few hundred bytes of indented JSON, short lines but for a resource id, from a command the
+  quickstart says takes minutes. That is a working position until a real run is captured. Under it a
+  file is silent for long stretches, then gains a few hundred bytes, so a buffer of 64 bytes means a
+  handful of reads per burst, not thousands; and the layer is mostly idle, which is what
+  [TW-D-5](#tw-d-5)'s rule against work between polls is for.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on

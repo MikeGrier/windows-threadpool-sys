@@ -371,3 +371,10 @@ a new crate: "I would put this in a distinct new module within the crate".
   workload, and they bear on the buffer-size default without settling it: the 64-byte default was the
   engineer's hedged pick for a lighter typical load, so a worst case that stresses it is a test of
   correctness, not a ruling against it.
+- **The typical load.** The engineer pointed at Microsoft Learn's Azure CLI deployment commands as the
+  likely shape of the real jobs, commands that return JSON and errors. The assistant read three pages
+  and measured the sample blocks they show. They are documented samples with parts elided, so the
+  capture says its sizes are lower bounds. The Azure CLI is installed on the development machine, but
+  a deployment would create cloud resources, so none was run; a read-only command would measure real
+  output and was offered, not run. The page says a VM create takes minutes and shows the result after
+  it; that the lines arrive as one burst is an inference, and the capture marks it as one.

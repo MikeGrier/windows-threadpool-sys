@@ -187,7 +187,12 @@ fine".
 
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
   that child processes write: the default options, a set of larger buffers and rings, and the tiny
-  set the in-crate tests use, every byte delivered once under each, and one child that writes the
+  set the in-crate tests use, every byte delivered once under each, one child that writes the
+  expected typical load, the shape of an Azure CLI deployment command's output
+  ([capture](bench-captures/2026-10-17-azure-cli-output-shape.txt)): a long silence, then one burst of
+  indented JSON of a few hundred bytes with the occasional long line, and an error on a second file,
+  with nothing written between, which the layer must deliver at once after the silence and otherwise
+  leave quiet, and one child that writes the
   worst-case load, the shape of a CI runner's job log ([TW-D-16](DESIGN-NOTES.md#tw-d-16), the
   [capture](bench-captures/2026-10-16-runner-log-shape.txt)): lines of mixed length, most longer than
   a default buffer, in bursts with idle stretches between them, from which the test reassembles every
