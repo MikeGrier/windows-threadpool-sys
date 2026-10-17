@@ -1133,30 +1133,6 @@
       "replace": ["        Ok(0) => Ok(0),\n"]
     },
     {
-      "name": "DI-13.2: a created-and-truncated file is not emptied",
-      "file": "src/windows_backend/opened_file.rs",
-      "expect": "caught",
-      "why": "With CREATE_ALWAYS avoided, OPEN_ALWAYS plus an emptying call is the whole of create-and-truncate; without the call an existing file keeps its content.",
-      "find": ["            (true, true, false) => (OPEN_ALWAYS, true),\n"],
-      "replace": ["            (true, true, false) => (OPEN_ALWAYS, false),\n"]
-    },
-    {
-      "name": "DI-13.2: a new file is created through a link that is already there",
-      "file": "src/windows_backend/opened_file.rs",
-      "expect": "caught",
-      "why": "std added FILE_FLAG_OPEN_REPARSE_POINT for a new file, so CREATE_NEW does not follow a link; the open moved off std and keeps that.",
-      "find": ["        let reparse = if self.create_new {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
-      "replace": ["        let reparse = if self.create_new {\n            0\n"]
-    },
-    {
-      "name": "DI-13.2: the emptying step is skipped",
-      "file": "src/windows_backend/opened_file/open_request.rs",
-      "expect": "caught",
-      "why": "The emptying happens after the open, so it is tried on the call itself and not only on the parameters that ask for it.",
-      "find": ["    if !parameters.truncate_after {\n"],
-      "replace": ["    if true {\n"]
-    },
-    {
       "name": "DI-13.7.1: the path is handed to the request through a lossy conversion",
       "file": "src/windows_backend/opened_file/open_request.rs",
       "expect": "caught",
@@ -1202,7 +1178,7 @@
       "expect": "caught",
       "why": "The engineer ruled (DI-13.1 (f)) that a hint is passed to an unbuffered file and documented there, not refused. Caught by the tests that open every pair against the kernel and the ring.",
       "find": ["        let given = path.clone();\n"],
-      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(invalid_input(\"a hint is not offered to an unbuffered file\"));\n        }\n        let given = path.clone();\n"]
+      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(io::Error::new(io::ErrorKind::InvalidInput, \"a hint is not offered to an unbuffered file\"));\n        }\n        let given = path.clone();\n"]
     },
     {
       "name": "DI-14.1 control: the hint flags start from a typed zero",
@@ -1261,20 +1237,68 @@
       "replace": ["            rights: FileRights::NONE,\n            share: self.share,\n"]
     },
     {
-      "name": "DI-13.8: creating needs no right to write",
-      "file": "src/windows_backend/opened_file.rs",
+      "name": "DI-13.7.3: a disposition is sent to the call as another one",
+      "file": "src/windows_backend/disposition.rs",
       "expect": "caught",
-      "why": "Creating or truncating a file without the right to write is refused as invalid input until DI-13.7 removes the check, and the other rights do not stand in for it.",
-      "find": ["        if !A::WRITE && self.creates_or_truncates() {\n"],
-      "replace": ["        if false && !A::WRITE && self.creates_or_truncates() {\n"]
+      "why": "Each variant is the value it is named for; one that asked for OPEN_EXISTING in OpenAlways's place would fail to create where it says it does. Caught by the mapping test and by the test that opens each against the kernel.",
+      "find": ["            Self::OpenAlways => OPEN_ALWAYS,\n"],
+      "replace": ["            Self::OpenAlways => OPEN_EXISTING,\n"]
     },
     {
-      "name": "DI-13.8: a truncated file is not emptied",
+      "name": "DI-13.7.3: a new-file open is made to succeed on a file that is there",
+      "file": "src/windows_backend/disposition.rs",
+      "expect": "caught",
+      "why": "CreateNew is the disposition that fails when the file exists; as OPEN_ALWAYS it would open it. Caught by the kernel-facing test, not only by the mapping.",
+      "find": ["            Self::CreateNew => CREATE_NEW,\n"],
+      "replace": ["            Self::CreateNew => OPEN_ALWAYS,\n"]
+    },
+    {
+      "name": "DI-13.7.3: the options forget their disposition",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "TRUNCATE_EXISTING needs GENERIC_WRITE, which the data access does not ask for, so a file that is only truncated is opened and emptied after. Without the emptying the option would do nothing.",
-      "find": ["            (false, true, false) => (OPEN_EXISTING, true),\n"],
-      "replace": ["            (false, true, false) => (OPEN_EXISTING, false),\n"]
+      "why": "The options reach CreateFileW as OPEN_EXISTING whatever was asked, so the disposition has no effect.",
+      "find": ["            disposition: self.disposition.bits(),\n"],
+      "replace": ["            disposition: Disposition::OpenExisting.bits(),\n"]
+    },
+    {
+      "name": "DI-13.7.3: changing the data access forgets the disposition",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else, so one that reset the disposition would lose what an earlier call asked for.",
+      "find": ["            disposition: self.disposition,\n"],
+      "replace": ["            disposition: Disposition::OpenExisting,\n"]
+    },
+    {
+      "name": "DI-13.7.3: changing the data access forgets the reparse option",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the option that opens a link itself.",
+      "find": ["            open_reparse_point: self.open_reparse_point,\n"],
+      "replace": ["            open_reparse_point: false,\n"]
+    },
+    {
+      "name": "DI-13.7.3: the reparse option sets no flag",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Without the flag a link is followed, so a new file is created through one that is already there. Caught by the test of the flags and by the test that makes the link.",
+      "find": ["        let reparse = if self.open_reparse_point {\n            FILE_FLAG_OPEN_REPARSE_POINT\n"],
+      "replace": ["        let reparse = if self.open_reparse_point {\n            0\n"]
+    },
+    {
+      "name": "DI-13.7.3: a new-file disposition sets the reparse flag by itself",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The flag is an option and no disposition implies it; std's open did, and this one reflects Win32.",
+      "find": ["        let reparse = if self.open_reparse_point {\n"],
+      "replace": ["        let reparse = if self.open_reparse_point || self.disposition == Disposition::CreateNew {\n"]
+    },
+    {
+      "name": "DI-13.7.3 control: the flags of an open joined in another order",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same mask with its parts the other way round, which no test can tell apart.",
+      "find": ["            flags: flags | reparse | hints,\n"],
+      "replace": ["            flags: hints | reparse | flags,\n"]
     },
     {
       "name": "DI-13.8 control: the same test of containment with its operands the other way round",

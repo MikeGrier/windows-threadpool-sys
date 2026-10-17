@@ -23,8 +23,8 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
+    FILE_READ_DATA, FILE_WRITE_DATA,
 };
 use wtf_string::{Wtf16Str, Wtf16String};
 
@@ -32,6 +32,7 @@ use durable_ioring::{
     Access, Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
 };
 
+use super::disposition::Disposition;
 use super::file_rights::FileRights;
 use super::share_mode::ShareMode;
 
@@ -134,10 +135,11 @@ impl Buffering for Unbuffered {
     }
 }
 
-/// What to open: the data access, the other rights, what other opens may do meanwhile, how the file
-/// is created, and the cache hints. Only these, because the open mode is what an [`OpenedFile`]
-/// vouches for, and a caller's own flags could change it. A file is shared for reading, writing and
-/// deletion, as std opens one, until [`share`](Self::share) says otherwise.
+/// What to open: the data access, the other rights, what other opens may do meanwhile, what the open
+/// does about a file that is there or not, whether a link is opened or followed, and the cache hints.
+/// Only these, because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags
+/// could change it. A file is shared for reading, writing and deletion, as std opens one, until
+/// [`share`](Self::share) says otherwise.
 ///
 /// The data access is the type parameter `A`: it starts as [`NoData`], and [`read`](Self::read) and
 /// [`write`](Self::write) move it, so the handle an open makes carries the access it was asked
@@ -157,9 +159,8 @@ pub struct FileOptions<A: DataAccess = NoData> {
     access: PhantomData<A>,
     rights: FileRights,
     share: ShareMode,
-    create: bool,
-    create_new: bool,
-    truncate: bool,
+    disposition: Disposition,
+    open_reparse_point: bool,
     random_access: bool,
     sequential_scan: bool,
 }
@@ -178,9 +179,8 @@ impl FileOptions<NoData> {
             access: PhantomData,
             rights: FileRights::NONE,
             share: ShareMode::ALL,
-            create: false,
-            create_new: false,
-            truncate: false,
+            disposition: Disposition::OpenExisting,
+            open_reparse_point: false,
             random_access: false,
             sequential_scan: false,
         }
@@ -227,33 +227,31 @@ impl<A: DataAccess> FileOptions<A> {
             access: PhantomData,
             rights: self.rights,
             share: self.share,
-            create: self.create,
-            create_new: self.create_new,
-            truncate: self.truncate,
+            disposition: self.disposition,
+            open_reparse_point: self.open_reparse_point,
             random_access: self.random_access,
             sequential_scan: self.sequential_scan,
         }
     }
 
-    /// Create the file if it does not exist.
-    pub fn create(mut self, create: bool) -> Self {
-        self.create = create;
+    /// What the open does about a file that is there and one that is not (`dwCreationDisposition`).
+    /// The default is [`Disposition::OpenExisting`]. Calling this again replaces the disposition.
+    ///
+    /// No disposition changes the contents of a file that exists, so none is refused for want of the
+    /// right to write. A caller that wants an existing file emptied does it through the handle this
+    /// crate lends, with `File::set_len(0)`, which needs the write right and is not atomic with the
+    /// open.
+    pub fn disposition(mut self, disposition: Disposition) -> Self {
+        self.disposition = disposition;
         self
     }
 
-    /// Create the file, and fail if it exists.
-    pub fn create_new(mut self, create_new: bool) -> Self {
-        self.create_new = create_new;
-        self
-    }
-
-    /// Empty the file once it is open. The file is opened with `OPEN_EXISTING` and emptied after, as
-    /// for [`create`](Self::create) and `truncate` together, and not with `TRUNCATE_EXISTING`:
-    /// `CreateFileW` documents that disposition as needing `GENERIC_WRITE`, which the write access
-    /// does not ask for, and an open with `FILE_WRITE_DATA` in its place was measured to be refused
-    /// with `ERROR_INVALID_PARAMETER`. Emptying after the open is not atomic with it.
-    pub fn truncate(mut self, truncate: bool) -> Self {
-        self.truncate = truncate;
+    /// Open a link itself and not what it points to (`FILE_FLAG_OPEN_REPARSE_POINT`). Without it a
+    /// link is followed, including by [`Disposition::CreateNew`], which then creates the file the
+    /// link names. With it a link that is already there is what exists, so `CreateNew` fails and
+    /// `OpenAlways` opens the link. It has no effect on a path that is not a reparse point.
+    pub fn open_reparse_point(mut self, open_reparse_point: bool) -> Self {
+        self.open_reparse_point = open_reparse_point;
         self
     }
 
@@ -284,27 +282,10 @@ impl<A: DataAccess> FileOptions<A> {
         self
     }
 
-    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or a refusal for
-    /// a combination that cannot mean anything: (as `std::fs::OpenOptions` refused, until
-    /// `DI-13.7`) creating or truncating without the right to write.
-    fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
-        if !A::WRITE && self.creates_or_truncates() {
-            return Err(invalid_input(
-                "creating or truncating a file requires write access",
-            ));
-        }
-        // Neither `CREATE_ALWAYS` nor `TRUNCATE_EXISTING` is used: a truncated file is opened and
-        // emptied once open, as std does for a created one (the second needs `GENERIC_WRITE`, which
-        // the data access does not ask for).
-        let (disposition, truncate_after) = match (self.create, self.truncate, self.create_new) {
-            (false, false, false) => (OPEN_EXISTING, false),
-            (true, false, false) => (OPEN_ALWAYS, false),
-            (false, true, false) => (OPEN_EXISTING, true),
-            (true, true, false) => (OPEN_ALWAYS, true),
-            (_, _, true) => (CREATE_NEW, false),
-        };
-        // A new file is never created through a link that is already there.
-        let reparse = if self.create_new {
+    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies. Every
+    /// combination of the options is a request, so nothing here is refused.
+    fn parameters(self, flags: u32) -> open_request::Parameters {
+        let reparse = if self.open_reparse_point {
             FILE_FLAG_OPEN_REPARSE_POINT
         } else {
             0
@@ -316,17 +297,12 @@ impl<A: DataAccess> FileOptions<A> {
         if self.sequential_scan {
             hints |= FILE_FLAG_SEQUENTIAL_SCAN;
         }
-        Ok(open_request::Parameters {
+        open_request::Parameters {
             access: data_rights::<A>() | self.rights.bits(),
-            disposition,
+            disposition: self.disposition.bits(),
             flags: flags | reparse | hints,
             share: self.share.bits(),
-            truncate_after,
-        })
-    }
-
-    fn creates_or_truncates(self) -> bool {
-        self.create || self.create_new || self.truncate
+        }
     }
 }
 
@@ -336,10 +312,6 @@ impl<A: DataAccess> FileOptions<A> {
 /// stated here.
 pub(super) const fn data_rights<A: DataAccess>() -> u32 {
     (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })
-}
-
-fn invalid_input(message: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
 /// An unbuffered file was asked for on a device of another machine, which cannot keep the claim
@@ -496,19 +468,16 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, and if `options` create or
-    /// truncate a file and carry no right to write, before anything is touched (until `DI-13.7.3`
-    /// removes the second). Otherwise whatever the open reports: [`SharingViolation`] (as an
+    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, before anything is touched.
+    /// Otherwise whatever the open reports: [`SharingViolation`] (as an
     /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
     /// this open's access or sharing, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`]
     /// error) when `B` can claim its warranty only on a local device and `path` is on a remote one.
     /// That is decided from the path's final location, which resolves links and mapped drives,
     /// before anything is created; the file can still be replaced by a link in the time between.
     pub fn open(path: Wtf16String, options: FileOptions<A>) -> io::Result<Self> {
-        // Decided before anything is touched: what is asked for either makes a valid request or it
-        // does not.
         let (rights, share) = (options.rights, options.share);
-        let parameters = options.parameters(B::FLAGS)?;
+        let parameters = options.parameters(B::FLAGS);
         if B::LOCAL_DEVICE_ONLY {
             // The one place a `Path` is needed, until `DI-14.5` moves the check to the opened handle.
             let location = final_location(Path::new(&path.to_os_string()))?;

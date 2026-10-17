@@ -47,6 +47,7 @@ use durable_ioring::backend::{
 };
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
+mod disposition;
 mod file_rights;
 mod file_target;
 mod opened_disk;
@@ -61,6 +62,7 @@ mod wait;
 pub use wait::CompletionEvent;
 
 // The markers are the core's (DI-D-66); this module states what each asks of Win32.
+pub use disposition::Disposition;
 pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };

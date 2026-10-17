@@ -17,8 +17,8 @@ use super::super::{
     DataAccess, FileRights, NoData, ReadOnly, ReadWrite, Win32FileTarget, WriteOnly,
 };
 use super::{
-    Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
-    data_rights, final_location, names_a_remote_device, open_request,
+    Buffering, Cached, Disposition, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice,
+    Unbuffered, data_rights, final_location, names_a_remote_device, open_request,
 };
 use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::{
@@ -115,7 +115,7 @@ fn an_aligned_write_to_an_unbuffered_file_succeeds() {
 #[test]
 fn a_hint_sets_its_own_flag_and_nothing_else() {
     fn flags<A: DataAccess>(options: FileOptions<A>, mode: u32) -> u32 {
-        options.parameters(mode).expect("valid").flags
+        options.parameters(mode).flags
     }
     let read = FileOptions::new().read();
 
@@ -135,7 +135,7 @@ fn a_hint_sets_its_own_flag_and_nothing_else() {
         0,
         "a hint can be taken back"
     );
-    // Added to the mode's own flags and to the one a new file carries, never in place of them.
+    // Added to the mode's own flags and to the reparse flag, never in place of them.
     assert_eq!(
         flags(read.random_access(true), FILE_FLAG_NO_BUFFERING),
         FILE_FLAG_NO_BUFFERING | FILE_FLAG_RANDOM_ACCESS
@@ -144,7 +144,7 @@ fn a_hint_sets_its_own_flag_and_nothing_else() {
         flags(
             FileOptions::new()
                 .write()
-                .create_new(true)
+                .open_reparse_point(true)
                 .sequential_scan(true),
             0
         ),
@@ -259,18 +259,20 @@ fn the_options_decide_what_is_opened_and_created() {
     let error = OpenedFile::<Cached>::open(wtf(&missing), read_write()).expect_err("not created");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 
-    let created =
-        OpenedFile::<Cached>::open(wtf(&missing), read_write().create(true)).expect("create");
+    let created = OpenedFile::<Cached>::open(
+        wtf(&missing),
+        read_write().disposition(Disposition::OpenAlways),
+    )
+    .expect("create");
     assert!(missing.exists());
     drop(created);
 
-    let error = OpenedFile::<Cached>::open(wtf(&missing), read_write().create_new(true))
-        .expect_err("it exists");
+    let error = OpenedFile::<Cached>::open(
+        wtf(&missing),
+        read_write().disposition(Disposition::CreateNew),
+    )
+    .expect_err("it exists");
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-
-    fs::write(&missing, b"content").expect("fill");
-    drop(OpenedFile::<Cached>::open(wtf(&missing), read_write().truncate(true)).expect("truncate"));
-    assert_eq!(fs::metadata(&missing).expect("metadata").len(), 0);
 
     fs::remove_file(&missing).expect("remove");
 }
@@ -281,15 +283,21 @@ fn an_unbuffered_file_can_be_created_where_none_exists_yet() {
     // before anything is created, and a missing directory is the open's own NotFound.
     let temp = TempFile::new("of-new");
     let fresh = temp.0.with_extension("fresh");
-    let created = OpenedFile::<Unbuffered>::open(wtf(&fresh), read_write().create_new(true))
-        .expect("create unbuffered");
+    let created = OpenedFile::<Unbuffered>::open(
+        wtf(&fresh),
+        read_write().disposition(Disposition::CreateNew),
+    )
+    .expect("create unbuffered");
     assert!(fresh.exists());
     drop(created);
     fs::remove_file(&fresh).expect("remove");
 
     let nowhere = temp.0.join("no-such-directory").join("file");
-    let error = OpenedFile::<Unbuffered>::open(wtf(&nowhere), read_write().create(true))
-        .expect_err("no directory");
+    let error = OpenedFile::<Unbuffered>::open(
+        wtf(&nowhere),
+        read_write().disposition(Disposition::OpenAlways),
+    )
+    .expect_err("no directory");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }
 
@@ -392,142 +400,224 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
 }
 
 // --- What an open asks of CreateFileW -------------------------------------------------------
-//
-// Opening went from `std::fs::OpenOptions` to `windows-namespace-request-sys`'s `OpenFile`, and
-// a caller must see no difference, so what std asked of the kernel is pinned here.
 
 fn parameters_of<A: DataAccess>(options: FileOptions<A>) -> open_request::Parameters {
-    options.parameters(0).expect("a valid combination")
+    options.parameters(0)
 }
 
 /// What a file opened for reading and writing asks `CreateFileW` for, and nothing else.
 const READ_WRITE: u32 = FILE_READ_DATA | FILE_WRITE_DATA;
 
-fn parameters(
-    access: u32,
-    disposition: u32,
-    flags: u32,
-    truncate_after: bool,
-) -> open_request::Parameters {
+fn parameters(access: u32, disposition: u32, flags: u32) -> open_request::Parameters {
     open_request::Parameters {
         access,
         disposition,
         flags,
-        // What every file was opened with before the share mode was an option, and still is unless
-        // it is told otherwise.
+        // Every member, unless the options say otherwise.
         share: FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        truncate_after,
     }
 }
 
 #[test]
-fn the_options_map_to_the_access_and_disposition_std_asked_for() {
+fn the_options_map_to_the_access_and_disposition_they_name() {
     assert_eq!(
         parameters_of(FileOptions::new().read()),
-        parameters(FILE_READ_DATA, OPEN_EXISTING, 0, false)
+        parameters(FILE_READ_DATA, OPEN_EXISTING, 0)
     );
     assert_eq!(
         parameters_of(FileOptions::new().write()),
-        parameters(FILE_WRITE_DATA, OPEN_EXISTING, 0, false)
+        parameters(FILE_WRITE_DATA, OPEN_EXISTING, 0)
     );
     assert_eq!(
         parameters_of(read_write()),
-        parameters(READ_WRITE, OPEN_EXISTING, 0, false)
+        parameters(READ_WRITE, OPEN_EXISTING, 0),
+        "OpenExisting is what the options start at"
     );
     assert_eq!(
-        parameters_of(read_write().create(true)),
-        parameters(READ_WRITE, OPEN_ALWAYS, 0, false)
+        parameters_of(read_write().disposition(Disposition::OpenExisting)),
+        parameters(READ_WRITE, OPEN_EXISTING, 0)
     );
-    // Not `TRUNCATE_EXISTING`, which needs `GENERIC_WRITE`: the file is opened and emptied after.
     assert_eq!(
-        parameters_of(read_write().truncate(true)),
-        parameters(READ_WRITE, OPEN_EXISTING, 0, true)
+        parameters_of(read_write().disposition(Disposition::OpenAlways)),
+        parameters(READ_WRITE, OPEN_ALWAYS, 0)
+    );
+    assert_eq!(
+        parameters_of(read_write().disposition(Disposition::CreateNew)),
+        parameters(READ_WRITE, CREATE_NEW, 0)
+    );
+    assert_eq!(
+        parameters_of(
+            read_write()
+                .disposition(Disposition::CreateNew)
+                .disposition(Disposition::OpenAlways)
+        ),
+        parameters(READ_WRITE, OPEN_ALWAYS, 0),
+        "the last disposition stated is the one used"
     );
 }
 
 #[test]
-fn a_created_and_truncated_file_is_opened_always_and_emptied_afterwards() {
-    // Not `CREATE_ALWAYS`, whose semantics std avoids the same way (rust-lang/rust#115745).
-    assert_eq!(
-        parameters_of(read_write().create(true).truncate(true)),
-        parameters(READ_WRITE, OPEN_ALWAYS, 0, true)
-    );
-}
-
-#[test]
-fn a_new_file_is_created_without_following_a_link_and_whatever_else_is_asked() {
-    let expected = parameters(READ_WRITE, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, false);
-    assert_eq!(parameters_of(read_write().create_new(true)), expected);
-    // `create_new` wins over `create` and `truncate`, as it does in std.
-    assert_eq!(
-        parameters_of(read_write().create_new(true).create(true).truncate(true)),
-        expected
-    );
+fn the_reparse_flag_is_set_by_its_option_and_by_no_disposition() {
+    for disposition in [
+        Disposition::CreateNew,
+        Disposition::OpenExisting,
+        Disposition::OpenAlways,
+    ] {
+        let options = read_write().disposition(disposition);
+        assert_eq!(parameters_of(options).flags, 0, "{disposition:?}");
+        assert_eq!(
+            parameters_of(options.open_reparse_point(true)).flags,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            "{disposition:?}"
+        );
+        assert_eq!(
+            parameters_of(options.open_reparse_point(true).open_reparse_point(false)).flags,
+            0,
+            "{disposition:?}: the option can be taken back"
+        );
+    }
 }
 
 #[test]
 fn the_buffering_flags_are_added_to_what_the_options_imply() {
     let flags = read_write()
-        .create_new(true)
+        .open_reparse_point(true)
         .parameters(FILE_FLAG_NO_BUFFERING)
-        .expect("valid")
         .flags;
     assert_eq!(flags, FILE_FLAG_NO_BUFFERING | FILE_FLAG_OPEN_REPARSE_POINT);
     assert_eq!(
-        read_write()
-            .parameters(FILE_FLAG_NO_BUFFERING)
-            .expect("valid")
-            .flags,
+        read_write().parameters(FILE_FLAG_NO_BUFFERING).flags,
         FILE_FLAG_NO_BUFFERING
     );
 }
 
 #[test]
-fn a_combination_that_cannot_mean_anything_is_invalid_input() {
-    fn refused<A: DataAccess>(label: &str, options: FileOptions<A>) {
-        let error = options.parameters(0).expect_err(label);
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{label}");
+fn every_disposition_is_a_request_whatever_the_data_access() {
+    fn requested<A: DataAccess>(options: FileOptions<A>) {
+        for (disposition, bits) in [
+            (Disposition::CreateNew, CREATE_NEW),
+            (Disposition::OpenExisting, OPEN_EXISTING),
+            (Disposition::OpenAlways, OPEN_ALWAYS),
+        ] {
+            let asked = parameters_of(options.disposition(disposition));
+            assert_eq!(asked.disposition, bits, "{disposition:?}");
+            assert_eq!(asked.access, data_rights::<A>() | options.rights.bits());
+        }
     }
-    refused("create only", FileOptions::new().create(true));
-    refused("create_new only", FileOptions::new().create_new(true));
-    refused("truncate only", FileOptions::new().truncate(true));
-    refused("read and create", FileOptions::new().read().create(true));
-    refused(
-        "read and create_new",
-        FileOptions::new().read().create_new(true),
-    );
-    refused(
-        "read and truncate",
-        FileOptions::new().read().truncate(true),
-    );
-    // Writing is what creating and truncating need, so the other rights do not stand in for it.
-    refused(
-        "other rights and create",
-        FileOptions::new()
-            .rights(FileRights::DELETE | FileRights::WRITE_ATTRIBUTES)
-            .create(true),
-    );
+    requested(FileOptions::new());
+    requested(FileOptions::new().read());
+    requested(FileOptions::new().write());
+    requested(read_write());
+    // The other rights are no stand-in for a data right, and none is wanted: nothing is refused.
+    requested(FileOptions::new().rights(FileRights::DELETE | FileRights::WRITE_ATTRIBUTES));
+}
+
+/// What the kernel does with each disposition, for a file that is there and for one that is not,
+/// judged by the kernel and not by the parameters the options produced.
+fn each_disposition_does_what_win32_says<A: DataAccess>(options: FileOptions<A>) {
+    const CONTENT: &[u8] = b"content";
+    let temp = TempFile::new("of-dispositions");
+    let absent = temp.0.with_extension("absent");
+    let open = |path: &Path, disposition| {
+        OpenedFile::<Cached, A>::open(wtf(path), options.disposition(disposition)).map(drop)
+    };
+
+    // (disposition, what it does to a file that is there, what it does to one that is not)
+    let table = [
+        (
+            Disposition::CreateNew,
+            Some(io::ErrorKind::AlreadyExists),
+            None,
+        ),
+        (
+            Disposition::OpenExisting,
+            None,
+            Some(io::ErrorKind::NotFound),
+        ),
+        (Disposition::OpenAlways, None, None),
+    ];
+    for (disposition, on_present, on_absent) in table {
+        fs::write(&temp.0, CONTENT).expect("fill");
+        let result = open(&temp.0, disposition);
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            on_present,
+            "{disposition:?} present"
+        );
+        assert_eq!(
+            fs::read(&temp.0).expect("read"),
+            CONTENT,
+            "{disposition:?} changed a file that was there"
+        );
+
+        let _ = fs::remove_file(&absent);
+        let result = open(&absent, disposition);
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            on_absent,
+            "{disposition:?} absent"
+        );
+        if on_absent.is_none() {
+            assert_eq!(
+                fs::metadata(&absent).expect("created").len(),
+                0,
+                "{disposition:?} created a file that was not empty"
+            );
+            fs::remove_file(&absent).expect("remove");
+        } else {
+            assert!(
+                !absent.exists(),
+                "{disposition:?} created a file it should not"
+            );
+        }
+    }
 }
 
 #[test]
-fn creating_and_truncating_empties_an_existing_file_on_either_buffering_mode() {
-    // The emptying is a call made after the open, so it is tried on an unbuffered handle too.
-    let temp = TempFile::new("of-truncate");
-    let options = read_write().create(true).truncate(true);
+fn each_disposition_does_what_win32_says_for_each_typed_access() {
+    each_disposition_does_what_win32_says(FileOptions::new());
+    each_disposition_does_what_win32_says(FileOptions::new().read());
+    each_disposition_does_what_win32_says(FileOptions::new().write());
+    each_disposition_does_what_win32_says(read_write());
+}
 
-    fs::write(&temp.0, b"content").expect("fill");
-    drop(OpenedFile::<Cached>::open(wtf(&temp.0), options).expect("cached"));
-    assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
+#[test]
+fn a_new_file_is_created_through_a_link_that_is_already_there_unless_the_link_is_opened() {
+    let temp = TempFile::new("of-link");
+    let target = temp.0.with_extension("target");
+    let link = temp.0.with_extension("link");
+    if let Err(error) = std::os::windows::fs::symlink_file(&target, &link) {
+        eprintln!("skipped: a symbolic link cannot be made here: {error}");
+        return;
+    }
+    let create = read_write().disposition(Disposition::CreateNew);
 
-    fs::write(&temp.0, b"content").expect("fill");
-    drop(OpenedFile::<Unbuffered>::open(wtf(&temp.0), options).expect("unbuffered"));
-    assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
+    // With the option the link is what is there, so the file it names is not created.
+    let error = OpenedFile::<Cached>::open(wtf(&link), create.open_reparse_point(true))
+        .expect_err("the link exists");
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert!(!target.exists());
 
-    // And where there is nothing to empty, the file is created.
-    let fresh = temp.0.with_extension("fresh");
-    drop(OpenedFile::<Cached>::open(wtf(&fresh), options).expect("created"));
-    assert_eq!(fs::metadata(&fresh).expect("metadata").len(), 0);
-    fs::remove_file(&fresh).expect("remove");
+    // Without it the link is followed, and the file it names is created.
+    drop(OpenedFile::<Cached>::open(wtf(&link), create).expect("created through the link"));
+    assert!(target.exists());
+
+    fs::remove_file(&link).expect("remove the link");
+    fs::remove_file(&target).expect("remove the target");
+}
+
+#[test]
+fn an_existing_file_is_the_same_length_after_each_disposition_on_either_buffering_mode() {
+    // Opening does nothing to the contents, so an unbuffered handle is no different.
+    let temp = TempFile::new("of-length");
+    for disposition in [Disposition::OpenExisting, Disposition::OpenAlways] {
+        fs::write(&temp.0, b"content").expect("fill");
+        let options = read_write().disposition(disposition);
+        drop(OpenedFile::<Cached>::open(wtf(&temp.0), options).expect("cached"));
+        assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 7);
+        drop(OpenedFile::<Unbuffered>::open(wtf(&temp.0), options).expect("unbuffered"));
+        assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 7);
+    }
 }
 
 #[test]
@@ -675,7 +765,7 @@ fn a_files_target_states_the_access_the_file_was_opened_with() {
 #[test]
 fn the_access_an_open_asks_the_kernel_for_is_the_data_access_and_the_other_rights() {
     fn access<A: DataAccess>(options: FileOptions<A>) -> u32 {
-        options.parameters(0).expect("valid").access
+        options.parameters(0).access
     }
     let other = FileRights::DELETE | FileRights::WRITE_ATTRIBUTES;
     assert_eq!(access(FileOptions::new()), 0);
@@ -700,7 +790,7 @@ fn the_access_an_open_asks_the_kernel_for_is_the_data_access_and_the_other_right
 #[test]
 fn no_options_ask_for_the_append_bit() {
     fn access<A: DataAccess>(options: FileOptions<A>) -> u32 {
-        options.parameters(0).expect("valid").access
+        options.parameters(0).access
     }
     let everything = FileRights::READ_ATTRIBUTES
         | FileRights::WRITE_ATTRIBUTES
@@ -732,13 +822,14 @@ fn read_and_write_reach_the_same_access_in_either_order_and_keep_everything_else
     let _: FileOptions<WriteOnly> = FileOptions::new().write().write();
     let _: FileOptions<ReadWrite> = FileOptions::new().read().write().read().write();
 
-    // Changing the access carries the creation mode and the hints along.
+    // Changing the access carries the disposition, the reparse flag and the hints along.
     let moved = FileOptions::new()
-        .create_new(true)
+        .disposition(Disposition::CreateNew)
+        .open_reparse_point(true)
         .random_access(true)
         .sequential_scan(true)
         .write();
-    let parameters = moved.parameters(0).expect("valid");
+    let parameters = moved.parameters(0);
     assert_eq!(parameters.disposition, CREATE_NEW);
     assert_eq!(
         parameters.flags,

@@ -24,7 +24,6 @@ fn read_existing() -> Parameters {
         disposition: OPEN_EXISTING,
         flags: 0,
         share: SHARE_ALL,
-        truncate_after: false,
     }
 }
 
@@ -97,38 +96,25 @@ fn an_empty_path_is_refused_by_win32_with_an_os_error_and_not_by_this_crate() {
 }
 
 #[test]
-fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
-    let temp = TempFile::new("or-truncate");
+fn an_open_that_creates_leaves_an_existing_file_as_it_was_and_makes_a_new_one_empty() {
+    let temp = TempFile::new("or-always");
     fs::write(&temp.0, b"content").expect("fill");
     let read_write = GENERIC_READ | windows_sys::Win32::Foundation::GENERIC_WRITE;
+    let always = Parameters {
+        access: read_write,
+        disposition: OPEN_ALWAYS,
+        flags: 0,
+        share: SHARE_ALL,
+    };
 
-    let kept: OwnedHandle = open(
-        wtf(&temp.0),
-        Parameters {
-            access: read_write,
-            disposition: OPEN_ALWAYS,
-            flags: 0,
-            share: SHARE_ALL,
-            truncate_after: false,
-        },
-    )
-    .expect("create");
+    let kept: OwnedHandle = open(wtf(&temp.0), always).expect("open");
     drop(kept);
     assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 7);
 
-    let emptied = open(
-        wtf(&temp.0),
-        Parameters {
-            access: read_write,
-            disposition: OPEN_ALWAYS,
-            flags: 0,
-            share: SHARE_ALL,
-            truncate_after: true,
-        },
-    )
-    .expect("create and truncate");
-    drop(emptied);
-    assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
+    let fresh = temp.0.with_extension("fresh");
+    drop(open(wtf(&fresh), always).expect("create"));
+    assert_eq!(fs::metadata(&fresh).expect("metadata").len(), 0);
+    fs::remove_file(&fresh).expect("remove");
 }
 
 #[test]

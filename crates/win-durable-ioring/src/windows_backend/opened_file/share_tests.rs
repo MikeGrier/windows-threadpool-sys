@@ -282,7 +282,7 @@ fn the_share_mode_survives_the_options_changing_their_data_access() {
 
 #[test]
 fn the_share_mode_reaches_the_request_as_it_is_and_defaults_to_every_member() {
-    let share_of = |options: FileOptions<ReadWrite>| options.parameters(0).expect("valid").share;
+    let share_of = |options: FileOptions<ReadWrite>| options.parameters(0).share;
     let read_write = || FileOptions::new().read().write();
     assert_eq!(share_of(read_write()), ShareMode::ALL.bits());
     for mode in every_share_mode() {

@@ -6,11 +6,9 @@
 //! means is decided here: [`Parameters`] is what [`FileOptions`](super::FileOptions) asks for, and
 //! [`open`] makes the call. The path is handed to the request as the caller gave it, a
 //! [`Wtf16String`] (DI-13.7.1): nothing here lengthens, shortens or refuses it, so a path longer than
-//! `MAX_PATH` without a verbatim prefix and an empty one are what Win32 makes of them. A file that
-//! is both created and truncated is still opened with `OPEN_ALWAYS` and then emptied, as `std`
-//! does, until DI-13.7.3 replaces the booleans with Win32's own dispositions.
+//! `MAX_PATH` without a verbatim prefix and an empty one are what Win32 makes of them. The
+//! disposition is Win32's own, and nothing is done to the file after the open (DI-13.7.3).
 
-use std::fs::File;
 use std::io;
 use std::os::windows::io::OwnedHandle;
 
@@ -33,8 +31,6 @@ pub(super) struct Parameters {
     pub flags: u32,
     /// `dwShareMode`.
     pub share: u32,
-    /// Whether to empty the file once it is open, for a file that is created and truncated.
-    pub truncate_after: bool,
 }
 
 /// Open `path` as `parameters` says. A path with an interior NUL is refused by the request, as
@@ -46,15 +42,9 @@ pub(super) fn open(path: Wtf16String, parameters: Parameters) -> io::Result<Owne
         .with_share_mode(parameters.share)
         .with_creation_disposition(parameters.disposition)
         .with_flags_and_attributes(parameters.flags);
-    let handle = request
+    request
         .perform()
-        .map_err(|error| io::Error::from_raw_os_error(raw_code(error.code())))?;
-    if !parameters.truncate_after {
-        return Ok(handle);
-    }
-    let file = File::from(handle);
-    file.set_len(0)?;
-    Ok(OwnedHandle::from(file))
+        .map_err(|error| io::Error::from_raw_os_error(raw_code(error.code())))
 }
 
 /// A path the request refused, as the error an open reports: the Windows code if the refusal came
