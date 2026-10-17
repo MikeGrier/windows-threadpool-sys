@@ -377,3 +377,9 @@ a new crate: "I would put this in a distinct new module within the crate".
   operations returning a token that is polled, and a build service is a design center that sets a
   floor. The capture was kept, marked as documentation and not a run. The Azure CLI is installed on
   the development machine, but a deployment would create cloud resources, so none was run.
+- **The ring's queue sizes were measured, not reasoned.** The assistant had inferred from two
+  observations that the kernel doubles the completion queue it is asked for, and wrote that down as a
+  working position with a note that TW-9.1 would confirm or replace it. A probe over a grid of sizes
+  replaced it: the completion queue is the larger of twice the submission queue and the request
+  rounded up. A request of zero is the finding that matters to the options type, because the ring
+  accepts it and picks a default, so a caller who passes zero gets a size they did not choose.

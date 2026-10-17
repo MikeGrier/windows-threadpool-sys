@@ -1314,6 +1314,38 @@
       "why": "Bytes past the window were not read into the buffer by this read, so a chunk claiming them shows another read's.",
       "find": ["            len <= self.window,"],
       "replace": ["            len <= self.bytes.len(),"]
+    },
+    {
+      "name": "the ring is not a limit on the reads in flight",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The engine stops submitting when the ring holds as many reads as its completion queue, so the queue cannot overflow. The ring-size tests assert the in-flight count is the least of the pieces, the buffers and that size.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if false && outstanding >= *cq_size {"]
+    },
+    {
+      "name": "the ring's limit is one read late",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A limit of the queue's size is reached at that many reads, not one more; the case where the pool and the ring are equal is the sharpest.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if outstanding > *cq_size {"]
+    },
+    {
+      "name": "the engine bounds the reads by the requested completion queue size, not the one the ring reports",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The ring rounds the request up and doubles the submission queue into it, so the request is not what bounds the reads.",
+      "find": ["                .completion_queue_size,\n        )\n        .expect(\"a u32 fits usize\");"],
+      "replace": ["                .completion_queue_size\n                .min(ring_cq_size),\n        )\n        .expect(\"a u32 fits usize\");"]
+    },
+    {
+      "name": "the outstanding count is read through a second local",
+      "file": "src/read_engine.rs",
+      "expect": "survives",
+      "why": "Equivalent: the count is the ring's outstanding, read into a local; naming it twice changes nothing.",
+      "find": ["            let mut outstanding = ring.outstanding();"],
+      "replace": ["            let outstanding_now = ring.outstanding();\n            let mut outstanding = outstanding_now;"]
     }
   ]
 }

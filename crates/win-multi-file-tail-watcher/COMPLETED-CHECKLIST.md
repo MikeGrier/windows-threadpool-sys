@@ -1245,3 +1245,25 @@ lists are in alphabetical order again.
 
 Noted, not changed: `2645d66a fix(overlapped-io)` touches this crate's docs, so the crate's first
 changelog will carry that line.
+
+## Moved 2026-10-17 00:24:10 -04:00 -- TW-9.1: the ring's queue sizes
+
+### <a id="tw-91"></a>TW-9.1 -- The ring's two queue sizes are measured and asserted: how it rounds and pairs them, its largest sizes and the conditions it refuses with, and how its completion queue bounds the reads in flight against the buffer count. *(completed 2026-10-17 00:24:10 -04:00)*
+
+`src/read_engine/ring_size_tests.rs`, six tests. A throwaway probe over a grid of requests was run
+first and replaced by tests that assert what it showed: the submission queue's rounding and its zero
+default, the completion queue's rule over a grid of 20 by 13 requests, the largest sizes taken from
+`capabilities()` with the refusals checked by the ring's own condition and not by text, an engine made
+at the largest ring and refused one over, and the in-flight count against pieces, buffers and ring
+sizes across seven cases including the tie and a submission queue smaller than the completion queue.
+The in-flight cases read the engine after two steps, planning and submitting, before any completion is
+popped, so the count is deterministic; the engine's private steps are reachable because the test
+module is a child of the engine's.
+
+Four sabotage entries: no ring limit, a limit one read late, the engine trusting the requested size
+over the reported one, all caught, and the outstanding count read through a second local, a control
+that survives. The first two were also applied by hand with only these tests run, and the in-flight
+test alone caught both.
+
+Limits: the formulas are what one host and build showed, asserted as such; throughput under a small
+completion queue and the memory of a ring at the largest sizes were not measured.

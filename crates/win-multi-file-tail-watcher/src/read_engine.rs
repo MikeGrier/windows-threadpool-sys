@@ -32,6 +32,8 @@ use crate::{CreateError, Diagnostic, DiagnosticKind, HeldFile, OpenError, Regist
 #[cfg(test)]
 mod child_tests;
 #[cfg(test)]
+mod ring_size_tests;
+#[cfg(test)]
 mod tests;
 
 /// The top sixteen bits of an `HRESULT` made from a Win32 code: severity 1, facility 7.

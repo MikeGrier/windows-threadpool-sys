@@ -473,9 +473,26 @@ module within the crate".
   ([below](#working-positions-not-decisions)): the engineer picked numbers with a hedge, and
   expects measurement to say little, since the best sizes depend on the workload.
 - **A size that cannot work is refused at construction**, naming the field and the bound, before
-  anything is allocated. The ring's rules for its two queue sizes, and how its completion queue
-  bounds the reads in flight against the buffer count, are measured first
-  ([TW-9.1](CHECKLIST.md)); nothing here states them until they are.
+  anything is allocated. The ring's rules for its two queue sizes were measured first
+  ([TW-9.1](CHECKLIST.md)) and are in the next bullet.
+- **What the ring does with the two queue sizes** (measured 2026-10-17 on an Intel Xeon Platinum
+  8573C, Windows 11 build 10.0.26300.9711; asserted by the tests in
+  [ring_size_tests.rs](src/read_engine/ring_size_tests.rs), which would fail on a host or build that
+  behaves differently):
+  - The submission queue is rounded up to a power of two of at least eight. A request of zero is
+    accepted and replaced by a default of 32. Nothing is refused for being small.
+  - The completion queue is the larger of twice the submission queue it settled on and the request
+    rounded up to a power of two. A request for a smaller completion queue than that is accepted and
+    raised.
+  - The largest sizes are what `capabilities()` reports. One more is refused with
+    `IORING_E_SUBMISSION_QUEUE_TOO_BIG` or `IORING_E_COMPLETION_QUEUE_TOO_BIG`, and a request just
+    over half the largest completion queue is rounded up to it. When both are too big the submission
+    queue is the one named.
+  - **Reads in flight at once are the least of the pieces announced, the buffers in the pool and the
+    completion queue the ring reports.** The ring's own limit is checked first, so a tie is reported
+    as a full ring. The submission queue is not a limit: a submit empties it and the engine goes on.
+  - What a completion queue smaller than the pool costs in throughput, and what the memory of a ring
+    at the largest sizes is, were not measured.
 - **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
   `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
 
@@ -506,9 +523,10 @@ bind to them as settled.
 - **The ring's two queues would default to 64 each too**, chosen by the assistant because the
   engineer left those two to it (2026-10-16). The reasoning: each read in flight holds a buffer, so
   with 64 buffers no more than 64 can be in flight, and a ring that holds more than that adds
-  nothing. The kernel was observed to report a completion queue twice the size asked for (16 for an
-  eight, 128 for a 64, on one host); if that holds, a request of 64 gives 128 and the pool, not the
-  ring, is what stops the reads. TW-9.1 confirms or replaces this before it binds anything.
+  nothing. TW-9.1 measured the ring: a request of 64 and 64 gives a submission queue of 64 and a
+  completion queue of 128, so the pool, not the ring, is what stops the reads at 64 buffers
+  ([TW-D-16](#tw-d-16)). The earlier reading here, that the kernel doubles the completion queue
+  asked for, was wrong: it is the larger of twice the submission queue and the request.
 - **The worst-case load to plan for is the output of a CI runner's job log.** The engineer,
   2026-10-16: "take it literally"; the real jobs are virtual machine deployments, the log is a good
   benchmark of them, and "this is our worst case load", so the typical load is lighter than this. The [capture](bench-captures/2026-10-16-runner-log-shape.txt) states what three runner

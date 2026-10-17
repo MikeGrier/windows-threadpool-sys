@@ -159,18 +159,18 @@ The module is `reader`, and its types are `TailReader<T>` (the layer), `TailRead
 sizes), `ReadEntry<T>` (the SQ entry) and `Chunk` (the bytes): the engineer, 2026-10-16, "the names are
 fine".
 
-- [ ] **TW-9.1** -- How the ring's two queue sizes behave is measured and recorded: which pairs
-  `IoRing::with_inventory` accepts and refuses, the completion queue size the kernel reports for each
-  request, the largest sizes it accepts (the ring reports a maximum completion queue size), and how that size bounds the reads in flight against the pool's buffer count. Tests in the
-  crate assert what was observed and the DESIGN-NOTES decision states it, with the host it was
-  measured on. Nothing in TW-9.2 states a rule that this item did not observe.
+- [x] **TW-9.1** -- The ring's two queue sizes are measured and asserted: how it rounds and pairs them, its largest sizes and the conditions it refuses with, and how its completion queue bounds the reads in flight against the buffer count. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-91)
 
 - [ ] **TW-9.2** -- An options type holds the five sizes and checks them before anything is
   allocated: each refusal is a distinct error naming the field and the bound, the buffer size and
-  count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by TW-9.1's. The
-  options have a `Default` of 64 buffers of 64 bytes, a client SQ of 64 entries and a ring of 64
-  and 64, a working position ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that
-  TW-9.1 confirms or replaces for the ring's two. No bound is stricter than the one that really limits the field, so a
+  count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by what TW-9.1
+  measured: zero is refused, because the ring accepts it and replaces it with a default the caller
+  did not choose, and a size past what `capabilities()` reports is refused naming the field and the
+  ring's own condition. Whether a ring size that is not a power of two is accepted, as the ring
+  rounds it up, or refused is decided here. The options have a `Default` of 64 buffers of 64 bytes, a
+  client SQ of 64 entries and a ring of 64 and 64, a working position
+  ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that TW-9.1 found a ring of 64
+  and 64 consistent with: the pool, not the ring, is then the limit. No bound is stricter than the one that really limits the field, so a
   size well above the defaults is accepted when the pool, the SQ and the ring can have it
   ([TW-D-16](DESIGN-NOTES.md#tw-d-16)). One check per field, tested at, below and above each
   bound, and every valid combination TW-9.1 found reaches a working engine, the defaults included.
