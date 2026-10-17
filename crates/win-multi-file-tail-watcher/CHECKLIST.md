@@ -187,7 +187,11 @@ fine".
 
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
   that child processes write: the default options, a set of larger buffers and rings, and the tiny
-  set the in-crate tests use, every byte delivered once under each, an invalid
+  set the in-crate tests use, every byte delivered once under each, and one child that writes the
+  shape of a CI runner's job log ([TW-D-16](DESIGN-NOTES.md#tw-d-16), the
+  [capture](bench-captures/2026-10-16-runner-log-shape.txt)): lines of mixed length, most longer than
+  a default buffer, in bursts with idle stretches between them, from which the test reassembles every
+  line whole out of chunks that arrive in any order, an invalid
   size of each field refused before any file is opened, and a chunk the client keeps stopping the
   reads until it is dropped. The README states what each size limits, naming the three stops (an
   empty pool, a full ring, a full client SQ), without a measured figure it does not cite.

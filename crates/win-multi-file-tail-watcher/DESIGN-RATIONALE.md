@@ -364,3 +364,9 @@ a new crate: "I would put this in a distinct new module within the crate".
 - **Names left open.** The assistant proposed `TailReader` and `TailReaderOptions` for the types and
   `reader` for the module, and asked whether "the layer's name" meant the types. It does: the module
   and type names, since no crate name is in question.
+- **The benchmark workload.** The assistant measured three raw runner logs of this repository when
+  the engineer said to plan for output with the cadence of a GitHub runner's job log, and the engineer
+  confirmed the literal reading: the real work is virtual machine deployment, and the log is a good
+  benchmark of it. The figures are in the capture, not here. What they change in the plan is TW-9.5's
+  workload, and they bear on the buffer-size default without settling it: the 64-byte default was the
+  engineer's hedged pick, and this is evidence about it, not a ruling.
