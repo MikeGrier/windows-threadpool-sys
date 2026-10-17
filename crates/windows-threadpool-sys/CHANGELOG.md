@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.1...windows-threadpool-sys-v0.2.2) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-overlapped-io-sys bumped from 0.2.0 to 0.3.0
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.2.0 to 0.3.0
+
 ## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.0...windows-threadpool-sys-v0.2.1) (2026-10-15)
 
 

@@ -2,7 +2,7 @@
 
 [package]
 name = "win-multi-file-tail-watcher"
-version = "0.1.0"
+version = "0.1.1"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -23,20 +23,20 @@ wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
 # `fs` is where the observer's length query lives. No other feature, so none of that crate's
 # optional dependencies come with it.
-windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-io-sys", default-features = false, features = [
+windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", default-features = false, features = [
 	"fs",
 ] }
 
 # The poll runs as a thread-pool work item, and parks on a thread-pool wait (TW-3.2). Path and
 # version both, as for every sibling.
-windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.2.2", path = "../windows-threadpool-sys" }
 
 # The buffer contract the I/O ring takes a read's buffer by (TW-D-15). Path and version both.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
 # The ring the reading engine reads through (TW-D-15). `threadpool` is where `CompletionWake` is,
 # which runs the engine when a read completes (TW-6.1); path and version both.
-windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys", default-features = false, features = [
+windows-ioring-sys = { version = "0.7.2", path = "../windows-ioring-sys", default-features = false, features = [
 	"threadpool",
 ] }
 

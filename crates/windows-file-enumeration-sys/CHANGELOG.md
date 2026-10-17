@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.2.0...windows-file-enumeration-sys-v0.2.1) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.2.1 to 0.2.2
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.1.4...windows-file-enumeration-sys-v0.2.0) (2026-10-16)
 
 

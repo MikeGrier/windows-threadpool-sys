@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.1...windows-ioring-sys-v0.7.2) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.2.1 to 0.2.2
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.2.0 to 0.3.0
+
 ## [0.7.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.0...windows-ioring-sys-v0.7.1) (2026-10-15)
 
 
