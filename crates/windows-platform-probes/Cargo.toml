@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-platform-probes"
-version = "2026.1017.0"
+version = "2026.1017.1"
 publish = false
 authors.workspace = true
 edition.workspace = true
@@ -229,12 +229,12 @@ serde = { version = "1.0", optional = true }
 # released sibling and fails the whole release run when the key is absent. This
 # crate is never published, and the release PR keeps the value in step.
 [target.'cfg(all(target_arch = "x86_64", target_feature = "cmpxchg16b"))'.dependencies]
-windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
+windows-waitable-queues = { version = "0.1.1", path = "../windows-waitable-queues", features = [
 	"dwcas",
 ] }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
-windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
+windows-waitable-queues = { version = "0.1.1", path = "../windows-waitable-queues", features = [
 	"dwcas",
 ] }
 

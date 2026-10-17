@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.2...windows-ioring-sys-v0.8.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ioring:** the CallbackEnviron accepted by EventDelivery::new and
+
+### Features
+
+* **ioring:** release as 0.8.0, paired with windows-threadpool-sys 0.3 ([4712b9f](https://github.com/MikeGrier/windows-threadpool-sys/commit/4712b9f3c7f7174cd6c1da5cbe0b05c6f7abf686))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.2.2 to 0.3.0
+
 ## [0.7.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.7.1...windows-ioring-sys-v0.7.2) (2026-10-17)
 
 

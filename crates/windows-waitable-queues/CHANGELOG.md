@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.1.0...windows-waitable-queues-v0.1.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **waitable-queues:** publish the documentation corrections made since 0.1.0 as 0.1.1 ([c675dee](https://github.com/MikeGrier/windows-threadpool-sys/commit/c675dee9c92b69b2402a95c2bb401c83c906adac))
+* **waitable-queues:** publish the documentation corrections made since 0.1.0 as 0.1.1 ([103b522](https://github.com/MikeGrier/windows-threadpool-sys/commit/103b522be2b35623fdcdbb78f408c90d68d321f3))
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.0.1...windows-waitable-queues-v0.1.0) (2026-09-05)
 
 

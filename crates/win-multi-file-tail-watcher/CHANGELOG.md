@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-multi-file-tail-watcher-v0.1.1...win-multi-file-tail-watcher-v0.1.2) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.2.2 to 0.3.0
+    * windows-ioring-sys bumped from 0.7.2 to 0.8.0
+    * windows-waitable-queues bumped from 0.1.0 to 0.1.1
+
 ## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-multi-file-tail-watcher-v0.1.0...win-multi-file-tail-watcher-v0.1.1) (2026-10-17)
 
 
