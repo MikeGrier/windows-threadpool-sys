@@ -279,6 +279,37 @@ fn an_exclusive_raw_volume_refuses_a_second_open_until_it_closes() {
 
 #[test]
 #[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_volume_can_be_locked_and_exclusive_at_once_and_the_share_mode_still_judges_a_second_open() {
+    // DI-13.12. The share mode is judged by the open and the lock is a device control made after it,
+    // so the two are expected to be independent; this is the measurement, and what it shows is
+    // written in DI-D-64, not assumed from here.
+    let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
+    let path = scratch.path();
+    let held = OpenedVolume::<Unbuffered>::open(
+        &path,
+        VolumeOptions::new().lock(true).share(ShareMode::NONE),
+    )
+    .expect("open exclusively and lock");
+    assert!(held.is_locked());
+    let refused = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new())
+        .expect_err("an exclusive open is open, locked or not");
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::ResourceBusy,
+        "{refused}"
+    );
+    drop(held);
+
+    // Locked and shared: what a second, plain open of the volume meets is recorded, not asserted.
+    let locked = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))
+        .expect("open and lock, sharing all three");
+    let second = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new());
+    eprintln!("a second open beside a locked, shared volume: {second:?}");
+    drop((locked, second));
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
 fn a_volume_with_another_handle_open_cannot_be_locked() {
     let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
     let path = scratch.path();
