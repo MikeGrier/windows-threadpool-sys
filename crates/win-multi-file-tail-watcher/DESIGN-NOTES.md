@@ -509,14 +509,15 @@ bind to them as settled.
   nothing. The kernel was observed to report a completion queue twice the size asked for (16 for an
   eight, 128 for a 64, on one host); if that holds, a request of 64 gives 128 and the pool, not the
   ring, is what stops the reads. TW-9.1 confirms or replaces this before it binds anything.
-- **The workload to plan for is the output of a CI runner's job log.** The engineer, 2026-10-16:
-  "take it literally"; the real jobs are virtual machine deployments, and the log is a good benchmark
-  of them. The [capture](bench-captures/2026-10-16-runner-log-shape.txt) states what three runner
+- **The worst-case load to plan for is the output of a CI runner's job log.** The engineer,
+  2026-10-16: "take it literally"; the real jobs are virtual machine deployments, the log is a good
+  benchmark of them, and "this is our worst case load", so the typical load is lighter than this. The [capture](bench-captures/2026-10-16-runner-log-shape.txt) states what three runner
   logs of this repository showed and where that stops: short lines, a large share of them longer than
   the default buffer, arriving in bursts with idle stretches between. A line therefore often spans
   more than one chunk, and chunks of one file complete in any order ([TW-D-15](#tw-d-15)), so joining
-  chunks back into lines is the client's work and the layer promises only the ranges. Whether the
-  default buffer size should follow is the engineer's to decide; this records the input to it.
+  chunks back into lines is the client's work and the layer promises only the ranges. Because this is
+  the worst case, the layer has to be correct under it; whether the default sizes also have to be
+  efficient under it is not decided, and the 64-byte default was picked for the lighter load.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
