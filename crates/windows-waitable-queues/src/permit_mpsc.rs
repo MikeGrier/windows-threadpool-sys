@@ -69,7 +69,7 @@ use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering
 use std::sync::Arc;
 
 use crate::CacheAligned;
-use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
+use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, allocate_slots, validate_capacity};
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, Disconnected, PushError, TryRecvError};
 use crate::metrics::Metrics;
@@ -163,23 +163,22 @@ const _: () = {
 ///
 /// # Errors
 ///
-/// [`CapacityError`] when the capacity is outside what this shape accepts.
+/// [`CapacityError`] when the capacity is outside what this shape accepts, or
+/// when the memory for the slots cannot be allocated
+/// ([`CapacityError::is_allocation_failure`]).
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
-    let mut slots = Vec::with_capacity(capacity);
-    for index in 0..capacity {
-        slots.push(Slot {
-            // Anything that is not `position + 1` for the position this slot
-            // first serves. Matches `reserving_mpsc`'s initialisation exactly.
-            sequence: AtomicU64::new(index as Position),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-        });
-    }
+    let slots = allocate_slots(capacity, BOUNDS, |index| Slot {
+        // Anything that is not `position + 1` for the position this slot
+        // first serves. Matches `reserving_mpsc`'s initialisation exactly.
+        sequence: AtomicU64::new(index as Position),
+        value: UnsafeCell::new(MaybeUninit::uninit()),
+    })?;
 
     let shared = Arc::new(Shared {
         metrics: Metrics::new(false),
-        slots: slots.into_boxed_slice(),
+        slots,
         mask: capacity - 1,
         capacity,
         head: CacheAligned(AtomicU64::new(0)),

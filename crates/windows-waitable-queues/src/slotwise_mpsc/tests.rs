@@ -16,6 +16,9 @@
 
 use super::{BOUNDS, Consumer, Producer, bounded, bounded_with, validate_capacity};
 use crate::Bounded;
+#[cfg(target_pointer_width = "64")]
+use crate::capacity::tests::BEYOND_MEMORY;
+use crate::capacity::tests::{Huge, assert_allocation_refusal};
 use crate::error::TryRecvError;
 use crate::race_hooks;
 use crate::{Disposal, Options};
@@ -308,6 +311,31 @@ fn a_capacity_above_half_the_address_space_is_refused() {
     );
 }
 
+#[test]
+fn a_capacity_the_shape_accepts_but_memory_cannot_hold_is_an_error_and_not_an_abort() {
+    // The shape's own largest capacity, of items no ring of that size could
+    // hold: a size past `isize::MAX`, refused before the allocator is asked.
+    let Err(error) = bounded::<Huge>(BOUNDS.max) else {
+        panic!(
+            "a ring of {} items of {} bytes was made",
+            BOUNDS.max,
+            size_of::<Huge>()
+        );
+    };
+    assert_allocation_refusal(error, BOUNDS.max, BOUNDS);
+
+    // A size the allocator is asked for and declines.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let Err(error) = bounded::<Huge>(BEYOND_MEMORY) else {
+            panic!(
+                "a ring of {BEYOND_MEMORY} items of {} bytes was made",
+                size_of::<Huge>()
+            );
+        };
+        assert_allocation_refusal(error, BEYOND_MEMORY, BOUNDS);
+    }
+}
 #[test]
 fn a_suggested_capacity_is_one_the_constructor_would_accept() {
     // The suggestion exists so a caller can correct the call. One that is
