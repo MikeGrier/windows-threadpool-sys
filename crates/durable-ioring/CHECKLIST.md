@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -241,41 +241,106 @@ option recorded by construction. The rule throughout is documented APIs only
 - [x] **DI-13.6** -- A `ReOpenFile` entry, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-136)
 
 - [ ] **DI-13.7** -- **Rework `OpenedFile::open` to reflect Win32, and amend `DI-D-63`.** <a id="di-137-rework"></a>
-  Commit `9b45563f` and [DI-D-63](DESIGN-NOTES.md#di-d-63) made the open match `std::fs::OpenOptions`
-  (create plus truncate as `OPEN_ALWAYS` and an emptying, an automatic
-  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, a path longer than `MAX_PATH` made verbatim, std's
-  combination checks, and the std-shaped `create`, `create_new` and `truncate`). The engineer's ruling
-  is that this crate reflects Win32 and not std, so all of that goes: the path is handed to `OpenFile`
-  as the caller gave it, a `Wtf16String`, with no conversion here (the request crate grafts or passes
-  it, [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)); the disposition is Win32's own, as a
-  Rust enum, in place of the booleans, and `TRUNCATE_EXISTING` needs `GENERIC_WRITE`, which the typed
-  write access does not ask for (measured, [DI-D-65](DESIGN-NOTES.md#di-d-65)), so how the enum offers it
-  is decided here; combinations the kernel accepts or refuses are the kernel's
-  to answer; `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. Four of the five sabotage entries
-  added with `DI-13.2` pin the std behaviours and are replaced; `DI-D-63`'s "a caller sees no
-  difference" principle is amended and its list of differences rewritten. Waits on the request
-  crate's coupled commit (step 2 of the order at the top of this file), which adapts this crate only
-  enough to build, and now follows [DI-D-64](DESIGN-NOTES.md#di-d-64).
-  **The shape, from the rulings of 2026-10-16 ([DI-13.1](COMPLETED-CHECKLIST.md#di-131) (a) to (c)):** `open` is split into a build
-  and a perform. The build is made on the submitting thread and holds the `Wtf16String`, the typed
-  options, and the request crate's captured path; what fails there fails where the caller can see
-  it. `perform` runs on whatever thread the caller chooses, makes the call, and then checks the
-  opened handle (`DI-14.5`), closing it if it is refused. Nothing is checked before the open (the
-  engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
-  long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
-  `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
-  **Next:** this item.
+  Too large for one commit, and investigated on 2026-10-16 into the five items below, which are the
+  work and replace the single description this item had. Commit `9b45563f` and
+  [DI-D-63](DESIGN-NOTES.md#di-d-63) made the open match `std::fs::OpenOptions`; the engineer's ruling
+  is that this crate reflects Win32 and not std ([DI-D-64](DESIGN-NOTES.md#di-d-64)), so what that
+  kept goes: the path made verbatim past `MAX_PATH` and refused when empty, the booleans `create`,
+  `create_new` and `truncate` with their `OPEN_ALWAYS` plus an emptying, the automatic
+  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, and the refusal of a create or truncate without write
+  access. **Nothing here waits on another crate:** the request crate's side is done
+  ([NR-3.3 to NR-3.6](../windows-namespace-request-sys/CHECKLIST.md): `OpenFile` takes a `Wtf16String`,
+  fixes a relative path to the directory it was built in, and is `Send`, so it can be built on one
+  thread and performed on another). **Order:** `DI-13.7.1`; `DI-13.7.2` is a question for the engineer
+  and can be answered meanwhile; `DI-13.7.3` waits on it; `DI-13.7.4` follows both; `DI-13.7.5` last.
+  Each code item is its own commit, and `DI-13.7.1` and `DI-13.7.3` each break `win-durable-ioring`,
+  which ships as one new minor (the ruling of `DI-13.1`, item (e)). This item is checked when all five are.
+
+- [ ] **DI-13.7.1** -- **The path is handed over as the caller gave it.** `OpenedFile::open` takes a
+  `Wtf16String` and nothing else (the ruling of `DI-13.1`, item (a)); the caller converts. Deleted
+  from `open_request.rs`: `verbatim_if_long`, `verbatim`, the `MAX_PATH` constant and the refusal of an
+  empty path, so a path longer than `MAX_PATH` without a verbatim prefix and an empty path are Win32's
+  to answer. `SharingViolation::path` and `RemoteDevice::location` hold what the open was given or
+  resolved, and the interim remote check (see `DI-13.7.4` and `DI-14.5`) converts to a `Path` for
+  `canonicalize` at the one place it needs one. About sixty-six call sites of `OpenedFile::open`
+  change, almost all in tests, the README and the examples, so a test helper that builds the
+  `Wtf16String` from a `Path` keeps them one line each. The sabotage entry `DI-13.2: a path longer
+  than an ordinary one is handed over as it was` is replaced by one that shows the path reaches the
+  request unaltered. Tests: a verbatim long path opens; the same long path without its prefix is
+  refused by Win32 and not by this crate; an empty path is Win32's answer; a path with an interior NUL
+  is refused by the request crate and reaches the caller as `InvalidInput`.
+
+- [ ] **DI-13.7.2** -- **Ruling: how the disposition enum offers `TRUNCATE_EXISTING`, and whether a
+  read-only handle may overwrite.** Measured on 2026-10-16 (Windows 11 build 26300, local NTFS, cached
+  and unbuffered, [disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs);
+  the table is in [DI-D-64](DESIGN-NOTES.md#di-d-64)): `TRUNCATE_EXISTING` fails with
+  `ERROR_INVALID_PARAMETER` for **every** access mask but one, the literal `GENERIC_WRITE`, including
+  `FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA`, which is `GENERIC_WRITE` less its append,
+  synchronize and read-control bits. `CREATE_ALWAYS` empties an existing file with **any** mask, a
+  read-only one and no access at all included. So with the typed write access, which asks for
+  `FILE_WRITE_DATA` only, the fifth disposition can never succeed, and a `ReadOnly` handle can be
+  opened to destroy the file it was typed not to change. **Working position, not a decision; the
+  assistant's recommendation:** offer all five, as ruled; let the open add the literal `GENERIC_WRITE`
+  for `TruncateExisting` and say in its documentation that the handle then holds `GENERIC_WRITE`'s
+  rights (it includes `FILE_WRITE_DATA`, so it is still not append-only); and make the two
+  dispositions that empty a file, `CreateAlways` and `TruncateExisting`, selectable only where `A:
+  CanWrite` (an `A`-bounded method, as `FileOptions::write` is), so that a handle typed not to write
+  cannot be opened to overwrite, at compile time and not by the kernel's refusal. `CreateNew` and
+  `OpenAlways` create a file and change nothing that exists, so they stay open to every `A`. The
+  alternatives are to leave the kernel's answer (a `TruncateExisting` that is always
+  `ERROR_INVALID_PARAMETER`, which is a variant that computes the wrong answer), and to drop
+  `TruncateExisting` (which loses "empty it, and fail if it is not there", the one thing
+  `CreateAlways` cannot say). "Too early to say" is an answer. Blocks `DI-13.7.3` only.
+
+- [ ] **DI-13.7.3** -- **The disposition is Win32's own, as an enum; `FILE_FLAG_OPEN_REPARSE_POINT` is an
+  explicit option.** Waits on `DI-13.7.2`. `Disposition` has the call's five variants, and
+  `FileOptions::disposition` replaces `create`, `create_new` and `truncate`, which go outright
+  (the ruling of `DI-13.1`, item (e)), with the default `OpenExisting`. Deleted: `Parameters`'s
+  `truncate_after`, the `OPEN_ALWAYS` plus `set_len(0)` that stood in for `CREATE_ALWAYS`, the
+  `parameters()` refusal of a create or truncate without write access, and the reparse flag set on
+  `create_new`. Added: `FileOptions::open_reparse_point`, a builder method; it moves here from
+  [DI-14.2](#di-142-flags) because removing the automatic flag would otherwise leave a new file with no
+  way to be created without following a link. Twenty-one uses in `opened_file/tests.rs` are rewritten,
+  and the doctests and the README follow. Four sabotage entries of `DI-13.2` pin the std behaviours
+  (not emptied, created through a link, the emptying skipped, and the one for the path, which `DI-13.7.1`
+  takes) and are replaced. Tests: each of the five dispositions against a present and an absent file,
+  for each of the three typed accesses, matching the measured table for what the kernel accepts; a new
+  file is created through a link that is already there unless the option is set, and is not when it is.
+
+- [ ] **DI-13.7.4** -- **`open` is a build and a perform.** Follows `DI-13.7.1` and `DI-13.7.3`.
+  `OpenedFile::request(path, options)` builds on the submitting thread: it holds the `Wtf16String`, the
+  typed options and the request crate's `OpenFile`, and what fails there (an interior NUL, the current
+  directory) fails where the caller can see it. `perform(&self)` makes the call on whatever thread the
+  caller chooses and returns the `OpenedFile`, so a blocking `CreateFileW` can be moved off the
+  submitting thread ([DI-13.1](COMPLETED-CHECKLIST.md#di-131), ruling (c)). `open` stays as the two run
+  inline, documented as blocking for as long as `CreateFileW` does. The request is typed by its
+  buffering mode and its data access, as `OpenedFile<B, A>` is. **The remote check:** the engineer ruled
+  that nothing is checked before the open and that the opened handle is checked by `DI-14.5`, which has
+  not been built, so the unbuffered open keeps its present check, on the path and before the call,
+  inside `perform` where it can block, until `DI-14.5` replaces it; this is an interim and is recorded
+  as one in `DI-D-64`, not a second decision. Tests: a request built on one thread and performed on
+  another after `set_current_dir` has changed opens the file the path named when it was built; a request
+  is `Send`; performing twice opens twice; an error from the build and one from the perform are
+  distinguishable; `open` is the same as the two.
+
+- [ ] **DI-13.7.5** -- **Amend `DI-D-63` and the documents that describe the open.** The principle
+  "a caller sees no difference from std" is amended and the list of differences rewritten in
+  [DI-D-63](DESIGN-NOTES.md#di-d-63), whose superseded marker already stands; the README's open
+  section, the module documentation of `opened_file.rs` and `open_request.rs`, and the doctests say
+  what the open now is. [DI-14.2](#di-142-flags) loses the reparse flag, which `DI-13.7.3` took.
+  Documentation only, so it needs no validation beyond the doctests it touches.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
 - [x] **DI-14.1** -- Cache hints: `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN` are builder methods on `FileOptions`, passed to a cached and an unbuffered file alike. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-141)
 
-- [ ] **DI-14.2** -- **Namespace and lifetime flags.** `FILE_FLAG_DELETE_ON_CLOSE`,
-  `FILE_FLAG_OPEN_REPARSE_POINT`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
+- [ ] **DI-14.2** -- **Namespace and lifetime flags.** <a id="di-142-flags"></a> `FILE_FLAG_DELETE_ON_CLOSE`,
+  `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
   `FILE_FLAG_OVERLAPPED` if the ring turns out to need or refuse it (settled by the test in
-  `DI-14.7`, not by recollection). The remote-device check in `DI-14.5` must see a reparse point's target, not
+  `DI-14.7`, not by recollection). `FILE_FLAG_OPEN_REPARSE_POINT` is offered by [DI-13.7.3](#di-137-rework),
+  and the remote-device check in `DI-14.5` must see a reparse point's target, not
   the reparse point. Tests: delete-on-close removes the file when the last handle closes; a reparse
-  point opened with the flag is the point and without it is the target.
+  point opened with the flag is the point and without it is the target (the second is `DI-13.7.3`'s).
 
 - [ ] **DI-14.3** -- **Creation attributes, security descriptor, inheritance.** The file attributes a
   new file can be created with (hidden, read-only, temporary, encrypted and the others the table
@@ -297,7 +362,10 @@ option recorded by construction. The rule throughout is documented APIs only
   [DI-D-60](DESIGN-NOTES.md#di-d-60) records a window between canonicalising the path and opening it,
   in which a link can be swapped, and the canonicalising itself opens the path. A documented query of
   the handle closes the window, and it is also what an open by ID needs, since it has no path. The
-  assistant must say which documented handle queries it checked and which it chose. **If none can tell
+  assistant must say which documented handle queries it checked and which it chose. (A lead from
+  the investigation for `DI-13.7`, checked only for existing: the request crate already has
+  `QueryFinalPath`, over `GetFinalPathNameByHandleW`, and queries for file information by handle; whether
+  the final path of a handle on a remote file names it as a UNC path was not measured.) **If none can tell
   a remote file from a local one, the check cannot be made on the handle, and the caller declares where
   the file is**, which is what this repository does for a fact only an undocumented call gives; that is
   raised with the engineer before anything is built. There is **no check before the open**: the

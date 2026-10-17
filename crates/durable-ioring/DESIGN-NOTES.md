@@ -293,6 +293,28 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   when exclusive and an open when shared. An open that asks for no data right is admitted in all four.
   So a caller that locks sees the lock's refusal and never the share mode's.
 
+**Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
+the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
+[disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs); every disposition
+against ten access masks, the file present except for `CREATE_NEW`. Cached and unbuffered agree except where
+stated.
+
+| Access | `CREATE_NEW`, `CREATE_ALWAYS`, `OPEN_EXISTING`, `OPEN_ALWAYS` | `TRUNCATE_EXISTING` |
+|---|---|---|
+| `FILE_WRITE_DATA` | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+| `FILE_READ_DATA \| FILE_WRITE_DATA` | as above | `ERROR_INVALID_PARAMETER` |
+| `FILE_WRITE_DATA` with `FILE_WRITE_ATTRIBUTES`, `FILE_WRITE_EA`, both, or `DELETE` | as above | `ERROR_INVALID_PARAMETER` |
+| `FILE_WRITE_DATA \| FILE_APPEND_DATA` | as above cached; every disposition `ERROR_INVALID_PARAMETER` unbuffered | `ERROR_INVALID_PARAMETER` |
+| `GENERIC_WRITE` | accepted; `CREATE_ALWAYS` empties the file | accepted; empties the file |
+| `FILE_READ_DATA` only | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+| no access | accepted; `CREATE_ALWAYS` empties the file | `ERROR_INVALID_PARAMETER` |
+
+`TRUNCATE_EXISTING` is accepted with the literal `GENERIC_WRITE` and with no other mask tried, including
+`GENERIC_WRITE` less its append, synchronize and read-control bits. `CREATE_ALWAYS` emptied the file under
+every mask, a read-only one and none included. Two questions follow for the engineer and are open, with the
+assistant's recommendation, in [DI-13.7.2](CHECKLIST.md#di-137-rework): how the enum offers
+`TRUNCATE_EXISTING`, and whether a handle typed not to write may be opened to overwrite.
+
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)
 (the open, the disposition and the two-phase shape), [DI-14.1](CHECKLIST.md) to [DI-14.7](CHECKLIST.md)
