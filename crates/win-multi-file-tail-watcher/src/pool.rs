@@ -3,7 +3,10 @@
 //! given back when the bytes read into them are no longer wanted (TW-D-15).
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the reading engine (TW-5.5) takes and lends them")
+    expect(
+        dead_code,
+        reason = "`count` and `available` are used by tests, and by nothing else"
+    )
 )]
 
 use std::collections::TryReserveError;

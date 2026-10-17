@@ -21,6 +21,8 @@ mod read_plan;
 mod read_sq;
 pub mod reader;
 mod sq;
+#[cfg(doctest)]
+mod surface_doctests;
 #[cfg(test)]
 mod test_support;
 mod watcher;

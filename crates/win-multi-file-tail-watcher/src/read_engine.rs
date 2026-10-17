@@ -5,7 +5,10 @@
 //! waiting and says why it stopped, and the next run continues from there.
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the reading layer (M6) drives it")
+    expect(
+        dead_code,
+        reason = "`read_sq`, `stop`, `in_flight` and `wait_for_completion` are used by tests, and by nothing else: the layer reaches the SQ and the stop flag by their shared handles"
+    )
 )]
 
 use std::collections::VecDeque;
@@ -56,6 +59,11 @@ pub(crate) struct Tracked<T> {
 }
 
 impl<T> Tracked<T> {
+    /// The caller's value, without what a read of the file needs.
+    pub(crate) fn into_value(self) -> T {
+        self.value
+    }
+
     fn new(value: T, file: &HeldFile, registration: u64) -> Self {
         let endpoint = file.endpoint_handle();
         Self {
@@ -424,6 +432,13 @@ impl<T: Clone> ReadEngine<T> {
     /// The pool the reads' buffers come from.
     pub(crate) fn pool(&self) -> &BufferPool {
         &self.pool
+    }
+
+    /// The completion queue size the engine bounds the reads in flight by, for a test of a layer
+    /// above this one.
+    #[cfg(test)]
+    pub(crate) fn cq_size_for_test(&self) -> usize {
+        self.cq_size
     }
 
     /// How many reads the ring holds: queued, in flight, or completed and not yet popped.

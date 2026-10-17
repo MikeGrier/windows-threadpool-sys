@@ -7,11 +7,17 @@
 //! private again, fails the build of this file. What the items do is tested through the layer, which
 //! is public in TW-9.4 and run over real files in TW-9.5.
 
+use std::io;
 use std::ops::Range;
 use std::os::windows::io::BorrowedHandle;
+use std::sync::Arc;
 
-use win_multi_file_tail_watcher::Terminal;
-use win_multi_file_tail_watcher::reader::{Chunk, Data, ReadDrain, ReadEntry, ReadSq, Shrink};
+use win_multi_file_tail_watcher::reader::{
+    Chunk, Data, ReadDrain, ReadEntry, ReadSq, Shrink, TailReader, TailReaderError,
+    TailReaderOptions, TailRegistration,
+};
+use win_multi_file_tail_watcher::{DiagnosticSink, OpenError, PollError, Terminal};
+use wtf_string::Wtf16Str;
 
 fn assert_send<T: Send>() {}
 fn assert_send_sync<T: Send + Sync>() {}
@@ -115,4 +121,50 @@ fn an_entry_is_matched_with_a_wildcard_arm_and_formats_for_debugging() {
     for entry in &entries {
         assert!(!format!("{entry:?}").is_empty());
     }
+}
+
+#[test]
+fn the_documented_signatures_of_the_reader() {
+    type Made = Result<TailReader<u32>, TailReaderError>;
+    type Registered = Result<TailRegistration<u32>, OpenError>;
+    let _: fn(&TailReaderOptions, usize) -> Made = TailReader::<u32>::new;
+    let _: fn(&TailReaderOptions, usize, Arc<dyn DiagnosticSink>) -> Made =
+        TailReader::<u32>::with_diagnostics;
+    let _: fn(&TailReader<u32>, &Wtf16Str, u64, u32) -> Registered = TailReader::<u32>::register;
+    let _: fn(&TailReader<u32>) -> Result<(), PollError> = TailReader::<u32>::poll;
+    let _: for<'a> fn(&'a TailReader<u32>) -> &'a ReadSq<u32> = TailReader::<u32>::read_sq;
+    let _: fn(&TailReader<u32>) = TailReader::<u32>::shutdown;
+    let _: fn(&TailReader<u32>) -> Option<io::Error> = TailReader::<u32>::take_failure;
+}
+
+#[test]
+fn the_documented_signatures_of_a_registration() {
+    let _: fn(&TailRegistration<u32>) -> u64 = TailRegistration::<u32>::id;
+    let _: fn(&TailRegistration<u32>) -> u32 = TailRegistration::<u32>::value;
+    let _: fn(&TailRegistration<u32>) -> u64 = TailRegistration::<u32>::start_offset;
+}
+
+#[test]
+fn the_reader_error_is_an_error_a_caller_can_hold_and_send() {
+    fn assert_error<E: std::error::Error + Send + Sync + 'static>() {}
+    assert_error::<TailReaderError>();
+}
+
+/// The error is open to further causes, so a caller matches it with a wildcard arm.
+#[test]
+fn the_reader_error_is_matched_with_a_wildcard_arm() {
+    // The options are `#[non_exhaustive]`: a caller starts from the defaults and assigns.
+    let mut options = TailReaderOptions::default();
+    options.buffer_len = 0;
+    let error = TailReader::<u32>::new(&options, 64).unwrap_err();
+    let kind = match &error {
+        TailReaderError::Options(_) => "options",
+        TailReaderError::Watcher(_) => "watcher",
+        TailReaderError::ClientSq(_) => "client queue",
+        TailReaderError::Allocation(_) => "allocation",
+        TailReaderError::Ring(_) => "ring",
+        TailReaderError::Io(_) => "io",
+        _ => "a cause this version does not know",
+    };
+    assert_eq!(kind, "options");
 }

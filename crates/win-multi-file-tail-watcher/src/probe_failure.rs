@@ -1,12 +1,5 @@
 // Copyright (c) 2026 Mike Grier
 //! What a failed probe means: transient or terminal, decided in one place (TW-D-13).
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the probe pass (TW-2.6) and the diagnostic sink (TW-2.6.2) use it"
-    )
-)]
 
 use std::io;
 

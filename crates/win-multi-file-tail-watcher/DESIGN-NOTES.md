@@ -546,6 +546,30 @@ module within the crate".
     second drain wait; a `Chunk` may outlive the pool.
   - **`Shrink` mirrors `Attention`**: public fields and not `#[non_exhaustive]`, so a field added
     later is a breaking change for both. `ReadEntry` is `#[non_exhaustive]` as `SqEntry` is.
+- **`TailReader<T>` is a public wrapper over the layer, not the layer renamed** ([TW-9.4](CHECKLIST.md)).
+  It holds the crate-internal layer and delegates, so the layer's own tests and its crate-only
+  methods stay as they are, and nothing the layer needs from the watcher becomes public.
+  - **It is made from the options and the watcher's own arguments**: `TailReader::new(&options,
+    watcher_sq_capacity)` and `with_diagnostics(&options, watcher_sq_capacity, sink)`, which mirror
+    `Watcher::new` and `Watcher::with_diagnostics`. The options are checked first, then the watcher
+    (small) is made, then the buffers (not).
+  - **Its public methods** are `register` (a path, an offset and a `T`), `poll`, `read_sq`,
+    `shutdown` and `take_failure`. `register` returns a `TailRegistration<T>` with `id`, `value` and
+    `start_offset`, and not the watcher's `Registration`, whose type argument would expose the
+    crate-internal `Tracked<T>` that carries what a read needs.
+  - **`TailReaderError` is its own enum**, one variant per cause, each carrying the error behind it as
+    its `source`: `Options` (a refused size), `Watcher` and `ClientSq` (a queue that could not be
+    made), `Allocation` (the buffers), `Ring` (the I/O ring could not be made or cannot read, which
+    is what a Windows without I/O ring support reports) and `Io` (anything else the operating system
+    refused). It is `#[non_exhaustive]`.
+  - **The names `TailRegistration` and `TailReaderError` were chosen by the assistant**, as `Data`,
+    `Shrink`, `ReadSq` and `ReadDrain` were, and not asked of the engineer.
+  - **What the watcher's public surface keeps out**: `register_with`, `stop_handle`,
+    `mark_terminal` and `diagnose` stay `pub(crate)`, each shown by a `compile_fail,E0624`
+    documentation example that is written to compile if the method were public.
+  - **Callback hazards are stated on the type**, as the watcher states them: `T::clone`, `T`'s `Drop`
+    and the sink run on thread-pool callbacks, a panic out of one aborts the process, and a `Drop`
+    must not release the last owner of the reader.
 
 ## Working positions (not decisions)
 

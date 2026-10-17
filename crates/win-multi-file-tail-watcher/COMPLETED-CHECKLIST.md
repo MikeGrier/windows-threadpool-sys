@@ -1331,3 +1331,49 @@ caught by the doctest.
 `Shrink` mirrors `Attention`: public fields, not `#[non_exhaustive]`, so adding a field later would be
 breaking for both. The parts of an entry keep the names they had, which the engineer was not asked about;
 they are recorded in TW-D-16.
+
+## Moved 2026-10-17 16:21:22 -04:00 -- TW-9.4: the reading layer is public
+
+### <a id="tw-94"></a>TW-9.4 -- The reading layer itself is public as `reader::TailReader`: made from the options and the watcher's own arguments, it registers a file with an offset and a `T`, polls, exposes its SQ and doorbells, shuts down without blocking and reports the first error a run returned, with nothing it needs from the watcher made public. *(completed 2026-10-17 16:21:22 -04:00)*
+
+`src/reader/tail_reader.rs` holds `TailReader<T>` and `TailRegistration<T>`, and `tail_reader_error.rs` holds
+`TailReaderError`. `TailReader` wraps the crate-internal `ReadLayer` and delegates, so the layer's own tests
+and its crate-only methods are unchanged. `new` and `with_diagnostics` check the options first, then make the
+watcher, then the buffers, then the engine and the layer; the watcher's own arguments are its SQ capacity and,
+for `with_diagnostics`, its sink. A runnable doctest registers a file, polls, waits on the doorbell and reads
+the bytes through public items only.
+
+`TailReaderError` is `#[non_exhaustive]` with six variants, each carrying its cause as a source. The two
+translations from the crate's own pool and engine errors are pure functions and are tested by building those
+errors, since neither a ring that cannot be made nor a doorbell the system refuses can be had on demand. The pool's
+two dimension refusals are an `unreachable!`: the options refused them with the pool's own check, and a test
+shows the panic. A count of `usize::MAX` is the case that does reach the allocator, and it is an `Allocation`
+error and not an abort.
+
+Making the layer reachable fulfilled the `dead_code` allowances that were waiting for it. Two were removed
+(`probe_failure.rs` and `held_file::endpoint_handle`). Three stated reasons that were no longer true, and now
+name what is still dead, all of it used only by tests: `count` and `available` in the pool, four engine methods
+the layer does not use, and `remaining` in the planner.
+
+Thirty tests in the module, among them: the pool's length and count against how many reads a file takes, the ring
+sizes against the completion queue the engine bounds its reads by, every refused size and its option's name, the
+order of checks, the first failure kept and taken once, the sink given being the one reported to, and a poll after
+a poll-done being accepted. `small()` has no two sizes equal, because a transposed pair passed unnoticed until it
+had. Two test-only seams were added, `ReadLayer::engine_for_test` and `record_for_test`, and
+`ReadEngine::cq_size_for_test`.
+
+Four documentation examples in `src/surface_doctests.rs` (compiled only for doctests) show that
+`register_with`, `stop_handle`, `mark_terminal` and `diagnose` are not public. Each is written to compile if
+the method were public. They pass with error codes enforced as CI runs them, and both guard scripts accept them.
+One of the four sabotages first survived: making `stop_handle` public alone leaves a method returning a crate-private
+type, which no example can use, so the example kept failing for an unrelated reason. The entry now makes the type
+public with it, as a real widening would.
+
+Fifteen new sabotage entries in `sabotage.json` (fourteen caught, one control), four in
+`sabotage-doctests.json` and twelve in `sabotage-public-surface.json`, which now pins `TailReader`'s seven
+methods, `TailRegistration`'s three, and the two exports. All behave as declared, and three of the fifteen were also
+applied by hand with only the module's tests run, each caught.
+
+Not tested: `ReadLayer::new`'s failure, which maps to `Io`, since a thread-pool wait cannot be made to fail on
+demand. The module's tests wait at most six seconds for a doorbell, so a reader that stops delivering fails by
+assertion inside a sabotage run's bound.

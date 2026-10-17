@@ -95,10 +95,6 @@ impl HeldFile {
     }
 
     /// The handle as its one submitter holds it, for the reading engine to address reads to.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the reading engine (TW-5.5) submits through it")
-    )]
     pub(crate) fn endpoint_handle(&self) -> &EndpointHandle {
         &self.endpoint
     }

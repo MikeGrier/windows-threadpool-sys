@@ -1,14 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The reading layer on the thread pool (TW-D-15, TW-D-5): the engine run, with no thread of the
-//! caller's, whenever something it waits for happens. Its names are working names until the layer's
-//! own is chosen.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the layer is not public until its names are chosen"
-    )
-)]
+//! caller's, whenever something it waits for happens. [`crate::reader::TailReader`] is what a caller
+//! outside the crate holds; it wraps this.
 
 use std::io;
 use std::os::windows::io::OwnedHandle;
@@ -199,6 +192,18 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
+    }
+
+    /// The engine, locked, for a test of a layer above this one to reach what is private to it.
+    #[cfg(test)]
+    pub(crate) fn engine_for_test(&self) -> std::sync::MutexGuard<'_, ReadEngine<T>> {
+        self.core.engine()
+    }
+
+    /// Record `result` as a run would, for a test of a layer above this one.
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, result: io::Result<Stop>) {
+        self.core.record(result);
     }
 }
 

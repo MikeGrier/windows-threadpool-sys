@@ -165,11 +165,7 @@ fine".
 
 - [x] **TW-9.3** -- The reading layer's entries are public in the `reader` module: the entry type and its data, shrink, terminal and poll-done kinds, the chunk, the drain and the SQ with its two doorbells, each with rustdoc stating what it promises and what holding it too long does. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-93)
 
-- [ ] **TW-9.4** -- The layer itself is public in a module of this crate: it is made from the
-  options and the watcher's own arguments, registers a file with an offset and a `T`, polls, exposes
-  its SQ and doorbells, shuts down without blocking, and reports the first error a run returned.
-  Everything it needs from the watcher stays crate-internal, so the watcher's public surface does not
-  grow. A doctest compiles an example that uses only public items.
+- [x] **TW-9.4** -- The reading layer itself is public as `reader::TailReader`: made from the options and the watcher's own arguments, it registers a file with an offset and a `T`, polls, exposes its SQ and doorbells, shuts down without blocking and reports the first error a run returned, with nothing it needs from the watcher made public. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-94)
 
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
   that child processes write: the default options, a set well above them of the size a build service would choose (large buffers, many of them, a large client SQ and ring), and the tiny
