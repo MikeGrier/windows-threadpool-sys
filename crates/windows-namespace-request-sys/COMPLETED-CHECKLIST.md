@@ -369,3 +369,20 @@ verbatim prefix make it normalised, so only the exactly-backslash form suppresse
 claim of `D-19` rule 6, measured here for the first time); `UNC` is matched without regard to ASCII case;
 and `\\.\UNC\` is a UNC form. The run also showed that `\\.\` is normalised, which corrects the reason
 given for rule 6, and that `GetFullPathNameW` cannot be the oracle.
+
+### <a id="nr-52-withdrawn"></a>NR-5.2 to NR-5.4 -- withdrawn, not done. *(withdrawn 2026-10-16 19:59:00 -04:00)*
+
+Withdrawn by the engineer on 2026-10-16. They were a public `PathForm`, the graft rules derived from it,
+and `win32_path_form()` on the path-taking entries, planned so that durable-ioring could refuse a path
+that is evidently remote before the open. The engineer ruled that finding out late is acceptable and
+that the check on the opened handle is the only one needed ([DI-13.1
+(b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131), amended), so the one consumer dropped it, and a
+new public type in a published crate was not worth what was left. What would reopen them is a consumer
+that needs to know a path is remote before it makes any call. The graft rules stay as they are,
+including rule 6, whose reason [D-28](DESIGN-NOTES.md#d-28) corrects. The reasons are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+A working position recorded with them, not a decision: the entries keep taking the `windows-sys` types
+and raw access masks they take now, and the typed vocabulary for rights, share mode, disposition and
+attributes belongs to durable-ioring's `DI-13.3`, `DI-13.4` and `DI-13.7`, so this crate stays the
+policy-free catalogue.

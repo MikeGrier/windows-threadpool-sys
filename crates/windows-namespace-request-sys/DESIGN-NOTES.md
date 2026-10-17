@@ -722,8 +722,8 @@ The drafts themselves, and why each failed, are Tier 2:
 wired into the entries by `NR-3.4` to `NR-3.6`; what those settled is [D-27](#d-27). It supersedes the mechanism of [D-9](#d-9) and the decision of
 [D-18](#d-18); D-18's measurements stand.
 
-**Amended by [D-28](#d-28): the reason given for rule 6 below is corrected there, and whether the rule
-stays as wide as it is is an open choice in `NR-5.3`.**
+**Amended by [D-28](#d-28): the reason given for rule 6 below is corrected there. The rule stays as
+wide as it is.**
 
 **What is decided.** A path reaches Win32 as the caller gave it: a `Wtf16String`, with no length limit
 and no check of this crate's own beyond the one that cannot be avoided, an interior NUL, which a
@@ -1020,15 +1020,15 @@ rework is [DI-13.7](../durable-ioring/CHECKLIST.md).
 
 ## <a id="d-28"></a>D-28: The forms of a path are the readings `CreateFileW` gives its prefix, measured, and `GetFullPathNameW` is not the oracle for them
 
-**Status: measured on 2026-10-16 by `NR-5.1`; the type that carries it is `NR-5.2`.** It corrects the
-reason given for rule 6 of [D-19](#d-19), and settles what that rule may be derived from in `NR-5.3`.
+**Status: measured on 2026-10-16 by `NR-5.1`.** The classifier of path forms that was planned to carry
+it, `NR-5.2` to `NR-5.4`, was **withdrawn the same day**, because the refusal it was for was dropped
+(below); the measurements stand as a record. They correct the reason given for rule 6 of
+[D-19](#d-19).
 
-**What is decided.** A classifier of path forms, which `NR-5.2` writes, answers *how `CreateFileW`
-reads the start of this string*. It does not answer what `GetFullPathNameW` makes of it, because the
-two disagree (below), and the call that matters to a consumer is the one that opens. The table below
-is its specification, row by row; `NR-5.2` pins each row with a test and the example that produced
-the rows reproduces them. The classifier is pure: no call into the OS, and no policy about what a form
-means to a caller.
+**What is decided.** How `CreateFileW` reads the start of a string is the table below, and not what
+`GetFullPathNameW` makes of it, because the two disagree. A consumer that ever needs to classify a path
+classifies by this table. The example that produced the rows reproduces them. Nothing in this crate
+classifies a path by it, and no public type does.
 
 **How it was measured.** `cargo run --example path_form_measurements`
 ([examples/path_form_measurements.rs](examples/path_form_measurements.rs)) puts each spelling to both
@@ -1082,10 +1082,12 @@ added, and of `C:` is the current directory of that drive.
   separator, which is a backslash for the two that are not normalised and either kind for the rest.
   It makes the path UNC, which reaches the network.
 
-**What "remote by its string" therefore is**, for the refusal that
-[DI-13.1 (b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131) puts before an open: UNC, and a
-verbatim, device or NT path with a UNC marker. Nothing else can be shown remote by its string, which is
-why the check on the opened handle remains the authority.
+**What a string alone can show to be remote** is UNC, and a verbatim, device or NT path with a UNC
+marker; nothing else. A refusal on that was planned before an open ([DI-13.1
+(b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131)) and dropped by the engineer on 2026-10-16: there
+is no check before the open, and the check on the opened handle is the only one. Discovering a remote
+device late costs a file left behind by an unbuffered create, which is documented, and a network call
+made before the refusal.
 
 **Not measured, stated as such.**
 
@@ -1095,18 +1097,17 @@ why the check on the opened handle remains the authority.
   was used so that nothing remote is contacted.
 - Whether `\??\` is documented by Microsoft. It was found by measurement. A consumer binds to
   documented behaviour ([copilot-instructions.md](../../.github/copilot-instructions.md), platform
-  integrity), so the form is recognised only to refuse a path earlier, which errs the safe way, and
-  never to decide that a path is local or safe to graft onto.
+  integrity), so a consumer that used this row would be binding to behaviour that was found and not
+  read, and should say so.
 - The behaviour on other Windows builds.
 
 **Consequence for [D-19](#d-19) rule 6.** Rule 6 gave as its reason that Win32 does not normalise a
 path with either the `\\?\` or the `\\.\` prefix. This measurement shows that holds for `\\?\` and not
 for `\\.\`, which is normalised, so a child grafted onto a `\\.\` directory would be read as it should
-be. The rule is as it was implemented, wider than its reason, and errs toward not grafting. Whether
-`NR-5.3` keeps it as it is or narrows it to the exactly-backslash verbatim form is **not decided**: it
-is a change in behaviour for a process whose current directory has the device prefix, and it is the
-engineer's to rule on. The same run confirms that only a backslash-only `\\?\` suppresses
+be. The rule stays as it was implemented, wider than its reason, and errs toward not grafting; narrowing
+it to the exactly-backslash verbatim form would change behaviour for a process whose current directory
+has the device prefix, and no work is scheduled for that. The same run confirms that only a backslash-only `\\?\` suppresses
 normalisation, the claim rule 6 made with no measurement recorded.
 
-**Scheduled work:** `NR-5.2` to `NR-5.4` in [CHECKLIST.md](CHECKLIST.md), and the choice above in
-`NR-5.3`.
+**Scheduled work:** none. `NR-5.2` to `NR-5.4` are withdrawn, as
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-52-withdrawn) says, with what would reopen them.

@@ -53,15 +53,12 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
 4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
    so a new minor. This is a release action and not a checklist item.
 5. `DI-13.1` is done: its table is [DI-D-64](DESIGN-NOTES.md#di-d-64), and `DI-13.3` onward build on
-   it. [DI-13.7](#di-137-rework) also waits on step 7.
+   it.
 6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Added 2026-10-16: [NR-5.1 to NR-5.4](../windows-namespace-request-sys/CHECKLIST.md) -- request
-   crate: the path-form classifier that `DI-13.7`'s syntactic refusal uses. Additive, so a new minor
-   release; `DI-13.7` takes it.
-8. Then, here: `DI-13.3` and `DI-13.4` (neither needs step 7), `DI-13.7` (after step 7), `DI-M14`,
+7. Then, here: `DI-13.3`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -258,15 +255,11 @@ option recorded by construction. The rule throughout is documented APIs only
   **The shape, from the rulings of 2026-10-16 ([DI-13.1](COMPLETED-CHECKLIST.md#di-131) (a) to (c)):** `open` is split into a build
   and a perform. The build is made on the submitting thread and holds the `Wtf16String`, the typed
   options, and the request crate's captured path; what fails there fails where the caller can see
-  it, including the syntactic refusal of a path that is evidently remote. `perform` runs on whatever
-  thread the caller chooses, makes the call, and then checks the opened handle (`DI-14.5`),
-  closing it if it is refused. `open` stays as the two run inline, documented as blocking for as
+  it. `perform` runs on whatever thread the caller chooses, makes the call, and then checks the
+  opened handle (`DI-14.5`), closing it if it is refused. Nothing is checked before the open (the
+  engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode, as `OpenedFile<B>` is.
   **Next:** `DI-13.3`.
-
-  > **-> CROSS-COMPONENT PREREQUISITE:** the syntactic refusal needs the path-form classifier of
-  > `windows-namespace-request-sys` -> `NR-5` (`NR-5.1` to `NR-5.4`), released. See
-  > [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
@@ -295,15 +288,18 @@ option recorded by construction. The rule throughout is documented APIs only
   combination refused only after a file was created is the worse outcome, so the refusal is ahead of
   the open wherever the table lets it be.
 
-- [ ] **DI-14.5** -- **The remote-device check is made on the opened handle, not on the path.**
+- [ ] **DI-14.5** -- **The remote-device check is made on the opened handle, and nowhere else.**
   [DI-D-60](DESIGN-NOTES.md#di-d-60) records a window between canonicalising the path and opening it,
-  in which a link can be swapped. A documented query of the handle closes it, and it is also what an
-  open by ID needs, since it has no path. The assistant must say which documented handle queries it
-  checked and which it chose. A file created on a remote device before the check can refuse it
-  leaves a file behind; that is accepted and documented (`DI-13.1` ruling (b), 2026-10-16). The only
-  check before the open is syntactic, on the path handed to Win32, for the forms a string alone
-  shows remote ([NR-5](../windows-namespace-request-sys/CHECKLIST.md)); the handle check is the
-  authority for every open.
+  in which a link can be swapped, and the canonicalising itself opens the path. A documented query of
+  the handle closes the window, and it is also what an open by ID needs, since it has no path. The
+  assistant must say which documented handle queries it checked and which it chose. **If none can tell
+  a remote file from a local one, the check cannot be made on the handle, and the caller declares where
+  the file is**, which is what this repository does for a fact only an undocumented call gives; that is
+  raised with the engineer before anything is built. There is **no check before the open**: the
+  engineer ruled on 2026-10-16 that finding out late is acceptable, and that an unbuffered file is still
+  refused on a remote device, since `OpenedFile<Unbuffered>` promises `SharedDevice` and a remote file
+  cannot keep it. The costs are documented and not prevented: an unbuffered create refused on the
+  handle has already created the file, and the open touches the network before it is refused.
 
 - [ ] **DI-14.6** -- **What an open can reach that is not a disk file is measured, and what this
   crate does about it is decided from the measurements.** The request crate passes every path to

@@ -119,59 +119,7 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
   > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
   > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## NR-5 -- A path-form classifier: one definition of what a path's syntactic form is
-
-Why this milestone exists. [durable-ioring's `DI-13.1`](../durable-ioring/CHECKLIST.md) ruling (b),
-2026-10-16: before an open, a path whose string alone shows it remote is refused, and the full
-validation is made on the opened handle only. That syntactic check has to be made on the path
-**handed to Win32** ([`OpenFile::win32_path`](src/open.rs)), not on the path as given, because a
-relative path under a UNC current directory is grafted into a UNC path. This crate's graft rules
-([D-19](DESIGN-NOTES.md#d-19) rules 2, 4 and 6) already classify path forms, privately; a consumer
-deriving the same classification would hold a second copy of the rule. The classifier is pure: no OS
-call and no policy. It says which documented form a string has, and the consumer decides what that
-means.
-
-What this milestone deliberately does not change, each a working position and not a decision:
-
-- The entries keep taking the `windows-sys` types and raw access masks they take now. A typed
-  vocabulary for rights, share mode, disposition and attributes belongs to durable-ioring's
-  `DI-13.3`, `DI-13.4` and `DI-13.7`, so this crate stays the policy-free catalogue.
-- Nothing here bounds a call that blocks. A request is already a value that is built on one thread
-  and performed on another, which is the whole answer to a blocked `CreateFileW`; whether
-  `CancelSynchronousIo` interrupts a create is not something any design here depends on.
-- `perform` keeps taking `&self`, so one captured request can be performed more than once.
-
-- [x] **NR-5.1** -- The decision for the path-form classifier, from measurements, before the type exists: [D-28](DESIGN-NOTES.md#d-28). -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#nr-51-forms)
-
-- [ ] **NR-5.2** -- **`PathForm` and `PathForm::of`**, additive and public, over a `Wtf16Str`,
-  specified by the table in [D-28](DESIGN-NOTES.md#d-28): each row of it is pinned by a test, so the
-  forms and the UNC marker are the readings `CreateFileW` gives and not `GetFullPathNameW`'s. At
-  least ten ordinary cases besides, and every edge the measurements name (empty, a lone separator,
-  `\\` alone, `\\?\` alone, `\\?\UNC` with no separator, a lone surrogate in the string, mixed
-  slashes). Sabotage entries with a `survives` control, per the usual harness.
-
-- [ ] **NR-5.3** -- **The graft rules 2, 4 and 6 are derived from the classifier**, so a form is
-  decided at one site. **Awaiting a ruling from the engineer before this starts:** rule 6 refuses to
-  graft onto a `\\?\` or a `\\.\` directory, and [D-28](DESIGN-NOTES.md#d-28) measured that Win32
-  normalises a `\\.\` path, so for that prefix the rule is wider than its reason. Either it is derived
-  as it stands (no behaviour changes: every existing test in the crate passes unchanged, and the
-  corrected reason is the only edit), or it is narrowed to the exactly-backslash verbatim form (a graft
-  now applies to a `\\.\` directory, which is a change in behaviour with its own tests). The
-  sabotage that shows it is a derivation and not a second copy: changing the classifier's answer for
-  one form changes whether a path is grafted.
-
-- [ ] **NR-5.4** -- **`win32_path_form()` on each entry that takes a path** (`OpenFile`,
-  `WatchDirectory`, `ResolveFullPath`), classifying the path handed to Win32, so a relative path
-  under a UNC current directory reports UNC. Every path-taking entry gets it, since the accessor
-  costs nothing and a consumer of any of them needs the same answer. The test for the UNC case is
-  the ignored child-process one in [tests/unc_current_directory.rs](tests/unc_current_directory.rs)
-  extended, and runs where a UNC current directory can be set.
-  **Next:** the release of this crate (a new minor; the commits are `feat(namespace-request)`, one
-  crate per commit), then durable-ioring's `DI-13.7`.
-
-  > **-> CROSS-COMPONENT HANDOFF:** when `NR-5.1` to `NR-5.4` are released, the next work is in
-  > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.7` (the two-phase open and its syntactic
-  > remote refusal). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+## NR-M-inf -- The horizon (ungated)
 
 ## NR-M-inf -- The horizon (ungated)
 

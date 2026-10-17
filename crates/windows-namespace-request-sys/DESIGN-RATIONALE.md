@@ -624,12 +624,15 @@ has to get right, and a wrong answer to the first or fourth is a path that reach
 nothing to stop it.
 
 **Why the example asserts nothing.** What it prints is what one machine did. A test that asserted it
-would fail on another Windows build for a reason that is a finding, not a defect, and `NR-5.2`'s
-classifier tests are what pin the rows. The example is the means of redoing the measurement when a
-row is in doubt.
+would fail on another Windows build for a reason that is a finding, not a defect. The example is the
+means of redoing the measurement when a row is in doubt.
 
-**The `\??\` form is recognised to refuse, and for nothing else.** It is the one row whose behaviour
-this repository found rather than read, and the platform-integrity rule says to bind to specified
-behaviour. Recognising it only ever refuses a path earlier, which errs toward safety, and the check on
-the opened handle is the authority, so a change in what Windows does with `\??\` can make the early
-refusal miss but cannot make an open unsafe.
+**Why the classifier was withdrawn.** It was planned (`NR-5.2` to `NR-5.4`) so that durable-ioring
+could refuse a path that is evidently remote before the open, to avoid a file left behind by an
+unbuffered create and a network call made before a refusal. The engineer's answer, 2026-10-16, was
+that finding out late is acceptable, and that the check on the opened handle is the only one needed.
+That left the classifier with one consumer that had dropped it, a new public type in a published crate,
+and one row (`\??\`) whose behaviour this repository found rather than read, which the
+platform-integrity rule says not to bind to. The graft rules it would also have derived from stayed
+as they are. It would be reopened by a consumer that needs to know a path is remote before it makes any
+call.
