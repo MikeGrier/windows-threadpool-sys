@@ -21,6 +21,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
+use windows_namespace_request_sys::open::OpenFile;
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
@@ -38,6 +39,8 @@ use super::share_mode::ShareMode;
 
 mod open_request;
 
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod share_tests;
 #[cfg(test)]
@@ -457,43 +460,43 @@ pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite> {
 }
 
 impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
-    /// Open `path` as `options` says, in buffering mode `B`. The handle has the data access the
-    /// options were given, which is its type `A`.
+    /// Open `path` as `options` says, in buffering mode `B`: [`request`](Self::request) and then
+    /// [`perform`](OpenRequest::perform), one after the other on this thread. The handle has the data
+    /// access the options were given, which is its type `A`.
+    ///
+    /// **This blocks for as long as `CreateFileW` does**, which on a network path or an opportunistic
+    /// lock break can be a long time. A caller that cannot block builds the request here and performs
+    /// it on a thread it chooses.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`request`](Self::request) and of [`perform`](OpenRequest::perform).
+    pub fn open(path: Wtf16String, options: FileOptions<A>) -> io::Result<Self> {
+        Self::request(path, options)?.perform()
+    }
+
+    /// The request to open `path` as `options` says, in buffering mode `B`, built here and made
+    /// wherever the caller chooses with [`perform`](OpenRequest::perform). Nothing is opened, and
+    /// nothing blocks.
     ///
     /// The path is handed to Win32 as it was given: this crate does not lengthen it, shorten it or
     /// refuse it, so a path longer than `MAX_PATH` without a verbatim prefix, and an empty one, are
     /// what `CreateFileW` makes of them. A relative path is fixed to the current directory as it is
-    /// when this is called, by the request crate. Convert a `Path` with
-    /// [`Wtf16String::from_os_str`], which loses nothing.
+    /// when this is called, so the request names the same file wherever and whenever it is performed.
+    /// Convert a `Path` with [`Wtf16String::from_os_str`], which loses nothing.
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, before anything is touched.
-    /// Otherwise whatever the open reports: [`SharingViolation`] (as an
-    /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
-    /// this open's access or sharing, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`]
-    /// error) when `B` can claim its warranty only on a local device and `path` is on a remote one.
-    /// That is decided from the path's final location, which resolves links and mapped drives,
-    /// before anything is created; the file can still be replaced by a link in the time between.
-    pub fn open(path: Wtf16String, options: FileOptions<A>) -> io::Result<Self> {
+    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, and the error of
+    /// `GetCurrentDirectoryW` if the current directory had to be read and could not be, both before
+    /// anything is touched.
+    pub fn request(path: Wtf16String, options: FileOptions<A>) -> io::Result<OpenRequest<B, A>> {
         let (rights, share) = (options.rights, options.share);
-        let parameters = options.parameters(B::FLAGS);
-        if B::LOCAL_DEVICE_ONLY {
-            // The one place a `Path` is needed, until `DI-14.5` moves the check to the opened handle.
-            let location = final_location(Path::new(&path.to_os_string()))?;
-            if names_a_remote_device(&location) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    RemoteDevice { location },
-                ));
-            }
-        }
-        let given = path.clone();
-        let handle = open_request::open(path, parameters)
-            .map_err(|error| refine_sharing(error, &given, data_access::<A>(), rights, share))?;
-        Ok(Self {
-            handle: SharedHandle::from(handle),
-            geometry: B::geometry(),
+        let request = open_request::request(path, options.parameters(B::FLAGS))?;
+        Ok(OpenRequest {
+            request,
+            rights,
+            share,
             mode: PhantomData,
         })
     }
@@ -508,6 +511,63 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     #[must_use]
     pub fn geometry(&self) -> Geometry {
         self.geometry
+    }
+}
+
+/// The request to open one file, built by [`OpenedFile::request`] and made by
+/// [`perform`](Self::perform): the path, fixed to the current directory if it was relative, and the
+/// options, typed by the buffering mode and the data access of the [`OpenedFile`] it opens.
+///
+/// It is `Send`, so it can be built on the thread that has the path and the current directory and
+/// performed on one that can afford to block, and it can be performed more than once, each time
+/// opening the file again.
+#[derive(Debug)]
+#[must_use = "a request that is not performed opens nothing"]
+pub struct OpenRequest<B: Buffering = Cached, A: DataAccess = ReadWrite> {
+    request: OpenFile,
+    rights: FileRights,
+    share: ShareMode,
+    mode: PhantomData<fn() -> (B, A)>,
+}
+
+impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
+    /// Open the file, on the calling thread. **This blocks for as long as `CreateFileW` does.**
+    ///
+    /// # Errors
+    ///
+    /// [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error) when `B` can claim its warranty
+    /// only on a local device and the path is on a remote one, decided from the path's final location,
+    /// which resolves links and mapped drives, before anything is created; the file can still be
+    /// replaced by a link in the time between. Otherwise whatever the open reports, among them
+    /// [`SharingViolation`] (as an [`io::ErrorKind::ResourceBusy`] error) when the file is open in a
+    /// way that conflicts with this open's access or sharing.
+    pub fn perform(&self) -> io::Result<OpenedFile<B, A>> {
+        if B::LOCAL_DEVICE_ONLY {
+            // The one place a `Path` is needed, until `DI-14.5` moves the check to the opened
+            // handle. It looks at the path the call is given, fixed to the directory the request
+            // was built in, so it is the file the call will open that is judged.
+            let location = final_location(Path::new(&self.request.win32_path().to_os_string()))?;
+            if names_a_remote_device(&location) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    RemoteDevice { location },
+                ));
+            }
+        }
+        let handle = open_request::perform(&self.request).map_err(|error| {
+            refine_sharing(
+                error,
+                self.request.path(),
+                data_access::<A>(),
+                self.rights,
+                self.share,
+            )
+        })?;
+        Ok(OpenedFile {
+            handle: SharedHandle::from(handle),
+            geometry: B::geometry(),
+            mode: PhantomData,
+        })
     }
 }
 

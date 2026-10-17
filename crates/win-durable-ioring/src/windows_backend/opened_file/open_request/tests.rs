@@ -12,8 +12,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use wtf_string::Wtf16String;
 
-use super::{Parameters, open, path_error, raw_code};
+use super::{Parameters, path_error, perform, raw_code, request};
 use crate::dioring::tests::{TempFile, wtf};
+
+/// The two steps run one after the other, as `OpenedFile::open` runs them.
+fn open(path: Wtf16String, parameters: Parameters) -> io::Result<OwnedHandle> {
+    perform(&request(path, parameters)?)
+}
 
 /// What a file was always opened with before the share mode was a parameter.
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;

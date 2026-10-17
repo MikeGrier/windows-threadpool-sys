@@ -1137,16 +1137,16 @@
       "file": "src/windows_backend/opened_file/open_request.rs",
       "expect": "caught",
       "why": "The path is the caller's, a Wtf16String, and reaches the request as given; a conversion through UTF-8 replaces a lone surrogate, so a file with one in its name no longer opens. Caught by the test that opens such a name.",
-      "find": ["    let request = OpenFile::new(path)\n"],
-      "replace": ["    let request = OpenFile::new(Wtf16String::from(path.to_os_string().to_string_lossy().as_ref()))\n"]
+      "find": ["    Ok(OpenFile::new(path)\n"],
+      "replace": ["    Ok(OpenFile::new(Wtf16String::from(path.to_os_string().to_string_lossy().as_ref()))\n"]
     },
     {
       "name": "DI-13.7.1: control, the path is cloned on its way to the request",
       "file": "src/windows_backend/opened_file/open_request.rs",
       "expect": "survives",
       "why": "A copy of the path is the same path, so this changes nothing the open can observe.",
-      "find": ["    let request = OpenFile::new(path)\n"],
-      "replace": ["    let request = OpenFile::new(path.clone())\n"]
+      "find": ["    Ok(OpenFile::new(path)\n"],
+      "replace": ["    Ok(OpenFile::new(path.clone())\n"]
     },
     {
       "name": "DI-14.1: the random-access hint sets nothing",
@@ -1177,8 +1177,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "The engineer ruled (DI-13.1 (f)) that a hint is passed to an unbuffered file and documented there, not refused. Caught by the tests that open every pair against the kernel and the ring.",
-      "find": ["        let given = path.clone();\n"],
-      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(io::Error::new(io::ErrorKind::InvalidInput, \"a hint is not offered to an unbuffered file\"));\n        }\n        let given = path.clone();\n"]
+      "find": ["        let (rights, share) = (options.rights, options.share);\n        let request = open_request::request(path, options.parameters(B::FLAGS))?;\n"],
+      "replace": ["        let (rights, share) = (options.rights, options.share);\n        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(io::Error::new(io::ErrorKind::InvalidInput, \"a hint is not offered to an unbuffered file\"));\n        }\n        let request = open_request::request(path, options.parameters(B::FLAGS))?;\n"]
     },
     {
       "name": "DI-14.1 control: the hint flags start from a typed zero",
@@ -1291,6 +1291,30 @@
       "why": "The flag is an option and no disposition implies it; std's open did, and this one reflects Win32.",
       "find": ["        let reparse = if self.open_reparse_point {\n"],
       "replace": ["        let reparse = if self.open_reparse_point || self.disposition == Disposition::CreateNew {\n"]
+    },
+    {
+      "name": "DI-13.7.4: a request forgets the share mode its sharing violation reports",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The request is built on one thread and performed on another, so what the violation says this open allowed must be carried in it and not read from the options again; a request that reset it would report an open that shared everything.",
+      "find": ["            rights,\n            share,\n            mode: PhantomData,\n"],
+      "replace": ["            rights,\n            share: ShareMode::ALL,\n            mode: PhantomData,\n"]
+    },
+    {
+      "name": "DI-13.7.4: a request forgets the rights its sharing violation reports",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the rights asked for besides the data access.",
+      "find": ["            rights,\n            share,\n            mode: PhantomData,\n"],
+      "replace": ["            rights: FileRights::NONE,\n            share,\n            mode: PhantomData,\n"]
+    },
+    {
+      "name": "DI-13.7.4 control: open runs its build and its perform through a binding",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "A control: the same two steps with the request named between them, which no test can tell apart from open.",
+      "find": ["        Self::request(path, options)?.perform()\n"],
+      "replace": ["        let request = Self::request(path, options)?;\n        request.perform()\n"]
     },
     {
       "name": "DI-13.7.3 control: the flags of an open joined in another order",

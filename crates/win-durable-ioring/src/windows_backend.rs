@@ -70,7 +70,8 @@ pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
 pub use opened_file::{
-    Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, SharingViolation, Unbuffered,
+    Buffering, Cached, FileOptions, OpenRequest, OpenedFile, RemoteDevice, SharingViolation,
+    Unbuffered,
 };
 pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
