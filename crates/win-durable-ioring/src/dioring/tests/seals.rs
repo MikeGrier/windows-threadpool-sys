@@ -10,10 +10,10 @@ use windows_ioring_sys::RegisteredSpan;
 use super::pushes::{ADDED, GIVEN, Harness, Ring, given, instance, read_only, temp};
 use super::{empty, file, keeper, setup};
 use crate::windows_backend::Win32FileTarget;
+use durable_ioring::{Access, DurableRing, RegisteredBufferRing};
 use durable_ioring::{
     DurabilityRequest, Entry, Epoch, EpochState, Outcome, PushRefusal, SealError, UnknownLineage,
 };
-use durable_ioring::{DurableRing, RegisteredBufferRing};
 
 /// The next entry, which must be `Durable` through `id` of the default lineage.
 fn expect_durable(harness: &mut Harness, id: u64) {
@@ -225,7 +225,10 @@ fn a_failed_write_is_not_covered_and_does_not_hold_its_seal() {
     let mut harness = Harness::new(instance(vec![given(GIVEN, &good)], Vec::new()));
     harness
         .ring
-        .add_target(ADDED, Win32FileTarget::new(read_only(&refused)))
+        .add_target(
+            ADDED,
+            Win32FileTarget::new(read_only(&refused)).claiming(Access::ReadWrite),
+        )
         .expect("add a read-only file");
     let failing = harness.write(ADDED, 0, b"refused", 1, 1);
     harness.write(GIVEN, 0, b"kept", 1, 2);

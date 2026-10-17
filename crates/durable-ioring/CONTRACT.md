@@ -204,6 +204,9 @@ dioring binds to these obligations, never to how a backing happens to meet them
   shares fate with every target.
 - **Its geometry and capabilities are stated**: the alignment its offsets, lengths and buffers
   need, and what it offers beyond these obligations, such as per-write write-through.
+- **Its access is stated**: whether it can be read, written, or both. An operation its access does not
+  cover is refused when it is pushed, as `AccessDenied`, and never reaches the target; a commit is not
+  one of them.
 - **A fault names its source**: the layer that reported it, and that layer's code where it gives one
   (see "Where every report comes from").
 

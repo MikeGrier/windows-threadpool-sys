@@ -17,10 +17,12 @@ use super::super::{
 };
 use super::{
     Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
-    final_location, names_a_remote_device, open_request,
+    data_rights, final_location, names_a_remote_device, open_request,
 };
 use crate::dioring::tests::TempFile;
-use durable_ioring::{Capabilities, Geometry, GeometryError, IoTarget, WarrantyClass};
+use durable_ioring::{
+    Access, Capabilities, Geometry, GeometryError, HasData, IoTarget, WarrantyClass,
+};
 
 /// `ERROR_INVALID_PARAMETER`, which an unbuffered file answers an unaligned transfer with.
 const INVALID_PARAMETER: i32 = 87;
@@ -629,6 +631,39 @@ fn each_data_access_opens_a_file_of_ones_own_on_either_buffering_mode() {
     opens("ReadOnly", FileOptions::new().read());
     opens("WriteOnly", FileOptions::new().write());
     opens("ReadWrite", FileOptions::new().read().write());
+}
+
+#[test]
+fn each_marker_asks_the_kernel_for_exactly_the_data_rights_it_names() {
+    assert_eq!(data_rights::<NoData>(), 0);
+    assert_eq!(data_rights::<ReadOnly>(), FILE_READ_DATA);
+    assert_eq!(data_rights::<WriteOnly>(), FILE_WRITE_DATA);
+    assert_eq!(data_rights::<ReadWrite>(), FILE_READ_DATA | FILE_WRITE_DATA);
+    for asked in [
+        data_rights::<NoData>(),
+        data_rights::<ReadOnly>(),
+        data_rights::<WriteOnly>(),
+        data_rights::<ReadWrite>(),
+    ] {
+        assert_eq!(asked & FILE_APPEND_DATA, 0, "{asked:#x}");
+    }
+}
+
+#[test]
+fn a_files_target_states_the_access_the_file_was_opened_with() {
+    fn stated<A: HasData>(options: FileOptions<A>) -> Access {
+        let temp = TempFile::new("of-stated");
+        let file = OpenedFile::<Cached, A>::open(&temp.0, options).expect("open");
+        Win32FileTarget::new(file).access()
+    }
+    assert_eq!(stated(FileOptions::new().read()), Access::ReadOnly);
+    assert_eq!(stated(FileOptions::new().write()), Access::WriteOnly);
+    assert_eq!(stated(FileOptions::new().read().write()), Access::ReadWrite);
+    // The other rights do not change what a target can do with its data.
+    assert_eq!(
+        stated(FileOptions::new().read().rights(FileRights::DELETE)),
+        Access::ReadOnly
+    );
 }
 
 #[test]

@@ -4,12 +4,11 @@
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use super::data_access::HasData;
 use super::opened_disk::OpenedDisk;
 use super::opened_file::{Buffering, OpenedFile};
 use super::opened_volume::OpenedVolume;
 use durable_ioring::FlushDomain;
-use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
+use durable_ioring::{Access, Capabilities, Geometry, HasData, IoTarget, WarrantyClass};
 
 /// A target backed by a Win32 file, a raw volume or a whole disk this crate opened, held as a
 /// `SharedHandle` -- an owning form, never a raw handle (DI-D-4).
@@ -47,6 +46,8 @@ pub struct Win32FileTarget {
     warranty: WarrantyClass,
     geometry: Geometry,
     capabilities: Capabilities,
+    /// What the handle was opened for, stated to the core (DI-D-66).
+    access: Access,
 }
 
 impl Win32FileTarget {
@@ -61,6 +62,7 @@ impl Win32FileTarget {
             domains: Vec::new(),
             warranty: B::WARRANTY,
             capabilities: B::CAPABILITIES,
+            access: A::ACCESS,
         }
     }
 
@@ -77,6 +79,7 @@ impl Win32FileTarget {
             declared: Vec::new(),
             warranty: B::WARRANTY,
             capabilities: B::CAPABILITIES,
+            access: A::ACCESS,
         }
     }
 
@@ -93,6 +96,7 @@ impl Win32FileTarget {
             declared: Vec::new(),
             warranty: B::WARRANTY,
             capabilities: B::CAPABILITIES,
+            access: A::ACCESS,
         }
     }
 
@@ -114,6 +118,16 @@ impl Win32FileTarget {
     #[must_use]
     pub fn handle(&self) -> &SharedHandle {
         &self.handle
+    }
+
+    /// State an access the handle was not opened with, to test what happens when a target
+    /// overstates it: the core trusts what a target states, so the kernel's own refusal is what is
+    /// left to meet.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn claiming(mut self, access: Access) -> Self {
+        self.access = access;
+        self
     }
 
     /// State a class a file's open mode cannot give, to test what the backend does with each.
@@ -147,5 +161,9 @@ impl IoTarget for Win32FileTarget {
 
     fn capabilities(&self) -> Capabilities {
         self.capabilities
+    }
+
+    fn access(&self) -> Access {
+        self.access
     }
 }

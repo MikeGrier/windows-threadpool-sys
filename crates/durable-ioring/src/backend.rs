@@ -121,6 +121,9 @@ pub enum RefusalCause {
     /// target's geometry does not admit, or a region outside its registered buffer. Retrying does
     /// not help.
     Invalid,
+    /// The target's access does not cover the operation: a write to a target that cannot write, or a
+    /// read from one that cannot read (DI-D-66). Retrying does not help.
+    AccessDenied,
     /// The backend can take no more submissions, ever; carries what it reported.
     Unusable(IoFault),
     /// The backend could not say why; carries what it reported.
@@ -161,6 +164,7 @@ impl fmt::Display for RefusalCause {
             Self::UnknownTarget => f.write_str("no target is attached under that key"),
             Self::Unsupported => f.write_str("the backend cannot perform it"),
             Self::Invalid => f.write_str("the submission is malformed for its target"),
+            Self::AccessDenied => f.write_str("the target's access does not cover the operation"),
             Self::Unusable(fault) => write!(f, "the backend is unusable: {}", fault.error),
             Self::Unknown(fault) => write!(f, "refused for a reason not known: {}", fault.error),
         }
@@ -194,6 +198,7 @@ pub(crate) fn refusal_fault(cause: RefusalCause) -> IoFault {
         RefusalCause::Unsupported => io::ErrorKind::Unsupported,
         RefusalCause::Invalid => io::ErrorKind::InvalidInput,
         RefusalCause::UnknownTarget => io::ErrorKind::NotFound,
+        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,
         _ => io::ErrorKind::Other,
     };
     IoFault {

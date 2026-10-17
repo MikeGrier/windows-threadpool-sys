@@ -2,6 +2,7 @@
 //! A target's geometry and description.
 
 use super::{Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass};
+use crate::access::Access;
 use crate::memory::MemoryTarget;
 use crate::types::FlushDomain;
 
@@ -102,7 +103,8 @@ fn a_description_is_everything_the_target_states() {
         .with_domains(domains.clone())
         .with_warranty(WarrantyClass::SharedDevice)
         .with_geometry(geometry)
-        .with_capabilities(Capabilities::NONE.with_write_through());
+        .with_capabilities(Capabilities::NONE.with_write_through())
+        .with_access(Access::ReadOnly);
     assert_eq!(
         target.describe(),
         IoTargetDescription {
@@ -110,6 +112,7 @@ fn a_description_is_everything_the_target_states() {
             warranty: WarrantyClass::SharedDevice,
             geometry,
             capabilities: Capabilities::NONE.with_write_through(),
+            access: Access::ReadOnly,
         }
     );
 }
@@ -121,4 +124,14 @@ fn a_target_with_no_domains_describes_none() {
     assert_eq!(description.warranty, WarrantyClass::Complete);
     assert_eq!(description.geometry, Geometry::UNALIGNED);
     assert_eq!(description.capabilities, Capabilities::NONE);
+    assert_eq!(description.access, Access::ReadWrite);
+}
+
+#[test]
+fn a_description_carries_the_access_a_target_states_and_nothing_else_does() {
+    for access in [Access::ReadOnly, Access::WriteOnly, Access::ReadWrite] {
+        let target = MemoryTarget::new().with_access(access);
+        assert_eq!(target.access(), access);
+        assert_eq!(target.describe().access, access);
+    }
 }

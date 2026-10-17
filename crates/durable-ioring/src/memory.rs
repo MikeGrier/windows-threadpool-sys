@@ -17,6 +17,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::access::Access;
 use crate::backend::{
     Completion, DuplicateTarget, IoBackend, RefusalCause, Refused, RegisteredRegion, Submission,
     SubmissionData, SubmissionOp, SubmissionToken,
@@ -41,7 +42,7 @@ fn memory_fault(message: &str) -> IoFault {
 
 /// A target whose bytes are held in memory: what was written, and what the last successful commit
 /// warranted. It states what it is built with: no flush domains, [`WarrantyClass::Complete`],
-/// [`Geometry::UNALIGNED`] and [`Capabilities::NONE`] unless set.
+/// [`Geometry::UNALIGNED`], [`Capabilities::NONE`] and [`Access::ReadWrite`] unless set.
 #[derive(Clone, Debug)]
 pub struct MemoryTarget {
     contents: Vec<u8>,
@@ -50,6 +51,7 @@ pub struct MemoryTarget {
     warranty: WarrantyClass,
     geometry: Geometry,
     capabilities: Capabilities,
+    access: Access,
 }
 
 impl Default for MemoryTarget {
@@ -69,6 +71,7 @@ impl MemoryTarget {
             warranty: WarrantyClass::Complete,
             geometry: Geometry::UNALIGNED,
             capabilities: Capabilities::NONE,
+            access: Access::ReadWrite,
         }
     }
 
@@ -97,6 +100,14 @@ impl MemoryTarget {
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = capabilities;
+        self
+    }
+
+    /// State what it can do with its data, which the backend enforces: a write to a target that
+    /// cannot write, or a read from one that cannot read, is refused.
+    #[must_use]
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
         self
     }
 
@@ -153,6 +164,10 @@ impl IoTarget for MemoryTarget {
 
     fn capabilities(&self) -> Capabilities {
         self.capabilities
+    }
+
+    fn access(&self) -> Access {
+        self.access
     }
 }
 
@@ -314,6 +329,14 @@ impl MemoryBackend {
         let Some(target) = self.targets.get(&target) else {
             return Err(RefusalCause::UnknownTarget);
         };
+        let covered = match op {
+            SubmissionOp::Write { .. } => target.access.can_write(),
+            SubmissionOp::Read { .. } => target.access.can_read(),
+            SubmissionOp::Commit => true,
+        };
+        if !covered {
+            return Err(RefusalCause::AccessDenied);
+        }
         let shape = match op {
             SubmissionOp::Write { offset, data, .. } | SubmissionOp::Read { offset, data } => {
                 Some((*offset, data))

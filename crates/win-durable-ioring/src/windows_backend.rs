@@ -47,7 +47,6 @@ use durable_ioring::backend::{
 };
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
-mod data_access;
 mod file_rights;
 mod file_target;
 mod opened_disk;
@@ -59,7 +58,8 @@ mod wait;
 
 pub use wait::CompletionEvent;
 
-pub use data_access::{
+// The markers are the core's (DI-D-66); this module states what each asks of Win32.
+pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };
 pub use file_rights::FileRights;
@@ -488,7 +488,8 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         })
     }
 
-    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, an owned
+    /// Why `op` on `target` cannot be pushed, before the ring is asked: an unknown target, an
+    /// operation its access does not cover (DI-D-66), an owned
     /// read on a backend without owned reads (DI-D-17), a registered region without a registration,
     /// or an operation its target's geometry does not admit. A registered region is checked for offset and length only; its buffer's address is
     /// the registration's, and whether it lies within the registration is the ring's own check at
@@ -497,6 +498,16 @@ impl<B: IoBuf, R: IoBufMut> WindowsBackend<B, R> {
         let Some(slot) = self.targets.get(&target) else {
             return Err(RefusalCause::UnknownTarget);
         };
+        // What the target can do with its data, before the shape of the operation is looked at.
+        let access = slot.target.access();
+        let covered = match op {
+            SubmissionOp::Write { .. } => access.can_write(),
+            SubmissionOp::Read { .. } => access.can_read(),
+            SubmissionOp::Commit => true,
+        };
+        if !covered {
+            return Err(RefusalCause::AccessDenied);
+        }
         if self.owned_read.is_none()
             && matches!(
                 op,

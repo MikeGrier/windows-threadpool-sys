@@ -23,10 +23,9 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::bytes_per_sector;
 
-use super::data_access::{DataAccess, ReadWrite};
-use super::opened_file::{Buffering, Unbuffered};
+use super::opened_file::{Buffering, Unbuffered, data_rights};
 use super::opened_volume::disk_flush_domain;
-use durable_ioring::{FlushDomain, Geometry};
+use durable_ioring::{DataAccess, FlushDomain, Geometry, ReadWrite};
 
 #[cfg(test)]
 mod tests;
@@ -90,7 +89,7 @@ impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
     /// device's own error from the sector size control.
     pub fn open(path: DiskPath) -> io::Result<Self> {
         let file = OpenOptions::new()
-            .access_mode(A::RIGHTS)
+            .access_mode(data_rights::<A>())
             .custom_flags(B::FLAGS)
             .open(path.path())?;
         let sector = bytes_per_sector(&file)?;

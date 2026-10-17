@@ -1238,27 +1238,27 @@
     },
     {
       "name": "DI-13.8: read-only access asks for the right to write",
-      "file": "src/windows_backend/data_access.rs",
+      "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "A marker is the data rights it names and no more, so a read-only handle that asked for write would be granted one the type says it lacks. Caught by the tests that have the kernel judge each access.",
-      "find": ["    const RIGHTS: u32 = FILE_READ_DATA;\n"],
-      "replace": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"]
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::READ { FILE_READ_DATA | FILE_WRITE_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"]
     },
     {
       "name": "DI-13.8: write-only access asks for the right to read",
-      "file": "src/windows_backend/data_access.rs",
+      "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "The same, the other way round: a write-only handle that asked for read would read when its type says it cannot.",
-      "find": ["    const RIGHTS: u32 = FILE_WRITE_DATA;\n"],
-      "replace": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"]
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_READ_DATA | FILE_WRITE_DATA } else { 0 })\n"]
     },
     {
       "name": "DI-13.8: the other rights are left out of the open",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "What an open asks for is the data access and the other rights joined, so an open that dropped the others would ask for less than the caller said. Caught by the test of what the options ask the kernel for and by the one that sets a time through a handle opened with WRITE_ATTRIBUTES.",
-      "find": ["            access: A::RIGHTS | self.rights.bits(),\n"],
-      "replace": ["            access: A::RIGHTS,\n"]
+      "find": ["            access: data_rights::<A>() | self.rights.bits(),\n"],
+      "replace": ["            access: data_rights::<A>(),\n"]
     },
     {
       "name": "DI-13.8: changing the data access forgets the other rights",
@@ -1273,8 +1273,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "Creating or truncating a file without the right to write is refused as invalid input until DI-13.7 removes the check, and the other rights do not stand in for it.",
-      "find": ["        if A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {\n"],
-      "replace": ["        if false && A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {\n"]
+      "find": ["        if !A::WRITE && self.creates_or_truncates() {\n"],
+      "replace": ["        if false && !A::WRITE && self.creates_or_truncates() {\n"]
     },
     {
       "name": "DI-13.8: a truncated file is not emptied",
@@ -1293,12 +1293,68 @@
       "replace": ["        other.0 & self.0 == other.0\n"]
     },
     {
-      "name": "DI-13.8 control: the two data rights joined in the other order",
-      "file": "src/windows_backend/data_access.rs",
+      "name": "DI-13.8 control: the two data rights of a marker joined in the other order",
+      "file": "src/windows_backend/opened_file.rs",
       "expect": "survives",
-      "why": "A control: the same mask written the other way round, which no test can tell apart.",
-      "find": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"],
-      "replace": ["    const RIGHTS: u32 = FILE_WRITE_DATA | FILE_READ_DATA;\n"]
+      "why": "A control: the same mask with its two halves the other way round, which no test can tell apart.",
+      "find": ["    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })\n"],
+      "replace": ["    (if A::WRITE { FILE_WRITE_DATA } else { 0 }) | (if A::READ { FILE_READ_DATA } else { 0 })\n"]
+    },
+    {
+      "name": "DI-13.9: a file's target states more access than the file was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "A target states the access its handle was opened with, so one that always said read and write would be believed by the core and refused by the kernel. Caught by the test that reads the stated access off a target made from each kind of file.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `volume` makes"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `volume` makes"]
+    },
+    {
+      "name": "DI-13.9: a volume's target states more access than the volume was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The same for a raw volume, whose open is judged by the kernel only where there is an administrator, so the stated access is pinned by the test that assembles one.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `disk` makes"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `disk` makes"]
+    },
+    {
+      "name": "DI-13.9: a disk's target states more access than the disk was opened with",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The same for a whole disk.",
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// Declare every flush domain"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// Declare every flush domain"]
+    },
+    {
+      "name": "DI-13.9: the backend lets a write through to a target that cannot write",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "A write is covered by a target that can write. Asking whether it can read instead lets a write to a read-only target reach the kernel, which is what the test of the refusal at the push shows.",
+      "find": ["            SubmissionOp::Write { .. } => access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => access.can_read(),\n"]
+    },
+    {
+      "name": "DI-13.9: the backend lets a read through from a target that cannot read",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "The same for a read from a write-only target.",
+      "find": ["            SubmissionOp::Read { .. } => access.can_read(),\n"],
+      "replace": ["            SubmissionOp::Read { .. } => access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the backend does not refuse what the access does not cover",
+      "file": "src/windows_backend.rs",
+      "expect": "caught",
+      "why": "An operation the access does not cover is refused as AccessDenied and never reaches the ring.",
+      "find": ["        if !covered {\n            return Err(RefusalCause::AccessDenied);\n"],
+      "replace": ["        if false && !covered {\n            return Err(RefusalCause::AccessDenied);\n"]
+    },
+    {
+      "name": "DI-13.9 control: the access asked of a write is stated as a binding first",
+      "file": "src/windows_backend.rs",
+      "expect": "survives",
+      "why": "A control: the same call made through a local, which no test can tell apart.",
+      "find": ["            SubmissionOp::Write { .. } => access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => { let writes = access.can_write(); writes }\n"]
     }
   ]
 }

@@ -5,9 +5,10 @@ use std::io;
 use super::{DiskPath, OpenedDisk};
 use crate::dioring::tests::TempFile;
 use crate::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget, disk_flush_domain,
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, Unbuffered, Win32FileTarget, WriteOnly,
+    disk_flush_domain,
 };
-use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
+use durable_ioring::{Access, Capabilities, Geometry, IoTarget, WarrantyClass};
 
 /// A disk made of the parts a test gives it, over an ordinary file's handle: what is derived from a
 /// disk does not depend on the handle being one, and opening one needs an administrator.
@@ -22,6 +23,20 @@ fn assembled<B: crate::windows_backend::Buffering>(
         OpenedDisk::assembled(file.handle().clone(), disk_number, sector),
         temp,
     )
+}
+
+#[test]
+fn a_disks_target_states_the_access_the_disk_was_opened_with() {
+    let temp = TempFile::new("od-access");
+    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+        .expect("open a file");
+    let handle = file.handle().clone();
+    let disk = OpenedDisk::<Unbuffered, ReadOnly>::assembled(handle.clone(), 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::ReadOnly);
+    let disk = OpenedDisk::<Unbuffered, WriteOnly>::assembled(handle.clone(), 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::WriteOnly);
+    let disk = OpenedDisk::<Unbuffered, ReadWrite>::assembled(handle, 1, 512);
+    assert_eq!(Win32FileTarget::from_disk(disk).access(), Access::ReadWrite);
 }
 
 #[test]

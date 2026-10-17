@@ -8,8 +8,10 @@ use super::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain, domains_of,
 };
 use crate::dioring::tests::TempFile;
-use crate::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget};
-use durable_ioring::{Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
+use crate::windows_backend::{
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, Unbuffered, Win32FileTarget, WriteOnly,
+};
+use durable_ioring::{Access, Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
 
 fn extent(disk_number: u32) -> DiskExtent {
     DiskExtent {
@@ -48,6 +50,40 @@ fn a_disk_is_named_as_it_answers_and_two_targets_share_a_domain_by_equal_bytes()
     assert_eq!(disk_flush_domain(3), disk_flush_domain(3));
     assert_ne!(disk_flush_domain(3), disk_flush_domain(30));
     assert_ne!(disk_flush_domain(1), disk_flush_domain(2));
+}
+
+#[test]
+fn a_volumes_target_states_the_access_the_volume_was_opened_with() {
+    let temp = TempFile::new("ov-access");
+    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+        .expect("open a file");
+    let handle = file.handle().clone();
+    let volume = OpenedVolume::<Unbuffered, ReadOnly>::assembled(
+        handle.clone(),
+        vec![extent(1)],
+        512,
+        false,
+    );
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::ReadOnly
+    );
+    let volume = OpenedVolume::<Unbuffered, WriteOnly>::assembled(
+        handle.clone(),
+        vec![extent(1)],
+        512,
+        false,
+    );
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::WriteOnly
+    );
+    let volume =
+        OpenedVolume::<Unbuffered, ReadWrite>::assembled(handle, vec![extent(1)], 512, false);
+    assert_eq!(
+        Win32FileTarget::from_volume(volume).access(),
+        Access::ReadWrite
+    );
 }
 
 #[test]

@@ -24,9 +24,8 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, bytes_per_sector, lock_volume, volume_disk_extents};
 
-use super::data_access::{DataAccess, ReadWrite};
-use super::opened_file::{Buffering, Unbuffered};
-use durable_ioring::{FlushDomain, Geometry};
+use super::opened_file::{Buffering, Unbuffered, data_rights};
+use durable_ioring::{DataAccess, FlushDomain, Geometry, ReadWrite};
 
 #[cfg(test)]
 mod tests;
@@ -177,7 +176,7 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
     /// held.
     pub fn open(path: &VolumePath, options: VolumeOptions) -> io::Result<Self> {
         let file = OpenOptions::new()
-            .access_mode(A::RIGHTS)
+            .access_mode(data_rights::<A>())
             .custom_flags(B::FLAGS)
             .open(path.as_str())?;
         let extents = volume_disk_extents(&file)?;

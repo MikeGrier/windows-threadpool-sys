@@ -23,12 +23,13 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
+    FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 
-use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
+use durable_ioring::{
+    Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
+};
 
-use super::data_access::{DataAccess, NoData, ReadWrite};
 use super::file_rights::FileRights;
 
 mod open_request;
@@ -267,7 +268,7 @@ impl<A: DataAccess> FileOptions<A> {
     /// a combination that cannot mean anything: (as `std::fs::OpenOptions` refused, until
     /// `DI-13.7`) creating or truncating without the right to write.
     fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
-        if A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {
+        if !A::WRITE && self.creates_or_truncates() {
             return Err(invalid_input(
                 "creating or truncating a file requires write access",
             ));
@@ -296,7 +297,7 @@ impl<A: DataAccess> FileOptions<A> {
             hints |= FILE_FLAG_SEQUENTIAL_SCAN;
         }
         Ok(open_request::Parameters {
-            access: A::RIGHTS | self.rights.bits(),
+            access: data_rights::<A>() | self.rights.bits(),
             disposition,
             flags: flags | reparse | hints,
             truncate_after,
@@ -306,6 +307,14 @@ impl<A: DataAccess> FileOptions<A> {
     fn creates_or_truncates(self) -> bool {
         self.create || self.create_new || self.truncate
     }
+}
+
+/// What `A` asks `CreateFileW` for: `FILE_READ_DATA` as it reads and `FILE_WRITE_DATA` as it writes,
+/// and no other right. The append bit is never among them, so a handle that appends and cannot write
+/// at an offset cannot be asked for. The markers are the core's (DI-D-66); what they ask of Win32 is
+/// stated here.
+pub(super) const fn data_rights<A: DataAccess>() -> u32 {
+    (if A::READ { FILE_READ_DATA } else { 0 }) | (if A::WRITE { FILE_WRITE_DATA } else { 0 })
 }
 
 fn invalid_input(message: &'static str) -> io::Error {

@@ -2,12 +2,13 @@
 //! What a target states about itself (DI-D-48, DI-D-50): the [`IoTarget`] trait.
 //!
 //! The obligations a target meets are the contract's ("What this contract requires of a target");
-//! this module carries what a target *reports* -- its flush domains, warranty class, geometry and
-//! capabilities. The driver hands the target itself to the backend, which runs its I/O, and its
-//! [`IoTargetDescription`] to the core, which decides with it (DI-D-52).
+//! this module carries what a target *reports* -- its flush domains, warranty class, geometry,
+//! capabilities and data access. The driver hands the target itself to the backend, which runs its
+//! I/O, and its [`IoTargetDescription`] to the core, which decides with it (DI-D-52).
 
 use std::fmt;
 
+use crate::access::Access;
 use crate::types::FlushDomain;
 
 #[cfg(test)]
@@ -167,6 +168,8 @@ pub struct IoTargetDescription {
     pub geometry: Geometry,
     /// What it offers beyond its obligations.
     pub capabilities: Capabilities,
+    /// What it can do with its data: an operation this does not cover is refused (DI-D-66).
+    pub access: Access,
 }
 
 /// A target: what a write or a read addresses and a commit makes durable, defined by the
@@ -188,6 +191,12 @@ pub trait IoTarget: Send {
     /// What it offers beyond its obligations.
     fn capabilities(&self) -> Capabilities;
 
+    /// What it can do with its data: read it, write it, or both. A backend refuses a write to a target
+    /// that cannot write and a read from one that cannot read, with
+    /// [`RefusalCause::AccessDenied`](crate::backend::RefusalCause::AccessDenied). There is no
+    /// default: a target that has not said what it can do has not said it can do everything.
+    fn access(&self) -> Access;
+
     /// Everything it states, as the core takes it.
     fn describe(&self) -> IoTargetDescription {
         IoTargetDescription {
@@ -195,6 +204,7 @@ pub trait IoTarget: Send {
             warranty: self.warranty(),
             geometry: self.geometry(),
             capabilities: self.capabilities(),
+            access: self.access(),
         }
     }
 }
