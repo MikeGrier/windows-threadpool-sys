@@ -5,7 +5,7 @@ use std::io;
 use super::{DiskPath, OpenedDisk};
 use crate::dioring::tests::TempFile;
 use crate::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget, disk_flush_domain,
+    Cached, FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget, disk_flush_domain,
 };
 use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
 
@@ -16,8 +16,11 @@ fn assembled<B: crate::windows_backend::Buffering>(
     sector: u32,
 ) -> (OpenedDisk<B>, TempFile) {
     let temp = TempFile::new("od-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
-        .expect("open a file");
+    let file = OpenedFile::<Cached>::open(
+        &temp.0,
+        FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
+    )
+    .expect("open a file");
     (
         OpenedDisk::assembled(file.handle().clone(), disk_number, sector),
         temp,

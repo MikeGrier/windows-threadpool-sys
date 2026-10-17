@@ -8,7 +8,7 @@ use io_buffers::AlignedBuf;
 
 use super::{QUEUE, TempFile};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
-use crate::windows_backend::{FileOptions, OpenedFile, Unbuffered, Win32FileTarget};
+use crate::windows_backend::{FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
     DurableRing, Entry, IoTarget, IoTargetKey, LineageHandle, OpCompletion, Outcome, PushRefusal,
@@ -26,7 +26,10 @@ fn unbuffered(temp: &TempFile, options: FileOptions) -> Win32FileTarget {
 }
 
 fn instance(temp: &TempFile) -> (AlignedRing, LineageHandle) {
-    instance_with(temp, FileOptions::new().read(true).write(true))
+    instance_with(
+        temp,
+        FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
+    )
 }
 
 fn instance_with(temp: &TempFile, options: FileOptions) -> (AlignedRing, LineageHandle) {
@@ -71,8 +74,7 @@ fn an_unbuffered_file_opened_with_cache_hints_runs_through_the_ring() {
     for (random, sequential) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = TempFile::new("unbuffered-hints");
         let options = FileOptions::new()
-            .read(true)
-            .write(true)
+            .access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE)
             .random_access(random)
             .sequential_scan(sequential);
         let (mut ring, lineage) = instance_with(&temp, options);

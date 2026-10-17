@@ -8,7 +8,9 @@ use super::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain, domains_of,
 };
 use crate::dioring::tests::TempFile;
-use crate::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget};
+use crate::windows_backend::{
+    Cached, FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget,
+};
 use durable_ioring::{Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
 
 fn extent(disk_number: u32) -> DiskExtent {
@@ -27,8 +29,11 @@ fn assembled<B: crate::windows_backend::Buffering>(
     locked: bool,
 ) -> (OpenedVolume<B>, TempFile) {
     let temp = TempFile::new("ov-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
-        .expect("open a file");
+    let file = OpenedFile::<Cached>::open(
+        &temp.0,
+        FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
+    )
+    .expect("open a file");
     (
         OpenedVolume::assembled(file.handle().clone(), extents, sector, locked),
         temp,
@@ -237,8 +242,11 @@ fn declared_domains_are_added_to_a_volumes_and_never_take_one_away() {
 #[test]
 fn a_file_targets_domains_are_only_what_is_declared() {
     let temp = TempFile::new("ov-file-domains");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read(true).write(true))
-        .expect("open");
+    let file = OpenedFile::<Cached>::open(
+        &temp.0,
+        FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
+    )
+    .expect("open");
     let target = Win32FileTarget::new(file).with_domains([disk_flush_domain(9)]);
     assert_eq!(target.flush_domains(), [disk_flush_domain(9)]);
 }

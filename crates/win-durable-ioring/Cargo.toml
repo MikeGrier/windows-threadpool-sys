@@ -47,7 +47,11 @@ win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_Storage_FileSystem"]
+features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+]
 
 [features]
 # The fault seam (DI-3.2.4): `Dioring::fail_next_flush`, failures on demand for tests. Off by

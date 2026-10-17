@@ -21,13 +21,14 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
-use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
     OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
 };
 
 use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
+
+use super::file_rights::FileRights;
 
 mod open_request;
 
@@ -126,14 +127,13 @@ impl Buffering for Unbuffered {
     }
 }
 
-/// What to open: access and creation, as `std::fs::OpenOptions` names them. Only these, because
-/// the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags could change it.
-/// A file is shared for reading, writing and deletion, as std opens one.
+/// What to open: the access rights, how the file is created, and the cache hints. Only these,
+/// because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags could
+/// change it. A file is shared for reading, writing and deletion, as std opens one.
 #[derive(Clone, Copy, Debug, Default)]
 #[must_use]
 pub struct FileOptions {
-    read: bool,
-    write: bool,
+    access: FileRights,
     create: bool,
     create_new: bool,
     truncate: bool,
@@ -142,20 +142,20 @@ pub struct FileOptions {
 }
 
 impl FileOptions {
-    /// Nothing requested: set at least read or write before opening.
+    /// Nothing requested: give the access rights before opening.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Open for reading.
-    pub fn read(mut self, read: bool) -> Self {
-        self.read = read;
-        self
-    }
-
-    /// Open for writing.
-    pub fn write(mut self, write: bool) -> Self {
-        self.write = write;
+    /// The access rights to open with (`dwDesiredAccess`). A file target needs a data right, which
+    /// [`FileRights::READ_DATA`], [`FileRights::WRITE_DATA`] or a generic right that maps to one
+    /// supplies, and an open without one is refused as invalid input before any call is made, not
+    /// when the first operation fails. What the file's security allows is the kernel's to say, and
+    /// its refusal reaches the caller as its own error.
+    ///
+    /// Calling this again replaces the rights; join them with `|` to ask for several.
+    pub fn access(mut self, access: FileRights) -> Self {
+        self.access = access;
         self
     }
 
@@ -204,23 +204,17 @@ impl FileOptions {
         self
     }
 
-    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or the same
-    /// refusal `std::fs::OpenOptions` gave for a combination that cannot mean anything: no
-    /// access, or creating or truncating without write access.
+    /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or a refusal for
+    /// a combination that cannot mean anything: no data right, or (as `std::fs::OpenOptions`
+    /// refused, until `DI-13.7`) creating or truncating without the right to write.
     fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
-        let access = match (self.read, self.write) {
-            (true, false) => GENERIC_READ,
-            (false, true) => GENERIC_WRITE,
-            (true, true) => GENERIC_READ | GENERIC_WRITE,
-            (false, false) => {
-                return Err(invalid_input(if self.creates_or_truncates() {
-                    "creating or truncating a file requires write access"
-                } else {
-                    "must specify at least one of read or write access"
-                }));
-            }
-        };
-        if !self.write && self.creates_or_truncates() {
+        let access = self.access;
+        if !access.grants_a_data_right() {
+            return Err(invalid_input(
+                "a file target needs a data right: READ_DATA, WRITE_DATA, or a generic right that includes one",
+            ));
+        }
+        if !access.grants_write_data() && self.creates_or_truncates() {
             return Err(invalid_input(
                 "creating or truncating a file requires write access",
             ));
@@ -248,7 +242,7 @@ impl FileOptions {
             hints |= FILE_FLAG_SEQUENTIAL_SCAN;
         }
         Ok(open_request::Parameters {
-            access,
+            access: access.bits(),
             disposition,
             flags: flags | reparse | hints,
             truncate_after,
@@ -294,11 +288,14 @@ impl std::error::Error for RemoteDevice {}
 /// be passed:
 ///
 /// ```compile_fail,E0308
-/// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered};
+/// use win_durable_ioring::windows_backend::{
+///     Cached, FileOptions, FileRights, OpenedFile, Unbuffered,
+/// };
 ///
 /// fn needs_an_unbuffered_file(_: OpenedFile<Unbuffered>) {}
 ///
-/// let cached = OpenedFile::<Cached>::open("a-file", FileOptions::new().read(true)).unwrap();
+/// let options = FileOptions::new().access(FileRights::READ_DATA);
+/// let cached = OpenedFile::<Cached>::open("a-file", options).unwrap();
 /// needs_an_unbuffered_file(cached);
 /// ```
 #[derive(Clone, Debug)]
@@ -313,12 +310,16 @@ impl<B: Buffering> OpenedFile<B> {
     ///
     /// # Errors
     ///
-    /// Whatever the open reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
+    /// [`io::ErrorKind::InvalidInput`] if `options` carry no data right, before anything is touched.
+    /// Otherwise whatever the open reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
     /// when `B` can claim its warranty only on a local device and `path` is on a remote one. That
     /// is decided from the path's final location, which resolves links and mapped drives, before
     /// anything is created; the file can still be replaced by a link in the time between.
     pub fn open(path: impl AsRef<Path>, options: FileOptions) -> io::Result<Self> {
         let path = path.as_ref();
+        // Decided before anything is touched: what is asked for either makes a file target or it
+        // does not.
+        let parameters = options.parameters(B::FLAGS)?;
         if B::LOCAL_DEVICE_ONLY {
             let location = final_location(path)?;
             if names_a_remote_device(&location) {
@@ -328,7 +329,7 @@ impl<B: Buffering> OpenedFile<B> {
                 ));
             }
         }
-        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;
+        let handle = open_request::open(path, parameters)?;
         Ok(Self {
             handle: SharedHandle::from(handle),
             geometry: B::geometry(),

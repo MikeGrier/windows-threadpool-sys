@@ -47,6 +47,7 @@ use durable_ioring::backend::{
 };
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
+mod file_rights;
 mod file_target;
 mod opened_disk;
 mod opened_file;
@@ -57,6 +58,7 @@ mod wait;
 
 pub use wait::CompletionEvent;
 
+pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use opened_disk::{DiskPath, OpenedDisk};
 pub use opened_file::{Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, Unbuffered};

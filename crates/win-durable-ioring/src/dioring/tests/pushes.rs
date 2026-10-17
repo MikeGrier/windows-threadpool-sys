@@ -20,7 +20,7 @@ fn length(len: usize) -> u32 {
 use crate::InterruptStamps;
 use crate::dioring::{Dioring, Setup, TargetSetup, TimeBase};
 use crate::readiness::check_readiness;
-use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
+use crate::windows_backend::{FileOptions, FileRights, OpenedFile, Win32FileTarget};
 use durable_ioring::IoTarget;
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::oracle::ConformanceOracle;
@@ -52,7 +52,8 @@ pub(super) fn temp(content: &[u8]) -> TempFile {
 }
 
 pub(super) fn read_only(temp: &TempFile) -> OpenedFile {
-    OpenedFile::open(&temp.0, FileOptions::new().read(true)).expect("open read-only")
+    OpenedFile::open(&temp.0, FileOptions::new().access(FileRights::GENERIC_READ))
+        .expect("open read-only")
 }
 
 pub(super) fn instance(files: Vec<TargetSetup>, buffers: Vec<Vec<u8>>) -> Ring {

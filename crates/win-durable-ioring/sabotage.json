@@ -1209,8 +1209,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "The engineer ruled (DI-13.1 (f)) that a hint is passed to an unbuffered file and documented there, not refused. Caught by the tests that open every pair against the kernel and the ring.",
-      "find": ["        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;\n"],
-      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(invalid_input(\"a hint is not offered to an unbuffered file\"));\n        }\n        let handle = open_request::open(path, options.parameters(B::FLAGS)?)?;\n"]
+      "find": ["        let handle = open_request::open(path, parameters)?;\n"],
+      "replace": ["        if B::FLAGS != 0 && (options.random_access || options.sequential_scan) {\n            return Err(invalid_input(\"a hint is not offered to an unbuffered file\"));\n        }\n        let handle = open_request::open(path, parameters)?;\n"]
     },
     {
       "name": "DI-14.1 control: the hint flags start from a typed zero",
@@ -1219,6 +1219,54 @@
       "why": "A control: the same value with a stated type, which no test can tell apart from the original, so a harness that reports it caught is reporting something other than the tests.",
       "find": ["        let mut hints = 0;\n"],
       "replace": ["        let mut hints = 0u32;\n"]
+    },
+    {
+      "name": "DI-13.3: a right is the value of another right",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "caught",
+      "why": "Each right is the constant it is named for, so a member holding a neighbour's value asks the kernel for something else under a name that says otherwise. Caught by the test that checks every single right against the constant it is named for.",
+      "find": ["        WRITE_DATA = FILE_WRITE_DATA;\n"],
+      "replace": ["        WRITE_DATA = FILE_READ_DATA;\n"]
+    },
+    {
+      "name": "DI-13.3: containing a set only needs one of its rights",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "caught",
+      "why": "A set contains another when it holds every right in it, so a test that asks for any of them would call a read-only set a read-write one.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        self.0 & other.0 != 0 || other.0 == 0\n"]
+    },
+    {
+      "name": "DI-13.3: GENERIC_WRITE no longer counts as the right to write data",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "caught",
+      "why": "The kernel expands a generic right, so a set holding only GENERIC_WRITE is a data right and may create or truncate. Without it a generic write-only open is refused as having no data right.",
+      "find": ["        self.0 & (FILE_WRITE_DATA | GENERIC_WRITE | GENERIC_ALL) != 0\n"],
+      "replace": ["        self.0 & (FILE_WRITE_DATA | GENERIC_ALL) != 0\n"]
+    },
+    {
+      "name": "DI-13.3: an open with no data right is let through",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A file target needs a data right, and an open without one is refused as invalid input before any call is made. Caught by the test whose path does not exist, so a call that reached the kernel would have said not-found.",
+      "find": ["        if !access.grants_a_data_right() {\n"],
+      "replace": ["        if false && !access.grants_a_data_right() {\n"]
+    },
+    {
+      "name": "DI-13.3: the rights asked for are not the rights opened",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The set is handed to CreateFileW as asked, so an open that always asked for the same read and write rights would grant a read-only caller a write. Caught by the tests that open a right and have the kernel refuse the operation it does not cover.",
+      "find": ["            access: access.bits(),\n"],
+      "replace": ["            access: access.bits() | 2,\n"]
+    },
+    {
+      "name": "DI-13.3 control: the same test of containment with its operands the other way round",
+      "file": "src/windows_backend/file_rights.rs",
+      "expect": "survives",
+      "why": "A control: the same predicate with its operands swapped, which no test can tell apart, so a harness that reports it caught is reporting something other than the tests.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        other.0 & self.0 == other.0\n"]
     }
   ]
 }

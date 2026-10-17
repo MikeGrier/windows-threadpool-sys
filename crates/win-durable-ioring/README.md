@@ -43,6 +43,13 @@ write-through. A consumer that needs the stronger warranty asks for `OpenedFile<
 own signature, and a cached file cannot be passed. A handle opened elsewhere cannot be given to a
 target in this version.
 
+The access an open asks for is a set of named rights, `FileRights`, joined with `|` and given to
+`FileOptions::access`: the documented file access rights (`READ_DATA`, `WRITE_DATA`, `DELETE` and the
+rest) and the generic ones. There is no constructor from a raw mask, so append-only access, which
+would land every write at the end of the file whatever offset the core names, cannot be asked for. A
+file target needs a data right, and an open without one is refused as invalid input before any call is
+made; what the file's security allows is the kernel's to say.
+
 `FileOptions::random_access` and `FileOptions::sequential_scan` are the two cache hints
 (`FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`). They are passed to an unbuffered file as
 well as a cached one, never refused, and change nothing a target claims: the class, the alignment and
@@ -51,13 +58,13 @@ on an unbuffered file can be read two ways, and the methods' own documentation s
 
 ```rust
 use win_durable_ioring::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
+    Cached, FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget,
 };
 use win_durable_ioring::{IoTarget, WarrantyClass};
 
 let path = std::env::temp_dir().join(format!("durable-ioring-open-{}", std::process::id()));
 std::fs::write(&path, [0u8; 8192])?;
-let options = FileOptions::new().read(true).write(true);
+let options = FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE);
 
 let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(&path, options)?);
 assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
@@ -149,7 +156,9 @@ flush of a file report the error given whatever the device answered. Setting up 
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     windows_backend::FileOptions::new().access(
+#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
+#     ),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
@@ -233,7 +242,9 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     windows_backend::FileOptions::new().access(
+#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
+#     ),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
@@ -322,7 +333,9 @@ fails as never issued.
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().read(true).write(true),
+#     windows_backend::FileOptions::new().access(
+#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
+#     ),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
