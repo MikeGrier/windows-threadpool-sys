@@ -262,12 +262,29 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   judges (read, write, delete) and the eight share modes on each side, 576 pairs, is accepted or refused
   as the page's two conditions say. An open that asks for no data right and no other right is not
   refused beside an exclusive one.
-- `OpenedDisk` and `OpenedVolume` open through `std::fs::OpenOptions`, so they take std's default sharing
-  and have no share mode of their own; the option is on `FileOptions`, which is the file's. Giving them
-  one is scheduled as [DI-13.11](CHECKLIST.md#di-1311). What blocks measuring it here is that a raw disk
-  or volume open needs an administrator and a scratch virtual disk, which only CI has.
+- `OpenedDisk` and `OpenedVolume` took std's default sharing and had no share mode of their own, because
+  they open through `std::fs::OpenOptions`; [DI-13.11](CHECKLIST.md#di-1311) gave them one, below.
 - `ReOpenFile` takes a share mode too, so [DI-15.4](CHECKLIST.md) takes a `ShareMode` and raises the same
   `SharingViolation`.
+
+**What building DI-13.11 settled** ([DI-13.11](CHECKLIST.md#di-1311)). None of these was a ruling.
+
+- `VolumeOptions::share` and a new `DiskOptions::share` take the same `ShareMode`, default all three, and a
+  conflict is the same `SharingViolation` with no right beyond the data access. A disk had no options
+  type; `OpenedDisk::open(path, options)` replaces `open(path)`, which breaks its callers, and is the
+  assistant's choice over a second method beside the first, so that a volume and a disk are opened alike.
+- The volume's and the disk's open are one function, `raw_open::open`, so what a device open asks of the
+  kernel is one decision. The call is the same whatever the path names, so its tests open a file through
+  it: every pair of read, write and read-and-write opens with the eight share modes on each side matches
+  the documented rule, as a file's do.
+- What is not reached locally: that `OpenedVolume::open` and `OpenedDisk::open` pass their options' share
+  mode to that function. A raw open needs an administrator and a scratch virtual disk, so the exclusive
+  volume and disk tests are the ignored ones that run in CI, and an open that asks for no data right is not
+  judged by the share mode, so a no-data handle cannot show it either. Two sabotage entries say so, each
+  expecting to survive. Those two CI tests were written and have not been run.
+- The share mode and `VolumeOptions::lock` are independent: the lock is a device control made after the
+  open, and the share mode is judged by the open. Whether a locked volume interacts with the share mode
+  was not measured.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)
@@ -362,7 +379,7 @@ the choice the code made, with the measurement.
   `OpenedFile::<Cached>::open(path, FileOptions::new().read())` names `ReadWrite` and does not compile.
   A file opened with other options writes the parameter or leaves it to be inferred with `_`:
   `OpenedFile::<Cached, _>::open(path, options)`. A disk and a volume have no options to infer it
-  from, so it is named at the call, `OpenedDisk::<Unbuffered, ReadOnly>::open(path)`.
+  from, so it is named at the call, `OpenedDisk::<Unbuffered, ReadOnly>::open(path, options)`.
 - `VolumeOptions::lock` is offered with any data access. The `FSCTL_LOCK_VOLUME` page names no right
   the handle needs, and whether the kernel wants one was not measured.
 

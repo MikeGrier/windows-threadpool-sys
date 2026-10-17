@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.11` and `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -232,15 +232,17 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.4** -- Share mode as a typed set, with a sharing violation as a typed error. <a id="di-134"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-134)
 
-- [ ] **DI-13.11** -- **A share mode for `OpenedVolume` and `OpenedDisk`.** <a id="di-1311"></a>
-  Both open through `std::fs::OpenOptions` and so take std's default sharing; the `ShareMode` set and
-  the `SharingViolation` error of [DI-13.4](#di-134) exist and are the file's. A database that owns a
-  volume or a disk may want it exclusive as it would a file, so `VolumeOptions` and the disk's open take
-  a `ShareMode` and report a conflict as the same `SharingViolation`. What blocks measuring it here is
-  that a raw open needs an administrator and a scratch virtual disk, which only CI has, so the tests are
-  the ignored ones of `raw_disk` and `raw_volume` and are unrun locally; whether a locked volume
-  ([DI-D-61](DESIGN-NOTES.md#di-d-61)) interacts with the share mode is a test of its own. Decide before
-  starting whether the disk's open grows an options type as the volume's has.
+- [x] **DI-13.11** -- A share mode for `OpenedVolume` and `OpenedDisk`, through one device open. <a id="di-1311"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1311)
+
+- [ ] **DI-13.12** -- **Run the exclusive-volume and exclusive-disk tests elevated, and measure the lock against the share mode.** <a id="di-1312"></a>
+  [DI-13.11](#di-1311) wrote `an_exclusive_raw_volume_refuses_a_second_open_until_it_closes` and
+  `an_exclusive_raw_disk_refuses_a_second_open_until_it_closes`, which need an administrator and a
+  scratch virtual disk and have not been run. The blocker is that no session here is elevated. Run them
+  elevated, and fix what they show: a mounted volume may be held by another handle, which would refuse
+  the exclusive open for a reason that is not the test's. Add the test of whether a locked volume
+  ([DI-D-61](DESIGN-NOTES.md#di-d-61)) interacts with the share mode, which `DI-13.11` did not measure,
+  and, with the three results in hand, remove the two `survives` entries of `DI-13.11` from the manifest if
+  the tests reach what they name.
 
 - [x] **DI-13.5** -- `SecurityDescriptor` from SDDL, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-135)
 
@@ -270,7 +272,7 @@ option recorded by construction. The rule throughout is documented APIs only
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
   `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
-  **Next:** `DI-13.11`.
+  **Next:** this item.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
@@ -427,6 +429,8 @@ option recorded by construction. The rule throughout is documented APIs only
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
 
 - [x] **DI-12.4** -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-124)
+
+- [ ] **DI-12.5** -- **Split `COMPLETED-CHECKLIST.md`**, which is within a kilobyte of the 256 KiB line at which a source file is a standing defect. It is append-only history under `## Moved` headings dated by the day, and each completed item is linked by an `<a id>` anchor from stubs and from other documents, so the fracture point is the date group and the links must survive: a facade-preserving split that leaves every anchor resolving, or a sibling file per period with the stubs' links updated in the same commit. A split is a refactor on its own commit with the provenance trailers.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 

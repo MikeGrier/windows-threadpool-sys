@@ -3020,3 +3020,10 @@ default stays all three. A conflict is a `SharingViolation`, kind `ResourceBusy`
 asked for and keeping the kernel's error as its source; the kernel does not say which side conflicted. All
 576 pairs of opens over the three accesses and eight modes are tested against the documented rule.
 Twelve sabotage entries, one a control. `DI-13.11` carries the volume and the disk.
+
+### <a id="di-1311"></a>DI-13.11 -- A share mode for `OpenedVolume` and `OpenedDisk`, through one device open. *(completed 2026-10-16 23:05:00 -04:00)*
+
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-13.11 settled". `VolumeOptions::share` and a new
+`DiskOptions` take the `ShareMode` of `DI-13.4`, and a conflict is its `SharingViolation`. Both opens are
+`raw_open::open`, tried on a file against the documented rule. The two exclusive tests run only in CI and
+are unrun; `DI-13.12` carries them and the lock. Nine sabotage entries caught, three expected to survive.
