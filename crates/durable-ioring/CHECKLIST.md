@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.11` and `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -230,10 +230,17 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.10** -- A typed `Key<A>` carries the access to the ring's submit methods. <a id="di-1310"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1310)
 
-- [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
-  exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
-  violation is a typed error that names which side conflicted where the kernel says. Tests with two
-  opens: each combination the table lists is accepted or refused as `CreateFileW` documents.
+- [x] **DI-13.4** -- Share mode as a typed set, with a sharing violation as a typed error. <a id="di-134"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-134)
+
+- [ ] **DI-13.11** -- **A share mode for `OpenedVolume` and `OpenedDisk`.** <a id="di-1311"></a>
+  Both open through `std::fs::OpenOptions` and so take std's default sharing; the `ShareMode` set and
+  the `SharingViolation` error of [DI-13.4](#di-134) exist and are the file's. A database that owns a
+  volume or a disk may want it exclusive as it would a file, so `VolumeOptions` and the disk's open take
+  a `ShareMode` and report a conflict as the same `SharingViolation`. What blocks measuring it here is
+  that a raw open needs an administrator and a scratch virtual disk, which only CI has, so the tests are
+  the ignored ones of `raw_disk` and `raw_volume` and are unrun locally; whether a locked volume
+  ([DI-D-61](DESIGN-NOTES.md#di-d-61)) interacts with the share mode is a test of its own. Decide before
+  starting whether the disk's open grows an options type as the volume's has.
 
 - [x] **DI-13.5** -- `SecurityDescriptor` from SDDL, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-135)
 
@@ -263,7 +270,7 @@ option recorded by construction. The rule throughout is documented APIs only
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
   `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
-  **Next:** `DI-13.4`.
+  **Next:** `DI-13.11`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

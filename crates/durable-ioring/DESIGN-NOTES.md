@@ -185,7 +185,7 @@ for this table.
 | `ACCESS_SYSTEM_SECURITY` | Exposed | Member | A caller who lacks what the kernel requires for it gets the kernel's error, not a panic; which privilege that is was not measured here. | standing |
 | `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, the combination the kernel documents as incompatible, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. | engineer 2026-10-16; assistant |
 | `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_LIST_DIRECTORY`, `FILE_TRAVERSE`, `FILE_DELETE_CHILD`, `FILE_CREATE_PIPE_INSTANCE` | Excluded | None | These name the directory or pipe meaning of a right. A directory is opened only with `FILE_FLAG_BACKUP_SEMANTICS` (the page says so), which is not offered in v1, and a pipe is not a file; the bits shared with the file rights are already members. The directory rights are revisited when `FILE_FLAG_BACKUP_SEMANTICS` is offered. That the pipe right is never offered is a working position ("almost certainly never"), not a decision. | engineer 2026-10-16 (directory); assistant |
-| `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation is the kernel's error. | engineer 2026-10-15 |
+| `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
 | `lpSecurityAttributes`: `bInheritHandle` (CF) | Not in v1 | None; the handle is never inheritable | An inheritable handle reaches child processes that can write through it, and no call this crate makes chooses inheritance. A ruling for v1, not a rejection. | engineer 2026-10-15 |
 | `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back. | assistant |
@@ -244,6 +244,30 @@ the list is kept here so that the answers are in one place and are not asked aga
 
 **Zero access** (`dwDesiredAccess` of zero, which the engineer named "no access") was the one call not
 ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as the type `NoData`.
+
+**What building DI-13.4 settled** ([DI-13.4](CHECKLIST.md#di-134)). None of these was a ruling.
+
+- `ShareMode` is a set of `READ`, `WRITE` and `DELETE` with `NONE` and `ALL`, built as `FileRights` is, with
+  no constructor from a raw mask and no `Default`: the empty set is the exclusive one and the set a file
+  is opened with is every member, so either would be a surprising answer from `default()`.
+  `FileOptions::share` replaces the mode; the default is `ALL`, which is what every file was opened with.
+- The row said a sharing violation is the kernel's error, and the checklist item said it is a typed error
+  that names which side conflicted where the kernel says. The kernel does not say: the `CreateFileW` page
+  documents two conditions, an open asking for what the other does not share and an open not sharing what
+  the other holds, and fails both with `ERROR_SHARING_VIOLATION`; no documented call reports the other
+  open's access or sharing. So the error is a `SharingViolation`, with the kind `ResourceBusy`, that
+  carries what *this* open asked for (data access, rights, sharing, path) and keeps the kernel's own
+  error as its `source`, which satisfies both statements. It does not name a side.
+- Measured on local NTFS, Windows 11 build 26300: every pair of opens over the three accesses a share mode
+  judges (read, write, delete) and the eight share modes on each side, 576 pairs, is accepted or refused
+  as the page's two conditions say. An open that asks for no data right and no other right is not
+  refused beside an exclusive one.
+- `OpenedDisk` and `OpenedVolume` open through `std::fs::OpenOptions`, so they take std's default sharing
+  and have no share mode of their own; the option is on `FileOptions`, which is the file's. Giving them
+  one is scheduled as [DI-13.11](CHECKLIST.md#di-1311). What blocks measuring it here is that a raw disk
+  or volume open needs an administrator and a scratch virtual disk, which only CI has.
+- `ReOpenFile` takes a share mode too, so [DI-15.4](CHECKLIST.md) takes a `ShareMode` and raises the same
+  `SharingViolation`.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)

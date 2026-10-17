@@ -3011,3 +3011,12 @@ push. `add_target` and construction refuse a key that declares more than its tar
 target or every file handed back; `AddTargetError` gained a `cause` and `TargetSetup` gained `declared`.
 Five sabotage entries in `durable-ioring` and five in `win-durable-ioring`, each set with a control, and
 `compile_fail` doctests on `WriteKey` and `ReadKey`.
+
+### <a id="di-134"></a>DI-13.4 -- Share mode as a typed set, with a sharing violation as a typed error. *(completed 2026-10-16 22:40:00 -04:00)*
+
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s `dwShareMode` row, and its "What building DI-13.4 settled", which holds the
+decisions. `ShareMode` is a set of `READ`, `WRITE` and `DELETE`; `FileOptions::share` takes it and the
+default stays all three. A conflict is a `SharingViolation`, kind `ResourceBusy`, naming what this open
+asked for and keeping the kernel's error as its source; the kernel does not say which side conflicted. All
+576 pairs of opens over the three accesses and eight modes are tested against the documented rule.
+Twelve sabotage entries, one a control. `DI-13.11` carries the volume and the disk.
