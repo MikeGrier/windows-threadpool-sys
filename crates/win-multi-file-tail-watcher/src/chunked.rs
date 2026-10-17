@@ -2,10 +2,11 @@
 //! An append-only sequence held in fixed-size chunks, for the poll's per-poll copies.
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll engine (TW-3.1) uses it")
+    expect(
+        dead_code,
+        reason = "`iter`, `is_empty` and `retain` are used by tests, and by nothing else yet"
+    )
 )]
-
-use std::mem::size_of;
 
 #[cfg(test)]
 mod tests;

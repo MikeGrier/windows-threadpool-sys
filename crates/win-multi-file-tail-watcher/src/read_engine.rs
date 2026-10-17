@@ -246,10 +246,21 @@ struct Current<T> {
 }
 
 /// How a pass at submitting the current plan's reads ended.
-enum Submitted {
+enum Submitted<T> {
     /// Every read of the plan is submitted.
     Done,
     Blocked(Stop),
+    /// The ring refused a read for a reason that is not a full queue.
+    Refused(Refusal<T>),
+}
+
+/// A read the ring refused to take, with what is needed to report it as failed.
+struct Refusal<T> {
+    error: io::Error,
+    registration: u64,
+    value: T,
+    offset: u64,
+    len: u32,
 }
 
 /// What taking the next piece of work did.
@@ -261,13 +272,13 @@ enum Advance {
 }
 
 /// Why one batch of pushes ended.
-enum Ended {
+enum Ended<T> {
     Planned,
     // A stop request landed while the batch was being pushed: the reads left are abandoned.
     Abandoned,
     Stopped(Stop),
     RingSqFull,
-    Refused(io::Error),
+    Refused(Refusal<T>),
 }
 
 /// The reading engine over a watcher: see the module documentation.
@@ -538,24 +549,14 @@ impl<T: Clone> ReadEngine<T> {
             Ok(read) => read,
             Err(error) => match win32_code(&error) {
                 Some(ERROR_HANDLE_EOF) => 0,
-                code => {
-                    self.watcher
-                        .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {
-                            registration: pending.registration,
-                            offset: pending.offset,
-                            len: pending.len,
-                            win32_code: code,
-                        });
-                    if let Some(win32_code) = code
-                        && classify_code(code).is_terminal()
-                        && self.watcher.mark_terminal(pending.registration, win32_code)
-                    {
-                        self.undelivered = Some(ReadEntry::Terminal(Terminal {
-                            value: pending.value,
-                            win32_code,
-                            last_known: pending.offset,
-                        }));
-                    }
+                _ => {
+                    self.report_failure(
+                        pending.registration,
+                        pending.value,
+                        pending.offset,
+                        pending.len,
+                        &error,
+                    );
                     return;
                 }
             },
@@ -568,6 +569,38 @@ impl<T: Clone> ReadEngine<T> {
             pending.offset,
             buffer.into_chunk(read),
         )));
+    }
+
+    /// Report a read that failed, whether the ring refused it or it completed with an error: to the
+    /// diagnostic sink, and as a terminal entry too when the code is a terminal one and this is the
+    /// first to make its registration so. A refused push is reported as a failed read because it is
+    /// one, and the rest of its plan, which addresses the same file, is abandoned with it.
+    fn report_failure(
+        &mut self,
+        registration: u64,
+        value: T,
+        offset: u64,
+        len: u32,
+        error: &io::Error,
+    ) {
+        let code = win32_code(error);
+        self.watcher
+            .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {
+                registration,
+                offset,
+                len,
+                win32_code: code,
+            });
+        if let Some(win32_code) = code
+            && classify_code(code).is_terminal()
+            && self.watcher.mark_terminal(registration, win32_code)
+        {
+            self.undelivered = Some(ReadEntry::Terminal(Terminal {
+                value,
+                win32_code,
+                last_known: offset,
+            }));
+        }
     }
 
     /// Take the next piece of work: submit the current plan's reads, or take the next entry from
@@ -586,6 +619,18 @@ impl<T: Clone> ReadEngine<T> {
                     Advance::Progress
                 }
                 Submitted::Blocked(stop) => Advance::Blocked(stop),
+                Submitted::Refused(refusal) => {
+                    // The rest of the plan addresses the same file and is abandoned with it.
+                    self.current = None;
+                    self.report_failure(
+                        refusal.registration,
+                        refusal.value,
+                        refusal.offset,
+                        refusal.len,
+                        &refusal.error,
+                    );
+                    Advance::Progress
+                }
             });
         }
         let Some(entry) = self.watcher.drain().next() else {
@@ -613,7 +658,7 @@ impl<T: Clone> ReadEngine<T> {
     /// the ring's SQ is drained by a submit, so one that refuses a push is submitted and the push
     /// goes on, and only a ring that refuses with nothing queued stops it. A stop request ends it
     /// too, at the next read: the reads already pushed are submitted and the rest are abandoned.
-    fn submit_reads(&mut self) -> io::Result<Submitted> {
+    fn submit_reads(&mut self) -> io::Result<Submitted<T>> {
         let Self {
             ring,
             pool,
@@ -673,7 +718,15 @@ impl<T: Clone> ReadEngine<T> {
                     Err(refused) if refused.error.is_submission_queue_full() => {
                         break Ended::RingSqFull;
                     }
-                    Err(refused) => break Ended::Refused(refused.into_error()),
+                    Err(refused) => {
+                        break Ended::Refused(Refusal {
+                            error: refused.into_error(),
+                            registration: current.target.registration,
+                            value: current.reads.value().clone(),
+                            offset: read.offset,
+                            len: read.len,
+                        });
+                    }
                 }
             };
             if pushed == 0 {
@@ -690,7 +743,7 @@ impl<T: Clone> ReadEngine<T> {
                 // The submit made room.
                 Ended::RingSqFull if pushed > 0 => {}
                 Ended::RingSqFull => return Ok(Submitted::Blocked(Stop::RingFull)),
-                Ended::Refused(error) => return Err(error),
+                Ended::Refused(refusal) => return Ok(Submitted::Refused(refusal)),
             }
         }
     }

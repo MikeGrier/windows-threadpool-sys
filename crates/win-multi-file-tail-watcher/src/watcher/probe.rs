@@ -2,7 +2,10 @@
 //! The probe pass: read each snapshotted length with no lock held (TW-D-7, TW-D-13).
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the poll engine (TW-3.1) runs it")
+    expect(
+        dead_code,
+        reason = "`probe` is the form of `probe_with` that tests call; the engine calls the latter"
+    )
 )]
 
 use std::io;

@@ -12,8 +12,9 @@ pub enum PollError {
     InFlight,
     /// The watcher has been shut down, and no poll starts again.
     Shutdown,
-    /// The operating system refused to create the thread-pool work item. The error carries the
-    /// Win32 code.
+    /// The operating system refused to make what a poll runs on: a duplicate of the resume
+    /// doorbell's event, the wait, or the thread-pool work item. The error carries the Win32 code.
+    /// The watcher is as it was, and a later call tries again.
     Io(io::Error),
 }
 
@@ -22,7 +23,7 @@ impl fmt::Display for PollError {
         match self {
             Self::InFlight => f.write_str("a poll is already in flight"),
             Self::Shutdown => f.write_str("the watcher has been shut down"),
-            Self::Io(error) => write!(f, "creating the poll's thread-pool work failed: {error}"),
+            Self::Io(error) => write!(f, "making what the poll runs on failed: {error}"),
         }
     }
 }

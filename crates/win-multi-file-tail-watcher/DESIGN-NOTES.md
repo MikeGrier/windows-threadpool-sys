@@ -198,12 +198,16 @@ can wait on something outside the crate. The reasoning, and the engineer's origi
   never waits (a refused write returns the entry), and across `T::clone`: the lock does not depend
   on `T`, but a `Clone` that calls back into the watcher would deadlock against it, and must not.
   A `Drop` of `T` may call back into it: the entry a registration removes is dropped after the
-  lock is released.
+  lock is released. One `Drop` may not, because a `T` is also dropped on the poll's thread-pool
+  callback (the clone of an entry the SQ refused), and releasing the last owner of the watcher there
+  waits for that callback. A panic that unwinds out of `T::clone`, `T`'s `Drop` or the sink, on a
+  callback, aborts the process, as every thread-pool callback does.
   Other locks exist in the process that this crate does not control; the rule is about its own.
 - **No allocation for these copies is larger than 64 KiB.** They are chunked buffers, held between
-  polls so there is none after warm-up. The chunks are themselves held in groups of at most 2,730,
-  in at most 2,730 groups, both growing in steps that stop there, so the directory is bound too; a
-  buffer that would need more panics, at 2,730 x 2,730 chunks.
+  polls so there is none after warm-up. The chunks are themselves held in groups, and the groups in
+  a directory, each of at most `FAN` handles, the number that fit in 64 KiB (derived from the size
+  of a `Vec`, so 2,730 on a 64-bit target), both growing in steps that stop there, so the
+  directory is bound too; a buffer that would need more than `FAN` x `FAN` chunks panics.
 - **Roster changes between a stop and its continuation need no special handling.** A dropped
   registration's id is not found and is skipped; one made since is seen by the next poll; nothing is
   repeated, because ids are never reused ([TW-D-8](#tw-d-8)).

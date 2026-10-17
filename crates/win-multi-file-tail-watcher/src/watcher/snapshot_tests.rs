@@ -1,5 +1,4 @@
 // Copyright (c) 2026 Mike Grier
-use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{SnapshotItem, Watcher};

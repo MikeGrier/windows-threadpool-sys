@@ -1159,6 +1159,47 @@ fn a_terminal_read_failure_of_a_registration_since_dropped_reaches_the_sink_alon
 }
 
 #[test]
+fn a_read_the_ring_refuses_is_a_failed_read_and_the_rest_of_its_plan_is_abandoned() {
+    let dir = TempDir::new("re-refused");
+    let sink = RecordingSink::wanting();
+    let mut engine = engine_with(8, 8, 64, 64, 128, Some(sink.clone()));
+    let path = dir.file("a.log", &pattern(64));
+    let registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    plan_current(&mut engine, &registration.value(), 0, 64);
+    // A handle no read can address, which the ring is not asked about until the read is built.
+    engine.current.as_mut().expect("planned").target.file = usize::MAX;
+    assert!(matches!(
+        engine
+            .advance()
+            .expect("a refusal is not an error of the run"),
+        Advance::Progress
+    ));
+    assert!(engine.current.is_none(), "the plan is abandoned");
+    assert_eq!(engine.in_flight(), 0, "nothing was queued");
+    let seen = sink.seen();
+    assert_eq!(seen.len(), 1, "one read failed: {seen:?}");
+    assert!(matches!(
+        seen[0],
+        Diagnostic::ReadFailed { registration: id, offset: 0, len: 8, .. } if id == registration.id()
+    ));
+    assert_eq!(engine.pool().available(), 8, "the buffer went back");
+    // The ring refuses an invalid handle with the code a terminal read failure carries, so the
+    // failure is delivered, once, ahead of the poll-done that was waiting on it.
+    engine.groups.close_open();
+    assert_eq!(
+        settle(&mut engine),
+        [
+            Got::Terminal {
+                value: 7,
+                win32_code: ERROR_INVALID_HANDLE,
+                last_known: 0
+            },
+            Got::PollDone
+        ]
+    );
+}
+
+#[test]
 fn a_transient_read_failure_reaches_the_diagnostic_sink_alone() {
     let dir = TempDir::new("re-transient-read");
     let sink = RecordingSink::wanting();

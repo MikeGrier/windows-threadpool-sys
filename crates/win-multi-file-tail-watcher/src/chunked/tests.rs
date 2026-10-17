@@ -427,10 +427,10 @@ fn the_directory_never_allocates_more_than_a_chunk_does() {
     for group in &directory.groups {
         assert!(group.capacity() * size_of::<Vec<u8>>() <= CHUNK_BYTES);
     }
-    assert_eq!(
-        FAN * size_of::<Vec<u8>>(),
-        65_520,
-        "a full group, to the byte"
+    let full = FAN * size_of::<Vec<u8>>();
+    assert!(
+        full <= CHUNK_BYTES && CHUNK_BYTES - full < size_of::<Vec<u8>>(),
+        "a full group is the most that fits, whatever the pointer width"
     );
 }
 

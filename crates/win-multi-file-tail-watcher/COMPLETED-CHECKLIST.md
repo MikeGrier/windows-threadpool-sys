@@ -1192,3 +1192,56 @@ fan's group never exceeds a chunk, a small fan's allocations stay within it, ind
 ### <a id="tw-86"></a>TW-8.6 -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. *(completed 2026-10-16 19:20:00 -04:00)*
 
 The row said reads were parked behind M4. It now says what the crate is and links its checklist.
+## Moved 2026-10-16 20:58:29 -04:00 -- TW-8.7 to TW-8.10: the third pre-merge review
+
+### <a id="tw-87"></a>TW-8.7 -- CI sweeps every sabotage manifest a crate carries, not only `sabotage.json`, so this crate's integration and doctest manifests are run. *(completed 2026-10-16 20:58:29 -04:00)*
+
+`tools/plan-sabotage-matrix.ps1` looked for `crates/*/sabotage.json` and the sweep workflow named
+that file, so the two other manifests this crate carries (each has its own `testArgs`) were run by
+hand only. The planner now finds `sabotage*.json`, and each matrix entry carries the manifest path
+and a label, the crate for the plain manifest and `<crate>-<kind>` for the others, which the job
+name, cache key and artifact name use so they stay distinct. `tools/test-plan-sabotage-matrix.ps1`
+has a case for a crate with several manifests. Both manifests were run and behave as declared.
+
+### <a id="tw-88"></a>TW-8.8 -- The crate is seeded at `0.0.1` in the release-please manifest, with `Release-As: 0.1.0` on the commit that records it, so its first release is `0.1.0`. *(completed 2026-10-16 20:58:29 -04:00)*
+
+[TW-1.1](#tw-11) says the crate was registered "at `0.0.0`, so the first release is `0.1.0`". That is
+wrong, as `aac584a6` and SH-3.4.1 in the repository's records show: a `0.0.0` seed is special-cased
+and proposes 1.0.0. The seed is `0.0.1`. A seed alone gives 0.0.2 for these `feat` and `fix`
+commits, none breaking, so the commit that carries the crate's changes this round has the
+`Release-As: 0.1.0` footer and touches only this crate, as io-buffers' did. The archived sentence
+is left as written.
+
+### <a id="tw-89"></a>TW-8.9 -- Error edges that had no test or no answer: a push the ring refuses is a failed read and abandons the rest of its plan, a poll whose poller cannot be made releases the gate, the layer keeps the first error a run returns, and a failed construction drains the waits it made. *(completed 2026-10-16 20:58:29 -04:00)*
+
+- **A refused push** returned an error from `run` and left the refused read at the front of its plan,
+  so every later run refused it again and nothing behind it was delivered. It is now a failed read:
+  reported to the sink, delivered as a terminal entry when its code is a terminal one and it is the
+  first to make its registration so, and the rest of the plan, which addresses the same file, is
+  abandoned. `ReadEngine::report_failure` is shared with a read that completes with an error. The
+  earlier note that no test could reach a refusal was wrong: a handle no read can address is
+  refused with `ERROR_INVALID_HANDLE`, and the test uses one. One sabotage entry, caught.
+- **A poller that cannot be made**: `poll` takes what makes the poller as a parameter, so the test
+  fails it twice and shows a later poll goes on.
+- **`Core::record`** keeps the first error of a run for `take_failure`, with a test of keeping the
+  first, taking once, and keeping a later one.
+- **`ReadLayer::new`** drains the waits it has made when a later wait or the completion wake
+  cannot be made, since an armed wait dropped undrained is a panic under `fail-fast`. Untested, as
+  a wait cannot be made to fail on demand, which is stated at the definition.
+
+### <a id="tw-810"></a>TW-8.10 -- Documentation and housekeeping from the third review: `PollError::Io` and the poll docs, the callback hazards (a panic aborts, a `Drop` must not release the last owner of the watcher), `FAN` stated as derived, a control's `why`, stale lint reasons and comments, and the plans and README claims. *(completed 2026-10-16 20:58:29 -04:00)*
+
+`PollError::Io` and `poll` said only the first call could fail and named only the work item; both now
+say what may fail and that a later call tries again. The `Watcher` and `DiagnosticSink` docs say a
+panic out of `T::clone`, `T`'s `Drop` or the sink aborts the process, and that a `Drop` of `T` must
+not release the last owner of the watcher, because one is dropped on the poll callback. The chunk
+directory's ceiling is `FAN` x `FAN`, with `FAN` derived from the size of a `Vec`, and the test
+asserts the bound rather than 2,730, which holds on a 64-bit target only. The `why` of the control on
+draining the work object is reworded as not equivalent in every interleaving. Two `expect(dead_code)`
+reasons name what is actually unused; a `size_of` import that the prelude makes redundant is gone,
+as is a comment saying no writer waits on a lock it does wait on, a README claim of efficiency with
+no measurement, and this crate's own plans row, which restated its checklist. The publish workflow's
+lists are in alphabetical order again.
+
+Noted, not changed: `2645d66a fix(overlapped-io)` touches this crate's docs, so the crate's first
+changelog will carry that line.

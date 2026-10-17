@@ -53,7 +53,12 @@ pub(crate) struct SnapshotItem {
 /// `T::clone` runs while the watcher's internal lock is held, here in [`Registration::value`] and
 /// when the crate reports a change. A `Clone` that calls back into the watcher (registering,
 /// dropping a [`Registration`], draining) deadlocks. `T`'s `Drop` runs after the lock is released, so
-/// it may do any of those.
+/// it may do any of those, with one exception: a `T` is also dropped on a thread-pool callback of
+/// the crate (the clone of an entry the queue refused is), so a `Drop` must not release the last
+/// owner of the watcher, which waits for that callback when it is dropped.
+///
+/// `T::clone`, `T`'s `Drop` and the [`DiagnosticSink`](crate::DiagnosticSink) run on thread-pool
+/// callbacks, and a panic that unwinds out of a callback aborts the process.
 ///
 /// Dropping the watcher stops it as [`shutdown`](Self::shutdown) does, and then waits for the
 /// crate's own callbacks: a poll that is running reaches its next step and returns, and a poll

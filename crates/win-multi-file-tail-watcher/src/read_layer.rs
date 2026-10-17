@@ -19,7 +19,7 @@ use windows_ioring_sys::CompletionWake;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 use wtf_string::Wtf16Str;
 
-use crate::read_engine::{ReadEngine, Tracked};
+use crate::read_engine::{ReadEngine, Stop, Tracked};
 use crate::read_sq::ReadSq;
 use crate::watcher::StopHandle;
 use crate::{OpenError, PollError, Registration};
@@ -55,8 +55,13 @@ impl<T: Clone> Core<T> {
         #[cfg(test)]
         self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let result = self.engine().run();
+        self.record(result);
+    }
+
+    /// Keep the first error a run returned for the owner: the state is consistent after one and a
+    /// later wake runs the engine again.
+    fn record(&self, result: io::Result<Stop>) {
         if let Err(error) = result {
-            // Kept for the owner: the state is consistent and a later wake runs the engine again.
             self.failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -77,7 +82,8 @@ impl<T: Clone> Core<T> {
 pub(crate) struct ReadLayer<T: Clone + Send + 'static> {
     // Field order is drop order, after `Drop::drop` has drained the waits: the ring's wake goes
     // first, and the engine, which the callbacks share, last.
-    wake: CompletionWake,
+    // Held, never read: what it is for happens when it is dropped.
+    _wake: CompletionWake,
     waits: [ThreadpoolWait; 3],
     sq: Arc<ReadSq<T>>,
     core: Arc<Core<T>>,
@@ -108,18 +114,37 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
             runs: std::sync::atomic::AtomicUsize::new(0),
         });
         let [doorbell, pool, resume] = events;
-        let waits = [
-            watch(&core, doorbell)?,
-            watch(&core, pool)?,
-            watch(&core, resume)?,
-        ];
-        // Built under the engine's lock, which the setup signal's first call waits for.
+        // Untested: a wait cannot be made to fail on demand. One that is made is armed, and an armed
+        // wait dropped undrained is a defect a build with `fail-fast` turns into a panic, so a failure
+        // from here on drains the ones already made.
+        let mut waits = Vec::with_capacity(3);
+        for event in [doorbell, pool, resume] {
+            match watch(&core, event) {
+                Ok(wait) => waits.push(wait),
+                Err(error) => {
+                    drain(&waits);
+                    return Err(error);
+                }
+            }
+        }
+        // Built under the engine's lock, which the setup signal's first call waits for; released
+        // before anything is drained, since a callback may be waiting for it.
         let on_wake = Arc::clone(&core);
-        let wake = core
+        let attached = core
             .engine()
-            .attach_completion_wake(move || on_wake.drive())?;
+            .attach_completion_wake(move || on_wake.drive());
+        let wake = match attached {
+            Ok(wake) => wake,
+            Err(error) => {
+                drain(&waits);
+                return Err(error);
+            }
+        };
+        let waits: [ThreadpoolWait; 3] = waits
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("three waits were made"));
         Ok(Self {
-            wake,
+            _wake: wake,
             waits,
             sq,
             core,
@@ -187,7 +212,12 @@ impl<T: Clone + Send + 'static> Drop for ReadLayer<T> {
         for wait in &self.waits {
             wait.stop_and_drain();
         }
-        let _ = &self.wake;
+    }
+}
+
+fn drain(waits: &[ThreadpoolWait]) {
+    for wait in waits {
+        wait.stop_and_drain();
     }
 }
 

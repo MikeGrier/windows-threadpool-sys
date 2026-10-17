@@ -151,6 +151,20 @@ fn a_registration_outliving_its_polled_watcher_is_usable() {
 }
 
 #[test]
+fn a_poll_whose_poller_cannot_be_made_releases_the_gate_and_a_later_poll_goes_on() {
+    let dir = TempDir::new("poll-no-poller");
+    let watcher = watcher(4);
+    let _registrations = changing(&dir, &watcher, 1);
+    for _ in 0..2 {
+        let failed = watcher.poll_with(|_| Err(PollError::Io(std::io::Error::other("no pool"))));
+        assert!(matches!(failed, Err(PollError::Io(_))));
+    }
+    // Not InFlight, and not Shutdown: the gate was let go and the watcher is as it was.
+    watcher.poll().expect("a poll after the failures");
+    assert_eq!(values(&until_poll_done(&watcher)), [0]);
+}
+
+#[test]
 fn poll_errors_say_what_happened() {
     assert_eq!(
         PollError::InFlight.to_string(),
@@ -162,7 +176,7 @@ fn poll_errors_say_what_happened() {
     );
     assert!(std::error::Error::source(&PollError::Shutdown).is_none());
     let io = PollError::from(std::io::Error::from_raw_os_error(5));
-    assert!(io.to_string().contains("thread-pool work"));
+    assert!(io.to_string().contains("what the poll runs on"));
     assert!(std::error::Error::source(&io).is_some());
     assert!(std::error::Error::source(&PollError::InFlight).is_none());
 }

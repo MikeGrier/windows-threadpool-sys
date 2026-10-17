@@ -381,3 +381,21 @@ fn shutdown_while_stalled_on_kept_chunks_delivers_poll_done_once_they_return() {
     assert!(total < 12 * 40, "reads stopped: {total}");
     assert!(layer.take_failure().is_none());
 }
+
+#[test]
+fn the_first_error_a_run_returns_is_kept_for_the_owner_and_taken_once() {
+    use crate::read_engine::Stop;
+    let layer = layer();
+    assert!(layer.take_failure().is_none());
+    layer.core.record(Err(std::io::Error::other("the first")));
+    layer.core.record(Err(std::io::Error::other("the second")));
+    layer.core.record(Ok(Stop::Idle));
+    let kept = layer.take_failure().expect("an error was kept");
+    assert_eq!(kept.to_string(), "the first", "the first stays");
+    assert!(layer.take_failure().is_none(), "and is taken once");
+    layer.core.record(Err(std::io::Error::other("the third")));
+    assert_eq!(
+        layer.take_failure().expect("a later one").to_string(),
+        "the third"
+    );
+}

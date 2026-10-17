@@ -139,3 +139,10 @@ A review of the branch against origin/main, 2026-10-16, found three defects in M
 - [x] **TW-8.5** -- The chunk directory is bound as the chunks are: no allocation of a `Chunked` is larger than 64 KiB, at the price of a ceiling of 2,730 x 2,730 chunks. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-85)
 
 - [x] **TW-8.6** -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-86)
+- [x] **TW-8.7** -- CI sweeps every sabotage manifest a crate carries, not only `sabotage.json`, so this crate's integration and doctest manifests are run. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-87)
+
+- [x] **TW-8.8** -- The crate is seeded at `0.0.1` in the release-please manifest, with `Release-As: 0.1.0` on the commit that records it, so its first release is `0.1.0`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-88)
+
+- [x] **TW-8.9** -- Error edges that had no test or no answer: a push the ring refuses is a failed read and abandons the rest of its plan, a poll whose poller cannot be made releases the gate, the layer keeps the first error a run returns, and a failed construction drains the waits it made. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-89)
+
+- [x] **TW-8.10** -- Documentation and housekeeping from the third review: `PollError::Io` and the poll docs, the callback hazards (a panic aborts, a `Drop` must not release the last owner of the watcher), `FAN` stated as derived, a control's `why`, stale lint reasons and comments, and the plans and README claims. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-810)

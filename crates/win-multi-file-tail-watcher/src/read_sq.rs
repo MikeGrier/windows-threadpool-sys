@@ -104,7 +104,8 @@ pub(crate) struct Shrink<T> {
 /// layer writes and rings [`doorbell`](Self::doorbell), the client resets it before draining, and
 /// the client rings [`resume_doorbell`](Self::resume_doorbell) when it has made room.
 pub(crate) struct ReadSq<T> {
-    // Held only to hand out clones, so no writer waits on this lock to write.
+    // Locked to clone a handle, which waits for nothing; a write then goes through the clone, so
+    // the lock is not held while one is made.
     writer: Mutex<QueueWriter<ReadEntry<T>>>,
     reader: Mutex<QueueReader<ReadEntry<T>>>,
     doorbell: Doorbell,

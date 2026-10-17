@@ -104,7 +104,8 @@ impl fmt::Display for Diagnostic {
 
 /// Where a watcher's diagnostics go. Called from whatever thread observed the event, possibly while
 /// the watcher holds a lock of its own, so a sink returns promptly and never calls back into the
-/// watcher.
+/// watcher. It runs on thread-pool callbacks too, where a panic that unwinds out of it aborts the
+/// process.
 pub trait DiagnosticSink: Send + Sync {
     /// Whether the sink wants events of `kind`. Asked before each event is built, so answering
     /// `false` costs the watcher a branch and nothing more.

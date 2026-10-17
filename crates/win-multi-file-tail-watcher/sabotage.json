@@ -209,7 +209,7 @@
       "expect": "caught",
       "why": "The buffers are held between polls so that there is no allocation after warm-up.",
       "find": ["    pub(crate) fn clear(&mut self) {\n        self.truncate(0);"],
-      "replace": ["    pub(crate) fn clear(&mut self) {\n        self.chunks.clear();\n        self.len = 0;"]
+      "replace": ["    pub(crate) fn clear(&mut self) {\n        self.chunks = Directory::new(FAN);\n        self.len = 0;"]
     },
     {
       "name": "truncate forgets to shorten the length",
@@ -735,7 +735,7 @@
       "name": "control: the work object is drained by its own drop and not by name",
       "file": "src/watcher/poll.rs",
       "expect": "survives",
-      "why": "`stop_and_drain` is the drain the work object's drop performs; naming it only discharges an obligation that is reported under a feature this build does not enable.",
+      "why": "`stop_and_drain` is the drain the work object's drop performs, and the wait's own drop drains again before the watcher's drop returns, so nothing is freed early. Not equivalent in every interleaving -- draining the work first is what stops it arming the wait after the wait's drain, which that drain does not exclude -- but no test can order a callback against a drop.",
       "find": ["        self.work.stop_and_drain();"],
       "replace": [""]
     },
@@ -936,8 +936,8 @@
       "file": "src/read_layer.rs",
       "expect": "caught",
       "why": "Nothing else says a read finished, so its chunk would wait for some other wake to be delivered.",
-      "find": ["            .attach_completion_wake(move || on_wake.drive())?;"],
-      "replace": ["            .attach_completion_wake(move || drop(&on_wake))?;"]
+      "find": ["            .attach_completion_wake(move || on_wake.drive());"],
+      "replace": ["            .attach_completion_wake(move || drop(&on_wake));"]
     },
     {
       "name": "a wait does not watch again after it runs the engine",
@@ -984,16 +984,16 @@
       "file": "src/read_engine.rs",
       "expect": "caught",
       "why": "A handle that can never answer again is the client's to know of; the diagnostic sink alone leaves a client waiting for bytes that will not come.",
-      "find": ["                        && classify_code(code).is_terminal()"],
-      "replace": ["                        && !classify_code(code).is_terminal()"]
+      "find": ["            && classify_code(code).is_terminal()"],
+      "replace": ["            && !classify_code(code).is_terminal()"]
     },
     {
       "name": "a terminal read failure names the wrong offset",
       "file": "src/read_engine.rs",
       "expect": "caught",
       "why": "The offset the failed read began at is what tells a client where to register again.",
-      "find": ["                            last_known: pending.offset,"],
-      "replace": ["                            last_known: 0,"]
+      "find": ["                last_known: offset,"],
+      "replace": ["                last_known: 0,"]
     },
     {
       "name": "dropping a callback's view stops the watcher",
@@ -1008,7 +1008,15 @@
       "file": "src/read_engine.rs",
       "expect": "caught",
       "why": "A terminal entry is reported once per registration; without the mark every terminal read failure of it is delivered again, and a probe's report is repeated by a read's.",
-      "find": ["                        && self.watcher.mark_terminal(pending.registration, win32_code)\n"],
+      "find": ["            && self.watcher.mark_terminal(registration, win32_code)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused read leaves the rest of its plan to be refused again",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A push the ring refuses is a failed read; kept at the front of its plan it would be refused by every run and block every attention and poll-done behind it.",
+      "find": ["                    // The rest of the plan addresses the same file and is abandoned with it.\n                    self.current = None;\n"],
       "replace": [""]
     },
     {
@@ -1240,8 +1248,8 @@
       "file": "src/read_engine.rs",
       "expect": "caught",
       "why": "A sink says which kinds it wants before an event is built, so an event asked about under another kind is never built for a sink that wanted only this one.",
-      "find": ["                        .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {"],
-      "replace": ["                        .diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ReadFailed {"]
+      "find": ["            .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {"],
+      "replace": ["            .diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ReadFailed {"]
     },
     {
       "name": "a settled read stays outstanding in its group",
