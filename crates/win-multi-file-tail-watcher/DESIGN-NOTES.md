@@ -499,11 +499,21 @@ module within the crate".
   refuse zero. This is the same rule the client SQ's capacity already follows
   ([TW-D-6](#tw-d-6)). It is stated in the rustdoc of each of the two ring-size fields and of the
   error that refuses them ([TW-9.2](CHECKLIST.md)), and in the README.
-  - **Not decided:** the ring also raises some powers of two. A submission queue under eight is
-    raised to eight, and a completion queue under twice the submission queue is raised to that. Both
-    would still leave the caller with a size they did not ask for, and the engineer's rule as stated
-    does not say whether they are refused too. The default of 64 and 64 is one: its completion
-    queue is raised to 128.
+- **A ring queue size the ring would raise is refused too.** The engineer, 2026-10-17: "yes also
+  refuse." The ring raises a submission queue under eight to eight, and a completion queue under
+  twice the submission queue to that, so a caller who passed either would hold a ring of a size they
+  did not ask for. The options therefore accept a submission queue that is a power of two of at least
+  eight, and a completion queue that is a power of two of at least twice the submission queue, each
+  at most what `capabilities()` reports. These are the measured rules above, and the tests that
+  assert them fail on a ring that behaves differently. Because of it the default ring is 64 and 128,
+  not 64 and 64: a completion queue of 64 beside a submission queue of 64 is refused.
+- **The error that refuses a size carries its cause.** The engineer, 2026-10-17: "ensure the err enum
+  has cause." Read here as: each refusal is a distinct variant that names the field, the value given
+  and the cause, which is the rule it broke (zero, not a power of two, below the ring's floor, below
+  twice the submission queue, above the largest the ring reports), and a refusal that a lower layer
+  made carries that layer's error as its `source` (the pool's, the SQ's, the ring's), so a caller
+  can read why without parsing text. The enum implements `std::error::Error` and `Display`
+  ([TW-9.2](CHECKLIST.md)).
 - **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
   `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
 
@@ -531,13 +541,14 @@ bind to them as settled.
   as a bet over 32, a larger count of slightly smaller buffers and a mid-sized queue as the
   expected shape, and doubt that measurement will say much because it is workload dependent. The
   64-entry queue is the client SQ, the one back to the layer's client.
-- **The ring's two queues would default to 64 each too**, chosen by the assistant because the
+- **The ring's two queues would default to 64 and 128**, chosen by the assistant because the
   engineer left those two to it (2026-10-16). The reasoning: each read in flight holds a buffer, so
   with 64 buffers no more than 64 can be in flight, and a ring that holds more than that adds
-  nothing. TW-9.1 measured the ring: a request of 64 and 64 gives a submission queue of 64 and a
-  completion queue of 128, so the pool, not the ring, is what stops the reads at 64 buffers
-  ([TW-D-16](#tw-d-16)). The earlier reading here, that the kernel doubles the completion queue
-  asked for, was wrong: it is the larger of twice the submission queue and the request.
+  nothing. TW-9.1 measured the ring: a submission queue of 64 gives a completion queue of at least
+  128, so the pool, not the ring, is what stops the reads at 64 buffers
+  ([TW-D-16](#tw-d-16)). The first pick was 64 and 64; the engineer's rule that a size the ring would
+  raise is refused (2026-10-17) makes the completion queue 128, which is the size the ring would
+  have used.
 - **The worst-case load to plan for is the output of a CI runner's job log.** The engineer,
   2026-10-16: "take it literally"; the real jobs are virtual machine deployments, the log is a good
   benchmark of them, and "this is our worst case load", so the typical load is lighter than this. The [capture](bench-captures/2026-10-16-runner-log-shape.txt) states what three runner

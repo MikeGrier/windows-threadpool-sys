@@ -162,18 +162,20 @@ fine".
 - [x] **TW-9.1** -- The ring's two queue sizes are measured and asserted: how it rounds and pairs them, its largest sizes and the conditions it refuses with, and how its completion queue bounds the reads in flight against the buffer count. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-91)
 
 - [ ] **TW-9.2** -- An options type holds the five sizes and checks them before anything is
-  allocated: each refusal is a distinct error naming the field and the bound, the buffer size and
+  allocated: each refusal is a distinct variant of an error enum that names the field, the value given
+  and the cause, the rule it broke, and carries a lower layer's error as its `source` where one
+  refused it, so a caller reads why without parsing text; the buffer size and
   count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by what TW-9.1
   measured: zero is refused, because the ring accepts it and replaces it with a default the caller
   did not choose, and a size past what `capabilities()` reports is refused naming the field and the
   ring's own condition. A ring size that is not a power of two is refused, as a client SQ capacity
-  is ([TW-D-16](DESIGN-NOTES.md#tw-d-16)), and the rule is stated in the rustdoc of both ring-size
-  fields and of the error, and in the README, with a doctest that shows the refusal. Whether the ring
-  sizes it still raises (a submission queue under 8, a completion queue under twice the submission
-  queue) are refused too is asked of the engineer before this item is done, and answered here. The options have a `Default` of 64 buffers of 64 bytes, a
-  client SQ of 64 entries and a ring of 64 and 64, a working position
-  ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that TW-9.1 found a ring of 64
-  and 64 consistent with: the pool, not the ring, is then the limit. No bound is stricter than the one that really limits the field, so a
+  is, and so is one the ring would raise: a submission queue under 8, and a completion queue under
+  twice the submission queue ([TW-D-16](DESIGN-NOTES.md#tw-d-16)). Each rule is stated in the rustdoc
+  of both ring-size fields and of the error, and in the README, with a doctest that shows a refusal,
+  and each is tested at, below and above its bound. The options have a `Default` of 64 buffers of 64
+  bytes, a client SQ of 64 entries and a ring of 64 and 128, a working position
+  ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that TW-9.1 found
+  consistent: the pool, not the ring, is then the limit. No bound is stricter than the one that really limits the field, so a
   size well above the defaults is accepted when the pool, the SQ and the ring can have it
   ([TW-D-16](DESIGN-NOTES.md#tw-d-16)). One check per field, tested at, below and above each
   bound, and every valid combination TW-9.1 found reaches a working engine, the defaults included.

@@ -383,10 +383,14 @@ a new crate: "I would put this in a distinct new module within the crate".
   replaced it: the completion queue is the larger of twice the submission queue and the request
   rounded up. A request of zero is the finding that matters to the options type, because the ring
   accepts it and picks a default, so a caller who passes zero gets a size they did not choose.
-- **Non-powers of two are refused.** The assistant put the choice after TW-9.1 showed the ring
-  rounds a request up: accept it and let the ring round, or refuse it. It noted that accepting is
-  harmless, since the caller gets at least what they asked for, but hides the real size. The
-  engineer chose to refuse and asked that it be documented. The same measurement shows the rule does
-  not make the caller's number the ring's number: a power of two below the ring's floor, or a
-  completion queue below twice the submission queue, is still raised, and the default of 64 and 64
-  is one such case. That is recorded as undecided, not as a consequence of the rule.
+- **Sizes the ring would raise are refused too.** The assistant put the choice after TW-9.1 showed
+  the ring rounds a request up: accept it and let the ring round, or refuse it. It noted that
+  accepting is harmless, since the caller gets at least what they asked for, but hides the real
+  size. The engineer chose to refuse non-powers of two and asked that it be documented. The same
+  measurement showed the rule alone does not make the caller's number the ring's: a power of two
+  below the ring's floor, or a completion queue below twice the submission queue, is still raised,
+  and the assistant's own first default of 64 and 64 was one such case. The engineer said to refuse
+  those too, so the default became 64 and 128.
+- **The error carries its cause.** The engineer asked that the error enum have a cause. The assistant
+  read that as each variant naming the rule it broke and a lower layer's error being its `source`,
+  and said so in the notes in case another reading was meant.
