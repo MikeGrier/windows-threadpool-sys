@@ -7,8 +7,8 @@ on:
       - 'durable-ioring-v*'
       - 'io-buffers-v*'
       - 'win-durable-ioring-v*'
-      - 'win-multi-file-tail-watcher-v*'
       - 'win-error-codes-v*'
+      - 'win-multi-file-tail-watcher-v*'
       - 'win-numa-sys-v*'
       - 'win-shared-os-owned-handle-v*'
       - 'win-sync-sys-v*'
@@ -42,8 +42,8 @@ on:
           - durable-ioring
           - io-buffers
           - win-durable-ioring
-          - win-multi-file-tail-watcher
           - win-error-codes
+          - win-multi-file-tail-watcher
           - win-numa-sys
           - win-shared-os-owned-handle
           - win-sync-sys
