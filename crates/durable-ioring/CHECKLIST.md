@@ -314,14 +314,15 @@ option recorded by construction. The rule throughout is documented APIs only
   security descriptor.** `DI-14.3` could not read either back, because this crate forbids `unsafe` and no
   crate of the workspace offers the two queries safely (`GetHandleInformation`; `GetSecurityInfo`, which
   returns a descriptor the request crate's `SecurityDescriptor::capture` can take and `to_sddl` can print).
-  **Where they belong is a working position, not a decision.** The engineer's suggestion, 2026-10-17, hedged
-  ("perhaps"): place a safe wrapper of a platform API by the grouping Microsoft Learn documents it under,
-  going forward. Read from the two pages' metadata and not from the navigation tree, `GetSecurityInfo`
-  (`aclapi.h`) is in the security reference and `GetHandleInformation` (`handleapi.h`) is not: its page's
-  technology root is the base services, so the two do not share a home under that rule, and the
-  engineer's belief that both are under "Security and Identity" holds for the first only. Nothing is built
-  until the engineer rules on the rule and on what it implies for `SecurityDescriptor`, which today lives
-  in the request crate. When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
+  **Where they belong is ruled by the rule of the
+  [root DESIGN-NOTES.md](../../DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under)
+  (the engineer, 2026-10-17), read from [WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt):**
+  `GetSecurityInfo` is documented under *Security and Identity > Authorization* and `GetHandleInformation`
+  under *System Services > Windows System Information > Handles and Objects*, so they are two new crates
+  and not one, and neither is the request crate or `win-sync-sys`. Their names are the engineer's to
+  choose. The handles crate would also be where `DuplicateHandle` is documented, which `win-sync-sys` holds
+  today; moving it, and moving `SecurityDescriptor` and the SDDL conversions out of the request crate, are
+  separate items this one does not do. When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
 

@@ -406,6 +406,49 @@ the existing ones stays open. The clarified scope adds a question to that migrat
 `windows-*` crates are facilities rather than direct layers, and for those the answer may be a
 name with no platform prefix rather than `win-`. The rationale for the clarification is in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-the-win-prefix-is-scoped-to-direct-layers).
+## <a id="safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under"></a>A safe wrapper of a platform API is placed by the Microsoft Learn section the API is documented under, as of a dated snapshot
+
+**The engineer's decision, 2026-10-17.** The question was where a new safe wrapper belongs when no
+existing crate's scope contains it (the case that raised it was the two read-backs of
+[DI-14.8](crates/durable-ioring/CHECKLIST.md): `GetSecurityInfo` and `GetHandleInformation`). The first
+proposal, 2026-10-17, was to follow Learn's grouping; the engineer ruled it "the rule to follow", stayed
+undecided between naming by header and naming by documentation section, and then ruled: "classify by learn
+section as of this date", with a local record of Learn's table of contents to apply it by.
+
+**The rule.** A wrapper of a platform API goes in the crate for the Learn section that documents the API.
+The section is read from the dated snapshot [WIN32-LEARN-MAP-DATA.txt](WIN32-LEARN-MAP-DATA.txt), which
+[WIN32-LEARN-MAP.md](WIN32-LEARN-MAP.md) describes and
+[tools/snapshot-learn-toc.ps1](tools/snapshot-learn-toc.ps1) regenerates. No existing crate's scope
+contains it: a new crate, named by this repository for the section's subject and by the `win-` rule above.
+
+**Microsoft's strings classify and never name.** Neither a header name nor a section title appears in a
+crate name, a module path or any public identifier. They are carried in one place, the snapshot, so that
+Microsoft renaming a section or moving a symbol to another header is a new snapshot and not a release,
+and no release is compelled by the change. This is the permanent indirection the choice of key could not
+avoid, kept where it costs a regeneration. The header is recorded beside the symbol as an attribute that
+can be checked against the binding the wrapper calls, and is not the key. The engineer's reasoning:
+Microsoft may change the header that carries a symbol while `Windows.h` stays the public header clients
+include, and a key by header would then compel this repository to follow the change, where a section
+retitled in Learn can be absorbed by a new snapshot.
+
+**Granularity.** A crate covers a second-level topic under a Learn area (*Synchronization*, *Handles and
+Objects*, *Authorization*), which is how `win-sync-sys` and `win-volume-sys` are already cut. Learn
+sections that are very small may share a crate, and a topic too large for one crate may split; either
+is a judgement written in the crate's notes. One crate for the whole of Win32 with a feature per area, and
+one crate per symbol, were considered and rejected: the first has one version for areas that change at
+different rates and decisions that are authored, where `windows-sys`'s are generated, and the second has
+no meaning.
+
+**Going forward only.** Existing crates are not moved to match. Where the rule shows that an existing
+crate holds something filed elsewhere, which it does for the SDDL conversions and `SecurityDescriptor` in
+`windows-namespace-request-sys` (documented under *Authorization*) and for
+`duplicate_handle_with_access` in `win-sync-sys` (`DuplicateHandle` is documented under *Handles and
+Objects*), the move is a separate scheduled item and is not done as a side effect of adding a wrapper.
+
+**Not decided, and scheduling no work:** an umbrella crate that only re-exports the others, which would
+decide no placement and is not needed to follow the rule; and a machine check that a crate's contents match
+the snapshot, which is possible and has no consumer until there is more than one wrapper placed by it.
+
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
