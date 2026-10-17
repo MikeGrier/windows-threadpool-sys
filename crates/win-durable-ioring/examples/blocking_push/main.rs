@@ -180,10 +180,7 @@ impl Scratch {
     fn target(&self) -> TargetSetup {
         let file = OpenedFile::<Cached>::open(&self.0, FileOptions::new().read().write())
             .expect("open the scratch file");
-        TargetSetup {
-            key: FILE,
-            target: Win32FileTarget::new(file),
-        }
+        TargetSetup::new(FILE, Win32FileTarget::new(file))
     }
 }
 

@@ -206,7 +206,9 @@ dioring binds to these obligations, never to how a backing happens to meet them
   need, and what it offers beyond these obligations, such as per-write write-through.
 - **Its access is stated**: whether it can be read, written, or both. An operation its access does not
   cover is refused when it is pushed, as `AccessDenied`, and never reaches the target; a commit is not
-  one of them.
+  one of them. A consumer may register the target under a typed `Key<A>`, which declares the access
+  it expects: a declaration the stated access does not cover is refused at registration, with the
+  target handed back, and a declaration of less is accepted.
 - **A fault names its source**: the layer that reported it, and that layer's code where it gives one
   (see "Where every report comes from").
 

@@ -36,7 +36,7 @@ fn instance_with(temp: &TempFile, options: FileOptions<ReadWrite>) -> (AlignedRi
     AlignedRing::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
-        files: vec![TargetSetup { key: FILE, target }],
+        files: vec![TargetSetup::new(FILE, target)],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
         diagnostics: None,

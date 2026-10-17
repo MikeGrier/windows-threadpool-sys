@@ -39,6 +39,25 @@ fn rows() -> [Row; 4] {
 }
 
 #[test]
+fn an_access_covers_what_it_can_do_and_nothing_that_it_cannot() {
+    use Access::{ReadOnly as R, ReadWrite as RW, WriteOnly as W};
+    let table = [
+        (R, R, true),
+        (R, W, false),
+        (R, RW, false),
+        (W, R, false),
+        (W, W, true),
+        (W, RW, false),
+        (RW, R, true),
+        (RW, W, true),
+        (RW, RW, true),
+    ];
+    for (held, wanted, covers) in table {
+        assert_eq!(held.covers(wanted), covers, "{held} covers {wanted}");
+    }
+}
+
+#[test]
 fn each_marker_reads_and_writes_as_it_is_named() {
     let expected = [
         ("NoData", false, false),

@@ -78,10 +78,7 @@ pub(super) fn instance_with_clock<K: TimeBase>(
 }
 
 pub(super) fn given(key: IoTargetKey, temp: &TempFile) -> TargetSetup {
-    TargetSetup {
-        key,
-        target: Win32FileTarget::new(temp.open()),
-    }
+    TargetSetup::new(key, Win32FileTarget::new(temp.open()))
 }
 
 /// An instance and the oracle watching its stream.

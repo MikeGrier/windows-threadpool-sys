@@ -1778,6 +1778,46 @@
       "why": "A control: the same value returned through a local, which no test can tell apart.",
       "find": ["    fn access(&self) -> Access {\n        self.access\n    }\n"],
       "replace": ["    fn access(&self) -> Access {\n        let access = self.access;\n        access\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: a key declaring more than its target states is admitted",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "Registration refuses a key whose declaration the target does not cover. Admitting exactly those it does cover, and refusing the rest, is the one runtime step a typed key adds.",
+      "find": ["            Some(declared) if !actual.covers(declared) => {\n"],
+      "replace": ["            Some(declared) if actual.covers(declared) => {\n"]
+    },
+    {
+      "name": "DI-13.10: a typed key declares some other access than its marker names",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "What a key declares is what its marker says; a key that always declared read and write would be admitted by every target that can do both and refused by none it should be.",
+      "find": ["        Some(A::ACCESS)\n"],
+      "replace": ["        Some(Access::ReadWrite)\n"]
+    },
+    {
+      "name": "DI-13.10: an untyped key declares an access",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "An untyped key declares nothing, so any target registers under it and the core judges what is pushed.",
+      "find": ["    fn declared(&self) -> Option<Access> {\n        None\n    }\n"],
+      "replace": ["    fn declared(&self) -> Option<Access> {\n        Some(Access::ReadWrite)\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: an access covers what it cannot do",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "An access covers another when it can do everything the other can, so joining the two axes with an or covers a key that declares one axis the target lacks.",
+      "find": ["(self.can_read() || !other.can_read()) && (self.can_write() || !other.can_write())"],
+      "replace": ["(self.can_read() || !other.can_read()) || (self.can_write() || !other.can_write())"]
+    },
+    {
+      "name": "DI-13.10 control: a typed key's number is taken through a binding",
+      "file": "src/key.rs",
+      "expect": "survives",
+      "why": "A control: the same number returned through a local, which no test can tell apart.",
+      "find": ["    fn untyped(&self) -> IoTargetKey {\n        self.key\n    }\n"],
+      "replace": ["    fn untyped(&self) -> IoTargetKey {\n        let key = self.key;\n        key\n    }\n"]
     }
   ]
 }

@@ -1347,6 +1347,46 @@
       "why": "A control: the same call made through a local, which no test can tell apart.",
       "find": ["            SubmissionOp::Write { .. } => access.can_write(),\n"],
       "replace": ["            SubmissionOp::Write { .. } => { let writes = access.can_write(); writes }\n"]
+    },
+    {
+      "name": "DI-13.10: registration does not judge a key's declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "add_target refuses a key that declares more than its target states, and hands the target back with the cause. Admitting every key leaves a declaration nothing compares.",
+      "find": ["            declared.admitted_by(target.access()).err()\n"],
+      "replace": ["            None\n"]
+    },
+    {
+      "name": "DI-13.10: construction admits a key that declares more than its target states",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Construction refuses a setup whose key declared what its target cannot do, and hands every file back.",
+      "find": ["        (!actual.covers(declared)).then_some(SetupRefusal::AccessNotCovered {\n"],
+      "replace": ["        (actual.covers(declared)).then_some(SetupRefusal::AccessNotCovered {\n"]
+    },
+    {
+      "name": "DI-13.10: a setup made with a typed key does not keep its declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "TargetSetup::new reads the declaration off the key, so a setup that dropped it would never be judged.",
+      "find": ["            declared: key.declared(),\n"],
+      "replace": ["            declared: None,\n"]
+    },
+    {
+      "name": "DI-13.10: a failed construction hands a file back with another declaration",
+      "file": "src/dioring.rs",
+      "expect": "caught",
+      "why": "Files come back as they were given, which includes what their keys declared; a hand-back that dropped it would let a second attempt skip the check.",
+      "find": ["        .find_map(|&(given, access)| (given == key).then_some(access))\n"],
+      "replace": ["        .find_map(|&(given, _)| (given == key).then_some(Access::ReadWrite))\n"]
+    },
+    {
+      "name": "DI-13.10 control: the registered key's number is taken through a binding",
+      "file": "src/dioring.rs",
+      "expect": "survives",
+      "why": "A control: the same number taken through a local, which no test can tell apart.",
+      "find": ["        let key = declared.untyped();\n"],
+      "replace": ["        let key = { let number = declared.untyped(); number };\n"]
     }
   ]
 }

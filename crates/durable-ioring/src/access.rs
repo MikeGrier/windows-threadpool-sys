@@ -47,6 +47,13 @@ impl Access {
     pub const fn can_write(self) -> bool {
         matches!(self, Self::WriteOnly | Self::ReadWrite)
     }
+
+    /// Whether everything `other` can do, this can: what a target must be able to do for a key
+    /// that declares `other` to be registered under it.
+    #[must_use]
+    pub const fn covers(self, other: Self) -> bool {
+        (self.can_read() || !other.can_read()) && (self.can_write() || !other.can_write())
+    }
 }
 
 impl fmt::Display for Access {

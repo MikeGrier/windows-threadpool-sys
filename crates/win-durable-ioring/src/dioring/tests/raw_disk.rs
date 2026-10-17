@@ -43,10 +43,7 @@ fn raw_instance(disk: OpenedDisk<Unbuffered>) -> (DiskRing, LineageHandle) {
     DiskRing::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
-        files: vec![TargetSetup {
-            key: DISK,
-            target: Win32FileTarget::from_disk(disk),
-        }],
+        files: vec![TargetSetup::new(DISK, Win32FileTarget::from_disk(disk))],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
         diagnostics: None,

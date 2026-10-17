@@ -24,6 +24,7 @@ mod error_code;
 mod ids;
 mod io_core;
 mod io_target;
+mod key;
 pub mod memory;
 pub mod oracle;
 mod provider;
@@ -49,14 +50,15 @@ pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
 pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
+pub use key::{Key, ReadKey, TargetKey, WriteKey};
 pub use provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use pump::Waitable;
 pub use types::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
+    AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
+    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
     Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
     MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,

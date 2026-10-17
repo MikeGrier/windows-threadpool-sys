@@ -46,6 +46,8 @@ mod raw_disk;
 mod raw_volume;
 // A file opened unbuffered, through an instance: DI-D-60.
 mod unbuffered;
+// A typed key at registration and at construction: DI-13.10.
+mod keys;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
@@ -147,10 +149,7 @@ fn domain(name: &str) -> FlushDomain {
 }
 
 fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
-    TargetSetup {
-        key: IoTargetKey(key),
-        target: target(temp.open(), domains),
-    }
+    TargetSetup::new(IoTargetKey(key), target(temp.open(), domains))
 }
 
 /// A target over `file`, declared with `domains`.

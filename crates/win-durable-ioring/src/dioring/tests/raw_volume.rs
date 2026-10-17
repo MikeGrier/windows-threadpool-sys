@@ -42,10 +42,10 @@ fn raw_instance(volume: OpenedVolume<Unbuffered>) -> (RawRing, LineageHandle) {
     RawRing::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
-        files: vec![TargetSetup {
-            key: VOLUME,
-            target: Win32FileTarget::from_volume(volume),
-        }],
+        files: vec![TargetSetup::new(
+            VOLUME,
+            Win32FileTarget::from_volume(volume),
+        )],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
         diagnostics: None,

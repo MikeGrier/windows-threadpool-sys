@@ -170,10 +170,10 @@ flush of a file report the error given whatever the device answered. Setting up 
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
@@ -254,10 +254,10 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,
@@ -343,10 +343,10 @@ fails as never issued.
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
 #     completion_queue_size: 64,
-#     files: vec![TargetSetup {
-#         key: FILE,
-#         target: windows_backend::Win32FileTarget::new(file),
-#     }],
+#     files: vec![TargetSetup::new(
+#         FILE,
+#         windows_backend::Win32FileTarget::new(file),
+#     )],
 #     buffers: Vec::new(),
 #     provider: None,
 #     diagnostics: None,

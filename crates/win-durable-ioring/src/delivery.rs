@@ -29,6 +29,7 @@ use durable_ioring::{
     DurableRing, EntryOf, EpochIdOf, FailureIdOf, HandleOf, Lin, PushResult, RegisteredBufferRing,
     TokenOf,
 };
+use durable_ioring::{ReadKey, TargetKey, WriteKey};
 
 #[cfg(test)]
 mod tests;
@@ -107,9 +108,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::add_target`].
-    pub fn add_target(
+    pub fn add_target<K: TargetKey>(
         &self,
-        key: IoTargetKey,
+        key: K,
         target: D::Target,
     ) -> Result<(), AddTargetError<D::Target>> {
         self.with(|ring| ring.add_target(key, target))
@@ -162,9 +163,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::write`].
-    pub fn write(
+    pub fn write<K: WriteKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: D::Buffer,
         tag: Tag<'_, D::Ids>,
@@ -181,9 +182,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::write_with`].
-    pub fn write_with(
+    pub fn write_with<K: WriteKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: D::Buffer,
         tag: Tag<'_, D::Ids>,
@@ -201,9 +202,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::read`].
-    pub fn read(
+    pub fn read<K: ReadKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: D::Buffer,
         context: D::Context,
@@ -219,9 +220,9 @@ impl<D: DurableRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`DurableRing::read_with`].
-    pub fn read_with(
+    pub fn read_with<K: ReadKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         buffer: D::Buffer,
         context: D::Context,
@@ -344,9 +345,9 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::write_registered`].
-    pub fn write_registered(
+    pub fn write_registered<K: WriteKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, D::Ids>,
@@ -360,9 +361,9 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::write_registered_with`].
-    pub fn write_registered_with(
+    pub fn write_registered_with<K: WriteKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, D::Ids>,
@@ -377,9 +378,9 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::read_registered`].
-    pub fn read_registered(
+    pub fn read_registered<K: ReadKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         context: D::Context,
@@ -392,9 +393,9 @@ impl<D: RegisteredBufferRing> DeliveryHandle<D> {
     /// # Errors
     ///
     /// As [`RegisteredBufferRing::read_registered_with`].
-    pub fn read_registered_with(
+    pub fn read_registered_with<K: ReadKey>(
         &self,
-        file: IoTargetKey,
+        file: K,
         offset: u64,
         span: RegisteredSpan,
         context: D::Context,
