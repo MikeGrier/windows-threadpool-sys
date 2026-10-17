@@ -266,11 +266,12 @@ write, give `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`.
 
 ```rust
 pub trait DataAccess: Sealed + Copy + Debug + Send + Sync + 'static {
-    const RIGHTS: u32;            // what the marker asks the open for
+    const READ: bool;             // the markers live in durable-ioring (DI-D-66); the rights they ask
+    const WRITE: bool;            // of Win32 are derived from these in win-durable-ioring
     type WithRead: DataAccess;    // NoData -> ReadOnly, WriteOnly -> ReadWrite, the rest unchanged
     type WithWrite: DataAccess;
 }
-pub trait HasData: DataAccess {}  // ReadOnly, WriteOnly, ReadWrite
+pub trait HasData: DataAccess { const ACCESS: Access; }  // ReadOnly, WriteOnly, ReadWrite
 pub trait CanRead: HasData {}     // ReadOnly, ReadWrite
 pub trait CanWrite: HasData {}    // WriteOnly, ReadWrite
 

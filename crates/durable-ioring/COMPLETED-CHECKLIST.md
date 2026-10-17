@@ -2988,3 +2988,15 @@ the data rights, the generic constants and `ALL_ACCESS`. Ten sabotage entries, t
 `compile_fail` doctest for each refusal; and a read-only test for a raw disk and a raw volume that runs
 in CI, since it needs an administrator. A transition that leaves a marker where it was changes a type, so
 its detection is a compile error and not a sabotage entry.
+
+### <a id="di-139"></a>DI-13.9 -- `IoTarget` states its data access, and the core refuses what the access does not cover. *(completed 2026-10-16 21:46:00 -04:00)*
+
+The engineer's ruling of 2026-10-16, layer 1 of [DI-D-66](DESIGN-NOTES.md#di-d-66). The markers moved to
+`durable-ioring`; `IoTarget::access` is required with no default, `IoTargetDescription` carries it, and
+`RefusalCause::AccessDenied` is a permission-denied fault. Both backends refuse a write to a target that
+cannot write and a read from one that cannot read at the push, after the unknown-target check and before
+geometry; a commit has no rule. `Win32FileTarget` states the access of its marker. What a marker asks of
+Win32 is a function over the core's `READ` and `WRITE`, not a trait, so the Windows crate adds nothing the
+core must know. Nine sabotage entries in `durable-ioring` and seven in `win-durable-ioring`, each set
+with a control. The read-only raw disk and volume tests run only in CI, and the stated access of a disk
+and a volume is pinned locally by assembled targets.
