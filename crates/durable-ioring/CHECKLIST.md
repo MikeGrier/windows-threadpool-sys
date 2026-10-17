@@ -260,26 +260,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.7.2** -- Ruled: v1 offers neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`; see DI-D-64.
 
-- [ ] **DI-13.7.3** -- **The disposition is Win32's own, as an enum; `FILE_FLAG_OPEN_REPARSE_POINT` is an
-  explicit option.** Unblocked by the ruling of `DI-13.7.2`, which leaves three variants: `CreateNew`,
-  `OpenExisting` and `OpenAlways` ([DI-D-64](DESIGN-NOTES.md#di-d-64)). `Disposition` is that enum, and
-  `FileOptions::disposition` replaces `create`, `create_new` and `truncate`, which go outright (the
-  ruling of `DI-13.1`, item (e)), with the default `OpenExisting`. Neither of the two left out is
-  representable, so nothing is refused at run time on their account; and none of the three changes or
-  empties a file that exists, so no data access `A` is gated by the disposition. A caller that wants an
-  existing file emptied does it through the lent handle (`File::set_len(0)`, which needs the write
-  right), and that is not atomic with the open. Deleted: `Parameters`'s `truncate_after`, the
-  `OPEN_ALWAYS` plus `set_len(0)` that stood in for `CREATE_ALWAYS`, the `parameters()` refusal of a
-  create or truncate without write access, and the reparse flag set on `create_new`. Added:
-  `FileOptions::open_reparse_point`, a builder method; it moves here from [DI-14.2](#di-142-flags)
-  because removing the automatic flag would otherwise leave a new file with no way to be created
-  without following a link. Twenty-one uses in `opened_file/tests.rs` are rewritten, and the doctests
-  and the README follow. Four sabotage entries of `DI-13.2` pin the std behaviours (not emptied,
-  created through a link, the emptying skipped, and the one for the path, which `DI-13.7.1` takes) and
-  are replaced. Tests: each of the three dispositions against a present and an absent file, for each
-  of the three typed accesses, matching what the kernel accepts; a new file is created through a link
-  that is already there unless the option is set, and is not when it is; a file that exists is the
-  same length after each disposition.
+- [x] **DI-13.7.3** -- The disposition is Win32's own, an enum, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-1373)
 
 - [ ] **DI-13.7.4** -- **`open` is a build and a perform.** Follows `DI-13.7.1` and `DI-13.7.3`.
   `OpenedFile::request(path, options)` builds on the submitting thread: it holds the `Wtf16String`, the

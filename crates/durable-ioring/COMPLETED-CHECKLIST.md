@@ -3040,3 +3040,14 @@ Commit `5ac36393`. `OpenedFile::open` takes a `Wtf16String` and nothing is lengt
 a path past `MAX_PATH` without a verbatim prefix and an empty one are `CreateFileW`'s to answer. Converting a
 `Path` is `Wtf16String::from_os_str`, re-exported at the crate root. The `DI-13.2` long-path sabotage entry is
 replaced by one that shows the path reaches the request unaltered, with a `survives` control.
+
+### <a id="di-1373"></a>DI-13.7.3 -- The disposition is Win32's own, an enum, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. *(completed 2026-10-17 00:27:16 -04:00)*
+
+Commit `dfdecb8a`; the ruling is [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `dwCreationDisposition` row.
+`Disposition` is `CreateNew`, `OpenExisting` (the default) or `OpenAlways`, `#[non_exhaustive]`, and
+`FileOptions::disposition` replaces `create`, `create_new` and `truncate`. `FileOptions::open_reparse_point`
+sets the flag, which a new-file open no longer sets itself. Deleted: `truncate_after`, the `OPEN_ALWAYS` plus
+`set_len(0)` stand-in and the refusal of a create without the right to write, so `parameters()` is infallible.
+Tests open each disposition against a present and an absent file for each typed access, and make a link to
+show a new file is created through it unless the option is set; the link test is skipped where a symbolic link
+cannot be made. Seven sabotage entries and a `survives` control replace the five that pinned std's behaviours.

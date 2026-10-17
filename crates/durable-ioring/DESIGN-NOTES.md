@@ -401,10 +401,9 @@ the choice the code made, with the measurement.
   writing, extending, flushing and every test through the ring pass with them.
 - **`TRUNCATE_EXISTING` is refused with `ERROR_INVALID_PARAMETER` when the access holds
   `FILE_WRITE_DATA` and not `GENERIC_WRITE`**, measured on Windows 11 build 26300, which is what the
-  `CreateFileW` page says of that disposition. A typed write access cannot ask for `GENERIC_WRITE`, so
-  the existing `truncate` option opens with `OPEN_EXISTING` and empties the file once it is open, as
-  `create` with `truncate` already did. How the disposition enum of [DI-13.7](CHECKLIST.md#di-137-rework)
-  offers `TRUNCATE_EXISTING` is a question that item now has.
+  `CreateFileW` page says of that disposition. A typed write access cannot ask for `GENERIC_WRITE`,
+  which is one of the two reasons `TRUNCATE_EXISTING` is not among the dispositions offered for v1
+  (see the `dwCreationDisposition` row above; [DI-6+.11](CHECKLIST.md) revisits it).
 - A type parameter written in a path takes its default when it is left off, so
   `OpenedFile::<Cached>::open(path, FileOptions::new().read())` names `ReadWrite` and does not compile.
   A file opened with other options writes the parameter or leaves it to be inferred with `_`:
