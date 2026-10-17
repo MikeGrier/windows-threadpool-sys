@@ -21,19 +21,23 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 
 use durable_ioring::{
-    Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
+    Access, Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
 };
 
 use super::file_rights::FileRights;
+use super::share_mode::ShareMode;
 
 mod open_request;
 
+#[cfg(test)]
+mod share_tests;
 #[cfg(test)]
 mod tests;
 
@@ -129,9 +133,10 @@ impl Buffering for Unbuffered {
     }
 }
 
-/// What to open: the data access, the other rights, how the file is created, and the cache hints.
-/// Only these, because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags
-/// could change it. A file is shared for reading, writing and deletion, as std opens one.
+/// What to open: the data access, the other rights, what other opens may do meanwhile, how the file
+/// is created, and the cache hints. Only these, because the open mode is what an [`OpenedFile`]
+/// vouches for, and a caller's own flags could change it. A file is shared for reading, writing and
+/// deletion, as std opens one, until [`share`](Self::share) says otherwise.
 ///
 /// The data access is the type parameter `A`: it starts as [`NoData`], and [`read`](Self::read) and
 /// [`write`](Self::write) move it, so the handle an open makes carries the access it was asked
@@ -150,6 +155,7 @@ impl Buffering for Unbuffered {
 pub struct FileOptions<A: DataAccess = NoData> {
     access: PhantomData<A>,
     rights: FileRights,
+    share: ShareMode,
     create: bool,
     create_new: bool,
     truncate: bool,
@@ -170,6 +176,7 @@ impl FileOptions<NoData> {
         Self {
             access: PhantomData,
             rights: FileRights::NONE,
+            share: ShareMode::ALL,
             create: false,
             create_new: false,
             truncate: false,
@@ -203,10 +210,22 @@ impl<A: DataAccess> FileOptions<A> {
         self
     }
 
+    /// What other opens of the file may request while this handle is open (`dwShareMode`). The
+    /// default is [`ShareMode::ALL`]; [`ShareMode::NONE`] is an exclusive open, which a database that
+    /// owns its file wants.
+    ///
+    /// An open the sharing of either side does not allow fails with a [`SharingViolation`], whichever
+    /// of the two opens came first. Calling this again replaces the mode.
+    pub fn share(mut self, share: ShareMode) -> Self {
+        self.share = share;
+        self
+    }
+
     fn with_access<A2: DataAccess>(self) -> FileOptions<A2> {
         FileOptions {
             access: PhantomData,
             rights: self.rights,
+            share: self.share,
             create: self.create,
             create_new: self.create_new,
             truncate: self.truncate,
@@ -300,6 +319,7 @@ impl<A: DataAccess> FileOptions<A> {
             access: data_rights::<A>() | self.rights.bits(),
             disposition,
             flags: flags | reparse | hints,
+            share: self.share.bits(),
             truncate_after,
         })
     }
@@ -340,6 +360,83 @@ impl fmt::Display for RemoteDevice {
 }
 
 impl std::error::Error for RemoteDevice {}
+
+/// An open failed because of how the file is already open: either this open asked for an access that
+/// an open already holding the file does not share, or it did not share an access that open asked for.
+/// `CreateFileW` fails both ways with `ERROR_SHARING_VIOLATION` and says nothing of which, and no
+/// documented call reports the other open's access or sharing, so this carries what *this* open asked
+/// for and nothing about the other.
+///
+/// It is the cause of an [`io::ErrorKind::ResourceBusy`] error from [`OpenedFile::open`], reached with
+/// [`io::Error::get_ref`] and a downcast. The kernel's own error, which carries the Win32 code, is its
+/// [`source`](std::error::Error::source).
+#[derive(Debug)]
+pub struct SharingViolation {
+    /// The path the open was made at, as it was given.
+    pub path: PathBuf,
+    /// The data access the open asked for, or `None` for one that asked for no data right.
+    pub data: Option<Access>,
+    /// The rights the open asked for besides the data access.
+    pub rights: FileRights,
+    /// What this open allowed other opens to request.
+    pub share: ShareMode,
+    os_error: io::Error,
+}
+
+impl fmt::Display for SharingViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} is open in a way that conflicts with this open (data access {}, {:?}, sharing {:?}): \
+             the other open does not share what this one asked for, or this one does not share what \
+             the other holds",
+            self.path.display(),
+            self.data
+                .map_or_else(|| "none".to_owned(), |data| data.to_string()),
+            self.rights,
+            self.share,
+        )
+    }
+}
+
+impl std::error::Error for SharingViolation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.os_error)
+    }
+}
+
+/// The data access `A` asks for, as a value, or `None` for one that asks for no data right.
+fn data_access<A: DataAccess>() -> Option<Access> {
+    match (A::READ, A::WRITE) {
+        (false, false) => None,
+        (true, false) => Some(Access::ReadOnly),
+        (false, true) => Some(Access::WriteOnly),
+        (true, true) => Some(Access::ReadWrite),
+    }
+}
+
+/// `error`, or the [`SharingViolation`] it is if the kernel said so.
+fn refine_sharing(
+    error: io::Error,
+    path: &Path,
+    data: Option<Access>,
+    rights: FileRights,
+    share: ShareMode,
+) -> io::Error {
+    if error.raw_os_error() != Some(ERROR_SHARING_VIOLATION.cast_signed()) {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::ResourceBusy,
+        SharingViolation {
+            path: path.to_path_buf(),
+            data,
+            rights,
+            share,
+            os_error: error,
+        },
+    )
+}
 
 /// A file this crate opened, in buffering mode `B` and with data access `A`: a [`SharedHandle`] and
 /// what is known of it because of how it was opened. Cloning shares the one handle.
@@ -390,7 +487,9 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     ///
     /// [`io::ErrorKind::InvalidInput`] if `options` create or truncate a file and carry no right to
     /// write, before anything is touched (until `DI-13.7` removes it). Otherwise whatever the open
-    /// reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
+    /// reports, [`SharingViolation`] (as an [`io::ErrorKind::ResourceBusy`] error) when the file is
+    /// open in a way that conflicts with this open's access or sharing, and [`RemoteDevice`] (as an
+    /// [`io::ErrorKind::Unsupported`] error)
     /// when `B` can claim its warranty only on a local device and `path` is on a remote one. That
     /// is decided from the path's final location, which resolves links and mapped drives, before
     /// anything is created; the file can still be replaced by a link in the time between.
@@ -398,6 +497,7 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
         let path = path.as_ref();
         // Decided before anything is touched: what is asked for either makes a valid request or it
         // does not.
+        let (rights, share) = (options.rights, options.share);
         let parameters = options.parameters(B::FLAGS)?;
         if B::LOCAL_DEVICE_ONLY {
             let location = final_location(path)?;
@@ -408,7 +508,8 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
                 ));
             }
         }
-        let handle = open_request::open(path, parameters)?;
+        let handle = open_request::open(path, parameters)
+            .map_err(|error| refine_sharing(error, path, data_access::<A>(), rights, share))?;
         Ok(Self {
             handle: SharedHandle::from(handle),
             geometry: B::geometry(),

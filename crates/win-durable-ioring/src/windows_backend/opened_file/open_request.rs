@@ -21,9 +21,6 @@ use std::path::{Path, PathBuf};
 use windows_namespace_request_sys::PathCaptureError;
 use windows_namespace_request_sys::open::OpenFile;
 use windows_sys::Win32::Foundation::MAX_PATH;
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-};
 use wtf_string::Wtf16String;
 
 #[cfg(test)]
@@ -39,6 +36,8 @@ pub(super) struct Parameters {
     pub disposition: u32,
     /// `dwFlagsAndAttributes`.
     pub flags: u32,
+    /// `dwShareMode`.
+    pub share: u32,
     /// Whether to empty the file once it is open, for a file that is created and truncated.
     pub truncate_after: bool,
 }
@@ -46,7 +45,7 @@ pub(super) struct Parameters {
 /// The verbatim prefix of a path, `\\?\`, as UTF-16.
 const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
 
-/// Open `path` as `parameters` says, shared for reading, writing and deletion as std opens a file.
+/// Open `path` as `parameters` says.
 pub(super) fn open(path: &Path, parameters: Parameters) -> io::Result<OwnedHandle> {
     let path = verbatim_if_long(path)?;
     // An empty path names nothing, and std reports it as invalid input; the request carries it to
@@ -60,7 +59,7 @@ pub(super) fn open(path: &Path, parameters: Parameters) -> io::Result<OwnedHandl
     let request = OpenFile::new(Wtf16String::from_os_str(path.as_os_str()))
         .map_err(path_error)?
         .with_desired_access(parameters.access)
-        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .with_share_mode(parameters.share)
         .with_creation_disposition(parameters.disposition)
         .with_flags_and_attributes(parameters.flags);
     let handle = request

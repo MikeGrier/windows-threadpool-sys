@@ -53,6 +53,7 @@ mod opened_disk;
 mod opened_file;
 mod opened_volume;
 pub(crate) mod pool;
+mod share_mode;
 pub(crate) mod signalled;
 mod wait;
 
@@ -65,10 +66,13 @@ pub use durable_ioring::{
 pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use opened_disk::{DiskPath, OpenedDisk};
-pub use opened_file::{Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, Unbuffered};
+pub use opened_file::{
+    Buffering, Cached, FileOptions, OpenedFile, RemoteDevice, SharingViolation, Unbuffered,
+};
 pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
 };
+pub use share_mode::ShareMode;
 
 #[cfg(test)]
 mod tests;

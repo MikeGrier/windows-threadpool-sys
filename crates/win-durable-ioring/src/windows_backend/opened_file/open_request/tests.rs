@@ -7,17 +7,23 @@ use std::path::{Path, PathBuf};
 
 use windows_namespace_request_sys::{OpenFile, PathCaptureError};
 use windows_sys::Win32::Foundation::GENERIC_READ;
-use windows_sys::Win32::Storage::FileSystem::{CREATE_NEW, OPEN_ALWAYS, OPEN_EXISTING};
+use windows_sys::Win32::Storage::FileSystem::{
+    CREATE_NEW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING,
+};
 use wtf_string::Wtf16String;
 
 use super::{Parameters, open, path_error, raw_code, verbatim, verbatim_if_long};
 use crate::dioring::tests::TempFile;
+
+/// What a file was always opened with before the share mode was a parameter.
+const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
 fn read_existing() -> Parameters {
     Parameters {
         access: GENERIC_READ,
         disposition: OPEN_EXISTING,
         flags: 0,
+        share: SHARE_ALL,
         truncate_after: false,
     }
 }
@@ -112,6 +118,7 @@ fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
             access: read_write,
             disposition: OPEN_ALWAYS,
             flags: 0,
+            share: SHARE_ALL,
             truncate_after: false,
         },
     )
@@ -125,6 +132,7 @@ fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
             access: read_write,
             disposition: OPEN_ALWAYS,
             flags: 0,
+            share: SHARE_ALL,
             truncate_after: true,
         },
     )

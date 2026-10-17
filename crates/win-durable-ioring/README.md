@@ -54,6 +54,13 @@ constructor from a raw mask and no right for appending only, which would land ev
 of the file whatever offset the core names, so it cannot be asked for. What the file's security
 allows is the kernel's to say.
 
+`FileOptions::share` takes a `ShareMode`, a set of `READ`, `WRITE` and `DELETE` naming what other opens of
+the file may request while this one is open; a file is opened sharing all three unless it is told
+otherwise, and `ShareMode::NONE` is an exclusive open. An open that the sharing of either side does not
+allow fails as a `SharingViolation`, an `io::ErrorKind::ResourceBusy` error whose cause carries what this
+open asked for. `CreateFileW` reports both sides' conflicts as one error and no documented call reports
+what the other open holds, so it cannot say which side conflicted. The kernel's own error is its source.
+
 `FileOptions::random_access` and `FileOptions::sequential_scan` are the two cache hints
 (`FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`). They are passed to an unbuffered file as
 well as a cached one, never refused, and change nothing a target claims: the class, the alignment and

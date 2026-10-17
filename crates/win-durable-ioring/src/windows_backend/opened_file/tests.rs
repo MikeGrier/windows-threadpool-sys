@@ -9,7 +9,8 @@ use io_buffers::AlignedBuf;
 
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_APPEND_DATA, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS,
-    FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 
 use super::super::{
@@ -410,6 +411,9 @@ fn parameters(
         access,
         disposition,
         flags,
+        // What every file was opened with before the share mode was an option, and still is unless
+        // it is told otherwise.
+        share: FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         truncate_after,
     }
 }

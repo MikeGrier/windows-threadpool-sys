@@ -1387,6 +1387,102 @@
       "why": "A control: the same number taken through a local, which no test can tell apart.",
       "find": ["        let key = declared.untyped();\n"],
       "replace": ["        let key = { let number = declared.untyped(); number };\n"]
+    },
+    {
+      "name": "DI-13.4: every share mode is said to share less than it does",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "ShareMode::ALL is what every file was opened with before the mode was an option, so one that left out a member would refuse a deleter that the default admitted.",
+      "find": ["    pub const ALL: Self = Self(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);"],
+      "replace": ["    pub const ALL: Self = Self(FILE_SHARE_READ | FILE_SHARE_WRITE);"]
+    },
+    {
+      "name": "DI-13.4: a member is the value of another",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "Each member is the flag it is named for; a swapped one shares the wrong access.",
+      "find": ["    READ = FILE_SHARE_READ;"],
+      "replace": ["    READ = FILE_SHARE_WRITE;"]
+    },
+    {
+      "name": "DI-13.4: containing a set only needs one of its members",
+      "file": "src/windows_backend/share_mode.rs",
+      "expect": "caught",
+      "why": "A set contains another when every member of the other is in it.",
+      "find": ["        self.0 & other.0 == other.0"],
+      "replace": ["        self.0 & other.0 != 0"]
+    },
+    {
+      "name": "DI-13.4: a file is opened sharing nothing unless told otherwise",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The default is every member, as std opens a file; an exclusive default would refuse every second open.",
+      "find": ["            share: ShareMode::ALL,"],
+      "replace": ["            share: ShareMode::NONE,"]
+    },
+    {
+      "name": "DI-13.4: the options forget their share mode when the data access changes",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read and write rebuild the options for a new access type, and a field not carried across is silently reset.",
+      "find": ["            share: self.share,"],
+      "replace": ["            share: ShareMode::ALL,"]
+    },
+    {
+      "name": "DI-13.4: the request is made with every member whatever was asked",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The share mode an open asks for is the one it is made with.",
+      "find": ["            share: self.share.bits(),"],
+      "replace": ["            share: ShareMode::ALL.bits(),"]
+    },
+    {
+      "name": "DI-13.4: the request is made sharing nothing whatever was asked",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "caught",
+      "why": "The open passes the parameters' share mode to the call and decides none itself.",
+      "find": ["        .with_share_mode(parameters.share)"],
+      "replace": ["        .with_share_mode(0)"]
+    },
+    {
+      "name": "DI-13.4: another error is taken for a sharing violation",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Only the kernel's sharing violation becomes a SharingViolation; any other failure is its own error as it was.",
+      "find": ["    if error.raw_os_error() != Some(ERROR_SHARING_VIOLATION.cast_signed()) {"],
+      "replace": ["    if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION.cast_signed()) {"]
+    },
+    {
+      "name": "DI-13.4: a sharing violation reports some other kind of error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The error's kind is how a consumer who does not downcast tells a sharing conflict from the rest.",
+      "find": ["        io::ErrorKind::ResourceBusy,"],
+      "replace": ["        io::ErrorKind::Other,"]
+    },
+    {
+      "name": "DI-13.4: a sharing violation drops the kernel's error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The kernel's error, which carries the Win32 code, is the violation's source.",
+      "find": ["        Some(&self.os_error)"],
+      "replace": ["        None"]
+    },
+    {
+      "name": "DI-13.4: a read-only open is reported as read and write",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A violation says what this open asked for, so the data access it names is the marker's.",
+      "find": ["        (true, false) => Some(Access::ReadOnly),"],
+      "replace": ["        (true, false) => Some(Access::ReadWrite),"]
+    },
+    {
+      "name": "DI-13.4 control: the share mode is passed to the call through a binding",
+      "file": "src/windows_backend/opened_file/open_request.rs",
+      "expect": "survives",
+      "why": "A control: the same mode passed through a local, which no test can tell apart.",
+      "find": ["        .with_share_mode(parameters.share)"],
+      "replace": ["        .with_share_mode({ let share = parameters.share; share })"]
     }
   ]
 }
