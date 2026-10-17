@@ -234,21 +234,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.11** -- A share mode for `OpenedVolume` and `OpenedDisk`, through one device open. <a id="di-1311"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1311)
 
-- [ ] **DI-13.12** -- **Run the exclusive-volume and exclusive-disk tests elevated, and measure the lock against the share mode.** <a id="di-1312"></a>
-  [DI-13.11](#di-1311) wrote `an_exclusive_raw_volume_refuses_a_second_open_until_it_closes` and
-  `an_exclusive_raw_disk_refuses_a_second_open_until_it_closes`, which need an administrator and a
-  scratch virtual disk and have not been run. The blocker is that no session here is elevated, checked at
-  the start of this item: the token is at the medium integrity level. The test of whether a locked
-  volume ([DI-D-61](DESIGN-NOTES.md#di-d-61)) interacts with the share mode is written
-  (`a_volume_can_be_locked_and_exclusive_at_once_and_the_share_mode_still_judges_a_second_open`, which
-  asserts the exclusive and locked case and prints what a second open meets beside a locked, shared
-  volume) and has not been run either. What is left is the run, from an elevated shell:
-  `cargo test -p win-durable-ioring --lib -- --include-ignored --nocapture exclusive_raw locked_and_exclusive`
-  (the first filter matches both exclusive tests and the second the lock test; the test harness takes
-  several). Then fix what the runs show, since a mounted volume may be held by another handle and
-  would refuse the exclusive open for a reason that is not the test's; record what the lock test printed in
-  [DI-D-64](DESIGN-NOTES.md#di-d-64); and remove the two `survives` entries of `DI-13.11` from the manifest
-  if the tests reach what they name.
+- [x] **DI-13.12** -- The exclusive-volume and exclusive-disk tests run elevated, and the lock measured against the share mode. <a id="di-1312"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1312)
 
 - [x] **DI-13.5** -- `SecurityDescriptor` from SDDL, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-135)
 

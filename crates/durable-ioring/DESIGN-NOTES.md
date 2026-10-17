@@ -277,14 +277,21 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   kernel is one decision. The call is the same whatever the path names, so its tests open a file through
   it: every pair of read, write and read-and-write opens with the eight share modes on each side matches
   the documented rule, as a file's do.
-- What is not reached locally: that `OpenedVolume::open` and `OpenedDisk::open` pass their options' share
-  mode to that function. A raw open needs an administrator and a scratch virtual disk, so the exclusive
-  volume and disk tests are the ignored ones that run in CI, and an open that asks for no data right is not
-  judged by the share mode, so a no-data handle cannot show it either. Two sabotage entries say so, each
-  expecting to survive. Those two CI tests were written and have not been run.
-- The share mode and `VolumeOptions::lock` are independent: the lock is a device control made after the
-  open, and the share mode is judged by the open. Whether a locked volume interacts with the share mode
-  was not measured.
+- What is not reached by the local run: that `OpenedVolume::open` and `OpenedDisk::open` pass their
+  options' share mode to that function. A raw open needs an administrator and a scratch virtual disk, so
+  the exclusive volume and disk tests are the ignored ones that run in CI, and an open that asks for no
+  data right is not judged by the share mode, so a no-data handle cannot show it either. Run elevated on
+  2026-10-16 ([DI-13.12](CHECKLIST.md#di-1312)), both pass, and each wiring mutated to ignore the options
+  fails its test. The two sabotage entries still expect to survive, because the sweep runs no ignored test.
+  The first open of an exclusive volume was refused once in two runs as a sharing violation that was not
+  the test's, something else holding the volume just after it appeared; the volume tests open it again for
+  a bounded time, so that is the test's patience and not the library's.
+- **The lock is not independent of the share mode.** Measured elevated on 2026-10-16 on a 64 MiB scratch
+  volume: a volume locked with `VolumeOptions::lock` refuses every other open that asks for a data right,
+  read-write or read-only, with `ERROR_ACCESS_DENIED` and not a `SharingViolation`, whether the holder
+  shared nothing or everything; an unlocked volume answers as the share mode says, a sharing violation
+  when exclusive and an open when shared. An open that asks for no data right is admitted in all four.
+  So a caller that locks sees the lock's refusal and never the share mode's.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)

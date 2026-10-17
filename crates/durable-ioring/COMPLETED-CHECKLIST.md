@@ -3027,3 +3027,9 @@ Twelve sabotage entries, one a control. `DI-13.11` carries the volume and the di
 `DiskOptions` take the `ShareMode` of `DI-13.4`, and a conflict is its `SharingViolation`. Both opens are
 `raw_open::open`, tried on a file against the documented rule. The two exclusive tests run only in CI and
 are unrun; `DI-13.12` carries them and the lock. Nine sabotage entries caught, three expected to survive.
+
+### <a id="di-1312"></a>DI-13.12 -- The exclusive-volume and exclusive-disk tests run elevated, and the lock measured against the share mode. *(completed 2026-10-16 23:20:00 -04:00)*
+
+Run through `sudo` on 2026-10-16; the findings are in [DI-D-64](DESIGN-NOTES.md#di-d-64). Both exclusive
+tests pass and each wiring mutated to ignore its options fails its test; a locked volume refuses a data
+open as access denied whatever the share mode. The two `survives` entries stay, as the sweep runs no ignored test.
