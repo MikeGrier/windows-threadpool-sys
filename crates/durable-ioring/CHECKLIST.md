@@ -222,12 +222,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.2** -- A file is opened through `windows-namespace-request-sys`, so this crate has no `unsafe` of its own for it and `std::fs::OpenOptions` is no longer the opener. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-132)
 
-- [ ] **DI-13.3** -- **Access as named rights, not a read/write pair.** A typed set over the
-  documented file access rights the table in [DI-D-64](DESIGN-NOTES.md#di-d-64) exposes (data read and write; attributes;
-  `DELETE`; the security rights; append-only if ruled in), with no raw `u32`. A target needs a data
-  right, which is checked when the file is opened and not when the first operation fails. Tests: each
-  right opens and is exercised; a right the file's security refuses reaches the caller as the
-  kernel's error and not as a panic.
+- [x] **DI-13.3** -- Access is a typed set of named rights, `FileRights`, with no raw `u32`; a file target needs a data right, checked when it is opened. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-133)
 
 - [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
   exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
@@ -259,7 +254,7 @@ option recorded by construction. The rule throughout is documented APIs only
   opened handle (`DI-14.5`), closing it if it is refused. Nothing is checked before the open (the
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode, as `OpenedFile<B>` is.
-  **Next:** `DI-13.3`.
+  **Next:** `DI-13.4`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

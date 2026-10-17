@@ -2965,3 +2965,15 @@ file. Five sabotage entries in `win-durable-ioring`, including a control, cover 
 flags the mode opens with, and a refusal on an unbuffered file. Handle-level `FILE_FLAG_WRITE_THROUGH`
 stays out of v1, and the per-write flag's error 509 on a cached handle is the test that was already
 kept.
+
+### <a id="di-133"></a>DI-13.3 -- Access is a typed set of named rights, `FileRights`, with no raw `u32`; a file target needs a data right, checked when it is opened. *(completed 2026-10-16 20:22:03 -04:00)*
+
+`FileOptions::access` takes a `FileRights`, joined with `|`, in place of the `read` and `write`
+booleans, which are removed. The set holds the documented file rights and the generic ones, per
+[DI-D-64](DESIGN-NOTES.md#di-d-64); there is no constructor from a raw mask and no member for
+`FILE_APPEND_DATA` alone, so append-only access cannot be asked for. An open with no data right is
+refused as invalid input before any call is made; what the file's security allows is the kernel's to
+say, and a right it refuses reaches the caller as its error. Tests open each right and have the kernel
+judge the operation it does and does not cover. Measured: an unbuffered open of `FILE_ALL_ACCESS` is
+refused with `ERROR_INVALID_PARAMETER`, which is recorded in the `DI-D-64` row for the generic rights
+and on the constant. Six sabotage entries, including a control, are in `win-durable-ioring`.
