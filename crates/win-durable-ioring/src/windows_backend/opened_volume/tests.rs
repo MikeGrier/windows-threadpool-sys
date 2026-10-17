@@ -9,9 +9,40 @@ use super::{
 };
 use crate::dioring::tests::TempFile;
 use crate::windows_backend::{
-    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, Unbuffered, Win32FileTarget, WriteOnly,
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
+    WriteOnly,
 };
 use durable_ioring::{Access, Capabilities, FlushDomain, Geometry, IoTarget, WarrantyClass};
+
+#[test]
+fn a_volume_is_opened_sharing_every_member_unless_told_otherwise() {
+    assert_eq!(VolumeOptions::new().share, ShareMode::ALL);
+    assert_eq!(VolumeOptions::default().share, ShareMode::ALL);
+    assert_eq!(
+        VolumeOptions::new().share(ShareMode::NONE).share,
+        ShareMode::NONE
+    );
+    assert_eq!(
+        VolumeOptions::new()
+            .share(ShareMode::NONE)
+            .share(ShareMode::READ)
+            .share,
+        ShareMode::READ,
+        "the last call replaces the mode"
+    );
+}
+
+#[test]
+fn the_share_mode_and_the_lock_are_independent_options() {
+    let locked_exclusively = VolumeOptions::new().lock(true).share(ShareMode::NONE);
+    assert!(locked_exclusively.lock);
+    assert_eq!(locked_exclusively.share, ShareMode::NONE);
+    let the_other_order = VolumeOptions::new().share(ShareMode::NONE).lock(true);
+    assert!(the_other_order.lock);
+    assert_eq!(the_other_order.share, ShareMode::NONE);
+    assert!(!VolumeOptions::new().share(ShareMode::NONE).lock);
+    assert_eq!(VolumeOptions::new().lock(true).share, ShareMode::ALL);
+}
 
 fn extent(disk_number: u32) -> DiskExtent {
     DiskExtent {

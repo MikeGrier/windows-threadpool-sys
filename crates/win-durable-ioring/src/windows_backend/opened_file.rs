@@ -406,7 +406,7 @@ impl std::error::Error for SharingViolation {
 }
 
 /// The data access `A` asks for, as a value, or `None` for one that asks for no data right.
-fn data_access<A: DataAccess>() -> Option<Access> {
+pub(super) fn data_access<A: DataAccess>() -> Option<Access> {
     match (A::READ, A::WRITE) {
         (false, false) => None,
         (true, false) => Some(Access::ReadOnly),
@@ -416,7 +416,7 @@ fn data_access<A: DataAccess>() -> Option<Access> {
 }
 
 /// `error`, or the [`SharingViolation`] it is if the kernel said so.
-fn refine_sharing(
+pub(super) fn refine_sharing(
     error: io::Error,
     path: &Path,
     data: Option<Access>,

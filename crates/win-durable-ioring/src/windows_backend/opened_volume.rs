@@ -15,16 +15,16 @@
 //! disks.
 
 use std::fmt;
-use std::fs::OpenOptions;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, bytes_per_sector, lock_volume, volume_disk_extents};
 
-use super::opened_file::{Buffering, Unbuffered, data_rights};
+use super::opened_file::{Buffering, Unbuffered};
+use super::raw_open;
+use super::share_mode::ShareMode;
 use durable_ioring::{DataAccess, FlushDomain, Geometry, ReadWrite};
 
 #[cfg(test)]
@@ -117,17 +117,41 @@ impl VolumePath {
     }
 }
 
-/// How a volume is opened beyond its path.
-#[derive(Clone, Copy, Debug, Default)]
+/// How a volume is opened beyond its path: whether it is locked, and what other opens of the volume
+/// may request meanwhile.
+#[derive(Clone, Copy, Debug)]
 #[must_use]
 pub struct VolumeOptions {
     lock: bool,
+    share: ShareMode,
+}
+
+impl Default for VolumeOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VolumeOptions {
-    /// Nothing requested beyond opening the volume.
+    /// Nothing requested beyond opening the volume, which is shared for reading, writing and
+    /// deletion, as `std::fs::OpenOptions` opens one.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            lock: false,
+            share: ShareMode::ALL,
+        }
+    }
+
+    /// What other opens of the volume may request while this handle is open (`dwShareMode`), as
+    /// [`FileOptions::share`](super::FileOptions::share) is for a file. [`ShareMode::NONE`] opens the
+    /// volume exclusively. An open the sharing of either side does not allow fails with a
+    /// [`SharingViolation`](super::SharingViolation). Calling this again replaces the mode.
+    ///
+    /// This is not the lock: [`lock`](Self::lock) is a device control made once the volume is open,
+    /// and the share mode is judged by the open itself.
+    pub fn share(mut self, share: ShareMode) -> Self {
+        self.share = share;
+        self
     }
 
     /// Lock the volume once it is open, so that this handle is the only one that can use it until
@@ -170,15 +194,12 @@ impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
     ///
     /// # Errors
     ///
-    /// Whatever the open reports, and the device's own error from the extents or sector size
-    /// control: a volume that is remote, or a path that is not a volume, does not answer them, so
+    /// Whatever the open reports, a [`SharingViolation`](super::SharingViolation) among it, and the
+    /// device's own error from the extents or sector size control: a volume that is remote, or a path that is not a volume, does not answer them, so
     /// it is refused here. When the lock is asked for, the lock's own error, and then nothing is
     /// held.
     pub fn open(path: &VolumePath, options: VolumeOptions) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .access_mode(data_rights::<A>())
-            .custom_flags(B::FLAGS)
-            .open(path.as_str())?;
+        let file = raw_open::open::<B, A>(path.as_str(), options.share)?;
         let extents = volume_disk_extents(&file)?;
         let sector = bytes_per_sector(&file)?;
         let geometry = B::sector_geometry(sector)

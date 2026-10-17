@@ -25,7 +25,8 @@ use super::QUEUE;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::scratch_volume::ScratchDisk;
 use crate::windows_backend::{
-    DiskPath, OpenedDisk, ReadOnly, Unbuffered, Win32FileTarget, disk_flush_domain,
+    DiskOptions, DiskPath, OpenedDisk, ReadOnly, ShareMode, SharingViolation, Unbuffered,
+    Win32FileTarget, disk_flush_domain,
 };
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
@@ -87,16 +88,43 @@ fn read_back(disk_number: u32, offset: u64, length: usize) -> Vec<u8> {
 }
 
 fn open(scratch: &ScratchDisk) -> OpenedDisk<Unbuffered> {
-    OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()))
+    OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()), DiskOptions::new())
         .expect("open the scratch disk")
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn an_exclusive_raw_disk_refuses_a_second_open_until_it_closes() {
+    let scratch = ScratchDisk::create(MEGABYTES).expect("a scratch disk");
+    let path = DiskPath::number(scratch.disk_number());
+    let exclusive = OpenedDisk::<Unbuffered>::open(path, DiskOptions::new().share(ShareMode::NONE))
+        .expect("open exclusively");
+    let refused = OpenedDisk::<Unbuffered>::open(path, DiskOptions::new())
+        .expect_err("an exclusive open is open");
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::ResourceBusy,
+        "{refused}"
+    );
+    assert!(
+        refused
+            .get_ref()
+            .is_some_and(|inner| inner.is::<SharingViolation>()),
+        "{refused}"
+    );
+    drop(exclusive);
+    OpenedDisk::<Unbuffered>::open(path, DiskOptions::new()).expect("nothing holds the disk now");
 }
 
 #[test]
 #[ignore = "needs an administrator: creates and attaches a virtual disk"]
 fn a_raw_disk_opened_for_reading_only_reads_and_is_refused_a_write_by_the_kernel() {
     let scratch = ScratchDisk::create(MEGABYTES).expect("a scratch disk");
-    let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(DiskPath::number(scratch.disk_number()))
-        .expect("open the scratch disk for reading only");
+    let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(
+        DiskPath::number(scratch.disk_number()),
+        DiskOptions::new(),
+    )
+    .expect("open the scratch disk for reading only");
     let sector = disk.geometry().offset_alignment() as usize;
     let mut through = File::from(disk.as_handle().try_clone_to_owned().expect("duplicate"));
 

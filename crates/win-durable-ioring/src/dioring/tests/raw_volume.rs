@@ -24,7 +24,8 @@ use super::QUEUE;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::scratch_volume::ScratchVolume;
 use crate::windows_backend::{
-    OpenedVolume, ReadOnly, Unbuffered, VolumeOptions, Win32FileTarget, disk_flush_domain,
+    OpenedVolume, ReadOnly, ShareMode, SharingViolation, Unbuffered, VolumeOptions,
+    Win32FileTarget, disk_flush_domain,
 };
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
@@ -248,6 +249,32 @@ fn a_locked_raw_volume_is_written_and_the_lock_is_given_up_when_it_closes() {
     drop(ring);
     OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))
         .expect("the lock was released when the handle closed");
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn an_exclusive_raw_volume_refuses_a_second_open_until_it_closes() {
+    let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
+    let path = scratch.path();
+    let exclusive =
+        OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().share(ShareMode::NONE))
+            .expect("open exclusively");
+    let refused = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new())
+        .expect_err("an exclusive open is open");
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::ResourceBusy,
+        "{refused}"
+    );
+    assert!(
+        refused
+            .get_ref()
+            .is_some_and(|inner| inner.is::<SharingViolation>()),
+        "{refused}"
+    );
+    drop(exclusive);
+    OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new())
+        .expect("nothing holds the volume now");
 }
 
 #[test]

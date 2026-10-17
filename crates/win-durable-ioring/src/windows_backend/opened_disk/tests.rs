@@ -2,11 +2,11 @@
 
 use std::io;
 
-use super::{DiskPath, OpenedDisk};
+use super::{DiskOptions, DiskPath, OpenedDisk};
 use crate::dioring::tests::TempFile;
 use crate::windows_backend::{
-    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, Unbuffered, Win32FileTarget, WriteOnly,
-    disk_flush_domain,
+    Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
+    WriteOnly, disk_flush_domain,
 };
 use durable_ioring::{Access, Capabilities, Geometry, IoTarget, WarrantyClass};
 
@@ -23,6 +23,24 @@ fn assembled<B: crate::windows_backend::Buffering>(
         OpenedDisk::assembled(file.handle().clone(), disk_number, sector),
         temp,
     )
+}
+
+#[test]
+fn a_disk_is_opened_sharing_every_member_unless_told_otherwise() {
+    assert_eq!(DiskOptions::new().share, ShareMode::ALL);
+    assert_eq!(DiskOptions::default().share, ShareMode::ALL);
+    assert_eq!(
+        DiskOptions::new().share(ShareMode::NONE).share,
+        ShareMode::NONE
+    );
+    assert_eq!(
+        DiskOptions::new()
+            .share(ShareMode::NONE)
+            .share(ShareMode::READ)
+            .share,
+        ShareMode::READ,
+        "the last call replaces the mode"
+    );
 }
 
 #[test]
@@ -122,8 +140,8 @@ fn declared_domains_are_added_to_the_disks_own_and_never_take_it_away() {
 fn a_disk_number_nothing_has_is_refused() {
     // Not opened for any purpose but to be refused: no disk is numbered this, so the open fails
     // whatever the account, and never touches a real one.
-    let error =
-        OpenedDisk::<Unbuffered>::open(DiskPath::number(u32::MAX - 1)).expect_err("no such disk");
+    let error = OpenedDisk::<Unbuffered>::open(DiskPath::number(u32::MAX - 1), DiskOptions::new())
+        .expect_err("no such disk");
     assert!(
         matches!(
             error.kind(),

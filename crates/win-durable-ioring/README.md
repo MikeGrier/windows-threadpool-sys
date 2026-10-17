@@ -124,15 +124,18 @@ let target = Win32FileTarget::from_volume(volume);
 which a device control reports. It claims `SharedDevice` when opened unbuffered and `BestEffort` when opened cached, never
 `Complete`, for the reason a volume does not. Windows documents that it blocks a direct write to a sector a mounted volume covers, so a
 disk with volumes on it is written through them, or has them locked or is taken offline first; the
-tests here use a disk with no partition. Opening one for writing needs an administrator.
+tests here use a disk with no partition. Opening one for writing needs an administrator. A disk and a
+volume are opened sharing reading, writing and deletion unless `DiskOptions::share` or
+`VolumeOptions::share` takes a `ShareMode` otherwise, and a conflict is the same `SharingViolation` a file
+reports.
 
 ```rust,no_run
 use win_durable_ioring::windows_backend::{
-    DiskPath, OpenedDisk, ReadOnly, Unbuffered, Win32FileTarget,
+    DiskOptions, DiskPath, OpenedDisk, ReadOnly, Unbuffered, Win32FileTarget,
 };
 
 // The data access is named in the type: this one is opened for reading only.
-let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(DiskPath::number(3))?;
+let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(DiskPath::number(3), DiskOptions::new())?;
 let target = Win32FileTarget::from_disk(disk);
 # Ok::<(), std::io::Error>(())
 ```
