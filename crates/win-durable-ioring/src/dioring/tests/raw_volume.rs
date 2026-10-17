@@ -24,7 +24,7 @@ use super::QUEUE;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::scratch_volume::ScratchVolume;
 use crate::windows_backend::{
-    OpenedVolume, ReadOnly, ShareMode, SharingViolation, Unbuffered, VolumeOptions,
+    OpenedVolume, ReadOnly, ShareMode, SharingViolation, Unbuffered, VolumeOptions, VolumePath,
     Win32FileTarget, disk_flush_domain,
 };
 use durable_ioring::backend::RefusalCause;
@@ -77,6 +77,29 @@ fn transferred(entry: EntryOf<RawRing>) -> u32 {
             other => panic!("expected a transfer, got {other:?}"),
         },
         other => panic!("expected a completion, got {other:?}"),
+    }
+}
+
+/// Open `path` as `options` say, trying again while something else holds the volume. The system
+/// does for a moment, just after a volume appears and between two opens of it, and refuses the open
+/// as a sharing violation that is not the test's: an exclusive open measured in an elevated run was
+/// refused so, once in two runs, with nothing of the test's own open.
+fn open_when_free(path: &VolumePath, options: VolumeOptions) -> OpenedVolume<Unbuffered> {
+    let mut attempts = 0;
+    loop {
+        match OpenedVolume::<Unbuffered>::open(path, options) {
+            Ok(volume) => return volume,
+            Err(error)
+                if attempts < 40
+                    && error
+                        .get_ref()
+                        .is_some_and(|inner| inner.is::<SharingViolation>()) =>
+            {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("open the volume: {error}"),
+        }
     }
 }
 
@@ -256,9 +279,7 @@ fn a_locked_raw_volume_is_written_and_the_lock_is_given_up_when_it_closes() {
 fn an_exclusive_raw_volume_refuses_a_second_open_until_it_closes() {
     let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
     let path = scratch.path();
-    let exclusive =
-        OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().share(ShareMode::NONE))
-            .expect("open exclusively");
+    let exclusive = open_when_free(&path, VolumeOptions::new().share(ShareMode::NONE));
     let refused = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new())
         .expect_err("an exclusive open is open");
     assert_eq!(
@@ -279,33 +300,72 @@ fn an_exclusive_raw_volume_refuses_a_second_open_until_it_closes() {
 
 #[test]
 #[ignore = "needs an administrator: creates and attaches a virtual disk"]
-fn a_volume_can_be_locked_and_exclusive_at_once_and_the_share_mode_still_judges_a_second_open() {
-    // DI-13.12. The share mode is judged by the open and the lock is a device control made after it,
-    // so the two are expected to be independent; this is the measurement, and what it shows is
-    // written in DI-D-64, not assumed from here.
+fn a_locked_volume_refuses_data_opens_as_access_denied_and_an_unlocked_one_as_the_share_mode_says()
+{
+    // DI-13.12, measured by an elevated run on 2026-10-16 on a 64 MiB scratch volume: the lock is a
+    // device control made after the open, and it is not independent of the share mode. A volume
+    // that is locked refuses every other open that asks for a data right with ERROR_ACCESS_DENIED,
+    // whether the holder shared everything or nothing, so a caller that locks never sees the share
+    // mode's SharingViolation from another open; an unlocked volume answers as the share mode says.
+    // An open that asks for no data right is admitted in every case.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Meets {
+        Opened,
+        SharingViolation,
+        AccessDenied,
+    }
+    fn meets(result: std::io::Result<()>) -> Meets {
+        match result {
+            Ok(()) => Meets::Opened,
+            Err(error)
+                if error
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<SharingViolation>()) =>
+            {
+                Meets::SharingViolation
+            }
+            Err(error) if error.raw_os_error() == Some(5) => Meets::AccessDenied,
+            Err(error) => panic!("an unexpected refusal: {error}"),
+        }
+    }
+
     let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
     let path = scratch.path();
-    let held = OpenedVolume::<Unbuffered>::open(
-        &path,
-        VolumeOptions::new().lock(true).share(ShareMode::NONE),
-    )
-    .expect("open exclusively and lock");
-    assert!(held.is_locked());
-    let refused = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new())
-        .expect_err("an exclusive open is open, locked or not");
-    assert_eq!(
-        refused.kind(),
-        std::io::ErrorKind::ResourceBusy,
-        "{refused}"
-    );
-    drop(held);
-
-    // Locked and shared: what a second, plain open of the volume meets is recorded, not asserted.
-    let locked = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))
-        .expect("open and lock, sharing all three");
-    let second = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new());
-    eprintln!("a second open beside a locked, shared volume: {second:?}");
-    drop((locked, second));
+    // (the holder locks, the holder's share mode) and what a read-write or read-only second open meets.
+    let table = [
+        (false, ShareMode::NONE, Meets::SharingViolation),
+        (false, ShareMode::ALL, Meets::Opened),
+        (true, ShareMode::NONE, Meets::AccessDenied),
+        (true, ShareMode::ALL, Meets::AccessDenied),
+    ];
+    for (lock, share, expected) in table {
+        let held = open_when_free(&path, VolumeOptions::new().lock(lock).share(share));
+        let label = format!("holder lock={lock} share={share:?}");
+        assert_eq!(
+            meets(OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new()).map(drop)),
+            expected,
+            "{label}: a read-write open"
+        );
+        assert_eq!(
+            meets(
+                OpenedVolume::<Unbuffered, ReadOnly>::open(&path, VolumeOptions::new()).map(drop)
+            ),
+            expected,
+            "{label}: a read-only open"
+        );
+        assert_eq!(
+            meets(
+                OpenedVolume::<Unbuffered, crate::windows_backend::NoData>::open(
+                    &path,
+                    VolumeOptions::new(),
+                )
+                .map(drop)
+            ),
+            Meets::Opened,
+            "{label}: an open that asks for no data right"
+        );
+        drop(held);
+    }
 }
 
 #[test]
