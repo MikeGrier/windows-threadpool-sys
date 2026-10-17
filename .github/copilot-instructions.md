@@ -890,6 +890,14 @@ points the file already has. A file may sit two thresholds up and still be right
 whole, and a file below every threshold may still be worth splitting when it obviously wants
 to be two things. Never reach for the byte count to justify a cut.
 
+**Archival documents are exempt at every threshold.** `COMPLETED-CHECKLIST.md` and
+`COMPLETED-PLANS.md` (and any other append-only history file, such as
+`RESOLVED-TEST-FAILURES.md` and `DESIGN-NOTES-AGED-OUT.md`) are records, not modules: they have
+no fracture points, they grow by appending, and their `<a id>` anchors are linked from stubs and
+other documents, so a split buys nothing and breaks links. Never queue a CHECKLIST item to split
+one, never hold an archive entry back because of one's size, and never record a size decision for
+one. The scale governs source files only.
+
 | Size on disk | Name | Default posture |
 |---|---|---|
 | < 32 KiB | normal | No action. |
