@@ -67,9 +67,25 @@ well as a cached one, never refused, and change nothing a target claims: the cla
 what it offers follow from the buffering mode alone. What the `CreateFileW` documentation says about them
 on an unbuffered file can be read two ways, and the methods' own documentation says what was measured.
 
+The path is a `Wtf16String`, handed to Win32 as the caller gave it: nothing lengthens, shortens or
+refuses it, so a path past `MAX_PATH` without a `\\?\` prefix, and an empty one, are what `CreateFileW`
+makes of them. Convert a `Path` with `Wtf16String::from_os_str`, which loses nothing.
+
+`FileOptions::disposition` takes a `Disposition`: `CreateNew`, `OpenExisting` (where the options start) or
+`OpenAlways`, named as `CreateFileW` names them. `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, the two that
+empty a file that exists, are not offered in this version; a caller empties a file through the handle the
+open lends, with `File::set_len(0)`. `FileOptions::open_reparse_point` sets `FILE_FLAG_OPEN_REPARSE_POINT`,
+which no disposition implies: without it a link is followed, including by `CreateNew`.
+
+`OpenedFile::open` blocks for as long as `CreateFileW` does. `OpenedFile::request` builds an `OpenRequest`
+and opens nothing, fixing a relative path to the current directory as it is then, and
+`OpenRequest::perform` makes the call on whatever thread the caller chooses. A request is `Send`, and
+performing it again opens the file again. The refusal of an unbuffered file on a remote device is made in
+`perform`.
+
 ```rust
 use win_durable_ioring::windows_backend::{
-    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
+    Cached, Disposition, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
 };
 use win_durable_ioring::{IoTarget, WarrantyClass, Wtf16String};
 
@@ -85,6 +101,11 @@ assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
 let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(name(), options)?);
 assert_eq!(unbuffered.warranty(), WarrantyClass::SharedDevice);
 assert!(unbuffered.capabilities().write_through());
+
+// Built here, and made on the thread that may block.
+let request = OpenedFile::<Cached>::request(name(), options.disposition(Disposition::OpenAlways))?;
+let opened = std::thread::spawn(move || request.perform()).join().expect("the thread")?;
+drop(opened);
 # std::fs::remove_file(&path)?;
 # Ok::<(), std::io::Error>(())
 ```

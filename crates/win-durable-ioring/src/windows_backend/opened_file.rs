@@ -12,6 +12,12 @@
 //! The buffering mode is a type: [`OpenedFile<Cached>`] or [`OpenedFile<Unbuffered>`]. What a mode
 //! implies is stated once, on [`Buffering`]; a consumer that needs the stronger warranty asks for
 //! `OpenedFile<Unbuffered>` in its own signature, and a cached file cannot be passed.
+//!
+//! The open reflects `CreateFileW` and not `std::fs::OpenOptions` (DI-D-64): the path is a
+//! `Wtf16String` handed over as given, the [`Disposition`] is Win32's own, and no option implies
+//! another (a new file does not set the reparse flag by itself). It is a build,
+//! [`OpenedFile::request`], and a perform, [`OpenRequest::perform`], with
+//! [`OpenedFile::open`] the two run together.
 
 use std::fmt;
 use std::fs;
