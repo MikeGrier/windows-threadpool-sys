@@ -256,19 +256,8 @@ option recorded by construction. The rule throughout is documented APIs only
   Each code item is its own commit, and `DI-13.7.1` and `DI-13.7.3` each break `win-durable-ioring`,
   which ships as one new minor (the ruling of `DI-13.1`, item (e)). This item is checked when all five are.
 
-- [ ] **DI-13.7.1** -- **The path is handed over as the caller gave it.** `OpenedFile::open` takes a
-  `Wtf16String` and nothing else (the ruling of `DI-13.1`, item (a)); the caller converts. Deleted
-  from `open_request.rs`: `verbatim_if_long`, `verbatim`, the `MAX_PATH` constant and the refusal of an
-  empty path, so a path longer than `MAX_PATH` without a verbatim prefix and an empty path are Win32's
-  to answer. `SharingViolation::path` and `RemoteDevice::location` hold what the open was given or
-  resolved, and the interim remote check (see `DI-13.7.4` and `DI-14.5`) converts to a `Path` for
-  `canonicalize` at the one place it needs one. About sixty-six call sites of `OpenedFile::open`
-  change, almost all in tests, the README and the examples, so a test helper that builds the
-  `Wtf16String` from a `Path` keeps them one line each. The sabotage entry `DI-13.2: a path longer
-  than an ordinary one is handed over as it was` is replaced by one that shows the path reaches the
-  request unaltered. Tests: a verbatim long path opens; the same long path without its prefix is
-  refused by Win32 and not by this crate; an empty path is Win32's answer; a path with an interior NUL
-  is refused by the request crate and reaches the caller as `InvalidInput`.
+- [x] **DI-13.7.1** -- The path is handed over as the caller gave it, a `Wtf16String`; done in `5ac36393`.
+  Its archive entry waits for `DI-12.5`, because the archive is at the size line.
 
 - [x] **DI-13.7.2** -- Ruled: v1 offers neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`; see DI-D-64.
 
