@@ -1,0 +1,522 @@
+// Copyright (c) 2026 Mike Grier
+//! The observer's information queries, all behind the `fs` feature.
+
+use std::io;
+use std::mem::{MaybeUninit, offset_of};
+use std::os::windows::io::AsRawHandle;
+use std::time::{Duration, SystemTime};
+
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALIGNMENT_INFO, FILE_BASIC_INFO, FILE_ID_128, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS,
+    FILE_REMOTE_PROTOCOL_INFO, FILE_STANDARD_INFO, FILE_STORAGE_INFO, FileAlignmentInfo,
+    FileBasicInfo, FileIdInfo, FileRemoteProtocolInfo, FileStandardInfo, FileStorageInfo,
+    GetFileInformationByHandleEx,
+};
+
+use super::EndpointObserver;
+
+#[cfg(test)]
+mod tests;
+
+/// `FILE_STORAGE_INFO`'s flag bits and its unknown-offset sentinel.
+///
+/// `windows-sys` exports these only behind `Win32_System_WindowsProgramming`, so
+/// they are named here rather than pulling that feature in. Changing any value is
+/// a breaking change.
+pub(crate) mod storage_info_values {
+    /// `STORAGE_INFO_FLAGS_ALIGNED_DEVICE`.
+    pub(crate) const FLAGS_ALIGNED_DEVICE: u32 = 0x1;
+    /// `STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE`.
+    pub(crate) const FLAGS_PARTITION_ALIGNED_ON_DEVICE: u32 = 0x2;
+    /// `STORAGE_INFO_OFFSET_UNKNOWN`.
+    pub(crate) const OFFSET_UNKNOWN: u32 = 0xFFFF_FFFF;
+}
+
+/// `FILE_REMOTE_PROTOCOL_INFO`'s SMB protocol value and flag bits.
+///
+/// `windows-sys` exports these only behind `Win32_Storage_InstallableFileSystems`
+/// and `Win32_System_WindowsProgramming`, so they are named here rather than
+/// pulling those features in. Changing any value is a breaking change.
+pub(crate) mod remote_protocol_values {
+    /// `WNNC_NET_SMB`: the protocol value for SMB, whose protocol-specific
+    /// information is the SMB2 block.
+    pub(crate) const PROTOCOL_SMB: u32 = 0x0002_0000;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_LOOPBACK`.
+    pub(crate) const FLAG_LOOPBACK: u32 = 0x1;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_OFFLINE`.
+    pub(crate) const FLAG_OFFLINE: u32 = 0x2;
+    /// `REMOTE_PROTOCOL_INFO_FLAG_PERSISTENT_HANDLE`.
+    pub(crate) const FLAG_PERSISTENT_HANDLE: u32 = 0x4;
+}
+
+/// A file's standard information, read through an open handle.
+///
+/// What `GetFileInformationByHandleEx(FileStandardInfo)` reports, as of the
+/// query: [`EndpointObserver::standard_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StandardInfo {
+    /// The end-of-file position in bytes: the file's length.
+    pub len: u64,
+    /// The bytes the file system has allocated to the file. Rounded up to its
+    /// allocation unit, and smaller than `len` for a sparse file.
+    pub allocation_size: u64,
+    /// The number of hard links to the file.
+    pub link_count: u32,
+    /// Whether a delete has been requested that takes effect once the last
+    /// handle to the file closes.
+    pub delete_pending: bool,
+    /// Whether the handle is to a directory.
+    pub is_directory: bool,
+}
+
+/// `FILE_STANDARD_INFO` with its two `BOOLEAN`s read as bytes, so a value other
+/// than 0 or 1 from a driver cannot become an invalid `bool`.
+#[repr(C)]
+struct RawStandardInfo {
+    allocation_size: i64,
+    end_of_file: i64,
+    number_of_links: u32,
+    delete_pending: u8,
+    directory: u8,
+}
+
+const _: () = {
+    assert!(size_of::<RawStandardInfo>() == size_of::<FILE_STANDARD_INFO>());
+    assert!(align_of::<RawStandardInfo>() == align_of::<FILE_STANDARD_INFO>());
+    assert!(
+        offset_of!(RawStandardInfo, allocation_size)
+            == offset_of!(FILE_STANDARD_INFO, AllocationSize)
+    );
+    assert!(offset_of!(RawStandardInfo, end_of_file) == offset_of!(FILE_STANDARD_INFO, EndOfFile));
+    assert!(
+        offset_of!(RawStandardInfo, number_of_links)
+            == offset_of!(FILE_STANDARD_INFO, NumberOfLinks)
+    );
+    assert!(
+        offset_of!(RawStandardInfo, delete_pending)
+            == offset_of!(FILE_STANDARD_INFO, DeletePending)
+    );
+    assert!(offset_of!(RawStandardInfo, directory) == offset_of!(FILE_STANDARD_INFO, Directory));
+};
+
+/// A file's times and attributes, as
+/// `GetFileInformationByHandleEx(FileBasicInfo)` reports them:
+/// [`EndpointObserver::basic_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BasicInfo {
+    /// When the file was created.
+    pub creation_time: FileTime,
+    /// When the file was last read or written, as far as the file system
+    /// records access.
+    pub last_access_time: FileTime,
+    /// When the file's data was last written.
+    pub last_write_time: FileTime,
+    /// When the file's data or metadata last changed.
+    pub change_time: FileTime,
+    /// The `FILE_ATTRIBUTE_*` bits, as reported.
+    pub attributes: u32,
+}
+
+/// A time as the file system reports it: 100-nanosecond intervals since
+/// 1601-01-01 00:00 UTC, kept exactly as reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileTime {
+    /// The intervals since 1601-01-01 00:00 UTC.
+    pub ticks: i64,
+}
+
+/// The file-time epoch and unit. Changing any value is a breaking change.
+mod file_time_values {
+    /// Seconds from 1601-01-01 to 1970-01-01, both 00:00 UTC.
+    pub(super) const SECONDS_FROM_1601_TO_1970: u64 = 11_644_473_600;
+    /// File-time ticks per second.
+    pub(super) const TICKS_PER_SECOND: i64 = 10_000_000;
+    /// Nanoseconds per file-time tick.
+    pub(super) const NANOS_PER_TICK: i64 = 100;
+}
+
+impl FileTime {
+    /// The time as a `SystemTime`, or `None` when the count is negative: a time
+    /// before 1601, which `SystemTime` cannot hold.
+    #[must_use]
+    pub fn to_system_time(self) -> Option<SystemTime> {
+        use file_time_values::{NANOS_PER_TICK, SECONDS_FROM_1601_TO_1970, TICKS_PER_SECOND};
+        // Equivalent to a bare cast on Windows: a negative count cast is 2^63 or more,
+        // which overflows SystemTime below. Kept so the refusal does not rest on that.
+        let ticks = u64::try_from(self.ticks).ok()?;
+        let per_second = TICKS_PER_SECOND.cast_unsigned();
+        let since_1601 = Duration::new(
+            ticks / per_second,
+            u32::try_from(ticks % per_second * NANOS_PER_TICK.cast_unsigned()).ok()?,
+        );
+        // Checked, though Windows' SystemTime holds every non-negative count (tested).
+        let epoch_1601 =
+            SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(SECONDS_FROM_1601_TO_1970))?;
+        epoch_1601.checked_add(since_1601)
+    }
+}
+
+fn basic_info_from(raw: &FILE_BASIC_INFO) -> BasicInfo {
+    BasicInfo {
+        creation_time: FileTime {
+            ticks: raw.CreationTime,
+        },
+        last_access_time: FileTime {
+            ticks: raw.LastAccessTime,
+        },
+        last_write_time: FileTime {
+            ticks: raw.LastWriteTime,
+        },
+        change_time: FileTime {
+            ticks: raw.ChangeTime,
+        },
+        attributes: raw.FileAttributes,
+    }
+}
+
+/// A file's identity: the volume it is on and its ID within that volume.
+///
+/// Two handles with equal `FileId`s are open on the same file, whatever paths
+/// they were opened by -- hard links and renames included. What
+/// `GetFileInformationByHandleEx(FileIdInfo)` reports:
+/// [`EndpointObserver::file_id`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileId {
+    /// The serial number of the volume holding the file.
+    pub volume_serial_number: u64,
+    /// The file's 128-bit ID within its volume, as the file system reports it.
+    pub file_id: [u8; 16],
+}
+
+/// The sector geometry of the storage under a file, as
+/// `GetFileInformationByHandleEx(FileStorageInfo)` reports it:
+/// [`EndpointObserver::storage_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StorageInfo {
+    /// The logical sector size: the unit unbuffered offsets and lengths are
+    /// multiples of.
+    pub logical_bytes_per_sector: u32,
+    /// The physical sector size the device writes atomically.
+    pub physical_bytes_per_sector_for_atomicity: u32,
+    /// The physical sector size the device performs best at.
+    pub physical_bytes_per_sector_for_performance: u32,
+    /// The atomic write unit the file system honours, which may be smaller than
+    /// the device's.
+    pub file_system_effective_physical_bytes_per_sector_for_atomicity: u32,
+    /// The `STORAGE_INFO_FLAGS_*` bits, as reported; see
+    /// [`aligned_device`](Self::aligned_device) and
+    /// [`partition_aligned_on_device`](Self::partition_aligned_on_device).
+    pub flags: u32,
+    /// Bytes from the start of the first sector to the first physical sector
+    /// boundary, or `None` when the file system reports it unknown.
+    pub byte_offset_for_sector_alignment: Option<u32>,
+    /// Bytes from the partition's start to the first physical sector boundary,
+    /// or `None` when the file system reports it unknown.
+    pub byte_offset_for_partition_alignment: Option<u32>,
+}
+
+impl StorageInfo {
+    /// Whether `STORAGE_INFO_FLAGS_ALIGNED_DEVICE` is set: the device's logical
+    /// sectors start on physical sector boundaries.
+    #[must_use]
+    pub fn aligned_device(&self) -> bool {
+        self.flags & storage_info_values::FLAGS_ALIGNED_DEVICE != 0
+    }
+
+    /// Whether `STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE` is set: the
+    /// partition starts on a physical sector boundary.
+    #[must_use]
+    pub fn partition_aligned_on_device(&self) -> bool {
+        self.flags & storage_info_values::FLAGS_PARTITION_ALIGNED_ON_DEVICE != 0
+    }
+}
+
+fn storage_info_from(raw: &FILE_STORAGE_INFO) -> StorageInfo {
+    let known = |offset| (offset != storage_info_values::OFFSET_UNKNOWN).then_some(offset);
+    StorageInfo {
+        logical_bytes_per_sector: raw.LogicalBytesPerSector,
+        physical_bytes_per_sector_for_atomicity: raw.PhysicalBytesPerSectorForAtomicity,
+        physical_bytes_per_sector_for_performance: raw.PhysicalBytesPerSectorForPerformance,
+        file_system_effective_physical_bytes_per_sector_for_atomicity: raw
+            .FileSystemEffectivePhysicalBytesPerSectorForAtomicity,
+        flags: raw.Flags,
+        byte_offset_for_sector_alignment: known(raw.ByteOffsetForSectorAlignment),
+        byte_offset_for_partition_alignment: known(raw.ByteOffsetForPartitionAlignment),
+    }
+}
+
+/// The buffer alignment a device requires for unbuffered I/O, as
+/// `GetFileInformationByHandleEx(FileAlignmentInfo)` reports it:
+/// [`EndpointObserver::alignment_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlignmentInfo {
+    /// The reported requirement, a mask: an address meets it when every bit set
+    /// here is clear in the address. Win32 documents it as one less than a power
+    /// of two (`FILE_BYTE_ALIGNMENT` is 0, `FILE_512_BYTE_ALIGNMENT` is `0x1FF`).
+    pub requirement_mask: u32,
+}
+
+impl AlignmentInfo {
+    /// Whether `address` meets the requirement.
+    #[must_use]
+    pub fn is_aligned(&self, address: usize) -> bool {
+        address as u64 & u64::from(self.requirement_mask) == 0
+    }
+
+    /// The requirement in bytes, or `None` when the mask is not one less than a
+    /// power of two and so names no single alignment.
+    #[must_use]
+    pub fn byte_alignment(&self) -> Option<u64> {
+        let bytes = u64::from(self.requirement_mask) + 1;
+        bytes.is_power_of_two().then_some(bytes)
+    }
+}
+
+/// The remote protocol a file is reached through, as
+/// `GetFileInformationByHandleEx(FileRemoteProtocolInfo)` reports it:
+/// [`EndpointObserver::remote_protocol_info`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RemoteProtocolInfo {
+    /// The version of the structure the file system filled in.
+    pub structure_version: u16,
+    /// The protocol, as a `WNNC_NET_*` value; SMB is `0x20000`.
+    pub protocol: u32,
+    /// The protocol's major version.
+    pub major_version: u16,
+    /// The protocol's minor version.
+    pub minor_version: u16,
+    /// The protocol's revision.
+    pub revision: u16,
+    /// The `REMOTE_PROTOCOL_INFO_FLAG_*` bits, as reported; see
+    /// [`loopback`](Self::loopback), [`offline`](Self::offline) and
+    /// [`persistent_handle`](Self::persistent_handle).
+    pub flags: u32,
+    /// The SMB2 block, present when `protocol` is SMB.
+    pub smb2: Option<Smb2Info>,
+}
+
+impl RemoteProtocolInfo {
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_LOOPBACK` is set: the remote server is
+    /// this machine.
+    #[must_use]
+    pub fn loopback(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_LOOPBACK != 0
+    }
+
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_OFFLINE` is set: the file is reached
+    /// from an offline cache.
+    #[must_use]
+    pub fn offline(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_OFFLINE != 0
+    }
+
+    /// Whether `REMOTE_PROTOCOL_INFO_FLAG_PERSISTENT_HANDLE` is set: the handle
+    /// survives a reconnection to the server.
+    #[must_use]
+    pub fn persistent_handle(&self) -> bool {
+        self.flags & remote_protocol_values::FLAG_PERSISTENT_HANDLE != 0
+    }
+}
+
+/// The SMB2 server and share capabilities of a [`RemoteProtocolInfo`], as
+/// reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Smb2Info {
+    /// The server's capability bits.
+    pub server_capabilities: u32,
+    /// The share's capability bits.
+    pub share_capabilities: u32,
+    /// The share's flag bits.
+    pub share_flags: u32,
+}
+
+fn remote_protocol_info_from(raw: &FILE_REMOTE_PROTOCOL_INFO) -> RemoteProtocolInfo {
+    let smb2 = (raw.Protocol == remote_protocol_values::PROTOCOL_SMB).then(|| {
+        // SAFETY: both union members are plain integers, valid for any bit pattern;
+        // the SMB2 one is the member the file system fills in for SMB.
+        let block = unsafe { raw.ProtocolSpecific.Smb2 };
+        Smb2Info {
+            server_capabilities: block.Server.Capabilities,
+            share_capabilities: block.Share.Capabilities,
+            share_flags: block.Share.ShareFlags,
+        }
+    });
+    RemoteProtocolInfo {
+        structure_version: raw.StructureVersion,
+        protocol: raw.Protocol,
+        major_version: raw.ProtocolMajorVersion,
+        minor_version: raw.ProtocolMinorVersion,
+        revision: raw.ProtocolRevision,
+        flags: raw.Flags,
+        smb2,
+    }
+}
+
+/// The output buffer of every query. The kernel checks a per-class buffer
+/// alignment that can exceed `T`'s own: measured, `FileRemoteProtocolInfo`
+/// refused a buffer aligned to 4 but not 8 with `ERROR_NOACCESS`, so every
+/// query gets 8.
+#[repr(C, align(8))]
+struct QueryBuffer<T>(MaybeUninit<T>);
+
+const _: () = assert!(align_of::<QueryBuffer<u8>>() >= 8);
+
+impl EndpointObserver {
+    /// Fill a `T` with the information class `class` through the handle.
+    ///
+    /// # Safety
+    ///
+    /// `T` must be laid out as the structure `class` returns, and every bit
+    /// pattern of it must be valid.
+    unsafe fn query_info<T>(&self, class: FILE_INFO_BY_HANDLE_CLASS) -> io::Result<T> {
+        let mut out = QueryBuffer(MaybeUninit::<T>::uninit());
+        let size = u32::try_from(size_of::<T>()).expect("an information structure fits a u32 size");
+        // SAFETY: a live handle this observer holds, and an output buffer laid out
+        // as `class` requires (the caller's obligation) of exactly the size passed.
+        // The call is synchronous, so the buffer is borrowed only for this statement.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                self.handle.as_raw_handle(),
+                class,
+                out.0.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call succeeded, so it filled the whole structure, and any
+        // bit pattern is valid for `T` (the caller's obligation).
+        Ok(unsafe { out.0.assume_init() })
+    }
+}
+
+impl EndpointObserver {
+    /// The file's standard information: its length, allocation, link count,
+    /// whether a delete is pending, and whether it is a directory.
+    ///
+    /// Read through the handle with `GetFileInformationByHandleEx(FileStandardInfo)`.
+    /// The query is synchronous and issues no overlapped I/O, so it is safe while
+    /// the endpoint has operations in flight. Read through the handle, the
+    /// length is current as soon as a write through any other handle has
+    /// extended or truncated the file, unlike the size in the file's directory
+    /// entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose device does not answer the standard-information query.
+    pub fn standard_info(&self) -> io::Result<StandardInfo> {
+        // Never seen failing -- files, the NUL device and an unconnected named-pipe server
+        // all answer -- so its error is tested through `file_id`, on the shared path.
+        // SAFETY: laid out as FILE_STANDARD_INFO (asserted above), and all integers.
+        let raw: RawStandardInfo = unsafe { self.query_info(FileStandardInfo) }?;
+        // A file system never reports a negative size; reinterpret rather than check.
+        Ok(StandardInfo {
+            len: raw.end_of_file.cast_unsigned(),
+            allocation_size: raw.allocation_size.cast_unsigned(),
+            link_count: raw.number_of_links,
+            delete_pending: raw.delete_pending != 0,
+            is_directory: raw.directory != 0,
+        })
+    }
+
+    /// The file's creation, last-access, last-write and change times and its
+    /// attributes, read through the handle with
+    /// `GetFileInformationByHandleEx(FileBasicInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight. Measured on NTFS and ReFS: after a write through
+    /// another handle, the last-write and change times read here had advanced at
+    /// the first query, while the file's directory entry kept the earlier times
+    /// until that other handle closed. Whether and when the last-access time
+    /// advances on a read differed between the two.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the basic-information query.
+    pub fn basic_info(&self) -> io::Result<BasicInfo> {
+        // SAFETY: FILE_BASIC_INFO is windows-sys' own definition of the class's
+        // structure, and every field is an integer.
+        let raw: FILE_BASIC_INFO = unsafe { self.query_info(FileBasicInfo) }?;
+        Ok(basic_info_from(&raw))
+    }
+
+    /// The file's identity: its volume's serial number and its 128-bit ID within
+    /// that volume, read through the handle with
+    /// `GetFileInformationByHandleEx(FileIdInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the file-ID query.
+    pub fn file_id(&self) -> io::Result<FileId> {
+        // SAFETY: FILE_ID_INFO is windows-sys' own definition of the class's
+        // structure, and both its fields are integers.
+        let raw: FILE_ID_INFO = unsafe { self.query_info(FileIdInfo) }?;
+        let FILE_ID_128 { Identifier } = raw.FileId;
+        Ok(FileId {
+            volume_serial_number: raw.VolumeSerialNumber,
+            file_id: Identifier,
+        })
+    }
+
+    /// The sector geometry of the storage under the file, read through the
+    /// handle with `GetFileInformationByHandleEx(FileStorageInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the storage query.
+    pub fn storage_info(&self) -> io::Result<StorageInfo> {
+        // SAFETY: FILE_STORAGE_INFO is windows-sys' own definition of the class's
+        // structure, and every field is a u32.
+        let raw: FILE_STORAGE_INFO = unsafe { self.query_info(FileStorageInfo) }?;
+        Ok(storage_info_from(&raw))
+    }
+
+    /// The buffer alignment the device requires for unbuffered I/O, read through
+    /// the handle with `GetFileInformationByHandleEx(FileAlignmentInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports, for a handle
+    /// whose file system or device does not answer the alignment query.
+    pub fn alignment_info(&self) -> io::Result<AlignmentInfo> {
+        // SAFETY: FILE_ALIGNMENT_INFO is windows-sys' own definition of the class's
+        // structure: one u32.
+        let raw: FILE_ALIGNMENT_INFO = unsafe { self.query_info(FileAlignmentInfo) }?;
+        Ok(AlignmentInfo {
+            requirement_mask: raw.AlignmentRequirement,
+        })
+    }
+
+    /// The remote protocol the file is reached through -- for a file on a share,
+    /// SMB and its version and capabilities -- read through the handle with
+    /// `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`.
+    ///
+    /// Synchronous and issues no overlapped I/O, so it is safe while the endpoint
+    /// has operations in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error `GetFileInformationByHandleEx` reports. Measured: a file
+    /// on a local volume is refused with `ERROR_INVALID_PARAMETER`, so an error is
+    /// how a local file answers, not a failure to tell.
+    pub fn remote_protocol_info(&self) -> io::Result<RemoteProtocolInfo> {
+        // SAFETY: FILE_REMOTE_PROTOCOL_INFO is windows-sys' own definition of the
+        // class's structure, and every field, union members included, is integers.
+        let raw: FILE_REMOTE_PROTOCOL_INFO = unsafe { self.query_info(FileRemoteProtocolInfo) }?;
+        Ok(remote_protocol_info_from(&raw))
+    }
+}

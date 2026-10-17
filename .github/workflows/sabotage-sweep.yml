@@ -124,7 +124,7 @@ jobs:
         run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -GitHubOutput "${env:GITHUB_OUTPUT}"
 
   sweep:
-    name: sweep ${{ matrix.crate }} ${{ matrix.shard }}/${{ matrix.shards }}
+    name: sweep ${{ matrix.label }} ${{ matrix.shard }}/${{ matrix.shards }}
     needs: plan
     runs-on: windows-latest
     # Sharded by crate AND within each crate, so the wall clock is the longest
@@ -186,7 +186,7 @@ jobs:
           workspaces: '. -> .scratch/sabotage/target'
           # Every shard is a separate job building a different slice, so they
           # must not share a key.
-          key: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+          key: sabotage-${{ matrix.label }}-${{ matrix.shard }}
       # Unconditional. A dispatch that named one manifest has already been
       # resolved by `plan`, which emitted jobs for that manifest alone, so there
       # is nothing left for a step-level `if` to decide. The pair of conditional
@@ -194,7 +194,7 @@ jobs:
       # the `endsWith` test did not match -- and a job whose every step is
       # skipped is a job that succeeds, so the run went green having swept
       # nothing.
-      - name: Sweep ${{ matrix.crate }}
+      - name: Sweep ${{ matrix.label }}
         shell: pwsh
         # Below the job's own bound, so a sweep that stalls fails THIS step and
         # the transcript upload below still runs. Hitting the job's bound instead
@@ -206,18 +206,18 @@ jobs:
           # Same rule as the planner step above. `inputs.name` is the value an
           # attacker chooses, and the matrix values travel the same way rather
           # than asking a reader to work out which of them is safe to splice.
-          SWEEP_CRATE: ${{ matrix.crate }}
+          SWEEP_MANIFEST: ${{ matrix.manifest }}
           SWEEP_SHARD: ${{ matrix.shard }}
           SWEEP_SHARDS: ${{ matrix.shards }}
           SWEEP_NAME: ${{ inputs.name || '*' }}
-        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceLaunches
+        run: ./tools/run-sabotage.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceLaunches
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+          name: sabotage-${{ matrix.label }}-${{ matrix.shard }}
           # The working copy and its target directory live here too and are far
           # too large to upload; only the transcripts are wanted. They are
           # `<name>.txt` plus `.build`, `.err` and `.build.err` siblings, so the

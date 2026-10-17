@@ -5,12 +5,45 @@
 //! but not yet associated with a completion backend. Association is a later,
 //! consuming transition; this module models only ownership and the provenance
 //! that must hold before an endpoint may be trusted for safe completion routing.
+//!
+//! An endpoint may share its handle with [`EndpointObserver`]s, which keep it
+//! open but can never become a second endpoint. See [DESIGN-NOTES.md] ->
+//! "observers share the handle; only the endpoint does I/O".
+//!
+//! [DESIGN-NOTES.md]: https://docs.rs/crate/windows-overlapped-io-sys/latest/source/DESIGN-NOTES.md
 
 use std::fs::OpenOptions;
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle, RawHandle};
 use std::path::Path;
+
+use win_shared_os_owned_handle::SharedHandle;
+
+mod file_type;
+
+pub use self::file_type::FileType;
+
+#[cfg(feature = "fs")]
+mod final_path;
+
+#[cfg(feature = "fs")]
+mod query;
+
+#[cfg(feature = "fs")]
+mod volume_info;
+
+#[cfg(feature = "fs")]
+pub use self::final_path::{PathForm, VolumeName};
+
+#[cfg(feature = "fs")]
+pub use self::query::{
+    AlignmentInfo, BasicInfo, FileId, FileTime, RemoteProtocolInfo, Smb2Info, StandardInfo,
+    StorageInfo,
+};
+
+#[cfg(feature = "fs")]
+pub use self::volume_info::{FileSystemFlags, VolumeInfo};
 
 /// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
@@ -58,25 +91,23 @@ pub struct NotificationModes {
     /// success, or that returns `ERROR_IO_PENDING` from an asynchronous call.
     ///
     /// Independent of the completion port: it concerns the handle's internal
-    /// event, which completion-port-driven code does not wait on. An event
-    /// supplied explicitly in the `OVERLAPPED` is still signalled.
-    ///
-    /// **Do not set this on an endpoint destined for
-    /// [`crate::BlockingEndpoint`]**, which waits on exactly that internal
-    /// event: suppressing it leaves the wait with nothing to wake it.
+    /// event, which no backend in this crate waits on. An event supplied
+    /// explicitly in the `OVERLAPPED` is still signalled, which is what
+    /// [`crate::BlockingEndpoint`] waits on.
     pub skip_set_event_on_handle: bool,
 }
 
 /// An overlapped-capable endpoint that has not yet been associated with a
 /// completion backend.
 ///
-/// The endpoint owns its handle and closes it on drop. It is intentionally not
-/// `Clone`: a second owner could route completions through a duplicate handle
-/// and break the single-association invariant that the completion backends rely
-/// on.
+/// The endpoint is intentionally not `Clone`: a second endpoint over the same
+/// handle could route completions through it and break the single-association
+/// invariant that the completion backends rely on. It may share its handle with
+/// [`EndpointObserver`]s, which cannot issue I/O; the handle closes when the
+/// last of the endpoint, the backend it moves into, and its observers drops.
 #[derive(Debug)]
 pub struct UnassociatedEndpoint {
-    handle: OwnedHandle,
+    handle: SharedHandle,
     /// What [`UnassociatedEndpoint::set_notification_modes`] has established on
     /// the handle. Carried with the endpoint, and onward into association,
     /// because the submission seam has to answer "will a completion packet
@@ -141,8 +172,19 @@ impl UnassociatedEndpoint {
     #[must_use]
     pub unsafe fn assume_overlapped(handle: OwnedHandle) -> Self {
         Self {
-            handle,
+            handle: SharedHandle::new(handle),
             modes: NotificationModes::default(),
+        }
+    }
+
+    /// A new observer of this endpoint's handle.
+    ///
+    /// The observer keeps the handle open after this endpoint, or the backend it
+    /// moves into, is gone.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        EndpointObserver {
+            handle: self.handle.clone(),
         }
     }
 
@@ -161,15 +203,36 @@ impl UnassociatedEndpoint {
         self.modes
     }
 
-    /// Consume the endpoint and recover the owned handle.
+    /// Consume the endpoint and recover the owned handle, if no observer still
+    /// holds it.
     ///
     /// This abandons the overlapped-endpoint invariants; the recovered handle is
     /// an ordinary [`OwnedHandle`] again. Any notification mode set on it stays
     /// set -- Win32 offers no way to clear one -- so a handle rewrapped later
     /// must re-declare it.
-    #[must_use]
-    pub fn into_handle(self) -> OwnedHandle {
+    ///
+    /// # Errors
+    ///
+    /// While any [`EndpointObserver`] of this endpoint is alive, returns the
+    /// endpoint unchanged, notification modes included.
+    pub fn into_handle(self) -> Result<OwnedHandle, Self> {
+        let modes = self.modes;
         self.handle
+            .try_into_owned()
+            .map_err(|handle| Self { handle, modes })
+    }
+
+    /// Consume the endpoint into the handle a completion backend holds.
+    ///
+    /// For backends outside this crate, such as `windows-threadpool-sys`'
+    /// `ThreadpoolIo`. Observers already taken stay valid. Read
+    /// [`notification_modes`](Self::notification_modes) first if the backend
+    /// needs them: they are not carried across.
+    #[must_use]
+    pub fn into_endpoint_handle(self) -> EndpointHandle {
+        EndpointHandle {
+            handle: self.handle,
+        }
     }
 
     /// Set this endpoint's completion-notification modes before it is
@@ -204,8 +267,6 @@ impl UnassociatedEndpoint {
     /// reports `ERROR_INVALID_PARAMETER` for a handle whose device does not
     /// support the requested mode.
     pub fn set_notification_modes(&mut self, modes: NotificationModes) -> io::Result<()> {
-        use std::os::windows::io::AsRawHandle;
-
         let mut flags = 0_u8;
         if modes.skip_completion_port_on_success {
             flags |= notification_flags::SKIP_COMPLETION_PORT_ON_SUCCESS;
@@ -230,6 +291,160 @@ impl UnassociatedEndpoint {
         self.modes.skip_completion_port_on_success |= modes.skip_completion_port_on_success;
         self.modes.skip_set_event_on_handle |= modes.skip_set_event_on_handle;
         Ok(())
+    }
+}
+
+/// A query-only holder of an endpoint's handle.
+///
+/// An observer keeps the handle open and can never become a second endpoint: it
+/// implements neither `AsHandle` nor `AsRawHandle`, so safe code holding one
+/// cannot borrow, duplicate, or wrap the handle, and so cannot reach any
+/// constructor that associates it or issues I/O through it.
+///
+/// What it offers instead is a fixed set of safe queries -- [`file_type`](Self::file_type)
+/// in every configuration; `standard_info` and its `file_len` shortcut,
+/// `basic_info`, `file_id`, `storage_info`, `alignment_info`,
+/// `remote_protocol_info`, `final_path` and `volume_info`, behind
+/// the `fs` feature -- and
+/// an `unsafe` borrow ([`handle`](Self::handle)) for any other query.
+///
+/// Obtained from an endpoint, or from the backend that endpoint moved into, with
+/// `observer()`. Cloning shares the same handle.
+///
+/// Neither trait is implemented, so neither borrow compiles:
+///
+/// ```compile_fail,E0599
+/// # use windows_overlapped_io_sys::EndpointObserver;
+/// use std::os::windows::io::AsHandle;
+/// fn borrow(observer: &EndpointObserver) {
+///     let _ = observer.as_handle();
+/// }
+/// ```
+///
+/// ```compile_fail,E0599
+/// # use windows_overlapped_io_sys::EndpointObserver;
+/// use std::os::windows::io::AsRawHandle;
+/// fn borrow(observer: &EndpointObserver) {
+///     let _ = observer.as_raw_handle();
+/// }
+/// ```
+///
+/// Nor does it pass for an endpoint, to a completion port or the blocking
+/// backend (`windows-threadpool-sys`' `ThreadpoolIo::new` is checked there):
+///
+/// ```compile_fail,E0308
+/// # use windows_overlapped_io_sys::{CompletionPort, EndpointObserver};
+/// fn associate(port: &CompletionPort, observer: EndpointObserver) {
+///     let _ = port.associate(observer, 0);
+/// }
+/// ```
+///
+/// ```compile_fail,E0308
+/// # use windows_overlapped_io_sys::{BlockingEndpoint, EndpointObserver};
+/// fn block(observer: EndpointObserver) {
+///     let _ = BlockingEndpoint::new(observer);
+/// }
+/// ```
+///
+/// What those reject is the observer: the same borrows compile on a backend's
+/// [`EndpointHandle`], and the same calls with an endpoint.
+///
+/// ```
+/// # use windows_overlapped_io_sys::{
+/// #     BlockingEndpoint, CompletionPort, EndpointHandle, UnassociatedEndpoint,
+/// # };
+/// use std::os::windows::io::{AsHandle, AsRawHandle};
+/// fn borrow(held: &EndpointHandle) {
+///     let _ = held.as_handle();
+///     let _ = held.as_raw_handle();
+/// }
+/// fn associate(port: &CompletionPort, endpoint: UnassociatedEndpoint) {
+///     let _ = port.associate(endpoint, 0);
+/// }
+/// fn block(endpoint: UnassociatedEndpoint) {
+///     let _ = BlockingEndpoint::new(endpoint);
+/// }
+/// ```
+// A query added here belongs in `test_util::OBSERVER_QUERIES` too, which every backend's tests issue.
+#[derive(Clone, Debug)]
+pub struct EndpointObserver {
+    handle: SharedHandle,
+}
+
+impl EndpointObserver {
+    /// Whether `self` and `other` observe the same handle.
+    #[must_use]
+    pub fn same_handle(&self, other: &Self) -> bool {
+        self.handle.same_handle(&other.handle)
+    }
+
+    /// The file's current length in bytes: [`standard_info`](Self::standard_info)'s
+    /// `len`.
+    ///
+    /// # Errors
+    ///
+    /// As [`standard_info`](Self::standard_info).
+    #[cfg(feature = "fs")]
+    pub fn file_len(&self) -> io::Result<u64> {
+        Ok(self.standard_info()?.len)
+    }
+
+    /// Borrow the handle for a native query this type does not offer.
+    ///
+    /// # Safety
+    ///
+    /// The handle belongs to an endpoint, which alone may issue overlapped I/O
+    /// through it. The caller guarantees that, through this borrow, it:
+    ///
+    /// - issues no overlapped I/O, nor any other request that could complete
+    ///   through the handle's event or a completion port;
+    /// - associates the handle with no completion port or thread-pool I/O
+    ///   object, and sets no completion-notification mode on it;
+    /// - neither duplicates the handle nor closes it.
+    ///
+    /// Synchronous queries of the handle's state are what the borrow is for.
+    #[must_use]
+    pub unsafe fn handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raw_for_test(&self) -> RawHandle {
+        self.handle.as_raw_handle()
+    }
+}
+
+/// An endpoint's handle, as held by a completion backend.
+///
+/// Obtained only by consuming an endpoint
+/// ([`UnassociatedEndpoint::into_endpoint_handle`]) and not `Clone`, so it
+/// carries the endpoint's one-backend guarantee with it. It lends the handle
+/// for native calls and hands out observers; it never yields an owned handle.
+/// The handle closes when this and every observer have dropped.
+#[derive(Debug)]
+pub struct EndpointHandle {
+    handle: SharedHandle,
+}
+
+impl EndpointHandle {
+    /// A new observer of this handle.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        EndpointObserver {
+            handle: self.handle.clone(),
+        }
+    }
+}
+
+impl AsHandle for EndpointHandle {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+impl AsRawHandle for EndpointHandle {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.handle.as_raw_handle()
     }
 }
 

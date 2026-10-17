@@ -6,6 +6,7 @@ members = [
 	"crates/io-buffers",
 	"crates/win-error-codes",
 	"crates/win-job-launcher",
+	"crates/win-multi-file-tail-watcher",
 	"crates/win-numa-sys",
 	"crates/win-durable-ioring",
 	"crates/win-shared-os-owned-handle",

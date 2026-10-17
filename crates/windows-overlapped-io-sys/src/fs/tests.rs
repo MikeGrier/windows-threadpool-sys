@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 use crate::{
-    BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PAGE_SIZE, PageBuffers,
-    UnassociatedEndpoint,
+    BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PageBuffers, UnassociatedEndpoint,
+    page_size,
 };
 
 #[test]
@@ -365,7 +365,7 @@ fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
     // losing both the alignment and a copy.
     use crate::IoBuf;
 
-    let content = vec![0xAB_u8; PAGE_SIZE];
+    let content = vec![0xAB_u8; page_size()];
     let port = CompletionPort::new(0).expect("create port");
     let (endpoint, path) = iocp_endpoint(&port, &content, "pages");
 
@@ -379,14 +379,210 @@ fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (returned, result) = token.claim(&completion).expect("token matches");
 
-    assert_eq!(result.expect("read result"), PAGE_SIZE);
+    assert_eq!(result.expect("read result"), page_size());
     assert_eq!(returned.stable_ptr(), expected_ptr);
-    assert_eq!(returned.stable_ptr().addr() % PAGE_SIZE, 0);
+    assert_eq!(returned.stable_ptr().addr() % page_size(), 0);
     assert_eq!(returned.as_bytes(), &content[..]);
 
     drop(endpoint);
     drop(port);
     let _ = std::fs::remove_file(&path);
+}
+
+// --- page size and buffer alignment, asked rather than assumed (M17.5) ---
+
+mod alignment {
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+    use super::super::buffer_alignment;
+    use crate::{
+        AlignmentInfo, BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PageBuffers,
+        UnassociatedEndpoint, page_size,
+    };
+
+    fn mask(requirement_mask: u32) -> AlignmentInfo {
+        AlignmentInfo { requirement_mask }
+    }
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "windows-overlapped-io-sys-fs-align-{tag}-{}.tmp",
+            std::process::id()
+        ))
+    }
+
+    fn patterned(mut buffers: PageBuffers) -> PageBuffers {
+        for (i, byte) in buffers.as_bytes_mut().iter_mut().enumerate() {
+            *byte = (i % 241) as u8;
+        }
+        buffers
+    }
+
+    #[test]
+    fn the_page_size_is_the_operating_systems() {
+        let mut info = SYSTEM_INFO::default();
+        // SAFETY: a live local of the right type; the call only writes it.
+        unsafe { GetSystemInfo(&raw mut info) };
+        assert_eq!(page_size(), info.dwPageSize as usize);
+        assert!(page_size().is_power_of_two());
+        assert_eq!(page_size(), page_size(), "kept, not re-asked differently");
+    }
+
+    #[test]
+    fn the_buffer_alignment_is_the_larger_of_the_page_and_the_device() {
+        for (page, requirement, expected) in [
+            (4096, 0, 4096),
+            (4096, 1, 4096),
+            (4096, 0x1FF, 4096),
+            (4096, 0xFFF, 4096),
+            (4096, 0x1FFF, 8192),
+            (4096, 0x3FFF, 16_384),
+            (4096, 0xF_FFFF, 1 << 20),
+            (65_536, 0x1FFF, 65_536),
+            (65_536, 0x1_FFFF, 131_072),
+        ] {
+            assert_eq!(
+                buffer_alignment(page, mask(requirement)),
+                Some(expected),
+                "page {page}, mask {requirement:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mask_not_of_the_documented_form_rounds_up_to_one_that_clears_every_bit() {
+        for (requirement, expected) in [(0x100_u32, 4096), (0x1000, 8192), (0x2001, 16_384)] {
+            let align = buffer_alignment(4096, mask(requirement)).expect("fits");
+            assert_eq!(align, expected, "mask {requirement:#x}");
+            assert!(mask(requirement).is_aligned(align), "mask {requirement:#x}");
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_widest_mask_still_fits_a_64_bit_target() {
+        assert_eq!(buffer_alignment(4096, mask(u32::MAX)), Some(1 << 32));
+    }
+
+    #[test]
+    fn new_buffers_are_page_aligned() {
+        for pages in [1, 2, 7] {
+            let buffers = PageBuffers::new(pages).expect("page buffers");
+            assert_eq!(buffers.alignment(), page_size());
+            assert_eq!(buffers.as_bytes().as_ptr().addr() % page_size(), 0);
+            assert_eq!(buffers.len(), pages * page_size());
+        }
+    }
+
+    #[test]
+    fn aligned_buffers_meet_the_alignment_they_were_asked_for() {
+        for requirement in [0_u32, 1, 0x1FF, 0xFFF, 0x1FFF, 0x3FFF, 0xF_FFFF] {
+            let info = mask(requirement);
+            let buffers = PageBuffers::with_alignment(3, info).expect("with_alignment");
+            let base = buffers.as_bytes().as_ptr().addr();
+
+            assert!(buffers.alignment() >= page_size(), "mask {requirement:#x}");
+            assert_eq!(
+                Some(buffers.alignment()),
+                buffer_alignment(page_size(), info),
+                "mask {requirement:#x}"
+            );
+            assert_eq!(base % buffers.alignment(), 0, "mask {requirement:#x}");
+            assert!(info.is_aligned(base), "mask {requirement:#x}");
+            assert_eq!(
+                buffers.len(),
+                3 * page_size(),
+                "the size is pages, not alignment"
+            );
+            assert!(buffers.as_bytes().iter().all(|&b| b == 0), "zeroed");
+        }
+    }
+
+    #[test]
+    fn every_segment_is_page_aligned_and_the_first_meets_the_device() {
+        let info = mask(0x3FFF);
+        let buffers = PageBuffers::with_alignment(5, info).expect("with_alignment");
+        let segments = buffers.segment_array();
+
+        assert_eq!(segments.len(), 6, "five pages and the terminator");
+        // SAFETY: reading the Buffer member of elements this array was built with.
+        let addresses: Vec<usize> = segments[..5]
+            .iter()
+            .map(|segment| unsafe { segment.Buffer }.addr())
+            .collect();
+        assert!(info.is_aligned(addresses[0]));
+        for (i, address) in addresses.iter().enumerate() {
+            assert_eq!(address % page_size(), 0, "segment {i}");
+            assert_eq!(*address, addresses[0] + i * page_size(), "segment {i}");
+        }
+        // SAFETY: as above, the terminator.
+        assert_eq!(unsafe { segments[5].Alignment }, 0);
+    }
+
+    #[test]
+    fn buffers_aligned_above_a_page_round_trip_through_blocking_scatter_gather() {
+        let path = temp_path("blocking");
+        std::fs::write(&path, b"").expect("create file");
+        let mut endpoint = BlockingEndpoint::new(
+            UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
+                .expect("open endpoint"),
+        )
+        .expect("blocking endpoint");
+
+        let above_a_page = mask(0x3FFF);
+        let source = patterned(PageBuffers::with_alignment(4, above_a_page).expect("source"));
+        let written = endpoint.write_gather(&source, 0).expect("write_gather");
+        assert_eq!(written, source.len());
+
+        let mut destination = PageBuffers::with_alignment(4, above_a_page).expect("destination");
+        let read = endpoint
+            .read_scatter(&mut destination, 0)
+            .expect("read_scatter");
+        assert_eq!(read, source.len());
+        assert_eq!(destination.as_bytes(), source.as_bytes());
+
+        drop(endpoint);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn buffers_aligned_as_the_endpoint_asks_round_trip_through_iocp_scatter_gather() {
+        let path = temp_path("iocp");
+        std::fs::write(&path, b"").expect("create file");
+        let port = CompletionPort::new(0).expect("create port");
+        let endpoint = UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
+            .expect("open endpoint");
+        let asked = endpoint
+            .observer()
+            .alignment_info()
+            .expect("alignment_info");
+        let endpoint = port.associate(endpoint, 0).expect("associate");
+
+        let source = patterned(PageBuffers::with_alignment(2, asked).expect("source"));
+        let expected = source.as_bytes().to_vec();
+        let token = endpoint
+            .write_gather(source, 0)
+            .expect("submit write_gather")
+            .expect_pending("not in skip-on-success mode");
+        let completion = port.get(5_000).expect("get").expect("write completion");
+        let (returned, result) = token.claim(&completion).expect("token matches");
+        assert_eq!(result.expect("write result"), returned.len());
+
+        let destination = PageBuffers::with_alignment(2, asked).expect("destination");
+        let token = endpoint
+            .read_scatter(destination, 0)
+            .expect("submit read_scatter")
+            .expect_pending("not in skip-on-success mode");
+        let completion = port.get(5_000).expect("get").expect("read completion");
+        let (buffers, result) = token.claim(&completion).expect("token matches");
+        assert_eq!(result.expect("read result"), buffers.len());
+        assert_eq!(buffers.as_bytes(), expected.as_slice());
+        assert_eq!(port.outstanding(), 0);
+
+        drop(endpoint);
+        drop(port);
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 // `PageBuffers` holds an `io_buffers::AlignedBuf` (IB-2+.2); these pin what it promises on top of
@@ -398,8 +594,8 @@ fn page_buffers_report_their_pages_and_length() {
     for pages in [1_usize, 2, 3, 7, 16] {
         let buffers = PageBuffers::new(pages).expect("page buffers");
         assert_eq!(buffers.pages(), pages);
-        assert_eq!(buffers.len(), pages * PAGE_SIZE);
-        assert_eq!(buffers.as_bytes().len(), pages * PAGE_SIZE);
+        assert_eq!(buffers.len(), pages * page_size());
+        assert_eq!(buffers.as_bytes().len(), pages * page_size());
         assert!(!buffers.is_empty());
     }
 }
@@ -409,7 +605,11 @@ fn page_buffers_are_zeroed_and_page_aligned_for_every_page_count() {
     use crate::IoBuf;
     for pages in [1_usize, 2, 3, 16, 33] {
         let buffers = PageBuffers::new(pages).expect("page buffers");
-        assert_eq!(buffers.stable_ptr().addr() % PAGE_SIZE, 0, "{pages} pages");
+        assert_eq!(
+            buffers.stable_ptr().addr() % page_size(),
+            0,
+            "{pages} pages"
+        );
         assert!(
             buffers.as_bytes().iter().all(|&byte| byte == 0),
             "{pages} pages"
@@ -428,8 +628,12 @@ fn the_segment_array_names_each_page_in_order_and_ends_with_a_terminator() {
         for (index, segment) in segments[..pages].iter().enumerate() {
             // SAFETY: every element before the terminator was written through `Buffer`.
             let address = unsafe { segment.Buffer }.addr();
-            assert_eq!(address, base + index * PAGE_SIZE, "page {index} of {pages}");
-            assert_eq!(address % PAGE_SIZE, 0);
+            assert_eq!(
+                address,
+                base + index * page_size(),
+                "page {index} of {pages}"
+            );
+            assert_eq!(address % page_size(), 0);
         }
         // SAFETY: the terminator is a zeroed element, read through `Alignment`.
         assert_eq!(unsafe { segments[pages].Alignment }, 0);
@@ -441,14 +645,14 @@ fn bytes_written_through_the_mutable_view_are_read_through_every_other_view() {
     use crate::{IoBuf, IoBufMut};
     let mut buffers = PageBuffers::new(2).expect("page buffers");
     buffers.as_bytes_mut()[0] = 0xAB;
-    buffers.as_bytes_mut()[PAGE_SIZE + 5] = 0xCD;
+    buffers.as_bytes_mut()[page_size() + 5] = 0xCD;
     assert_eq!(buffers.as_bytes()[0], 0xAB);
-    assert_eq!(buffers.as_bytes()[PAGE_SIZE + 5], 0xCD);
+    assert_eq!(buffers.as_bytes()[page_size() + 5], 0xCD);
     assert_eq!(buffers.as_bytes()[1], 0, "bytes not written are still zero");
 
     let shared = buffers.stable_ptr();
     assert_eq!(buffers.stable_mut_ptr().cast_const(), shared);
-    assert_eq!(buffers.bytes_len(), 2 * PAGE_SIZE);
+    assert_eq!(buffers.bytes_len(), 2 * page_size());
     // SAFETY: the pointer is this buffer's own allocation of `bytes_len` initialised bytes.
     assert_eq!(unsafe { *shared }, 0xAB);
 }
@@ -471,7 +675,7 @@ fn zero_pages_is_refused_as_invalid_input() {
 
 #[test]
 fn a_page_count_whose_length_overflows_is_refused_as_invalid_input() {
-    let error = PageBuffers::new(usize::MAX / PAGE_SIZE + 1).expect_err("the length overflows");
+    let error = PageBuffers::new(usize::MAX / page_size() + 1).expect_err("the length overflows");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(error.to_string().contains("overflow"), "{error}");
 }
@@ -481,7 +685,7 @@ fn a_page_count_the_machine_cannot_supply_is_refused_as_out_of_memory() {
     // The count is the caller's, so this is a failure a caller can meet and recover from by asking
     // for fewer pages: not a panic, and not an abort. The length does not overflow, but no
     // allocation could be that large.
-    let error = PageBuffers::new(usize::MAX / PAGE_SIZE).expect_err("no machine has this");
+    let error = PageBuffers::new(usize::MAX / page_size()).expect_err("no machine has this");
     assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
 }
 

@@ -1,0 +1,31 @@
+# TW-2.8 capture: the bare GetFileInformationByHandleEx(FileStandardInfo) call, and it and file_len across threads.
+# test: bench_the_query_alone_and_across_threads in src/watcher/engine/bench.rs, 7 timed repetitions after one untimed, thread start excluded
+# command: cargo test --release -p win-multi-file-tail-watcher --lib bench_the_query -- --ignored --nocapture --test-threads=1
+# base commit: 59c03a67 plus this test
+# date: 2026-10-15 21:21:28 -04:00
+# cpu: INTEL(R) XEON(R) PLATINUM 8573C, 8 cores, 16 logical
+# os: Microsoft Windows 11 Enterprise 10.0.26300
+BENCH pass=query_bare_call n=20000 files=shared threads=1 wall_us_min=99225 wall_us_median=101426 wall_us_max=102833 ns_per_median=5071
+BENCH pass=query_bare_call n=20000 files=shared threads=2 wall_us_min=58119 wall_us_median=61799 wall_us_max=64011 ns_per_median=3090
+BENCH pass=query_bare_call n=20000 files=shared threads=4 wall_us_min=28577 wall_us_median=28799 wall_us_max=30662 ns_per_median=1440
+BENCH pass=query_bare_call n=20000 files=shared threads=8 wall_us_min=14871 wall_us_median=15634 wall_us_max=16544 ns_per_median=782
+BENCH pass=query_bare_call n=20000 files=shared threads=12 wall_us_min=11255 wall_us_median=11375 wall_us_max=11877 ns_per_median=569
+BENCH pass=query_bare_call n=20000 files=shared threads=16 wall_us_min=11886 wall_us_median=13211 wall_us_max=13848 ns_per_median=661
+BENCH pass=query_file_len n=20000 files=shared threads=1 wall_us_min=87271 wall_us_median=94273 wall_us_max=100722 ns_per_median=4714
+BENCH pass=query_file_len n=20000 files=shared threads=2 wall_us_min=43921 wall_us_median=45497 wall_us_max=48017 ns_per_median=2275
+BENCH pass=query_file_len n=20000 files=shared threads=4 wall_us_min=21898 wall_us_median=22511 wall_us_max=24628 ns_per_median=1126
+BENCH pass=query_file_len n=20000 files=shared threads=8 wall_us_min=11617 wall_us_median=12033 wall_us_max=12522 ns_per_median=602
+BENCH pass=query_file_len n=20000 files=shared threads=12 wall_us_min=9778 wall_us_median=10021 wall_us_max=10150 ns_per_median=501
+BENCH pass=query_file_len n=20000 files=shared threads=16 wall_us_min=8213 wall_us_median=8288 wall_us_max=8938 ns_per_median=414
+BENCH pass=query_bare_call n=20000 files=distinct threads=1 wall_us_min=89150 wall_us_median=92391 wall_us_max=94844 ns_per_median=4620
+BENCH pass=query_bare_call n=20000 files=distinct threads=2 wall_us_min=51223 wall_us_median=51302 wall_us_max=54390 ns_per_median=2565
+BENCH pass=query_bare_call n=20000 files=distinct threads=4 wall_us_min=26842 wall_us_median=27278 wall_us_max=27648 ns_per_median=1364
+BENCH pass=query_bare_call n=20000 files=distinct threads=8 wall_us_min=16774 wall_us_median=17010 wall_us_max=17600 ns_per_median=850
+BENCH pass=query_bare_call n=20000 files=distinct threads=12 wall_us_min=12128 wall_us_median=12319 wall_us_max=12663 ns_per_median=616
+BENCH pass=query_bare_call n=20000 files=distinct threads=16 wall_us_min=10517 wall_us_median=12166 wall_us_max=14174 ns_per_median=608
+BENCH pass=query_file_len n=20000 files=distinct threads=1 wall_us_min=90037 wall_us_median=91228 wall_us_max=92094 ns_per_median=4561
+BENCH pass=query_file_len n=20000 files=distinct threads=2 wall_us_min=50002 wall_us_median=51098 wall_us_max=51897 ns_per_median=2555
+BENCH pass=query_file_len n=20000 files=distinct threads=4 wall_us_min=26654 wall_us_median=26808 wall_us_max=27385 ns_per_median=1340
+BENCH pass=query_file_len n=20000 files=distinct threads=8 wall_us_min=16340 wall_us_median=16845 wall_us_max=17326 ns_per_median=842
+BENCH pass=query_file_len n=20000 files=distinct threads=12 wall_us_min=11684 wall_us_median=12014 wall_us_max=12416 ns_per_median=601
+BENCH pass=query_file_len n=20000 files=distinct threads=16 wall_us_min=9517 wall_us_median=10389 wall_us_max=13990 ns_per_median=519

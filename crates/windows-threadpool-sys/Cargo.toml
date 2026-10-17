@@ -100,6 +100,13 @@ features = [
 
 # The TP_IO tests issue real overlapped I/O against a named pipe, which needs
 # binding surface the published crate itself does not use.
+[dev-dependencies.windows-overlapped-io-sys]
+version = "0.2.0"
+path = "../windows-overlapped-io-sys"
+# For the observer's queries, which the TP_IO tests issue through an observer:
+# `fs` holds them, and `test-util` lists every one (M17.10).
+features = ["fs", "test-util"]
+
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

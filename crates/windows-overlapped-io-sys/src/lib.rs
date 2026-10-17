@@ -56,6 +56,9 @@ mod endpoint;
 #[cfg(all(windows, feature = "fs"))]
 mod fs;
 
+#[cfg(all(windows, feature = "fs", any(test, feature = "test-util")))]
+pub mod test_util;
+
 #[cfg(windows)]
 mod identity;
 
@@ -88,10 +91,18 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use device::DeviceIoControlIo;
 
 #[cfg(windows)]
-pub use endpoint::{NotificationModes, UnassociatedEndpoint};
+pub use endpoint::{
+    EndpointHandle, EndpointObserver, FileType, NotificationModes, UnassociatedEndpoint,
+};
 
 #[cfg(all(windows, feature = "fs"))]
-pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
+pub use endpoint::{
+    AlignmentInfo, BasicInfo, FileId, FileSystemFlags, FileTime, PathForm, RemoteProtocolInfo,
+    Smb2Info, StandardInfo, StorageInfo, VolumeInfo, VolumeName,
+};
+
+#[cfg(all(windows, feature = "fs"))]
+pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PageBuffers, ScatterGatherIo, page_size};
 
 #[cfg(windows)]
 pub use identity::{OperationId, OperationRegistry};

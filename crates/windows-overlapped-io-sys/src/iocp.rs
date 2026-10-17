@@ -25,7 +25,7 @@ use windows_sys::Win32::System::IO::{
 };
 
 use crate::identity::{OperationId, OperationRegistry};
-use crate::{Operation, OperationState, UnassociatedEndpoint};
+use crate::{EndpointHandle, EndpointObserver, Operation, OperationState, UnassociatedEndpoint};
 
 /// Bound on each `GetQueuedCompletionStatus` wait inside [`CompletionPort::run_down`].
 ///
@@ -142,7 +142,7 @@ impl CompletionPort {
         // Read before the handle is taken out, so the mode travels with the
         // endpoint into association rather than being lost at the boundary.
         let modes = endpoint.notification_modes();
-        let handle = endpoint.into_handle();
+        let handle = endpoint.into_endpoint_handle();
         let outstanding = Arc::new(AtomicUsize::new(0));
         {
             // Checked and reserved under one lock acquisition, so no other
@@ -491,13 +491,14 @@ impl Drop for CompletionPort {
 
 /// An overlapped endpoint bound to exactly one [`CompletionPort`].
 ///
-/// The endpoint owns its handle and borrows the port it is associated with, so
+/// The endpoint holds its handle and borrows the port it is associated with, so
 /// the port cannot be dropped while any endpoint still routes completions to it.
-/// It is intentionally not `Clone`.
+/// It is intentionally not `Clone`, and is the only thing that submits through
+/// the handle; [`EndpointObserver`]s may keep the handle open after it drops.
 #[derive(Debug)]
 pub struct AssociatedEndpoint<'port> {
     port: &'port CompletionPort,
-    handle: OwnedHandle,
+    handle: EndpointHandle,
     key: usize,
     modes: crate::NotificationModes,
     /// This endpoint's own outstanding-operation count (M1, PR #20 review
@@ -513,6 +514,12 @@ impl<'port> AssociatedEndpoint<'port> {
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+
+    /// A new observer of this endpoint's handle.
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        self.handle.observer()
     }
 
     /// The completion key packets from this endpoint are tagged with.

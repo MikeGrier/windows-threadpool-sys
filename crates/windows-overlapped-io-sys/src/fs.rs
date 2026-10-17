@@ -10,19 +10,21 @@
 use std::fmt;
 use std::io;
 use std::os::windows::io::AsRawHandle;
+use std::sync::OnceLock;
 
-use io_buffers::AlignedBuf;
+use io_buffers::{AlignedBuf, AlignedBufError};
 
 use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SEGMENT_ELEMENT, ReadFile, ReadFileScatter, WriteFile, WriteFileGather,
 };
 use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
 use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
-    OperationId, Started, Submitted,
+    AlignmentInfo, AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued,
+    Operation, OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
@@ -406,34 +408,53 @@ impl<B: IoBuf> FileIo<B> {
     }
 }
 
-/// The memory page size assumed by the scatter/gather adapters.
+/// The operating system's memory page size: the size, and the least alignment,
+/// of each scatter/gather segment.
 ///
-/// A fixed 4 KiB, matching every Windows target this crate supports. Buffers are
-/// aligned to it and I/O lengths are multiples of it, which also satisfies the
-/// sector alignment `FILE_FLAG_NO_BUFFERING` requires.
-pub const PAGE_SIZE: usize = 4096;
+/// Asked of the operating system (`GetSystemInfo`) on first use and kept, since
+/// it cannot change while the process runs.
+#[must_use]
+pub fn page_size() -> usize {
+    static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+    *PAGE_SIZE.get_or_init(|| {
+        let mut info = SYSTEM_INFO::default();
+        // SAFETY: `info` is a live local of the right type; the call only writes it.
+        unsafe { GetSystemInfo(&raw mut info) };
+        info.dwPageSize as usize
+    })
+}
 
-// `AlignedBuf` refuses an alignment that is not a power of two, and `PageBuffers::new` reports every
-// refusal as out of memory, so this is checked where it cannot be mistaken for one.
-const _: () = assert!(PAGE_SIZE.is_power_of_two());
+/// The base alignment for buffers a device reporting `alignment` reads and
+/// writes: the larger of `page` and the least power of two that clears every bit
+/// of its mask. `None` when that does not fit a `usize`.
+fn buffer_alignment(page: usize, alignment: AlignmentInfo) -> Option<usize> {
+    let device = (u64::from(alignment.requirement_mask) + 1).next_power_of_two();
+    // Fails only where usize is 32 bits and the mask is u32::MAX; no target tested here has that.
+    usize::try_from(device).ok().map(|device| device.max(page))
+}
 
 /// The Win32 `FILE_FLAG_NO_BUFFERING` flag.
 ///
 /// The scatter/gather adapters require the endpoint be opened with this flag (in
 /// addition to `FILE_FLAG_OVERLAPPED`, which [`crate::UnassociatedEndpoint::open`]
-/// always sets); pass it as that constructor's `extra_flags`.
+/// always sets); pass it as that constructor's `extra_flags`. Unbuffered offsets
+/// and lengths must then be multiples of the volume's sector size
+/// ([`EndpointObserver::storage_info`](crate::EndpointObserver::storage_info)'s
+/// `logical_bytes_per_sector`), or the native call fails.
 pub const FILE_FLAG_NO_BUFFERING: u32 =
     windows_sys::Win32::Storage::FileSystem::FILE_FLAG_NO_BUFFERING;
 
-/// A page-aligned set of memory pages: the buffer form the scatter/gather
-/// adapters read into and write from.
+/// A set of memory pages: the buffer form the scatter/gather adapters read into
+/// and write from.
 ///
-/// It owns one page-aligned allocation of `pages * PAGE_SIZE` bytes and can be
-/// viewed as a byte slice. Its page-aligned segments are what `ReadFileScatter`
-/// and `WriteFileGather` require.
+/// It owns one zeroed allocation of `pages *` [`page_size()`] bytes and can be
+/// viewed as a byte slice. Each page is one `ReadFileScatter` / `WriteFileGather`
+/// segment, aligned to at least a page. [`with_alignment`](Self::with_alignment)
+/// also aligns the allocation's base to a device's reported alignment.
 pub struct PageBuffers {
     buffer: AlignedBuf,
     pages: usize,
+    align: usize,
 }
 
 impl PageBuffers {
@@ -441,25 +462,66 @@ impl PageBuffers {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or `pages * PAGE_SIZE`
-    /// overflows, and [`io::ErrorKind::OutOfMemory`] if the memory cannot be allocated -- too
-    /// large for the machine, or refused by the allocator. The count is the caller's, so a
-    /// caller can recover by asking for fewer pages.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or `pages *`
+    /// [`page_size()`] overflows, and [`io::ErrorKind::OutOfMemory`] if the memory
+    /// cannot be allocated -- too large for the machine, or refused by the
+    /// allocator. The count is the caller's, so a caller can recover by asking for
+    /// fewer pages.
     pub fn new(pages: usize) -> io::Result<Self> {
+        Self::allocate(pages, page_size())
+    }
+
+    /// Allocate `pages` zeroed memory pages whose base meets `alignment` -- a
+    /// device's requirement, from
+    /// [`EndpointObserver::alignment_info`](crate::EndpointObserver::alignment_info)
+    /// -- as well as a page.
+    ///
+    /// A best effort, not a guarantee: the base is aligned to the larger of the
+    /// page size and the least power of two meeting the mask, while later pages
+    /// follow on at page intervals, and user mode controls only virtual
+    /// addresses. A device that still cannot accept the buffer fails the native
+    /// call, and that error is returned there.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new), and [`io::ErrorKind::InvalidInput`] if the alignment
+    /// does not fit an allocation on this target.
+    pub fn with_alignment(pages: usize, alignment: AlignmentInfo) -> io::Result<Self> {
+        let align = buffer_alignment(page_size(), alignment).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the device's alignment does not fit an allocation on this target",
+            )
+        })?;
+        Self::allocate(pages, align)
+    }
+
+    fn allocate(pages: usize, align: usize) -> io::Result<Self> {
         if pages == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "PageBuffers requires at least one page",
             ));
         }
-        let size = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
+        let size = pages.checked_mul(page_size()).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "page buffer size overflow")
         })?;
-        // `PAGE_SIZE` is a power of two, checked where it is defined, so the only refusals left
-        // are of the length.
-        let buffer = AlignedBuf::zeroed(size, PAGE_SIZE)
-            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
-        Ok(Self { buffer, pages })
+        // The alignment is the OS page size or a device's, so a refusal of it is
+        // reported as itself rather than as running out of memory.
+        let buffer = AlignedBuf::zeroed(size, align).map_err(|error| match error {
+            AlignedBufError::InvalidAlignment { .. } => {
+                io::Error::new(io::ErrorKind::InvalidInput, error)
+            }
+            AlignedBufError::TooLarge { .. } | AlignedBufError::AllocationFailed { .. } => {
+                io::Error::new(io::ErrorKind::OutOfMemory, error)
+            }
+            _ => io::Error::other(error),
+        })?;
+        Ok(Self {
+            buffer,
+            pages,
+            align,
+        })
     }
 
     /// The number of pages.
@@ -468,10 +530,17 @@ impl PageBuffers {
         self.pages
     }
 
-    /// The total length in bytes (`pages * PAGE_SIZE`).
+    /// The alignment of the allocation's base, in bytes: the page size, or more
+    /// when [`with_alignment`](Self::with_alignment) was asked for more.
+    #[must_use]
+    pub fn alignment(&self) -> usize {
+        self.align
+    }
+
+    /// The total length in bytes (`pages *` [`page_size()`]).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.pages * PAGE_SIZE
+        self.pages * page_size()
     }
 
     /// Always `false`: a `PageBuffers` holds at least one page.
@@ -494,6 +563,7 @@ impl PageBuffers {
 
     /// Build the `NULL`-terminated `FILE_SEGMENT_ELEMENT` array over these pages.
     fn segment_array(&self) -> Vec<FILE_SEGMENT_ELEMENT> {
+        let page_size = page_size();
         let mut segments = Vec::with_capacity(self.pages + 1);
         for i in 0..self.pages {
             // SAFETY: `i < pages`, so the offset stays within the allocation, and
@@ -501,7 +571,7 @@ impl PageBuffers {
             // the allocation's own, made const by `as_ptr`, so making it mutable
             // again is giving back what it was; the kernel writes through it only
             // for a scatter read, which holds the pages by `&mut`.
-            let page = unsafe { self.buffer.as_ptr().cast_mut().add(i * PAGE_SIZE) };
+            let page = unsafe { self.buffer.as_ptr().cast_mut().add(i * page_size) };
             segments.push(FILE_SEGMENT_ELEMENT {
                 Buffer: page.cast(),
             });
@@ -516,14 +586,15 @@ impl fmt::Debug for PageBuffers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PageBuffers")
             .field("pages", &self.pages)
+            .field("alignment", &self.align)
             .finish_non_exhaustive()
     }
 }
 
-// SAFETY: the bytes live in a page-aligned heap allocation the `AlignedBuf` this
-// holds owns outright, so moving the value moves the pointer and not the bytes,
-// and the page count is fixed at construction. The buffer is zeroed, so all of
-// them are initialized.
+// SAFETY: the bytes live in a heap allocation, aligned to at least a page, that
+// the `AlignedBuf` this holds owns outright, so moving the value moves the
+// pointer and not the bytes, and the page count is fixed at construction. The
+// buffer is zeroed, so all of them are initialized.
 unsafe impl crate::IoBuf for PageBuffers {
     fn stable_ptr(&self) -> *const u8 {
         self.buffer.stable_ptr()

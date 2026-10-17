@@ -53,6 +53,14 @@ function Assert-Equal {
     if ($Expected -ne $Actual) { throw "$Message (expected '$Expected', got '$Actual')" }
 }
 
+# Culture-free ordering, so an expected list does not depend on how a culture treats '-' and '.'.
+function Get-Ordinal {
+    param([string[]] $Items)
+    $sorted = [string[]]$Items.Clone()
+    [Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+    return $sorted
+}
+
 # Every fixture directory this suite creates, so the runner can remove them all
 # after each case -- INCLUDING when the case threw, which is when a leftover is
 # least likely to be noticed and most likely to confuse the next run. The
@@ -111,18 +119,18 @@ $cases = @(
             # Structural, against the real tree: no count is asserted, only
             # that nothing with a manifest is silently left unswept.
             $m = Invoke-Planner -Root $repositoryRoot
-            $planned = @($m.include | ForEach-Object { $_.crate } | Sort-Object -Unique)
+            $planned = @($m.include | ForEach-Object { $_.manifest } | Sort-Object -Unique)
             $onDisk = @(Get-ChildItem -Path (Join-Path $repositoryRoot 'crates') -Directory |
-                    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'sabotage.json') } |
-                    ForEach-Object { $_.Name } | Sort-Object)
-            Assert-Equal ($onDisk -join ',') ($planned -join ',') 'every crate with a manifest must appear in the matrix'
+                    ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
+                    ForEach-Object { 'crates/' + $_.Directory.Name + '/' + $_.Name } | Sort-Object)
+            Assert-Equal ($onDisk -join ',') ($planned -join ',') 'every manifest must appear in the matrix'
         }
     },
     @{
         Name = 'shard-indices-are-contiguous-and-unique'
         Run  = {
             $m = Invoke-Planner -Root $repositoryRoot
-            foreach ($group in ($m.include | Group-Object crate)) {
+            foreach ($group in ($m.include | Group-Object manifest)) {
                 $shards = @($group.Group | ForEach-Object { $_.shard } | Sort-Object)
                 $declared = @($group.Group | ForEach-Object { $_.shards } | Sort-Object -Unique)
                 Assert-Equal 1 $declared.Count "$($group.Name) must declare one shard count"
@@ -228,6 +236,24 @@ $cases = @(
             $failed = $false
             try { Invoke-Planner -Root $root } catch { $failed = $true }
             Assert-True $failed 'an empty matrix must never be the answer'
+        }
+    },
+    @{
+        Name = 'a-crate-with-several-manifests-gets-each-swept-under-a-label-of-its-own'
+        Run  = {
+            # The tail watcher's integration and doctest manifests were never swept by CI, because
+            # only `sabotage.json` was looked for.
+            $root = New-FixtureRoot @{ 'crate-a' = 3 }
+            foreach ($kind in 'integration', 'doctests') {
+                Copy-Item -LiteralPath (Join-Path $root 'crates/crate-a/sabotage.json') `
+                    -Destination (Join-Path $root "crates/crate-a/sabotage-$kind.json")
+            }
+            $m = Invoke-Planner -Root $root
+            Assert-Equal 3 @($m.include).Count 'one shard for each of the three manifests'
+            Assert-Equal 'crate-a,crate-a-doctests,crate-a-integration' ((Get-Ordinal @($m.include | ForEach-Object { $_.label })) -join ',') 'labels must differ, and the plain manifest keeps the crate name'
+            Assert-Equal 'crates/crate-a/sabotage-doctests.json,crates/crate-a/sabotage-integration.json,crates/crate-a/sabotage.json' ((Get-Ordinal @($m.include | ForEach-Object { $_.manifest })) -join ',') 'each job names its own manifest'
+            $one = Invoke-Planner -Root $root -Manifest 'crates/crate-a/sabotage-doctests.json'
+            Assert-Equal 1 @($one.include).Count 'a dispatch may name one of them'
         }
     },
     @{

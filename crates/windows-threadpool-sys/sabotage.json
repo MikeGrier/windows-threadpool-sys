@@ -3,9 +3,11 @@
   "description": "Sabotages for windows-threadpool-sys: the draining teardown and its per-object obligation, the self-heal registry and repair submission, and the trace record buffer. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
   "notCoveredHere": "The hook facility this manifest was originally written for has been removed: it patched undocumented \ntdll syscall stubs, and this crate ships no undocumented entry points or assumptions about unpublished layouts. Fourteen entries went with it. What remains sweeps the teardown model, the drain obligations, and the self-heal -- all of which rest on documented Win32. The one trace entry below covers the record buffer's eviction, which is this crate's own data structure.",
   "testArgs": [
+    "-p",
+    "windows-threadpool-sys",
     "--all-features"
   ],
-  "whyTestArgs": "--all-features, because this crate's two optional features each gate code these sabotages patch and tests that catch them: `self-heal` gates the whole repair registry, and `trace` gates the record buffer and every test that reads it -- including the one that catches the periodic member draining rather than cancelling, which is observable only in the trace. Without the features the patched code is not compiled, the sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working. (It formerly said this was about the hook module; that module was removed, and the reason the flag is still required is a different one.)",
+  "whyTestArgs": "--all-features, because this crate's two optional features each gate code these sabotages patch and tests that catch them: `self-heal` gates the whole repair registry, and `trace` gates the record buffer and every test that reads it -- including the one that catches the periodic member draining rather than cancelling, which is observable only in the trace. Without the features the patched code is not compiled, the sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working. (It formerly said this was about the hook module; that module was removed, and the reason the flag is still required is a different one.) -p, because testArgs replaces everything after `cargo test`, so without it the sweep ran the whole workspace: cargo stops at the first failing test binary, and a dependent crate's test failing first was reported as this crate's catch while this crate's own tests never ran. Three entries had to be verified by hand for that reason before it was scoped (2026-10-15).",
   "sabotages": [
     {
       "name": "the pre-main initialiser is dropped by the linker",
@@ -348,10 +350,21 @@
       ]
     },
     {
+      "name": "an observer's volume query cancels the handle's I/O",
+      "file": "../windows-overlapped-io-sys/src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "M17.10: every observer query, issued from windows-overlapped-io-sys' shared table while a TP_IO read pends, must leave that read to complete. The volume query is one only that table issues while an operation pends. Patched in the sibling crate because that is where the query lives. Caught by this crate's `io::tests::observers::every_query` tests.",
+      "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
+      "replace": [
+        "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.as_raw_handle(), std::ptr::null()) };"
+      ]
+    },
+    {
       "name": "M-T14.1: the conversion from an Event makes a fresh event",
       "file": "src/wait.rs",
       "expect": "caught",
-      "why": "A wait target that is a different event looks like a working wait in isolation; it fails only where the caller signals through the clone it kept, which is the documented way to signal a pool-owned event. Caught in this crate by the_conversion_keeps_the_event_it_was_given, without a timing window -- checked by hand with this crate's wait tests alone, because under this manifest's workspace-wide run a dependent crate's test (windows-file-enumeration-sys' doorbell, which starts signalled through WaitableHandle::event) fails first and cargo stops there.",
+      "why": "A wait target that is a different event looks like a working wait in isolation; it fails only where the caller signals through the clone it kept, which is the documented way to signal a pool-owned event. Caught in this crate by the_conversion_keeps_the_event_it_was_given, without a timing window.",
       "find": [
         "            target: WaitTarget::Owned(event.into()),\n"
       ],
@@ -363,7 +376,7 @@
       "name": "M-T14.1: WaitableHandle::event swaps the reset modes",
       "file": "src/wait.rs",
       "expect": "caught",
-      "why": "The constructor's boolean must still mean what it meant when it called CreateEventW itself. Caught in this crate by the_event_constructor_makes_each_reset_mode_and_initial_state -- checked by hand, for the same reason as the entry above: dependent crates' tests fail first under the workspace-wide run.",
+      "why": "The constructor's boolean must still mean what it meant when it called CreateEventW itself. Caught in this crate by the_event_constructor_makes_each_reset_mode_and_initial_state.",
       "find": [
         "        let reset = if manual_reset {\n            ResetMode::Manual\n        } else {\n            ResetMode::Auto\n        };\n"
       ],

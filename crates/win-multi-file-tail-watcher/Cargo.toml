@@ -1,0 +1,67 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-multi-file-tail-watcher"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Reports length changes across a large population of files on a beat the caller owns, reading each length through a handle held open, rather than running a timer per file."
+keywords = ["windows", "file", "tail", "watcher"]
+categories = ["os::windows-apis", "filesystem"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root).
+# Everything is one crate, whatever its internal layers (TW-D-10 in DESIGN-NOTES.md).
+
+[dependencies]
+# Path and version both: a dependency on a published sibling must carry a version.
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+
+# `fs` is where the observer's length query lives. No other feature, so none of that crate's
+# optional dependencies come with it.
+windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-io-sys", default-features = false, features = [
+	"fs",
+] }
+
+# The poll runs as a thread-pool work item, and parks on a thread-pool wait (TW-3.2). Path and
+# version both, as for every sibling.
+windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys" }
+
+# The buffer contract the I/O ring takes a read's buffer by (TW-D-15). Path and version both.
+io-buffers = { version = "0.1.0", path = "../io-buffers" }
+
+# The ring the reading engine reads through (TW-D-15). `threadpool` is where `CompletionWake` is,
+# which runs the engine when a read completes (TW-6.1); path and version both.
+windows-ioring-sys = { version = "0.7.1", path = "../windows-ioring-sys", default-features = false, features = [
+	"threadpool",
+] }
+
+# The SQ is its `slotwise_mpsc`: bounded, many writers and one reader, so a poll can later be
+# sharded across threads. The crate's `experimental-permit-claim` and `dwcas` features stay off.
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", default-features = false }
+
+# `default-features = false` matches every other crate in the workspace; each Win32 feature
+# arrives with the call that needs it. The doorbells' `CreateEventW` takes a security-attributes
+# type, which is why `Win32_Security` is here beside `Win32_System_Threading`.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_Threading",
+] }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+
+# Win32 names the tests compare error codes and sharing modes against. The crate itself needs
+# none yet.
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_Storage_FileSystem"]

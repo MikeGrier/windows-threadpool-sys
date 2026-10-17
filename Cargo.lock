@@ -149,6 +149,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-multi-file-tail-watcher"
+version = "0.1.0"
+dependencies = [
+ "io-buffers",
+ "windows-ioring-sys",
+ "windows-overlapped-io-sys",
+ "windows-sys",
+ "windows-threadpool-sys",
+ "windows-waitable-queues",
+ "wtf-string",
+]
+
+[[package]]
 name = "win-numa-sys"
 version = "0.1.1"
 dependencies = [
@@ -285,7 +298,9 @@ name = "windows-overlapped-io-sys"
 version = "0.2.0"
 dependencies = [
  "io-buffers",
+ "win-shared-os-owned-handle",
  "windows-sys",
+ "wtf-string",
 ]
 
 [[package]]
