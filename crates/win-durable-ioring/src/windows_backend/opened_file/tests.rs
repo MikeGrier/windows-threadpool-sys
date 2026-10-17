@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 
 use io_buffers::AlignedBuf;
 
-use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+    CREATE_NEW, FILE_APPEND_DATA, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 
-use super::super::{FileRights, Win32FileTarget};
+use super::super::{
+    DataAccess, FileRights, NoData, ReadOnly, ReadWrite, Win32FileTarget, WriteOnly,
+};
 use super::{
     Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
     final_location, names_a_remote_device, open_request,
@@ -24,8 +25,8 @@ use durable_ioring::{Capabilities, Geometry, GeometryError, IoTarget, WarrantyCl
 /// `ERROR_INVALID_PARAMETER`, which an unbuffered file answers an unaligned transfer with.
 const INVALID_PARAMETER: i32 = 87;
 
-fn read_write() -> FileOptions {
-    FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE)
+fn read_write() -> FileOptions<ReadWrite> {
+    FileOptions::new().read().write()
 }
 
 /// A second handle to the file `opened` holds, as a `std::fs::File`, to do I/O the kernel itself
@@ -109,8 +110,10 @@ fn an_aligned_write_to_an_unbuffered_file_succeeds() {
 
 #[test]
 fn a_hint_sets_its_own_flag_and_nothing_else() {
-    let read = FileOptions::new().access(FileRights::READ_DATA);
-    let flags = |options: FileOptions, mode: u32| options.parameters(mode).expect("valid").flags;
+    fn flags<A: DataAccess>(options: FileOptions<A>, mode: u32) -> u32 {
+        options.parameters(mode).expect("valid").flags
+    }
+    let read = FileOptions::new().read();
 
     assert_eq!(flags(read, 0), 0, "no hint, no flag");
     assert_eq!(flags(read.random_access(true), 0), FILE_FLAG_RANDOM_ACCESS);
@@ -136,7 +139,7 @@ fn a_hint_sets_its_own_flag_and_nothing_else() {
     assert_eq!(
         flags(
             FileOptions::new()
-                .access(FileRights::WRITE_DATA)
+                .write()
                 .create_new(true)
                 .sequential_scan(true),
             0
@@ -195,7 +198,7 @@ fn the_kernel_takes_each_hint_on_an_unbuffered_file() {
 #[test]
 fn a_hint_changes_neither_the_class_nor_the_alignment_nor_what_is_offered() {
     // Judged on the target made from each file, which is what a consumer reads.
-    let claims = |options: FileOptions| {
+    let claims = |options: FileOptions<ReadWrite>| {
         let (unbuffered, cached) = (TempFile::new("of-claims-u"), TempFile::new("of-claims-c"));
         let u = Win32FileTarget::new(
             OpenedFile::<Unbuffered>::open(&unbuffered.0, options).expect("open unbuffered"),
@@ -264,8 +267,6 @@ fn the_options_decide_what_is_opened_and_created() {
     drop(OpenedFile::<Cached>::open(&missing, read_write().truncate(true)).expect("truncate"));
     assert_eq!(fs::metadata(&missing).expect("metadata").len(), 0);
 
-    let error = OpenedFile::<Cached>::open(&missing, FileOptions::new()).expect_err("no access");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     fs::remove_file(&missing).expect("remove");
 }
 
@@ -390,9 +391,12 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
 // Opening went from `std::fs::OpenOptions` to `windows-namespace-request-sys`'s `OpenFile`, and
 // a caller must see no difference, so what std asked of the kernel is pinned here.
 
-fn parameters_of(options: FileOptions) -> open_request::Parameters {
+fn parameters_of<A: DataAccess>(options: FileOptions<A>) -> open_request::Parameters {
     options.parameters(0).expect("a valid combination")
 }
+
+/// What a file opened for reading and writing asks `CreateFileW` for, and nothing else.
+const READ_WRITE: u32 = FILE_READ_DATA | FILE_WRITE_DATA;
 
 fn parameters(
     access: u32,
@@ -411,24 +415,25 @@ fn parameters(
 #[test]
 fn the_options_map_to_the_access_and_disposition_std_asked_for() {
     assert_eq!(
-        parameters_of(FileOptions::new().access(FileRights::GENERIC_READ)),
-        parameters(GENERIC_READ, OPEN_EXISTING, 0, false)
+        parameters_of(FileOptions::new().read()),
+        parameters(FILE_READ_DATA, OPEN_EXISTING, 0, false)
     );
     assert_eq!(
-        parameters_of(FileOptions::new().access(FileRights::GENERIC_WRITE)),
-        parameters(GENERIC_WRITE, OPEN_EXISTING, 0, false)
+        parameters_of(FileOptions::new().write()),
+        parameters(FILE_WRITE_DATA, OPEN_EXISTING, 0, false)
     );
     assert_eq!(
         parameters_of(read_write()),
-        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING, 0, false)
+        parameters(READ_WRITE, OPEN_EXISTING, 0, false)
     );
     assert_eq!(
         parameters_of(read_write().create(true)),
-        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS, 0, false)
+        parameters(READ_WRITE, OPEN_ALWAYS, 0, false)
     );
+    // Not `TRUNCATE_EXISTING`, which needs `GENERIC_WRITE`: the file is opened and emptied after.
     assert_eq!(
         parameters_of(read_write().truncate(true)),
-        parameters(GENERIC_READ | GENERIC_WRITE, TRUNCATE_EXISTING, 0, false)
+        parameters(READ_WRITE, OPEN_EXISTING, 0, true)
     );
 }
 
@@ -437,18 +442,13 @@ fn a_created_and_truncated_file_is_opened_always_and_emptied_afterwards() {
     // Not `CREATE_ALWAYS`, whose semantics std avoids the same way (rust-lang/rust#115745).
     assert_eq!(
         parameters_of(read_write().create(true).truncate(true)),
-        parameters(GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS, 0, true)
+        parameters(READ_WRITE, OPEN_ALWAYS, 0, true)
     );
 }
 
 #[test]
 fn a_new_file_is_created_without_following_a_link_and_whatever_else_is_asked() {
-    let expected = parameters(
-        GENERIC_READ | GENERIC_WRITE,
-        CREATE_NEW,
-        FILE_FLAG_OPEN_REPARSE_POINT,
-        false,
-    );
+    let expected = parameters(READ_WRITE, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, false);
     assert_eq!(parameters_of(read_write().create_new(true)), expected);
     // `create_new` wins over `create` and `truncate`, as it does in std.
     assert_eq!(
@@ -476,33 +476,29 @@ fn the_buffering_flags_are_added_to_what_the_options_imply() {
 
 #[test]
 fn a_combination_that_cannot_mean_anything_is_invalid_input() {
-    for (label, options) in [
-        ("nothing", FileOptions::new()),
-        ("create only", FileOptions::new().create(true)),
-        ("create_new only", FileOptions::new().create_new(true)),
-        ("truncate only", FileOptions::new().truncate(true)),
-        (
-            "read and create",
-            FileOptions::new()
-                .access(FileRights::READ_DATA)
-                .create(true),
-        ),
-        (
-            "read and create_new",
-            FileOptions::new()
-                .access(FileRights::GENERIC_READ)
-                .create_new(true),
-        ),
-        (
-            "read and truncate",
-            FileOptions::new()
-                .access(FileRights::READ_DATA)
-                .truncate(true),
-        ),
-    ] {
+    fn refused<A: DataAccess>(label: &str, options: FileOptions<A>) {
         let error = options.parameters(0).expect_err(label);
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{label}");
     }
+    refused("create only", FileOptions::new().create(true));
+    refused("create_new only", FileOptions::new().create_new(true));
+    refused("truncate only", FileOptions::new().truncate(true));
+    refused("read and create", FileOptions::new().read().create(true));
+    refused(
+        "read and create_new",
+        FileOptions::new().read().create_new(true),
+    );
+    refused(
+        "read and truncate",
+        FileOptions::new().read().truncate(true),
+    );
+    // Writing is what creating and truncating need, so the other rights do not stand in for it.
+    refused(
+        "other rights and create",
+        FileOptions::new()
+            .rights(FileRights::DELETE | FileRights::WRITE_ATTRIBUTES)
+            .create(true),
+    );
 }
 
 #[test]
@@ -537,129 +533,188 @@ fn an_opened_file_is_shared_for_reading_writing_and_deletion_as_std_opened_one()
     drop(held);
 }
 
-// DI-13.3: the access an open asks for is a set of named rights, and what the kernel makes of each
-// is judged here through a second handle to the same file, as the kernel enforces it.
+// DI-13.8: the data access is the type of the handle, and what the kernel makes of each is judged
+// here through a second handle to the same file, as the kernel enforces it.
 
 /// `ERROR_ACCESS_DENIED`, which a handle answers an operation its rights do not cover with.
 const ACCESS_DENIED: i32 = 5;
 
-/// Every right that can be asked for alongside a data right and be granted on a file of one's own,
-/// in the order the set names them. `ACCESS_SYSTEM_SECURITY` needs a privilege, so it has its own
-/// test.
-const GRANTED_WITH_READ: [(&str, FileRights); 12] = [
-    ("READ_DATA", FileRights::READ_DATA),
-    ("WRITE_DATA", FileRights::WRITE_DATA),
-    ("READ_ATTRIBUTES", FileRights::READ_ATTRIBUTES),
-    ("WRITE_ATTRIBUTES", FileRights::WRITE_ATTRIBUTES),
-    ("READ_EA", FileRights::READ_EA),
-    ("WRITE_EA", FileRights::WRITE_EA),
-    ("EXECUTE", FileRights::EXECUTE),
-    ("DELETE", FileRights::DELETE),
-    ("READ_CONTROL", FileRights::READ_CONTROL),
-    ("WRITE_DAC", FileRights::WRITE_DAC),
-    ("WRITE_OWNER", FileRights::WRITE_OWNER),
-    ("SYNCHRONIZE", FileRights::SYNCHRONIZE),
-];
+/// What the kernel allowed through a duplicate of a handle, one field for each call a consumer or this
+/// crate makes on it that depends on the data rights.
+#[derive(Debug, PartialEq, Eq)]
+struct Allowed {
+    read: bool,
+    write: bool,
+    extend: bool,
+    flush: bool,
+}
+
+/// Whether `result` succeeded, and a panic for any failure other than the one a missing right gives.
+fn allowed<T>(call: &str, result: io::Result<T>) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => false,
+        Err(error) => panic!("{call} failed with something other than access denied: {error}"),
+    }
+}
+
+/// Opens a file of one's own cached with `options` and asks the kernel what the handle allows.
+fn judged<A: DataAccess>(options: FileOptions<A>) -> Allowed {
+    let temp = TempFile::new("of-judged");
+    fs::write(&temp.0, vec![0u8; 8192]).expect("fill");
+    let opened = OpenedFile::<Cached, A>::open(&temp.0, options).expect("open");
+    let mut through = io_through(&opened);
+    Allowed {
+        read: allowed("read", through.read(&mut [0u8; 1])),
+        write: allowed("write", through.write(b"x")),
+        extend: allowed("extend", through.set_len(16384)),
+        flush: allowed("flush", through.sync_all()),
+    }
+}
 
 #[test]
-fn each_right_opens_a_file_of_ones_own_on_either_buffering_mode() {
-    for (name, right) in GRANTED_WITH_READ {
-        let options = FileOptions::new().access(FileRights::READ_DATA | right);
-        let temp = TempFile::new("of-right-opens");
-        OpenedFile::<Cached>::open(&temp.0, options)
+fn the_kernel_allows_what_each_data_access_names_and_nothing_else() {
+    assert_eq!(
+        judged(FileOptions::new()),
+        Allowed {
+            read: false,
+            write: false,
+            extend: false,
+            flush: false
+        },
+        "NoData"
+    );
+    assert_eq!(
+        judged(FileOptions::new().read()),
+        Allowed {
+            read: true,
+            write: false,
+            extend: false,
+            flush: false
+        },
+        "ReadOnly"
+    );
+    assert_eq!(
+        judged(FileOptions::new().write()),
+        Allowed {
+            read: false,
+            write: true,
+            extend: true,
+            flush: true
+        },
+        "WriteOnly"
+    );
+    assert_eq!(
+        judged(FileOptions::new().read().write()),
+        Allowed {
+            read: true,
+            write: true,
+            extend: true,
+            flush: true
+        },
+        "ReadWrite"
+    );
+}
+
+#[test]
+fn each_data_access_opens_a_file_of_ones_own_on_either_buffering_mode() {
+    fn opens<A: DataAccess>(name: &str, options: FileOptions<A>) {
+        let temp = TempFile::new("of-access-opens");
+        OpenedFile::<Cached, A>::open(&temp.0, options)
             .unwrap_or_else(|error| panic!("{name}, cached: {error}"));
-        OpenedFile::<Unbuffered>::open(&temp.0, options)
+        OpenedFile::<Unbuffered, A>::open(&temp.0, options)
             .unwrap_or_else(|error| panic!("{name}, unbuffered: {error}"));
     }
-    for (name, right) in [
-        ("GENERIC_READ", FileRights::GENERIC_READ),
-        ("GENERIC_WRITE", FileRights::GENERIC_WRITE),
-        (
-            "GENERIC_EXECUTE",
-            FileRights::GENERIC_READ | FileRights::GENERIC_EXECUTE,
-        ),
-        ("GENERIC_ALL", FileRights::GENERIC_ALL),
-    ] {
-        let temp = TempFile::new("of-generic-opens");
-        OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(right))
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    opens("NoData", FileOptions::new());
+    opens("ReadOnly", FileOptions::new().read());
+    opens("WriteOnly", FileOptions::new().write());
+    opens("ReadWrite", FileOptions::new().read().write());
+}
+
+#[test]
+fn the_access_an_open_asks_the_kernel_for_is_the_data_access_and_the_other_rights() {
+    fn access<A: DataAccess>(options: FileOptions<A>) -> u32 {
+        options.parameters(0).expect("valid").access
     }
-    let temp = TempFile::new("of-all-access-opens");
-    OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(FileRights::ALL_ACCESS))
-        .expect("ALL_ACCESS, cached");
-}
-
-// Measured: a set that names the append bit itself is refused by an unbuffered open, which is the
-// kernel's documented rule that no-buffering is incompatible with `FILE_APPEND_DATA`. `ALL_ACCESS`
-// is the one named right that does, and it reaches the caller as the kernel's error. A generic right
-// that maps to the append bit was measured to be taken.
-#[test]
-fn a_right_set_carrying_the_append_bit_is_refused_by_an_unbuffered_open_and_not_a_cached_one() {
-    let temp = TempFile::new("of-append-unbuffered");
-    let all = FileOptions::new().access(FileRights::ALL_ACCESS);
-    OpenedFile::<Cached>::open(&temp.0, all).expect("cached");
-    let refused = OpenedFile::<Unbuffered>::open(&temp.0, all).expect_err("unbuffered");
-    assert_eq!(refused.raw_os_error(), Some(INVALID_PARAMETER));
-
-    for generic in [FileRights::GENERIC_WRITE, FileRights::GENERIC_ALL] {
-        let options = FileOptions::new().access(generic);
-        OpenedFile::<Unbuffered>::open(&temp.0, options)
-            .unwrap_or_else(|error| panic!("{generic:?}: {error}"));
-    }
-}
-
-#[test]
-fn a_file_opened_for_reading_reads_and_is_refused_a_write_by_the_kernel() {
-    let temp = TempFile::new("of-read-only");
-    fs::write(&temp.0, b"content").expect("fill");
-    let opened =
-        OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(FileRights::READ_DATA))
-            .expect("open");
-    let mut through = io_through(&opened);
-
-    let mut read = Vec::new();
-    through.read_to_end(&mut read).expect("a data read");
-    assert_eq!(read, b"content");
-    let refused = through
-        .write(b"x")
-        .expect_err("a write the rights do not cover");
-    assert_eq!(refused.raw_os_error(), Some(ACCESS_DENIED));
-}
-
-#[test]
-fn a_file_opened_for_writing_writes_and_is_refused_a_read_by_the_kernel() {
-    let temp = TempFile::new("of-write-only");
-    let opened =
-        OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(FileRights::WRITE_DATA))
-            .expect("open");
-    let mut through = io_through(&opened);
-
-    through.write_all(b"content").expect("a data write");
-    let refused = through
-        .seek(SeekFrom::Start(0))
-        .and_then(|_| through.read(&mut [0u8; 7]));
+    let other = FileRights::DELETE | FileRights::WRITE_ATTRIBUTES;
+    assert_eq!(access(FileOptions::new()), 0);
+    assert_eq!(access(FileOptions::new().read()), FILE_READ_DATA);
+    assert_eq!(access(FileOptions::new().write()), FILE_WRITE_DATA);
     assert_eq!(
-        refused
-            .expect_err("a read the rights do not cover")
-            .raw_os_error(),
-        Some(ACCESS_DENIED)
+        access(FileOptions::new().read().write()),
+        FILE_READ_DATA | FILE_WRITE_DATA
     );
-    assert_eq!(fs::read(&temp.0).expect("read back"), b"content");
+    assert_eq!(access(FileOptions::new().rights(other)), other.bits());
+    assert_eq!(
+        access(FileOptions::new().read().rights(other)),
+        FILE_READ_DATA | other.bits()
+    );
+    assert_eq!(
+        access(FileOptions::new().rights(other).read().write()),
+        FILE_READ_DATA | FILE_WRITE_DATA | other.bits(),
+        "the other rights survive a change of data access"
+    );
 }
 
 #[test]
-fn attribute_rights_decide_whether_the_attributes_can_be_read_and_written() {
+fn no_options_ask_for_the_append_bit() {
+    fn access<A: DataAccess>(options: FileOptions<A>) -> u32 {
+        options.parameters(0).expect("valid").access
+    }
+    let everything = FileRights::READ_ATTRIBUTES
+        | FileRights::WRITE_ATTRIBUTES
+        | FileRights::READ_EA
+        | FileRights::WRITE_EA
+        | FileRights::EXECUTE
+        | FileRights::DELETE
+        | FileRights::READ_CONTROL
+        | FileRights::WRITE_DAC
+        | FileRights::WRITE_OWNER
+        | FileRights::SYNCHRONIZE
+        | FileRights::ACCESS_SYSTEM_SECURITY;
+    for asked in [
+        access(FileOptions::new().rights(everything)),
+        access(FileOptions::new().read().rights(everything)),
+        access(FileOptions::new().write().rights(everything)),
+        access(FileOptions::new().read().write().rights(everything)),
+    ] {
+        assert_eq!(asked & FILE_APPEND_DATA, 0, "{asked:#x}");
+    }
+}
+
+#[test]
+fn read_and_write_reach_the_same_access_in_either_order_and_keep_everything_else() {
+    // The types are the assertion: a mismatch does not compile.
+    let _: FileOptions<ReadWrite> = FileOptions::new().read().write();
+    let _: FileOptions<ReadWrite> = FileOptions::new().write().read();
+    let _: FileOptions<ReadOnly> = FileOptions::new().read().read();
+    let _: FileOptions<WriteOnly> = FileOptions::new().write().write();
+    let _: FileOptions<ReadWrite> = FileOptions::new().read().write().read().write();
+
+    // Changing the access carries the creation mode and the hints along.
+    let moved = FileOptions::new()
+        .create_new(true)
+        .random_access(true)
+        .sequential_scan(true)
+        .write();
+    let parameters = moved.parameters(0).expect("valid");
+    assert_eq!(parameters.disposition, CREATE_NEW);
+    assert_eq!(
+        parameters.flags,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_RANDOM_ACCESS | FILE_FLAG_SEQUENTIAL_SCAN
+    );
+}
+
+#[test]
+fn the_attribute_right_decides_whether_the_times_can_be_set() {
     let temp = TempFile::new("of-attributes");
     let modified =
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let times = fs::FileTimes::new().set_modified(modified);
 
-    let without =
-        OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(FileRights::READ_DATA))
-            .expect("open");
-    let through = io_through(&without);
+    let without = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("open");
     assert_eq!(
-        through
+        io_through(&without)
             .set_times(times)
             .expect_err("no attribute right")
             .raw_os_error(),
@@ -668,9 +723,7 @@ fn attribute_rights_decide_whether_the_attributes_can_be_read_and_written() {
 
     let with = OpenedFile::<Cached>::open(
         &temp.0,
-        FileOptions::new().access(
-            FileRights::READ_DATA | FileRights::READ_ATTRIBUTES | FileRights::WRITE_ATTRIBUTES,
-        ),
+        read_write().rights(FileRights::WRITE_ATTRIBUTES | FileRights::READ_ATTRIBUTES),
     )
     .expect("open");
     let through = io_through(&with);
@@ -688,22 +741,42 @@ fn attribute_rights_decide_whether_the_attributes_can_be_read_and_written() {
 }
 
 #[test]
-fn a_right_the_files_security_refuses_reaches_the_caller_as_the_kernels_error() {
+fn each_other_right_opens_a_file_of_ones_own_on_either_buffering_mode() {
+    // `ACCESS_SYSTEM_SECURITY` needs a privilege, so it has its own test.
+    for (name, right) in [
+        ("READ_ATTRIBUTES", FileRights::READ_ATTRIBUTES),
+        ("WRITE_ATTRIBUTES", FileRights::WRITE_ATTRIBUTES),
+        ("READ_EA", FileRights::READ_EA),
+        ("WRITE_EA", FileRights::WRITE_EA),
+        ("EXECUTE", FileRights::EXECUTE),
+        ("DELETE", FileRights::DELETE),
+        ("READ_CONTROL", FileRights::READ_CONTROL),
+        ("WRITE_DAC", FileRights::WRITE_DAC),
+        ("WRITE_OWNER", FileRights::WRITE_OWNER),
+        ("SYNCHRONIZE", FileRights::SYNCHRONIZE),
+    ] {
+        let options = FileOptions::new().read().rights(right);
+        let temp = TempFile::new("of-right-opens");
+        OpenedFile::<Cached, _>::open(&temp.0, options)
+            .unwrap_or_else(|error| panic!("{name}, cached: {error}"));
+        OpenedFile::<Unbuffered, _>::open(&temp.0, options)
+            .unwrap_or_else(|error| panic!("{name}, unbuffered: {error}"));
+    }
+}
+
+#[test]
+fn a_data_access_the_files_security_refuses_reaches_the_caller_as_the_kernels_error() {
     let temp = TempFile::new("of-refused");
     let mut permissions = fs::metadata(&temp.0).expect("metadata").permissions();
     permissions.set_readonly(true);
     fs::set_permissions(&temp.0, permissions.clone()).expect("read-only");
 
-    let refused = OpenedFile::<Cached>::open(
-        &temp.0,
-        FileOptions::new().access(FileRights::READ_DATA | FileRights::WRITE_DATA),
-    )
-    .expect_err("a read-only file refuses a data write");
+    let refused = OpenedFile::<Cached>::open(&temp.0, read_write())
+        .expect_err("a read-only file refuses a data write");
     assert_eq!(refused.raw_os_error(), Some(ACCESS_DENIED));
 
-    // What the file's security allows is the kernel's to say, so a right it does allow is granted.
-    OpenedFile::<Cached>::open(&temp.0, FileOptions::new().access(FileRights::READ_DATA))
-        .expect("reading is allowed");
+    // What the file's security allows is the kernel's to say, so an access it does allow is granted.
+    OpenedFile::<Cached, _>::open(&temp.0, FileOptions::new().read()).expect("reading is allowed");
 
     #[allow(clippy::permissions_set_readonly_false)]
     {
@@ -715,9 +788,11 @@ fn a_right_the_files_security_refuses_reaches_the_caller_as_the_kernels_error() 
 #[test]
 fn the_system_security_right_is_the_kernels_to_refuse_without_its_privilege() {
     let temp = TempFile::new("of-system-security");
-    let refused = OpenedFile::<Cached>::open(
+    let refused = OpenedFile::<Cached, _>::open(
         &temp.0,
-        FileOptions::new().access(FileRights::READ_DATA | FileRights::ACCESS_SYSTEM_SECURITY),
+        FileOptions::new()
+            .read()
+            .rights(FileRights::ACCESS_SYSTEM_SECURITY),
     );
     // `ERROR_PRIVILEGE_NOT_HELD`. A process that holds and has enabled the privilege is granted it,
     // which is the kernel's answer and not this crate's.
@@ -728,56 +803,11 @@ fn the_system_security_right_is_the_kernels_to_refuse_without_its_privilege() {
 }
 
 #[test]
-fn no_data_right_is_refused_before_any_call_is_made() {
-    // The path does not exist, so a call reaching the kernel would have said not-found.
-    let missing = TempFile::new("of-no-data-right")
-        .0
-        .with_extension("never-made");
-    for (label, access) in [
-        ("none", FileRights::NONE),
-        (
-            "attributes",
-            FileRights::READ_ATTRIBUTES | FileRights::WRITE_ATTRIBUTES,
-        ),
-        ("delete", FileRights::DELETE),
-        ("execute", FileRights::EXECUTE | FileRights::GENERIC_EXECUTE),
-        (
-            "every other right",
-            FileRights::READ_EA
-                | FileRights::WRITE_EA
-                | FileRights::READ_CONTROL
-                | FileRights::WRITE_DAC
-                | FileRights::WRITE_OWNER
-                | FileRights::SYNCHRONIZE
-                | FileRights::ACCESS_SYSTEM_SECURITY,
-        ),
-    ] {
-        let options = FileOptions::new().access(access);
-        assert_eq!(
-            options.parameters(0).expect_err(label).kind(),
-            io::ErrorKind::InvalidInput,
-            "{label}"
-        );
-        let error = OpenedFile::<Cached>::open(&missing, options).expect_err(label);
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{label}");
-    }
-}
-
-#[test]
-fn either_data_right_is_enough_and_the_set_is_handed_over_as_asked() {
-    for access in [
-        FileRights::READ_DATA,
-        FileRights::WRITE_DATA,
-        FileRights::GENERIC_READ,
-        FileRights::GENERIC_WRITE,
-        FileRights::GENERIC_ALL,
-        FileRights::ALL_ACCESS,
-        FileRights::READ_DATA | FileRights::DELETE | FileRights::SYNCHRONIZE,
-    ] {
-        let parameters = FileOptions::new()
-            .access(access)
-            .parameters(0)
-            .expect("a data right");
-        assert_eq!(parameters.access, access.bits(), "{access:?}");
-    }
+fn a_file_with_no_data_right_opens_and_is_not_a_target() {
+    // A target needs `A: HasData`, which the `compile_fail` doctest on `Win32FileTarget` pins. What
+    // is checked here is that a file with no data right is still a file the kernel opens, since a
+    // query needs no data right.
+    let temp = TempFile::new("of-no-data");
+    let file = OpenedFile::<Cached, NoData>::open(&temp.0, FileOptions::new()).expect("open");
+    assert_eq!(file.geometry(), Geometry::UNALIGNED);
 }

@@ -30,9 +30,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use win_durable_ioring::windows_backend::{
-    Cached, FileOptions, FileRights, OpenedFile, Win32FileTarget,
-};
+use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Win32FileTarget};
 use win_durable_ioring::{
     DeliveryMode, Dioring, DurableRing, Entry, IoTargetKey, LineageHandle, OpIdOf, PushError,
     PushRefusal, PushResult, Setup, TargetSetup,
@@ -180,11 +178,8 @@ impl Scratch {
     }
 
     fn target(&self) -> TargetSetup {
-        let file = OpenedFile::<Cached>::open(
-            &self.0,
-            FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
-        )
-        .expect("open the scratch file");
+        let file = OpenedFile::<Cached>::open(&self.0, FileOptions::new().read().write())
+            .expect("open the scratch file");
         TargetSetup {
             key: FILE,
             target: Win32FileTarget::new(file),

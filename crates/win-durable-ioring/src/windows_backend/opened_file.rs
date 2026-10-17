@@ -23,11 +23,12 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+    FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 
 use durable_ioring::{Capabilities, Geometry, GeometryError, WarrantyClass};
 
+use super::data_access::{DataAccess, NoData, ReadWrite};
 use super::file_rights::FileRights;
 
 mod open_request;
@@ -127,13 +128,27 @@ impl Buffering for Unbuffered {
     }
 }
 
-/// What to open: the access rights, how the file is created, and the cache hints. Only these,
-/// because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags could
-/// change it. A file is shared for reading, writing and deletion, as std opens one.
-#[derive(Clone, Copy, Debug, Default)]
+/// What to open: the data access, the other rights, how the file is created, and the cache hints.
+/// Only these, because the open mode is what an [`OpenedFile`] vouches for, and a caller's own flags
+/// could change it. A file is shared for reading, writing and deletion, as std opens one.
+///
+/// The data access is the type parameter `A`: it starts as [`NoData`], and [`read`](Self::read) and
+/// [`write`](Self::write) move it, so the handle an open makes carries the access it was asked
+/// for.
+///
+/// ```
+/// use win_durable_ioring::windows_backend::{FileOptions, FileRights, ReadWrite};
+///
+/// let options: FileOptions<ReadWrite> = FileOptions::new()
+///     .read()
+///     .write()
+///     .rights(FileRights::WRITE_ATTRIBUTES);
+/// ```
+#[derive(Clone, Copy, Debug)]
 #[must_use]
-pub struct FileOptions {
-    access: FileRights,
+pub struct FileOptions<A: DataAccess = NoData> {
+    access: PhantomData<A>,
+    rights: FileRights,
     create: bool,
     create_new: bool,
     truncate: bool,
@@ -141,22 +156,62 @@ pub struct FileOptions {
     sequential_scan: bool,
 }
 
-impl FileOptions {
-    /// Nothing requested: give the access rights before opening.
+impl Default for FileOptions<NoData> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FileOptions<NoData> {
+    /// Nothing requested: no data access and no other right. Ask to [`read`](Self::read) and
+    /// [`write`](Self::write) before opening a file that is to become a target.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            access: PhantomData,
+            rights: FileRights::NONE,
+            create: false,
+            create_new: false,
+            truncate: false,
+            random_access: false,
+            sequential_scan: false,
+        }
+    }
+}
+
+impl<A: DataAccess> FileOptions<A> {
+    /// Ask for the right to read the data (`FILE_READ_DATA`). The options carry the access this adds
+    /// to what they already had: [`NoData`] becomes [`ReadOnly`](super::ReadOnly) and
+    /// [`WriteOnly`](super::WriteOnly) becomes [`ReadWrite`].
+    pub fn read(self) -> FileOptions<A::WithRead> {
+        self.with_access()
     }
 
-    /// The access rights to open with (`dwDesiredAccess`). A file target needs a data right, which
-    /// [`FileRights::READ_DATA`], [`FileRights::WRITE_DATA`] or a generic right that maps to one
-    /// supplies, and an open without one is refused as invalid input before any call is made, not
-    /// when the first operation fails. What the file's security allows is the kernel's to say, and
-    /// its refusal reaches the caller as its own error.
+    /// Ask for the right to write the data (`FILE_WRITE_DATA`), as [`read`](Self::read) asks to read.
+    pub fn write(self) -> FileOptions<A::WithWrite> {
+        self.with_access()
+    }
+
+    /// The rights to open with besides the data access (`dwDesiredAccess`): the attribute, delete and
+    /// security rights, which gate calls made on the handle this crate lends and not anything it
+    /// does itself. What the file's security allows is the kernel's to say, and its refusal reaches
+    /// the caller as its own error.
     ///
     /// Calling this again replaces the rights; join them with `|` to ask for several.
-    pub fn access(mut self, access: FileRights) -> Self {
-        self.access = access;
+    pub fn rights(mut self, rights: FileRights) -> Self {
+        self.rights = rights;
         self
+    }
+
+    fn with_access<A2: DataAccess>(self) -> FileOptions<A2> {
+        FileOptions {
+            access: PhantomData,
+            rights: self.rights,
+            create: self.create,
+            create_new: self.create_new,
+            truncate: self.truncate,
+            random_access: self.random_access,
+            sequential_scan: self.sequential_scan,
+        }
     }
 
     /// Create the file if it does not exist.
@@ -171,7 +226,11 @@ impl FileOptions {
         self
     }
 
-    /// Truncate the file to nothing on opening.
+    /// Empty the file once it is open. The file is opened with `OPEN_EXISTING` and emptied after, as
+    /// for [`create`](Self::create) and `truncate` together, and not with `TRUNCATE_EXISTING`:
+    /// `CreateFileW` documents that disposition as needing `GENERIC_WRITE`, which the write access
+    /// does not ask for, and an open with `FILE_WRITE_DATA` in its place was measured to be refused
+    /// with `ERROR_INVALID_PARAMETER`. Emptying after the open is not atomic with it.
     pub fn truncate(mut self, truncate: bool) -> Self {
         self.truncate = truncate;
         self
@@ -205,26 +264,21 @@ impl FileOptions {
     }
 
     /// What this asks of `CreateFileW`, with `flags` added to the flags it implies, or a refusal for
-    /// a combination that cannot mean anything: no data right, or (as `std::fs::OpenOptions`
-    /// refused, until `DI-13.7`) creating or truncating without the right to write.
+    /// a combination that cannot mean anything: (as `std::fs::OpenOptions` refused, until
+    /// `DI-13.7`) creating or truncating without the right to write.
     fn parameters(self, flags: u32) -> io::Result<open_request::Parameters> {
-        let access = self.access;
-        if !access.grants_a_data_right() {
-            return Err(invalid_input(
-                "a file target needs a data right: READ_DATA, WRITE_DATA, or a generic right that includes one",
-            ));
-        }
-        if !access.grants_write_data() && self.creates_or_truncates() {
+        if A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {
             return Err(invalid_input(
                 "creating or truncating a file requires write access",
             ));
         }
-        // `CREATE_ALWAYS` is not used: a created-and-truncated file is opened with `OPEN_ALWAYS`
-        // and emptied once open, as std does.
+        // Neither `CREATE_ALWAYS` nor `TRUNCATE_EXISTING` is used: a truncated file is opened and
+        // emptied once open, as std does for a created one (the second needs `GENERIC_WRITE`, which
+        // the data access does not ask for).
         let (disposition, truncate_after) = match (self.create, self.truncate, self.create_new) {
             (false, false, false) => (OPEN_EXISTING, false),
             (true, false, false) => (OPEN_ALWAYS, false),
-            (false, true, false) => (TRUNCATE_EXISTING, false),
+            (false, true, false) => (OPEN_EXISTING, true),
             (true, true, false) => (OPEN_ALWAYS, true),
             (_, _, true) => (CREATE_NEW, false),
         };
@@ -242,7 +296,7 @@ impl FileOptions {
             hints |= FILE_FLAG_SEQUENTIAL_SCAN;
         }
         Ok(open_request::Parameters {
-            access: access.bits(),
+            access: A::RIGHTS | self.rights.bits(),
             disposition,
             flags: flags | reparse | hints,
             truncate_after,
@@ -278,46 +332,62 @@ impl fmt::Display for RemoteDevice {
 
 impl std::error::Error for RemoteDevice {}
 
-/// A file this crate opened, in buffering mode `B`: a [`SharedHandle`] and what is known of it
-/// because of how it was opened. Cloning shares the one handle.
+/// A file this crate opened, in buffering mode `B` and with data access `A`: a [`SharedHandle`] and
+/// what is known of it because of how it was opened. Cloning shares the one handle.
 ///
 /// It is what a [`Win32FileTarget`](super::Win32FileTarget) is made from, and the only thing it
-/// can be made from; the module documentation says why.
+/// can be made from; the module documentation says why. A target needs a data right, so a file
+/// opened with [`NoData`] cannot be made into one.
 ///
 /// A consumer that needs the stronger warranty says so in its signature, and a cached file cannot
 /// be passed:
 ///
 /// ```compile_fail,E0308
-/// use win_durable_ioring::windows_backend::{
-///     Cached, FileOptions, FileRights, OpenedFile, Unbuffered,
-/// };
+/// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered};
 ///
 /// fn needs_an_unbuffered_file(_: OpenedFile<Unbuffered>) {}
 ///
-/// let options = FileOptions::new().access(FileRights::READ_DATA);
+/// let options = FileOptions::new().read().write();
 /// let cached = OpenedFile::<Cached>::open("a-file", options).unwrap();
 /// needs_an_unbuffered_file(cached);
 /// ```
+///
+/// Nor can one opened for reading only be given where reading and writing are asked for:
+///
+/// ```compile_fail,E0308
+/// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, ReadWrite};
+///
+/// fn needs_both(_: OpenedFile<Cached, ReadWrite>) {}
+///
+/// let read_only = OpenedFile::<Cached, _>::open("a-file", FileOptions::new().read()).unwrap();
+/// needs_both(read_only);
+/// ```
+///
+/// The data access is a type parameter after the buffering mode, and a parameter written in a path
+/// takes its default, [`ReadWrite`], when it is left off, so a file opened with other options names it
+/// or leaves it to be inferred with `_`: `OpenedFile::<Cached, _>::open(path, options)`.
 #[derive(Clone, Debug)]
-pub struct OpenedFile<B: Buffering = Cached> {
+pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedFile<B> {
-    /// Open `path` as `options` says, in buffering mode `B`.
+impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
+    /// Open `path` as `options` says, in buffering mode `B`. The handle has the data access the
+    /// options were given, which is its type `A`.
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::InvalidInput`] if `options` carry no data right, before anything is touched.
-    /// Otherwise whatever the open reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
+    /// [`io::ErrorKind::InvalidInput`] if `options` create or truncate a file and carry no right to
+    /// write, before anything is touched (until `DI-13.7` removes it). Otherwise whatever the open
+    /// reports, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error)
     /// when `B` can claim its warranty only on a local device and `path` is on a remote one. That
     /// is decided from the path's final location, which resolves links and mapped drives, before
     /// anything is created; the file can still be replaced by a link in the time between.
-    pub fn open(path: impl AsRef<Path>, options: FileOptions) -> io::Result<Self> {
+    pub fn open(path: impl AsRef<Path>, options: FileOptions<A>) -> io::Result<Self> {
         let path = path.as_ref();
-        // Decided before anything is touched: what is asked for either makes a file target or it
+        // Decided before anything is touched: what is asked for either makes a valid request or it
         // does not.
         let parameters = options.parameters(B::FLAGS)?;
         if B::LOCAL_DEVICE_ONLY {
@@ -333,7 +403,7 @@ impl<B: Buffering> OpenedFile<B> {
         Ok(Self {
             handle: SharedHandle::from(handle),
             geometry: B::geometry(),
-            buffering: PhantomData,
+            mode: PhantomData,
         })
     }
 
@@ -350,7 +420,7 @@ impl<B: Buffering> OpenedFile<B> {
     }
 }
 
-impl OpenedFile<Unbuffered> {
+impl<A: DataAccess> OpenedFile<Unbuffered, A> {
     /// State the device's sector size, for a device whose sectors are smaller than
     /// [`Unbuffered::DEFAULT_SECTOR_SIZE`]. A size that is too small for the device is refused by
     /// the device on the first transfer that needs more, as an error on that operation's
@@ -365,13 +435,13 @@ impl OpenedFile<Unbuffered> {
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedFile<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedFile<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedFile<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedFile<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }

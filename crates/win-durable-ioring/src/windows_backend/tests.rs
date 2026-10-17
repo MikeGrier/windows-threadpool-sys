@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use windows_ioring_sys::{Batch, InjectedFailure, IoBuf, IoRing, PushOptions, RingCondition};
 
 use super::{
-    FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget, WindowsBackend,
-    WindowsBackendError, WindowsBackendRefusal, WindowsBackendSetup, refusal_cause, transfer,
+    FileOptions, OpenedFile, Unbuffered, Win32FileTarget, WindowsBackend, WindowsBackendError,
+    WindowsBackendRefusal, WindowsBackendSetup, refusal_cause, transfer,
 };
 use crate::dioring::tests::TempFile;
 use durable_ioring::backend::{
@@ -554,11 +554,8 @@ fn a_file_target_claims_what_its_open_mode_allows() {
     assert!(!cached.capabilities().write_through());
 
     let unbuffered = Win32FileTarget::new(
-        OpenedFile::<Unbuffered>::open(
-            &file.0,
-            FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
-        )
-        .expect("open unbuffered"),
+        OpenedFile::<Unbuffered>::open(&file.0, FileOptions::new().read().write())
+            .expect("open unbuffered"),
     )
     .with_domains([FlushDomain::new(b"disk".as_slice())]);
     let description = unbuffered.describe();

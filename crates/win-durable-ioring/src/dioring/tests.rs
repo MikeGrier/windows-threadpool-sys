@@ -11,7 +11,7 @@ use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{InterruptTime, TimePoint};
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
-use crate::windows_backend::{FileOptions, FileRights, OpenedFile, Win32FileTarget};
+use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
 use durable_ioring::DurableRing;
 use durable_ioring::backend::IoBackend;
 use durable_ioring::{DurabilityProvider, FlushRequest};
@@ -118,11 +118,8 @@ impl TempFile {
     }
 
     pub(crate) fn open(&self) -> OpenedFile {
-        OpenedFile::open(
-            &self.0,
-            FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
-        )
-        .expect("open the temporary file")
+        OpenedFile::open(&self.0, FileOptions::new().read().write())
+            .expect("open the temporary file")
     }
 
     /// Whether any handle to the file is open: an exclusive open fails exactly then.

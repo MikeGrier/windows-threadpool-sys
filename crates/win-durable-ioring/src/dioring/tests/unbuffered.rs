@@ -8,7 +8,7 @@ use io_buffers::AlignedBuf;
 
 use super::{QUEUE, TempFile};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
-use crate::windows_backend::{FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget};
+use crate::windows_backend::{FileOptions, OpenedFile, ReadWrite, Unbuffered, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
     DurableRing, Entry, IoTarget, IoTargetKey, LineageHandle, OpCompletion, Outcome, PushRefusal,
@@ -21,18 +21,15 @@ const BOUND: Duration = Duration::from_secs(10);
 
 type AlignedRing = Dioring<AlignedBuf, u64, u32>;
 
-fn unbuffered(temp: &TempFile, options: FileOptions) -> Win32FileTarget {
+fn unbuffered(temp: &TempFile, options: FileOptions<ReadWrite>) -> Win32FileTarget {
     Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&temp.0, options).expect("open unbuffered"))
 }
 
 fn instance(temp: &TempFile) -> (AlignedRing, LineageHandle) {
-    instance_with(
-        temp,
-        FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE),
-    )
+    instance_with(temp, FileOptions::new().read().write())
 }
 
-fn instance_with(temp: &TempFile, options: FileOptions) -> (AlignedRing, LineageHandle) {
+fn instance_with(temp: &TempFile, options: FileOptions<ReadWrite>) -> (AlignedRing, LineageHandle) {
     let target = unbuffered(temp, options);
     assert_eq!(target.warranty(), WarrantyClass::SharedDevice);
     assert!(target.capabilities().write_through());
@@ -74,7 +71,8 @@ fn an_unbuffered_file_opened_with_cache_hints_runs_through_the_ring() {
     for (random, sequential) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = TempFile::new("unbuffered-hints");
         let options = FileOptions::new()
-            .access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE)
+            .read()
+            .write()
             .random_access(random)
             .sequential_scan(sequential);
         let (mut ring, lineage) = instance_with(&temp, options);

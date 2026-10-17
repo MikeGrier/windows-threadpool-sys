@@ -4,6 +4,7 @@
 
 use win_shared_os_owned_handle::SharedHandle;
 
+use super::data_access::HasData;
 use super::opened_disk::OpenedDisk;
 use super::opened_file::{Buffering, OpenedFile};
 use super::opened_volume::OpenedVolume;
@@ -19,6 +20,17 @@ use durable_ioring::{Capabilities, Geometry, IoTarget, WarrantyClass};
 /// [`Unbuffered`](super::Unbuffered) is [`WarrantyClass::SharedDevice`], needs a sector's alignment,
 /// and offers per-write write-through. [`WarrantyClass::Complete`] is never one's: it needs
 /// knowledge of what else writes the device, which a volume's lock does not give (DI-D-61).
+///
+/// A target needs a data right, so it is made only from a handle whose data access is [`HasData`]: one
+/// opened with [`NoData`](super::NoData) is refused when the program is compiled, not when the
+/// first operation fails.
+///
+/// ```compile_fail,E0277
+/// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Win32FileTarget};
+///
+/// let no_data = OpenedFile::<Cached, _>::open("a-file", FileOptions::new()).unwrap();
+/// let _ = Win32FileTarget::new(no_data);
+/// ```
 ///
 /// A volume's flush domains are found from its disks. A file's are what it cannot know, so they are
 /// declared with [`with_domains`](Self::with_domains); declaring them on a volume adds to the ones
@@ -40,7 +52,7 @@ pub struct Win32FileTarget {
 impl Win32FileTarget {
     /// The target `file` makes, claiming what its open mode allows and no more.
     #[must_use]
-    pub fn new<B: Buffering>(file: OpenedFile<B>) -> Self {
+    pub fn new<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {
         Self {
             geometry: file.geometry(),
             handle: file.handle().clone(),
@@ -55,7 +67,7 @@ impl Win32FileTarget {
     /// The target `volume` makes: its sector's alignment, the flush domains of the disks it sits
     /// on, and what its open mode allows and no more.
     #[must_use]
-    pub fn from_volume<B: Buffering>(volume: OpenedVolume<B>) -> Self {
+    pub fn from_volume<B: Buffering, A: HasData>(volume: OpenedVolume<B, A>) -> Self {
         let found = volume.flush_domains();
         Self {
             geometry: volume.geometry(),
@@ -71,7 +83,7 @@ impl Win32FileTarget {
     /// The target `disk` makes: its sector's alignment, the disk itself as its flush domain, and
     /// what its open mode allows and no more.
     #[must_use]
-    pub fn from_disk<B: Buffering>(disk: OpenedDisk<B>) -> Self {
+    pub fn from_disk<B: Buffering, A: HasData>(disk: OpenedDisk<B, A>) -> Self {
         let found = vec![disk.flush_domain()];
         Self {
             geometry: disk.geometry(),

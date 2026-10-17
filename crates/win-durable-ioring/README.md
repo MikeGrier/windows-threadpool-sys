@@ -43,12 +43,16 @@ write-through. A consumer that needs the stronger warranty asks for `OpenedFile<
 own signature, and a cached file cannot be passed. A handle opened elsewhere cannot be given to a
 target in this version.
 
-The access an open asks for is a set of named rights, `FileRights`, joined with `|` and given to
-`FileOptions::access`: the documented file access rights (`READ_DATA`, `WRITE_DATA`, `DELETE` and the
-rest) and the generic ones. There is no constructor from a raw mask, so append-only access, which
-would land every write at the end of the file whatever offset the core names, cannot be asked for. A
-file target needs a data right, and an open without one is refused as invalid input before any call is
-made; what the file's security allows is the kernel's to say.
+The data access of a handle is its type. `FileOptions::new()` asks for none, `read()` and `write()` add
+the right to read and to write, and the file an open makes is an `OpenedFile<B, A>` whose `A` is
+`NoData`, `ReadOnly`, `WriteOnly` or `ReadWrite`. A target needs a data right, so a file opened with
+`NoData` cannot be made into one, and the program does not compile. `OpenedDisk` and `OpenedVolume` carry
+the same parameter, so either can be opened for reading only. The other rights an open can ask for, the
+attribute, delete and security rights, are a `FileRights` set given to `FileOptions::rights`; they gate
+calls a consumer makes on the handle it is lent and not anything this crate does. There is no
+constructor from a raw mask and no right for appending only, which would land every write at the end
+of the file whatever offset the core names, so it cannot be asked for. What the file's security
+allows is the kernel's to say.
 
 `FileOptions::random_access` and `FileOptions::sequential_scan` are the two cache hints
 (`FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN`). They are passed to an unbuffered file as
@@ -58,13 +62,13 @@ on an unbuffered file can be read two ways, and the methods' own documentation s
 
 ```rust
 use win_durable_ioring::windows_backend::{
-    Cached, FileOptions, FileRights, OpenedFile, Unbuffered, Win32FileTarget,
+    Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
 };
 use win_durable_ioring::{IoTarget, WarrantyClass};
 
 let path = std::env::temp_dir().join(format!("durable-ioring-open-{}", std::process::id()));
 std::fs::write(&path, [0u8; 8192])?;
-let options = FileOptions::new().access(FileRights::GENERIC_READ | FileRights::GENERIC_WRITE);
+let options = FileOptions::new().read().write();
 
 let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(&path, options)?);
 assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
@@ -94,11 +98,13 @@ file system on it needs and which fails if anything else has the volume open.
 
 ```rust,no_run
 use win_durable_ioring::windows_backend::{
-    OpenedVolume, Unbuffered, VolumeOptions, VolumePath, Win32FileTarget,
+    OpenedVolume, ReadWrite, Unbuffered, VolumeOptions, VolumePath, Win32FileTarget,
 };
 
 let path = VolumePath::drive('E')?;
-let volume = OpenedVolume::<Unbuffered>::open(&path, VolumeOptions::new().lock(true))?;
+// The data access is named in the type: a volume opened for reading only is `ReadOnly`.
+let volume =
+    OpenedVolume::<Unbuffered, ReadWrite>::open(&path, VolumeOptions::new().lock(true))?;
 let target = Win32FileTarget::from_volume(volume);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -114,9 +120,12 @@ disk with volumes on it is written through them, or has them locked or is taken 
 tests here use a disk with no partition. Opening one for writing needs an administrator.
 
 ```rust,no_run
-use win_durable_ioring::windows_backend::{DiskPath, OpenedDisk, Unbuffered, Win32FileTarget};
+use win_durable_ioring::windows_backend::{
+    DiskPath, OpenedDisk, ReadOnly, Unbuffered, Win32FileTarget,
+};
 
-let disk = OpenedDisk::<Unbuffered>::open(DiskPath::number(3))?;
+// The data access is named in the type: this one is opened for reading only.
+let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(DiskPath::number(3))?;
 let target = Win32FileTarget::from_disk(disk);
 # Ok::<(), std::io::Error>(())
 ```
@@ -156,9 +165,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().access(
-#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
-#     ),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
@@ -242,9 +249,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().access(
-#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
-#     ),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,
@@ -333,9 +338,7 @@ fails as never issued.
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
 #     &path,
-#     windows_backend::FileOptions::new().access(
-#         windows_backend::FileRights::GENERIC_READ | windows_backend::FileRights::GENERIC_WRITE,
-#     ),
+#     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
 #     submission_queue_size: 64,

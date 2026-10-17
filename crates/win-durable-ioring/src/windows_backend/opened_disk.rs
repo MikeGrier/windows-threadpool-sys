@@ -23,6 +23,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::bytes_per_sector;
 
+use super::data_access::{DataAccess, ReadWrite};
 use super::opened_file::{Buffering, Unbuffered};
 use super::opened_volume::disk_flush_domain;
 use durable_ioring::{FlushDomain, Geometry};
@@ -62,22 +63,26 @@ impl fmt::Display for DiskPath {
 }
 
 /// A whole physical disk this crate opened, in buffering mode `B` ([`Unbuffered`] unless said
-/// otherwise): a [`SharedHandle`], its number and the sector it is addressed in. Cloning shares the
-/// one handle.
+/// otherwise) and with data access `A` ([`ReadWrite`] unless said otherwise): a [`SharedHandle`],
+/// its number and the sector it is addressed in. Cloning shares the one handle.
 ///
-/// It is what [`Win32FileTarget::from_disk`](super::Win32FileTarget::from_disk) is made from.
+/// It is what [`Win32FileTarget::from_disk`](super::Win32FileTarget::from_disk) is made from, when
+/// `A` has a data right. The data access is the one the open was given, which no argument carries, so
+/// it is named in the type at the call: `OpenedDisk::<Unbuffered, ReadOnly>::open(path)`.
 #[derive(Clone, Debug)]
-pub struct OpenedDisk<B: Buffering = Unbuffered> {
+pub struct OpenedDisk<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     disk_number: u32,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedDisk<B> {
-    /// Open `path` for reading and writing in buffering mode `B`, and find its sector size.
+impl<B: Buffering, A: DataAccess> OpenedDisk<B, A> {
+    /// Open `path` with data access `A` in buffering mode `B`, and find its sector size.
     ///
-    /// Opening a disk for writing needs an account that is an administrator.
+    /// Opening a disk for writing needs an account that is an administrator. Opening it with
+    /// [`NoData`](super::NoData) asks for no data right, which is enough to query the disk, and the
+    /// result cannot be made into a target.
     ///
     /// # Errors
     ///
@@ -85,8 +90,7 @@ impl<B: Buffering> OpenedDisk<B> {
     /// device's own error from the sector size control.
     pub fn open(path: DiskPath) -> io::Result<Self> {
         let file = OpenOptions::new()
-            .read(true)
-            .write(true)
+            .access_mode(A::RIGHTS)
             .custom_flags(B::FLAGS)
             .open(path.path())?;
         let sector = bytes_per_sector(&file)?;
@@ -96,7 +100,7 @@ impl<B: Buffering> OpenedDisk<B> {
             handle: SharedHandle::from(file),
             geometry,
             disk_number: path.disk_number(),
-            buffering: PhantomData,
+            mode: PhantomData,
         })
     }
 
@@ -132,18 +136,18 @@ impl<B: Buffering> OpenedDisk<B> {
             handle,
             geometry: B::sector_geometry(sector).expect("a power of two"),
             disk_number,
-            buffering: PhantomData,
+            mode: PhantomData,
         }
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedDisk<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedDisk<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedDisk<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedDisk<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }

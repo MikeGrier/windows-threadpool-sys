@@ -3,7 +3,7 @@
   "testArgs": ["-p", "win-durable-ioring", "--no-fail-fast"],
   "whyTestArgs": "--no-fail-fast, so the doctests run even when the unit tests have already failed. README.md's worked examples are compiled as doctests and claim to break the build when a change invalidates them (DI-3.2.4); without this flag cargo stops at the first failing target, the doctests never run under any sabotage the unit tests catch, and nothing shows that claim is true.",
   "description": "Sabotages for win-durable-ioring, the Windows driver (DI-8.2); the portable core's are in ../durable-ioring/sabotage.json. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. What would cover these creation failures, here and below, is a fault seam in win-sync-sys and windows-threadpool-sys of the kind the ring crate has (its kernel-seam), which neither has: the failure is the process running out of handles or memory, which a test cannot cause without breaking its own harness. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a registration left in flight when the ring is sealed (only a raw push makes one, which is unsafe, which this crate forbids; a completion the ring held nothing for is not a case at all, since the ring is an owned one, the ring crate's D-91); a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait ending as abandoned (windows_backend/wait.rs) is absent: only a mutex is abandoned, and making one needs unsafe, which this crate forbids; what would cover it is a safe Mutex in win-sync-sys (its WS-1+.3). Its survives entry is named DI-7.3: blind spot. The notification's wait failing, and Dioring::pump reporting that error, are covered, by a duplicate of an event with no SYNCHRONIZE access, which win-sync-sys makes without unsafe. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's. Which pool a delivery's callback runs on is covered, for the pool's delivery and the signalled one's, by holding the named pool's only thread (held_pool.rs).",
+  "notCoveredHere": "A ring without the registration op is absent as a cause of a construction failure: its path is the refused build's, which tests reach (DI-7.2), and the capability probe is outside the ring crate's seam (its D-60), so nothing can make the probe refuse. Also absent -- no test can produce the failure: creating the readiness event and pool delivery at construction. What would cover these creation failures, here and below, is a fault seam in win-sync-sys and windows-threadpool-sys of the kind the ring crate has (its kernel-seam), which neither has: the failure is the process running out of handles or memory, which a test cannot cause without breaking its own harness. EntryDelivery::new's failures after the readiness signal is duplicated -- creating the thread-pool wait, and setting the signal -- and a delivery ended by a failed pop, are absent for the same reason; delivery.rs says so. The Windows path's turning of a short write count into a fault (windows_backend.rs's transfer) is reached only by its unit tests: the I/O ring does not complete a file or volume write short (DI-D-50). Also absent from the Windows backend (windows_backend.rs), as no test can produce them: a registration left in flight when the ring is sealed (only a raw push makes one, which is unsafe, which this crate forbids; a completion the ring held nothing for is not a case at all, since the ring is an owned one, the ring crate's D-91); a notification that cannot be duplicated, which also ends a pumped instance's construction (the delivery's handing the engine back is reached over the in-memory backend, in durable-ioring's pump/tests.rs); and an owned buffer the ring refuses, which needs one longer than a u32. The Windows notification's wait ending as abandoned (windows_backend/wait.rs) is absent: only a mutex is abandoned, and making one needs unsafe, which this crate forbids; what would cover it is a safe Mutex in win-sync-sys (its WS-1+.3). Its survives entry is named DI-7.3: blind spot. The notification's wait failing, and Dioring::pump reporting that error, are covered, by a duplicate of an event with no SYNCHRONIZE access, which win-sync-sys makes without unsafe. SignalledDelivery::new's failures (making or duplicating its event, and the ring crate's wake, as the pool's) are absent for the same reason as the pool's. Which pool a delivery's callback runs on is covered, for the pool's delivery and the signalled one's, by holding the named pool's only thread (held_pool.rs). The data access of an OpenedDisk and an OpenedVolume, which their open passes to the kernel as the marker's rights (DI-13.8), is reached only by the raw_disk and raw_volume tests, which need an administrator and a scratch virtual disk and so run in CI and not here; no entry here sabotages it, since none could be caught locally.",
   "sabotages": [
     {
       "name": "DI-3.2.1: a duplicate file key is not refused",
@@ -1221,15 +1221,15 @@
       "replace": ["        let mut hints = 0u32;\n"]
     },
     {
-      "name": "DI-13.3: a right is the value of another right",
+      "name": "DI-13.8: a right is the value of another right",
       "file": "src/windows_backend/file_rights.rs",
       "expect": "caught",
-      "why": "Each right is the constant it is named for, so a member holding a neighbour's value asks the kernel for something else under a name that says otherwise. Caught by the test that checks every single right against the constant it is named for.",
-      "find": ["        WRITE_DATA = FILE_WRITE_DATA;\n"],
-      "replace": ["        WRITE_DATA = FILE_READ_DATA;\n"]
+      "why": "Each right is the constant it is named for, so a member holding a neighbour's value asks the kernel for something else under a name that says otherwise. Caught by the test that checks every right against the constant it is named for.",
+      "find": ["    WRITE_ATTRIBUTES = FILE_WRITE_ATTRIBUTES;\n"],
+      "replace": ["    WRITE_ATTRIBUTES = FILE_READ_ATTRIBUTES;\n"]
     },
     {
-      "name": "DI-13.3: containing a set only needs one of its rights",
+      "name": "DI-13.8: containing a set only needs one of its rights",
       "file": "src/windows_backend/file_rights.rs",
       "expect": "caught",
       "why": "A set contains another when it holds every right in it, so a test that asks for any of them would call a read-only set a read-write one.",
@@ -1237,36 +1237,68 @@
       "replace": ["        self.0 & other.0 != 0 || other.0 == 0\n"]
     },
     {
-      "name": "DI-13.3: GENERIC_WRITE no longer counts as the right to write data",
-      "file": "src/windows_backend/file_rights.rs",
+      "name": "DI-13.8: read-only access asks for the right to write",
+      "file": "src/windows_backend/data_access.rs",
       "expect": "caught",
-      "why": "The kernel expands a generic right, so a set holding only GENERIC_WRITE is a data right and may create or truncate. Without it a generic write-only open is refused as having no data right.",
-      "find": ["        self.0 & (FILE_WRITE_DATA | GENERIC_WRITE | GENERIC_ALL) != 0\n"],
-      "replace": ["        self.0 & (FILE_WRITE_DATA | GENERIC_ALL) != 0\n"]
+      "why": "A marker is the data rights it names and no more, so a read-only handle that asked for write would be granted one the type says it lacks. Caught by the tests that have the kernel judge each access.",
+      "find": ["    const RIGHTS: u32 = FILE_READ_DATA;\n"],
+      "replace": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"]
     },
     {
-      "name": "DI-13.3: an open with no data right is let through",
+      "name": "DI-13.8: write-only access asks for the right to read",
+      "file": "src/windows_backend/data_access.rs",
+      "expect": "caught",
+      "why": "The same, the other way round: a write-only handle that asked for read would read when its type says it cannot.",
+      "find": ["    const RIGHTS: u32 = FILE_WRITE_DATA;\n"],
+      "replace": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"]
+    },
+    {
+      "name": "DI-13.8: the other rights are left out of the open",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "A file target needs a data right, and an open without one is refused as invalid input before any call is made. Caught by the test whose path does not exist, so a call that reached the kernel would have said not-found.",
-      "find": ["        if !access.grants_a_data_right() {\n"],
-      "replace": ["        if false && !access.grants_a_data_right() {\n"]
+      "why": "What an open asks for is the data access and the other rights joined, so an open that dropped the others would ask for less than the caller said. Caught by the test of what the options ask the kernel for and by the one that sets a time through a handle opened with WRITE_ATTRIBUTES.",
+      "find": ["            access: A::RIGHTS | self.rights.bits(),\n"],
+      "replace": ["            access: A::RIGHTS,\n"]
     },
     {
-      "name": "DI-13.3: the rights asked for are not the rights opened",
+      "name": "DI-13.8: changing the data access forgets the other rights",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "The set is handed to CreateFileW as asked, so an open that always asked for the same read and write rights would grant a read-only caller a write. Caught by the tests that open a right and have the kernel refuse the operation it does not cover.",
-      "find": ["            access: access.bits(),\n"],
-      "replace": ["            access: access.bits() | 2,\n"]
+      "why": "read() and write() move the type and carry everything else, so one that reset the other rights would lose what an earlier call asked for.",
+      "find": ["            rights: self.rights,\n            create: self.create,\n"],
+      "replace": ["            rights: FileRights::NONE,\n            create: self.create,\n"]
     },
     {
-      "name": "DI-13.3 control: the same test of containment with its operands the other way round",
+      "name": "DI-13.8: creating needs no right to write",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Creating or truncating a file without the right to write is refused as invalid input until DI-13.7 removes the check, and the other rights do not stand in for it.",
+      "find": ["        if A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {\n"],
+      "replace": ["        if false && A::RIGHTS & FILE_WRITE_DATA == 0 && self.creates_or_truncates() {\n"]
+    },
+    {
+      "name": "DI-13.8: a truncated file is not emptied",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "TRUNCATE_EXISTING needs GENERIC_WRITE, which the data access does not ask for, so a file that is only truncated is opened and emptied after. Without the emptying the option would do nothing.",
+      "find": ["            (false, true, false) => (OPEN_EXISTING, true),\n"],
+      "replace": ["            (false, true, false) => (OPEN_EXISTING, false),\n"]
+    },
+    {
+      "name": "DI-13.8 control: the same test of containment with its operands the other way round",
       "file": "src/windows_backend/file_rights.rs",
       "expect": "survives",
       "why": "A control: the same predicate with its operands swapped, which no test can tell apart, so a harness that reports it caught is reporting something other than the tests.",
       "find": ["        self.0 & other.0 == other.0\n"],
       "replace": ["        other.0 & self.0 == other.0\n"]
+    },
+    {
+      "name": "DI-13.8 control: the two data rights joined in the other order",
+      "file": "src/windows_backend/data_access.rs",
+      "expect": "survives",
+      "why": "A control: the same mask written the other way round, which no test can tell apart.",
+      "find": ["    const RIGHTS: u32 = FILE_READ_DATA | FILE_WRITE_DATA;\n"],
+      "replace": ["    const RIGHTS: u32 = FILE_WRITE_DATA | FILE_READ_DATA;\n"]
     }
   ]
 }

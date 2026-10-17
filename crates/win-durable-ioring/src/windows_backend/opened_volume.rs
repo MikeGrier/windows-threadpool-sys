@@ -24,6 +24,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, bytes_per_sector, lock_volume, volume_disk_extents};
 
+use super::data_access::{DataAccess, ReadWrite};
 use super::opened_file::{Buffering, Unbuffered};
 use durable_ioring::{FlushDomain, Geometry};
 
@@ -125,7 +126,7 @@ pub struct VolumeOptions {
 }
 
 impl VolumeOptions {
-    /// Nothing requested beyond opening the volume for reading and writing.
+    /// Nothing requested beyond opening the volume.
     pub fn new() -> Self {
         Self::default()
     }
@@ -134,31 +135,39 @@ impl VolumeOptions {
     /// the handle closes. A file system on the volume is flushed and writes nothing more, which is
     /// what lets a raw write to its own sectors be made; a volume with no file system needs none.
     /// Opening fails, and nothing is held, if anything else has the volume open.
+    ///
+    /// The `FSCTL_LOCK_VOLUME` page names no right the handle needs, so the lock is offered with any
+    /// data access and the kernel's error is the answer if one is needed; which it is was not
+    /// measured, since it needs an administrator.
     pub fn lock(mut self, lock: bool) -> Self {
         self.lock = lock;
         self
     }
 }
 
-/// A raw volume this crate opened, in buffering mode `B` ([`Unbuffered`] unless said otherwise): a
-/// [`SharedHandle`], the disks it sits on, the sector it is addressed in and whether it is locked.
-/// Cloning shares the one handle.
+/// A raw volume this crate opened, in buffering mode `B` ([`Unbuffered`] unless said otherwise) and
+/// with data access `A` ([`ReadWrite`] unless said otherwise): a [`SharedHandle`], the disks it sits
+/// on, the sector it is addressed in and whether it is locked. Cloning shares the one handle.
 ///
-/// It is what [`Win32FileTarget::from_volume`](super::Win32FileTarget::from_volume) is made from.
+/// It is what [`Win32FileTarget::from_volume`](super::Win32FileTarget::from_volume) is made from, when
+/// `A` has a data right. The data access is the one the open was given, which `options` do not carry,
+/// so it is named in the type at the call: `OpenedVolume::<Unbuffered, ReadOnly>::open(..)`.
 #[derive(Clone, Debug)]
-pub struct OpenedVolume<B: Buffering = Unbuffered> {
+pub struct OpenedVolume<B: Buffering = Unbuffered, A: DataAccess = ReadWrite> {
     handle: SharedHandle,
     geometry: Geometry,
     extents: Vec<DiskExtent>,
     locked: bool,
-    buffering: PhantomData<B>,
+    mode: PhantomData<(B, A)>,
 }
 
-impl<B: Buffering> OpenedVolume<B> {
-    /// Open `path` for reading and writing in buffering mode `B`, find its disks and sector size,
-    /// and lock it if `options` say so.
+impl<B: Buffering, A: DataAccess> OpenedVolume<B, A> {
+    /// Open `path` with data access `A` in buffering mode `B`, find its disks and sector size, and
+    /// lock it if `options` say so.
     ///
-    /// Opening a volume for writing needs an account that is an administrator.
+    /// Opening a volume for writing needs an account that is an administrator. Opening it with
+    /// [`NoData`](super::NoData) asks for no data right, which is enough to query the volume, and the
+    /// result cannot be made into a target.
     ///
     /// # Errors
     ///
@@ -168,8 +177,7 @@ impl<B: Buffering> OpenedVolume<B> {
     /// held.
     pub fn open(path: &VolumePath, options: VolumeOptions) -> io::Result<Self> {
         let file = OpenOptions::new()
-            .read(true)
-            .write(true)
+            .access_mode(A::RIGHTS)
             .custom_flags(B::FLAGS)
             .open(path.as_str())?;
         let extents = volume_disk_extents(&file)?;
@@ -184,7 +192,7 @@ impl<B: Buffering> OpenedVolume<B> {
             geometry,
             extents,
             locked: options.lock,
-            buffering: PhantomData,
+            mode: PhantomData,
         })
     }
 
@@ -232,18 +240,18 @@ impl<B: Buffering> OpenedVolume<B> {
             geometry: B::sector_geometry(sector).expect("a power of two"),
             extents,
             locked,
-            buffering: PhantomData,
+            mode: PhantomData,
         }
     }
 }
 
-impl<B: Buffering> AsHandle for OpenedVolume<B> {
+impl<B: Buffering, A: DataAccess> AsHandle for OpenedVolume<B, A> {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
     }
 }
 
-impl<B: Buffering> AsRawHandle for OpenedVolume<B> {
+impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedVolume<B, A> {
     fn as_raw_handle(&self) -> RawHandle {
         self.handle.as_raw_handle()
     }
