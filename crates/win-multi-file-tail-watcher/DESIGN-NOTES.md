@@ -29,6 +29,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
 | <a id="tw-d-14"></a>TW-D-14 | **The passes work in batches of 256 under the roster lock, the buffers in chunks of at most 64 KiB, and the roster stays a `BTreeMap`; sharding the probe across threads is a known remedy that is not built.** |
 | <a id="tw-d-15"></a>TW-D-15 | **A layer above the watcher reads the bytes each poll announces through an I/O ring, into owned buffers from a pool it keeps, and delivers them as chunks on an SQ of its own, as the reads complete.** No CQ: a chunk's `Drop` returns its buffer. |
+| <a id="tw-d-16"></a>TW-D-16 | **The reading layer is made public in a module of this crate, with the client choosing the buffer size, the buffer count, the client SQ capacity and the ring's two queue sizes; no size has a default yet.** |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -454,6 +455,29 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   buffer to another thread while the ring fills its neighbours, which its `RegisteredBuffers::get`
   does not (it borrows the whole registration mutably). This decision schedules no work for them, so
   their absence from the checklist is intentional.
+
+## TW-D-16: the reading layer becomes public, in a module of this crate
+
+The engineer, 2026-10-16, asked whether a client can choose the ring sizes, the buffer size and the
+buffer count, and said the public layer is not a new crate: "I would put this in a distinct new
+module within the crate".
+
+- **The layer is made public from this crate**, in a module of its own, and no crate is added. It
+  has been crate-internal since [TW-D-15](#tw-d-15) because its names were not chosen
+  ([TW-D-11](#tw-d-11)); this decision chooses to publish it and leaves the names to
+  [TW-9.3](CHECKLIST.md) and [TW-9.4](CHECKLIST.md).
+- **The client chooses five sizes**, all of which the internal constructors already take: the
+  buffer size, the buffer count, the client SQ's capacity, and the ring's submission and completion
+  queue sizes. The watcher's SQ capacity is the sixth, and is already a public argument.
+- **No size has a default yet**, as [TW-2.2](CHECKLIST.md) left the watcher's SQ capacity without
+  one: a default is a number nothing has chosen. Choosing them is measurement work and is parked in
+  the checklist.
+- **A size that cannot work is refused at construction**, naming the field and the bound, before
+  anything is allocated. The ring's rules for its two queue sizes, and how its completion queue
+  bounds the reads in flight against the buffer count, are measured first
+  ([TW-9.1](CHECKLIST.md)); nothing here states them until they are.
+- **Names are working positions.** `TailReader`, `TailReaderOptions` and a module `reader` are
+  placeholders from the plan; nothing should bind to them until TW-9.3 records them.
 
 ## Working positions (not decisions)
 

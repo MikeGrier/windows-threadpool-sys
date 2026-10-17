@@ -342,3 +342,23 @@ choice open to the engineer's correction; the decision text they sit under is
 - **Poll-done survives shutdown.** Abandoning only reads, and letting every other entry through, is
   what keeps the group accounting (a poll's poll-done waits for its reads) true after a stop with no
   special case.
+
+## TW-D-16
+
+The engineer asked whether a client could choose the ring sizes, the buffer size and the buffer
+count. The assistant found that the internal constructors take all of them, and that none of the
+layer is public, so no client outside the crate could. The engineer then said the public layer is not
+a new crate: "I would put this in a distinct new module within the crate".
+
+- **A new crate was not considered further.** The layer owns a `Watcher` and uses crate-internal
+  parts of it (`register_with`, `mark_terminal`, the stop flag). A second crate would need each of
+  those made public for one consumer, which is a larger public surface than the layer itself.
+- **No defaults.** A default buffer size or count is a number nothing has chosen, which is why
+  `Watcher::new` takes its capacity. Defaults need a measurement at realistic sizes, and the tests so
+  far use deliberately tiny ones. The assistant put it to the engineer as work, not as a gap.
+- **Refusal before allocation.** The pool allocates and zeroes every buffer when it is made, so an
+  invalid size found late would have paid for the allocation. The ring's own rules for its queue
+  sizes are not known from reading the code, which is why the first item measures them.
+- **Names left open.** The assistant proposed `TailReader` and `TailReaderOptions` for the types and
+  `reader` for the module, and asked whether "the layer's name" meant the types. It does: the module
+  and type names, since no crate name is in question.
