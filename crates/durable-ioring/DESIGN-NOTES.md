@@ -75,7 +75,8 @@ appear here.
 | <a id="di-d-61"></a>DI-D-61 | **A raw volume is a file target made from a volume this crate opened: one handle, one commit per volume, regions that are offsets the consumer allocates inside it, flush domains found from its disks, and never `Complete`.** The engineer, 2026-10-14 and 2026-10-15, closing `DI-10.2`. **Whole volume, not region targets** (the engineer: "the first is the intent"): the target is the volume, and "regions in it" are offsets the consumer chooses, so one commit per volume needs no change to the core; region targets over a shared handle, which the contract's "window over part of another" would be, would need commits coalesced across targets and are a different item. **The unsafe home** (the engineer: "unsafe home: sounds good, do it"): a new crate, [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1), over documented device controls only ([DI-D-60](#di-d-60)'s rule): `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, `IOCTL_DISK_GET_DRIVE_GEOMETRY`, `FSCTL_LOCK_VOLUME` and `FSCTL_UNLOCK_VOLUME`. **Provenance by construction**, as for a file: `OpenedVolume<B>` is opened here, by a `VolumePath` that can only be a drive letter or a volume GUID, and `Win32FileTarget::from_volume` takes it and nothing else. A volume that does not answer the extents control, which a remote volume and a handle that is not a volume do not, is refused, so a volume target is over this machine's own disks. **Alignment is the sector the device reports**, not a default: offsets and lengths, and the buffer's address when unbuffered. **Flush domains are found from the disks**, which the contract makes a backing's own obligation (its "Complete flush-domain declarations"): one per distinct disk, named `\\.\PhysicalDriveN` by `disk_flush_domain`, so a consumer declares the same bytes for a file on that disk and the two share a domain exactly when their bytes agree. A consumer's declaration on a volume adds to the found domains and never removes one, since a missing domain leaves a failure unreported. **The class is `SharedDevice` when unbuffered (`BestEffort` when cached, below) and never `Complete`** (the engineer: "your call. I don't feel strongly"): `Complete` is a device held exclusively with nothing else on it, and a volume's lock keeps other handles off the volume, not other writers off its disks, so a handle cannot show it, even locked and even with no other volume on the disks (an unmounted partition, a raw user of the disk, or another machine sharing a LUN is invisible to it). Claiming it would compute the wrong thing, which is the ground this repository removes an option on. What would change the answer is an attestation by a consumer that knows the disk is theirs alone, which is [`DI-10.3`](CHECKLIST.md)'s mechanism, not a new one; enumerating the machine's other volumes to rule out the visible sharers is parked in win-volume-sys as `WV-inf.2`, and would narrow the claim, not make it. **The lock** is `VolumeOptions::lock`: `FSCTL_LOCK_VOLUME` after the open, which flushes a file system and stops it writing, what a raw write to a mounted volume's own sectors needs and a volume with no file system does not, and which fails, holding nothing, if any other handle has the volume open. It is released when the handle closes, which for a target is when the instance ends. **A cached volume is allowed** (`OpenedVolume<Cached>`: `BestEffort`, offsets and lengths aligned to the sector, buffers not), so the option exists though the default is unbuffered. **D-44** ([windows-ioring-sys](../windows-ioring-sys/DESIGN-NOTES.md#d-44)'s spike-before-wrapping rule, left open under [DI-D-48](#di-d-48)): the assistant's proposal, which the engineer did not contradict, is that it applies inside a backing's implementation and does not gate the design; a flush-failure spike on a volume needs a disk that fails on demand, which a virtual disk does not, so it stays `DI-4.1`'s. **Evidence:** the raw I/O, the lock and the durable write were run elevated on 2026-10-15 against a scratch virtual disk created with `diskpart` (the engineer approved the run and `sudo`), five tests that are ignored by default and that CI runs on its administrator account; everything that needs no privilege runs by default. The lock being taken is a declared survivor of the default sabotage sweep, since only those tests can tell it from a lock that was not. |
 | <a id="di-d-62"></a>DI-D-62 | **A whole physical disk is a file target made from a disk this crate opened by number: its own flush domain, sector-aligned, and never `Complete`.** The engineer, 2026-10-15, asking for the volume target to be repeated against the disk rather than a partition on it, and then "since we're operating at a somewhat fundamental level of storage, you should be precise". Recorded as `DI-10.4`; the request was not a checklist item. **Provenance by construction**, as for a file and a volume ([DI-D-60](#di-d-60), [DI-D-61](#di-d-61)): `OpenedDisk<B>` is opened here, from a `DiskPath` that can only be a disk number, `\\.\PhysicalDriveN`, and `Win32FileTarget::from_disk` takes it and nothing else. **The disk is its own flush domain**, named by `disk_flush_domain` exactly as a volume on that disk names it, so a target on the disk and a target on a volume on it share one domain and a flush is not issued twice for the same device. A consumer's `with_domains` adds to it and never removes it, as for a volume. **Alignment is the sector the device reports**, through the same documented control as a volume (`IOCTL_DISK_GET_DRIVE_GEOMETRY`, in [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1)); `Buffering::volume_geometry` was renamed `sector_geometry` because it no longer describes only volumes. **The class is `SharedDevice` when unbuffered and `BestEffort` when cached, never `Complete`**, for the reason a volume's is: a handle to a disk cannot show that nothing else writes it. Only an attestation by a consumer that knows could claim more, and that is [DI-10.3](CHECKLIST.md). **Windows blocks a direct write under a mounted volume** (documented); a disk with volumes on it is written through them, or has them locked, or is taken offline first. The tests use a disk with no partition and no volume, so the blocking is documented here and not exercised. **The test helper is the safety, because the data is the disk's.** `ScratchDisk` creates and attaches an unpartitioned VHDX, then takes the disk number only from `diskpart`'s own report of the file it just made: exactly one `Filename:` equal to the canonical long path of that file, and exactly one `Associated disk#:` that is not 0. Anything else is a refusal, so no test writes to a disk it did not create. **Evidence**, an elevated run on 2026-10-15 of the five `raw_disk` tests on a 64 MiB scratch disk, all passing, with no disk or file left behind: `bytes_per_sector` answers on a physical-disk handle opened for reading and writing; the last sector is accepted and a transfer starting at the end transfers nothing; a per-write write-through request is accepted on the unbuffered handle. **Not verified:** the exact outcome of a transfer past the end, which the test pins only as "nothing transfers"; whether `bytes_per_sector` answers on a disk handle opened with no access; any disk that has a volume on it. **Scheduled work:** none beyond `DI-10.3`, which already carries the attestation question. |
 | <a id="di-d-63"></a>DI-D-63 | **A file is opened through `windows-namespace-request-sys`'s `OpenFile`: that crate carries every parameter of `CreateFileW` and decides none, and what an open means is decided here.** **Amended by [DI-D-64](#di-d-64): the list below of what was kept so that a caller sees no difference from `std` is superseded, because this crate reflects Win32 and not `std`; the code follows in `DI-13.7`.** The engineer, 2026-10-15: "yes take that dependency, and do those checks", after it was found that the workspace already had a memory-safe, un-narrowed wrapper for the open calls ([windows-namespace-request-sys](../windows-namespace-request-sys/README.md): `OpenFile`, `OpenFileByIdentifier`, and the handle queries). A new unsafe crate for opening, or a widened [win-volume-sys](../win-volume-sys/README.md), would have duplicated working, tested code, and the mono-repo rule is to fix the layer. **The division:** the request crate takes raw access, share and flag words and a path, and adds nothing; `win-durable-ioring` states which of them an open may use ([DI-D-60](#di-d-60)'s provenance), so `FileOptions` and `Buffering` stay here and the crate keeps `forbid(unsafe_code)`. **What std did that `CreateFileW` alone does not, kept so that a caller sees no difference**, each with a test and a sabotage: a path longer than `MAX_PATH` is opened in its verbatim form (the request crate refuses an ordinary path past `MAX_PATH` by design, so the conversion is the load-bearing step, and the test shows the request alone refuses the same path); a file that is created and truncated is opened `OPEN_ALWAYS` and emptied once open, as std does to avoid `CREATE_ALWAYS`'s semantics (rust-lang/rust#115745); a new file keeps `FILE_FLAG_OPEN_REPARSE_POINT`; every file is shared for reading, writing and deletion; no access, or creating or truncating without write access, is `InvalidInput`. **The two checks the engineer asked for.** First, that a synchronous `perform` is acceptable for an open: it is one `CreateFileW` call on the calling thread, which is what `std::fs::OpenOptions` was, so nothing is added. Second, that the handle is plain and unassociated, which the request crate documents and its code shows (no completion-port association, no flag added or removed): every ring test of this crate, which now opens its files this way and drives them through the ring, passes, and that is the empirical check. **Differences found and kept honest:** a created-and-truncated file is emptied after the open and not atomically with it, so another handle can see the old content in between; std's source (1.98) has one route for the combination that overwrites in a single kernel call and one that is `OPEN_ALWAYS` plus a manual truncation, and which of them an open takes was not established here, so whether std was atomic is unknown; and an ordinary path is judged by `GetFullPathNameW` as the request crate documents (a legacy device name such as `CON` resolves to the device), which was not compared with std's handling here. **Not verified:** the handle's inheritability is not read back, since this crate forbids `unsafe` and has no safe query for it; it follows from `OpenFile` passing no security attributes, which `CreateFileW` documents as a non-inheritable handle. **Scheduled work:** `DI-13.5` and `DI-13.6` (the SDDL constructor and the `ReOpenFile` entry, which the request crate lacks; [NR-3](../windows-namespace-request-sys/CHECKLIST.md)), and `DI-14.5` (the remote check is still made on the path). |
-| <a id="di-d-64-index"></a>DI-D-64 | **The open surface, parameter by parameter (`DI-13.1`): which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile` are exposed and as which type, which are excluded and why, and what each does to a target's claim.** The engineer, 2026-10-15 and 2026-10-16. This crate reflects Win32 and not `std`, so [DI-D-63](#di-d-63)'s parity with `std` is amended. The table, its sources, what was not verified and the engineer's rulings of 2026-10-16 on the calls the assistant had made are in [the section below](#di-d-64). |
+| <a id="di-d-64-index"></a>DI-D-64 | **The open surface, parameter by parameter (`DI-13.1`): which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile` are exposed and as which type, which are excluded and why, and what each does to a target's claim.** The engineer, 2026-10-15 and 2026-10-16. This crate reflects Win32 and not `std`, so [DI-D-63](#di-d-63)'s parity with `std` is amended. The table, its sources, what was not verified and the engineer's rulings of 2026-10-16 on the calls the assistant had made are in [the section below](#di-d-64). **Amended by [DI-D-65](#di-d-65) for the data rights.** |
+| <a id="di-d-65-index"></a>DI-D-65 | **Data access is a type parameter of every handle this crate opens, and the rights set carries only the rest.** The engineer, 2026-10-16, on the observation that requiring a data right of the type while access is a parameter of the open is odd, and that the pattern should reach disks and volumes and not only a file in the ring. Four markers, `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`; a file target is made only from a handle with a data right, at compile time. The ring does not see the type; whether the target states its access to the core is open ([DI-13.9](CHECKLIST.md#di-139)). [Section below](#di-d-65). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -124,6 +125,8 @@ twice. A consumer can do it through the lent handle.
 
 ## <a id="di-d-64"></a>DI-D-64: the open surface, parameter by parameter
 
+**Amended by [DI-D-65](#di-d-65): the rows for zero access, `FILE_READ_DATA` and `FILE_WRITE_DATA`, and the generic rights are superseded for the data rights, which are a type and no longer members of the rights set.**
+
 **What is decided.** Which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile`
 this crate exposes and as which type, which it excludes and why, and what each does to a target's
 claim. The engineer's rulings of 2026-10-15 and 2026-10-16 are applied as given; a row that is the
@@ -169,8 +172,8 @@ for this table.
 | `hVolumeHint` (ID) | Exposed | A file or volume this crate opened | Provenance-checked like every handle here. The page accepts any file on the volume or share; this crate takes only what it opened. | plan, [DI-15.2](CHECKLIST.md) |
 | `lpFileId` (ID) | Exposed | The identifier kinds the request crate's `OpenFileByIdentifier` carries: the 64-bit file ID, the 128-bit extended ID, the object ID | The `FILE_ID_DESCRIPTOR` page was not read for this table, so the list of kinds is the request crate's and the ruling's, not the page's. | engineer 2026-10-15 |
 | `hOriginalFile` (RO) | Exposed | An `OpenedFile` | The page says it must have been created by `CreateFile`; whether a handle that came from `OpenFileById` is accepted was not measured. | plan, [DI-15.4](CHECKLIST.md) |
-| `dwDesiredAccess` (CF, ID, RO): zero | Excluded for an `OpenedFile` | None | A zero-access open is valid Win32 (it queries attributes without access), but a file target with no data right has no operation to offer, so it is refused when the request is built and not when the first operation fails. | assistant, as [DI-13.3](CHECKLIST.md) plans |
-| `FILE_READ_DATA`, `FILE_WRITE_DATA` | Exposed | Members of the rights set | Read and write operations. A target needs one of them. | engineer 2026-10-15 |
+| `dwDesiredAccess` (CF, ID, RO): zero | **Superseded by [DI-D-65](#di-d-65):** the type `NoData`, excluded only from a file target | `NoData` | A zero-access open is valid Win32 (it queries attributes without access). A handle opened so cannot become a file target, which the `HasData` bound refuses at compile time and not when the first operation fails. | engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
+| `FILE_READ_DATA`, `FILE_WRITE_DATA` | **Superseded by [DI-D-65](#di-d-65):** the data access type, not members of the rights set | `ReadOnly`, `WriteOnly`, `ReadWrite` | Read and write operations. A target needs one of them, which is the `HasData` bound. | engineer 2026-10-15; engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
 | `FILE_APPEND_DATA` | Excluded as a member | None on its own | Its page says that without `FILE_WRITE_DATA` a write does not overwrite existing data, and the core addresses by offset, so an append-only handle would compute the wrong answer. With no member for it and no raw constructor, append-only access cannot be built; the bit is still carried by the generic rights below, each of which includes `FILE_WRITE_DATA`. | engineer 2026-10-15 (the rule); assistant (the representation) |
 | `FILE_READ_ATTRIBUTES`, `FILE_WRITE_ATTRIBUTES` | Exposed | Members | None. | engineer 2026-10-15 |
 | `FILE_READ_EA`, `FILE_WRITE_EA` | Exposed | Members | None. | standing |
@@ -179,7 +182,7 @@ for this table.
 | `READ_CONTROL`, `WRITE_DAC`, `WRITE_OWNER` | Exposed | Members | None. | engineer 2026-10-15 |
 | `SYNCHRONIZE` | Exposed | Member | None. | standing |
 | `ACCESS_SYSTEM_SECURITY` | Exposed | Member | A caller who lacks what the kernel requires for it gets the kernel's error, not a panic; which privilege that is was not measured here. | standing |
-| `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | Exposed | Named constants of the same set | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, the combination the kernel documents as incompatible, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. | engineer 2026-10-16; assistant |
+| `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, the combination the kernel documents as incompatible, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. | engineer 2026-10-16; assistant |
 | `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_LIST_DIRECTORY`, `FILE_TRAVERSE`, `FILE_DELETE_CHILD`, `FILE_CREATE_PIPE_INSTANCE` | Excluded | None | These name the directory or pipe meaning of a right. A directory is opened only with `FILE_FLAG_BACKUP_SEMANTICS` (the page says so), which is not offered in v1, and a pipe is not a file; the bits shared with the file rights are already members. The directory rights are revisited when `FILE_FLAG_BACKUP_SEMANTICS` is offered. That the pipe right is never offered is a working position ("almost certainly never"), not a decision. | engineer 2026-10-16 (directory); assistant |
 | `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation is the kernel's error. | engineer 2026-10-15 |
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
@@ -230,20 +233,102 @@ the list is kept here so that the answers are in one place and are not asked aga
   apps on the unified app model. Its page lists desktop apps as a supported target, so that reason is
   not recorded as a fact; the exclusion stands on the row's own reason.
 - The generic rights and `FILE_ALL_ACCESS` are named constants and the set has no raw constructor:
-  ruled. The cost stands: a right Win32 adds later cannot be expressed until the set gains it.
+  ruled, and then superseded for the data rights by [DI-D-65](#di-d-65). The no-raw-constructor part
+  stands, with its cost: a right Win32 adds later cannot be expressed until the set gains it.
 - The directory-only rights are not members until `FILE_FLAG_BACKUP_SEMANTICS` is offered: ruled. The
   pipe right never being offered is a working position, not a decision.
 - `FILE_ATTRIBUTE_NORMAL` is the empty set and not a member: ruled.
 - `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are exposed: ruled.
 - The reason given for excluding `hTemplateFile`: ruled.
 
-**Not yet ruled.** A zero-access open (`dwDesiredAccess` of zero, which the engineer named "no
-access") is refused for an `OpenedFile` because the file is an I/O target and has no data right. Whether
-a zero-access open is wanted elsewhere in the crate is a question for [DI-15](CHECKLIST.md), which opens
-by identifier and reopens.
+**Zero access** (`dwDesiredAccess` of zero, which the engineer named "no access") was the one call not
+ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as the type `NoData`.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)
 (the open, the disposition and the two-phase shape), [DI-14.1](CHECKLIST.md) to [DI-14.7](CHECKLIST.md)
 (flags, attributes, security, combinations, the remote check, devices, the overlapped evidence) and
 [DI-15.1](CHECKLIST.md) to [DI-15.4](CHECKLIST.md) (identity and reopening).
+
+## <a id="di-d-65"></a>DI-D-65: data access is a type parameter, and the rights set carries the rest
+
+**Amends [DI-D-64](#di-d-64) for the data rights.** The rows there for zero access, `FILE_READ_DATA`,
+`FILE_WRITE_DATA` and the generic rights carry the marker.
+
+**What is decided.** The engineer, 2026-10-16, after the form below was shown: "ok this seems usable,
+let's use it". The prompt was the engineer's observation that, with access a parameter of the open,
+demanding a data right of the type was odd, and that the pattern should reach every handle this crate
+opens and not only a file in the ring.
+
+**The types.** Four sealed markers name the data access a handle was opened with; two axes, read and
+write, give `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`.
+
+```rust
+pub trait DataAccess: Sealed + Copy + Debug + Send + Sync + 'static {
+    const RIGHTS: u32;            // what the marker asks the open for
+    type WithRead: DataAccess;    // NoData -> ReadOnly, WriteOnly -> ReadWrite, the rest unchanged
+    type WithWrite: DataAccess;
+}
+pub trait HasData: DataAccess {}  // ReadOnly, WriteOnly, ReadWrite
+pub trait CanRead: HasData {}     // ReadOnly, ReadWrite
+pub trait CanWrite: HasData {}    // WriteOnly, ReadWrite
+
+pub struct FileOptions<A: DataAccess = NoData>;                      // .read(), .write() move A
+pub struct OpenedFile<B: Buffering = Cached, A: DataAccess = ReadWrite>;
+pub struct OpenedDisk<B: Buffering = Unbuffered, A: DataAccess = ReadWrite>;
+pub struct OpenedVolume<B: Buffering = Unbuffered, A: DataAccess = ReadWrite>;
+// Win32FileTarget::new, from_disk and from_volume take A: HasData; the target stays one type.
+```
+
+`FileRights` keeps the rights that gate nothing this crate offers: attributes, extended attributes,
+`FILE_EXECUTE`, `DELETE`, the security rights and `SYNCHRONIZE`. `FILE_READ_DATA`, `FILE_WRITE_DATA`,
+the `GENERIC_*` constants and `FILE_ALL_ACCESS` leave it. No marker or set carries `FILE_APPEND_DATA`,
+so [DI-D-64](#di-d-64)'s rule that append-only access is unrepresentable holds.
+
+**Where the line between type and set is drawn, and why.** A right is a type if it gates something this
+crate's own API does with the handle: a file target is made only from a handle with a data right, and
+the ring's read, write and commit are what a target performs. A right that gates only a call the
+consumer makes on the lent handle stays in `FileRights` and is judged by the kernel. The measurement is
+in [access_rights_measurements.rs](../win-durable-ioring/examples/access_rights_measurements.rs), which
+prints a table for a cached and an unbuffered open of nine sets, using safe `std` calls on a duplicate
+of the handle. On a local file system: a read needed the read-data right; a write, a length change and
+a flush needed the write-data right; setting a time needed the write-attributes right; and the size
+query succeeded for every set tried, including those without the read-attributes right, where the
+`GetFileSizeEx` page says it may depend on the directory's permissions. From the documentation and not
+measured: `DELETE` gates rename and delete-on-close through `SetFileInformationByHandle`, and
+`SetFileValidData` needs `GENERIC_WRITE` and a privilege. If this crate later offers a method gated by
+one of those, that right becomes an axis, and the cost of one more axis is in
+[DI-13.8](CHECKLIST.md#di-138).
+
+**What it fixes.**
+
+- The refusal of a handle with no data right, made when the request was built, is a compile error: a
+  `NoData` handle has no conversion to a file target.
+- A raw disk or volume could be opened only for reading and writing, since
+  [opened_disk.rs](../win-durable-ioring/src/windows_backend/opened_disk.rs) and
+  [opened_volume.rs](../win-durable-ioring/src/windows_backend/opened_volume.rs) passed both; either can
+  now be opened for reading only, and a geometry query can be made on a handle with no data right.
+- `ReOpenFile` ([DI-15.4](CHECKLIST.md)) changes the access of a handle, and the change is a change of
+  `A`.
+- `FILE_ALL_ACCESS` named the append bit, and an unbuffered open of it was measured to be refused with
+  `ERROR_INVALID_PARAMETER` ([DI-D-64](#di-d-64)); no marker carries the bit, so that open cannot be
+  asked for.
+
+**What the type does not reach.** The ring addresses a target by `IoTargetKey(pub u64)`, a number the
+consumer chooses, and `Win32FileTarget` is not generic, so a compile-time check ends where the target is
+built. A write submitted to a read-only target still reaches the kernel and fails with its error, as the
+existing test `a_write_through_a_read_only_handle_fails` expects. Whether the target states its data
+access to the core, as it states its warranty and geometry, so that the core can refuse at submission, is
+open and is [DI-13.9](CHECKLIST.md#di-139). It is a working position and not a decision that typed keys
+are not wanted.
+
+**Not decided, and not verified.** Each is settled inside [DI-13.8](CHECKLIST.md#di-138) and is not a
+ruling: which bits `read()` and `write()` ask for, `FILE_READ_DATA` and `FILE_WRITE_DATA` alone (the
+measurement used those) or the generic rights; how `A` is named for a disk or a volume, which have no
+options argument to infer it from; whether `ReOpenFile` can widen a handle's access; whether locking a
+volume needs the write right; and what a raw disk or volume does for each marker, which needs an
+administrator and runs only where the test run has one.
+
+**Scheduled work.** [DI-13.8](CHECKLIST.md#di-138) and [DI-13.9](CHECKLIST.md#di-139). Amended by this
+decision: [DI-13.7](CHECKLIST.md#di-137-rework), [DI-15.2](CHECKLIST.md) and
+[DI-15.4](CHECKLIST.md).

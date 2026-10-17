@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.3`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.8`, `DI-13.9`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -224,6 +224,34 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.3** -- Access is a typed set of named rights, `FileRights`, with no raw `u32`; a file target needs a data right, checked when it is opened. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-133)
 
+- [ ] **DI-13.8** -- **Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest.** <a id="di-138"></a>
+  The engineer's ruling of 2026-10-16, [DI-D-65](DESIGN-NOTES.md#di-d-65). The four markers and the
+  traits are there. `FileOptions<A>` moves `A` with `read()` and `write()`; `OpenedFile<B, A>`,
+  `OpenedDisk<B, A>` and `OpenedVolume<B, A>` carry it, and the disk and the volume stop passing read
+  and write unconditionally; `Win32FileTarget::new`, `from_disk` and `from_volume` take `A: HasData`,
+  which replaces the runtime refusal `DI-13.3` made. `FileRights` loses `READ_DATA`, `WRITE_DATA`, the
+  `GENERIC_*` constants, `ALL_ACCESS` and the `grants_*` helpers. It replaces the shape `DI-13.3`
+  shipped, so the `DI-13.3` sabotage entries that pin those members, its tests, the README snippets and
+  [access_rights_measurements.rs](../win-durable-ioring/examples/access_rights_measurements.rs) are
+  rewritten with it, and the commit is `feat(win-durable-ioring)!`.
+  Settled inside this item, each by a test or a measurement and not by recollection: which bits
+  `read()` and `write()` ask for, `FILE_READ_DATA` and `FILE_WRITE_DATA` alone or the generic rights;
+  how `A` is named for a disk and a volume (a turbofish, or `open_read_only` and `open_read_write`);
+  whether locking a volume needs the write right. Tests: every marker opens and the kernel judges what
+  it does and does not cover, as `DI-13.3`'s do; `compile_fail` doctests for a `NoData` handle given to a
+  target and for a read-only handle given where write is required; a raw volume and a raw disk opened
+  for reading only on the scratch virtual disks the CI step already makes (it needs an administrator,
+  so it is not run on a development machine that lacks one).
+
+- [ ] **DI-13.9** -- **Decide, with the engineer, whether `IoTarget` states its data access to the core.** <a id="di-139"></a>
+  Gated on `DI-13.8`. The type reaches as far as the target's construction, and the ring addresses
+  targets by `IoTargetKey(pub u64)` ([DI-D-65](DESIGN-NOTES.md#di-d-65)). If a target states its access
+  as it states its warranty and geometry, the core could refuse a write to a read-only target at
+  submission, as a typed `RefusalCause`, in place of the kernel's error after it; that changes the
+  test `a_write_through_a_read_only_handle_fails`, and a new required method on `IoTarget` is breaking
+  for any other backend unless it has a default. What is asked is whether that is wanted, and with which
+  default. It is a working position until it is decided.
+
 - [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
   exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
   violation is a typed error that names which side conflicted where the kernel says. Tests with two
@@ -253,8 +281,9 @@ option recorded by construction. The rule throughout is documented APIs only
   it. `perform` runs on whatever thread the caller chooses, makes the call, and then checks the
   opened handle (`DI-14.5`), closing it if it is refused. Nothing is checked before the open (the
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
-  long as `CreateFileW` does. The request is typed by its buffering mode, as `OpenedFile<B>` is.
-  **Next:** `DI-13.4`.
+  long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
+  `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
+  **Next:** `DI-13.8`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 
@@ -342,7 +371,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
   volume hint that must be a file this crate opened or a volume it opened, so the hint is
-  provenance-checked like everything else. It takes the full typed set from `DI-M13` and `DI-M14`. The
+  provenance-checked like everything else. It takes the full typed set from `DI-M13` and `DI-M14`, with the data access `A` ([DI-13.8](#di-138)). The
   remote check runs on the hint's device (`DI-14.5`). Tests: round trip of a file opened by path and
   again by ID; an ID from a directory listing (`FileIdExtdDirectoryInfo`) opens by ID; a stale ID is
   the kernel's error.
@@ -354,8 +383,9 @@ option recorded by construction. The rule throughout is documented APIs only
   not a finding. If it holds, the decision records it and names the substitute: list the directory,
   take the child's ID, open it by ID (`DI-15.2`). If a documented route exists, it is an item here.
 
-- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2>` from an
-  owned one, changing access, sharing and flags: cached to unbuffered and back, a read-only handle for
+- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2, A2>` from an
+  owned one, changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
+  lets a reopen widen the access is a test here), sharing and flags: cached to unbuffered and back, a read-only handle for
   a scrubber beside the writer. The target's alignment is recomputed for the new mode, and going
   unbuffered runs the remote check. `ReOpenFile` documents that the new access and sharing cannot
   conflict with a previous open that is still open; each conflict the table lists is a test, and a
