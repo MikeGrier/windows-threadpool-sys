@@ -76,7 +76,8 @@ appear here.
 | <a id="di-d-62"></a>DI-D-62 | **A whole physical disk is a file target made from a disk this crate opened by number: its own flush domain, sector-aligned, and never `Complete`.** The engineer, 2026-10-15, asking for the volume target to be repeated against the disk rather than a partition on it, and then "since we're operating at a somewhat fundamental level of storage, you should be precise". Recorded as `DI-10.4`; the request was not a checklist item. **Provenance by construction**, as for a file and a volume ([DI-D-60](#di-d-60), [DI-D-61](#di-d-61)): `OpenedDisk<B>` is opened here, from a `DiskPath` that can only be a disk number, `\\.\PhysicalDriveN`, and `Win32FileTarget::from_disk` takes it and nothing else. **The disk is its own flush domain**, named by `disk_flush_domain` exactly as a volume on that disk names it, so a target on the disk and a target on a volume on it share one domain and a flush is not issued twice for the same device. A consumer's `with_domains` adds to it and never removes it, as for a volume. **Alignment is the sector the device reports**, through the same documented control as a volume (`IOCTL_DISK_GET_DRIVE_GEOMETRY`, in [win-volume-sys](../win-volume-sys/DESIGN-NOTES.md#wv-d-1)); `Buffering::volume_geometry` was renamed `sector_geometry` because it no longer describes only volumes. **The class is `SharedDevice` when unbuffered and `BestEffort` when cached, never `Complete`**, for the reason a volume's is: a handle to a disk cannot show that nothing else writes it. Only an attestation by a consumer that knows could claim more, and that is [DI-10.3](CHECKLIST.md). **Windows blocks a direct write under a mounted volume** (documented); a disk with volumes on it is written through them, or has them locked, or is taken offline first. The tests use a disk with no partition and no volume, so the blocking is documented here and not exercised. **The test helper is the safety, because the data is the disk's.** `ScratchDisk` creates and attaches an unpartitioned VHDX, then takes the disk number only from `diskpart`'s own report of the file it just made: exactly one `Filename:` equal to the canonical long path of that file, and exactly one `Associated disk#:` that is not 0. Anything else is a refusal, so no test writes to a disk it did not create. **Evidence**, an elevated run on 2026-10-15 of the five `raw_disk` tests on a 64 MiB scratch disk, all passing, with no disk or file left behind: `bytes_per_sector` answers on a physical-disk handle opened for reading and writing; the last sector is accepted and a transfer starting at the end transfers nothing; a per-write write-through request is accepted on the unbuffered handle. **Not verified:** the exact outcome of a transfer past the end, which the test pins only as "nothing transfers"; whether `bytes_per_sector` answers on a disk handle opened with no access; any disk that has a volume on it. **Scheduled work:** none beyond `DI-10.3`, which already carries the attestation question. |
 | <a id="di-d-63"></a>DI-D-63 | **A file is opened through `windows-namespace-request-sys`'s `OpenFile`: that crate carries every parameter of `CreateFileW` and decides none, and what an open means is decided here.** **Amended by [DI-D-64](#di-d-64): the list below of what was kept so that a caller sees no difference from `std` is superseded, because this crate reflects Win32 and not `std`; the code follows in `DI-13.7`.** The engineer, 2026-10-15: "yes take that dependency, and do those checks", after it was found that the workspace already had a memory-safe, un-narrowed wrapper for the open calls ([windows-namespace-request-sys](../windows-namespace-request-sys/README.md): `OpenFile`, `OpenFileByIdentifier`, and the handle queries). A new unsafe crate for opening, or a widened [win-volume-sys](../win-volume-sys/README.md), would have duplicated working, tested code, and the mono-repo rule is to fix the layer. **The division:** the request crate takes raw access, share and flag words and a path, and adds nothing; `win-durable-ioring` states which of them an open may use ([DI-D-60](#di-d-60)'s provenance), so `FileOptions` and `Buffering` stay here and the crate keeps `forbid(unsafe_code)`. **What std did that `CreateFileW` alone does not, kept so that a caller sees no difference**, each with a test and a sabotage: a path longer than `MAX_PATH` is opened in its verbatim form (the request crate refuses an ordinary path past `MAX_PATH` by design, so the conversion is the load-bearing step, and the test shows the request alone refuses the same path); a file that is created and truncated is opened `OPEN_ALWAYS` and emptied once open, as std does to avoid `CREATE_ALWAYS`'s semantics (rust-lang/rust#115745); a new file keeps `FILE_FLAG_OPEN_REPARSE_POINT`; every file is shared for reading, writing and deletion; no access, or creating or truncating without write access, is `InvalidInput`. **The two checks the engineer asked for.** First, that a synchronous `perform` is acceptable for an open: it is one `CreateFileW` call on the calling thread, which is what `std::fs::OpenOptions` was, so nothing is added. Second, that the handle is plain and unassociated, which the request crate documents and its code shows (no completion-port association, no flag added or removed): every ring test of this crate, which now opens its files this way and drives them through the ring, passes, and that is the empirical check. **Differences found and kept honest:** a created-and-truncated file is emptied after the open and not atomically with it, so another handle can see the old content in between; std's source (1.98) has one route for the combination that overwrites in a single kernel call and one that is `OPEN_ALWAYS` plus a manual truncation, and which of them an open takes was not established here, so whether std was atomic is unknown; and an ordinary path is judged by `GetFullPathNameW` as the request crate documents (a legacy device name such as `CON` resolves to the device), which was not compared with std's handling here. **Not verified:** the handle's inheritability is not read back, since this crate forbids `unsafe` and has no safe query for it; it follows from `OpenFile` passing no security attributes, which `CreateFileW` documents as a non-inheritable handle. **Scheduled work:** `DI-13.5` and `DI-13.6` (the SDDL constructor and the `ReOpenFile` entry, which the request crate lacks; [NR-3](../windows-namespace-request-sys/CHECKLIST.md)), and `DI-14.5` (the remote check is still made on the path). |
 | <a id="di-d-64-index"></a>DI-D-64 | **The open surface, parameter by parameter (`DI-13.1`): which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile` are exposed and as which type, which are excluded and why, and what each does to a target's claim.** The engineer, 2026-10-15 and 2026-10-16. This crate reflects Win32 and not `std`, so [DI-D-63](#di-d-63)'s parity with `std` is amended. The table, its sources, what was not verified and the engineer's rulings of 2026-10-16 on the calls the assistant had made are in [the section below](#di-d-64). **Amended by [DI-D-65](#di-d-65) for the data rights.** |
-| <a id="di-d-65-index"></a>DI-D-65 | **Data access is a type parameter of every handle this crate opens, and the rights set carries only the rest.** The engineer, 2026-10-16, on the observation that requiring a data right of the type while access is a parameter of the open is odd, and that the pattern should reach disks and volumes and not only a file in the ring. Four markers, `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`; a file target is made only from a handle with a data right, at compile time. The ring does not see the type; whether the target states its access to the core is open ([DI-13.9](CHECKLIST.md#di-139)). [Section below](#di-d-65). |
+| <a id="di-d-65-index"></a>DI-D-65 | **Data access is a type parameter of every handle this crate opens, and the rights set carries only the rest.** The engineer, 2026-10-16, on the observation that requiring a data right of the type while access is a parameter of the open is odd, and that the pattern should reach disks and volumes and not only a file in the ring. Four markers, `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`; a file target is made only from a handle with a data right, at compile time. The ring sees it through [DI-D-66](#di-d-66). [Section below](#di-d-65). |
+| <a id="di-d-66-index"></a>DI-D-66 | **A target states its data access to the core, and a key can carry it.** The engineer, 2026-10-16: "it seems like IoTarget should have the same sort of type-based encoding of the access to the target that we just litigated in di-13.8", then "do both, schedule both". `IoTarget` gains a required `access()` read once into its description, the core refuses what the access does not cover, and a typed `Key<A>` lets a wrong submission fail to compile. [Section below](#di-d-66). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -314,13 +315,12 @@ one of those, that right becomes an axis, and the cost of one more axis is in
   `ERROR_INVALID_PARAMETER` ([DI-D-64](#di-d-64)); no marker carries the bit, so that open cannot be
   asked for.
 
-**What the type does not reach.** The ring addresses a target by `IoTargetKey(pub u64)`, a number the
+**What the type does not reach, and what then reaches it** ([DI-D-66](#di-d-66)). The ring addresses a target by `IoTargetKey(pub u64)`, a number the
 consumer chooses, and `Win32FileTarget` is not generic, so a compile-time check ends where the target is
 built. A write submitted to a read-only target still reaches the kernel and fails with its error, as the
 existing test `a_write_through_a_read_only_handle_fails` expects. Whether the target states its data
-access to the core, as it states its warranty and geometry, so that the core can refuse at submission, is
-open and is [DI-13.9](CHECKLIST.md#di-139). It is a working position and not a decision that typed keys
-are not wanted.
+access to the core, as it states its warranty and geometry, so that the core can refuse at submission, and
+whether a key carries it, are decided by [DI-D-66](#di-d-66).
 
 **What building it settled** ([DI-13.8](CHECKLIST.md#di-138)). None of these was a ruling; each is
 the choice the code made, with the measurement.
@@ -345,6 +345,80 @@ the choice the code made, with the measurement.
 runs only where the test run has one, in CI; and whether `ReOpenFile` can widen a handle's access, which
 is a test in [DI-15.4](CHECKLIST.md).
 
-**Scheduled work.** [DI-13.8](CHECKLIST.md#di-138) and [DI-13.9](CHECKLIST.md#di-139). Amended by this
-decision: [DI-13.7](CHECKLIST.md#di-137-rework), [DI-15.2](CHECKLIST.md) and
+**Scheduled work.** [DI-13.8](CHECKLIST.md#di-138), and [DI-13.9](CHECKLIST.md#di-139) and
+[DI-13.10](CHECKLIST.md#di-1310) from [DI-D-66](#di-d-66). Amended by this decision: [DI-13.7](CHECKLIST.md#di-137-rework), [DI-15.2](CHECKLIST.md) and
 [DI-15.4](CHECKLIST.md).
+
+## <a id="di-d-66"></a>DI-D-66: a target states its data access to the core, and a key can carry it
+
+**Extends [DI-D-65](#di-d-65) to the ring.** The data access of a handle is a type where this crate opens
+it; here the same access reaches the core, which is where a submission is judged.
+
+**What is decided.** The engineer, 2026-10-16, on being shown that the type ends where the target is built:
+"it seems like IoTarget should have the same sort of type-based encoding of the access to the target that
+we just litigated in di-13.8", and then, offered the two layers below, "do both, schedule both".
+
+**Why the trait does not take an associated type.** A ring holds one `IoBackend::Target`, and addresses
+what it holds by `IoTargetKey(pub u64)`, a number the consumer picks. `Win32FileTarget` is one type for every
+file, volume and disk, and the buffering mode is already read into its fields when it is made and not carried
+as a parameter. An associated type on `IoTarget` would let a ring hold targets of one access only, so a
+ring with a read-write log file and a read-only snapshot could not be built. The access is therefore a
+type where the target is constructed and a stated fact after it, as the buffering mode is.
+
+**Layer 1 -- the target states it** ([DI-13.9](CHECKLIST.md#di-139)).
+
+```rust
+// durable-ioring (portable): the markers and traits of DI-D-65 live here, so that MemoryTarget and
+// any other backend use them. What a marker asks of Win32 stays in win-durable-ioring.
+pub enum Access { ReadOnly, WriteOnly, ReadWrite }     // the stated fact; a target has data
+
+trait IoTarget { /* existing */ fn access(&self) -> Access; }   // required, no default
+struct IoTargetDescription { /* existing */ access: Access }    // read once, as the rest is
+RefusalCause::AccessDenied                                      // additive, the enum is non_exhaustive
+```
+
+`IoBackend::check` refuses a write to a target that cannot write and a read to one that cannot read. It
+already runs before a gated operation is held ([DI-D-54](#di-d-54)), so a gated write to a read-only
+target is refused at the consumer's push and not when its gate releases. The method has no default,
+because a default would state `ReadWrite` for a target that never said so.
+
+**Layer 2 -- a key carries it** ([DI-13.10](CHECKLIST.md#di-1310)), additive.
+
+```rust
+pub struct Key<A: HasData>(IoTargetKey, PhantomData<A>);   // the same number; the consumer's declaration
+trait WriteKey { fn untyped(&self) -> IoTargetKey }         // IoTargetKey, and Key<A> where A: CanWrite
+trait ReadKey  { fn untyped(&self) -> IoTargetKey }         // IoTargetKey, and Key<A> where A: CanRead
+fn write_with<K: WriteKey>(&mut self, file: K, ..)          // and write, read, read_with
+```
+
+`IoTargetKey` implements both traits, so a call with an untyped key compiles as it does now and is judged
+at runtime by layer 1. A `Key<ReadOnly>` does not implement `WriteKey`, so a write through it does not
+compile. Registration checks the key's declared access against the target's and refuses a mismatch;
+that check is at runtime because the target is erased, and it is the only runtime step a typed key adds.
+Entries, errors and events keep the untyped key.
+
+**What is the engineer's and what is the assistant's.**
+
+| Choice | Who |
+|---|---|
+| The target states its access to the core, as it states its warranty and geometry | engineer 2026-10-16 |
+| A typed key as well, built with the first layer and scheduled beside it | engineer 2026-10-16 |
+| No associated type on `IoTarget`; the access is stated, not carried as a type parameter | assistant; the reason is above |
+| `access()` is required, with no default | assistant |
+| The markers and traits move to `durable-ioring`, the Windows rights staying in the Windows crate | assistant |
+| The names `Access`, `AccessDenied` and `Key<A>` | assistant |
+| The four submit methods become generic over `WriteKey` and `ReadKey`; untyped keys keep working | assistant |
+| A commit to a read-only target needs no rule: a commit is issued only to a target with writes, and a read-only one has none | assistant |
+| `Key<NoData>` does not exist | assistant |
+
+A row that is the assistant's stands until amended; it is not a list awaiting confirmation.
+
+**What changes in what exists.** The test `a_write_through_a_read_only_handle_fails` changes: the write is
+refused at the push, with its buffer handed back, and no longer fails after the kernel. A required
+method on a published trait breaks every other implementor; the implementors in this workspace are
+`MemoryTarget`, `Win32FileTarget` and the test targets.
+
+**Not verified.** That the four submit methods can be generic without harming a caller that holds the
+ring through the `DurableRing` trait; `DI-13.10` finds out by building it.
+
+**Scheduled work.** [DI-13.9](CHECKLIST.md#di-139) and [DI-13.10](CHECKLIST.md#di-1310).

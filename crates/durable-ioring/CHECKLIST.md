@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.8`, `DI-13.9`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.9`, `DI-13.10`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -226,14 +226,35 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.8** -- Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest. <a id="di-138"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-138)
 
-- [ ] **DI-13.9** -- **Decide, with the engineer, whether `IoTarget` states its data access to the core.** <a id="di-139"></a>
-  Gated on `DI-13.8`. The type reaches as far as the target's construction, and the ring addresses
-  targets by `IoTargetKey(pub u64)` ([DI-D-65](DESIGN-NOTES.md#di-d-65)). If a target states its access
-  as it states its warranty and geometry, the core could refuse a write to a read-only target at
-  submission, as a typed `RefusalCause`, in place of the kernel's error after it; that changes the
-  test `a_write_through_a_read_only_handle_fails`, and a new required method on `IoTarget` is breaking
-  for any other backend unless it has a default. What is asked is whether that is wanted, and with which
-  default. It is a working position until it is decided.
+- [ ] **DI-13.9** -- **`IoTarget` states its data access, and the core refuses what the access does not cover.** <a id="di-139"></a>
+  The engineer's ruling of 2026-10-16, layer 1 of [DI-D-66](DESIGN-NOTES.md#di-d-66). The markers and
+  traits of [DI-D-65](DESIGN-NOTES.md#di-d-65) move into `durable-ioring`, so `MemoryTarget` and any other
+  backend use them; `win-durable-ioring` re-exports them and keeps what a marker asks of Win32 (its
+  `FILE_READ_DATA` and `FILE_WRITE_DATA`) in a Windows-side trait implemented for the core's markers.
+  `IoTarget` gains a required `access()` returning the runtime `Access`, `IoTargetDescription` gains the
+  field, and `RefusalCause` gains `AccessDenied`. `IoBackend::check` refuses a write to a target that cannot
+  write and a read to one that cannot read, in `MemoryTarget`'s backend and in the Windows one, so a gated
+  operation is refused at the push ([DI-D-54](DESIGN-NOTES.md#di-d-54)). `Win32FileTarget::new`,
+  `from_disk` and `from_volume` read `A` into the stated access, as the buffering mode is read; `MemoryTarget`
+  gets a `with_access`, and the test targets state theirs. The test
+  `a_write_through_a_read_only_handle_fails` changes to a refusal at the push with the buffer handed back,
+  and a gated write to a read-only target is a test of its own. `IoTarget::access` has no default.
+  Commits: the markers are added to `durable-ioring` first, as an additive `feat`; adding a required
+  method to a trait breaks every implementor, so the commit that adds it and the one that makes
+  `win-durable-ioring` state it cannot build apart and span both crates, which the commit-scope check
+  will flag and which is expected here.
+
+- [ ] **DI-13.10** -- **A typed `Key<A>` carries the access to the ring's submit methods.** <a id="di-1310"></a>
+  Layer 2 of [DI-D-66](DESIGN-NOTES.md#di-d-66), after `DI-13.9`, additive. `Key<A: HasData>` holds the same
+  number as an `IoTargetKey`; `WriteKey` is implemented for `IoTargetKey` and for `Key<A>` where `A:
+  CanWrite`, and `ReadKey` likewise for `CanRead`. `write`, `write_with`, `read` and `read_with` take a
+  `WriteKey` or a `ReadKey`, so a call with an untyped key compiles as before and is judged by `DI-13.9` at
+  runtime. Registration (`add_target` and construction) checks the key's declared access against the
+  target's and refuses a mismatch, with an error that hands the target back. Entries, errors and events keep
+  the untyped key. Tests: `compile_fail` doctests for a write through a `Key<ReadOnly>` and a read
+  through a `Key<WriteOnly>`; an untyped key still writes and reads; a registration whose key claims more
+  than its target is refused. Finds out whether the four submit methods can be generic without
+  harming a caller that holds the ring through the `DurableRing` trait.
 
 - [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
   exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
