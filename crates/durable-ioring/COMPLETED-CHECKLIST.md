@@ -3078,3 +3078,13 @@ neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`), [DI-13.7.3](#di-1373) (`Dispos
 open section gains the path, the disposition, the reparse option and `request`/`perform`, with a doctest of the
 second; the module documentation of `opened_file.rs` says the same. [DI-14.2](CHECKLIST.md#di-142-flags) already
 lacks the reparse flag.
+
+### <a id="di-142"></a>DI-14.2 -- `FILE_FLAG_DELETE_ON_CLOSE`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are builder methods on `FileOptions`. *(completed 2026-10-17 16:05:14 -04:00)*
+
+`FileOptions::delete_on_close`, `open_no_recall` and `posix_semantics`, each setting its own bit and passed to
+a cached and an unbuffered file alike; measurements and the three non-findings are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.2 settled". Delete-on-close removes the file when the
+last handle closes and is not refused without the right to delete. `FILE_FLAG_OVERLAPPED`, which this item's
+text named conditionally, is not offered here: it waits on [DI-14.7](CHECKLIST.md)'s run, which now carries the
+question of whether `FileOptions` offers it. The reparse-target requirement moved to
+[DI-14.5](CHECKLIST.md). Eight sabotage entries.

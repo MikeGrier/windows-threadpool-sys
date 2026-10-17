@@ -295,6 +295,22 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   when exclusive and an open when shared. An open that asks for no data right is admitted in all four.
   So a caller that locks sees the lock's refusal and never the share mode's.
 
+**What building DI-14.2 settled** ([DI-14.2](CHECKLIST.md#di-142-flags)). None of these was a ruling.
+
+- `FileOptions::delete_on_close`, `open_no_recall` and `posix_semantics` are the three flags of the rows
+  above, each a bool that sets its own bit, passed to a cached and an unbuffered file alike. Nothing is
+  added or checked for them here; combinations the kernel refuses are [DI-14.4](CHECKLIST.md)'s.
+- **Delete-on-close is not refused for want of the right to delete.** The `CreateFileW` page lists the
+  right as needed; measured on Windows 11 build 26300, an open with the flag and no right to delete among
+  the rights succeeds and the file is deleted when the last handle closes. While the handle is open, a
+  later open that does not share deletion fails with a sharing violation, whatever it asks for, and one that
+  shares it is admitted, with the right to delete or without.
+- `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are measured only as far as an open with each
+  succeeds on a local file and the file is usable. What either does is not, since neither affects a target
+  and the measurement needs remote storage and a case-sensitive directory respectively.
+- `FILE_FLAG_OVERLAPPED` is not offered by this item: whether the ring needs it is settled by the run in
+  [DI-14.7](CHECKLIST.md), and [DI-D-64](#di-d-64) keeps it out of v1 until then.
+
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
 [disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs); every disposition

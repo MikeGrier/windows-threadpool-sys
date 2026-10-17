@@ -246,13 +246,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.1** -- Cache hints: `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN` are builder methods on `FileOptions`, passed to a cached and an unbuffered file alike. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-141)
 
-- [ ] **DI-14.2** -- **Namespace and lifetime flags.** <a id="di-142-flags"></a> `FILE_FLAG_DELETE_ON_CLOSE`,
-  `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`, plus
-  `FILE_FLAG_OVERLAPPED` if the ring turns out to need or refuse it (settled by the test in
-  `DI-14.7`, not by recollection). `FILE_FLAG_OPEN_REPARSE_POINT` is offered by [DI-13.7.3](#di-137-rework),
-  and the remote-device check in `DI-14.5` must see a reparse point's target, not
-  the reparse point. Tests: delete-on-close removes the file when the last handle closes; a reparse
-  point opened with the flag is the point and without it is the target (the second is `DI-13.7.3`'s).
+- [x] **DI-14.2** -- `FILE_FLAG_DELETE_ON_CLOSE`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are builder methods on `FileOptions`. <a id="di-142-flags"></a> -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-142)
 
 - [ ] **DI-14.3** -- **Creation attributes, security descriptor, inheritance.** The file attributes a
   new file can be created with (hidden, read-only, temporary, encrypted and the others the table
@@ -280,7 +274,8 @@ option recorded by construction. The rule throughout is documented APIs only
   the final path of a handle on a remote file names it as a UNC path was not measured.) **If none can tell
   a remote file from a local one, the check cannot be made on the handle, and the caller declares where
   the file is**, which is what this repository does for a fact only an undocumented call gives; that is
-  raised with the engineer before anything is built. There is **no check before the open**: the
+  raised with the engineer before anything is built. The check must see a reparse point's target and
+  not the reparse point ([DI-13.7.3](#di-137-rework) offers the flag that opens the point). There is **no check before the open**: the
   engineer ruled on 2026-10-16 that finding out late is acceptable, and that an unbuffered file is still
   refused on a remote device, since `OpenedFile<Unbuffered>` promises `SharedDevice` and a remote file
   cannot keep it. The costs are documented and not prevented: an unbuffered create refused on the
@@ -317,8 +312,9 @@ option recorded by construction. The rule throughout is documented APIs only
   the status and information values, the order of completions, and whether the ring refuses or
   accepts a handle opened either way. Each difference, or the absence of one, is recorded as
   measured, with the machine and the ring's version. The test asserts what was measured, so a
-  changed result fails it. The outcome is the input to `DI-14.2`, and whether the flag stays out of
-  v1 is then the engineer's to rule on; nothing is decided here. It needs no administrator and only
+  changed result fails it. The outcome is the input to whether `FileOptions` offers
+  `FILE_FLAG_OVERLAPPED` (a builder method, as the other flags are), which is the engineer's to rule on
+  and is not decided here; if it is offered, the method is added by the item that rules it. It needs no administrator and only
   what already exists, so it is independent of the rest of this milestone and may be done at any
   point.
 
