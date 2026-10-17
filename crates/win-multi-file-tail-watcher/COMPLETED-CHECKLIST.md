@@ -1377,3 +1377,40 @@ applied by hand with only the module's tests run, each caught.
 Not tested: `ReadLayer::new`'s failure, which maps to `Io`, since a thread-pool wait cannot be made to fail on
 demand. The module's tests wait at most six seconds for a doorbell, so a reader that stops delivering fails by
 assertion inside a sabotage run's bound.
+
+## Moved 2026-10-17 19:35:00 -04:00 -- TW-9.5: integration tests of the public reader layer
+
+### <a id="tw-95"></a>TW-9.5 -- The layer is exercised from `tests/` through the public API only, over files that child processes write, under the default options, a set well above them and two small sets, with the near-term and worst-case loads, every invalid size refused, and a held chunk and an undrained client SQ each stopping the reads; the README names what each size limits and the three stops. *(completed 2026-10-17 19:35:00 -04:00)*
+
+`tests/reader_real_writers/` is one test target of a shared `harness.rs` and five modules, all through
+public items. The children are `cmd.exe` writing to files the parent opened and handed over as their
+stdout and stderr; a gated child waits on stdin between phases. The client side of a poll (drain, reset
+the doorbell first, `ring_resume` after, the poll-done, then a quiet check) is one `Client` in the harness,
+which also checks that every chunk is no longer than the buffer and that the pieces of a file meet with no
+gap and no repeat.
+
+- `option_sets`: every byte of several files delivered once, from children writing while the reader polls,
+  under the defaults, a build-service-sized set, a tiny set, and a set whose ring is smaller than its pool.
+- `azure_shape`: one gated child, silent and then a burst of JSON on stdout and errors on stderr. Polls
+  during the silence deliver nothing and the doorbell stays quiet; after the burst the first poll delivers
+  both files whole, in as many reads as the buffer needs.
+- `runner_log`: three gated bursts of lines of four lengths, up to about 200 bytes, with the silences
+  between them checked quiet. The log is reassembled and compared to the bytes generated in Rust, and every
+  line longer than a buffer is shown to have been cut across chunks. Under the defaults and under 8-byte
+  buffers.
+- `held_chunks`: four held chunks stop reads with nothing in flight and no poll-done, and the rest follows
+  when they drop; a client queue of two and nobody draining holds exactly two entries, and nothing is lost
+  once it is drained.
+- `refusals`: each field with a zero, a non-power-of-two where one is required, a size below the least and a
+  size above the most, the first refused option being the one reported, and buffers the allocator will not
+  give being an error. Constructing the reader opens no file, so "refused before any file is opened" is the
+  construction failing.
+
+A new manifest, `sabotage-reader-integration.json`, declares six sabotages these tests catch on their own and
+a control that survives; all seven behave as declared. Two are caught by the suite's hang bound and not by an
+assertion (an entry the full client queue refused is dropped, and the completion queue's size is not
+respected), since the missing delivery is waited for up to the tests' own sixty-second bound.
+
+Found by writing the refusals, not by a test that could keep it: a `client_sq_capacity` of `1 << 40` is
+accepted by the options and aborts the process in the queue's infallible allocation. Recorded as TW-9.6.
+The README states what each size limits and the three stops, citing no figure.

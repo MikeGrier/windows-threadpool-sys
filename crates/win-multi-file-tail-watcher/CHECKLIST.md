@@ -167,18 +167,6 @@ fine".
 
 - [x] **TW-9.4** -- The reading layer itself is public as `reader::TailReader`: made from the options and the watcher's own arguments, it registers a file with an offset and a `T`, polls, exposes its SQ and doorbells, shuts down without blocking and reports the first error a run returned, with nothing it needs from the watcher made public. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-94)
 
-- [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
-  that child processes write: the default options, a set well above them of the size a build service would choose (large buffers, many of them, a large client SQ and ring), and the tiny
-  set the in-crate tests use, every byte delivered once under each, one child that writes the
-  near-term load, the shape of an Azure CLI deployment command's output
-  ([capture](bench-captures/2026-10-17-azure-cli-output-shape.txt)): a long silence, then one burst of
-  indented JSON of a few hundred bytes with the occasional long line, and an error on a second file,
-  with nothing written between, which the layer must deliver at once after the silence and otherwise
-  leave quiet, and one child that writes the
-  worst-case load, the shape of a CI runner's job log ([TW-D-16](DESIGN-NOTES.md#tw-d-16), the
-  [capture](bench-captures/2026-10-16-runner-log-shape.txt)): lines of mixed length, most longer than
-  a default buffer, in bursts with idle stretches between them, from which the test reassembles every
-  line whole out of chunks that arrive in any order, an invalid
-  size of each field refused before any file is opened, and a chunk the client keeps stopping the
-  reads until it is dropped. The README states what each size limits, naming the three stops (an
-  empty pool, a full ring, a full client SQ), without a measured figure it does not cite.
+- [x] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files that child processes write, under the default options, a set well above them and two small sets, with the near-term and worst-case loads, every invalid size refused, and a held chunk and an undrained client SQ each stopping the reads; the README names what each size limits and the three stops. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-95)
+
+- [ ] **TW-9.6** -- A `client_sq_capacity` the options accept but the allocator cannot give aborts the process instead of returning an error: the queue's own ceiling is representational, not what memory allows, and it allocates infallibly (found by TW-9.5; capacity `1 << 40` is an 80 TiB request). The pool already answers this case with `TailReaderError::Allocation`. Blocked on a decision, raised with the engineer: where the fix belongs (a fallible constructor in `windows-waitable-queues`, which is a published crate and needs a release; or a probe in the reader's options).

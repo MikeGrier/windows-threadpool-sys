@@ -42,5 +42,21 @@ refuse each of those instead, so the ring a caller gets is the ring they asked f
 Reads in flight at once are the least of the pieces announced, `buffer_count`, and the completion
 queue the ring gives.
 
+Each size limits one thing, and the reader stops when it reaches any of three, going on again
+without a further call when the stop is lifted:
+
+- **Every buffer is held.** A `Chunk` holds its buffer until it drops, so a client that keeps
+  `buffer_count` chunks keeps the reader from reading, with nothing in flight, until one drops. A
+  poll's poll-done waits for the reads of its poll.
+- **The ring is full.** `ring_cq_size` is the most reads the ring holds at once. Past it the reader
+  waits for a completion, whatever the pool could lend.
+- **The client's queue is full.** `client_sq_capacity` is the most entries waiting at once. Past it
+  the reader holds the entry it could not queue and waits for the client to drain and call
+  `ring_resume`; nothing is dropped.
+
+The integration tests of this layer, [tests/reader_real_writers](tests/reader_real_writers), run
+each of these over files that child processes write, with the defaults, with sizes well above
+them, and with sizes small enough that every stop is reached all the time.
+
 What was decided, and why: [DESIGN-NOTES.md](DESIGN-NOTES.md). The work, in order:
 [CHECKLIST.md](CHECKLIST.md).

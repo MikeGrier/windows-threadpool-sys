@@ -1,0 +1,63 @@
+{
+  "package": "win-multi-file-tail-watcher",
+  "description": "Sabotages the integration tests of the public reader layer (tests/reader_real_writers/) must catch on their own, over files that child processes write. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "win-multi-file-tail-watcher", "--all-features", "--test", "reader_real_writers"],
+  "sabotages": [
+    {
+      "name": "a read starts one byte before the offset it was planned at",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Every file is delivered whole and in order under every option set, so a read that lands elsewhere repeats a byte or loses one.",
+      "find": ["                    batch.read_raw_owned(file, buffer, extra, read.offset, PushOptions::new())"],
+      "replace": ["                    batch.read_raw_owned(file, buffer, extra, read.offset.saturating_sub(1), PushOptions::new())"]
+    },
+    {
+      "name": "a chunk is the whole buffer rather than the bytes read",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The last read of a file is shorter than a buffer; its chunk then carries stale bytes past the end, and the range no longer matches the length.",
+      "find": ["        &self.buffer.bytes[..self.len]"],
+      "replace": ["        &self.buffer.bytes[..]"]
+    },
+    {
+      "name": "an entry the full client queue refused is dropped",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A client queue of two, and one nobody drains, are the cases where the queue refuses; the entry must wait and be delivered later, not be lost.",
+      "find": ["                    self.undelivered = Some(entry);"],
+      "replace": ["                    drop(entry);"]
+    },
+    {
+      "name": "the completion queue's size is not respected",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "With a pool of sixty-four and a ring of sixteen it is the ring that limits the reads in flight; without the check the ring is asked for more than it holds.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if false && outstanding >= *cq_size {"]
+    },
+    {
+      "name": "a size that is not a power of two is not refused",
+      "file": "src/reader/options.rs",
+      "expect": "caught",
+      "why": "The refusals are asserted through the public constructor, one cause at a time.",
+      "find": ["    if !given.is_power_of_two() {"],
+      "replace": ["    if false && !given.is_power_of_two() {"]
+    },
+    {
+      "name": "a size below the least is accepted",
+      "file": "src/reader/options.rs",
+      "expect": "caught",
+      "why": "The ring would raise it, so the reader would run with a ring the caller did not ask for.",
+      "find": ["    if given < least {"],
+      "replace": ["    if false && given < least {"]
+    },
+    {
+      "name": "the text of an expect that cannot fail is changed",
+      "file": "src/read_engine.rs",
+      "expect": "survives",
+      "why": "Control: a change no test can observe. If this were caught, the manifest would be measuring something other than what these tests do.",
+      "find": ["        .expect(\"a u32 fits usize\");"],
+      "replace": ["        .expect(\"a u32 fits a usize\");"]
+    }
+  ]
+}
