@@ -510,10 +510,29 @@ module within the crate".
 - **The error that refuses a size carries its cause.** The engineer, 2026-10-17: "ensure the err enum
   has cause." Read here as: each refusal is a distinct variant that names the field, the value given
   and the cause, which is the rule it broke (zero, not a power of two, below the ring's floor, below
-  twice the submission queue, above the largest the ring reports), and a refusal that a lower layer
-  made carries that layer's error as its `source` (the pool's, the SQ's, the ring's), so a caller
-  can read why without parsing text. The enum implements `std::error::Error` and `Display`
+  twice the submission queue, above the largest the ring reports), so a caller can read why without
+  parsing text. The enum implements `std::error::Error` and `Display`
   ([TW-9.2](CHECKLIST.md)).
+  - **As built:** the cause is a field of each variant, a `Cause` enum, not the error's `source`, and
+    the message includes it, so printing the error shows why without walking a chain. The pool's and
+    the queue's refusals are the options' own checks, written to give the same verdict as theirs
+    and translated to a `Cause`, so no lower layer's error exists to carry. The one lower-layer
+    error that can arise is the operating system's, when the ring's limits cannot be read, and
+    that is the `source` of `OptionsError::RingCapabilities`. The reading made earlier in this
+    bullet, that a lower layer's error is carried as the `source`, was wider than what there is to
+    carry.
+  - **The queue's rule is written twice.** The client queue's capacity rule (a power of two within
+    bounds) lives in `windows-waitable-queues`, which does not expose it without allocating a queue.
+    The options read the queue's bounds from its refusal of a capacity of zero, which is made before
+    any allocation, and apply the rule themselves; a test compares the two over a range of
+    capacities. Exposing the rule from that crate would remove the copy but changes a published
+    crate, whose release would have to precede this crate's use of it. No work is scheduled for
+    that: the copy is three comparisons guarded by a test, and it is the engineer's to say if it is
+    worth the release.
+  - **The ring's floor and ratio are public constants** (`MIN_RING_SQ_SIZE`,
+    `MIN_RING_CQ_PER_SQ`) so the options and the tests that tie them to the real ring share one
+    definition. That a pair of ring sizes is accepted exactly when the ring gives those sizes is
+    tested in both directions over a grid.
 - **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
   `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
 
@@ -536,7 +555,8 @@ bind to them as settled.
   stderr), a guesstimate the engineer regards as an extreme.
 - **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15), [TW-D-16](#tw-d-16)): the
   buffer size and count when the layer is created.
-- **The defaults would be 64 buffers of 64 bytes and a client SQ of 64 entries.** The engineer,
+- **The defaults would be 64 buffers of 64 bytes and a client SQ of 64 entries**, which
+  `TailReaderOptions::default()` holds as public constants and the options accept as valid. The engineer,
   2026-10-16: "my defaults if I were to pick would be 64 buffers of 64 bytes each", a queue of 64
   as a bet over 32, a larger count of slightly smaller buffers and a mid-sized queue as the
   expected shape, and doubt that measurement will say much because it is workload dependent. The

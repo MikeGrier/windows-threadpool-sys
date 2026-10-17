@@ -107,7 +107,7 @@ impl Shared {
 }
 
 /// Check a pool's dimensions before anything is allocated.
-fn check(buffer_len: usize, count: usize) -> Result<(), PoolError> {
+pub(crate) fn check(buffer_len: usize, count: usize) -> Result<(), PoolError> {
     if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {
         return Err(PoolError::BufferLen(buffer_len));
     }

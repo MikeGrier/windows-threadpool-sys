@@ -19,6 +19,7 @@ mod read_engine;
 mod read_layer;
 mod read_plan;
 mod read_sq;
+pub mod reader;
 mod sq;
 #[cfg(test)]
 mod test_support;

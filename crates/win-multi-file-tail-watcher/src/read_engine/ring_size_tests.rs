@@ -11,13 +11,17 @@ use windows_ioring_sys::{IoRing, IoRingErrorExt, RingCondition, RingInfo, capabi
 use super::{Advance, EngineError, ReadEngine, Stop};
 use crate::Watcher;
 use crate::pool::BufferPool;
+use crate::reader::TailReaderOptions;
 use crate::test_support::{TempDir, wtf};
 
 type Ring = IoRing<(), ()>;
 
-/// The submission queue size a request of zero is replaced by, and the least a nonzero one gets.
+/// The submission queue size a request of zero is replaced by.
 const DEFAULT_SQ: u32 = 32;
-const LEAST_SQ: u32 = 8;
+/// The least a nonzero request gets, and the ratio of the completion queue to the submission queue:
+/// the reading layer's options refuse what the ring would raise, using these two.
+const LEAST_SQ: u32 = TailReaderOptions::MIN_RING_SQ_SIZE;
+const CQ_PER_SQ: u32 = TailReaderOptions::MIN_RING_CQ_PER_SQ;
 
 fn reported(sq: u32, cq: u32) -> RingInfo {
     Ring::with_inventory(sq, cq)
@@ -48,7 +52,7 @@ fn expected_sq(request: u32) -> u32 {
 /// The completion queue size the ring gives a request: the larger of twice the submission queue
 /// it settled on and the request rounded up to a power of two.
 fn expected_cq(sq: u32, cq_request: u32) -> u32 {
-    (expected_sq(sq) * 2).max(cq_request.next_power_of_two())
+    (expected_sq(sq) * CQ_PER_SQ).max(cq_request.next_power_of_two())
 }
 
 #[test]
@@ -100,7 +104,7 @@ fn a_size_of_zero_is_accepted_and_replaced_by_a_default_the_caller_did_not_choos
     let zero = reported(0, 0);
     assert_eq!(
         (zero.submission_queue_size, zero.completion_queue_size),
-        (DEFAULT_SQ, DEFAULT_SQ * 2)
+        (DEFAULT_SQ, DEFAULT_SQ * CQ_PER_SQ)
     );
 }
 

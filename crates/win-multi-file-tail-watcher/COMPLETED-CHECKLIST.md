@@ -1267,3 +1267,34 @@ test alone caught both.
 
 Limits: the formulas are what one host and build showed, asserted as such; throughput under a small
 completion queue and the memory of a ring at the largest sizes were not measured.
+
+## Moved 2026-10-17 13:03:05 -04:00 -- TW-9.2: the reading layer's options
+
+### <a id="tw-92"></a>TW-9.2 -- An options type holds the five sizes, checks them before anything is allocated, and refuses each size that cannot work with an error that names the option, the value and the cause, including every ring size the ring would round, replace or raise. *(completed 2026-10-17 13:03:05 -04:00)*
+
+`src/reader.rs` is the new public module `reader`, holding `TailReaderOptions`, `OptionsError` and
+`Cause`. The options are five public fields (`buffer_len`, `buffer_count`, `client_sq_capacity`,
+`ring_sq_size`, `ring_cq_size`) on a `#[non_exhaustive]` struct, so a sixth can be added; a caller
+outside the crate starts from `Default` and assigns. `validate` allocates nothing: the pool's own
+dimension check, now crate-visible, decides the buffer size and count; the client queue's bounds are
+read from its refusal of a capacity of zero; and the ring's two sizes are checked against
+`capabilities()`.
+
+`OptionsError` has a variant per option carrying the value given and a `Cause` (zero, not a power of
+two, below a least, above a most), and `RingCapabilities` carrying the operating system's error as its
+source. The first option to fail is the one reported. The ring's floor and ratio are the public
+constants `MIN_RING_SQ_SIZE` and `MIN_RING_CQ_PER_SQ`, and the defaults are public constants, the
+ring's completion queue derived from them so it cannot drift out of the rule.
+
+Fifteen tests, among them: the client queue's rule against the queue's own verdict over 29 capacities
+and past each bound; the ring's rule against a real ring in both directions over a 23 by 19 grid, a pair
+being accepted exactly when the ring gives exactly those sizes; the largest sizes the machine reports;
+the order of refusal; the messages and the source; and five valid sets, from the defaults to a
+build-service-sized one, the least of everything, a wide completion queue and the largest ring, each
+reading a file whole through an engine. `ring_size_tests.rs` now takes the floor and ratio from the
+constants, so the measured rule has one site. Seventeen sabotage entries: sixteen caught and one control
+that survives. Four were also applied by hand with only the new tests run, and each was caught.
+
+Not tested: `validate`'s arm for a failure to read the ring's capabilities, which cannot be made to
+fail on demand, and a buffer count whose memory is not there, which is the allocator's answer when the
+layer is made and not a refusal.
