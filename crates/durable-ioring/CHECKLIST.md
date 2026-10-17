@@ -262,21 +262,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.7.3** -- The disposition is Win32's own, an enum, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-1373)
 
-- [ ] **DI-13.7.4** -- **`open` is a build and a perform.** Follows `DI-13.7.1` and `DI-13.7.3`.
-  `OpenedFile::request(path, options)` builds on the submitting thread: it holds the `Wtf16String`, the
-  typed options and the request crate's `OpenFile`, and what fails there (an interior NUL, the current
-  directory) fails where the caller can see it. `perform(&self)` makes the call on whatever thread the
-  caller chooses and returns the `OpenedFile`, so a blocking `CreateFileW` can be moved off the
-  submitting thread ([DI-13.1](COMPLETED-CHECKLIST.md#di-131), ruling (c)). `open` stays as the two run
-  inline, documented as blocking for as long as `CreateFileW` does. The request is typed by its
-  buffering mode and its data access, as `OpenedFile<B, A>` is. **The remote check:** the engineer ruled
-  that nothing is checked before the open and that the opened handle is checked by `DI-14.5`, which has
-  not been built, so the unbuffered open keeps its present check, on the path and before the call,
-  inside `perform` where it can block, until `DI-14.5` replaces it; this is an interim and is recorded
-  as one in `DI-D-64`, not a second decision. Tests: a request built on one thread and performed on
-  another after `set_current_dir` has changed opens the file the path named when it was built; a request
-  is `Send`; performing twice opens twice; an error from the build and one from the perform are
-  distinguishable; `open` is the same as the two.
+- [x] **DI-13.7.4** -- `open` is a build, `OpenedFile::request`, and a perform, `OpenRequest::perform`. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-1374)
 
 - [ ] **DI-13.7.5** -- **Amend `DI-D-63` and the documents that describe the open.** The principle
   "a caller sees no difference from std" is amended and the list of differences rewritten in

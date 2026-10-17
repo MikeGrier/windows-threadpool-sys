@@ -152,7 +152,9 @@ for this table.
   check ahead of it; the engineer amended that on 2026-10-16, ruling that finding out late is
   acceptable and that the check on the opened handle ([DI-14.5](CHECKLIST.md)) is the only one. The
   refusal of an unbuffered file on a remote device stays, since `OpenedFile<Unbuffered>` promises
-  `SharedDevice` and a remote file cannot keep it.
+  `SharedDevice` and a remote file cannot keep it. Until `DI-14.5` builds the check on the opened
+  handle, it is made on the path, before the call and inside `OpenRequest::perform`, where it can block
+  with the call (an interim, not a second decision).
 - **What a target claims follows from how the file was opened** ([DI-D-60](#di-d-60)). The buffering
   mode is the type: it decides the warranty class, the alignment and whether per-write write-through is
   offered, and no other row changes the class.

@@ -3051,3 +3051,14 @@ sets the flag, which a new-file open no longer sets itself. Deleted: `truncate_a
 Tests open each disposition against a present and an absent file for each typed access, and make a link to
 show a new file is created through it unless the option is set; the link test is skipped where a symbolic link
 cannot be made. Seven sabotage entries and a `survives` control replace the five that pinned std's behaviours.
+
+### <a id="di-1374"></a>DI-13.7.4 -- `open` is a build, `OpenedFile::request`, and a perform, `OpenRequest::perform`. *(completed 2026-10-17 13:03:45 -04:00)*
+
+Commit `013990cd`; ruling (c) of [DI-13.1](#di-131). `OpenedFile::request(path, options)` builds an
+`OpenRequest<B, A>` on the calling thread, fixing a relative path to the current directory as it is then, and
+`perform(&self)` makes the call wherever the caller chooses; `open` is the two inline and is documented as
+blocking. The request is `Send` and can be performed repeatedly, each time opening the file again. The
+unbuffered remote check stays on the path inside `perform` until `DI-14.5`, recorded in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) as an interim. The tests are in `opened_file/request_tests.rs`; the
+remote refusal itself is the existing test that needs an administrative share, which passed here. Three
+sabotage entries and a `survives` control.
