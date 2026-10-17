@@ -29,7 +29,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
 | <a id="tw-d-14"></a>TW-D-14 | **The passes work in batches of 256 under the roster lock, the buffers in chunks of at most 64 KiB, and the roster stays a `BTreeMap`; sharding the probe across threads is a known remedy that is not built.** |
 | <a id="tw-d-15"></a>TW-D-15 | **A layer above the watcher reads the bytes each poll announces through an I/O ring, into owned buffers from a pool it keeps, and delivers them as chunks on an SQ of its own, as the reads complete.** No CQ: a chunk's `Drop` returns its buffer. |
-| <a id="tw-d-16"></a>TW-D-16 | **The reading layer is made public in a module of this crate, with the client choosing the buffer size, the buffer count, the client SQ capacity and the ring's two queue sizes; no size has a default yet.** |
+| <a id="tw-d-16"></a>TW-D-16 | **The reading layer is made public in a module of this crate, with the client choosing the buffer size, the buffer count, the client SQ capacity and the ring's two queue sizes; the defaults are a working position.** |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -469,15 +469,15 @@ module within the crate".
 - **The client chooses five sizes**, all of which the internal constructors already take: the
   buffer size, the buffer count, the client SQ's capacity, and the ring's submission and completion
   queue sizes. The watcher's SQ capacity is the sixth, and is already a public argument.
-- **No size has a default yet**, as [TW-2.2](CHECKLIST.md) left the watcher's SQ capacity without
-  one: a default is a number nothing has chosen. Choosing them is measurement work and is parked in
-  the checklist.
+- **Defaults are a working position, not a decision**
+  ([below](#working-positions-not-decisions)): the engineer picked numbers with a hedge, and
+  expects measurement to say little, since the best sizes depend on the workload.
 - **A size that cannot work is refused at construction**, naming the field and the bound, before
   anything is allocated. The ring's rules for its two queue sizes, and how its completion queue
   bounds the reads in flight against the buffer count, are measured first
   ([TW-9.1](CHECKLIST.md)); nothing here states them until they are.
-- **Names are working positions.** `TailReader`, `TailReaderOptions` and a module `reader` are
-  placeholders from the plan; nothing should bind to them until TW-9.3 records them.
+- **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
+  `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
 
 ## Working positions (not decisions)
 
@@ -496,8 +496,13 @@ bind to them as settled.
   Nothing here should bind to it.
 - **The expected population tops out around 20,000 files** (some 10,000 jobs, each with stdout and
   stderr), a guesstimate the engineer regards as an extreme.
-- **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15)): the buffer size and
-  count when the layer is created, with any defaults left to measurement.
+- **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15), [TW-D-16](#tw-d-16)): the
+  buffer size and count when the layer is created.
+- **The defaults would be 64 buffers of 64 bytes and a client SQ of 64 entries.** The engineer,
+  2026-10-16: "my defaults if I were to pick would be 64 buffers of 64 bytes each", a queue of 64
+  as a bet over 32, a larger count of slightly smaller buffers and a mid-sized queue as the
+  expected shape, and doubt that measurement will say much because it is workload dependent.
+  Whether the ring's two queue sizes take the same 64 is not settled, and TW-9.1 comes first.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on

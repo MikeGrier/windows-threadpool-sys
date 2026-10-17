@@ -353,9 +353,11 @@ a new crate: "I would put this in a distinct new module within the crate".
 - **A new crate was not considered further.** The layer owns a `Watcher` and uses crate-internal
   parts of it (`register_with`, `mark_terminal`, the stop flag). A second crate would need each of
   those made public for one consumer, which is a larger public surface than the layer itself.
-- **No defaults.** A default buffer size or count is a number nothing has chosen, which is why
-  `Watcher::new` takes its capacity. Defaults need a measurement at realistic sizes, and the tests so
-  far use deliberately tiny ones. The assistant put it to the engineer as work, not as a gap.
+- **Defaults.** The assistant first planned none, because a number nothing had chosen is why
+  `Watcher::new` takes its capacity, and parked them behind a measurement. The engineer replied that
+  measurement would not be very useful since the best sizes are workload dependent, and gave a
+  hedged pick: 64 buffers of 64 bytes and a queue of 64. That is recorded as a working position and
+  scheduled as part of TW-9.2, with no measurement gating it.
 - **Refusal before allocation.** The pool allocates and zeroes every buffer when it is made, so an
   invalid size found late would have paid for the allocation. The ring's own rules for its queue
   sizes are not known from reading the code, which is why the first item measures them.

@@ -155,8 +155,9 @@ registers files that child processes write, polls, and receives every announced 
 chunks; and a size that cannot work is refused at construction, naming the field and its bound
 ([TW-D-16](DESIGN-NOTES.md#tw-d-16)). The layer is a module of this crate, not a new one.
 
-The names of the module and its types are not chosen: `TailReader`, `TailReaderOptions` and a module
-`reader` are placeholders, and TW-9.3 records the real ones before anything is exported.
+The module is `reader`, and its types are `TailReader<T>` (the layer), `TailReaderOptions` (the five
+sizes), `ReadEntry<T>` (the SQ entry) and `Chunk` (the bytes): the engineer, 2026-10-16, "the names are
+fine".
 
 - [ ] **TW-9.1** -- How the ring's two queue sizes behave is measured and recorded: which pairs
   `IoRing::with_inventory` accepts and refuses, the completion queue size the kernel reports for each
@@ -166,15 +167,16 @@ The names of the module and its types are not chosen: `TailReader`, `TailReaderO
 
 - [ ] **TW-9.2** -- An options type holds the five sizes and checks them before anything is
   allocated: each refusal is a distinct error naming the field and the bound, the buffer size and
-  count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by TW-9.1's. No
-  size has a default. One check per field, tested at, below and above each bound, and every valid
-  combination TW-9.1 found reaches a working engine.
+  count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by TW-9.1's. The
+  options have a `Default` of 64 buffers of 64 bytes and a client SQ of 64 entries, a working
+  position ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)), with the ring sizes
+  the defaults take left to what TW-9.1 finds. One check per field, tested at, below and above each
+  bound, and every valid combination TW-9.1 found reaches a working engine, the defaults included.
 
 - [ ] **TW-9.3** -- The reading layer's entries are public: the data, shrink, terminal and poll-done
   entry type, the chunk (a view of exactly the bytes read, which returns its buffer to the pool on
   drop), the drain the client reads them through, and the two doorbells. The entry type is
-  `#[non_exhaustive]` as the watcher's is. This item chooses and records the module and type names,
-  and each public item carries rustdoc stating what it promises and the one thing each can do to a
+  `#[non_exhaustive]` as the watcher's is. The names are the ones in the milestone text, and each public item carries rustdoc stating what it promises and the one thing each can do to a
   caller who holds it too long (a held chunk keeps a buffer out of the pool).
 
 - [ ] **TW-9.4** -- The layer itself is public in a module of this crate: it is made from the
@@ -184,14 +186,8 @@ The names of the module and its types are not chosen: `TailReader`, `TailReaderO
   grow. A doctest compiles an example that uses only public items.
 
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
-  that child processes write: a realistic option set (large buffers, many of them, rings sized to
-  match) and the tiny set the in-crate tests use, every byte delivered once under each, an invalid
+  that child processes write: the default options, a set of larger buffers and rings, and the tiny
+  set the in-crate tests use, every byte delivered once under each, an invalid
   size of each field refused before any file is opened, and a chunk the client keeps stopping the
   reads until it is dropped. The README states what each size limits, naming the three stops (an
   empty pool, a full ring, a full client SQ), without a measured figure it does not cite.
-
-## M9+ -- After the layer is public
-
-- [ ] **TW-9+.1** -- Defaults for the five sizes, if the engineer wants them, chosen from a
-  measurement at realistic sizes. Gated on TW-9.5: until the layer runs at those sizes there is
-  nothing to choose from, and TW-D-16 leaves the sizes without defaults.
