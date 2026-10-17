@@ -251,8 +251,8 @@ option recorded by construction. The rule throughout is documented APIs only
   access. **Nothing here waits on another crate:** the request crate's side is done
   ([NR-3.3 to NR-3.6](../windows-namespace-request-sys/CHECKLIST.md): `OpenFile` takes a `Wtf16String`,
   fixes a relative path to the directory it was built in, and is `Send`, so it can be built on one
-  thread and performed on another). **Order:** `DI-13.7.1`; `DI-13.7.2` is a question for the engineer
-  and can be answered meanwhile; `DI-13.7.3` waits on it; `DI-13.7.4` follows both; `DI-13.7.5` last.
+  thread and performed on another). **Order:** `DI-13.7.1`; `DI-13.7.2` is ruled
+  and `DI-13.7.3` is unblocked; `DI-13.7.4` follows both; `DI-13.7.5` last.
   Each code item is its own commit, and `DI-13.7.1` and `DI-13.7.3` each break `win-durable-ioring`,
   which ships as one new minor (the ruling of `DI-13.1`, item (e)). This item is checked when all five are.
 
@@ -270,42 +270,28 @@ option recorded by construction. The rule throughout is documented APIs only
   refused by Win32 and not by this crate; an empty path is Win32's answer; a path with an interior NUL
   is refused by the request crate and reaches the caller as `InvalidInput`.
 
-- [ ] **DI-13.7.2** -- **Ruling: how the disposition enum offers `TRUNCATE_EXISTING`, and whether a
-  read-only handle may overwrite.** Measured on 2026-10-16 (Windows 11 build 26300, local NTFS, cached
-  and unbuffered, [disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs);
-  the table is in [DI-D-64](DESIGN-NOTES.md#di-d-64)): `TRUNCATE_EXISTING` fails with
-  `ERROR_INVALID_PARAMETER` for **every** access mask but one, the literal `GENERIC_WRITE`, including
-  `FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA`, which is `GENERIC_WRITE` less its append,
-  synchronize and read-control bits. `CREATE_ALWAYS` empties an existing file with **any** mask, a
-  read-only one and no access at all included. So with the typed write access, which asks for
-  `FILE_WRITE_DATA` only, the fifth disposition can never succeed, and a `ReadOnly` handle can be
-  opened to destroy the file it was typed not to change. **Working position, not a decision; the
-  assistant's recommendation:** offer all five, as ruled; let the open add the literal `GENERIC_WRITE`
-  for `TruncateExisting` and say in its documentation that the handle then holds `GENERIC_WRITE`'s
-  rights (it includes `FILE_WRITE_DATA`, so it is still not append-only); and make the two
-  dispositions that empty a file, `CreateAlways` and `TruncateExisting`, selectable only where `A:
-  CanWrite` (an `A`-bounded method, as `FileOptions::write` is), so that a handle typed not to write
-  cannot be opened to overwrite, at compile time and not by the kernel's refusal. `CreateNew` and
-  `OpenAlways` create a file and change nothing that exists, so they stay open to every `A`. The
-  alternatives are to leave the kernel's answer (a `TruncateExisting` that is always
-  `ERROR_INVALID_PARAMETER`, which is a variant that computes the wrong answer), and to drop
-  `TruncateExisting` (which loses "empty it, and fail if it is not there", the one thing
-  `CreateAlways` cannot say). "Too early to say" is an answer. Blocks `DI-13.7.3` only.
+- [x] **DI-13.7.2** -- Ruled: v1 offers neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`; see DI-D-64.
 
 - [ ] **DI-13.7.3** -- **The disposition is Win32's own, as an enum; `FILE_FLAG_OPEN_REPARSE_POINT` is an
-  explicit option.** Waits on `DI-13.7.2`. `Disposition` has the call's five variants, and
-  `FileOptions::disposition` replaces `create`, `create_new` and `truncate`, which go outright
-  (the ruling of `DI-13.1`, item (e)), with the default `OpenExisting`. Deleted: `Parameters`'s
-  `truncate_after`, the `OPEN_ALWAYS` plus `set_len(0)` that stood in for `CREATE_ALWAYS`, the
-  `parameters()` refusal of a create or truncate without write access, and the reparse flag set on
-  `create_new`. Added: `FileOptions::open_reparse_point`, a builder method; it moves here from
-  [DI-14.2](#di-142-flags) because removing the automatic flag would otherwise leave a new file with no
-  way to be created without following a link. Twenty-one uses in `opened_file/tests.rs` are rewritten,
-  and the doctests and the README follow. Four sabotage entries of `DI-13.2` pin the std behaviours
-  (not emptied, created through a link, the emptying skipped, and the one for the path, which `DI-13.7.1`
-  takes) and are replaced. Tests: each of the five dispositions against a present and an absent file,
-  for each of the three typed accesses, matching the measured table for what the kernel accepts; a new
-  file is created through a link that is already there unless the option is set, and is not when it is.
+  explicit option.** Unblocked by the ruling of `DI-13.7.2`, which leaves three variants: `CreateNew`,
+  `OpenExisting` and `OpenAlways` ([DI-D-64](DESIGN-NOTES.md#di-d-64)). `Disposition` is that enum, and
+  `FileOptions::disposition` replaces `create`, `create_new` and `truncate`, which go outright (the
+  ruling of `DI-13.1`, item (e)), with the default `OpenExisting`. Neither of the two left out is
+  representable, so nothing is refused at run time on their account; and none of the three changes or
+  empties a file that exists, so no data access `A` is gated by the disposition. A caller that wants an
+  existing file emptied does it through the lent handle (`File::set_len(0)`, which needs the write
+  right), and that is not atomic with the open. Deleted: `Parameters`'s `truncate_after`, the
+  `OPEN_ALWAYS` plus `set_len(0)` that stood in for `CREATE_ALWAYS`, the `parameters()` refusal of a
+  create or truncate without write access, and the reparse flag set on `create_new`. Added:
+  `FileOptions::open_reparse_point`, a builder method; it moves here from [DI-14.2](#di-142-flags)
+  because removing the automatic flag would otherwise leave a new file with no way to be created
+  without following a link. Twenty-one uses in `opened_file/tests.rs` are rewritten, and the doctests
+  and the README follow. Four sabotage entries of `DI-13.2` pin the std behaviours (not emptied,
+  created through a link, the emptying skipped, and the one for the path, which `DI-13.7.1` takes) and
+  are replaced. Tests: each of the three dispositions against a present and an absent file, for each
+  of the three typed accesses, matching what the kernel accepts; a new file is created through a link
+  that is already there unless the option is set, and is not when it is; a file that exists is the
+  same length after each disposition.
 
 - [ ] **DI-13.7.4** -- **`open` is a build and a perform.** Follows `DI-13.7.1` and `DI-13.7.3`.
   `OpenedFile::request(path, options)` builds on the submitting thread: it holds the `Wtf16String`, the
@@ -548,6 +534,13 @@ implementation before it is answerable.
     the choice there is purely one of performance.
   Applies to the default provider (DI-2.12), the only one that uses dioring's wioring.
   Gated on DI-3.2.
+
+- [ ] **DI-6+.11** -- **Revisit `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, which v1 leaves out** (the engineer,
+  2026-10-16, "just to simplify the matrix", to be revisited at a later date). Parked, neither added nor
+  dropped. What an answer needs is in [DI-D-64](DESIGN-NOTES.md#di-d-64): `TRUNCATE_EXISTING` was
+  accepted only with the literal `GENERIC_WRITE`, and `CREATE_ALWAYS` emptied a file under every access
+  mask including a read-only one, so offering either means deciding what a handle typed not to write may
+  be opened to do. It is answerable once the three dispositions of [DI-13.7.3](#di-137-rework) are in use.
 
 - [ ] **DI-6+.6** -- **Make the default provider cheaper than per-file sync.** From DI-2.12 point 1;
   the engineer, 2026-10-06, asked these be recorded as "optimizations we should strongly consider",

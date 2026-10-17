@@ -189,7 +189,7 @@ for this table.
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
 | `lpSecurityAttributes`: `bInheritHandle` (CF) | Not in v1 | None; the handle is never inheritable | An inheritable handle reaches child processes that can write through it, and no call this crate makes chooses inheritance. A ruling for v1, not a rejection. | engineer 2026-10-15 |
 | `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back. | assistant |
-| `dwCreationDisposition` (CF) | Exposed | An enum of `CREATE_NEW`, `CREATE_ALWAYS`, `OPEN_EXISTING`, `OPEN_ALWAYS`, `TRUNCATE_EXISTING` | The call's own five, `CREATE_ALWAYS` included. A truncating disposition empties a file whose earlier epochs may have been reported durable; that is the caller's choice. `create`, `create_new` and `truncate` go, and with them the `OPEN_ALWAYS` plus an emptying that [DI-D-63](#di-d-63) used. `TRUNCATE_EXISTING` requires write access and `CREATE_ALWAYS` cannot be used with `FILE_FLAG_OPEN_REPARSE_POINT` (the page says both); the kernel makes those refusals. | engineer 2026-10-15, 2026-10-16 |
+| `dwCreationDisposition` (CF) | Exposed, **narrowed for v1** | An enum of `CREATE_NEW`, `OPEN_EXISTING` and `OPEN_ALWAYS`. **`CREATE_ALWAYS` and `TRUNCATE_EXISTING` are excluded for v1 and are to be revisited** ([DI-6+.11](CHECKLIST.md)) | Three of the call's five: the three that never change or empty a file that exists, so no data access is gated by the disposition. The two left out are unrepresentable, so nothing is refused at run time on their account. `create`, `create_new` and `truncate` go, and with them the `OPEN_ALWAYS` plus an emptying that [DI-D-63](#di-d-63) used; a caller empties a file through the lent handle. What an answer to the two needs is measured below. | engineer 2026-10-15 (the five); engineer 2026-10-16 (the two left out for v1, "just to simplify the matrix", to be revisited at a later date) |
 | `FILE_ATTRIBUTE_ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` (CF) | Exposed | Members of the attributes set, for a created file | None. The page says an existing file's attributes are generally combined with the flags and the supplied attributes ignored, and says applications should not change `OFFLINE` arbitrarily. `ID` ignores attributes and `RO` cannot take them, so those entries have none. | plan, [DI-14.3](CHECKLIST.md) |
 | `FILE_ATTRIBUTE_TEMPORARY` (CF) | Exposed | Member | The page says it lets a file system hold data in the cache and avoid writing it back while memory allows, which is within `BestEffort` for a cached file. For an unbuffered file the page does not say what it does, and the pair was not measured, so the class `SharedDevice` is not demonstrated for it; [DI-14.4](CHECKLIST.md) measures it. | standing |
 | `FILE_ATTRIBUTE_NORMAL` (CF) | Not a member | The empty set | The page says it is valid only alone and that any other attribute overrides it, so it is the absence of attributes and not one. What is passed for an empty set, zero or `NORMAL`, and whether it matters, is for [DI-14.3](CHECKLIST.md)'s tests. | engineer 2026-10-16; assistant |
@@ -311,9 +311,10 @@ stated.
 
 `TRUNCATE_EXISTING` is accepted with the literal `GENERIC_WRITE` and with no other mask tried, including
 `GENERIC_WRITE` less its append, synchronize and read-control bits. `CREATE_ALWAYS` emptied the file under
-every mask, a read-only one and none included. Two questions follow for the engineer and are open, with the
-assistant's recommendation, in [DI-13.7.2](CHECKLIST.md#di-137-rework): how the enum offers
-`TRUNCATE_EXISTING`, and whether a handle typed not to write may be opened to overwrite.
+every mask, a read-only one and none included. The engineer ruled on 2026-10-16 that v1 offers neither,
+which is the row above; the two questions the table raises, how an enum would offer `TRUNCATE_EXISTING`
+and whether a handle typed not to write may be opened to overwrite, are not answered and go with the
+revisit.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
 [DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)
