@@ -240,36 +240,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.6** -- A `ReOpenFile` entry, taken from the request crate's release. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-136)
 
-- [ ] **DI-13.7** -- **Rework `OpenedFile::open` to reflect Win32, and amend `DI-D-63`.** <a id="di-137-rework"></a>
-  Too large for one commit, and investigated on 2026-10-16 into the five items below, which are the
-  work and replace the single description this item had. Commit `9b45563f` and
-  [DI-D-63](DESIGN-NOTES.md#di-d-63) made the open match `std::fs::OpenOptions`; the engineer's ruling
-  is that this crate reflects Win32 and not std ([DI-D-64](DESIGN-NOTES.md#di-d-64)), so what that
-  kept goes: the path made verbatim past `MAX_PATH` and refused when empty, the booleans `create`,
-  `create_new` and `truncate` with their `OPEN_ALWAYS` plus an emptying, the automatic
-  `FILE_FLAG_OPEN_REPARSE_POINT` on a new file, and the refusal of a create or truncate without write
-  access. **Nothing here waits on another crate:** the request crate's side is done
-  ([NR-3.3 to NR-3.6](../windows-namespace-request-sys/CHECKLIST.md): `OpenFile` takes a `Wtf16String`,
-  fixes a relative path to the directory it was built in, and is `Send`, so it can be built on one
-  thread and performed on another). **Order:** `DI-13.7.1`; `DI-13.7.2` is ruled
-  and `DI-13.7.3` is unblocked; `DI-13.7.4` follows both; `DI-13.7.5` last.
-  Each code item is its own commit, and `DI-13.7.1` and `DI-13.7.3` each break `win-durable-ioring`,
-  which ships as one new minor (the ruling of `DI-13.1`, item (e)). This item is checked when all five are.
-
-- [x] **DI-13.7.1** -- The path is handed over as the caller gave it, a `Wtf16String`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1371)
-
-- [x] **DI-13.7.2** -- Ruled: v1 offers neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`; see DI-D-64.
-
-- [x] **DI-13.7.3** -- The disposition is Win32's own, an enum, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-1373)
-
-- [x] **DI-13.7.4** -- `open` is a build, `OpenedFile::request`, and a perform, `OpenRequest::perform`. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-1374)
-
-- [ ] **DI-13.7.5** -- **Amend `DI-D-63` and the documents that describe the open.** The principle
-  "a caller sees no difference from std" is amended and the list of differences rewritten in
-  [DI-D-63](DESIGN-NOTES.md#di-d-63), whose superseded marker already stands; the README's open
-  section, the module documentation of `opened_file.rs` and `open_request.rs`, and the doctests say
-  what the open now is. [DI-14.2](#di-142-flags) loses the reparse flag, which `DI-13.7.3` took.
-  Documentation only, so it needs no validation beyond the doctests it touches.
+- [x] **DI-13.7** -- `OpenedFile::open` reflects Win32 and not `std`, and `DI-D-63` is amended. <a id="di-137-rework"></a> -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-137)
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

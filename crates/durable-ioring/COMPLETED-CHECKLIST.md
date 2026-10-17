@@ -3062,3 +3062,19 @@ unbuffered remote check stays on the path inside `perform` until `DI-14.5`, reco
 [DI-D-64](DESIGN-NOTES.md#di-d-64) as an interim. The tests are in `opened_file/request_tests.rs`; the
 remote refusal itself is the existing test that needs an administrative share, which passed here. Three
 sabotage entries and a `survives` control.
+
+### <a id="di-137"></a>DI-13.7 -- `OpenedFile::open` reflects Win32 and not `std`, and `DI-D-63` is amended. *(completed 2026-10-17 14:14:17 -04:00)*
+
+Five items, each its own commit, under the engineer's ruling that this crate reflects Win32
+([DI-D-64](DESIGN-NOTES.md#di-d-64)): [DI-13.7.1](#di-1371) (the path as given), `DI-13.7.2` (ruled: v1 offers
+neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`), [DI-13.7.3](#di-1373) (`Disposition` and
+`open_reparse_point`), [DI-13.7.4](#di-1374) (`request` and `perform`), and `DI-13.7.5` below. The two that broke
+`win-durable-ioring` ship as one new minor (the ruling of [DI-13.1](#di-131), item (e)).
+
+### <a id="di-1375"></a>DI-13.7.5 -- `DI-D-63` amended, and the README and module documentation say what the open now is. *(completed 2026-10-17 14:14:17 -04:00)*
+
+[DI-D-63](DESIGN-NOTES.md#di-d-63)'s superseded list of what was kept so that a caller sees no difference from
+`std` is replaced by what the open is now, and its two checks and its unverified items are kept. The README's
+open section gains the path, the disposition, the reparse option and `request`/`perform`, with a doctest of the
+second; the module documentation of `opened_file.rs` says the same. [DI-14.2](CHECKLIST.md#di-142-flags) already
+lacks the reparse flag.
