@@ -83,6 +83,35 @@ and opens nothing, fixing a relative path to the current directory as it is then
 performing it again opens the file again. The refusal of an unbuffered file on a remote device is made in
 `perform`.
 
+A file the open creates is given `FileOptions::attributes`, a `FileAttributes` set of `ARCHIVE`, `HIDDEN`,
+`OFFLINE`, `READONLY`, `SYSTEM` and `TEMPORARY` (`FILE_ATTRIBUTE_NORMAL`, the absence of attributes, is the
+empty set, and `FILE_ATTRIBUTE_ENCRYPTED` is not offered), and `OpenRequest::with_security_descriptor`, a
+`SecurityDescriptor` built from SDDL, which the request owns and frees. The descriptor is on the request and
+not in the options because it owns memory and cannot be copied, as the options can. Neither applies to a file
+that already exists. Handles are never inheritable, and there is no option to make one so.
+
+```rust
+use win_durable_ioring::windows_backend::{
+    Cached, Disposition, FileAttributes, FileOptions, OpenedFile, SecurityDescriptor,
+};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-create-{}", std::process::id()));
+let options = FileOptions::new()
+    .read()
+    .write()
+    .disposition(Disposition::CreateNew)
+    .attributes(FileAttributes::HIDDEN);
+let descriptor = SecurityDescriptor::from_sddl(&Wtf16String::from("D:P(A;;GA;;;WD)"))?;
+
+let created = OpenedFile::<Cached>::request(Wtf16String::from_os_str(path.as_os_str()), options)?
+    .with_security_descriptor(descriptor)
+    .perform()?;
+drop(created);
+# std::fs::remove_file(&path)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ```rust
 use win_durable_ioring::windows_backend::{
     Cached, Disposition, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,

@@ -28,6 +28,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::open::OpenFile;
+use windows_namespace_request_sys::{SecurityAttributes, SecurityDescriptor};
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -41,11 +42,14 @@ use durable_ioring::{
 };
 
 use super::disposition::Disposition;
+use super::file_attributes::FileAttributes;
 use super::file_rights::FileRights;
 use super::share_mode::ShareMode;
 
 mod open_request;
 
+#[cfg(test)]
+mod creation_tests;
 #[cfg(test)]
 mod flag_tests;
 #[cfg(test)]
@@ -173,6 +177,7 @@ pub struct FileOptions<A: DataAccess = NoData> {
     share: ShareMode,
     disposition: Disposition,
     open_reparse_point: bool,
+    attributes: FileAttributes,
     delete_on_close: bool,
     open_no_recall: bool,
     posix_semantics: bool,
@@ -196,6 +201,7 @@ impl FileOptions<NoData> {
             share: ShareMode::ALL,
             disposition: Disposition::OpenExisting,
             open_reparse_point: false,
+            attributes: FileAttributes::NONE,
             delete_on_close: false,
             open_no_recall: false,
             posix_semantics: false,
@@ -247,6 +253,7 @@ impl<A: DataAccess> FileOptions<A> {
             share: self.share,
             disposition: self.disposition,
             open_reparse_point: self.open_reparse_point,
+            attributes: self.attributes,
             delete_on_close: self.delete_on_close,
             open_no_recall: self.open_no_recall,
             posix_semantics: self.posix_semantics,
@@ -273,6 +280,20 @@ impl<A: DataAccess> FileOptions<A> {
     /// `OpenAlways` opens the link. It has no effect on a path that is not a reparse point.
     pub fn open_reparse_point(mut self, open_reparse_point: bool) -> Self {
         self.open_reparse_point = open_reparse_point;
+        self
+    }
+
+    /// The attributes a file the open creates is given (`FILE_ATTRIBUTE_*` in `dwFlagsAndAttributes`).
+    /// The default is none, which is not `FILE_ATTRIBUTE_NORMAL`: the empty set passes no attribute at
+    /// all, and a created file has the attributes the file system gives it, `ARCHIVE` among them
+    /// (measured: the same as an open that passes `NORMAL`). Calling this again replaces the set.
+    ///
+    /// They are for a file that is created, and what an open of a file that exists does with them is
+    /// Win32's: the `CreateFileW` page says they are generally combined with the file's own or
+    /// ignored, and nothing here changes an existing file's attributes (measured: the open leaves them
+    /// as they were).
+    pub fn attributes(mut self, attributes: FileAttributes) -> Self {
+        self.attributes = attributes;
         self
     }
 
@@ -364,7 +385,7 @@ impl<A: DataAccess> FileOptions<A> {
         open_request::Parameters {
             access: data_rights::<A>() | self.rights.bits(),
             disposition: self.disposition.bits(),
-            flags: flags | reparse | named | hints,
+            flags: flags | reparse | named | hints | self.attributes.bits(),
             share: self.share.bits(),
         }
     }
@@ -592,6 +613,29 @@ pub struct OpenRequest<B: Buffering = Cached, A: DataAccess = ReadWrite> {
 }
 
 impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
+    /// Give the file this open creates the security descriptor, built from SDDL with
+    /// [`SecurityDescriptor::from_sddl`]. The request owns it and frees it, and a caller never holds
+    /// a pointer to it. Calling this again replaces the descriptor.
+    ///
+    /// It is the request's and not a [`FileOptions`] field because a descriptor owns memory and
+    /// cannot be copied, and the options are a plain `Copy` description that is passed to several
+    /// opens. Handles are never inheritable: the attributes this passes to `CreateFileW` say so
+    /// (`bInheritHandle` is false), and a request given no descriptor passes none, which the
+    /// `CreateFileW` page documents as a handle that cannot be inherited.
+    ///
+    /// The `CreateFileW` page says the descriptor is for a file that is created and is ignored when
+    /// the file exists (measured: an open of an existing file with a descriptor that denies reading
+    /// leaves the file as it was). This crate does not apply the descriptor itself and has no
+    /// `unsafe` with which to read a file's descriptor back.
+    pub fn with_security_descriptor(self, descriptor: SecurityDescriptor) -> Self {
+        Self {
+            request: self
+                .request
+                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),
+            ..self
+        }
+    }
+
     /// Open the file, on the calling thread. **This blocks for as long as `CreateFileW` does.**
     ///
     /// # Errors

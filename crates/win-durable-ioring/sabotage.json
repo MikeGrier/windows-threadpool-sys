@@ -1169,8 +1169,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "A hint is added to FILE_FLAG_NO_BUFFERING and to a new file's reparse flag. In place of them, an unbuffered file with a hint would be a cached one that still claims SharedDevice.",
-      "find": ["            flags: flags | reparse | named | hints,\n"],
-      "replace": ["            flags: if hints == 0 { flags | reparse | named } else { hints | reparse | named },\n"]
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: if hints == 0 { flags | reparse | named | self.attributes.bits() } else { hints | reparse | named | self.attributes.bits() },\n"]
     },
     {
       "name": "DI-14.1: a hint is refused on an unbuffered file",
@@ -1321,8 +1321,48 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "survives",
       "why": "A control: the same mask with its parts the other way round, which no test can tell apart.",
-      "find": ["            flags: flags | reparse | named | hints,\n"],
-      "replace": ["            flags: hints | named | reparse | flags,\n"]
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: self.attributes.bits() | hints | named | reparse | flags,\n"]
+    },
+    {
+      "name": "DI-14.3: the attributes are left out of the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The options record the attributes and the call must carry them; a created file that is not hidden when it was asked to be is the visible result.",
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: flags | reparse | named | hints,\n"]
+    },
+    {
+      "name": "DI-14.3: changing the data access forgets the attributes",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            attributes: self.attributes,\n"],
+      "replace": ["            attributes: FileAttributes::NONE,\n"]
+    },
+    {
+      "name": "DI-14.3: a created file's handle is asked to be inheritable",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Handles are never inheritable in v1 (the engineer's ruling, DI-13.1): an inheritable handle reaches child processes that can write through it. The request is where the choice is made.",
+      "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
+      "replace": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), true))),\n"]
+    },
+    {
+      "name": "DI-14.3: the descriptor is not given to the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A descriptor that never reaches CreateFileW leaves the file with the parent's defaults and no error. Caught by the test that a deny-read descriptor refuses a later open.",
+      "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
+      "replace": ["                .with_security(Some(SecurityAttributes::new(None, false))),\n"]
+    },
+    {
+      "name": "DI-14.3: an attribute is another attribute",
+      "file": "src/windows_backend/file_attributes.rs",
+      "expect": "caught",
+      "why": "Each member is the attribute it is named for; HIDDEN as SYSTEM would hide nothing and mark every file it touched as part of the operating system.",
+      "find": ["    HIDDEN = FILE_ATTRIBUTE_HIDDEN;\n"],
+      "replace": ["    HIDDEN = FILE_ATTRIBUTE_SYSTEM;\n"]
     },
     {
       "name": "DI-14.2: delete-on-close sets another flag",
@@ -1353,8 +1393,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "The options record the flags and the call must carry them; a delete-on-close file that is not deleted is the visible result.",
-      "find": ["            flags: flags | reparse | named | hints,\n"],
-      "replace": ["            flags: flags | reparse | hints,\n"]
+      "find": ["            flags: flags | reparse | named | hints | self.attributes.bits(),\n"],
+      "replace": ["            flags: flags | reparse | hints | self.attributes.bits(),\n"]
     },
     {
       "name": "DI-14.2: changing the data access forgets delete-on-close",

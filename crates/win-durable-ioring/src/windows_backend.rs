@@ -48,6 +48,7 @@ use durable_ioring::backend::{
 use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
 mod disposition;
+mod file_attributes;
 mod file_rights;
 mod file_target;
 mod opened_disk;
@@ -66,6 +67,7 @@ pub use disposition::Disposition;
 pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };
+pub use file_attributes::FileAttributes;
 pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
@@ -77,6 +79,9 @@ pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
 };
 pub use share_mode::ShareMode;
+// The descriptor a created file is given, owned and freed by the type that built it, so a caller
+// never holds a raw pointer (DI-14.3).
+pub use windows_namespace_request_sys::{SecurityCaptureError, SecurityDescriptor};
 
 #[cfg(test)]
 mod tests;
