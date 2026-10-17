@@ -224,24 +224,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.3** -- Access is a typed set of named rights, `FileRights`, with no raw `u32`; a file target needs a data right, checked when it is opened. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-133)
 
-- [ ] **DI-13.8** -- **Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest.** <a id="di-138"></a>
-  The engineer's ruling of 2026-10-16, [DI-D-65](DESIGN-NOTES.md#di-d-65). The four markers and the
-  traits are there. `FileOptions<A>` moves `A` with `read()` and `write()`; `OpenedFile<B, A>`,
-  `OpenedDisk<B, A>` and `OpenedVolume<B, A>` carry it, and the disk and the volume stop passing read
-  and write unconditionally; `Win32FileTarget::new`, `from_disk` and `from_volume` take `A: HasData`,
-  which replaces the runtime refusal `DI-13.3` made. `FileRights` loses `READ_DATA`, `WRITE_DATA`, the
-  `GENERIC_*` constants, `ALL_ACCESS` and the `grants_*` helpers. It replaces the shape `DI-13.3`
-  shipped, so the `DI-13.3` sabotage entries that pin those members, its tests, the README snippets and
-  [access_rights_measurements.rs](../win-durable-ioring/examples/access_rights_measurements.rs) are
-  rewritten with it, and the commit is `feat(win-durable-ioring)!`.
-  Settled inside this item, each by a test or a measurement and not by recollection: which bits
-  `read()` and `write()` ask for, `FILE_READ_DATA` and `FILE_WRITE_DATA` alone or the generic rights;
-  how `A` is named for a disk and a volume (a turbofish, or `open_read_only` and `open_read_write`);
-  whether locking a volume needs the write right. Tests: every marker opens and the kernel judges what
-  it does and does not cover, as `DI-13.3`'s do; `compile_fail` doctests for a `NoData` handle given to a
-  target and for a read-only handle given where write is required; a raw volume and a raw disk opened
-  for reading only on the scratch virtual disks the CI step already makes (it needs an administrator,
-  so it is not run on a development machine that lacks one).
+- [x] **DI-13.8** -- Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest. <a id="di-138"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-138)
 
 - [ ] **DI-13.9** -- **Decide, with the engineer, whether `IoTarget` states its data access to the core.** <a id="di-139"></a>
   Gated on `DI-13.8`. The type reaches as far as the target's construction, and the ring addresses
@@ -269,7 +252,9 @@ option recorded by construction. The rule throughout is documented APIs only
   is that this crate reflects Win32 and not std, so all of that goes: the path is handed to `OpenFile`
   as the caller gave it, a `Wtf16String`, with no conversion here (the request crate grafts or passes
   it, [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md)); the disposition is Win32's own, as a
-  Rust enum, in place of the booleans; combinations the kernel accepts or refuses are the kernel's
+  Rust enum, in place of the booleans, and `TRUNCATE_EXISTING` needs `GENERIC_WRITE`, which the typed
+  write access does not ask for (measured, [DI-D-65](DESIGN-NOTES.md#di-d-65)), so how the enum offers it
+  is decided here; combinations the kernel accepts or refuses are the kernel's
   to answer; `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. Four of the five sabotage entries
   added with `DI-13.2` pin the std behaviours and are replaced; `DI-D-63`'s "a caller sees no
   difference" principle is amended and its list of differences rewritten. Waits on the request
@@ -283,7 +268,7 @@ option recorded by construction. The rule throughout is documented APIs only
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
   `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
-  **Next:** `DI-13.8`.
+  **Next:** `DI-13.9`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

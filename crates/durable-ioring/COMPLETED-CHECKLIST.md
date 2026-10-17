@@ -2977,3 +2977,14 @@ say, and a right it refuses reaches the caller as its error. Tests open each rig
 judge the operation it does and does not cover. Measured: an unbuffered open of `FILE_ALL_ACCESS` is
 refused with `ERROR_INVALID_PARAMETER`, which is recorded in the `DI-D-64` row for the generic rights
 and on the constant. Six sabotage entries, including a control, are in `win-durable-ioring`.
+
+### <a id="di-138"></a>DI-13.8 -- Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest. *(completed 2026-10-16 21:15:29 -04:00)*
+
+The engineer's ruling of 2026-10-16, [DI-D-65](DESIGN-NOTES.md#di-d-65), which holds the types, where the
+line between the type and the rights set falls, and what building it settled. `FileOptions<A>` moves `A`
+with `read()` and `write()`; the three opened types carry it, and a disk and a volume can be opened for
+reading only; `Win32FileTarget::new`, `from_disk` and `from_volume` take `A: HasData`. `FileRights` lost
+the data rights, the generic constants and `ALL_ACCESS`. Ten sabotage entries, two of them controls; a
+`compile_fail` doctest for each refusal; and a read-only test for a raw disk and a raw volume that runs
+in CI, since it needs an administrator. A transition that leaves a marker where it was changes a type, so
+its detection is a compile error and not a sabotage entry.

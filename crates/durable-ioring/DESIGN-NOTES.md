@@ -322,12 +322,28 @@ access to the core, as it states its warranty and geometry, so that the core can
 open and is [DI-13.9](CHECKLIST.md#di-139). It is a working position and not a decision that typed keys
 are not wanted.
 
-**Not decided, and not verified.** Each is settled inside [DI-13.8](CHECKLIST.md#di-138) and is not a
-ruling: which bits `read()` and `write()` ask for, `FILE_READ_DATA` and `FILE_WRITE_DATA` alone (the
-measurement used those) or the generic rights; how `A` is named for a disk or a volume, which have no
-options argument to infer it from; whether `ReOpenFile` can widen a handle's access; whether locking a
-volume needs the write right; and what a raw disk or volume does for each marker, which needs an
-administrator and runs only where the test run has one.
+**What building it settled** ([DI-13.8](CHECKLIST.md#di-138)). None of these was a ruling; each is
+the choice the code made, with the measurement.
+
+- `read()` and `write()` ask for `FILE_READ_DATA` and `FILE_WRITE_DATA` alone, and no generic right. Reading,
+  writing, extending, flushing and every test through the ring pass with them.
+- **`TRUNCATE_EXISTING` is refused with `ERROR_INVALID_PARAMETER` when the access holds
+  `FILE_WRITE_DATA` and not `GENERIC_WRITE`**, measured on Windows 11 build 26300, which is what the
+  `CreateFileW` page says of that disposition. A typed write access cannot ask for `GENERIC_WRITE`, so
+  the existing `truncate` option opens with `OPEN_EXISTING` and empties the file once it is open, as
+  `create` with `truncate` already did. How the disposition enum of [DI-13.7](CHECKLIST.md#di-137-rework)
+  offers `TRUNCATE_EXISTING` is a question that item now has.
+- A type parameter written in a path takes its default when it is left off, so
+  `OpenedFile::<Cached>::open(path, FileOptions::new().read())` names `ReadWrite` and does not compile.
+  A file opened with other options writes the parameter or leaves it to be inferred with `_`:
+  `OpenedFile::<Cached, _>::open(path, options)`. A disk and a volume have no options to infer it
+  from, so it is named at the call, `OpenedDisk::<Unbuffered, ReadOnly>::open(path)`.
+- `VolumeOptions::lock` is offered with any data access. The `FSCTL_LOCK_VOLUME` page names no right
+  the handle needs, and whether the kernel wants one was not measured.
+
+**Not verified.** What a raw disk and a raw volume do for each marker, which needs an administrator and
+runs only where the test run has one, in CI; and whether `ReOpenFile` can widen a handle's access, which
+is a test in [DI-15.4](CHECKLIST.md).
 
 **Scheduled work.** [DI-13.8](CHECKLIST.md#di-138) and [DI-13.9](CHECKLIST.md#di-139). Amended by this
 decision: [DI-13.7](CHECKLIST.md#di-137-rework), [DI-15.2](CHECKLIST.md) and
