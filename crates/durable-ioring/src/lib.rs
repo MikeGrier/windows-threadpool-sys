@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod access;
 pub mod backend;
 mod clock;
 mod contract;
@@ -31,6 +32,9 @@ mod pump;
 mod test_support;
 mod types;
 
+pub use access::{
+    Access, CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
+};
 pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
