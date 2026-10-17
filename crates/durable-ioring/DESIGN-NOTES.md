@@ -311,6 +311,36 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
 - `FILE_FLAG_OVERLAPPED` is not offered by this item: whether the ring needs it is settled by the run in
   [DI-14.7](CHECKLIST.md), and [DI-D-64](#di-d-64) keeps it out of v1 until then.
 
+**What building DI-14.3 settled** ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). None of these was a ruling.
+
+- `FileAttributes` is a set of `ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` and `TEMPORARY`, built as
+  `ShareMode` is, with no constructor from a raw mask; `FileOptions::attributes` replaces the set. The item
+  listed *encrypted* among them; the table excludes `FILE_ATTRIBUTE_ENCRYPTED` (engineer 2026-10-15), and the
+  table is what was followed.
+- **The empty set and `FILE_ATTRIBUTE_NORMAL`** (the question the table left to this item): measured on
+  Windows 11 build 26300, a file created with no attributes and one created with `NORMAL` have the same
+  attributes, `ARCHIVE` among them. The empty set passes zero.
+- **A file created `READONLY` with the right to write**: the create succeeds, the handle that made it can
+  write, and a later open for writing is refused with `ERROR_ACCESS_DENIED`.
+- **An open of a file that exists leaves its attributes alone**, whatever attributes are asked for, with
+  `OpenExisting` or `OpenAlways`.
+- **The security descriptor is on the request, not in `FileOptions`.** A descriptor owns memory and cannot be
+  `Copy`, and the options are a `Copy` description passed to several opens, so a field there would have ended
+  that for every caller. `OpenRequest::with_security_descriptor` takes the `SecurityDescriptor` the request
+  crate builds from SDDL, which the request owns and frees. It is the assistant's choice over a field in the
+  options, and a change of place later is a change to one method.
+- **Inheritance is not an option.** The request passes `SECURITY_ATTRIBUTES` with `bInheritHandle` false when
+  it has a descriptor and none otherwise, which `CreateFileW` documents as a handle that cannot be inherited;
+  a test pins the first on the request. Whether the opened handle is inheritable is **not read back**: the
+  query is `GetHandleInformation`, this crate forbids `unsafe`, and no crate of the workspace offers it
+  safely. [DI-14.8](CHECKLIST.md) queues the read-back and names where it belongs.
+- **The descriptor is read back by behaviour, not by query.** A file created with a DACL that denies read to
+  everyone refuses a later open for reading, and one created with a DACL that allows it admits one; a
+  descriptor given with an open of a file that exists leaves it as it was, as the page says. Reading the
+  descriptor itself is `GetSecurityInfo`, which needs `unsafe` and is also queued under
+  [DI-14.8](CHECKLIST.md).
+- The security quality-of-service flags are excluded by the table, so none is offered.
+
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
 [disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs); every disposition

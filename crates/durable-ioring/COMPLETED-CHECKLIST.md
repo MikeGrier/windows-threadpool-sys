@@ -3088,3 +3088,15 @@ last handle closes and is not refused without the right to delete. `FILE_FLAG_OV
 text named conditionally, is not offered here: it waits on [DI-14.7](CHECKLIST.md)'s run, which now carries the
 question of whether `FileOptions` offers it. The reparse-target requirement moved to
 [DI-14.5](CHECKLIST.md). Eight sabotage entries.
+
+### <a id="di-143"></a>DI-14.3 -- Creation attributes (`FileAttributes`), a security descriptor on the request, and no inheritance. *(completed 2026-10-17 16:22:48 -04:00)*
+
+`FileAttributes` is a typed set of the six attributes the table keeps, passed with `FileOptions::attributes`;
+`OpenRequest::with_security_descriptor` gives a created file a `SecurityDescriptor` built from SDDL, owned and
+freed by the request; no handle is asked to be inheritable. What was measured and the choices made are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.3 settled". **Not done as written:** the item asked
+for the descriptor and the inheritance read back with documented queries; both need `unsafe`, which this crate
+forbids and no workspace crate offers safely, so the descriptor is read back by behaviour (a deny-read DACL
+refuses a later open) and the inheritance choice is pinned on the request, and the read-backs are
+[DI-14.8](CHECKLIST.md), raised with the engineer. The item named *encrypted* among the attributes and the
+table excludes it. Five sabotage entries.
