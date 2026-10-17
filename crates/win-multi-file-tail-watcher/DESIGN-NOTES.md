@@ -501,8 +501,14 @@ bind to them as settled.
 - **The defaults would be 64 buffers of 64 bytes and a client SQ of 64 entries.** The engineer,
   2026-10-16: "my defaults if I were to pick would be 64 buffers of 64 bytes each", a queue of 64
   as a bet over 32, a larger count of slightly smaller buffers and a mid-sized queue as the
-  expected shape, and doubt that measurement will say much because it is workload dependent.
-  Whether the ring's two queue sizes take the same 64 is not settled, and TW-9.1 comes first.
+  expected shape, and doubt that measurement will say much because it is workload dependent. The
+  64-entry queue is the client SQ, the one back to the layer's client.
+- **The ring's two queues would default to 64 each too**, chosen by the assistant because the
+  engineer left those two to it (2026-10-16). The reasoning: each read in flight holds a buffer, so
+  with 64 buffers no more than 64 can be in flight, and a ring that holds more than that adds
+  nothing. The kernel was observed to report a completion queue twice the size asked for (16 for an
+  eight, 128 for a 64, on one host); if that holds, a request of 64 gives 128 and the pool, not the
+  ring, is what stops the reads. TW-9.1 confirms or replaces this before it binds anything.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on

@@ -168,9 +168,9 @@ fine".
 - [ ] **TW-9.2** -- An options type holds the five sizes and checks them before anything is
   allocated: each refusal is a distinct error naming the field and the bound, the buffer size and
   count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by TW-9.1's. The
-  options have a `Default` of 64 buffers of 64 bytes and a client SQ of 64 entries, a working
-  position ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)), with the ring sizes
-  the defaults take left to what TW-9.1 finds. One check per field, tested at, below and above each
+  options have a `Default` of 64 buffers of 64 bytes, a client SQ of 64 entries and a ring of 64
+  and 64, a working position ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that
+  TW-9.1 confirms or replaces for the ring's two. One check per field, tested at, below and above each
   bound, and every valid combination TW-9.1 found reaches a working engine, the defaults included.
 
 - [ ] **TW-9.3** -- The reading layer's entries are public: the data, shrink, terminal and poll-done
