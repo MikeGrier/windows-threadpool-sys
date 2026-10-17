@@ -175,6 +175,12 @@ pinned operation storage, adding the balanced `StartThreadpoolIo` accounting
 that only the thread pool requires. The pool's internal completion port is never
 exposed.
 
+`ThreadpoolIo::new` takes that crate's `UnassociatedEndpoint` and
+`ThreadpoolIo::observer` returns its `EndpointObserver`, so those types are part
+of this crate's public API. Each `windows-overlapped-io-sys` minor release in the
+0.x series is therefore a minor release of this crate too: 0.3 of this crate
+pairs with 0.3 of `windows-overlapped-io-sys`.
+
 ## Timer stress suite
 
 [`tests/timer_stress.rs`](tests/timer_stress.rs) applies sustained load to the
