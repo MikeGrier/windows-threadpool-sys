@@ -1169,8 +1169,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "A hint is added to FILE_FLAG_NO_BUFFERING and to a new file's reparse flag. In place of them, an unbuffered file with a hint would be a cached one that still claims SharedDevice.",
-      "find": ["            flags: flags | reparse | hints,\n"],
-      "replace": ["            flags: if hints == 0 { flags | reparse } else { hints | reparse },\n"]
+      "find": ["            flags: flags | reparse | named | hints,\n"],
+      "replace": ["            flags: if hints == 0 { flags | reparse | named } else { hints | reparse | named },\n"]
     },
     {
       "name": "DI-14.1: a hint is refused on an unbuffered file",
@@ -1321,8 +1321,64 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "survives",
       "why": "A control: the same mask with its parts the other way round, which no test can tell apart.",
-      "find": ["            flags: flags | reparse | hints,\n"],
-      "replace": ["            flags: hints | reparse | flags,\n"]
+      "find": ["            flags: flags | reparse | named | hints,\n"],
+      "replace": ["            flags: hints | named | reparse | flags,\n"]
+    },
+    {
+      "name": "DI-14.2: delete-on-close sets another flag",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Each option is the flag it is named for; one that set another would delete nothing, or something else.",
+      "find": ["            named |= FILE_FLAG_DELETE_ON_CLOSE;\n"],
+      "replace": ["            named |= FILE_FLAG_POSIX_SEMANTICS;\n"]
+    },
+    {
+      "name": "DI-14.2: no-recall sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An option that reaches CreateFileW as no flag is a request that was dropped without a word.",
+      "find": ["            named |= FILE_FLAG_OPEN_NO_RECALL;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.2: POSIX semantics sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the third flag.",
+      "find": ["            named |= FILE_FLAG_POSIX_SEMANTICS;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.2: the three flags are left out of the call",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The options record the flags and the call must carry them; a delete-on-close file that is not deleted is the visible result.",
+      "find": ["            flags: flags | reparse | named | hints,\n"],
+      "replace": ["            flags: flags | reparse | hints,\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets delete-on-close",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            delete_on_close: self.delete_on_close,\n"],
+      "replace": ["            delete_on_close: false,\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets no-recall",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the second flag.",
+      "find": ["            open_no_recall: self.open_no_recall,\n"],
+      "replace": ["            open_no_recall: false,\n"]
+    },
+    {
+      "name": "DI-14.2: changing the data access forgets POSIX semantics",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The same for the third flag.",
+      "find": ["            posix_semantics: self.posix_semantics,\n"],
+      "replace": ["            posix_semantics: false,\n"]
     },
     {
       "name": "DI-13.8 control: the same test of containment with its operands the other way round",

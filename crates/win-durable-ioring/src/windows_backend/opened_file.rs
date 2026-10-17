@@ -30,8 +30,9 @@ use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::open::OpenFile;
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_READ_DATA, FILE_WRITE_DATA,
+    FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA,
+    FILE_WRITE_DATA,
 };
 use wtf_string::{Wtf16Str, Wtf16String};
 
@@ -45,6 +46,8 @@ use super::share_mode::ShareMode;
 
 mod open_request;
 
+#[cfg(test)]
+mod flag_tests;
 #[cfg(test)]
 mod request_tests;
 #[cfg(test)]
@@ -170,6 +173,9 @@ pub struct FileOptions<A: DataAccess = NoData> {
     share: ShareMode,
     disposition: Disposition,
     open_reparse_point: bool,
+    delete_on_close: bool,
+    open_no_recall: bool,
+    posix_semantics: bool,
     random_access: bool,
     sequential_scan: bool,
 }
@@ -190,6 +196,9 @@ impl FileOptions<NoData> {
             share: ShareMode::ALL,
             disposition: Disposition::OpenExisting,
             open_reparse_point: false,
+            delete_on_close: false,
+            open_no_recall: false,
+            posix_semantics: false,
             random_access: false,
             sequential_scan: false,
         }
@@ -238,6 +247,9 @@ impl<A: DataAccess> FileOptions<A> {
             share: self.share,
             disposition: self.disposition,
             open_reparse_point: self.open_reparse_point,
+            delete_on_close: self.delete_on_close,
+            open_no_recall: self.open_no_recall,
+            posix_semantics: self.posix_semantics,
             random_access: self.random_access,
             sequential_scan: self.sequential_scan,
         }
@@ -261,6 +273,39 @@ impl<A: DataAccess> FileOptions<A> {
     /// `OpenAlways` opens the link. It has no effect on a path that is not a reparse point.
     pub fn open_reparse_point(mut self, open_reparse_point: bool) -> Self {
         self.open_reparse_point = open_reparse_point;
+        self
+    }
+
+    /// Delete the file when its last handle is closed (`FILE_FLAG_DELETE_ON_CLOSE`). A durability
+    /// report is then about data that does not outlive the handles, which is the caller's choice to
+    /// make.
+    ///
+    /// The file goes when the last handle to it, however that was opened, is closed. Measured on
+    /// Windows 11 build 26300: the open succeeds without the right to delete among the
+    /// [`rights`](Self::rights), although the `CreateFileW` page lists it as needed, and while the
+    /// handle is open a later open has to share deletion ([`ShareMode::DELETE`]) or it fails with a
+    /// [`SharingViolation`]. Nothing is added or checked here; which combinations are refused ahead
+    /// of the open is `DI-14.4`'s.
+    pub fn delete_on_close(mut self, delete_on_close: bool) -> Self {
+        self.delete_on_close = delete_on_close;
+        self
+    }
+
+    /// Ask that the file's data not be brought back from remote storage to be read
+    /// (`FILE_FLAG_OPEN_NO_RECALL`). The `CreateFileW` page says the flag is for remote storage
+    /// systems; it is passed on and nothing about a target depends on it. What it does to a file on
+    /// a local disk was not measured.
+    pub fn open_no_recall(mut self, open_no_recall: bool) -> Self {
+        self.open_no_recall = open_no_recall;
+        self
+    }
+
+    /// Access the file by POSIX rules (`FILE_FLAG_POSIX_SEMANTICS`). The `CreateFileW` page says
+    /// that this includes allowing names that differ only in case, and that a file made with the flag
+    /// may not be reachable by applications written for MS-DOS or 16-bit Windows. It is passed on and
+    /// nothing about a target depends on it.
+    pub fn posix_semantics(mut self, posix_semantics: bool) -> Self {
+        self.posix_semantics = posix_semantics;
         self
     }
 
@@ -299,6 +344,16 @@ impl<A: DataAccess> FileOptions<A> {
         } else {
             0
         };
+        let mut named = 0;
+        if self.delete_on_close {
+            named |= FILE_FLAG_DELETE_ON_CLOSE;
+        }
+        if self.open_no_recall {
+            named |= FILE_FLAG_OPEN_NO_RECALL;
+        }
+        if self.posix_semantics {
+            named |= FILE_FLAG_POSIX_SEMANTICS;
+        }
         let mut hints = 0;
         if self.random_access {
             hints |= FILE_FLAG_RANDOM_ACCESS;
@@ -309,7 +364,7 @@ impl<A: DataAccess> FileOptions<A> {
         open_request::Parameters {
             access: data_rights::<A>() | self.rights.bits(),
             disposition: self.disposition.bits(),
-            flags: flags | reparse | hints,
+            flags: flags | reparse | named | hints,
             share: self.share.bits(),
         }
     }
