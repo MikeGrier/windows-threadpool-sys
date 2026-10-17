@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     Emits the `strategy.matrix` object that `.github/workflows/sabotage-sweep.yml`
-    consumes, as `{"include":[{"crate":...,"shard":N,"shards":M},...]}`.
+    consumes, as `{"include":[{"crate":...,"manifest":...,"label":...,"shard":N,"shards":M},...]}`.
 
     WHY THIS EXISTS RATHER THAN A LIST IN THE WORKFLOW. A hand-written matrix
     stores two facts the repository already owns: which crates have a manifest,
@@ -66,13 +66,13 @@ if (-not (Test-Path -LiteralPath $cratesDir)) {
 # makes two runs impossible to compare, and GitHub orders jobs as given.
 $manifests = @(
     Get-ChildItem -Path $cratesDir -Directory |
-        ForEach-Object { Join-Path $_.FullName 'sabotage.json' } |
-        Where-Object { Test-Path -LiteralPath $_ } |
+        ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
+        ForEach-Object { $_.FullName } |
         Sort-Object
 )
 
 if ($manifests.Count -eq 0) {
-    throw "No crates/*/sabotage.json found under '$RepositoryRoot'."
+    throw "No crates/*/sabotage*.json found under '$RepositoryRoot'."
 }
 
 # Compare by repository-relative path with forward slashes, so a dispatch input
@@ -124,11 +124,18 @@ foreach ($path in $chosen) {
     $shards = [math]::Max(1, [math]::Ceiling($count / [double]$EntriesPerShard))
 
     $crate = Split-Path -Leaf (Split-Path -Parent $path)
+    # A crate may carry several manifests, each with its own `testArgs`: `sabotage.json` and
+    # `sabotage-<kind>.json`. The label names a job, a cache and an artifact, so it must differ
+    # between them; for the plain one it is the crate, as it always was.
+    $kind = [System.IO.Path]::GetFileNameWithoutExtension($path).Substring('sabotage'.Length).TrimStart('-')
+    $label = if ($kind) { "$crate-$kind" } else { $crate }
     for ($shard = 0; $shard -lt $shards; $shard++) {
         $include += [ordered]@{
-            crate  = $crate
-            shard  = $shard
-            shards = [int]$shards
+            crate    = $crate
+            manifest = Get-RelativePath $path
+            label    = $label
+            shard    = $shard
+            shards   = [int]$shards
         }
     }
 }
