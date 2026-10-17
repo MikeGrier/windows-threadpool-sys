@@ -1,0 +1,18 @@
+{
+  "package": "win-multi-file-tail-watcher",
+  "description": "Sabotages the public-surface test of the reading layer's entries (tests/reader_public_items.rs) must refuse at build time: an item made private, or no longer exported, fails to compile the test, which is how that file notices. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "win-multi-file-tail-watcher", "--all-features", "--test", "reader_public_items"],
+  "sabotages": [
+    {"name":"ReadSq::drain is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"A client reads the SQ through it.","buildError":"E0624","find":["    pub fn drain(&self) -> ReadDrain<'_, T> {"],"replace":["    pub(crate) fn drain(&self) -> ReadDrain<'_, T> {"]},
+    {"name":"ReadSq::capacity is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"A client sizes its draining by it.","buildError":"E0624","find":["    pub fn capacity(&self) -> usize {"],"replace":["    pub(crate) fn capacity(&self) -> usize {"]},
+    {"name":"ReadSq::doorbell is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"It is the event the client waits on.","buildError":"E0624","find":["    pub fn doorbell(&self) -> BorrowedHandle<'_> {"],"replace":["    pub(crate) fn doorbell(&self) -> BorrowedHandle<'_> {"]},
+    {"name":"ReadSq::reset_doorbell is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"The client resets the doorbell before it drains.","buildError":"E0624","find":["    pub fn reset_doorbell(&self) {"],"replace":["    pub(crate) fn reset_doorbell(&self) {"]},
+    {"name":"ReadSq::resume_doorbell is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"It is the event the layer waits on for room.","buildError":"E0624","find":["    pub fn resume_doorbell(&self) -> BorrowedHandle<'_> {"],"replace":["    pub(crate) fn resume_doorbell(&self) -> BorrowedHandle<'_> {"]},
+    {"name":"ReadSq::ring_resume is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"It is how the client says it has made room.","buildError":"E0624","find":["    pub fn ring_resume(&self) {"],"replace":["    pub(crate) fn ring_resume(&self) {"]},
+    {"name":"Data::chunk is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"It is how a client reads the bytes.","buildError":"E0624","find":["    pub fn chunk(&self) -> &Chunk {"],"replace":["    pub(crate) fn chunk(&self) -> &Chunk {"]},
+    {"name":"Data::into_parts is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"It is how a client takes the chunk to keep or drop.","buildError":"E0624","find":["    pub fn into_parts(self) -> (T, Range<u64>, Chunk) {"],"replace":["    pub(crate) fn into_parts(self) -> (T, Range<u64>, Chunk) {"]},
+    {"name":"a shrink's last known length is no longer public","file":"src/read_sq.rs","expect":"refused-by-build","why":"A client reads both lengths by name.","buildError":"E0451","find":["    pub last_known: u64,"],"replace":["    pub(crate) last_known: u64,"]},
+    {"name":"Chunk is no longer exported from the reader module","file":"src/reader.rs","expect":"refused-by-build","why":"A client names the chunk it holds.","buildError":"E0432","find":["pub use crate::pool::Chunk;"],"replace":[""]},
+    {"name":"control: the reader module exports its entry types in another order","file":"src/reader.rs","expect":"survives","why":"The order of a use list is not a promise.","find":["pub use crate::read_sq::{Data, ReadDrain, ReadEntry, ReadSq, Shrink};"],"replace":["pub use crate::read_sq::{Shrink, ReadSq, ReadEntry, ReadDrain, Data};"]}
+  ]
+}

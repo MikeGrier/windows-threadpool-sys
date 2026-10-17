@@ -535,6 +535,17 @@ module within the crate".
     tested in both directions over a grid.
 - **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
   `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
+  - **The parts of an entry keep the names they had**, chosen by the assistant and not asked of the
+    engineer: `Data` and `Shrink` (the entry's payloads), `ReadSq` (the SQ and its two doorbells) and
+    `ReadDrain` (what the client reads it through), beside the watcher's `SqEntry`, `Attention` and
+    `SqDrain`.
+  - **What a client may do with each**, as the rustdoc states it: drain the SQ, reset and wait on the
+    layer's doorbell, ring the resume doorbell, read an entry's value, range and chunk. It may not
+    make a `ReadSq`, a `Data` or a `Chunk`: the layer makes them. Holding a `Chunk` keeps its buffer
+    out of the pool, which stops the reads once every buffer is held; holding a `ReadDrain` makes a
+    second drain wait; a `Chunk` may outlive the pool.
+  - **`Shrink` mirrors `Attention`**: public fields and not `#[non_exhaustive]`, so a field added
+    later is a breaking change for both. `ReadEntry` is `#[non_exhaustive]` as `SqEntry` is.
 
 ## Working positions (not decisions)
 

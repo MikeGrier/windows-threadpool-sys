@@ -18,6 +18,7 @@
       "why": "The order of the variants is not a promise, and nothing matches on it.",
       "find": ["    /// A registration's length changed.\n    Attention(Attention<T>),\n    /// A registration can no longer be probed, and no longer will be (TW-D-13).\n    Terminal(Terminal<T>),"],
       "replace": ["    /// A registration can no longer be probed, and no longer will be (TW-D-13).\n    Terminal(Terminal<T>),\n    /// A registration's length changed.\n    Attention(Attention<T>),"]
-    }
+    },
+    {"name":"ReadEntry is no longer non_exhaustive","file":"src/read_sq.rs","expect":"caught","why":"A further kind of entry must not break a client. The only thing that fails when the attribute goes is a caller written outside the crate, which a documentation example is.","find":["#[non_exhaustive]\npub enum ReadEntry<T> {"],"replace":["pub enum ReadEntry<T> {"]}
   ]
 }

@@ -163,11 +163,7 @@ fine".
 
 - [x] **TW-9.2** -- An options type holds the five sizes, checks them before anything is allocated, and refuses each size that cannot work with an error that names the option, the value and the cause, including every ring size the ring would round, replace or raise. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-92)
 
-- [ ] **TW-9.3** -- The reading layer's entries are public: the data, shrink, terminal and poll-done
-  entry type, the chunk (a view of exactly the bytes read, which returns its buffer to the pool on
-  drop), the drain the client reads them through, and the two doorbells. The entry type is
-  `#[non_exhaustive]` as the watcher's is. The names are the ones in the milestone text, and each public item carries rustdoc stating what it promises and the one thing each can do to a
-  caller who holds it too long (a held chunk keeps a buffer out of the pool).
+- [x] **TW-9.3** -- The reading layer's entries are public in the `reader` module: the entry type and its data, shrink, terminal and poll-done kinds, the chunk, the drain and the SQ with its two doorbells, each with rustdoc stating what it promises and what holding it too long does. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-93)
 
 - [ ] **TW-9.4** -- The layer itself is public in a module of this crate: it is made from the
   options and the watcher's own arguments, registers a file with an offset and a `T`, polls, exposes

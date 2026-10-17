@@ -1298,3 +1298,36 @@ that survives. Four were also applied by hand with only the new tests run, and e
 Not tested: `validate`'s arm for a failure to read the ring's capabilities, which cannot be made to
 fail on demand, and a buffer count whose memory is not there, which is the allocator's answer when the
 layer is made and not a refusal.
+
+## Moved 2026-10-17 14:20:33 -04:00 -- TW-9.3: the reading layer's entries
+
+### <a id="tw-93"></a>TW-9.3 -- The reading layer's entries are public in the `reader` module: the entry type and its data, shrink, terminal and poll-done kinds, the chunk, the drain and the SQ with its two doorbells, each with rustdoc stating what it promises and what holding it too long does. *(completed 2026-10-17 14:20:33 -04:00)*
+
+`Chunk`, `ReadEntry`, `Data`, `Shrink`, `ReadSq` and `ReadDrain` are `pub` and re-exported from
+`reader`; `read_sq.rs` lost its `expect(dead_code)`, which the public items no longer need. A client
+reads an entry's value, range and chunk, drains the SQ, resets and waits on the layer's doorbell and rings
+the resume doorbell. `Data::new`, `ReadSq::new`, the writer, `push`, the crate's own ring of the
+doorbell and its reset of the resume doorbell stay crate-only, so a client cannot make an entry or an SQ.
+
+Each public item says what it promises and what holding it too long does: a `Chunk` keeps its buffer out of the pool, so
+once every buffer is held the layer stops reading with nothing in flight and a poll-done waits for the
+reads of its poll; a `ReadDrain` makes a second drain wait; a full SQ stops the layer reading until the client drains
+and rings the resume doorbell. `ReadEntry` carries a doctest that matches it with a wildcard arm and a
+`compile_fail,E0004` one that shows the arm is needed, as `SqEntry` does.
+
+A client cannot make the SQ or a chunk, so nothing here can be run from outside the crate until the layer
+is public (TW-9.4); `tests/reader_public_items.rs` shows what can be shown: every item is named by its
+public path, each documented signature is pinned by a function pointer of that type, the entries are
+`Send` and the SQ `Send` and `Sync`, a shrink is built and compared by its public fields, and an entry
+is matched with a wildcard arm. The `Send` and `Sync` assertions are compile-time checks that were not
+themselves sabotaged: no one-site change makes the chunk or the SQ not `Send`.
+
+A new manifest, `sabotage-public-surface.json`, declares ten visibility and export changes, each
+`refused-by-build` with the error that names it (E0624 for a method made private, E0451 for a field,
+E0432 for an export removed), and a control that reorders an export list and survives. All eleven behave as
+declared. A further entry in `sabotage-doctests.json` removes `#[non_exhaustive]` from `ReadEntry` and is
+caught by the doctest.
+
+`Shrink` mirrors `Attention`: public fields, not `#[non_exhaustive]`, so adding a field later would be
+breaking for both. The parts of an entry keep the names they had, which the engineer was not asked about;
+they are recorded in TW-D-16.

@@ -275,9 +275,18 @@ unsafe impl IoBufMut for PoolBuffer {
     }
 }
 
-/// The bytes one read delivered, in a buffer lent from the reading layer's pool. Dropping it gives
-/// the buffer back.
-pub(crate) struct Chunk {
+/// The bytes one read delivered, as a view of exactly those bytes: it dereferences to `[u8]`, and its
+/// length is the number of bytes read, which can be less than the size of the buffer they were read
+/// into.
+///
+/// A chunk holds one of the reading layer's buffers and gives it back to the pool when it drops.
+/// That is the only way a buffer comes back, so a client that keeps a chunk keeps its buffer out of
+/// the pool. The pool never allocates past its count: when every buffer is held in a chunk, the
+/// layer stops reading, with nothing in flight, until one is dropped, and a poll-done waits for the
+/// reads of its poll. Copy what is needed out of a chunk and drop it to let the layer go on.
+///
+/// A chunk may outlive the pool it came from; dropping it then frees its buffer.
+pub struct Chunk {
     buffer: PoolBuffer,
     len: usize,
 }
