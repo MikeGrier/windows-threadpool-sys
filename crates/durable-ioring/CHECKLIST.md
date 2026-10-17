@@ -58,7 +58,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
-7. Then, here: `DI-13.10`, `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
+7. Then, here: `DI-13.4` and `DI-13.7` (none needs another crate), `DI-M14`,
    `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
    done at any point.
 
@@ -228,17 +228,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-13.9** -- `IoTarget` states its data access, and the core refuses what the access does not cover. <a id="di-139"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-139)
 
-- [ ] **DI-13.10** -- **A typed `Key<A>` carries the access to the ring's submit methods.** <a id="di-1310"></a>
-  Layer 2 of [DI-D-66](DESIGN-NOTES.md#di-d-66), after `DI-13.9`, additive. `Key<A: HasData>` holds the same
-  number as an `IoTargetKey`; `WriteKey` is implemented for `IoTargetKey` and for `Key<A>` where `A:
-  CanWrite`, and `ReadKey` likewise for `CanRead`. `write`, `write_with`, `read` and `read_with` take a
-  `WriteKey` or a `ReadKey`, so a call with an untyped key compiles as before and is judged by `DI-13.9` at
-  runtime. Registration (`add_target` and construction) checks the key's declared access against the
-  target's and refuses a mismatch, with an error that hands the target back. Entries, errors and events keep
-  the untyped key. Tests: `compile_fail` doctests for a write through a `Key<ReadOnly>` and a read
-  through a `Key<WriteOnly>`; an untyped key still writes and reads; a registration whose key claims more
-  than its target is refused. Finds out whether the four submit methods can be generic without
-  harming a caller that holds the ring through the `DurableRing` trait.
+- [x] **DI-13.10** -- A typed `Key<A>` carries the access to the ring's submit methods. <a id="di-1310"></a> -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1310)
 
 - [ ] **DI-13.4** -- **Share mode as a typed set**, with today's all-three default kept and an
   exclusive open (no sharing) expressible, since a database that owns its file wants it. A sharing
@@ -273,7 +263,7 @@ option recorded by construction. The rule throughout is documented APIs only
   engineer, 2026-10-16: finding out that a path is remote late is acceptable). `open` stays as the two run inline, documented as blocking for as
   long as `CreateFileW` does. The request is typed by its buffering mode and its data access, as
   `OpenedFile<B, A>` is ([DI-13.8](#di-138), [DI-D-65](DESIGN-NOTES.md#di-d-65)), so it follows `DI-13.8`.
-  **Next:** `DI-13.10`.
+  **Next:** `DI-13.4`.
 
 ## DI-M14 -- Opening a file: flags, attributes, security
 

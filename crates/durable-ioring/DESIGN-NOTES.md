@@ -386,10 +386,13 @@ because a default would state `ReadWrite` for a target that never said so.
 **Layer 2 -- a key carries it** ([DI-13.10](CHECKLIST.md#di-1310)), additive.
 
 ```rust
-pub struct Key<A: HasData>(IoTargetKey, PhantomData<A>);   // the same number; the consumer's declaration
-trait WriteKey { fn untyped(&self) -> IoTargetKey }         // IoTargetKey, and Key<A> where A: CanWrite
-trait ReadKey  { fn untyped(&self) -> IoTargetKey }         // IoTargetKey, and Key<A> where A: CanRead
-fn write_with<K: WriteKey>(&mut self, file: K, ..)          // and write, read, read_with
+pub struct Key<A: HasData>(IoTargetKey, PhantomData<fn() -> A>);  // the same number; the consumer's declaration
+trait TargetKey: Sealed { fn untyped(&self) -> IoTargetKey; fn declared(&self) -> Option<Access>; }
+trait WriteKey: TargetKey {}   // IoTargetKey, and Key<A> where A: CanWrite
+trait ReadKey: TargetKey {}    // IoTargetKey, and Key<A> where A: CanRead
+fn add_target<K: TargetKey>(&mut self, key: K, target)             // the registration check
+fn write_with<K: WriteKey>(&mut self, file: K, ..)                  // and write, read, read_with,
+                                                                    // and the four registered ones
 ```
 
 `IoTargetKey` implements both traits, so a call with an untyped key compiles as it does now and is judged
@@ -397,6 +400,17 @@ at runtime by layer 1. A `Key<ReadOnly>` does not implement `WriteKey`, so a wri
 compile. Registration checks the key's declared access against the target's and refuses a mismatch;
 that check is at runtime because the target is erased, and it is the only runtime step a typed key adds.
 Entries, errors and events keep the untyped key.
+
+**What building it settled** ([DI-13.10](CHECKLIST.md#di-1310)). The four submit methods, and the four
+registered-buffer ones beside them, are generic over `WriteKey` and `ReadKey` without harm to a caller
+that holds the ring through `DurableRing`: the trait was already generic-only ([DI-D-24](#di-d-24)), and
+every call that passed an `IoTargetKey` compiled unchanged. The two traits are supertraits of a sealed
+`TargetKey`, so no outside type can stand for a key that was never checked against what it claims.
+Registration is `add_target` and construction. `AddTargetError` gained a `cause` (`KeyInUse`, or
+`AccessNotCovered { declared, actual }`), and construction's `TargetSetup` gained `declared` and a `new`
+that reads it off the key, with `SetupRefusal::AccessNotCovered`; a construction that fails hands each file
+back with what its key declared. A key that declares less than its target states is accepted, as a narrower
+view, and the ring still judges an untyped push by the target.
 
 **What is the engineer's and what is the assistant's.**
 
@@ -411,6 +425,10 @@ Entries, errors and events keep the untyped key.
 | The four submit methods become generic over `WriteKey` and `ReadKey`; untyped keys keep working | assistant |
 | A commit to a read-only target needs no rule: a commit is issued only to a target with writes, and a read-only one has none | assistant |
 | `Key<NoData>` does not exist | assistant |
+| `WriteKey` and `ReadKey` are marker traits over a sealed `TargetKey` that carries the methods, not traits with a method each | assistant |
+| The registered-buffer methods take the same keys as the four submit methods | assistant |
+| `AddTargetError` gains a `cause`, and `TargetSetup` gains `declared`; both break a struct literal | assistant |
+| A key declaring less than its target states is accepted | assistant |
 
 A row that is the assistant's stands until amended; it is not a list awaiting confirmation.
 
@@ -418,8 +436,5 @@ A row that is the assistant's stands until amended; it is not a list awaiting co
 refused at the push, with its buffer handed back, and no longer fails after the kernel. A required
 method on a published trait breaks every other implementor; the implementors in this workspace are
 `MemoryTarget`, `Win32FileTarget` and the test targets.
-
-**Not verified.** That the four submit methods can be generic without harming a caller that holds the
-ring through the `DurableRing` trait; `DI-13.10` finds out by building it.
 
 **Scheduled work.** [DI-13.9](CHECKLIST.md#di-139) and [DI-13.10](CHECKLIST.md#di-1310).

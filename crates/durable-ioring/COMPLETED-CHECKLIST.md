@@ -3000,3 +3000,14 @@ Win32 is a function over the core's `READ` and `WRITE`, not a trait, so the Wind
 core must know. Nine sabotage entries in `durable-ioring` and seven in `win-durable-ioring`, each set
 with a control. The read-only raw disk and volume tests run only in CI, and the stated access of a disk
 and a volume is pinned locally by assembled targets.
+
+### <a id="di-1310"></a>DI-13.10 -- A typed `Key<A>` carries the access to the ring's submit methods. *(completed 2026-10-16 22:08:00 -04:00)*
+
+Layer 2 of [DI-D-66](DESIGN-NOTES.md#di-d-66), which holds the types and what building them settled.
+`Key<A: HasData>` is an `IoTargetKey` with a declaration; a sealed `TargetKey` is what registration takes,
+and `WriteKey` and `ReadKey` over it are what the four submit methods and the four registered-buffer
+methods take, so a write through a `Key<ReadOnly>` does not compile and an untyped key is judged at the
+push. `add_target` and construction refuse a key that declares more than its target states, with the
+target or every file handed back; `AddTargetError` gained a `cause` and `TargetSetup` gained `declared`.
+Five sabotage entries in `durable-ioring` and five in `win-durable-ioring`, each set with a control, and
+`compile_fail` doctests on `WriteKey` and `ReadKey`.
