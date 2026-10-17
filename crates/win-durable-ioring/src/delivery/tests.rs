@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use windows_ioring_sys::RegisteredSpan;
 
 use super::{DeliveryEvent, EntryDelivery};
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::fake::{Fake, Signals};
 use crate::windows_backend::Win32FileTarget;
@@ -492,7 +492,10 @@ fn a_typed_key_is_judged_at_registration_through_the_handle_too() {
     let read_only = crate::windows_backend::OpenedFile::<
         crate::windows_backend::Cached,
         crate::windows_backend::ReadOnly,
-    >::open(&other.0, crate::windows_backend::FileOptions::new().read())
+    >::open(
+        wtf(&other.0),
+        crate::windows_backend::FileOptions::new().read(),
+    )
     .expect("open read-only");
 
     let error = delivery

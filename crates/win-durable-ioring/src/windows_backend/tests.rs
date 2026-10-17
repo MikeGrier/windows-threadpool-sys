@@ -11,7 +11,7 @@ use super::{
     FileOptions, OpenedFile, Unbuffered, Win32FileTarget, WindowsBackend, WindowsBackendError,
     WindowsBackendRefusal, WindowsBackendSetup, refusal_cause, transfer,
 };
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::backend::{
     Completion, IoBackend, RefusalCause, RegisteredRegion, Submission, SubmissionData,
     SubmissionOp, SubmissionToken,
@@ -554,7 +554,7 @@ fn a_file_target_claims_what_its_open_mode_allows() {
     assert!(!cached.capabilities().write_through());
 
     let unbuffered = Win32FileTarget::new(
-        OpenedFile::<Unbuffered>::open(&file.0, FileOptions::new().read().write())
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
             .expect("open unbuffered"),
     )
     .with_domains([FlushDomain::new(b"disk".as_slice())]);

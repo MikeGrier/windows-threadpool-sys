@@ -178,7 +178,8 @@ impl Scratch {
     }
 
     fn target(&self) -> TargetSetup {
-        let file = OpenedFile::<Cached>::open(&self.0, FileOptions::new().read().write())
+        let name = win_durable_ioring::Wtf16String::from_os_str(self.0.as_os_str());
+        let file = OpenedFile::<Cached>::open(name, FileOptions::new().read().write())
             .expect("open the scratch file");
         TargetSetup::new(FILE, Win32FileTarget::new(file))
     }

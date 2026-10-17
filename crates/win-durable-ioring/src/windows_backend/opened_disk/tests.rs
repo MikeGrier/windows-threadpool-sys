@@ -3,7 +3,7 @@
 use std::io;
 
 use super::{DiskOptions, DiskPath, OpenedDisk};
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use crate::windows_backend::{
     Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
     WriteOnly, disk_flush_domain,
@@ -17,7 +17,7 @@ fn assembled<B: crate::windows_backend::Buffering>(
     sector: u32,
 ) -> (OpenedDisk<B>, TempFile) {
     let temp = TempFile::new("od-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     (
         OpenedDisk::assembled(file.handle().clone(), disk_number, sector),
@@ -46,7 +46,7 @@ fn a_disk_is_opened_sharing_every_member_unless_told_otherwise() {
 #[test]
 fn a_disks_target_states_the_access_the_disk_was_opened_with() {
     let temp = TempFile::new("od-access");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     let handle = file.handle().clone();
     let disk = OpenedDisk::<Unbuffered, ReadOnly>::assembled(handle.clone(), 1, 512);

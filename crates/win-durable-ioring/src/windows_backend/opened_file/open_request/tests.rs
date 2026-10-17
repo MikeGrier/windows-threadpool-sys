@@ -12,8 +12,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use wtf_string::Wtf16String;
 
-use super::{Parameters, open, path_error, raw_code, verbatim, verbatim_if_long};
-use crate::dioring::tests::TempFile;
+use super::{Parameters, open, path_error, raw_code};
+use crate::dioring::tests::{TempFile, wtf};
 
 /// What a file was always opened with before the share mode was a parameter.
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
@@ -36,74 +36,64 @@ fn directory_deeper_than_an_ordinary_path(under: &Path) -> PathBuf {
     deep
 }
 
-#[test]
-fn a_short_path_is_handed_over_as_it_was_given() {
-    let short = Path::new(r"C:\folder\file.txt");
-    assert_eq!(verbatim_if_long(short).expect("short"), short);
-    let relative = Path::new(r"folder\file.txt");
-    assert_eq!(verbatim_if_long(relative).expect("relative"), relative);
+/// The verbatim form of an absolute drive path.
+fn verbatim(path: &Path) -> PathBuf {
+    let mut prefixed = std::ffi::OsString::from(r"\\?\");
+    prefixed.push(path.as_os_str());
+    PathBuf::from(prefixed)
 }
 
 #[test]
-fn a_long_path_is_made_verbatim_and_a_short_one_never_is() {
-    let long = PathBuf::from(format!(r"C:\{}\file.txt", "x".repeat(300)));
-    let converted = verbatim_if_long(&long).expect("long");
-    assert_eq!(
-        converted,
-        PathBuf::from(format!(r"\\?\C:\{}\file.txt", "x".repeat(300)))
-    );
-}
-
-#[test]
-fn a_relative_path_that_resolves_long_is_made_verbatim() {
-    // Short as given, long once rooted: the resolved form is what the limit is judged against.
-    let cwd = std::env::current_dir().expect("a current directory");
-    let room = 259usize.saturating_sub(cwd.as_os_str().len());
-    if room < 4 {
-        eprintln!("skipped: the current directory leaves no room under the limit");
-        return;
-    }
-    let relative = PathBuf::from("y".repeat(room));
-    assert!(relative.as_os_str().len() <= 259);
-    let converted = verbatim_if_long(&relative).expect("resolved long");
-    assert!(
-        converted.to_string_lossy().starts_with(r"\\?\"),
-        "{} was not made verbatim",
-        converted.display()
-    );
-}
-
-#[test]
-fn verbatim_prefixes_a_drive_path_and_a_unc_path_and_leaves_the_rest_alone() {
-    assert_eq!(verbatim(Path::new(r"C:\a\b")), PathBuf::from(r"\\?\C:\a\b"));
-    assert_eq!(
-        verbatim(Path::new(r"\\server\share\a")),
-        PathBuf::from(r"\\?\UNC\server\share\a")
-    );
-    assert_eq!(verbatim(Path::new(r"\\?\C:\a")), PathBuf::from(r"\\?\C:\a"));
-    assert_eq!(
-        verbatim(Path::new(r"\\?\UNC\server\share")),
-        PathBuf::from(r"\\?\UNC\server\share")
-    );
-    assert_eq!(verbatim(Path::new(r"\\.\C:")), PathBuf::from(r"\\.\C:"));
-}
-
-#[test]
-fn a_file_under_a_path_longer_than_an_ordinary_one_opens() {
+fn a_file_under_a_path_longer_than_an_ordinary_one_opens_when_the_caller_made_it_verbatim() {
     let temp = TempFile::new("or-long");
     let root = temp.0.with_extension("deep");
     let directory = directory_deeper_than_an_ordinary_path(&root);
-    fs::create_dir_all(&directory).expect("create the deep directory");
-    let file = directory.join("file.txt");
+    fs::create_dir_all(verbatim(&directory)).expect("create the deep directory");
+    let file = verbatim(&directory.join("file.txt"));
     fs::write(&file, b"deep").expect("create the file");
 
-    let handle = open(&file, read_existing()).expect("open through the verbatim form");
+    let handle = open(wtf(&file), read_existing()).expect("open the verbatim path");
     assert_eq!(
         fs::File::from(handle).metadata().expect("metadata").len(),
         4
     );
 
-    fs::remove_dir_all(&root).expect("remove the deep tree");
+    fs::remove_dir_all(verbatim(&root)).expect("remove the deep tree");
+}
+
+#[test]
+fn a_long_path_without_its_prefix_is_what_win32_makes_of_it_and_not_this_crates_doing() {
+    let temp = TempFile::new("or-unprefixed");
+    let root = temp.0.with_extension("deep");
+    let directory = directory_deeper_than_an_ordinary_path(&root);
+    fs::create_dir_all(verbatim(&directory)).expect("create the deep directory");
+    let file = directory.join("file.txt");
+    fs::write(verbatim(&file), b"deep").expect("create the file");
+
+    // `std` hands `CreateFileW` the same bytes this open does, so what it answers is the answer
+    // of the call itself, whether or not the host lets an unprefixed long path through.
+    let given = open(wtf(&file), read_existing());
+    let std_made = fs::File::open(&file);
+    match (given, std_made) {
+        (Ok(_), Ok(_)) => {}
+        (Err(error), Err(_)) => assert!(error.raw_os_error().is_some(), "{error}"),
+        (given, std_made) => {
+            // `std` lengthens a long path itself, so it can succeed where the bytes alone do not.
+            assert!(
+                given.is_err() && std_made.is_ok(),
+                "an open of the unprefixed path succeeded where std's did not"
+            );
+        }
+    }
+
+    fs::remove_dir_all(verbatim(&root)).expect("remove the deep tree");
+}
+
+#[test]
+fn an_empty_path_is_refused_by_win32_with_an_os_error_and_not_by_this_crate() {
+    let error = open(Wtf16String::from_os_str("".as_ref()), read_existing()).expect_err("empty");
+    assert!(error.raw_os_error().is_some(), "{error}");
+    assert_ne!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[test]
@@ -113,7 +103,7 @@ fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
     let read_write = GENERIC_READ | windows_sys::Win32::Foundation::GENERIC_WRITE;
 
     let kept: OwnedHandle = open(
-        &temp.0,
+        wtf(&temp.0),
         Parameters {
             access: read_write,
             disposition: OPEN_ALWAYS,
@@ -127,7 +117,7 @@ fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
     assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 7);
 
     let emptied = open(
-        &temp.0,
+        wtf(&temp.0),
         Parameters {
             access: read_write,
             disposition: OPEN_ALWAYS,
@@ -145,11 +135,11 @@ fn a_created_and_truncated_file_is_emptied_and_a_created_one_is_not() {
 fn what_the_kernel_refuses_reaches_the_caller_as_its_own_error() {
     let temp = TempFile::new("or-errors");
     let missing = temp.0.with_extension("missing");
-    let error = open(&missing, read_existing()).expect_err("no such file");
+    let error = open(wtf(&missing), read_existing()).expect_err("no such file");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 
     let error = open(
-        &temp.0,
+        wtf(&temp.0),
         Parameters {
             disposition: CREATE_NEW,
             ..read_existing()
@@ -160,16 +150,29 @@ fn what_the_kernel_refuses_reaches_the_caller_as_its_own_error() {
 }
 
 #[test]
-fn a_path_that_cannot_name_a_file_is_invalid_input() {
-    let error = open(Path::new(""), read_existing()).expect_err("empty");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-
+fn a_path_with_an_interior_nul_is_invalid_input() {
     let with_nul = OpenFile::new(Wtf16String::from("a\0b")).expect_err("interior NUL");
     assert!(matches!(with_nul, PathCaptureError::InteriorNul));
     assert_eq!(path_error(with_nul).kind(), io::ErrorKind::InvalidInput);
 
-    let error = open(Path::new("a\0b"), read_existing()).expect_err("interior NUL");
+    let error = open(Wtf16String::from("a\0b"), read_existing()).expect_err("interior NUL");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_path_that_is_not_unicode_reaches_the_request_unaltered() {
+    use std::os::windows::ffi::OsStringExt;
+
+    // A lone surrogate is a legal Windows file name and no `String`: the open must not lose it.
+    let temp = TempFile::new("or-lone");
+    let mut name = std::ffi::OsString::from(format!("{}-", std::process::id()));
+    name.push(std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x62]));
+    let file = temp.0.with_file_name(name);
+    fs::write(&file, b"x").expect("create a file with a lone surrogate in its name");
+
+    let opened = open(wtf(&file), read_existing());
+    fs::remove_file(&file).expect("remove it");
+    opened.expect("the same name opens");
 }
 
 #[test]

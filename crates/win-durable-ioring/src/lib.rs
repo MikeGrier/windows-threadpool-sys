@@ -33,3 +33,4 @@ pub use durable_ioring::*;
 pub use win_shared_os_owned_handle::SharedHandle;
 pub use win_sync_sys::Event;
 pub use win_time_sys::{InterruptTime, TimePoint};
+pub use wtf_string::Wtf16String;

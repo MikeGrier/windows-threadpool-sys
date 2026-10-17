@@ -13,6 +13,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 
 use durable_ioring::DataAccess;
+use wtf_string::Wtf16String;
 
 use super::file_rights::FileRights;
 use super::opened_file::{Buffering, data_access, data_rights, refine_sharing};
@@ -54,5 +55,8 @@ pub(super) fn open<B: Buffering, A: DataAccess>(
         .share_mode(asked.share)
         .custom_flags(asked.flags)
         .open(path)
-        .map_err(|error| refine_sharing(error, path, data_access::<A>(), FileRights::NONE, share))
+        .map_err(|error| {
+            let given = Wtf16String::from_os_str(path.as_os_str());
+            refine_sharing(error, &given, data_access::<A>(), FileRights::NONE, share)
+        })
 }

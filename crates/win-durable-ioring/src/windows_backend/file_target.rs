@@ -25,9 +25,11 @@ use durable_ioring::{Access, Capabilities, Geometry, HasData, IoTarget, Warranty
 /// first operation fails.
 ///
 /// ```compile_fail,E0277
+/// use win_durable_ioring::Wtf16String;
 /// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Win32FileTarget};
 ///
-/// let no_data = OpenedFile::<Cached, _>::open("a-file", FileOptions::new()).unwrap();
+/// let name = Wtf16String::from_os_str("a-file".as_ref());
+/// let no_data = OpenedFile::<Cached, _>::open(name, FileOptions::new()).unwrap();
 /// let _ = Win32FileTarget::new(no_data);
 /// ```
 ///

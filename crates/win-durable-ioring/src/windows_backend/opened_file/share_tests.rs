@@ -11,7 +11,7 @@ use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
 use super::super::{FileRights, NoData, ReadWrite, ShareMode};
 use super::{Cached, FileOptions, OpenedFile, SharingViolation, data_access};
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::Access;
 
 /// What an open can ask for that a share mode is judged against: one of the three things the share
@@ -52,15 +52,15 @@ fn shares(wants: Wants) -> ShareMode {
 fn open(path: &Path, wants: Wants, share: ShareMode) -> io::Result<Box<dyn Any>> {
     Ok(match wants {
         Wants::Read => Box::new(OpenedFile::<Cached, _>::open(
-            path,
+            wtf(path),
             FileOptions::new().read().share(share),
         )?),
         Wants::Write => Box::new(OpenedFile::<Cached, _>::open(
-            path,
+            wtf(path),
             FileOptions::new().write().share(share),
         )?),
         Wants::Delete => Box::new(OpenedFile::<Cached, NoData>::open(
-            path,
+            wtf(path),
             FileOptions::new().rights(FileRights::DELETE).share(share),
         )?),
     })
@@ -170,7 +170,7 @@ fn a_few_combinations_by_name_so_the_matrix_is_not_the_only_statement() {
 fn an_open_that_shares_nothing_is_exclusive_to_everything_that_asks_for_data_or_delete() {
     let temp = TempFile::new("share-exclusive");
     let exclusive = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new().read().write().share(ShareMode::NONE),
     )
     .expect("the first open of an unopened file");
@@ -193,11 +193,11 @@ fn an_open_that_shares_nothing_is_exclusive_to_everything_that_asks_for_data_or_
 fn an_open_that_asks_for_no_data_and_no_right_is_not_judged_by_the_share_mode() {
     let temp = TempFile::new("share-nothing");
     let _exclusive = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new().read().write().share(ShareMode::NONE),
     )
     .expect("an exclusive open");
-    OpenedFile::<Cached, NoData>::open(&temp.0, FileOptions::new())
+    OpenedFile::<Cached, NoData>::open(wtf(&temp.0), FileOptions::new())
         .expect("an open that asks for nothing can address the file all the same");
 }
 
@@ -205,7 +205,7 @@ fn an_open_that_asks_for_no_data_and_no_right_is_not_judged_by_the_share_mode() 
 fn a_file_is_shared_for_reading_writing_and_deletion_unless_told_otherwise() {
     let temp = TempFile::new("share-default");
     let _first = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new().read().write().rights(FileRights::DELETE),
     )
     .expect("a default open");
@@ -218,12 +218,12 @@ fn a_file_is_shared_for_reading_writing_and_deletion_unless_told_otherwise() {
 fn the_error_names_what_this_open_asked_for_and_keeps_the_kernels_error() {
     let temp = TempFile::new("share-error");
     let _held = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new().read().write().share(ShareMode::NONE),
     )
     .expect("an exclusive open");
     let error = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new()
             .read()
             .write()
@@ -248,7 +248,7 @@ fn a_failure_that_is_not_a_sharing_violation_is_the_kernels_error_as_it_was() {
     let temp = TempFile::new("share-other");
     let missing = temp.0.with_extension("missing");
     let error = OpenedFile::<Cached, ReadWrite>::open(
-        &missing,
+        wtf(&missing),
         FileOptions::new().read().write().share(ShareMode::NONE),
     )
     .expect_err("there is no such file");
@@ -273,7 +273,7 @@ fn the_share_mode_survives_the_options_changing_their_data_access() {
     let temp = TempFile::new("share-types");
     // `share` is set before `read` and `write`, which rebuild the options for the new access type.
     let _exclusive = OpenedFile::<Cached, ReadWrite>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new().share(ShareMode::NONE).read().write(),
     )
     .expect("an exclusive open");

@@ -30,7 +30,10 @@ type Opener = Box<dyn Fn(&Path) -> io::Result<File>>;
 
 fn opener<B: Buffering, A: DataAccess>(options: FileOptions<A>) -> Opener {
     Box::new(move |path| {
-        let opened = OpenedFile::<B, A>::open(path, options)?;
+        let opened = OpenedFile::<B, A>::open(
+            win_durable_ioring::Wtf16String::from_os_str(path.as_ref()),
+            options,
+        )?;
         Ok(File::from(opened.as_handle().try_clone_to_owned()?))
     })
 }

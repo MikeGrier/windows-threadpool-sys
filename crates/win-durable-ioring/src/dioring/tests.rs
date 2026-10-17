@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{InterruptTime, TimePoint};
+use wtf_string::Wtf16String;
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
@@ -104,6 +105,11 @@ pub(crate) fn empty() -> Ring {
         .0
 }
 
+/// `path` as the open takes it (DI-13.7.1): the caller converts, and nothing is lost.
+pub(crate) fn wtf(path: &Path) -> Wtf16String {
+    Wtf16String::from_os_str(path.as_os_str())
+}
+
 /// A temporary file, removed when dropped.
 pub(crate) struct TempFile(pub(crate) PathBuf);
 
@@ -120,7 +126,7 @@ impl TempFile {
     }
 
     pub(crate) fn open(&self) -> OpenedFile {
-        OpenedFile::open(&self.0, FileOptions::new().read().write())
+        OpenedFile::open(wtf(&self.0), FileOptions::new().read().write())
             .expect("open the temporary file")
     }
 

@@ -26,6 +26,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_READ_DATA, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
+use wtf_string::{Wtf16Str, Wtf16String};
 
 use durable_ioring::{
     Access, Capabilities, DataAccess, Geometry, GeometryError, NoData, ReadWrite, WarrantyClass,
@@ -418,7 +419,7 @@ pub(super) fn data_access<A: DataAccess>() -> Option<Access> {
 /// `error`, or the [`SharingViolation`] it is if the kernel said so.
 pub(super) fn refine_sharing(
     error: io::Error,
-    path: &Path,
+    path: &Wtf16Str,
     data: Option<Access>,
     rights: FileRights,
     share: ShareMode,
@@ -429,7 +430,7 @@ pub(super) fn refine_sharing(
     io::Error::new(
         io::ErrorKind::ResourceBusy,
         SharingViolation {
-            path: path.to_path_buf(),
+            path: PathBuf::from(path.to_os_string()),
             data,
             rights,
             share,
@@ -449,23 +450,27 @@ pub(super) fn refine_sharing(
 /// be passed:
 ///
 /// ```compile_fail,E0308
+/// use win_durable_ioring::Wtf16String;
 /// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, Unbuffered};
 ///
 /// fn needs_an_unbuffered_file(_: OpenedFile<Unbuffered>) {}
 ///
 /// let options = FileOptions::new().read().write();
-/// let cached = OpenedFile::<Cached>::open("a-file", options).unwrap();
+/// let name = Wtf16String::from_os_str("a-file".as_ref());
+/// let cached = OpenedFile::<Cached>::open(name, options).unwrap();
 /// needs_an_unbuffered_file(cached);
 /// ```
 ///
 /// Nor can one opened for reading only be given where reading and writing are asked for:
 ///
 /// ```compile_fail,E0308
+/// use win_durable_ioring::Wtf16String;
 /// use win_durable_ioring::windows_backend::{Cached, FileOptions, OpenedFile, ReadWrite};
 ///
 /// fn needs_both(_: OpenedFile<Cached, ReadWrite>) {}
 ///
-/// let read_only = OpenedFile::<Cached, _>::open("a-file", FileOptions::new().read()).unwrap();
+/// let name = Wtf16String::from_os_str("a-file".as_ref());
+/// let read_only = OpenedFile::<Cached, _>::open(name, FileOptions::new().read()).unwrap();
 /// needs_both(read_only);
 /// ```
 ///
@@ -483,24 +488,30 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     /// Open `path` as `options` says, in buffering mode `B`. The handle has the data access the
     /// options were given, which is its type `A`.
     ///
+    /// The path is handed to Win32 as it was given: this crate does not lengthen it, shorten it or
+    /// refuse it, so a path longer than `MAX_PATH` without a verbatim prefix, and an empty one, are
+    /// what `CreateFileW` makes of them. A relative path is fixed to the current directory as it is
+    /// when this is called, by the request crate. Convert a `Path` with
+    /// [`Wtf16String::from_os_str`], which loses nothing.
+    ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::InvalidInput`] if `options` create or truncate a file and carry no right to
-    /// write, before anything is touched (until `DI-13.7` removes it). Otherwise whatever the open
-    /// reports, [`SharingViolation`] (as an [`io::ErrorKind::ResourceBusy`] error) when the file is
-    /// open in a way that conflicts with this open's access or sharing, and [`RemoteDevice`] (as an
-    /// [`io::ErrorKind::Unsupported`] error)
-    /// when `B` can claim its warranty only on a local device and `path` is on a remote one. That
-    /// is decided from the path's final location, which resolves links and mapped drives, before
-    /// anything is created; the file can still be replaced by a link in the time between.
-    pub fn open(path: impl AsRef<Path>, options: FileOptions<A>) -> io::Result<Self> {
-        let path = path.as_ref();
+    /// [`io::ErrorKind::InvalidInput`] if `path` has an interior NUL, and if `options` create or
+    /// truncate a file and carry no right to write, before anything is touched (until `DI-13.7.3`
+    /// removes the second). Otherwise whatever the open reports: [`SharingViolation`] (as an
+    /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
+    /// this open's access or sharing, and [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`]
+    /// error) when `B` can claim its warranty only on a local device and `path` is on a remote one.
+    /// That is decided from the path's final location, which resolves links and mapped drives,
+    /// before anything is created; the file can still be replaced by a link in the time between.
+    pub fn open(path: Wtf16String, options: FileOptions<A>) -> io::Result<Self> {
         // Decided before anything is touched: what is asked for either makes a valid request or it
         // does not.
         let (rights, share) = (options.rights, options.share);
         let parameters = options.parameters(B::FLAGS)?;
         if B::LOCAL_DEVICE_ONLY {
-            let location = final_location(path)?;
+            // The one place a `Path` is needed, until `DI-14.5` moves the check to the opened handle.
+            let location = final_location(Path::new(&path.to_os_string()))?;
             if names_a_remote_device(&location) {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
@@ -508,8 +519,9 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
                 ));
             }
         }
+        let given = path.clone();
         let handle = open_request::open(path, parameters)
-            .map_err(|error| refine_sharing(error, path, data_access::<A>(), rights, share))?;
+            .map_err(|error| refine_sharing(error, &given, data_access::<A>(), rights, share))?;
         Ok(Self {
             handle: SharedHandle::from(handle),
             geometry: B::geometry(),

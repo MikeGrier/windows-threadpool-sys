@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use io_buffers::AlignedBuf;
 
-use super::{QUEUE, TempFile};
+use super::{QUEUE, TempFile, wtf};
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::windows_backend::{FileOptions, OpenedFile, ReadWrite, Unbuffered, Win32FileTarget};
 use durable_ioring::backend::RefusalCause;
@@ -22,7 +22,9 @@ const BOUND: Duration = Duration::from_secs(10);
 type AlignedRing = Dioring<AlignedBuf, u64, u32>;
 
 fn unbuffered(temp: &TempFile, options: FileOptions<ReadWrite>) -> Win32FileTarget {
-    Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&temp.0, options).expect("open unbuffered"))
+    Win32FileTarget::new(
+        OpenedFile::<Unbuffered>::open(wtf(&temp.0), options).expect("open unbuffered"),
+    )
 }
 
 fn instance(temp: &TempFile) -> (AlignedRing, LineageHandle) {

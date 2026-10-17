@@ -7,7 +7,7 @@ use win_volume_sys::DiskExtent;
 use super::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain, domains_of,
 };
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use crate::windows_backend::{
     Cached, FileOptions, OpenedFile, ReadOnly, ReadWrite, ShareMode, Unbuffered, Win32FileTarget,
     WriteOnly,
@@ -60,7 +60,7 @@ fn assembled<B: crate::windows_backend::Buffering>(
     locked: bool,
 ) -> (OpenedVolume<B>, TempFile) {
     let temp = TempFile::new("ov-assembled");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     (
         OpenedVolume::assembled(file.handle().clone(), extents, sector, locked),
@@ -86,7 +86,7 @@ fn a_disk_is_named_as_it_answers_and_two_targets_share_a_domain_by_equal_bytes()
 #[test]
 fn a_volumes_target_states_the_access_the_volume_was_opened_with() {
     let temp = TempFile::new("ov-access");
-    let file = OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write())
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write())
         .expect("open a file");
     let handle = file.handle().clone();
     let volume = OpenedVolume::<Unbuffered, ReadOnly>::assembled(
@@ -305,7 +305,7 @@ fn declared_domains_are_added_to_a_volumes_and_never_take_one_away() {
 fn a_file_targets_domains_are_only_what_is_declared() {
     let temp = TempFile::new("ov-file-domains");
     let file =
-        OpenedFile::<Cached>::open(&temp.0, FileOptions::new().read().write()).expect("open");
+        OpenedFile::<Cached>::open(wtf(&temp.0), FileOptions::new().read().write()).expect("open");
     let target = Win32FileTarget::new(file).with_domains([disk_flush_domain(9)]);
     assert_eq!(target.flush_domains(), [disk_flush_domain(9)]);
 }

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use windows_ioring_sys::RegisteredSpan;
 
-use super::{TempFile, V, empty, setup};
+use super::{TempFile, V, empty, setup, wtf};
 
 /// A test buffer's length, as the oracle's push hook takes it.
 fn length(len: usize) -> u32 {
@@ -52,7 +52,7 @@ pub(super) fn temp(content: &[u8]) -> TempFile {
 }
 
 pub(super) fn read_only(temp: &TempFile) -> OpenedFile<Cached, ReadOnly> {
-    OpenedFile::open(&temp.0, FileOptions::new().read()).expect("open read-only")
+    OpenedFile::open(wtf(&temp.0), FileOptions::new().read()).expect("open read-only")
 }
 
 pub(super) fn instance(files: Vec<TargetSetup>, buffers: Vec<Vec<u8>>) -> Ring {
@@ -422,7 +422,7 @@ fn a_write_to_a_read_only_target_is_refused_at_the_push_with_its_buffer() {
 fn a_read_from_a_write_only_target_is_refused_at_the_push_and_a_write_to_it_is_not() {
     let temp = temp(&[0; 16]);
     let mut harness = Harness::new(instance(Vec::new(), Vec::new()));
-    let file = OpenedFile::<Cached, _>::open(&temp.0, FileOptions::new().write())
+    let file = OpenedFile::<Cached, _>::open(wtf(&temp.0), FileOptions::new().write())
         .expect("open write-only");
     harness
         .ring

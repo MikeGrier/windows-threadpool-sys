@@ -71,16 +71,18 @@ on an unbuffered file can be read two ways, and the methods' own documentation s
 use win_durable_ioring::windows_backend::{
     Cached, FileOptions, OpenedFile, Unbuffered, Win32FileTarget,
 };
-use win_durable_ioring::{IoTarget, WarrantyClass};
+use win_durable_ioring::{IoTarget, WarrantyClass, Wtf16String};
 
 let path = std::env::temp_dir().join(format!("durable-ioring-open-{}", std::process::id()));
 std::fs::write(&path, [0u8; 8192])?;
 let options = FileOptions::new().read().write();
+// The open takes the path as the caller gave it, a `Wtf16String`: converting loses nothing.
+let name = || Wtf16String::from_os_str(path.as_os_str());
 
-let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(&path, options)?);
+let cached = Win32FileTarget::new(OpenedFile::<Cached>::open(name(), options)?);
 assert_eq!(cached.warranty(), WarrantyClass::BestEffort);
 
-let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(&path, options)?);
+let unbuffered = Win32FileTarget::new(OpenedFile::<Unbuffered>::open(name(), options)?);
 assert_eq!(unbuffered.warranty(), WarrantyClass::SharedDevice);
 assert!(unbuffered.capabilities().write_through());
 # std::fs::remove_file(&path)?;
@@ -174,7 +176,7 @@ flush of a file report the error given whatever the device answered. Setting up 
 # let path = std::env::temp_dir().join(format!("durable-ioring-heal-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
 #     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
@@ -258,7 +260,7 @@ pushed before the failure is observed: the seal's commit is issued as soon as `A
 # let path = std::env::temp_dir().join(format!("durable-ioring-many-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
 #     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {
@@ -347,7 +349,7 @@ fails as never issued.
 # let path = std::env::temp_dir().join(format!("durable-ioring-abandon-{}", std::process::id()));
 # std::fs::write(&path, [0u8; 64])?;
 # let file = windows_backend::OpenedFile::<windows_backend::Cached>::open(
-#     &path,
+#     win_durable_ioring::Wtf16String::from_os_str(path.as_os_str()),
 #     windows_backend::FileOptions::new().read().write(),
 # )?;
 # let (mut ring, lineage) = Ring::new(Setup {

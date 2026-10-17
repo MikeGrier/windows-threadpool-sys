@@ -20,7 +20,7 @@ use super::{
     Buffering, Cached, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice, Unbuffered,
     data_rights, final_location, names_a_remote_device, open_request,
 };
-use crate::dioring::tests::TempFile;
+use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::{
     Access, Capabilities, Geometry, GeometryError, HasData, IoTarget, WarrantyClass,
 };
@@ -79,9 +79,10 @@ fn the_kernel_treats_a_cached_file_as_cached_and_an_unbuffered_one_as_unbuffered
         file.write_all(b"seven b")
     };
     let (cached_file, unbuffered_file) = (TempFile::new("of-cached"), TempFile::new("of-raw"));
-    let cached = OpenedFile::<Cached>::open(&cached_file.0, read_write()).expect("open cached");
-    let unbuffered =
-        OpenedFile::<Unbuffered>::open(&unbuffered_file.0, read_write()).expect("open unbuffered");
+    let cached =
+        OpenedFile::<Cached>::open(wtf(&cached_file.0), read_write()).expect("open cached");
+    let unbuffered = OpenedFile::<Unbuffered>::open(wtf(&unbuffered_file.0), read_write())
+        .expect("open unbuffered");
 
     unaligned(&mut io_through(&cached)).expect("a cached file takes an unaligned write");
     let refused =
@@ -92,7 +93,7 @@ fn the_kernel_treats_a_cached_file_as_cached_and_an_unbuffered_one_as_unbuffered
 #[test]
 fn an_aligned_write_to_an_unbuffered_file_succeeds() {
     let temp = TempFile::new("of-aligned");
-    let unbuffered = OpenedFile::<Unbuffered>::open(&temp.0, read_write()).expect("open");
+    let unbuffered = OpenedFile::<Unbuffered>::open(wtf(&temp.0), read_write()).expect("open");
     let sector = Unbuffered::DEFAULT_SECTOR_SIZE as usize;
     let buffer = AlignedBuf::from_bytes(&vec![7u8; sector], sector).expect("an aligned buffer");
     assert!(unbuffered.geometry().admits(0, sector as u64));
@@ -164,7 +165,7 @@ fn open_write_and_read_back<B: Buffering>(
     let options = read_write()
         .random_access(random)
         .sequential_scan(sequential);
-    let opened = OpenedFile::<B>::open(&temp.0, options)?;
+    let opened = OpenedFile::<B>::open(wtf(&temp.0), options)?;
     let sector = Unbuffered::DEFAULT_SECTOR_SIZE as usize;
     let written = AlignedBuf::from_bytes(&vec![0x5a; sector], sector).expect("an aligned buffer");
     let mut through = io_through(&opened);
@@ -204,10 +205,10 @@ fn a_hint_changes_neither_the_class_nor_the_alignment_nor_what_is_offered() {
     let claims = |options: FileOptions<ReadWrite>| {
         let (unbuffered, cached) = (TempFile::new("of-claims-u"), TempFile::new("of-claims-c"));
         let u = Win32FileTarget::new(
-            OpenedFile::<Unbuffered>::open(&unbuffered.0, options).expect("open unbuffered"),
+            OpenedFile::<Unbuffered>::open(wtf(&unbuffered.0), options).expect("open unbuffered"),
         );
         let c = Win32FileTarget::new(
-            OpenedFile::<Cached>::open(&cached.0, options).expect("open cached"),
+            OpenedFile::<Cached>::open(wtf(&cached.0), options).expect("open cached"),
         );
         (
             (u.warranty(), u.geometry(), u.capabilities()),
@@ -230,7 +231,7 @@ fn a_hint_changes_neither_the_class_nor_the_alignment_nor_what_is_offered() {
 #[test]
 fn a_sector_size_replaces_the_default_and_must_be_a_power_of_two() {
     let temp = TempFile::new("of-sector");
-    let open = || OpenedFile::<Unbuffered>::open(&temp.0, read_write()).expect("open");
+    let open = || OpenedFile::<Unbuffered>::open(wtf(&temp.0), read_write()).expect("open");
     let small = open().with_sector_size(512).expect("512 is a power of two");
     assert_eq!(small.geometry(), Geometry::uniform(512).expect("valid"));
     for bad in [0, 3, 1000, 4097] {
@@ -246,7 +247,7 @@ fn a_cached_file_has_no_sector_size_to_state() {
     // `with_sector_size` exists only for `OpenedFile<Unbuffered>`; a cached file's geometry is
     // fixed, and is read back as it was given.
     let temp = TempFile::new("of-fixed");
-    let cached = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("open");
+    let cached = OpenedFile::<Cached>::open(wtf(&temp.0), read_write()).expect("open");
     assert_eq!(cached.geometry(), Geometry::UNALIGNED);
 }
 
@@ -255,19 +256,20 @@ fn the_options_decide_what_is_opened_and_created() {
     let temp = TempFile::new("of-options");
     let missing = temp.0.with_extension("missing");
 
-    let error = OpenedFile::<Cached>::open(&missing, read_write()).expect_err("not created");
+    let error = OpenedFile::<Cached>::open(wtf(&missing), read_write()).expect_err("not created");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 
-    let created = OpenedFile::<Cached>::open(&missing, read_write().create(true)).expect("create");
+    let created =
+        OpenedFile::<Cached>::open(wtf(&missing), read_write().create(true)).expect("create");
     assert!(missing.exists());
     drop(created);
 
-    let error =
-        OpenedFile::<Cached>::open(&missing, read_write().create_new(true)).expect_err("it exists");
+    let error = OpenedFile::<Cached>::open(wtf(&missing), read_write().create_new(true))
+        .expect_err("it exists");
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
 
     fs::write(&missing, b"content").expect("fill");
-    drop(OpenedFile::<Cached>::open(&missing, read_write().truncate(true)).expect("truncate"));
+    drop(OpenedFile::<Cached>::open(wtf(&missing), read_write().truncate(true)).expect("truncate"));
     assert_eq!(fs::metadata(&missing).expect("metadata").len(), 0);
 
     fs::remove_file(&missing).expect("remove");
@@ -279,14 +281,14 @@ fn an_unbuffered_file_can_be_created_where_none_exists_yet() {
     // before anything is created, and a missing directory is the open's own NotFound.
     let temp = TempFile::new("of-new");
     let fresh = temp.0.with_extension("fresh");
-    let created = OpenedFile::<Unbuffered>::open(&fresh, read_write().create_new(true))
+    let created = OpenedFile::<Unbuffered>::open(wtf(&fresh), read_write().create_new(true))
         .expect("create unbuffered");
     assert!(fresh.exists());
     drop(created);
     fs::remove_file(&fresh).expect("remove");
 
     let nowhere = temp.0.join("no-such-directory").join("file");
-    let error = OpenedFile::<Unbuffered>::open(&nowhere, read_write().create(true))
+    let error = OpenedFile::<Unbuffered>::open(wtf(&nowhere), read_write().create(true))
         .expect_err("no directory");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }
@@ -294,7 +296,7 @@ fn an_unbuffered_file_can_be_created_where_none_exists_yet() {
 #[test]
 fn clones_share_one_handle_and_lending_gives_that_handle() {
     let temp = TempFile::new("of-clone");
-    let file = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("open");
+    let file = OpenedFile::<Cached>::open(wtf(&temp.0), read_write()).expect("open");
     let copy = file.clone();
     assert!(file.handle().same_handle(copy.handle()));
     assert_eq!(file.as_raw_handle(), copy.as_raw_handle());
@@ -371,7 +373,7 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
     let temp = TempFile::new("of-remote");
     let remote = admin_share(&temp.0);
 
-    let error = OpenedFile::<Unbuffered>::open(&remote, read_write())
+    let error = OpenedFile::<Unbuffered>::open(wtf(&remote), read_write())
         .expect_err("an unbuffered file on a share");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     let refusal = error
@@ -385,7 +387,7 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
     );
     assert!(refusal.to_string().contains("remote device"));
 
-    OpenedFile::<Cached>::open(&remote, read_write())
+    OpenedFile::<Cached>::open(wtf(&remote), read_write())
         .expect("a cached file on a share claims only best effort, and is allowed");
 }
 
@@ -514,16 +516,16 @@ fn creating_and_truncating_empties_an_existing_file_on_either_buffering_mode() {
     let options = read_write().create(true).truncate(true);
 
     fs::write(&temp.0, b"content").expect("fill");
-    drop(OpenedFile::<Cached>::open(&temp.0, options).expect("cached"));
+    drop(OpenedFile::<Cached>::open(wtf(&temp.0), options).expect("cached"));
     assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
 
     fs::write(&temp.0, b"content").expect("fill");
-    drop(OpenedFile::<Unbuffered>::open(&temp.0, options).expect("unbuffered"));
+    drop(OpenedFile::<Unbuffered>::open(wtf(&temp.0), options).expect("unbuffered"));
     assert_eq!(fs::metadata(&temp.0).expect("metadata").len(), 0);
 
     // And where there is nothing to empty, the file is created.
     let fresh = temp.0.with_extension("fresh");
-    drop(OpenedFile::<Cached>::open(&fresh, options).expect("created"));
+    drop(OpenedFile::<Cached>::open(wtf(&fresh), options).expect("created"));
     assert_eq!(fs::metadata(&fresh).expect("metadata").len(), 0);
     fs::remove_file(&fresh).expect("remove");
 }
@@ -531,8 +533,8 @@ fn creating_and_truncating_empties_an_existing_file_on_either_buffering_mode() {
 #[test]
 fn an_opened_file_is_shared_for_reading_writing_and_deletion_as_std_opened_one() {
     let temp = TempFile::new("of-share");
-    let held = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("first");
-    let second = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("a second open");
+    let held = OpenedFile::<Cached>::open(wtf(&temp.0), read_write()).expect("first");
+    let second = OpenedFile::<Cached>::open(wtf(&temp.0), read_write()).expect("a second open");
     drop(second);
     // Deleting a file that is open needs the delete share, which std's default gave.
     fs::remove_file(&temp.0).expect("a file opened shared for deletion can be deleted");
@@ -568,7 +570,7 @@ fn allowed<T>(call: &str, result: io::Result<T>) -> bool {
 fn judged<A: DataAccess>(options: FileOptions<A>) -> Allowed {
     let temp = TempFile::new("of-judged");
     fs::write(&temp.0, vec![0u8; 8192]).expect("fill");
-    let opened = OpenedFile::<Cached, A>::open(&temp.0, options).expect("open");
+    let opened = OpenedFile::<Cached, A>::open(wtf(&temp.0), options).expect("open");
     let mut through = io_through(&opened);
     Allowed {
         read: allowed("read", through.read(&mut [0u8; 1])),
@@ -626,9 +628,9 @@ fn the_kernel_allows_what_each_data_access_names_and_nothing_else() {
 fn each_data_access_opens_a_file_of_ones_own_on_either_buffering_mode() {
     fn opens<A: DataAccess>(name: &str, options: FileOptions<A>) {
         let temp = TempFile::new("of-access-opens");
-        OpenedFile::<Cached, A>::open(&temp.0, options)
+        OpenedFile::<Cached, A>::open(wtf(&temp.0), options)
             .unwrap_or_else(|error| panic!("{name}, cached: {error}"));
-        OpenedFile::<Unbuffered, A>::open(&temp.0, options)
+        OpenedFile::<Unbuffered, A>::open(wtf(&temp.0), options)
             .unwrap_or_else(|error| panic!("{name}, unbuffered: {error}"));
     }
     opens("NoData", FileOptions::new());
@@ -657,7 +659,7 @@ fn each_marker_asks_the_kernel_for_exactly_the_data_rights_it_names() {
 fn a_files_target_states_the_access_the_file_was_opened_with() {
     fn stated<A: HasData>(options: FileOptions<A>) -> Access {
         let temp = TempFile::new("of-stated");
-        let file = OpenedFile::<Cached, A>::open(&temp.0, options).expect("open");
+        let file = OpenedFile::<Cached, A>::open(wtf(&temp.0), options).expect("open");
         Win32FileTarget::new(file).access()
     }
     assert_eq!(stated(FileOptions::new().read()), Access::ReadOnly);
@@ -751,7 +753,7 @@ fn the_attribute_right_decides_whether_the_times_can_be_set() {
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let times = fs::FileTimes::new().set_modified(modified);
 
-    let without = OpenedFile::<Cached>::open(&temp.0, read_write()).expect("open");
+    let without = OpenedFile::<Cached>::open(wtf(&temp.0), read_write()).expect("open");
     assert_eq!(
         io_through(&without)
             .set_times(times)
@@ -761,7 +763,7 @@ fn the_attribute_right_decides_whether_the_times_can_be_set() {
     );
 
     let with = OpenedFile::<Cached>::open(
-        &temp.0,
+        wtf(&temp.0),
         read_write().rights(FileRights::WRITE_ATTRIBUTES | FileRights::READ_ATTRIBUTES),
     )
     .expect("open");
@@ -796,9 +798,9 @@ fn each_other_right_opens_a_file_of_ones_own_on_either_buffering_mode() {
     ] {
         let options = FileOptions::new().read().rights(right);
         let temp = TempFile::new("of-right-opens");
-        OpenedFile::<Cached, _>::open(&temp.0, options)
+        OpenedFile::<Cached, _>::open(wtf(&temp.0), options)
             .unwrap_or_else(|error| panic!("{name}, cached: {error}"));
-        OpenedFile::<Unbuffered, _>::open(&temp.0, options)
+        OpenedFile::<Unbuffered, _>::open(wtf(&temp.0), options)
             .unwrap_or_else(|error| panic!("{name}, unbuffered: {error}"));
     }
 }
@@ -810,12 +812,13 @@ fn a_data_access_the_files_security_refuses_reaches_the_caller_as_the_kernels_er
     permissions.set_readonly(true);
     fs::set_permissions(&temp.0, permissions.clone()).expect("read-only");
 
-    let refused = OpenedFile::<Cached>::open(&temp.0, read_write())
+    let refused = OpenedFile::<Cached>::open(wtf(&temp.0), read_write())
         .expect_err("a read-only file refuses a data write");
     assert_eq!(refused.raw_os_error(), Some(ACCESS_DENIED));
 
     // What the file's security allows is the kernel's to say, so an access it does allow is granted.
-    OpenedFile::<Cached, _>::open(&temp.0, FileOptions::new().read()).expect("reading is allowed");
+    OpenedFile::<Cached, _>::open(wtf(&temp.0), FileOptions::new().read())
+        .expect("reading is allowed");
 
     #[allow(clippy::permissions_set_readonly_false)]
     {
@@ -828,7 +831,7 @@ fn a_data_access_the_files_security_refuses_reaches_the_caller_as_the_kernels_er
 fn the_system_security_right_is_the_kernels_to_refuse_without_its_privilege() {
     let temp = TempFile::new("of-system-security");
     let refused = OpenedFile::<Cached, _>::open(
-        &temp.0,
+        wtf(&temp.0),
         FileOptions::new()
             .read()
             .rights(FileRights::ACCESS_SYSTEM_SECURITY),
@@ -847,6 +850,6 @@ fn a_file_with_no_data_right_opens_and_is_not_a_target() {
     // is checked here is that a file with no data right is still a file the kernel opens, since a
     // query needs no data right.
     let temp = TempFile::new("of-no-data");
-    let file = OpenedFile::<Cached, NoData>::open(&temp.0, FileOptions::new()).expect("open");
+    let file = OpenedFile::<Cached, NoData>::open(wtf(&temp.0), FileOptions::new()).expect("open");
     assert_eq!(file.geometry(), Geometry::UNALIGNED);
 }
