@@ -3033,3 +3033,10 @@ are unrun; `DI-13.12` carries them and the lock. Nine sabotage entries caught, t
 Run through `sudo` on 2026-10-16; the findings are in [DI-D-64](DESIGN-NOTES.md#di-d-64). Both exclusive
 tests pass and each wiring mutated to ignore its options fails its test; a locked volume refuses a data
 open as access denied whatever the share mode. The two `survives` entries stay, as the sweep runs no ignored test.
+
+### <a id="di-1371"></a>DI-13.7.1 -- The path is handed over as the caller gave it, a `Wtf16String`. *(completed 2026-10-16 23:30:00 -04:00)*
+
+Commit `5ac36393`. `OpenedFile::open` takes a `Wtf16String` and nothing is lengthened, shortened or refused:
+a path past `MAX_PATH` without a verbatim prefix and an empty one are `CreateFileW`'s to answer. Converting a
+`Path` is `Wtf16String::from_os_str`, re-exported at the crate root. The `DI-13.2` long-path sabotage entry is
+replaced by one that shows the path reaches the request unaltered, with a `survives` control.

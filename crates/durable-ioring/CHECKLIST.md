@@ -256,8 +256,7 @@ option recorded by construction. The rule throughout is documented APIs only
   Each code item is its own commit, and `DI-13.7.1` and `DI-13.7.3` each break `win-durable-ioring`,
   which ships as one new minor (the ruling of `DI-13.1`, item (e)). This item is checked when all five are.
 
-- [x] **DI-13.7.1** -- The path is handed over as the caller gave it, a `Wtf16String`; done in `5ac36393`.
-  Its archive entry waits for `DI-12.5`, because the archive is at the size line.
+- [x] **DI-13.7.1** -- The path is handed over as the caller gave it, a `Wtf16String`. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#di-1371)
 
 - [x] **DI-13.7.2** -- Ruled: v1 offers neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`; see DI-D-64.
 
@@ -464,8 +463,6 @@ option recorded by construction. The rule throughout is documented APIs only
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
 
 - [x] **DI-12.4** -- The five path-only dependencies of `win-durable-ioring` are pinned by version, keeping the path. -> [completed 2026-10-14](COMPLETED-CHECKLIST.md#di-124)
-
-- [ ] **DI-12.5** -- **Split `COMPLETED-CHECKLIST.md`**, which is within a kilobyte of the 256 KiB line at which a source file is a standing defect. It is append-only history under `## Moved` headings dated by the day, and each completed item is linked by an `<a id>` anchor from stubs and from other documents, so the fracture point is the date group and the links must survive: a facade-preserving split that leaves every anchor resolving, or a sibling file per period with the stubs' links updated in the same commit. A split is a refactor on its own commit with the provenance trailers.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 
