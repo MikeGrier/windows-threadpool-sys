@@ -224,13 +224,17 @@ serde = { version = "1.0", optional = true }
 # `src/queue_contention.rs` gates the `Wide` rows on the SAME conditions. The two
 # must agree; the source side names this comment so a reader changing one finds
 # the other.
+# `version` on the two entries below exists only for release-please's cargo-workspace
+# plugin: it rewrites a `version` key in every target-gated table that names a
+# released sibling and fails the whole release run when the key is absent. This
+# crate is never published, and the release PR keeps the value in step.
 [target.'cfg(all(target_arch = "x86_64", target_feature = "cmpxchg16b"))'.dependencies]
-windows-waitable-queues = { path = "../windows-waitable-queues", features = [
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
 	"dwcas",
 ] }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
-windows-waitable-queues = { path = "../windows-waitable-queues", features = [
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
 	"dwcas",
 ] }
 
