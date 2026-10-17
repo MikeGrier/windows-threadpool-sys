@@ -493,6 +493,17 @@ module within the crate".
     as a full ring. The submission queue is not a limit: a submit empties it and the engine goes on.
   - What a completion queue smaller than the pool costs in throughput, and what the memory of a ring
     at the largest sizes is, were not measured.
+- **A ring queue size that is not a power of two is refused.** The engineer, 2026-10-17: "refuse
+  non-power of two. ensure documented." The ring would accept it and round it up, so the caller would
+  hold a ring of a size they did not ask for; the options refuse it instead, naming the field, as they
+  refuse zero. This is the same rule the client SQ's capacity already follows
+  ([TW-D-6](#tw-d-6)). It is stated in the rustdoc of each of the two ring-size fields and of the
+  error that refuses them ([TW-9.2](CHECKLIST.md)), and in the README.
+  - **Not decided:** the ring also raises some powers of two. A submission queue under eight is
+    raised to eight, and a completion queue under twice the submission queue is raised to that. Both
+    would still leave the caller with a size they did not ask for, and the engineer's rule as stated
+    does not say whether they are refused too. The default of 64 and 64 is one: its completion
+    queue is raised to 128.
 - **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
   `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
 

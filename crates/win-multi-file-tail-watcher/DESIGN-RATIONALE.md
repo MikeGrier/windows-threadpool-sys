@@ -383,3 +383,10 @@ a new crate: "I would put this in a distinct new module within the crate".
   replaced it: the completion queue is the larger of twice the submission queue and the request
   rounded up. A request of zero is the finding that matters to the options type, because the ring
   accepts it and picks a default, so a caller who passes zero gets a size they did not choose.
+- **Non-powers of two are refused.** The assistant put the choice after TW-9.1 showed the ring
+  rounds a request up: accept it and let the ring round, or refuse it. It noted that accepting is
+  harmless, since the caller gets at least what they asked for, but hides the real size. The
+  engineer chose to refuse and asked that it be documented. The same measurement shows the rule does
+  not make the caller's number the ring's number: a power of two below the ring's floor, or a
+  completion queue below twice the submission queue, is still raised, and the default of 64 and 64
+  is one such case. That is recorded as undecided, not as a consequence of the rule.
