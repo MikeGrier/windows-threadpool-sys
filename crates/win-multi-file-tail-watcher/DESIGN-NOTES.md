@@ -532,7 +532,16 @@ bind to them as settled.
   use like a GitOps build service is imagined, "a design center I use to ensure I don't go below it".
   It is not a requirement to build for now. It means the layer must not be sized or shaped so that
   the near-term load fits and a build service's output cannot: the runner-log worst case above is
-  the stand-in for it, and a design that is correct but starves under it is below the floor.- **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
+  the stand-in for it, and a design that is correct but starves under it is below the floor.
+- **The floor is met by what the options accept, not by the defaults.** The engineer, 2026-10-17:
+  "clearly for the gitops deployment the parameters for the reading watcher would be well above the
+  defaults." So the defaults serve the near-term load, and a build service would choose much larger
+  buffer sizes, buffer counts, client SQ and ring sizes. The options must therefore not refuse a size
+  merely for being large: a bound is stated only where something real sets it (the pool's buffer
+  size is at most `u32::MAX`, the SQ's capacity is a power of two, the ring's queue sizes are
+  whatever the ring accepts), and an arbitrary ceiling chosen to protect the defaults is below the
+  floor. The pool allocates and zeroes every buffer when it is made, so a large count is a large
+  allocation at construction; that cost is the caller's to choose and the docs say so.- **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
   demand, so no test reaches `submit_queued`'s work; it is written and not exercised.

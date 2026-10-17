@@ -161,7 +161,7 @@ fine".
 
 - [ ] **TW-9.1** -- How the ring's two queue sizes behave is measured and recorded: which pairs
   `IoRing::with_inventory` accepts and refuses, the completion queue size the kernel reports for each
-  request, and how that size bounds the reads in flight against the pool's buffer count. Tests in the
+  request, the largest sizes it accepts (the ring reports a maximum completion queue size), and how that size bounds the reads in flight against the pool's buffer count. Tests in the
   crate assert what was observed and the DESIGN-NOTES decision states it, with the host it was
   measured on. Nothing in TW-9.2 states a rule that this item did not observe.
 
@@ -170,7 +170,9 @@ fine".
   count by the pool's rules, the client SQ capacity by the SQ's, and the ring sizes by TW-9.1's. The
   options have a `Default` of 64 buffers of 64 bytes, a client SQ of 64 entries and a ring of 64
   and 64, a working position ([DESIGN-NOTES.md](DESIGN-NOTES.md#working-positions-not-decisions)) that
-  TW-9.1 confirms or replaces for the ring's two. One check per field, tested at, below and above each
+  TW-9.1 confirms or replaces for the ring's two. No bound is stricter than the one that really limits the field, so a
+  size well above the defaults is accepted when the pool, the SQ and the ring can have it
+  ([TW-D-16](DESIGN-NOTES.md#tw-d-16)). One check per field, tested at, below and above each
   bound, and every valid combination TW-9.1 found reaches a working engine, the defaults included.
 
 - [ ] **TW-9.3** -- The reading layer's entries are public: the data, shrink, terminal and poll-done
@@ -186,7 +188,7 @@ fine".
   grow. A doctest compiles an example that uses only public items.
 
 - [ ] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files
-  that child processes write: the default options, a set of larger buffers and rings, and the tiny
+  that child processes write: the default options, a set well above them of the size a build service would choose (large buffers, many of them, a large client SQ and ring), and the tiny
   set the in-crate tests use, every byte delivered once under each, one child that writes the
   near-term load, the shape of an Azure CLI deployment command's output
   ([capture](bench-captures/2026-10-17-azure-cli-output-shape.txt)): a long silence, then one burst of
