@@ -148,6 +148,46 @@
       "why": "A control: a pointer is null when its address is zero, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        if !self.0.is_null() {\n"],
       "replace": ["        if self.0.addr() != 0 {\n"]
+    },
+    {
+      "name": "DI-14.8.2: a refused query is reported as success",
+      "file": "src/security/query.rs",
+      "expect": "caught",
+      "why": "Windows answers with its own code and the descriptor is only valid when that is success; a query that read nothing must not become an empty descriptor.",
+      "find": ["    if status != ERROR_SUCCESS {\n"],
+      "replace": ["    if status == ERROR_INVALID_DATA {\n"]
+    },
+    {
+      "name": "DI-14.8.2: a refused query carries a code that is not Windows'",
+      "file": "src/security/query.rs",
+      "expect": "caught",
+      "why": "The caller acts on the code Windows refused with; access denied and a bad parameter are different answers.",
+      "find": ["            Win32Error::from_code(status).to_io_error(),\n"],
+      "replace": ["            Win32Error::from_code(ERROR_INVALID_DATA).to_io_error(),\n"]
+    },
+    {
+      "name": "DI-14.8.2: the selection asked for is not the selection passed",
+      "file": "src/security/query.rs",
+      "expect": "caught",
+      "why": "Which parts are read is the caller's choice; reading the DACL whatever was asked for hands back parts that were not selected.",
+      "find": ["            information.bits(),\n"],
+      "replace": ["            SecurityInformation::DACL.bits(),\n"]
+    },
+    {
+      "name": "DI-14.8.2: the kind of object asked for is not the kind passed",
+      "file": "src/security/query.rs",
+      "expect": "caught",
+      "why": "The kind goes to Windows as named: a kind Windows refuses must still be refused, and not replaced by one it accepts.",
+      "find": ["            object_type.as_raw(),\n"],
+      "replace": ["            ObjectType::FILE.as_raw(),\n"]
+    },
+    {
+      "name": "DI-14.8.2: the file kind names the kernel object kind's value",
+      "file": "src/security/query.rs",
+      "expect": "caught",
+      "why": "Each kind is the Win32 value it is named for; the constants are what a caller passes to Windows.",
+      "find": ["    pub const FILE: Self = Self(SE_FILE_OBJECT);\n"],
+      "replace": ["    pub const FILE: Self = Self(SE_KERNEL_OBJECT);\n"]
     }
   ]
 }

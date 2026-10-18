@@ -10,7 +10,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "Memory-safe Rust over the Win32 authorization API: an owned security descriptor and SDDL text to and from one. Thin over Win32, adding no policy."
+description = "Memory-safe Rust over the Win32 authorization API: an owned security descriptor, SDDL text to and from one, and a descriptor read from an open handle. Thin over Win32, adding no policy."
 keywords = ["windows", "security", "sddl", "acl", "ffi"]
 categories = ["api-bindings", "os::windows-apis"]
 
@@ -38,6 +38,13 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 version = "0.61.2"
 default-features = false
 features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"]
+
+# Test-only. The tests create files with a descriptor through `CreateFileW` and read an event's security;
+# neither is something this crate offers, and a dev-dependency keeps the features from any consumer.
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"]
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it

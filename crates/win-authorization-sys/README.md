@@ -12,6 +12,9 @@ Identity > Authorization*. Thin over Win32, adding no policy.
 - `AclState` keeps apart the three states of an access-control list that look alike and are not: absent,
   **NULL** (everyone has complete access) and empty (nobody has any).
 - `SecurityInformation` is the selection of which parts of a descriptor a call reads or writes.
+- `get_security_info` is `GetSecurityInfo`: the parts of the security descriptor of the object an open handle
+  names, as an owned `SecurityDescriptor`, with `ObjectType` saying what kind of object it is. A part the
+  handle was not opened with the right to read is Windows' refusal, with its code.
 
 ```rust
 use win_authorization_sys::{AclState, SecurityDescriptor};

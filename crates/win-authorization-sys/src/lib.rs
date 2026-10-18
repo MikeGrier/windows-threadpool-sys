@@ -5,6 +5,6 @@
 mod security;
 
 pub use security::{
-    AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
-    SecurityInformation,
+    AclState, ObjectType, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure,
+    SecurityDescriptor, SecurityInformation, get_security_info,
 };

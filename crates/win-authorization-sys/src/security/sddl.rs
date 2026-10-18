@@ -102,7 +102,7 @@ impl BitOr for SecurityInformation {
 
 /// Memory Windows allocated with `LocalAlloc` and handed to this crate, freed when it goes out of
 /// scope, so no return path can leak it.
-struct LocalAllocation(*mut core::ffi::c_void);
+pub(super) struct LocalAllocation(pub(super) *mut core::ffi::c_void);
 
 impl Drop for LocalAllocation {
     fn drop(&mut self) {

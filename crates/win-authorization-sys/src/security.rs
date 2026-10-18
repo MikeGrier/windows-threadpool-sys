@@ -28,8 +28,10 @@ use windows_sys::Win32::Security::{
 
 use io_buffers::AlignedBuf;
 
+mod query;
 mod sddl;
 
+pub use query::{ObjectType, get_security_info};
 pub use sddl::SecurityInformation;
 
 /// A self-relative security descriptor must be DWORD-aligned.
@@ -78,6 +80,9 @@ pub enum SecurityCaptureFailure {
     InteriorNul,
     /// Windows refused to write a descriptor as SDDL. The error's code is Windows' own.
     ToSddl,
+    /// Windows refused to read the security of an object by its handle. The error's code is
+    /// Windows' own.
+    ReadSecurity,
 }
 
 /// A synchronous failure while capturing a caller's security attributes.
@@ -143,6 +148,7 @@ impl fmt::Display for SecurityCaptureError {
             SecurityCaptureFailure::ToSddl => {
                 "ConvertSecurityDescriptorToStringSecurityDescriptorW"
             }
+            SecurityCaptureFailure::ReadSecurity => "GetSecurityInfo",
         };
 
         write!(f, "{stage}: {}", self.source)
