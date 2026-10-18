@@ -296,6 +296,45 @@ function Test-ProcessStartFailureText {
     return $false
 }
 
+# --- A link that could not open its output -----------------------------------
+#
+# `link.exe` reports `LINK : fatal error LNK1104: cannot open file '<path>'`
+# when it cannot open a file it was given. For a test executable that is the
+# link's OUTPUT, and the usual reason is that some other process still has the
+# previous build's copy open: a scanner or an inventory service looking at a
+# freshly run test binary for a moment after it exited. A sweep links the same
+# path again for every entry, a second or two after the last one ran, so it
+# meets this by chance. The cargo build then fails with nothing wrong in the
+# patch or in the suite, and the same entry run alone builds. The evidence is in
+# DESIGN-RATIONALE.md, "A link that could not open its output".
+#
+# Why this one signature, and not "retry a failed build": a build that fails
+# because the patch is not valid Rust must fail on the first attempt, or a retry
+# would double the cost of every manifest that is wrong. LNK1104 is also what the
+# linker says for an INPUT it cannot find (`kernel32.lib`, a missing `.rlib`), and
+# that is not transient. So the file named has to be an executable or a library
+# it produces, `.exe` or `.dll`, and EVERY LNK1104 in the output has to be of that
+# kind: one that names an input makes the failure the build's own.
+#
+# What the signature cannot tell apart is a held file from any other refusal to
+# open an output -- a path too long, a missing directory. A retry of one of
+# those fails the same way, and the caller says so after the second attempt,
+# which costs one more build and hides nothing.
+#
+# Returns the path of the first file named, or $null when the text has no
+# LNK1104, or one that is not an output of this kind.
+function Get-LinkOutputOpenFailure {
+    param([AllowNull()][string] $Text)
+    if (-not $Text) { return $null }
+    $first = $null
+    foreach ($match in [regex]::Matches($Text, "fatal error LNK1104: cannot open file '([^'\r\n]*)'")) {
+        $path = $match.Groups[1].Value
+        if ($path -notmatch '(?i)\.(exe|dll)$') { return $null }
+        if ($null -eq $first) { $first = $path }
+    }
+    return $first
+}
+
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than
 # failing the report, because this runs on a path that is already failing.

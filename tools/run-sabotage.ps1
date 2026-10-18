@@ -281,6 +281,11 @@ $script:CargoExecutable = $CargoCommand
 # taken from -LauncherPath -- just before the baseline.
 $script:TraceLaunches = $TraceLaunches.IsPresent
 $script:LauncherExecutable = $null
+# How many builds were run a second time because the linker could not open its
+# output (see Invoke-Sabotaged), for the sweep's summary to report. A count kept
+# here and not returned from each call, because six returns would each carry it
+# and only the summary reads it; one sweep is one process, shards included.
+$script:LinkRetries = 0
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
@@ -585,6 +590,22 @@ function Add-CargoFlag {
 # detection that never happened. So the build gets a generous one, and its
 # failure is reported as its own outcome rather than folded into "caught":
 # the compiler rejecting a patch tells you nothing about your tests.
+#
+# ONE build failure is run a second time: the linker not being able to open its
+# output (see Get-LinkOutputOpenFailure in common.ps1, which says why that
+# signature and no wider one). Every entry links the same executable path a
+# second or two after the last entry's run of it, so something else holding that
+# file for a moment -- a scanner, an inventory service -- fails the link of an
+# entry whose patch and suite are both fine. It is reported as the manifest not
+# compiling if left alone, which is false, and it is not repeatable, so the
+# build is simply done again. Once: a second failure of the same kind is a
+# refusal that is not going away, and is reported as what it is
+# (`link-locked`), not as a patch that does not compile. Every retry is printed,
+# counted for the sweep's summary, and its first attempt's log is kept beside
+# the transcript, so a retried link is never absorbed silently.
+#
+# The run phase is not retried: it does not link, and a test that fails is a
+# result, never a flake to be tried again.
 function Invoke-Sabotaged {
     param(
         [string[]] $CargoArgs,
@@ -594,9 +615,37 @@ function Invoke-Sabotaged {
         [int] $TestSeconds
     )
 
-    $build = Invoke-Bounded -CargoArgs (Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run') `
-        -WorkingDirectory $WorkingDirectory `
+    $buildArgs = Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run'
+    $buildLog = "$TranscriptPath.build.err"
+    $build = Invoke-Bounded -CargoArgs $buildArgs -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+
+    if ($build.Outcome -eq 'failed') {
+        # Read-SharedText, like every file a just-exited process wrote (common.ps1).
+        $firstLog = ''
+        if (Test-Path -LiteralPath $buildLog) { $firstLog = Read-SharedText -Path $buildLog }
+        $locked = Get-LinkOutputOpenFailure $firstLog
+        if ($locked) {
+            $kept = "$TranscriptPath.build.attempt1.err"
+            [System.IO.File]::WriteAllText($kept, $firstLog, $utf8NoBom)
+            $script:LinkRetries++
+            Write-Report ("    The linker could not open its output, '$locked' (LNK1104): another process " +
+                "held it. Building once more; this attempt's log is kept as $(Split-Path -Leaf $kept).") -Level note
+
+            $build = Invoke-Bounded -CargoArgs $buildArgs -WorkingDirectory $WorkingDirectory `
+                -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+            if ($build.Outcome -eq 'passed') {
+                Write-Report '    The second build linked.' -Level note
+            }
+            elseif ($build.Outcome -eq 'failed' -and (Test-Path -LiteralPath $buildLog)) {
+                $again = Get-LinkOutputOpenFailure (Read-SharedText -Path $buildLog)
+                if ($again) {
+                    Write-Report ("    The second build could not open '$again' either; the entry is not scored.") -Level bad
+                    return [pscustomobject]@{ Outcome = 'link-locked'; Code = $build.Code; Seconds = 0; Output = $again }
+                }
+            }
+        }
+    }
 
     if ($build.Outcome -eq 'not-started') {
         return [pscustomobject]@{ Outcome = 'not-started'; Code = $build.Code; Seconds = 0 }
@@ -765,6 +814,7 @@ function Get-EvidencePath {
     switch ($Outcome) {
         'build-failed' { return "$TranscriptPath.build.err" }
         'build-hung' { return "$TranscriptPath.build.err" }
+        'link-locked' { return "$TranscriptPath.build.err" }
         'not-executed' { return "$TranscriptPath.err" }
         default { return $TranscriptPath }
     }
@@ -1300,7 +1350,7 @@ $testArgs = Add-CargoFlag -CargoArgs $testArgs -Flag @('--target-dir', $sweepTar
 # manifest nor being rejected by it deletes anything.
 $writableStems = @('baseline') + @($selected | ForEach-Object { $stems[$_.name] })
 foreach ($writableStem in $writableStems) {
-    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err', '.txt.result', '.txt.build.result')) {
+    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err', '.txt.build.attempt1.err', '.txt.result', '.txt.build.result')) {
         $stale = Join-Path $OutputDirectory ($writableStem + $suffix)
         if (Test-Path -LiteralPath $stale) {
             Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
@@ -1541,6 +1591,10 @@ foreach ($sabotage in $selected) {
         # the one that "failed" failed to compile, so it detected nothing.
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
         'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
+        # Not "MANIFEST DOES NOT COMPILE": the patch was never judged. The linker
+        # could not open its output on two builds running, so something still
+        # holds that file, or the path is not one it can write.
+        'link-locked' { "INFRASTRUCTURE: the linker could not open '$($run.Output)' on either of two builds, LNK1104 (tests never ran)" }
         'not-started' { "INFRASTRUCTURE: cargo could not be started, exit $(Format-ExitCode $run.Code) (tests never ran)" }
         'launcher-failed' { "INFRASTRUCTURE: win-job-launcher failed, exit $(Format-ExitCode $run.Code) (no verdict)" }
     }
@@ -1584,6 +1638,12 @@ $results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize
     Out-String | ForEach-Object { $_.TrimEnd("`r", "`n") } | Write-Report
 
 $unexpected = @($results | Where-Object { -not $_.Ok })
+# Said before the verdict, on every path out, so a sweep that was helped past a
+# held file by one retry does not read the same as one that was not.
+if ($script:LinkRetries -gt 0) {
+    Write-Report ("$($script:LinkRetries) build(s) were run a second time because the linker could not open its " +
+        'output (LNK1104). The first attempt of each is kept as *.build.attempt1.err beside its transcript.') -Level note
+}
 if ($unexpected.Count -eq 0) {
     Write-Report "All $($results.Count) sabotages behaved as declared." -Level good
     exit 0

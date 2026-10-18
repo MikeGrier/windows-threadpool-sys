@@ -331,6 +331,73 @@ Test-Case 'the host pressure report produces lines rather than throwing' {
     if ($lines.Count -lt 2) { throw "expected several lines, got $($lines.Count)" }
 }
 
+# --- A link that could not open its output ------------------------------------
+#
+# The sweep harness retries a build exactly once, and only for this. So the
+# signature is tested both ways: the output of the real failure is recognised,
+# and each way a link can fail for a reason that is NOT transient is not.
+
+# The failure as cargo printed it in a sweep, with the middle of the link line
+# omitted. Its `/OUT:` argument ends in `.exe"` as the error's own path does, and
+# is not the error: a pattern that looked for the file name alone would find it.
+$script:RealLinkFailure = @'
+   Compiling win-multi-file-tail-watcher v0.1.3 (Q:\github\windows-threadpool-sys\.scratch\sabotage\tree\crates\win-multi-file-tail-watcher)
+error: linking with `link.exe` failed: exit code: 1104
+  |
+  = note: "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe" "/NOLOGO" "<257 object files omitted>" "/OUT:Q:\\github\\windows-threadpool-sys\\.scratch\\sabotage\\target\\debug\\deps\\win_multi_file_tail_watcher-39ceb5c78e0fe780.exe" "/OPT:REF,NOICF" "/DEBUG"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: LINK : fatal error LNK1104: cannot open file 'Q:\github\windows-threadpool-sys\.scratch\sabotage\target\debug\deps\win_multi_file_tail_watcher-39ceb5c78e0fe780.exe'
+          
+
+error: could not compile `win-multi-file-tail-watcher` (lib test) due to 1 previous error
+'@
+
+Test-Case 'the real link failure names the output file that could not be opened' {
+    Assert-Equal 'Q:\github\windows-threadpool-sys\.scratch\sabotage\target\debug\deps\win_multi_file_tail_watcher-39ceb5c78e0fe780.exe' `
+        (Get-LinkOutputOpenFailure $script:RealLinkFailure) 'the path in the error, not the one in the link line'
+}
+
+Test-Case 'an output is recognised in any case, with spaces in its path, and as a library' {
+    Assert-Equal 'C:\My Dir\x.EXE' (Get-LinkOutputOpenFailure "LINK : fatal error LNK1104: cannot open file 'C:\My Dir\x.EXE'") 'upper case with a space'
+    Assert-Equal 'C:\t\deps\x.dll' (Get-LinkOutputOpenFailure "LINK : fatal error LNK1104: cannot open file 'C:\t\deps\x.dll'") 'a dll'
+    $two = "fatal error LNK1104: cannot open file 'C:\a.exe'`nfatal error LNK1104: cannot open file 'C:\b.exe'"
+    Assert-Equal 'C:\a.exe' (Get-LinkOutputOpenFailure $two) 'the first of several'
+}
+
+Test-Case 'an input the linker cannot find is not an output that was held open' {
+    # LNK1104 is also what a missing library or object says, and that is the
+    # build's own failure, which a retry would only repeat.
+    foreach ($text in @(
+            "LINK : fatal error LNK1104: cannot open file 'kernel32.lib'",
+            "LINK : fatal error LNK1104: cannot open file 'C:\t\deps\libfoo-1a2b.rlib'",
+            "LINK : fatal error LNK1104: cannot open file 'C:\t\x.obj'",
+            "LINK : fatal error LNK1104: cannot open file 'C:\a.exe\inner.lib'")) {
+        if (Get-LinkOutputOpenFailure $text) { throw "an input was taken for an output: $text" }
+    }
+}
+
+Test-Case 'one input among outputs makes the failure the build''s own' {
+    $mixed = "fatal error LNK1104: cannot open file 'C:\a.exe'`nfatal error LNK1104: cannot open file 'kernel32.lib'"
+    if (Get-LinkOutputOpenFailure $mixed) { throw 'a missing library was ignored because an output was also named' }
+    $reversed = "fatal error LNK1104: cannot open file 'kernel32.lib'`nfatal error LNK1104: cannot open file 'C:\a.exe'"
+    if (Get-LinkOutputOpenFailure $reversed) { throw 'order mattered' }
+}
+
+Test-Case 'other linker errors, and text without the error, are not this failure' {
+    foreach ($text in @(
+            "LINK : fatal error LNK1181: cannot open input file 'C:\t\x.obj'",
+            'LINK : fatal error LNK1120: 1 unresolved externals',
+            'x.obj : error LNK2019: unresolved external symbol main',
+            "cannot open file 'C:\a.exe'",
+            'LNK1104',
+            "warning LNK1104: cannot open file 'C:\a.exe'",
+            '', $null)) {
+        if (Get-LinkOutputOpenFailure $text) { throw "false alarm: $text" }
+    }
+    # The command line cargo prints names the output too, and is not the error.
+    if (Get-LinkOutputOpenFailure '"/OUT:C:\\t\\deps\\x.exe" "/DEBUG"') { throw 'the link line was taken for the error' }
+}
+
 # --- ConvertTo-NativeArgument: one argument, quoted for a command line --------
 
 Test-Case 'a plain argument is left unquoted' {

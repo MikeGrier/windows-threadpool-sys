@@ -247,6 +247,8 @@ M34.6 owns that.
   is chosen, the file becomes deletable once the three are done, since none of its own milestones
   are outstanding.
 
+- [x] **M34.8** -- Build a second time when the linker could not open its own output. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m348)
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

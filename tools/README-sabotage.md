@@ -237,6 +237,21 @@ where it passed on re-run; in CI the harness's suite now runs through
 which retries this signature and nothing else. If a baseline hits it, the
 sweep stops with the host's memory, commit, process and handle counts.
 
+**`INFRASTRUCTURE: the linker could not open '<file>.exe'`** -- the build's
+`link.exe` could not open its own output (`LNK1104`) on two builds in a row, so
+the patch was never judged. It was seen rarely, once in a long sweep, and the
+same entry linked when run alone. The harness therefore builds once
+more when, and only when, a build fails with `LNK1104` naming a `.exe` or `.dll`
+and no `LNK1104` naming anything else; the second build decides. The same
+message for a `.lib`, `.rlib` or `.obj` is a missing input, which is the
+build's own failure and is never retried. The signature is defined once, in
+`Get-LinkOutputOpenFailure` in [common.ps1](common.ps1). A retry is never
+silent: the first attempt's log is kept as `.build.attempt1.err` beside the
+build's transcript, and the summary says how many builds were run again. Only
+the build is retried; a test that ran is never run twice. The reasoning is in
+[DESIGN-RATIONALE.md](../DESIGN-RATIONALE.md), "A link that could not open its
+output".
+
 **`MANIFEST STALE`** -- the pattern no longer matches exactly one site.
 Refactoring moved the code out from under the manifest. Fix the manifest; the
 sabotage was not run and proves nothing.
@@ -516,7 +531,9 @@ from the current run.
 
 Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
 them to stderr, and error messages name whichever of the two actually holds the
-evidence. Each phase the launcher reports on also leaves its `.result`
+evidence. A build that is run again (see `INFRASTRUCTURE: the linker could not
+open`) also leaves its first attempt's diagnostics as `.build.attempt1.err`.
+Each phase the launcher reports on also leaves its `.result`
 (`.build.result` for the build), the one-line JSON outcome the harness judged it
 by. A launcher that failed leaves none, or a file that is not a result, and the
 run is `INFRASTRUCTURE`; a transcript is the evidence then.
