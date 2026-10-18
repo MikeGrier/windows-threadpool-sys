@@ -170,3 +170,16 @@ fine".
 - [x] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files that child processes write, under the default options, a set well above them and two small sets, with the near-term and worst-case loads, every invalid size refused, and a held chunk and an undrained client SQ each stopping the reads; the README names what each size limits and the three stops. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-95)
 
 - [x] **TW-9.6** -- A queue capacity that is valid but more than memory can hold is an error and not an abort: the queue crate's allocation refusal is mapped to a new `CreateError::Allocation` for the client queue and the watcher's own queue, and tested through the public constructor. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-96)
+
+## M10 -- Findings of the review of M9
+
+A review of the branch against origin/main, 2026-10-17, found four defects in M9. The engineer: "polls
+initiated before the previous one completes should fail. fix all".
+
+- [ ] **TW-10.1** -- A sabotage entry made stale by TW-9.6 (it matched text that no longer exists, so it never ran) is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale.
+
+- [ ] **TW-10.2** -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so.
+
+- [ ] **TW-10.3** -- `TailReader::poll` is refused while the previous poll is not complete, and a poll is complete when its poll-done has been queued for the client, after every read of it is delivered, and not when the watcher has finished announcing; a client that has read poll-done may poll again at once.
+
+- [ ] **TW-10.4** -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe (never more than the capacity in one drain, nothing lost) and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it.
