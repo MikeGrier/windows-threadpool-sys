@@ -306,7 +306,8 @@ impl<A: DataAccess> FileOptions<A> {
     ///
     /// The file goes when the last handle to it, however that was opened, is closed. Measured on
     /// Windows 11 build 26300: the open succeeds without the right to delete among the
-    /// [`rights`](Self::rights), although the `CreateFileW` page lists it as needed, and while the
+    /// [`rights`](Self::rights) (the `CreateFileW` pages do not say it is needed; `ZwCreateFile`'s
+    /// does, for its own flag, and that is not the call made here), and while the
     /// handle is open a later open has to share deletion ([`ShareMode::DELETE`]) or it fails with a
     /// [`SharingViolation`]. Nothing is added or checked here; which combinations are refused ahead
     /// of the open is `DI-14.4`'s.

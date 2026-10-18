@@ -124,8 +124,9 @@ fn a_file_opened_without_the_flag_stays_when_closed() {
 
 #[test]
 fn delete_on_close_needs_no_right_to_delete_among_the_rights_asked_for() {
-    // Measured on Windows 11 build 26300. The `CreateFileW` page lists the right to delete as needed,
-    // and the kernel does not refuse an open that leaves it out: the file goes all the same.
+    // Measured on Windows 11 build 26300, and evidence, not a contract: the `CreateFileW` pages do not
+    // say the right to delete is needed (`ZwCreateFile`'s does, for its own flag), and the kernel does
+    // not refuse an open that leaves it out: the file goes all the same.
     let temp = TempFile::new("fl-no-delete");
     let opened = OpenedFile::<Cached>::open(wtf(&temp.0), read_write().delete_on_close(true))
         .expect("opens without the right to delete");
