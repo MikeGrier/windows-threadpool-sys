@@ -176,7 +176,7 @@ fine".
 A review of the branch against origin/main, 2026-10-17, found four defects in M9. The engineer: "polls
 initiated before the previous one completes should fail. fix all".
 
-- [ ] **TW-10.1** -- A sabotage entry made stale by TW-9.6 (it matched text that no longer exists, so it never ran) is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale.
+- [x] **TW-10.1** -- A sabotage entry made stale by TW-9.6 is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-101)
 
 - [ ] **TW-10.2** -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so.
 

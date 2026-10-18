@@ -1440,3 +1440,16 @@ does not call the capacity a mistake of the rule; and the reverse, that every re
 
 Breaking: `CreateError` gains a variant, so a caller that matched it exhaustively no longer compiles. The commit
 is `feat!` and the next release is 0.2.0.
+
+## Moved 2026-10-18 00:53:22 -04:00 -- TW-10.1: the stale sabotage entry
+
+### <a id="tw-101"></a>TW-10.1 -- A sabotage entry made stale by TW-9.6 is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale. *(completed 2026-10-18 00:53:22 -04:00)*
+
+The entry "the queue's bounds are read the wrong way round" searched for `Err(refusal) => (wide(refusal.min_valid), ...`,
+which TW-9.6 rewrote to read the bounds through `refusal.capacity()`, so the harness reported `MANIFEST STALE` and the
+entry never ran. TW-9.6 ran only the entries it had added, by name, and not the manifest, which is how it was missed. The
+entry now swaps the two fields of the current expression and is caught.
+
+All five manifests of the crate were then swept in full against the tree as it stood: 7, 6, 23, 8 and 206 entries, all
+behaving as declared. That sweep is repeated at the end of M10, since the items after this one change the sources the
+entries patch.
