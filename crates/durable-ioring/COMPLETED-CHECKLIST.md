@@ -3311,3 +3311,14 @@ open of a serial port's name was observed not to return, and this crate does not
 It cites what `CancelSynchronousIo` is documented as, and names [DI-D-67](DESIGN-NOTES.md#di-d-67) for the sources and
 the measurement; it gives no advice, and carries no figure from the measurement. Documentation only: no behaviour
 changed, so no sabotage applies.
+
+### <a id="di-1463"></a>DI-14.6.3 -- The serial-port measurement is withdrawn: nothing decided rests on it, and what was observed is recorded. *(withdrawn 2026-10-18 19:52:00 -04:00)*
+
+Withdrawn, not completed. The item queued the measurements `DI-14.6.1` could not make on a serial port. The engineer
+asked why they are needed at all, and nothing decided depends on them: [DI-14.6.2](#di-1462) takes cached opens of any
+non-disk handle and refuses unbuffered ones with no final path, and [DI-D-67](DESIGN-NOTES.md#di-d-67) leaves a
+blocking open to the caller. It was filed open in a milestone it could not be worked in, which the checklist's rule
+for deferred work does not allow. The investigation found the ports are Remote Desktop redirections of the client's,
+and that `CancelSynchronousIo` returned success on a blocked open there without shortening it; both are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". The unmeasured remainder is listed there with the
+reason it is not queued.

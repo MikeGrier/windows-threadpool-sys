@@ -59,7 +59,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`. `DI-10.5` needs none of them and may be done at any point, as may `DI-14.6.4`, which is documentation; `DI-14.6.3` waits on a serial port, and `DI-10.6` is parked.
+   `DI-M15`. `DI-10.5` needs none of them and may be done at any point, and `DI-10.6` is parked.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -258,15 +258,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.6.2** -- A cached open of a handle that is not a disk file is accepted; an unbuffered one is refused as `UnknownLocation`, this crate's own narrowing, and no longer as the final-path call's error. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1462)
 
-- [ ] **DI-14.6.3** -- **Blocked: a serial port that opens repeatably.** Measure `GetFileType`, the
-  device control and `FlushFileBuffers` on an open serial port, and whether `CancelIoEx` or
-  `CancelSynchronousIo` interrupts a read that is blocked on it. The blocker is the machine, not the
-  work: of three ports named on the measuring machine one blocked in `CreateFileW` for over 45
-  seconds and later returned 5, one returned 31 and one returned 5, so the read was never reached.
-  A loopback or virtual port, or a machine with a real one, unblocks it; the kinds already measured
-  are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". It gates no decision:
-  `DI-14.6.2` can be taken from the kinds already measured, and a blocking open is the caller's
-  ([DI-D-67](DESIGN-NOTES.md#di-d-67)). It is evidence, recorded as such when it can be made.
+- [x] **DI-14.6.3** -- The serial-port measurement is withdrawn: nothing decided rests on it, and what was observed is recorded. -> [withdrawn 2026-10-18](COMPLETED-CHECKLIST.md#di-1463)
 
 - [x] **DI-14.6.4** -- The open's documentation states that where a name leads is the caller's responsibility. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1464)
 

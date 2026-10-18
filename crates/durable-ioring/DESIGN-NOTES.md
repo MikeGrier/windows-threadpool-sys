@@ -524,15 +524,20 @@ tests red, and one that always reports a number turns the file, directory, `NUL`
   and does not report success. A read returned end of file and a write succeeded, as [D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)
   recorded.
 - **A pipe's two ends are alike** on every query tried.
-- **A serial port was not measured, and what was seen is not repeatable.** Three ports are named on this
-  machine: `COM3`, `COM4` and `COM22`, of which the device manager lists none; `COM2` is listed in an error
-  state. In three runs `CreateFileW` on `COM3` had not returned after 15, 25 and 45 seconds; the process was
-  killed each time, and one killed process kept the executable locked until the shell that started it was
-  stopped. A later run of the same open, on a thread so that `CancelSynchronousIo` could be tried, returned
-  `ERROR_ACCESS_DENIED` at once, so the cancel was never exercised. `COM4` failed with 31 and `COM22` with 5.
-  So the earlier observation, a read on `COM3` still blocked after eight seconds, could not be reproduced, and
-  `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read remain unmeasured. What this crate
-  does about a blocking open is [DI-D-67](#di-d-67).
+- **A serial port was not measured, and no decision rests on it.** The three ports named on this machine are
+  Remote Desktop redirections of the client's ports: `QueryDosDevice` gives `COM3`, `COM4` and `COM22` the targets
+  `\Device\RdpDrPort\;COMn:2\tsclient\COMn`, so what an open waits on is the client's port at that moment. `COM2` is
+  an ACPI port in an error state with no DOS device. In three earlier runs `CreateFileW` on `COM3` had not returned
+  after 15, 25 and 45 seconds, and the process was killed each time; later it returned `ERROR_ACCESS_DENIED` after
+  about 80 ms, and `COM22` returned `ERROR_FILE_NOT_FOUND` at once. `COM4`, 2026-10-18, blocked in `CreateFileW`
+  for about 5.2 seconds in every run and then failed with 31. `CancelSynchronousIo` on that open, from a second
+  thread that held `THREAD_TERMINATE`, returned `TRUE` and did not shorten it: the call itself returned only when
+  the open did, about 4.2 seconds after it was made at one second, and after the whole open when made at once.
+  No port opened, so `GetFileType`, `FlushFileBuffers`, the device control and a cancel of a blocked serial read were
+  not measured. What is decided does not depend on them: a cached open of a handle that is not a disk file is
+  accepted and an unbuffered one with no final path is refused ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)), and
+  what this crate does about a blocking open is [DI-D-67](#di-d-67). A machine with a port that opens could measure
+  them.
 
 **What DI-14.6.2 settled** ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)). The engineer, 2026-10-18, "implement
 di-14.6.2", after the question of what refusing is worth had been discussed and not ruled; the positions below are
@@ -562,8 +567,8 @@ the assistant's, taken on that instruction, and stand until amended.
 - **Tested** with a real unbuffered and a real cached open of `NUL`. Three sabotages: an unreadable location
   accepted, the refusal reported as the call's error, and a cached open refused. The last is refused by a
   `const` assertion at build, before any test runs, which is the stronger rung.
-- **Unchanged and still open:** a serial port ([DI-14.6.3](CHECKLIST.md)), and the open's documentation of
-  [DI-D-67](#di-d-67) ([DI-14.6.4](CHECKLIST.md)).
+- **Not decided here:** a serial port, which was not measured and which nothing rests on (above), and the open's
+  documentation of [DI-D-67](#di-d-67), which is [DI-14.6.4](COMPLETED-CHECKLIST.md#di-1464).
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
@@ -791,9 +796,9 @@ the caller's to know.
 **The hazard.** Measured on one machine for [DI-14.6.1](COMPLETED-CHECKLIST.md#di-1461), in
 [DI-D-64](#di-d-64) under "Measured for DI-14.6": `CreateFileW` on `COM3` had not returned after 15, 25
 and 45 seconds, and a later run of the same open returned `ERROR_ACCESS_DENIED` at once. The open itself
-blocked, so no handle existed to judge. That none of the machine's three named ports is listed by the
-device manager fits a Bluetooth serial port, whose open attempts a connection; that is a guess and was
-not measured.
+blocked, so no handle existed to judge. The machine's three named ports are Remote Desktop redirections
+of the client's ports (`QueryDosDevice` gives each a `\Device\RdpDrPort\` target), so what the open waits
+on is the client's port ([DI-D-64](#di-d-64), "Measured for DI-14.6").
 
 **Why no check of the name can be complete.** A name can be redirected to a device by three routes, and
 only part of one is under an open's control:
@@ -827,6 +832,9 @@ Pending I/O Operations" (05/31/2018).
   canceled", and of the race on a shared thread. The engineer, 2026-10-18: "it could end up cancelling
   something other than the target API. There is no synchronization with the thread unless you build some
   gating with every API that you think you may need to cancel."
+- *Measured on a redirected serial port, 2026-10-18:* an open that blocks about 5.2 seconds and then fails with 31
+  was not shortened by `CancelSynchronousIo` from a second thread, which returned `TRUE` and itself returned only
+  when the open did ([DI-D-64](#di-d-64), "Measured for DI-14.6"). One driver, and not a guarantee either way.
 - *The gating such an open would need:* a thread of its own making that one call and no other, a cancel
   repeated until the thread reports done (a cancel issued before the call enters the kernel finds nothing),
   and a thread lost for good when the driver does not cancel.
@@ -845,7 +853,8 @@ refused, or classified and returned as such, and what an `OpenedFile` on such a 
 [DI-14.6.2](CHECKLIST.md)'s: those concern what a durability claim on such a handle would mean, not the
 blocking open. **Settled by [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)** ([DI-D-64](#di-d-64), "What DI-14.6.2
 settled"), which also names the unbuffered open of `NUL`'s refusal as this crate's own.
-[DI-14.6.3](CHECKLIST.md), the serial-port measurement, no longer gates a design decision; it is evidence.
+A serial-port measurement was queued as `DI-14.6.3` and is not made: no decision rests on it, and what was
+observed of it is in [DI-D-64](#di-d-64).
 
 **Scheduled work.** [DI-14.6.4](CHECKLIST.md): the open's documentation states this responsibility, since
 a caller cannot carry one it is not told of.
