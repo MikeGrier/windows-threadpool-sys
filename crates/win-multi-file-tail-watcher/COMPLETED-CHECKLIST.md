@@ -1496,6 +1496,11 @@ asks, so the poll was only sometimes in flight. The new test holds the gate by h
 
 All existing tests passed unchanged, so none relied on overlapped polls.
 
+The full sweep at the end of M10 then found that "shutdown does not shut the watcher down" survived. The layer's new stop check
+answers a poll after a shutdown before the watcher is asked, so the earlier test, which saw `Shutdown` from the watcher, no longer
+observed the watcher being stopped; the entry had been caught only by that accident. `shutdown_reaches_the_watcher_itself` asks the
+watcher directly.
+
 ## Moved 2026-10-18 01:39:34 -04:00 -- TW-10.4: the integration tests do not sleep as proof
 
 ### <a id="tw-104"></a>TW-10.4 -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe, that the poll cannot complete and nothing is lost, and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it. *(completed 2026-10-18 01:39:34 -04:00)*

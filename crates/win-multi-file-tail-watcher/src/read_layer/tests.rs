@@ -457,6 +457,17 @@ fn a_client_that_has_read_poll_done_may_poll_again_at_once() {
 }
 
 #[test]
+fn shutdown_reaches_the_watcher_itself() {
+    let layer = layer();
+    layer.shutdown();
+    // Asked of the watcher directly: the layer refuses a poll on its own stop request first, so
+    // `layer.poll()` no longer shows whether the watcher was stopped, and a poll of the watcher that
+    // is running when the layer shuts down stops at its next step only if it was.
+    let watcher_poll = layer.engine_for_test().watcher().poll();
+    assert!(matches!(watcher_poll, Err(crate::PollError::Shutdown)));
+}
+
+#[test]
 fn a_shut_down_reader_refuses_a_poll_as_shut_down_even_while_one_is_in_flight() {
     let layer = layer();
     // A poll in flight, held by hand: after a shutdown the engine may deliver its poll-done before
