@@ -383,6 +383,106 @@ fn shutdown_while_stalled_on_kept_chunks_delivers_poll_done_once_they_return() {
 }
 
 #[test]
+fn a_poll_before_the_previous_one_is_complete_is_refused_until_its_poll_done_is_queued() {
+    let dir = TempDir::new("rl-gate");
+    // Four buffers and twelve files: the watcher announces everything at once and its own poll is
+    // soon over, but the reads stall on the chunks the client keeps, so this poll is not.
+    let layer = layer_with(64, 4, 8);
+    let mut registrations = Vec::new();
+    for n in 0..12_u32 {
+        let path = dir.file(format!("f{n}.log"), &pattern(40));
+        registrations.push(layer.register(&wtf(&path), 0, n).expect("register"));
+    }
+    layer.poll().expect("poll");
+    let mut held = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held.len() < 4 {
+        assert!(Instant::now() < deadline, "the layer never delivered");
+        signalled_within(layer.read_sq().doorbell(), 100);
+        layer.read_sq().reset_doorbell();
+        held.extend(layer.read_sq().drain());
+    }
+    // Refused every time, for long enough that the watcher has finished announcing.
+    let until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < until {
+        assert!(
+            matches!(layer.poll(), Err(crate::PollError::InFlight)),
+            "a poll was accepted before the previous one was complete"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let mut taken = Taken::default();
+    for entry in held {
+        let ReadEntry::Data(data) = entry else {
+            panic!("only data was kept");
+        };
+        let (value, range, chunk) = data.into_parts();
+        taken.pieces.entry(value).or_default().push(Piece {
+            range,
+            bytes: chunk.to_vec(),
+        });
+    }
+    take_until(&layer, &mut taken, 1);
+    for n in 0..12 {
+        assert_eq!(taken.bytes_from(n, 0), pattern(40), "file {n}");
+    }
+    // Its poll-done is queued, so the next poll is accepted, and finds nothing new.
+    layer.poll().expect("the previous poll is complete");
+    take_until(&layer, &mut taken, 2);
+    assert!(layer.take_failure().is_none());
+}
+
+#[test]
+fn a_client_that_has_read_poll_done_may_poll_again_at_once() {
+    let dir = TempDir::new("rl-again");
+    let layer = layer();
+    let path = dir.file("a.log", &pattern(8));
+    let _registration = layer.register(&wtf(&path), 8, 7).expect("register");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    for round in 0..1_000 {
+        layer.poll().unwrap_or_else(|error| {
+            panic!("round {round}: refused right after poll-done: {error}")
+        });
+        // Spun on, not waited for, so that the poll is asked for in the instant poll-done is
+        // visible, which is the instant the gate has to be open.
+        while !layer
+            .read_sq()
+            .drain()
+            .any(|entry| matches!(entry, ReadEntry::PollDone))
+        {
+            assert!(Instant::now() < deadline, "poll-done never came");
+        }
+    }
+}
+
+#[test]
+fn a_shut_down_reader_refuses_a_poll_as_shut_down_even_while_one_is_in_flight() {
+    let layer = layer();
+    // A poll in flight, held by hand: after a shutdown the engine may deliver its poll-done before
+    // a test can ask, so a real one would only sometimes be in flight at the moment of asking.
+    assert!(layer.poll_gate.begin());
+    layer.shutdown();
+    assert!(
+        matches!(layer.poll(), Err(crate::PollError::Shutdown)),
+        "shut down, not in flight: no poll starts again, and the caller is told so"
+    );
+}
+
+#[test]
+fn a_poll_the_watcher_refuses_leaves_the_gate_as_it_was() {
+    let layer = layer();
+    // The watcher is stopped on its own, as `shutdown` would, and the layer is not: the layer takes
+    // its gate and the watcher refuses.
+    layer.core.watcher_stop.request();
+    assert!(matches!(layer.poll(), Err(crate::PollError::Shutdown)));
+    assert!(
+        !layer.poll_gate.in_flight(),
+        "a poll that never started is not in flight"
+    );
+}
+
+#[test]
 fn the_first_error_a_run_returns_is_kept_for_the_owner_and_taken_once() {
     use crate::read_engine::Stop;
     let layer = layer();

@@ -64,7 +64,9 @@ pub enum ReadEntry<T> {
     /// the offset the read began at, and the bytes from there are not read again.
     Terminal(Terminal<T>),
     /// Every read of a poll has been delivered: it follows the last read of its poll, and it is
-    /// always delivered, including after a shutdown request.
+    /// always delivered, including after a shutdown request. It ends the poll: the reader accepts
+    /// another [`poll`](crate::reader::TailReader::poll) from the moment it can be seen, and refuses
+    /// one before.
     PollDone,
 }
 

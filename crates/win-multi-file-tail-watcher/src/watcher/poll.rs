@@ -24,20 +24,24 @@ const FINISHING: u8 = 2;
 
 /// Whether a poll is in flight.
 ///
+/// The watcher has one, and the reading layer has one of its own: a poll is over for the watcher when
+/// its poll-done is written to the watcher's SQ, and over for the layer's client when the layer's
+/// poll-done is queued for it, which is later, after every read of the poll is delivered.
+///
 /// The state is not a flag because of one ordering. A caller who has read poll-done must be able to
 /// start the next poll at once, so the gate has to be open before that entry can be seen, yet a
 /// poll-done the queue refuses is not the end of the poll. `FINISHING` is the state in between:
 /// a `poll` that finds it waits for the write's outcome, which is a few instructions away.
 #[derive(Debug)]
-pub(super) struct PollGate(AtomicU8);
+pub(crate) struct PollGate(AtomicU8);
 
 impl PollGate {
-    pub(super) const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self(AtomicU8::new(IDLE))
     }
 
     /// Take the gate, or say a poll is in flight.
-    fn begin(&self) -> bool {
+    pub(crate) fn begin(&self) -> bool {
         loop {
             match self
                 .0
@@ -51,23 +55,29 @@ impl PollGate {
     }
 
     /// Give back a gate taken by a `poll` that could not submit.
-    fn abandon(&self) {
+    pub(crate) fn abandon(&self) {
         self.0.store(IDLE, Ordering::Release);
     }
 
     /// The poll-done entry is about to be written.
-    pub(super) fn finishing(&self) {
+    pub(crate) fn finishing(&self) {
         self.0.store(FINISHING, Ordering::Release);
     }
 
     /// The poll-done entry was written: the poll is over.
-    pub(super) fn finished(&self) {
+    pub(crate) fn finished(&self) {
         self.0.store(IDLE, Ordering::Release);
     }
 
     /// The poll-done entry was refused: the poll is still in flight.
-    pub(super) fn unfinished(&self) {
+    pub(crate) fn unfinished(&self) {
         self.0.store(RUNNING, Ordering::Release);
+    }
+
+    /// Whether a poll is in flight now, for a test to look without taking the gate.
+    #[cfg(test)]
+    pub(crate) fn in_flight(&self) -> bool {
+        self.0.load(Ordering::Acquire) != IDLE
     }
 }
 

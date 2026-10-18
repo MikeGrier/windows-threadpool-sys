@@ -117,7 +117,9 @@ Reporting the attention makes the current length the new last known length.
   on a full SQ still is. A caller who has read poll-done may poll again at once, which is why the
   gate is not a flag: poll-done has to be visible only once the gate is open, yet a poll-done the SQ
   refuses is not the end of the poll. The gate has a state between running and idle for the write,
-  and a `poll` that finds it waits for the write's outcome.
+  and a `poll` that finds it waits for the write's outcome. **This is the watcher's poll.** The
+  reading layer's poll has a gate of its own that opens later, when the layer's poll-done is queued
+  for the client ([TW-D-16](#tw-d-16)).
 - **`poll` needs `T: Send + 'static`**, because the poll runs on the thread pool, and the
   thread-pool work object is made by the first `poll`, so a watcher that is never polled makes none.
   Dropping the watcher drains it, which waits for a running poll to return; a poll parked on a full
@@ -402,7 +404,9 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   kept, and while it is held nothing else is taken, so a full SQ also leaves completions in the ring,
   where the buffers they hold are accounted for, and the layer holds at most one entry the client has
   not taken. Poll-done is delivered after every read of its own poll is settled, and after the
-  poll-dones before it; the reads of a later poll may be delivered before it.
+  poll-dones before it; the reads of a later poll may be delivered before it. **That holds of the
+  engine over a watcher polled directly; the reading layer does not let it happen**, because it
+  refuses a poll until the previous poll-done is queued ([TW-D-16](#tw-d-16), [TW-10.3](CHECKLIST.md)).
 - **"The ring is full" is its completion queue.** A submit empties the ring's SQ, so a refused push
   is answered by submitting and going on; what stops the reads is the ring holding as many reads --
   queued, in flight, or completed and not popped -- as its completion queue does, at the size the
@@ -577,6 +581,29 @@ module within the crate".
   - **Callback hazards are stated on the type**, as the watcher states them: `T::clone`, `T`'s `Drop`
     and the sink run on thread-pool callbacks, a panic out of one aborts the process, and a `Drop`
     must not release the last owner of the reader.
+- **A reader's poll is in flight until its poll-done is queued for the client, and a poll before then
+  fails** ([TW-10.3](CHECKLIST.md)). The engineer, 2026-10-18: "polls initiated before the previous one
+  completes should fail." Found by the review of M9: `TailReader::poll` delegated to the watcher's
+  `poll`, whose gate opens when the watcher's own poll-done is written, which is before the reading
+  engine has delivered the reads of that poll. A second poll was therefore accepted while the first
+  was still being delivered, and a client treating poll-done as the end of a poll could not tell
+  which poll an entry belonged to, because entries carry no poll id.
+  - **The reader has a gate of its own**, the same state machine as the watcher's (`PollGate`, now
+    `pub(crate)`), taken by the layer's `poll` and opened by the engine as it queues each
+    `ReadEntry::PollDone` for the client. A poll the watcher then refuses gives it back. The engine
+    marks the gate finishing before the push and opens it after, so a client that has read poll-done
+    may poll again at once, as for the watcher; one the client's SQ refuses leaves the poll in
+    flight.
+  - **The error is `PollError::InFlight`**, as for the watcher, with its documentation saying what
+    in flight means for each. After a shutdown the answer is `Shutdown` whether or not a poll is in
+    flight, as the watcher's is: the layer checks its stop request first.
+  - **A poll is therefore in flight through everything the client controls**: a full client SQ, and
+    chunks held until the pool is empty. A client that never drains never polls again. That is
+    stated on `TailReader::poll` and `PollError::InFlight`.
+  - **Not changed: the engine's own handling of overlapping polls.** The engine still keeps a
+    group per poll and delivers poll-dones in order, because it is driven over a watcher that may be
+    polled directly in the crate's own tests; only the reading layer, which is what a caller holds,
+    refuses the overlap.
 - **A queue the allocator will not give is `CreateError::Allocation`, and it is not a refused
   capacity** ([TW-9.6](CHECKLIST.md)). Found by [TW-9.5](CHECKLIST.md): a client queue of `1 << 40`
   entries is a capacity the queue accepts, and the process aborted allocating it. The fix was made

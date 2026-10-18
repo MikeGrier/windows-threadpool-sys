@@ -391,6 +391,17 @@ a new crate: "I would put this in a distinct new module within the crate".
   below the ring's floor, or a completion queue below twice the submission queue, is still raised,
   and the assistant's own first default of 64 and 64 was one such case. The engineer said to refuse
   those too, so the default became 64 and 128.
+- **A poll before the previous one is complete.** The review of M9 found that `TailReader::poll` accepted
+  a poll while the reads of the last one were still being delivered, since it asked only the watcher,
+  whose poll is over earlier. The assistant offered two fixes: a gate of the reader's own, or a
+  sentence in the documentation saying a caller that needs poll boundaries must wait for poll-done,
+  and leaned to the sentence, because it read the overlap as known and a gate as costing throughput.
+  The engineer decided otherwise in one line: "polls initiated before the previous one completes
+  should fail." The notes had recorded the overlap as a property ("the reads of a later poll may be
+  delivered before it"), and that sentence is amended to say it holds of the engine over a watcher
+  polled directly and not of the reading layer. The lean toward the documentation was the assistant's
+  and was wrong about the cost: a client that waits for each poll-done before polling again, which
+  is what a poll boundary needs, loses nothing to the gate.
 - **A queue the allocator refuses.** TW-9.5 found that the options accept a client queue capacity the
   queue crate also accepts and the process aborts allocating it. The engineer asked whether the fix
   belonged in `windows-waitable-queues` and, once it was released, chose a new `CreateError` variant

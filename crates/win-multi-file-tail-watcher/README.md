@@ -56,6 +56,11 @@ without a further call when the stop is lifted:
   the reader holds the entry it could not queue and waits for the client to drain and call
   `ring_resume`; nothing is dropped.
 
+A poll is in flight from `poll` until its poll-done has been queued for the caller, which is after every
+read of it is delivered, and a `poll` before then fails with `PollError::InFlight`. That includes a poll
+waiting on any of the three stops above, so a caller that never drains, or keeps every chunk, never
+polls again; a caller that has read a poll-done may poll again at once.
+
 The integration tests of this layer, [tests/reader_real_writers](tests/reader_real_writers), run
 each of these over files that child processes write, with the defaults, with sizes well above
 them, and with sizes small enough that every stop is reached all the time.

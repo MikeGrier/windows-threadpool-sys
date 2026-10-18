@@ -707,6 +707,72 @@ fn a_full_client_sq_stops_the_engine_and_ringing_back_continues_it() {
 }
 
 #[test]
+fn a_poll_the_reading_layer_started_is_in_flight_until_its_poll_done_is_queued_for_the_client() {
+    let dir = TempDir::new("re-gate");
+    let mut engine = engine_with(8, 16, 2, 16, 32, None);
+    let path = dir.file("a.log", &pattern(100));
+    let _registration = engine.register(&wtf(&path), 0, 7).expect("register");
+    let gate = engine.poll_gate();
+    assert!(gate.begin(), "the layer's poll takes the gate");
+    engine.watcher().poll_here();
+
+    // The watcher has announced everything and its own poll is over, but thirteen reads do not fit
+    // a client SQ of two, so this poll is not: it is in flight at every stop until its poll-done is
+    // queued, and not one stop longer.
+    let mut done = false;
+    let mut full_stops = 0;
+    for _ in 0..1_000 {
+        let stop = engine.run().expect("run");
+        let got = drain_got(&engine);
+        done |= got.contains(&Got::PollDone);
+        assert_eq!(
+            gate.in_flight(),
+            !done,
+            "in flight until the poll-done is queued"
+        );
+        if done {
+            break;
+        }
+        if stop == Stop::ClientFull {
+            full_stops += 1;
+            engine.read_sq().ring_resume();
+        } else {
+            engine.wait_for_completion(5_000).expect("wait");
+        }
+    }
+    assert!(done, "the poll finished");
+    assert!(
+        full_stops > 0,
+        "the client SQ was full while it was in flight"
+    );
+    assert!(gate.begin(), "and the next poll is accepted");
+}
+
+#[test]
+fn a_poll_done_the_client_sq_refuses_leaves_the_poll_in_flight() {
+    let dir = TempDir::new("re-gate-refused");
+    let mut engine = engine_with(8, 16, 2, 16, 32, None);
+    let path = dir.file("a.log", b"abc");
+    let _registration = engine.register(&wtf(&path), 3, 7).expect("register");
+    // Nothing to read, so the whole poll is its poll-done, and the client SQ has no room for it.
+    for _ in 0..2 {
+        engine.read_sq().push(ReadEntry::PollDone).expect("room");
+    }
+    let gate = engine.poll_gate();
+    assert!(gate.begin());
+    engine.watcher().poll_here();
+    assert_eq!(engine.run().expect("run"), Stop::ClientFull);
+    assert!(gate.in_flight(), "a refused poll-done is not the end");
+    assert!(!gate.begin(), "so a poll is refused");
+
+    assert_eq!(drain_got(&engine).len(), 2);
+    engine.read_sq().ring_resume();
+    engine.run().expect("run");
+    assert_eq!(drain_got(&engine), [Got::PollDone]);
+    assert!(!gate.in_flight(), "and its delivery is the end");
+}
+
+#[test]
 fn a_full_client_sq_stops_with_the_entry_it_refused_and_loses_none() {
     let dir = TempDir::new("re-keep");
     let mut engine = engine_with(8, 16, 2, 16, 32, None);

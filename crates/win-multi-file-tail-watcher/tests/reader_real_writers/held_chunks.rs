@@ -6,8 +6,9 @@
 //! queue nobody has drained. The third, a full ring, is not something a client holds, and is
 //! covered by the option set whose ring is smaller than its pool.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use win_multi_file_tail_watcher::PollError;
 use win_multi_file_tail_watcher::reader::{ReadEntry, TailReader, TailReaderOptions};
 
 use crate::harness::{Client, TempDir, crlf, for_lines, hold_data, script, spawn, wtf};
@@ -67,6 +68,48 @@ fn holding_every_buffer_stops_reads_until_one_is_dropped_and_loses_nothing() {
 
     let (bytes, _) = client.assemble(FILE);
     assert_eq!(bytes, content(40), "every byte, once, in order");
+    assert!(reader.take_failure().is_none());
+}
+
+#[test]
+fn a_poll_before_the_previous_one_is_complete_is_refused_and_the_next_is_accepted_once_it_is() {
+    let dir = TempDir::new("held-poll");
+    let path = written(&dir, 40);
+
+    let mut options = TailReaderOptions::default();
+    options.buffer_len = 8;
+    options.buffer_count = 4;
+    let reader = TailReader::<u32>::new(&options, 64).expect("a reader");
+    let mut client = Client::new(&reader, options.buffer_len);
+    let _registration = reader.register(&wtf(&path), 0, FILE).expect("register");
+
+    // Every buffer is held, so the reads stop. The watcher has long since announced everything, but
+    // the poll is not complete until its poll-done is queued, and that waits for the reads.
+    reader.poll().expect("start a poll");
+    let held = hold_data(&reader, 4);
+    let until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < until {
+        assert!(
+            matches!(reader.poll(), Err(PollError::InFlight)),
+            "a poll was accepted before the previous one was complete"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    for data in held {
+        client.add_piece(*data.value(), data.range(), data.chunk().to_vec());
+    }
+    let polled = client.finish_poll();
+    assert!(polled.other.is_empty(), "{:?}", polled.other);
+
+    // The poll-done has been read, so the next poll is accepted at once, and finds nothing new.
+    reader.poll().expect("the previous poll is complete");
+    assert_eq!(client.finish_poll().data, 0);
+    assert_eq!(
+        client.assemble(FILE).0,
+        content(40),
+        "every byte, once, in order"
+    );
     assert!(reader.take_failure().is_none());
 }
 

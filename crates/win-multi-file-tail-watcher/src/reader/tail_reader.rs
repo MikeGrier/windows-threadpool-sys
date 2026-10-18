@@ -179,13 +179,20 @@ impl<T: Clone + Send + 'static> TailReader<T> {
     }
 
     /// Start a poll and return at once. What it finds is read, and arrives on
-    /// [`read_sq`](Self::read_sq) with no further call, ending with a poll-done. One poll runs at a
-    /// time: a call while one is running or parked on a full queue is refused.
+    /// [`read_sq`](Self::read_sq) with no further call, ending with a poll-done.
+    ///
+    /// One poll is in flight at a time, from this call until its [`ReadEntry::PollDone`](super::ReadEntry::PollDone) has been
+    /// queued for the caller, which is after every read of the poll is delivered. A call before then
+    /// is refused, including while the poll is waiting for the caller to drain a full queue or to
+    /// drop the chunks that hold every buffer, and including when the files have all been read and
+    /// the last reads are only waiting to be delivered. So a poll-done ends the poll it follows, and
+    /// a caller that has read one may poll again at once.
     ///
     /// # Errors
     ///
-    /// A [`PollError`]: a poll is already running, the reader has been shut down, or the thread pool
-    /// refused to start the poll, in which case a later call tries again.
+    /// A [`PollError`]: a poll is already in flight ([`PollError::InFlight`]), the reader has been
+    /// shut down, or the thread pool refused to start the poll, in which case a later call tries
+    /// again.
     pub fn poll(&self) -> Result<(), PollError> {
         self.layer.poll()
     }

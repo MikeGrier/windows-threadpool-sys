@@ -23,7 +23,8 @@ mod engine;
 mod poll;
 mod probe;
 
-use poll::{PollGate, Poller};
+pub(crate) use poll::PollGate;
+use poll::Poller;
 
 #[cfg(test)]
 mod snapshot_tests;

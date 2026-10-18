@@ -1468,3 +1468,30 @@ survives, the message names the ring and does not say a size was refused, and th
 Two sabotage entries, one for each direction; both caught. Recorded in
 [TW-D-16](DESIGN-NOTES.md#tw-d-16). The review offered a second fix, wording `Options` more broadly; the first was taken
 because `Ring` already carries an operating-system error, and a client matching on the variant gets the right branch.
+
+## Moved 2026-10-18 01:02:23 -04:00 -- TW-10.3: a poll before the previous one is complete fails
+
+### <a id="tw-103"></a>TW-10.3 -- `TailReader::poll` is refused while the previous poll is not complete, and a poll is complete when its poll-done has been queued for the client, after every read of it is delivered, and not when the watcher has finished announcing; a client that has read poll-done may poll again at once. *(completed 2026-10-18 01:02:23 -04:00)*
+
+`TailReader::poll` delegated to `Watcher::poll`, whose gate opens when the watcher's own poll-done is written, before
+the engine has delivered the reads. The engineer's rule, "polls initiated before the previous one completes should
+fail", needed a gate that opens later. Decision and reasoning: [TW-D-16](DESIGN-NOTES.md#tw-d-16).
+
+`PollGate` is widened to `pub(crate)` and reused. The engine owns one, `ReadLayer::poll` checks the stop request, takes
+it and gives it back if the watcher refuses, and `deliver` marks it finishing before it pushes each `ReadEntry::PollDone`
+and opens it after, or leaves the poll in flight when the client's SQ refuses the entry. The error is
+`PollError::InFlight`; the documentation of `TailReader::poll`, `PollError`, `ReadEntry::PollDone` and the README says
+what in flight now means, including that a caller that never drains or keeps every chunk never polls again.
+
+Tests: the engine, synchronously, over a client SQ of two (in flight at every stop until its poll-done is queued, and
+a refused poll-done leaves it in flight); the layer, threaded (refused for 300 ms while every buffer is held and the
+watcher is long done, accepted after the poll-done is read, accepted at once over a thousand rounds that spin on the SQ
+so the poll is asked for in the instant poll-done is visible, the gate given back when the watcher refuses, and
+`Shutdown` ahead of `InFlight`); and the public reader over a child's file with every buffer held. Six sabotage entries
+in `sabotage.json`, all caught; the finishing-state one is a race and was caught five times in five.
+
+A first sabotage entry, "a shut down reader reports a poll in flight ahead of the shutdown", survived: the existing test
+asserted `Shutdown` after a shutdown while stalled, but a shutdown lets the engine deliver the poll-done before the test
+asks, so the poll was only sometimes in flight. The new test holds the gate by hand and is deterministic.
+
+All existing tests passed unchanged, so none relied on overlapped polls.
