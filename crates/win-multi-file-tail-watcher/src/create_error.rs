@@ -1,21 +1,24 @@
 // Copyright (c) 2026 Mike Grier
-//! Why a watcher could not be created.
+//! Why a submission queue could not be created.
 
 use std::{fmt, io};
 
 use crate::SqCapacityError;
 use crate::sq::QueueError;
 
-/// Why [`Watcher::new`](crate::Watcher::new) failed.
+/// Why a submission queue could not be made: the watcher's, by [`Watcher::new`](crate::Watcher::new),
+/// or the reading layer's client queue, which reaches a caller as
+/// [`TailReaderError::ClientSq`](crate::reader::TailReaderError::ClientSq). The messages name the
+/// queue and not which of the two it was; the variant that holds it says.
 ///
 /// Match it with a wildcard arm: a cause may be added without it being a breaking change.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CreateError {
-    /// The submission queue cannot have the capacity asked for: it is not a power of two within the
-    /// bounds the error carries. The same request is refused on every machine.
+    /// The queue cannot have the capacity asked for: it is not a power of two within the bounds the
+    /// error carries. The same request is refused on every machine.
     Capacity(SqCapacityError),
-    /// The capacity asked for is one the submission queue accepts, and the memory for its slots
+    /// The capacity asked for is one the queue accepts, and the memory for its slots
     /// could not be allocated. The error carries the capacity and the bounds, which are what the
     /// queue accepts and not what this machine can hold; a smaller capacity may succeed. It has no
     /// source: the allocator's refusal carries no error value.
@@ -27,14 +30,17 @@ pub enum CreateError {
 impl fmt::Display for CreateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Capacity(error) => write!(f, "creating the watcher failed: {error}"),
+            Self::Capacity(error) => write!(f, "creating the submission queue failed: {error}"),
             Self::Allocation(error) => write!(
                 f,
-                "creating the watcher failed: SQ capacity {} is within the accepted range, {} to {}, \
+                "creating the submission queue failed: SQ capacity {} is within the accepted range, {} to {}, \
                  but the memory for its slots could not be allocated",
                 error.requested, error.min_valid, error.max_valid
             ),
-            Self::Io(error) => write!(f, "creating the watcher's doorbells failed: {error}"),
+            Self::Io(error) => write!(
+                f,
+                "creating the submission queue's doorbells failed: {error}"
+            ),
         }
     }
 }

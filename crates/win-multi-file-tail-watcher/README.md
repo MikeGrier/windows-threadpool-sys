@@ -11,9 +11,10 @@ change and is never told what the caller consumed. It builds only on Windows.
 
 `reader::TailReader` goes on from the lengths to the bytes. It registers files as the watcher does,
 and on each poll it reads what the files gained through an I/O ring, into buffers from a pool, and
-delivers it on a queue the caller drains. Each entry carries a clone of the value the file was
-registered with, the range of the file its bytes are from, and the bytes. It is a module of this
-crate, and the watcher on its own is unchanged.
+delivers it on a queue the caller drains. Each data entry carries a clone of the value the file was
+registered with, the range of the file its bytes are from, and the bytes. A shrink or a terminal entry
+carries the value and what it reports instead, and a poll-done carries nothing and ends a poll. It is a
+module of this crate, and the watcher on its own is unchanged.
 
 ## Choosing the sizes of the reading layer
 

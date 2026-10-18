@@ -1611,3 +1611,26 @@ branch alters. It is the same one-line fix if wanted.
 
 The "short read" decision had been glued to the end of the preceding bullet's last sentence, so it rendered as text inside it. The
 file was searched for any other list marker glued to a sentence, as were the other planning documents of the crate: none.
+
+## Moved 2026-10-18 17:15:07 -04:00 -- TW-10.10 to TW-10.12: three findings of the sixth review
+
+### <a id="tw-1010"></a>TW-10.10 -- The public `TailReader` example rings `ring_resume` after it drains, as a reader stopped on a full queue needs, instead of teaching a loop that stalls on a poll longer than the queue. *(completed 2026-10-18 17:15:07 -04:00)*
+
+The example drained the client queue and never rang the resume doorbell, which `ReadSq`'s own contract requires after making room. It
+completes only because its one file fits the queue; a poll with more entries than the queue holds would stall. It now rings after the
+loop, with a comment saying this poll does not depend on it. It is the only example in the crate that drains. A doctest cannot be
+sabotaged to show the ring matters, and the longer-poll behaviour is covered by `Client::finish_poll` in the integration tests, which
+rings after every drain.
+
+### <a id="tw-1011"></a>TW-10.11 -- `CreateError`, which is now the error of the watcher's queue and of the reading layer's client queue, words its messages for a submission queue and not for the watcher. *(completed 2026-10-18 17:15:07 -04:00)*
+
+`TailReaderError::ClientSq` holds a `CreateError`, whose messages said "creating the watcher failed", so a client queue's failure read
+"the reader's client queue could not be made: creating the watcher failed: ...". It was a pre-existing wording that the public
+`ClientSq` exposed. The messages and the type's documentation now say submission queue. Which queue it was is the variant that holds
+it. The test builds all three causes and asserts none says "watcher", and the client-queue allocation test asserts "client queue" and
+not "watcher"; one sabotage entry puts the old wording back and is caught. Decision and the option not taken: [TW-D-16](DESIGN-NOTES.md#tw-d-16).
+
+### <a id="tw-1012"></a>TW-10.12 -- The README says a data entry carries the value, range and bytes, and what the other entries carry, instead of saying every entry does. *(completed 2026-10-18 17:15:07 -04:00)*
+
+Only `ReadEntry::Data` carries the value, range and chunk; a shrink and a terminal entry carry the value and what they report, and a
+poll-done carries nothing. The `TailReader` rustdoc already said "data entry".

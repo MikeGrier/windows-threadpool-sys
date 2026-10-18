@@ -290,6 +290,9 @@ fn a_client_queue_the_allocator_will_not_give_is_the_client_queues_allocation_fa
     };
     assert_eq!(*requested, 1 << 50);
     assert!(error.to_string().contains("memory"), "{error}");
+    // It is the client queue that failed, and the message says so once and not the watcher.
+    assert!(error.to_string().contains("client queue"), "{error}");
+    assert!(!error.to_string().contains("watcher"), "{error}");
 }
 
 #[test]

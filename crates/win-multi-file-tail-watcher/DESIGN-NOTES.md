@@ -609,6 +609,12 @@ module within the crate".
     in a loop. A refused poll costs one extra run of the engine, and when the client's SQ is full that
     run rings the client's doorbell, which is a hint and not a proof. The failure cannot be made on
     demand, so the test holds the gate by hand.
+  - **`CreateError` is the error of two queues and its messages name neither** ([TW-10.11](CHECKLIST.md)).
+    It was the watcher's, and became the reading layer's client queue's too when `TailReaderError::ClientSq`
+    was made public, so "creating the watcher failed" read as "the reader's client queue could not be
+    made: creating the watcher failed". The messages say "submission queue"; which one it was is the
+    variant of `TailReaderError` that holds it. A reader-specific error type was the other option and was
+    not taken: it would be a breaking change to a type this branch has already changed.
   - **`ReadSq::capacity` never takes the reader's lock** ([TW-10.8](CHECKLIST.md)). A `ReadDrain`
     holds that lock for as long as it lives, and `capacity` took it too, so asking for the capacity
     inside `for entry in sq.drain()` waited for itself for ever. The capacity never changes, so it is

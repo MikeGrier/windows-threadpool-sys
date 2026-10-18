@@ -74,6 +74,9 @@ mod tests;
 ///             _ => {}
 ///         }
 ///     }
+///     // Room has been made, which a reader stopped on a full queue waits to be told. This poll
+///     // fits the queue, so nothing here depends on it, and a longer one would stall without it.
+///     reader.read_sq().ring_resume();
 /// }
 /// assert_eq!(bytes, b"first line\n");
 /// # drop(registration);

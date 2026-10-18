@@ -208,6 +208,23 @@ fn a_rule_refusal_is_never_the_allocation_variant() {
 }
 
 #[test]
+fn a_create_error_does_not_say_which_queue_it_was_because_it_is_the_error_of_two() {
+    // The watcher's and the reading layer's client queue both fail with it, and the second reaches a
+    // caller as "the reader's client queue could not be made: <this>", which a message that said
+    // "the watcher" would contradict.
+    let capacity = CreateError::from(crate::sq::queue::<u32>(3).expect_err("not a power of two"));
+    let allocation = CreateError::from(crate::sq::queue::<u32>(1 << 50).expect_err("no machine"));
+    let io = CreateError::from(std::io::Error::from_raw_os_error(5));
+    assert!(matches!(capacity, CreateError::Capacity(_)));
+    assert!(matches!(allocation, CreateError::Allocation(_)));
+    for error in [capacity, allocation, io] {
+        let message = error.to_string();
+        assert!(!message.contains("watcher"), "{message}");
+        assert!(message.contains("submission queue"), "{message}");
+    }
+}
+
+#[test]
 fn a_create_error_names_its_cause() {
     let error = Watcher::<u32>::new(0).expect_err("invalid");
     assert!(error.to_string().contains('0'));

@@ -193,3 +193,9 @@ initiated before the previous one completes should fail. fix all".
 - [x] **TW-10.8** -- `ReadSq::capacity` no longer takes the lock a `ReadDrain` holds, so asking for the capacity while draining does not wait for the drain, on the thread that holds it or on another. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-108)
 
 - [x] **TW-10.9** -- A design-notes bullet that an earlier commit joined onto the end of the one before it is on its own line again. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-109)
+
+- [x] **TW-10.10** -- The public `TailReader` example rings `ring_resume` after it drains, as a reader stopped on a full queue needs, instead of teaching a loop that stalls on a poll longer than the queue. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1010)
+
+- [x] **TW-10.11** -- `CreateError`, which is now the error of the watcher's queue and of the reading layer's client queue, words its messages for a submission queue and not for the watcher. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1011)
+
+- [x] **TW-10.12** -- The README says a data entry carries the value, range and bytes, and what the other entries carry, instead of saying every entry does. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1012)
