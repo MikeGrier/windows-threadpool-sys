@@ -968,9 +968,34 @@
       "name": "DI-14.5: a handle whose final path cannot be read loses the call's error",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "A handle whose device is not known to be local is refused with the call's own code, not with an invented one that no caller can act on.",
+      "why": "A handle whose device is not known to be local is refused with the call's own code kept as the source of the refusal, not with an invented one that no caller can act on.",
       "find": ["                io::Error::from_raw_os_error(open_request::raw_code(code.code()))"],
       "replace": ["                io::Error::other(code)"]
+    },
+    {
+      "name": "DI-14.6.2: a handle with no final path is accepted unbuffered",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An unbuffered file claims that its writes reach a local device. A handle whose location cannot be read, NUL for one, must not be given that claim.",
+      "find": ["            let location = final_location(handle.as_handle()).map_err(|cause| {\n                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })\n            })?;"],
+      "replace": ["            let location = final_location(handle.as_handle()).unwrap_or_default();"]
+    },
+    {
+      "name": "DI-14.6.2: the refusal of a handle with no final path is the call's error and not this crate's own",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "The refusal is this crate's narrowing, named as its own so a caller can tell it from a failure of the open; the call's code is kept as its source.",
+      "find": ["                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })"],
+      "replace": ["                cause"]
+    },
+    {
+      "name": "DI-14.6.2: a cached open is refused for a handle with no final path",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: !Cached::LOCAL_DEVICE_ONLY",
+      "why": "Only the warranty of an unbuffered file needs a local file. A cached open claims best effort, and where a name leads is the caller's (DI-D-67). A const assertion on the flag refuses the build before the test that opens NUL cached would run.",
+      "find": ["    const LOCAL_DEVICE_ONLY: bool = false;"],
+      "replace": ["    const LOCAL_DEVICE_ONLY: bool = true;"]
     },
     {
       "name": "DI-10.1: a target takes its class from a declaration instead of its file",

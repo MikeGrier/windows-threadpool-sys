@@ -442,6 +442,36 @@ impl fmt::Display for RemoteDevice {
 
 impl std::error::Error for RemoteDevice {}
 
+/// An unbuffered file was asked for on a handle whose location could not be read: it has no final
+/// path (`NUL` has none), so it is not known to be a file on a local volume, which is what the
+/// warranty of an unbuffered file rests on.
+///
+/// This is this crate's own narrowing, not a condition `CreateFileW` documents: the open itself
+/// succeeded, and the handle is closed. A cached open of the same name is not refused. The call's
+/// own error is the [`source`](std::error::Error::source), kept as the call reported it, and is not
+/// a statement of what the handle is.
+#[derive(Debug)]
+pub struct UnknownLocation {
+    /// What reading the handle's final path reported.
+    pub cause: io::Error,
+}
+
+impl fmt::Display for UnknownLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the handle's final path could not be read, so it is not known to be a file on a local volume, which an unbuffered file needs: {}",
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for UnknownLocation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
 /// An open failed because of how the file is already open: either this open asked for an access that
 /// an open already holding the file does not share, or it did not share an access that open asked for.
 /// `CreateFileW` fails both ways with `ERROR_SHARING_VIOLATION` and says nothing of which, and no
@@ -669,9 +699,12 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
     /// handle's final path, which `GetFinalPathNameByHandleW` resolves through links and mapped
     /// drives, so there is no window between the check and the open in which a link can be
     /// swapped. It is made after the open, so a file created before the refusal stays created and
-    /// the open has already reached the network. A handle whose final path cannot be read is
-    /// refused with that call's error, since its device is then not known to be local. Otherwise
-    /// whatever the open reports, among them [`SharingViolation`] (as an
+    /// the open has already reached the network. [`UnknownLocation`] (also
+    /// [`io::ErrorKind::Unsupported`]) when the handle's final path cannot be read, since it is then
+    /// not known to be a file on a local volume; the call's own error is its source. That is this
+    /// crate's narrowing and not a condition of `CreateFileW`, and only an unbuffered open is subject
+    /// to it: a cached open of a device is not refused, and what a name leads to is the caller's
+    /// responsibility (DI-D-67). Otherwise whatever the open reports, among them [`SharingViolation`] (as an
     /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
     /// this open's access or sharing.
     pub fn perform(&self) -> io::Result<OpenedFile<B, A>> {
@@ -686,7 +719,9 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
         })?;
         let handle = SharedHandle::from(handle);
         if B::LOCAL_DEVICE_ONLY {
-            let location = final_location(handle.as_handle())?;
+            let location = final_location(handle.as_handle()).map_err(|cause| {
+                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })
+            })?;
             if names_a_remote_device(&location) {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,

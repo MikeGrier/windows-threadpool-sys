@@ -18,7 +18,7 @@ use super::super::{
 };
 use super::{
     Buffering, Cached, Disposition, FILE_FLAG_NO_BUFFERING, FileOptions, OpenedFile, RemoteDevice,
-    Unbuffered, data_rights, final_location, names_a_remote_device, open_request,
+    Unbuffered, UnknownLocation, data_rights, final_location, names_a_remote_device, open_request,
 };
 use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::{
@@ -351,15 +351,41 @@ fn where_a_handle_is_is_the_final_path_of_the_file_it_names() {
 }
 
 #[test]
-fn a_handle_whose_final_path_cannot_be_read_is_refused_with_that_calls_error() {
-    // `NUL` is a handle that is not a file of a volume, so it has no final path. An unbuffered open
-    // of such a device is therefore refused, since it is not known to be on a local device, and the
-    // error is the call's own rather than a made-up one. What an open of a device should do is
-    // DI-14.6's to settle; this is the behaviour until it does.
+fn the_location_of_a_handle_with_no_final_path_is_the_calls_own_error() {
+    // `NUL` is not a file of a volume, so it has no final path, and the error read is the call's.
     let nul = File::open("NUL").expect("open NUL");
     let error = final_location(nul.as_handle()).expect_err("NUL has no final path");
     assert!(error.raw_os_error().is_some(), "{error:?}");
     assert_ne!(error.kind(), io::ErrorKind::Unsupported);
+}
+
+#[test]
+fn an_unbuffered_open_of_a_handle_with_no_final_path_is_refused_as_this_crates_own_narrowing() {
+    // Without the refusal an unbuffered `NUL` would claim `WarrantyClass::SharedDevice`, that its
+    // writes reach a device, which they do not. The open succeeds and the refusal follows it.
+    let error = OpenedFile::<Unbuffered>::open(wtf(Path::new("NUL")), read_write())
+        .expect_err("NUL cannot be opened unbuffered");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let refusal = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<UnknownLocation>())
+        .expect("the cause is an UnknownLocation, and not the final-path call's own error");
+    assert!(
+        refusal.cause.raw_os_error().is_some(),
+        "{:?}",
+        refusal.cause
+    );
+    assert!(refusal.to_string().contains("not known to be a file"));
+    assert!(std::error::Error::source(refusal).is_some());
+}
+
+#[test]
+fn a_cached_open_of_a_handle_with_no_final_path_is_not_refused() {
+    // Only the warranty of an unbuffered file needs a local file. A cached open claims best effort,
+    // and where a name leads is the caller's (DI-D-67).
+    let nul = OpenedFile::<Cached>::open(wtf(Path::new("NUL")), read_write())
+        .expect("a cached open of NUL");
+    assert_eq!(nul.geometry(), Cached::geometry());
 }
 
 #[test]
