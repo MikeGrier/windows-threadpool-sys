@@ -1,0 +1,71 @@
+{
+  "package": "win-pipes-sys",
+  "description": "Sabotages for win-pipes-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "What several modes do is not observed, only their values: FILE_FLAG_WRITE_THROUGH affects only a pipe whose client is on another computer, PIPE_REJECT_REMOTE_CLIENTS needs a remote client to show, and WRITE_DAC, WRITE_OWNER and ACCESS_SYSTEM_SECURITY change what the caller may do to the pipe's security after it is made, which no test here does. A sabotage that swaps one of those values for another is caught by the test that pins the value, and a sabotage that dropped the mode from the call would not be caught for these four. The overlapped flag is observed in the positive direction only (an overlapped pipe starts a read and returns), because a read with an OVERLAPPED on a pipe that was not created overlapped is documented to fail in unpredictable ways and is not made by the suite as written. A security descriptor inside the attributes is not observed: the tests pass attributes with no descriptor and read only whether the handle is inheritable, so a descriptor that was dropped would not be caught.",
+  "sabotages": [
+    {
+      "name": "WP-1.1: the open mode and the pipe mode are passed in each other's place",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The two are both u32s in adjacent positions, so a swap compiles; the direction and the type then take each other's bits.",
+      "find": ["            options.open_mode.0,\n            options.pipe_mode.0,\n"],
+      "replace": ["            options.pipe_mode.0,\n            options.open_mode.0,\n"]
+    },
+    {
+      "name": "WP-1.1: the instance count is not the one given",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The count is the one parameter a test can observe by making instances until the call refuses.",
+      "find": ["            options.max_instances,\n"],
+      "replace": ["            1,\n"]
+    },
+    {
+      "name": "WP-1.1: the security attributes are not passed",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "Whether the handle can be inherited is decided by the attributes, so dropping them makes an inheritable request produce a handle that is not.",
+      "find": ["            security_pointer,\n        )\n"],
+      "replace": ["            ptr::null(),\n        )\n"]
+    },
+    {
+      "name": "WP-1.1: a name with an interior NUL reaches the call",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The call would read the name up to the NUL and make a pipe with a name the caller did not give.",
+      "find": ["    if wide.contains(&0) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.1: the name is made lossy before it reaches the call",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "A name that is not valid UTF-16 must reach the call as it is; converting it through a String replaces a lone surrogate and names a different pipe.",
+      "find": ["    let mut wide: Vec<u16> = name.as_ref().encode_wide().collect();\n"],
+      "replace": ["    let mut wide: Vec<u16> = name.as_ref().to_string_lossy().encode_utf16().collect();\n"]
+    },
+    {
+      "name": "WP-1.1: a failed call is not reported as one",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "INVALID_HANDLE_VALUE would be wrapped as an owned handle, so every refusal the page describes would come back as a success.",
+      "find": ["    if handle == INVALID_HANDLE_VALUE {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.1: the overlapped flag is the write-through flag",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The two are neighbouring bits in the same word, and a pipe that is not overlapped does not start a read and return. The sabotaged suite is caught by hanging: its overlapped read is made on a pipe that is not overlapped and blocks, and the sweep's 15 second limit ends it.",
+      "find": ["    pub const OVERLAPPED: Self = Self(FILE_FLAG_OVERLAPPED);"],
+      "replace": ["    pub const OVERLAPPED: Self = Self(FILE_FLAG_WRITE_THROUGH);"]
+    },
+    {
+      "name": "WP-1.1: control, the terminator pushed as an extension",
+      "file": "src/named_pipe.rs",
+      "expect": "survives",
+      "why": "A control: pushing a zero and extending by one are the same operation, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    wide.push(0);\n"],
+      "replace": ["    wide.extend([0]);\n"]
+    }
+  ]
+}

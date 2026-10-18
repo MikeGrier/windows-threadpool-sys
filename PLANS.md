@@ -6,6 +6,7 @@ plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 [crates/win-authorization-sys/PLANS.md](crates/win-authorization-sys/PLANS.md),
 [crates/win-error-codes/PLANS.md](crates/win-error-codes/PLANS.md),
 [crates/win-handles-sys/PLANS.md](crates/win-handles-sys/PLANS.md),
+[crates/win-pipes-sys/PLANS.md](crates/win-pipes-sys/PLANS.md),
 [crates/win-shared-os-owned-handle/PLANS.md](crates/win-shared-os-owned-handle/PLANS.md),
 [crates/win-sync-sys/PLANS.md](crates/win-sync-sys/PLANS.md),
 [crates/win-time-sys/PLANS.md](crates/win-time-sys/PLANS.md),
@@ -46,5 +47,6 @@ plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 | [crates/win-authorization-sys/CHECKLIST.md](crates/win-authorization-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 authorization API (Learn: Security and Identity > Authorization): the owned security descriptor, moved from the request crate, and the queries that read and write a descriptor on an object. | [crates/win-authorization-sys/DESIGN-NOTES.md](crates/win-authorization-sys/DESIGN-NOTES.md) |
 | [crates/win-handles-sys/CHECKLIST.md](crates/win-handles-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 handle and object API (Learn: System Services > Windows System Information > Handles and Objects): duplicating a handle with a chosen access, moved from `win-sync-sys`, and the handle-information queries. | [crates/win-handles-sys/DESIGN-NOTES.md](crates/win-handles-sys/DESIGN-NOTES.md) |
 | [crates/win-sync-sys/CHECKLIST.md](crates/win-sync-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 synchronization API, which began with `Event`; `windows-threadpool-sys` builds its wait targets on it, and durable-ioring's readiness event is the reason it exists now. The other kernel objects follow. | [crates/win-sync-sys/DESIGN-NOTES.md](crates/win-sync-sys/DESIGN-NOTES.md) |
+| [crates/win-pipes-sys/CHECKLIST.md](crates/win-pipes-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 pipe API (Learn: System Services > Interprocess Communications > Pipes): creating an instance of a named pipe, and the rest of the pipe functions queued. | [crates/win-pipes-sys/DESIGN-NOTES.md](crates/win-pipes-sys/DESIGN-NOTES.md) |
 
 Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or any crate's.

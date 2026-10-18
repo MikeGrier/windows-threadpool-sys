@@ -1,0 +1,61 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-pipes-sys"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Memory-safe Rust over the Win32 pipe API: creating an instance of a named pipe, with typed open and pipe modes. Thin over Win32, adding no policy."
+keywords = ["windows", "pipe", "named-pipe", "ffi"]
+categories = ["api-bindings", "os::windows-apis"]
+
+# Named under the workspace's `win-` prefix decision (DESIGN-NOTES.md at the repository root), and
+# placed by the rule that follows it: a safe layer more or less directly over a Win32 API area, and
+# the area is the one Microsoft Learn files the functions under, System Services > Interprocess
+# Communications > Pipes (WIN32-LEARN-MAP.md at the repository root).
+
+[dependencies]
+# The security attributes a pipe is created with, which the crate that owns the descriptor type
+# provides, as the request and durable-ioring crates take it.
+win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
+
+# `default-features = false` matches every other crate in the workspace.
+#
+# `Win32_Foundation` is `INVALID_HANDLE_VALUE` and the handle types. `Win32_Security` is there
+# because `CreateNamedPipeW`'s attributes parameter is a `SECURITY_ATTRIBUTES` pointer and the
+# binding is gated on it. `Win32_Storage_FileSystem` is the open-mode flags `PIPE_ACCESS_*` and
+# `FILE_FLAG_*` and the access rights `WRITE_DAC` and `WRITE_OWNER`; `Win32_System_SystemServices` is
+# the third, `ACCESS_SYSTEM_SECURITY`. `Win32_System_Pipes` is `CreateNamedPipeW` and the pipe-mode
+# flags.
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Pipes",
+	"Win32_System_SystemServices",
+]
+
+# Test-only. `win-handles-sys` reads whether a created pipe's handle is inheritable, which is what
+# the attributes parameter decides. `Win32_System_IO` is the overlapped read that pends on a pipe
+# created overlapped, and its cancellation; `ReadFile` is `Win32_Storage_FileSystem`, already above.
+[dev-dependencies]
+win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_Foundation", "Win32_System_IO"]
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
