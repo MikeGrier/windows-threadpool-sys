@@ -3100,3 +3100,13 @@ forbids and no workspace crate offers safely, so the descriptor is read back by 
 refuses a later open) and the inheritance choice is pinned on the request, and the read-backs are
 [DI-14.8](CHECKLIST.md), raised with the engineer. The item named *encrypted* among the attributes and the
 table excludes it. Five sabotage entries.
+
+### <a id="di-147"></a>DI-14.7 -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. *(completed 2026-10-17 20:36:00 -04:00)*
+
+`win-durable-ioring`'s `tests/overlapped_evidence.rs` opens four handles through the request crate's `OpenFile`
+(cached and unbuffered, with the flag and without) and drives one sequence through `windows-ioring-sys` on
+each. What was measured is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.7 settled". **Not done
+as written:** the item asked for the status and information values, which the safe API does not expose
+separately from the completion's result and byte count, so those are what was compared. The ruling the
+item's text left to the engineer is [DI-14.9](CHECKLIST.md). The test adds no public API, so there is no
+sabotage entry.

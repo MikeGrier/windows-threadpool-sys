@@ -59,7 +59,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`, and `DI-10.3` last. `DI-14.6` and `DI-14.7` are evidence items that need nothing and may be
+   `DI-M15`, and `DI-10.3` last. `DI-14.6` is an evidence item that needs nothing and may be
    done at any point.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
@@ -294,21 +294,7 @@ option recorded by construction. The rule throughout is documented APIs only
   recorded as measured. What an `OpenedFile` claims for a path that names a device is decided from
   that. Today it gets a file's default geometry and no flush domains, and that stays until then.
 
-- [ ] **DI-14.7** -- **Evidence: the ring on an overlapped handle, with the flag not exposed.**
-  The engineer's direction, 2026-10-16 (`DI-13.1` ruling (g)). `FILE_FLAG_OVERLAPPED` stays out of
-  v1, and this settles by running, not by recollection, whether that costs anything. A file is
-  opened through the request crate's `OpenFile` with the flag set in the raw flags, which the typed
-  surface does not offer, and the same sequence is driven through the ring as for a handle opened
-  without it: a read, a write, a flush, a read past the end of the file, and an operation that
-  fails, each on a cached and on an unbuffered handle. What is compared is the completion result,
-  the status and information values, the order of completions, and whether the ring refuses or
-  accepts a handle opened either way. Each difference, or the absence of one, is recorded as
-  measured, with the machine and the ring's version. The test asserts what was measured, so a
-  changed result fails it. The outcome is the input to whether `FileOptions` offers
-  `FILE_FLAG_OVERLAPPED` (a builder method, as the other flags are), which is the engineer's to rule on
-  and is not decided here; if it is offered, the method is added by the item that rules it. It needs no administrator and only
-  what already exists, so it is independent of the rest of this milestone and may be done at any
-  point.
+- [x] **DI-14.7** -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-147)
 
 - [ ] **DI-14.8** -- **Safe read-backs of what an open was given: a handle's inheritability and a file's
   security descriptor.** `DI-14.3` could not read either back, because this crate forbids `unsafe` and no
@@ -325,6 +311,14 @@ option recorded by construction. The rule throughout is documented APIs only
   separate items this one does not do. When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
+
+- [ ] **DI-14.9** -- **Rule on `FILE_FLAG_OVERLAPPED`: does `FileOptions` offer it?** Spawned by `DI-14.7`,
+  whose run is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.7 settled" and which decided
+  nothing. The engineer rules; if the flag is offered, the same item adds the builder method (a bool setting
+  its own bit, as the other flags are), a test that the ring completes the sequence of
+  `tests/overlapped_evidence.rs` on a handle opened through it, and the table row's change in
+  [DI-D-64](DESIGN-NOTES.md#di-d-64). If it is not offered, that row records the ruling and its reason. Not
+  reached by the run, and a reason a ruling may wait: a remote file, a device, and a volume that is not NTFS.
 
 ## DI-M15 -- Opening by identity, and reopening
 

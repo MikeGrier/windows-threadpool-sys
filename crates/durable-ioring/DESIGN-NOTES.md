@@ -204,7 +204,7 @@ for this table.
 | `FILE_FLAG_OPEN_NO_RECALL` (CF, ID, RO) | Exposed | Builder method | None. Intended for remote storage systems. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_POSIX_SEMANTICS` (CF, RO) | Exposed | Builder method | None. The page says files made with it may not be reachable by older applications. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. | engineer 2026-10-15 |
-| `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Not in v1, unless the ring needs it | None | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; whether the ring accepts, refuses or behaves differently on such a handle is measured in [DI-14.7](CHECKLIST.md) and not recalled. | engineer 2026-10-15, 2026-10-16 |
+| `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Not in v1, unless the ring needs it | None | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; whether the ring accepts, refuses or behaves differently on such a handle is measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147) and not recalled; whether to offer it is [DI-14.9](CHECKLIST.md). | engineer 2026-10-15, 2026-10-16 |
 | `FILE_FLAG_SESSION_AWARE` (CF) | Not in v1 | None | The page says it matters to processes in session 0 and is supported only on server editions; a small interest and hard to test. | engineer 2026-10-15 |
 | `SECURITY_SQOS_PRESENT` and the `SECURITY_*` flags (CF, RO) | Excluded | None | The `ReOpenFile` page confines them to the client side of a named pipe, and the `CreateFileW` page does not say what they do for a file. A file target does not impersonate a server. | engineer 2026-10-15 |
 | `FILE_FLAG_FIRST_PIPE_INSTANCE` | Excluded | None | It is for pipes and is not a parameter of these calls. | standing |
@@ -308,8 +308,9 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
 - `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are measured only as far as an open with each
   succeeds on a local file and the file is usable. What either does is not, since neither affects a target
   and the measurement needs remote storage and a case-sensitive directory respectively.
-- `FILE_FLAG_OVERLAPPED` is not offered by this item: whether the ring needs it is settled by the run in
-  [DI-14.7](CHECKLIST.md), and [DI-D-64](#di-d-64) keeps it out of v1 until then.
+- `FILE_FLAG_OVERLAPPED` is not offered by this item: the run in [DI-14.7](COMPLETED-CHECKLIST.md#di-147)
+  measured the ring on such a handle, and whether to offer it is [DI-14.9](CHECKLIST.md). [DI-D-64](#di-d-64)
+  keeps it out of v1 until that is ruled.
 
 **What building DI-14.3 settled** ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). None of these was a ruling.
 
@@ -340,6 +341,42 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   descriptor itself is `GetSecurityInfo`, which needs `unsafe` and is also queued under
   [DI-14.8](CHECKLIST.md).
 - The security quality-of-service flags are excluded by the table, so none is offered.
+
+**What building DI-14.7 settled** ([DI-14.7](COMPLETED-CHECKLIST.md#di-147)). None of these was a ruling, and
+none decides whether `FileOptions` offers `FILE_FLAG_OVERLAPPED`: that is [DI-14.9](CHECKLIST.md).
+
+Measured on Windows 11 build 26300, local NTFS (the volume of the temporary directory), through
+`windows-ioring-sys` 0.7.1, by `win-durable-ioring`'s `tests/overlapped_evidence.rs`. Four handles, each
+opened through the request crate's `OpenFile` with the flag in the raw flags or without it: cached and
+unbuffered, overlapped and plain. The same sequence was driven through the ring on each: two writes (offsets 0
+and 4096), a flush, two reads back, a read at the end of the file, a read across it, a write through a handle
+opened for reading only, a read at offset 1, four reads in one batch, and a read through a registered file.
+The completion carries a result and a byte count, so those are what was compared; the status and information
+values of the item's text are not separately visible through the safe API.
+
+- **The ring accepts a handle opened with the flag.** It registers one, and every step queued, submitted and
+  completed on it.
+- **Every result is the same with the flag as without it, in each buffering mode.** The write is 4096
+  bytes, the flush 0, the reads 4096; the read at the end of the file fails with `ERROR_HANDLE_EOF`, the write
+  through the read-only handle with `ERROR_ACCESS_DENIED`; the read across the end returns the 4096 bytes that
+  exist. The one result that differs is between the buffering modes and not between the flag's settings: a read
+  at offset 1 returns 4096 bytes on a cached handle and fails with `ERROR_INVALID_PARAMETER` on an unbuffered
+  one, with the flag or without it.
+- **What differs is when a completion is there.** `bounded_pop.rs` in `windows-ioring-sys` records that a
+  handle opened without the flag completes inline, during the submit. In the first run every step on every
+  plain handle, and on the cached overlapped handle, was poppable as soon as the submit returned, and the
+  four reads were in each of 30 further runs. On the unbuffered overlapped handle the three data reads and
+  the registered read were not poppable then, in each of the 30; the writes, the flush, and the three
+  failing steps were, in the first run, which is the only one in which they were looked at.
+- **Order of completion.** A batch of four reads completed in queue order on every plain handle and on the
+  cached overlapped handle in each of 30 runs; on the unbuffered overlapped handle it completed out of order
+  in 10 of 30 (`[3, 1, 2, 0]` in 7, `[2, 0, 3, 1]` in 3).
+- **What the test asserts and what it does not.** It asserts every step's result on all four handles, that a
+  plain handle completes inline, and that a batch's completions are the four queued. It does not assert the
+  inline completion of an overlapped handle, which depends on the host, and so it cannot fail if the flag
+  stops being applied: the 30-run observation above is what shows it was.
+- **Not reached:** a device that is not a disk file, a remote file, and a volume that is not NTFS; each is a
+  different row of [DI-13.1](COMPLETED-CHECKLIST.md)'s table, and no overlapped handle was opened on any.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
