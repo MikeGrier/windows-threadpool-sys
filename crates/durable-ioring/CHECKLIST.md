@@ -59,8 +59,8 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`, and `DI-10.3` last. `DI-14.6` is an evidence item that needs nothing and may be
-   done at any point.
+   `DI-M15`, and `DI-10.3` last. `DI-14.6.2` is a decision for the engineer and needs no other work, and
+   `DI-14.6.3` waits on a serial port.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -254,26 +254,27 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.5** -- The remote-device check is made on the opened handle, and nowhere else. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-145)
 
-- [ ] **DI-14.6** -- **What an open can reach that is not a disk file is measured, and what this
-  crate does about it is decided from the measurements.** The request crate passes every path to
-  `CreateFileW` and is policy-free ([D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)
-  records what was measured there). A device reached by name is not stopped by the graft rules: a
-  `\\.\` path is passed through untouched, and `COM10` and above need that prefix. Measured on one
-  machine, a read on an opened serial port (`COM3`) was still blocked after 8 seconds, while `NUL`
-  returned end of file and accepted writes that go nowhere. The work: query the opened handle's type
-  (`GetFileType` is the candidate; the assistant has not tried it) and measure what it says for a
-  disk file, a directory, `NUL`, a console, a serial port, a named pipe and a raw volume; whether
-  `CancelIoEx` or `CancelSynchronousIo` can interrupt the serial read; and what `FlushFileBuffers` does
-  on `NUL`. Then decide, with the engineer, what an open of a handle that is not a disk file does: it
-  is refused, or classified and returned as such. That is a working position, not a decision, until
-  the measurements exist.
+- [x] **DI-14.6.1** -- What an open handle reports about its own kind is measured over a disk file, a directory, `NUL`, a console, a pipe, a volume and a physical disk. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1461)
 
-  **Added 2026-10-16, `DI-13.1` ruling (d):** the same measurements also say whether a documented
-  device control, one that succeeds on a volume or disk handle and fails on a file, tells the two
-  apart. It is tried over the same set of handle kinds (a disk file, a directory, a volume, a
-  physical disk, `NUL`, a console, a serial port and a named pipe) and its answer for each is
-  recorded as measured. What an `OpenedFile` claims for a path that names a device is decided from
-  that. Today it gets a file's default geometry and no flush domains, and that stays until then.
+- [ ] **DI-14.6.2** -- **What an open of a handle that is not a disk file does is decided with the
+  engineer.** It is refused, or classified and returned as such; what an `OpenedFile` claims for a
+  path that names a device (today a file's default geometry and no flush domains) follows from it.
+  The measurements are in [DI-D-64](DESIGN-NOTES.md#di-d-64), under "Measured for DI-14.6", and are
+  the input; this item is the decision, so it has no work until the engineer rules. A serial port,
+  and `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read, are unmeasured: no port
+  on the measuring machine could be opened repeatably. Whatever is decided is a refusal on a
+  documented condition or the crate's own narrowing named as its own, per
+  [the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract); the measurements
+  create none.
+
+- [ ] **DI-14.6.3** -- **Blocked: a serial port that opens repeatably.** Measure `GetFileType`, the
+  device control and `FlushFileBuffers` on an open serial port, and whether `CancelIoEx` or
+  `CancelSynchronousIo` interrupts a read that is blocked on it. The blocker is the machine, not the
+  work: of three ports named on the measuring machine one blocked in `CreateFileW` for over 45
+  seconds and later returned 5, one returned 31 and one returned 5, so the read was never reached.
+  A loopback or virtual port, or a machine with a real one, unblocks it; the kinds already measured
+  are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". It does not gate
+  `DI-14.6.2`'s decision, which can be taken from them.
 
 - [x] **DI-14.7** -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-147)
 

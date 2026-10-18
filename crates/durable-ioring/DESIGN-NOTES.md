@@ -174,7 +174,7 @@ for this table.
 | `CreateFileTransacted` | Excluded | None | A transacted write is durable at the transaction's commit, so an epoch's warranty would mean nothing. | engineer 2026-10-15 |
 | `OpenFileById` as a call | Exposed | `OpenedFile::open_by_id` ([DI-15.2](CHECKLIST.md)) | Its page lists no creation disposition, takes no attributes, and marks the security-attributes parameter reserved. It lists SMB as not supported, so an open by ID on a remote share is the kernel's to refuse. | engineer 2026-10-15 |
 | `ReOpenFile` as a call | Exposed | `OpenedFile::reopen` ([DI-15.4](CHECKLIST.md)) | Takes access, share mode and flags only; its page says the flags cannot include attributes, and that the original must have been created by `CreateFile`. Reopening with a different buffering mode is a new `OpenedFile` of the other type. | engineer 2026-10-15 |
-| `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6](CHECKLIST.md) measures it. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
+| `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
 | `hVolumeHint` (ID) | Exposed | A file or volume this crate opened | Provenance-checked like every handle here. The page accepts any file on the volume or share; this crate takes only what it opened. | plan, [DI-15.2](CHECKLIST.md) |
 | `lpFileId` (ID) | Exposed | The identifier kinds the request crate's `OpenFileByIdentifier` carries: the 64-bit file ID, the 128-bit extended ID, the object ID | The `FILE_ID_DESCRIPTOR` page was not read for this table, so the list of kinds is the request crate's and the ruling's, not the page's. | engineer 2026-10-15 |
 | `hOriginalFile` (RO) | Exposed | An `OpenedFile` | The page says it must have been created by `CreateFile`; whether a handle that came from `OpenFileById` is accepted was not measured. | plan, [DI-15.4](CHECKLIST.md) |
@@ -415,7 +415,7 @@ values of the item's text are not separately visible through the safe API.
   handle opened on a link to a share is accepted, and is not refused for where the link leads.
 - **A handle whose final path cannot be read is refused with the call's own error.** `NUL` has no final
   path; an unbuffered open of one is therefore refused, as it was before (the path form failed to canonicalise
-  it), and what an open of a device should do is [DI-14.6](CHECKLIST.md)'s.
+  it), and what an open of a device should do is [DI-14.6.2](CHECKLIST.md)'s.
 - **What the unit tests reach and what they do not.** The location of a handle, the link cases on a local
   volume and the unreadable final path run everywhere. The refusal itself, the created-before-refused file and
   the link to a share need the administrative share and are ignored by default, as the earlier one was; they
@@ -488,6 +488,48 @@ documentation is wrong ... the remedy is to not embody the documentation structu
 exclusive-volume test is that evidence, so the share option stays as it is, and `VolumeOptions::share`
 documents the page's requirement and the measurement beside it. The section states no share-mode requirement
 for a physical disk.
+
+**Measured for DI-14.6: what an open handle reports about its own kind** ([DI-14.6.1](COMPLETED-CHECKLIST.md#di-1461)).
+Windows 11 build 26300, one machine, local NTFS, 2026-10-18. Every handle came from the request crate's
+`OpenFile`, which is `CreateFileW` with nothing added. These are measurements and not the contract: only
+`GetFileType`'s return values are documented, so the rows are anecdote, and none of them is a refusal
+([the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)). The pinned part is
+[device_handle_evidence.rs](../windows-namespace-request-sys/tests/device_handle_evidence.rs), which asserts
+`GetFileType`'s class and only whether `IOCTL_STORAGE_GET_DEVICE_NUMBER` succeeds, never which error a failure
+carries. Both directions were checked by sabotage: an ioctl that fails on a volume turns the volume and disk
+tests red, and one that always reports a number turns the file, directory, `NUL` and pipe tests red.
+
+| Handle | `GetFileType` | `IOCTL_STORAGE_GET_DEVICE_NUMBER` | `GetFileInformationByHandle` | `GetFinalPathNameByHandleW` | `FlushFileBuffers` |
+|---|---|---|---|---|---|
+| disk file | `DISK` | fails, 87 | succeeds | succeeds | succeeds |
+| directory (backup semantics) | `DISK` | fails, 87 | succeeds | succeeds | fails, 5 |
+| `\\.\NUL` | `CHAR` | fails, 1 | fails, 1 | fails, 87 | fails, 1 |
+| `CONOUT$` | `CHAR` | fails, 1 | fails, 1 | fails, 1 | fails, 6 |
+| `CONIN$` | `CHAR` | fails, 1 | fails, 1 | fails, 1 | succeeds |
+| volume `\\.\C:`, access 0 | `DISK` | succeeds | fails, 1 | fails, 1 | fails, 5 |
+| `\\.\PhysicalDriveN`, access 0 | `DISK` | succeeds | fails, 1 | fails, 1 | fails, 5 |
+| named pipe, server end | `PIPE` | fails, 1 | succeeds (attributes 0x80) | fails, 1 | succeeds |
+| named pipe, client end | `PIPE` | fails, 1 | succeeds (attributes 0x80) | fails, 1 | succeeds |
+
+- **`GetFileType` does not tell a file from a volume or a disk.** It answers `DISK` for all of them, so a
+  query of it alone cannot say whether a handle is a file.
+- **The device-number control does.** It succeeds on a volume and on a physical disk and fails on a file, a
+  directory, `NUL`, a console and a pipe, so the two sets are told apart by it over these kinds. It succeeded
+  with no access requested on both, unelevated; the volume's reply carries a non-zero partition number, and the
+  disk opened from that reply's device number reports the same device number. Opening the volume or the disk
+  for `GENERIC_READ` was refused with 5 in this unelevated session.
+- **`NUL`:** `CHAR`, and no file query succeeds on it. `FlushFileBuffers` fails with `ERROR_INVALID_FUNCTION`
+  and does not report success. A read returned end of file and a write succeeded, as [D-19](../windows-namespace-request-sys/DESIGN-NOTES.md#d-19)
+  recorded.
+- **A pipe's two ends are alike** on every query tried.
+- **A serial port was not measured, and what was seen is not repeatable.** Three ports are named on this
+  machine: `COM3`, `COM4` and `COM22`, of which the device manager lists none; `COM2` is listed in an error
+  state. In three runs `CreateFileW` on `COM3` had not returned after 15, 25 and 45 seconds; the process was
+  killed each time, and one killed process kept the executable locked until the shell that started it was
+  stopped. A later run of the same open, on a thread so that `CancelSynchronousIo` could be tried, returned
+  `ERROR_ACCESS_DENIED` at once, so the cancel was never exercised. `COM4` failed with 31 and `COM22` with 5.
+  So the earlier observation, a read on `COM3` still blocked after eight seconds, could not be reproduced, and
+  `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read remain unmeasured.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with

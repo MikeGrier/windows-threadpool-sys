@@ -3262,3 +3262,15 @@ opened a volume exclusively and was refused a second open until it closed. The e
 2026-10-18 settles it: "If we have evidence that the documentation is wrong, I believe the remedy is to not embody
 the documentation structurally." `VolumeOptions::share` keeps every mode, and its documentation quotes the page and
 names the test; the test's comment says it is that evidence.
+
+### <a id="di-1461"></a>DI-14.6.1 -- What an open handle reports about its own kind is measured over a disk file, a directory, `NUL`, a console, a pipe, a volume and a physical disk. *(completed 2026-10-18 15:41:29 -04:00)*
+
+`DI-14.6` split in three when the measuring started: this item (the measurements), [DI-14.6.2](CHECKLIST.md)
+(the decision, the engineer's) and [DI-14.6.3](CHECKLIST.md) (the serial port, blocked on a port that opens).
+The table and what it shows are in [DI-D-64](DESIGN-NOTES.md#di-d-64), under "Measured for DI-14.6". The pinned
+part is [device_handle_evidence.rs](../windows-namespace-request-sys/tests/device_handle_evidence.rs), six tests
+over `OpenFile`'s handles, with both directions of the device-number control checked by sabotage. The candidate
+named in the item, `GetFileType`, answers `DISK` for a volume and a physical disk as it does for a file, so it
+does not tell the two apart; the device-number control does. `FlushFileBuffers` on `NUL` fails with
+`ERROR_INVALID_FUNCTION`. The `ReadFile`/`CancelIoEx` part could not be measured: no serial port opened
+repeatably, one open blocked for over 45 seconds, and the process holding it was hard to kill.
