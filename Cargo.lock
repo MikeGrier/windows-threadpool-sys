@@ -296,6 +296,7 @@ dependencies = [
  "io-buffers",
  "win-authorization-sys",
  "win-error-codes",
+ "win-volume-sys",
  "windows-sys",
  "windows-thread-ambient-sys",
  "wtf-string",
