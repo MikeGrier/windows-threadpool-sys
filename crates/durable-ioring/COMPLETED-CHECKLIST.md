@@ -3206,3 +3206,12 @@ moved to the second), [DI-14.8.4](#di-1484) (`GetHandleInformation`) and [DI-14.
 The remaining functions of the two Learn sections are queued in the two crates' own checklists
 ([win-authorization-sys](../win-authorization-sys/CHECKLIST.md), [win-handles-sys](../win-handles-sys/CHECKLIST.md)),
 and not here.
+
+### <a id="di-1410"></a>DI-14.10 -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. *(completed 2026-10-18 13:25:00 -04:00)*
+
+The engineer ruled that it is accepted. [DI-14.5](#di-145) judges an opened handle by where it is, so a local link
+that leads to a share, opened with `open_reparse_point`, is a local handle and passes; followed, the handle is the
+share's file and is refused. Refusing the first case would have needed a second open that follows the link, which
+brings back the window `DI-14.5` closed. No code changed: the ignored administrative-share test
+`a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle` already
+asserts both cases, and the reading is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled".

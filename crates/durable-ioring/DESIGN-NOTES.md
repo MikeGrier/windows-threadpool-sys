@@ -403,7 +403,8 @@ values of the item's text are not separately visible through the safe API.
   is the link's own, on the local volume, and is accepted. Neither is a refusal made on the link's target by
   looking at the path, which was the item's concern about the check ahead of the open. A handle opened on a link
   is the link, and the ruling that an unbuffered file must be local is a statement about the device the
-  handle's I/O goes to; whether a handle that is a link to a share should be refused as well is [DI-14.10](CHECKLIST.md)'s.
+  handle's I/O goes to. **Ruled by the engineer, 2026-10-18 ([DI-14.10](COMPLETED-CHECKLIST.md#di-1410)):** a
+  handle opened on a link to a share is accepted, and is not refused for where the link leads.
 - **A handle whose final path cannot be read is refused with the call's own error.** `NUL` has no final
   path; an unbuffered open of one is therefore refused, as it was before (the path form failed to canonicalise
   it), and what an open of a device should do is [DI-14.6](CHECKLIST.md)'s.

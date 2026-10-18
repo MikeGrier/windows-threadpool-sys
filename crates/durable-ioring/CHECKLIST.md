@@ -285,15 +285,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.9** -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-149)
 
-- [ ] **DI-14.10** -- **Rule on an unbuffered open of a link to a share, opened as the link.** Spawned by
-  `DI-14.5`, which judges an opened handle by where it is
-  ([DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled"): a link on a local volume that
-  leads to a share, opened with `open_reparse_point`, is a local handle and is accepted, where the item's
-  text asked that the check see the target. The engineer rules whether the handle should instead be refused
-  because of where the link leads. Following it needs a query that follows the link, which is a second open
-  and brings back the window `DI-14.5` closed; if the ruling is to accept, the test
-  `a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle`
-  already records it and no work follows.
+- [x] **DI-14.10** -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1410)
 
 ## DI-M15 -- Opening by identity, and reopening
 
