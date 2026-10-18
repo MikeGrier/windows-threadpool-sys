@@ -10,8 +10,7 @@
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows_sys::Win32::Foundation::{
-    CompareObjectHandles, ERROR_ACCESS_DENIED, FALSE, GetHandleInformation, HANDLE_FLAG_INHERIT,
-    WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CompareObjectHandles, ERROR_ACCESS_DENIED, FALSE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, ResetEvent, SYNCHRONIZATION_SYNCHRONIZE,
@@ -19,6 +18,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{Access, duplicate_handle_with_access};
+use crate::{HandleFlags, get_handle_information};
 
 /// A manual-reset event with no name and default security.
 fn manual_event(signalled: bool) -> OwnedHandle {
@@ -210,11 +210,8 @@ fn closing_a_duplicate_leaves_its_source_working() {
 fn a_duplicate_is_not_inheritable() {
     let event = manual_event(false);
     let copy = duplicate(&event, Access::SYNCHRONIZE);
-    let mut flags = 0u32;
-    // SAFETY: the handle is open and `flags` is a valid out pointer.
-    let ok = unsafe { GetHandleInformation(copy.as_raw_handle(), &mut flags) };
-    assert_ne!(ok, FALSE);
-    assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    let flags = get_handle_information(&copy).expect("query the duplicate");
+    assert!(!flags.contains(HandleFlags::INHERIT));
 }
 
 #[test]

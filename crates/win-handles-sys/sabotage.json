@@ -59,6 +59,54 @@
       "why": "The manifest checking itself on the new module: FALSE is 0, so this is an equivalent change on code every duplicate runs. If it comes back caught, something is reacting to text rather than behaviour.",
       "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n"],
       "replace": ["    if ok == 0 {\n        return Err(io::Error::last_os_error());\n"]
+    },
+    {
+      "name": "DI-14.8.4: the query reports no flags",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "What the call wrote is the answer; a query that always said none would report every inheritable handle as not.",
+      "find": ["    Ok(HandleFlags(flags))\n"],
+      "replace": ["    Ok(HandleFlags(0))\n"]
+    },
+    {
+      "name": "DI-14.8.4: the inherit flag is the protect bit",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "Each flag is the Win32 bit it is named for; swapped, an inheritable handle would read as protected.",
+      "find": ["    pub const INHERIT: Self = Self(HANDLE_FLAG_INHERIT);\n"],
+      "replace": ["    pub const INHERIT: Self = Self(HANDLE_FLAG_PROTECT_FROM_CLOSE);\n"]
+    },
+    {
+      "name": "DI-14.8.4: the protect flag is the inherit bit",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "The same for the other flag.",
+      "find": ["    pub const PROTECT_FROM_CLOSE: Self = Self(HANDLE_FLAG_PROTECT_FROM_CLOSE);\n"],
+      "replace": ["    pub const PROTECT_FROM_CLOSE: Self = Self(HANDLE_FLAG_INHERIT);\n"]
+    },
+    {
+      "name": "DI-14.8.4: containing is overlapping",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "A set contains another only if it has every flag of it; a set that overlaps it has some.",
+      "find": ["        self.0 & other.0 == other.0\n"],
+      "replace": ["        self.0 & other.0 != 0\n"]
+    },
+    {
+      "name": "DI-14.8.4: combining flags intersects them",
+      "file": "src/handle_information.rs",
+      "expect": "caught",
+      "why": "Combining is a union, as for the other masks of this workspace.",
+      "find": ["        Self(self.0 | other.0)\n"],
+      "replace": ["        Self(self.0 & other.0)\n"]
+    },
+    {
+      "name": "DI-14.8.4: BLIND SPOT: a refused query is reported as flags",
+      "file": "src/handle_information.rs",
+      "expect": "survives",
+      "why": "GetHandleInformation fails only for a handle that is not open, which AsHandle rules out, so no test can make it fail. The definition says so.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(HandleFlags(flags))\n"],
+      "replace": ["    if ok == 12345 {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(HandleFlags(flags))\n"]
     }
   ]
 }
