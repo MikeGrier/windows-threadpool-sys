@@ -1780,6 +1780,54 @@
       "why": "A control: the same flags taken through a local, which no test can tell apart.",
       "find": ["        flags: B::FLAGS,"],
       "replace": ["        flags: { let flags = B::FLAGS; flags },"]
+    },
+    {
+      "name": "DI-10.5: an attested file's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "The attestation is the whole point of the constructor, so one that leaves the class at SharedDevice does nothing.",
+      "find": ["        Self::new(file).attested_exclusive()\n"],
+      "replace": ["        Self::new(file)\n"]
+    },
+    {
+      "name": "DI-10.5: an attested volume's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "As above, for a volume.",
+      "find": ["        Self::from_volume(volume).attested_exclusive()\n"],
+      "replace": ["        Self::from_volume(volume)\n"]
+    },
+    {
+      "name": "DI-10.5: an attested disk's target does not claim Complete",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "As above, for a disk.",
+      "find": ["        Self::from_disk(disk).attested_exclusive()\n"],
+      "replace": ["        Self::from_disk(disk)\n"]
+    },
+    {
+      "name": "DI-10.5: the attestation drops the flush domains",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Complete is a claim that the domains reported are all of them, so an attestation that discarded the found ones would claim it over none.",
+      "find": ["        self.warranty = WarrantyClass::Complete;\n        self\n"],
+      "replace": ["        self.warranty = WarrantyClass::Complete;\n        self.domains.clear();\n        self\n"]
+    },
+    {
+      "name": "DI-10.5: a cached file can be attested",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "caught",
+      "why": "Caught by the compile_fail doctest on the constructor and by nothing else: only the type refuses a cached file, so widening it to any buffering is a change no unit test can see and the doctest then compiles when it must not.",
+      "find": ["    pub fn new_attested_exclusive<A: HasData>(file: OpenedFile<Unbuffered, A>) -> Self {\n"],
+      "replace": ["    pub fn new_attested_exclusive<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {\n"]
+    },
+    {
+      "name": "DI-10.5 control: the attested claim is made through a binding",
+      "file": "src/windows_backend/file_target.rs",
+      "expect": "survives",
+      "why": "A control: the same target returned through a local, which no test can tell apart.",
+      "find": ["        self.warranty = WarrantyClass::Complete;\n        self\n"],
+      "replace": ["        self.warranty = WarrantyClass::Complete;\n        let this = self;\n        this\n"]
     }
   ]
 }

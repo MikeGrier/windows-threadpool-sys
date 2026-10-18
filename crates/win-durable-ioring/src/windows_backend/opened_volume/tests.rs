@@ -260,7 +260,45 @@ fn a_cached_volumes_target_claims_best_effort_and_no_write_through() {
 }
 
 #[test]
-fn a_volumes_target_is_never_complete() {
+fn an_attested_volumes_target_is_complete_and_nothing_else_changes() {
+    for locked in [false, true] {
+        let (volume, _temp) = assembled::<Unbuffered>(vec![extent(5), extent(2)], 512, locked);
+        let (sibling, _temp2) = assembled::<Unbuffered>(vec![extent(5), extent(2)], 512, locked);
+        let attested = Win32FileTarget::from_volume_attested_exclusive(volume);
+        let plain = Win32FileTarget::from_volume(sibling);
+
+        assert_eq!(attested.warranty(), WarrantyClass::Complete);
+        assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+        assert_eq!(attested.flush_domains(), plain.flush_domains());
+        assert_eq!(
+            attested.flush_domains(),
+            [disk_flush_domain(2), disk_flush_domain(5)]
+        );
+        assert_eq!(attested.geometry(), plain.geometry());
+        assert_eq!(attested.capabilities(), plain.capabilities());
+        assert_eq!(attested.access(), plain.access());
+    }
+}
+
+#[test]
+fn an_attested_volume_still_adds_declared_domains_and_never_loses_a_found_one() {
+    let (volume, _temp) = assembled::<Unbuffered>(vec![extent(1), extent(2)], 512, false);
+    let other = FlushDomain::new(b"a share".to_vec());
+    let target =
+        Win32FileTarget::from_volume_attested_exclusive(volume).with_domains([other.clone()]);
+    assert_eq!(target.warranty(), WarrantyClass::Complete);
+    assert_eq!(
+        target.flush_domains(),
+        [disk_flush_domain(1), disk_flush_domain(2), other]
+    );
+    assert_eq!(
+        target.with_domains([]).flush_domains(),
+        [disk_flush_domain(1), disk_flush_domain(2)]
+    );
+}
+
+#[test]
+fn a_volumes_target_is_not_complete_unless_attested() {
     // However it was opened and whether or not it is locked: a lock keeps other handles off the
     // volume, not other writers off its disks.
     for locked in [false, true] {

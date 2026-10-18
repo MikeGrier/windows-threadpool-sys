@@ -572,6 +572,41 @@ fn a_file_target_claims_what_its_open_mode_allows() {
 }
 
 #[test]
+fn an_attested_file_targets_is_complete_and_nothing_else_changes() {
+    let file = TempFile::new("wb-attested");
+    let open = || {
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
+            .expect("open unbuffered")
+    };
+    let domain = FlushDomain::new(b"disk".as_slice());
+    let attested = Win32FileTarget::new_attested_exclusive(open()).with_domains([domain.clone()]);
+    let plain = Win32FileTarget::new(open()).with_domains([domain.clone()]);
+
+    assert_eq!(attested.warranty(), WarrantyClass::Complete);
+    assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+    assert_eq!(attested.flush_domains(), [domain]);
+    assert_eq!(attested.flush_domains(), plain.flush_domains());
+    assert_eq!(attested.geometry(), plain.geometry());
+    assert_eq!(
+        attested.geometry(),
+        Geometry::uniform(Unbuffered::DEFAULT_SECTOR_SIZE).expect("a power of two")
+    );
+    assert_eq!(attested.capabilities(), plain.capabilities());
+    assert!(attested.capabilities().write_through());
+    assert_eq!(attested.access(), plain.access());
+}
+
+#[test]
+fn an_attested_file_target_reports_complete_to_the_core() {
+    let file = TempFile::new("wb-attested-describe");
+    let target = Win32FileTarget::new_attested_exclusive(
+        OpenedFile::<Unbuffered>::open(wtf(&file.0), FileOptions::new().read().write())
+            .expect("open unbuffered"),
+    );
+    assert_eq!(target.describe().warranty, WarrantyClass::Complete);
+}
+
+#[test]
 fn declaring_a_file_targets_domains_again_replaces_them() {
     // Carried over from `FileOptions`, which the target replaced: a declaration is the whole set.
     let file = TempFile::new("wb-domains");

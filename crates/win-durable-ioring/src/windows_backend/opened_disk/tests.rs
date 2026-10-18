@@ -116,7 +116,38 @@ fn a_cached_disks_target_claims_best_effort_and_no_write_through() {
 }
 
 #[test]
-fn a_disks_target_is_never_complete() {
+fn an_attested_disks_target_is_complete_and_nothing_else_changes() {
+    for (number, sector) in [(0u32, 512u32), (6, 4096), (17, 512)] {
+        let (disk, _temp) = assembled::<Unbuffered>(number, sector);
+        let (sibling, _temp2) = assembled::<Unbuffered>(number, sector);
+        let attested = Win32FileTarget::from_disk_attested_exclusive(disk);
+        let plain = Win32FileTarget::from_disk(sibling);
+
+        assert_eq!(attested.warranty(), WarrantyClass::Complete);
+        assert_eq!(plain.warranty(), WarrantyClass::SharedDevice);
+        assert_eq!(attested.flush_domains(), [disk_flush_domain(number)]);
+        assert_eq!(attested.flush_domains(), plain.flush_domains());
+        assert_eq!(attested.geometry(), plain.geometry());
+        assert_eq!(attested.capabilities(), plain.capabilities());
+        assert_eq!(attested.access(), plain.access());
+    }
+}
+
+#[test]
+fn an_attested_disk_still_adds_declared_domains_and_never_loses_its_own() {
+    let (disk, _temp) = assembled::<Unbuffered>(5, 512);
+    let other = durable_ioring::FlushDomain::new(b"a share".to_vec());
+    let target = Win32FileTarget::from_disk_attested_exclusive(disk).with_domains([other.clone()]);
+    assert_eq!(target.warranty(), WarrantyClass::Complete);
+    assert_eq!(target.flush_domains(), [disk_flush_domain(5), other]);
+    assert_eq!(
+        target.with_domains([]).flush_domains(),
+        [disk_flush_domain(5)]
+    );
+}
+
+#[test]
+fn a_disks_target_is_not_complete_unless_attested() {
     let (disk, _temp) = assembled::<Unbuffered>(0, 512);
     assert_ne!(
         Win32FileTarget::from_disk(disk).warranty(),
