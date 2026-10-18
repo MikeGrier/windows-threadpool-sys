@@ -1,5 +1,7 @@
 # Changelog
 
+## [2026.1018.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.1017.0...placement-probe-v2026.1018.0) (2026-10-18)
+
 ## [2026.1017.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.919.0...placement-probe-v2026.1017.0) (2026-10-17)
 
 ## [2026.919.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/placement-probe-v2026.902.0...placement-probe-v2026.919.0) (2026-09-19)
