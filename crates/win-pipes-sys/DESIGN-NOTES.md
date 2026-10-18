@@ -93,3 +93,35 @@ the sabotage that does it, which hangs the suite.
 **Not here:** `FlushFileBuffers`, which the `DisconnectNamedPipe` page says lets a server "make sure data is not
 lost by calling" it before disconnecting. It is documented under File Management Functions with `CreateFile`, so it
 is not this crate's.
+
+## <a id="wp-d-3"></a>WP-D-3: `create_pipe` returns a struct with `read` and `write` fields, and the call's error edge is not reached by any test
+
+The engineer, 2026-10-18, "implement wp-1.4". Page read the same day: `CreatePipe`, `ms.date` 12/05/2018.
+
+**The result is a struct, not a tuple.** The call writes two handles through two output pointers, and a tuple
+would leave which is which to position, where both are `OwnedHandle`s and a swap compiles. `AnonymousPipe` has a
+`read` field and a `write` field. The fields are public and the type has no other behaviour: a caller who wants one
+end closed moves it out and drops it, and `File::from` takes either.
+
+**One attributes parameter, so both ends share it.** The page's `lpPipeAttributes` "determines whether the returned
+handle can be inherited", and the call has no second one, so the two ends are inheritable together or not at all. The
+handle-flag calls that would change one end afterwards are `win-handles-sys`'s, and `SetHandleInformation` is queued
+there.
+
+**`size` is passed as given.** The page calls it "only a suggestion" and says zero selects "the default buffer size".
+The crate does not interpret it, and no test asserts what it did, because the page does not say. A sabotage that
+passes zero in its place is a declared survivor for that reason.
+
+**No handle is taken from a failed call.** The page: "If `CreatePipe` fails, the contents of the output parameters
+are indeterminate." The wrapper returns the call's error before it reads either local.
+
+**Not reached.** No test traverses that error edge. The largest `nSize`, `u32::MAX`, succeeded on the measuring
+machine (2026-10-18, Windows 11 build 26300, unelevated), called from Python, so no argument this crate can pass
+makes the call fail there. The test that passes it asserts only that either result is a result. What would reach it is a condition that exhausts the system, which a unit test does
+not make. The sabotage that replaces the failure test with `false` is a declared survivor and says so.
+
+**Observed, not a ruling:** the first version of the test that tries every size wrote on the thread that then read,
+and did not return for some size in its list, which is the page's account of a full buffer; it now writes from its
+own thread, and which sizes held the write was not recorded. After the write end is dropped a read reads zero bytes, which `File` reports as the end of the stream;
+after the read end is dropped a write fails with `ErrorKind::BrokenPipe`; a write on the read end and a read on the
+write end both fail.

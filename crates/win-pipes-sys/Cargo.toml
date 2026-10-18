@@ -10,7 +10,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "Memory-safe Rust over the Win32 pipe API: creating an instance of a named pipe, with typed open and pipe modes. Thin over Win32, adding no policy."
+description = "Memory-safe Rust over the Win32 pipe API: creating, connecting and disconnecting named pipes with typed open and pipe modes, and creating anonymous pipes. Thin over Win32, adding no policy."
 keywords = ["windows", "pipe", "named-pipe", "ffi"]
 categories = ["api-bindings", "os::windows-apis"]
 

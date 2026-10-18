@@ -16,8 +16,11 @@ Communications > Pipes*. Thin over Win32, adding no policy.
   before the call, which the call reports as zero with `ERROR_PIPE_CONNECTED`, is a result (`AlreadyConnected`) and
   not an error. See [WP-D-2](DESIGN-NOTES.md#wp-d-2).
 - `disconnect_named_pipe` is `DisconnectNamedPipe`.
+- `create_pipe` is `CreatePipe`: it creates an anonymous pipe and returns the two ends as an `AnonymousPipe` with
+  `read` and `write` fields, each an `OwnedHandle`. The one attributes parameter applies to both ends. See
+  [WP-D-3](DESIGN-NOTES.md#wp-d-3).
 
-The area has more in it: the rest of the *Pipe Functions* the section lists (`CreatePipe`, `PeekNamedPipe` and the
+The area has more in it: the rest of the *Pipe Functions* the section lists (`PeekNamedPipe` and the
 others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.
 
 ```rust

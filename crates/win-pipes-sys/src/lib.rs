@@ -4,9 +4,11 @@
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod anonymous_pipe;
 mod connect;
 mod named_pipe;
 
+pub use anonymous_pipe::{AnonymousPipe, create_pipe};
 pub use connect::{
     ConnectOutcome, ConnectStart, connect_named_pipe, connect_named_pipe_overlapped,
     disconnect_named_pipe,

@@ -43,3 +43,9 @@ and one caught by the suite hanging. The first consumer, `windows-overlapped-io-
 The three raw calls became one `unsafe` helper in that file, which maps `Pending` and a finished `Succeeded` to the
 port's `Issued::Pending` and an already connected client to `ERROR_PIPE_CONNECTED`, as the raw closures did. The
 `Win32_System_Pipes` dev feature, which only that file used, is removed from the crate's manifest.
+
+### <a id="wp-14"></a>WP-1.4 -- `CreatePipe`, the anonymous pipe, returning the two ends as owned handles. *(completed 2026-10-18 18:34:46 -04:00)*
+
+`create_pipe` and `AnonymousPipe`, with `read` and `write` fields. Why a struct, why one attributes parameter serves
+both ends, and the error edge no test reaches are [WP-D-3](DESIGN-NOTES.md#wp-d-3). Four sabotages, two of them
+declared survivors.

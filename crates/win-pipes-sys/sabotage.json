@@ -122,6 +122,38 @@
       "why": "A control: equality is symmetric, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {\n"],
       "replace": ["    if Some(ERROR_PIPE_CONNECTED as i32) == error.raw_os_error() {\n"]
+    },
+    {
+      "name": "WP-1.4: the two ends are returned in each other's place",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "caught",
+      "why": "Both ends are OwnedHandles in adjacent fields, so a swap compiles; a write to the read end then fails.",
+      "find": ["            read: OwnedHandle::from_raw_handle(read),\n            write: OwnedHandle::from_raw_handle(write),\n"],
+      "replace": ["            read: OwnedHandle::from_raw_handle(write),\n            write: OwnedHandle::from_raw_handle(read),\n"]
+    },
+    {
+      "name": "WP-1.4: the security attributes are not passed",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "caught",
+      "why": "Whether the ends can be inherited is decided by the attributes, so dropping them makes an inheritable request produce ends that are not.",
+      "find": ["CreatePipe(&mut read, &mut write, security_pointer, size)"],
+      "replace": ["CreatePipe(&mut read, &mut write, ptr::null(), size)"]
+    },
+    {
+      "name": "WP-1.4: the buffer size is not the one given",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test could close: the page says the size \"is only a suggestion\", so no assertion about what it did would be on the page, and one on what the system happens to do would bind to that. A larger and a smaller size both give a working pipe, which is all the tests assert.",
+      "find": ["CreatePipe(&mut read, &mut write, security_pointer, size)"],
+      "replace": ["CreatePipe(&mut read, &mut write, security_pointer, 0)"]
+    },
+    {
+      "name": "WP-1.4: a failed call is taken for a success",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "survives",
+      "why": "Declared: no argument this crate can give makes the call fail on the measuring machine (the largest size succeeds), so no test traverses the error edge. What would reach it is a condition that exhausts the system, which a unit test does not make. A failed call here would take two handles from output parameters the page calls indeterminate.",
+      "find": ["    if created == FALSE {\n"],
+      "replace": ["    if false {\n"]
     }
   ]
 }
