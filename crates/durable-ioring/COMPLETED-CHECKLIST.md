@@ -3215,3 +3215,18 @@ share's file and is refused. Refusing the first case would have needed a second 
 brings back the window `DI-14.5` closed. No code changed: the ignored administrative-share test
 `a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle` already
 asserts both cases, and the reading is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled".
+
+### <a id="di-1441"></a>DI-14.4.1 -- The reading pass: every condition the pages state on the open's arguments, sorted and cited. *(completed 2026-10-18 15:14:02 -04:00)*
+
+Read on 2026-10-18 from the sources the Learn pages are built from: `CreateFileW`, "Creating and Opening Files"
+(added because the `CreateFileW` page defers to it for combinations and special cases), "File Buffering", "File
+Access Rights Constants" and "File Attribute Constants". The sorted list, with citations and page dates, is in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What the reading pass of DI-14.4.1 found". Findings: every condition on the
+arguments alone that a page calls invalid is already unrepresentable in v1 (`FILE_ATTRIBUTE_NORMAL` alone, the
+reparse flag with `CREATE_ALWAYS`, `TRUNCATE_EXISTING` with `GENERIC_WRITE`, the dispositions not combinable), and
+the two that return with [DI-6+.11](CHECKLIST.md) are recorded there. **Two citations this crate carried were
+wrong:** that delete-on-close needs the `DELETE` right, and that the append right is incompatible with
+no-buffering, are on `ZwCreateFile`'s page and not on any page `CreateFileW` is governed by; both statements are
+corrected, and whether the lower layer's conditions count is asked in [DI-14.4.2](CHECKLIST.md). The volume
+section's requirement of `FILE_SHARE_WRITE` is a condition on `OpenedVolume`'s arguments that its share option
+does not honour, raised as [DI-14.11](CHECKLIST.md).

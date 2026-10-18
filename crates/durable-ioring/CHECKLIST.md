@@ -259,24 +259,22 @@ option recorded by construction. The rule throughout is documented APIs only
   the check cannot be separated from the check (a refused combination can no longer be opened through
   `OpenedFile` to measure it):
 
-  - [ ] **DI-14.4.1** -- **The reading pass.** Re-read the `CreateFileW` page, the "File Access Rights
-    Constants" page and the "File Buffering" page for every condition they state on a combination of the
-    open's arguments. Sort each into: a condition on the arguments alone that the page calls invalid; one
-    that depends on the target (existence, file system, device, local or remote, token, sharing); or one
-    that is not invalidity ("self-defeating", "ignored", "has no effect", or a sentence that reads two
-    ways). Record the list in [DI-D-64](DESIGN-NOTES.md#di-d-64) with each condition's citation and the
-    date read. If no condition is of the first kind, `DI-14.4.2` is recorded as having nothing to build.
+  - [x] **DI-14.4.1** -- The reading pass: every condition the pages state on the open's arguments, sorted and cited. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1441)
 
-  - [ ] **DI-14.4.2** -- **The check, and the measurements moved to evidence.** For the first kind only:
-    one pure function of the options, the buffering mode and the data access, called by
-    `OpenedFile::request` before anything touches the system, over a table whose rows carry the
-    predicate, the kind and the citation. Its refusal is a typed error that names the citation, and is a
-    different error kind from a refusal of this crate's own narrowing. Tested in memory; made structural
-    only where the condition falls on `B` or `A`, never by a new type parameter. In the same commit, every
-    earlier measurement of a combination it now refuses is moved to an evidence test through the request
-    crate, and documentation that says the combination is accepted is swept. Where the page and the
-    kernel disagree (delete-on-close without the right to delete is the known candidate), the page wins,
-    and `DI-14.2`'s "not refused for want of the right to delete" is reversed with its tests.
+  - [ ] **DI-14.4.2** -- **The check, and the measurements moved to evidence, once the engineer has ruled.**
+    The reading pass found no condition of the first kind that `OpenedFile`'s v1 surface can express: each
+    one is already unrepresentable ([DI-D-64](DESIGN-NOTES.md#di-d-64), "What the reading pass of
+    DI-14.4.1 found"). It also found that the two conditions this item was expected to refuse --
+    delete-on-close without the right to delete, and the append right with no-buffering -- are stated on
+    `ZwCreateFile`'s page and not on any page `CreateFileW` is governed by. **For the engineer:** does a
+    documented condition of the layer below (`ZwCreateFile`, which this repository does not call) count as
+    the contract of the call that is made? If not, this item has nothing to build and is closed recording
+    that. If so, those two become rows of the check: one pure function of the options, the buffering mode
+    and the data access, called by `OpenedFile::request` before anything touches the system, over a table
+    whose rows carry the predicate, the kind and the citation, refusing with a typed error that names the
+    citation, tested in memory; and in the same commit the measurements of the two are moved to evidence
+    tests through the request crate, and `DI-14.2`'s "not refused for want of the right to delete" is
+    reversed with its documentation and tests.
 
   - [ ] **DI-14.4.3** -- **For the engineer:** whether this crate chooses not to support
     `FILE_ATTRIBUTE_TEMPORARY` on an unbuffered file. The page is silent on the pair, so it is not a
@@ -313,6 +311,19 @@ option recorded by construction. The rule throughout is documented APIs only
 - [x] **DI-14.9** -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-149)
 
 - [x] **DI-14.10** -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1410)
+
+- [ ] **DI-14.11** -- **For the engineer: a volume opened without sharing writes.** Found by
+  [DI-14.4.1](COMPLETED-CHECKLIST.md#di-1441)'s reading. The `CreateFileW` page's "Physical Disks and
+  Volumes" section says that "When opening a volume or floppy disk, the *dwShareMode* parameter must have the
+  `FILE_SHARE_WRITE` flag". For `OpenedVolume` the path is a volume by its type, so this is a condition on
+  the arguments, and under [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)
+  a share mode without `FILE_SHARE_WRITE` is refused ahead of the open, `ShareMode::NONE` included -- although
+  [DI-13.12](COMPLETED-CHECKLIST.md#di-1312) measured the exclusive open succeeding elevated, and
+  [DI-13.11](COMPLETED-CHECKLIST.md#di-1311) offered it. The engineer rules whether the page wins here as
+  the rule says, which removes the exclusive volume open and leaves the lock as the way to hold a volume
+  alone. If so: the refusal is a row of the check `DI-14.4.2` describes, built for the device open, with the
+  exclusive-volume test turned into evidence and `VolumeOptions::share`'s documentation swept. The section
+  states no share-mode requirement for a physical disk, so `OpenedDisk` is unaffected.
 
 ## DI-M15 -- Opening by identity, and reopening
 
@@ -457,6 +468,12 @@ implementation before it is answerable.
   accepted only with the literal `GENERIC_WRITE`, and `CREATE_ALWAYS` emptied a file under every access
   mask including a read-only one, so offering either means deciding what a handle typed not to write may
   be opened to do. It is answerable once the three dispositions of [DI-13.7.3](#di-137-rework) are in use.
+  **Added 2026-10-18 by [DI-14.4.1](COMPLETED-CHECKLIST.md#di-1441):** offering either brings in a
+  documented condition on the arguments that is then a check under
+  [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract):
+  `FILE_FLAG_OPEN_REPARSE_POINT` "cannot be used with the `CREATE_ALWAYS` flag", and `TRUNCATE_EXISTING`
+  needs "the `GENERIC_WRITE` bit" in the access, which this crate's data access does not ask for
+  ([DI-D-64](DESIGN-NOTES.md#di-d-64), "What the reading pass of DI-14.4.1 found").
 
 - [ ] **DI-6+.6** -- **Make the default provider cheaper than per-file sync.** From DI-2.12 point 1;
   the engineer, 2026-10-06, asked these be recorded as "optimizations we should strongly consider",

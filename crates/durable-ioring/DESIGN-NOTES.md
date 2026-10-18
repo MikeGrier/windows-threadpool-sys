@@ -188,7 +188,7 @@ for this table.
 | `READ_CONTROL`, `WRITE_DAC`, `WRITE_OWNER` | Exposed | Members | None. | engineer 2026-10-15 |
 | `SYNCHRONIZE` | Exposed | Member | None. | standing |
 | `ACCESS_SYSTEM_SECURITY` | Exposed | Member | A caller who lacks what the kernel requires for it gets the kernel's error, not a panic; which privilege that is was not measured here. | standing |
-| `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, the combination the kernel documents as incompatible, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. | engineer 2026-10-16; assistant |
+| `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. **Corrected 2026-10-18 by [DI-14.4.1](CHECKLIST.md)'s reading:** this called the pair one "the kernel documents as incompatible". The pages `CreateFileW` is governed by do not say so; `ZwCreateFile`'s does, for its own flags, and this crate does not make that call. | engineer 2026-10-16; assistant |
 | `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_LIST_DIRECTORY`, `FILE_TRAVERSE`, `FILE_DELETE_CHILD`, `FILE_CREATE_PIPE_INSTANCE` | Excluded | None | These name the directory or pipe meaning of a right. A directory is opened only with `FILE_FLAG_BACKUP_SEMANTICS` (the page says so), which is not offered in v1, and a pipe is not a file; the bits shared with the file rights are already members. The directory rights are revisited when `FILE_FLAG_BACKUP_SEMANTICS` is offered. That the pipe right is never offered is a working position ("almost certainly never"), not a decision. | engineer 2026-10-16 (directory); assistant |
 | `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
@@ -305,8 +305,10 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   above, each a bool that sets its own bit, passed to a cached and an unbuffered file alike. Nothing is
   added or checked for them here; which combinations the documented contract calls invalid, and so are
   refused ahead of the open, is [DI-14.4](CHECKLIST.md)'s.
-- **Delete-on-close is not refused for want of the right to delete.** The `CreateFileW` page lists the
-  right as needed; measured on Windows 11 build 26300, an open with the flag and no right to delete among
+- **Delete-on-close is not refused for want of the right to delete.** **Corrected 2026-10-18 by
+  [DI-14.4.1](CHECKLIST.md)'s reading:** this said the `CreateFileW` page lists the right as needed; it does
+  not. The requirement is stated on `ZwCreateFile`'s page, a call this crate does not make (see "What the
+  reading pass of DI-14.4.1 found" below). Measured on Windows 11 build 26300, an open with the flag and no right to delete among
   the rights succeeds and the file is deleted when the last handle closes. While the handle is open, a
   later open that does not share deletion fails with a sharing violation, whatever it asks for, and one that
   shares it is admitted, with the right to delete or without.
@@ -418,6 +420,71 @@ values of the item's text are not separately visible through the safe API.
   volume and the unreadable final path run everywhere. The refusal itself, the created-before-refused file and
   the link to a share need the administrative share and are ignored by default, as the earlier one was; they
   were run with the ignored tests included, and pass.
+
+**What the reading pass of DI-14.4.1 found** ([DI-14.4.1](CHECKLIST.md)). Read 2026-10-18, under
+[the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract), from the
+sources the Learn pages are built from: `CreateFileW` (`ms.date` 08/16/2022), "Creating and Opening Files"
+(07/08/2025), "File Buffering" (05/31/2025), "File Access Rights Constants" (05/31/2018) and "File Attribute
+Constants" (09/23/2025). "Creating and Opening Files" was added to the item's three because the `CreateFileW`
+page refers to it for the valid combinations of share mode and access and for special cases. The question
+asked of every statement: is it a condition on a combination of the open's arguments, and does the page call
+it invalid.
+
+*Conditions on the arguments alone that a page calls invalid.* Every one is already unrepresentable in this
+crate's v1 surface, so none needs a check:
+
+| Condition | Where | Why it is already excluded |
+|---|---|---|
+| `FILE_ATTRIBUTE_NORMAL` "is valid only if used alone" | `CreateFileW`, attributes table; "File Attribute Constants" | `NORMAL` is not a member of `FileAttributes`; the empty set passes no attribute ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). |
+| `FILE_FLAG_OPEN_REPARSE_POINT` "cannot be used with the `CREATE_ALWAYS` flag" | `CreateFileW`, flags table | `CREATE_ALWAYS` is not a `Disposition` in v1. |
+| `TRUNCATE_EXISTING`: "The calling process must open the file with the `GENERIC_WRITE` bit set" | `CreateFileW`, `dwCreationDisposition` | `TRUNCATE_EXISTING` is not a `Disposition` in v1. Note for its return: the page names the `GENERIC_WRITE` bit, and this crate's data access asks for `FILE_WRITE_DATA`. |
+| The creation dispositions "cannot be combined" | `CreateFileW`, `dwCreationDisposition` | `Disposition` is an enum. |
+
+The two v1 exclusions are recorded against their return in [DI-6+.11](CHECKLIST.md), which is when the
+first two rows of this kind become checks.
+
+*Conditions that depend on the target*, which no check ahead of the open can judge and which the kernel's
+error answers: a share mode or access that conflicts with an open handle (`ERROR_SHARING_VIOLATION`);
+delete-on-close against open handles that did not share deletion, and later opens that do not; a security
+descriptor or attributes given for a file that exists (ignored); a security descriptor on a file system
+without security; `FILE_FLAG_OPEN_REPARSE_POINT` on a path that is not a reparse point (ignored); a file
+pending deletion (`ERROR_ACCESS_DENIED`); and the sections on directories, physical disks and volumes,
+communications resources, consoles, mailslots and pipes, which state requirements on the arguments *when the
+path names such a device*. Through `OpenedFile` the path is opaque, so those are conditions on the target.
+They are not conditions on the target for `OpenedVolume` and `OpenedDisk`, whose path types name the device;
+see the last paragraph.
+
+*Statements that are not invalidity*, and so pass through: random access with sequential scan, "self-defeating";
+sequential scan "should not be used if read-behind ... will be used", which is advice about the I/O and not
+about the arguments; each hint "has no effect if the file system does not support cached I/O and
+`FILE_FLAG_NO_BUFFERING`", which reads two ways and depends on the file system; `FILE_FLAG_WRITE_THROUGH` and
+`FILE_FLAG_NO_BUFFERING` "are independent and may be combined"; no-buffering with overlapped, a statement
+about performance; `FILE_ATTRIBUTE_TEMPORARY`, of which the pages say what it does to caching and say nothing
+about an unbuffered file ([DI-14.4.3](CHECKLIST.md)); and `FILE_APPEND_DATA` without `FILE_WRITE_DATA`, which
+the rights page says changes what a write does, not that it is invalid.
+
+*Two conditions this crate had attributed to the `CreateFileW` pages are not on them.* That delete-on-close
+needs the `DELETE` right, and that the append right is incompatible with no-buffering, are both stated on
+`ZwCreateFile`'s page in the driver documentation (`ms.date` 12/14/2022): "If this flag is set, the DELETE
+flag must be set in the *DesiredAccess* parameter", and `FILE_NO_INTERMEDIATE_BUFFERING` "is incompatible with
+the *DesiredAccess* parameter's FILE_APPEND_DATA flag". This crate opens through `CreateFileW`, and the
+[DOCUMENTED APIS ONLY rule](../../.github/copilot-instructions.md) keeps it from calling `ZwCreateFile`. Read as
+the call's own contract, the rule makes neither a contract refusal: what `CreateFileW` does with its flags
+on the way down is not documented on its pages, so the lower call's conditions describe the layer below and
+not the call. The measurements stay what they were, as anecdote: delete-on-close is taken without the right
+to delete, and `FILE_ALL_ACCESS` is refused unbuffered with `ERROR_INVALID_PARAMETER`. Whether a documented
+lower layer's conditions should count is the engineer's to rule, and is asked in
+[DI-14.4.2](CHECKLIST.md); until then nothing is refused on their account.
+
+*Outside `OpenedFile`:* the "Physical Disks and Volumes" section says that "When opening a volume or floppy
+disk, the *dwShareMode* parameter must have the `FILE_SHARE_WRITE` flag", and that the disposition must be
+`OPEN_EXISTING`. For `OpenedVolume` the path is a volume by its type, so this is a condition on its
+arguments, and `VolumeOptions::share` offers modes without `FILE_SHARE_WRITE`, including `ShareMode::NONE`,
+which [DI-13.12](COMPLETED-CHECKLIST.md#di-1312) measured succeeding elevated. The disposition is already
+`OPEN_EXISTING`, since the device open uses `std`'s with no create option. Under the rule the page wins
+over the measurement; that reverses a surface the engineer asked for, so it is raised in
+[DI-14.11](CHECKLIST.md) and not changed here. The section states no share-mode requirement for a physical
+disk.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
