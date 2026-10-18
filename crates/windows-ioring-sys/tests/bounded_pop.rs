@@ -62,21 +62,15 @@ use std::io::Write;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::Duration;
 
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 use windows_ioring_sys::{Batch, CompletionWait, IoRing, PushOptions, RingWait, SubmitWait};
 
 /// The ring these tests drive: it holds the read's buffer, so no test has to.
 type PipeRing = IoRing<Vec<u8>>;
 use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
-
-/// `PIPE_ACCESS_INBOUND`. The byte-type, byte-read-mode and wait bits are all
-/// zero, so one named constant covers the mode argument.
-const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
-const PIPE_MODE_BYTE_WAIT: u32 = 0;
 
 /// The bound these tests give the pop. Any value would do: the read cannot
 /// complete until the test writes, so this only decides how long the wait
@@ -117,23 +111,15 @@ impl Pipe {
         );
         let wide_name = wide(&name);
 
-        // SAFETY: a valid NUL-terminated name and standard parameters; the
-        // returned handle is owned here.
-        let server = unsafe {
-            CreateNamedPipeW(
-                wide_name.as_ptr(),
-                PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-                PIPE_MODE_BYTE_WAIT,
-                1,
-                4096,
-                4096,
-                0,
-                std::ptr::null(),
-            )
+        let options = NamedPipeOptions {
+            open_mode: PipeOpenMode::ACCESS_INBOUND | PipeOpenMode::OVERLAPPED,
+            pipe_mode: PipeMode::TYPE_BYTE | PipeMode::READMODE_BYTE | PipeMode::WAIT,
+            max_instances: 1,
+            out_buffer_size: 4096,
+            in_buffer_size: 4096,
+            default_timeout_ms: 0,
         };
-        assert!(!server.is_null(), "CreateNamedPipeW failed");
-        // SAFETY: a fresh handle nothing else owns.
-        let server = unsafe { OwnedHandle::from_raw_handle(server) };
+        let server = create_named_pipe(&name, &options, None).expect("create the pipe");
 
         // SAFETY: the pipe exists; this opens its client end.
         let client = unsafe {

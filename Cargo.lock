@@ -278,6 +278,7 @@ dependencies = [
  "io-buffers",
  "serde_json",
  "win-numa-sys",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-guard-alloc",
  "windows-overlapped-io-sys",
