@@ -46,8 +46,13 @@ features = [
 # Test-only. `win-handles-sys` reads whether a created pipe's handle is inheritable, which is what
 # the attributes parameter decides. `Win32_System_IO` is the overlapped read that pends on a pipe
 # created overlapped, and its cancellation; `ReadFile` is `Win32_Storage_FileSystem`, already above.
+#
+# Path-only, with no `version`, as `windows-ioring-sys`'s dev-dependencies are and for the reason it
+# gives: Cargo checks a pinned version against the path at every build, so a release of
+# `win-handles-sys` would break this crate, and a versionless dev-dependency is left out of the
+# published manifest.
 [dev-dependencies]
-win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+win-handles-sys = { path = "../win-handles-sys" }
 
 [dev-dependencies.windows-sys]
 version = "0.61.2"
