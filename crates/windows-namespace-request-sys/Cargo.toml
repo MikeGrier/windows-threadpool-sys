@@ -57,13 +57,16 @@ windows-thread-ambient-sys = { version = "0.3.0", path = "../windows-thread-ambi
 # depend on this crate.
 win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
 
+# Test-only: `tests/device_handle_evidence.rs` makes a named pipe, which this crate does not wrap because
+# Learn files it with the pipe functions. `win-pipes-sys` does not depend on this crate.
+win-pipes-sys = { version = "0.1.0", path = "../win-pipes-sys" }
+
 # Test-only. `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
 # they are the state `GetFullPathNameW` reads and rewrites when it roots a
 # drive-relative path, so a test that does not control them can only bound that
-# behaviour rather than pin it. `Win32_System_Pipes` is for
-# `tests/device_handle_evidence.rs`, which makes a named pipe. A dev-dependency, so no
-# consumer inherits the feature.
+# behaviour rather than pin it. A dev-dependency, so no consumer
+# inherits the feature.
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -75,7 +78,6 @@ features = [
 	"Win32_Foundation",
 	"Win32_Storage_FileSystem",
 	"Win32_System_Environment",
-	"Win32_System_Pipes",
 ]
 
 [dependencies.windows-sys]

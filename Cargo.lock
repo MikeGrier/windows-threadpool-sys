@@ -305,6 +305,7 @@ dependencies = [
  "io-buffers",
  "win-authorization-sys",
  "win-error-codes",
+ "win-pipes-sys",
  "win-volume-sys",
  "windows-sys",
  "windows-thread-ambient-sys",

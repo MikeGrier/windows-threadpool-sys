@@ -8,8 +8,8 @@
 //! rest on the documentation, not on this file.
 //!
 //! Both are asked through the crates that wrap them, [`QueryFileType`] here and
-//! `win_volume_sys::storage_device_number`, so this file makes no unsafe call of its own to read a
-//! handle.
+//! `win_volume_sys::storage_device_number`, and the named pipe is made by `win_pipes_sys`, so this
+//! file makes no unsafe call of its own.
 //!
 //! The handles come from [`OpenFile`], the opener a consumer uses, so the observations are of what
 //! that opener returns. Console and serial-port handles are not here: a test host may have neither,
@@ -19,15 +19,14 @@
 
 use std::os::windows::io::{AsHandle, OwnedHandle};
 
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 use win_volume_sys::{StorageDeviceNumber, storage_device_number};
 use windows_namespace_request_sys::{
     CapturedHandle, CloseRequest, FileType, OpenFile, QueryFileType,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_WAIT};
 use wtf_string::Wtf16String;
 
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -104,23 +103,15 @@ fn nul_is_char_and_has_no_device_number() {
 #[test]
 fn a_named_pipe_is_pipe_and_has_no_device_number() {
     let name = format!(r"\\.\pipe\di146-evidence-{}", std::process::id());
-    let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
-    // SAFETY: `wide` is NUL-terminated and outlives the call.
-    let server = unsafe {
-        CreateNamedPipeW(
-            wide.as_ptr(),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            std::ptr::null(),
-        )
+    let options = NamedPipeOptions {
+        open_mode: PipeOpenMode::ACCESS_DUPLEX,
+        pipe_mode: PipeMode::WAIT,
+        max_instances: 1,
+        out_buffer_size: 4096,
+        in_buffer_size: 4096,
+        default_timeout_ms: 0,
     };
-    assert_ne!(server, windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE);
-    // SAFETY: `server` is a handle this call owns.
-    let server = unsafe { std::os::windows::io::FromRawHandle::from_raw_handle(server) };
+    let server = create_named_pipe(&name, &options, None).expect("create the pipe");
     let client = open(&name, GENERIC_READ | GENERIC_WRITE, 0);
 
     for end in [&server, &client] {
