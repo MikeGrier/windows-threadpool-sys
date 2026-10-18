@@ -171,6 +171,12 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
     /// reads of the last one were still being delivered, and a poll-done would no longer end the
     /// poll it follows. A client that has read poll-done may poll again at once.
     ///
+    /// A refused poll also runs the engine once more, so that a poll stalled by an error a run
+    /// returned is not stalled for want of a wake: such an error leaves nothing in flight, rings
+    /// no doorbell, and until the engine runs again the gate stays closed, so a caller who only
+    /// polls would otherwise be told `InFlight` for ever. Before the gate was the reader's own,
+    /// the next poll was that wake.
+    ///
     /// # Errors
     ///
     /// [`PollError::Shutdown`] after [`shutdown`](Self::shutdown), whether or not a poll is in
@@ -181,6 +187,10 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
             return Err(PollError::Shutdown);
         }
         if !self.poll_gate.begin() {
+            // Rung without draining, which is idempotent and wakes the engine whatever it was
+            // waiting for: a run resets the doorbell before it looks, and finds nothing to do when
+            // nothing is stalled.
+            self.sq.ring_resume();
             return Err(PollError::InFlight);
         }
         // Whatever the watcher refuses leaves no poll in flight, so the gate goes back as it was. A

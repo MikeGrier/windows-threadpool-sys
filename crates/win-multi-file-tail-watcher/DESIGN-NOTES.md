@@ -597,6 +597,18 @@ module within the crate".
   - **The error is `PollError::InFlight`**, as for the watcher, with its documentation saying what
     in flight means for each. After a shutdown the answer is `Shutdown` whether or not a poll is in
     flight, as the watcher's is: the layer checks its stop request first.
+  - **A refused poll wakes the engine** ([TW-10.5](CHECKLIST.md)). Found by the second review of the
+    branch, which traced it and did not reproduce it: a run that returns an error (a failed submit
+    leaves its reads queued, `unsubmitted` set) leaves nothing in flight and rings no doorbell, so the
+    engine runs again only when something wakes it. Before the gate was the reader's own, the client's
+    next `poll` went to the watcher, whose poll-done rings the watcher's doorbell and so ran the
+    engine; with the gate in front, a stalled poll never opens it and every `poll` was refused with
+    nothing to wake the engine. `ReadLayer::poll` now rings the resume doorbell when it refuses, which
+    is idempotent and wakes the engine whatever it waited for. The alternative, ringing it from
+    `Core::record` after an error, was not taken: a persistent failure would run, fail and ring itself
+    in a loop. A refused poll costs one extra run of the engine, and when the client's SQ is full that
+    run rings the client's doorbell, which is a hint and not a proof. The failure cannot be made on
+    demand, so the test holds the gate by hand.
   - **A poll is therefore in flight through everything the client controls**: a full client SQ, and
     chunks held until the pool is empty. A client that never drains never polls again. That is
     stated on `TailReader::poll` and `PollError::InFlight`.

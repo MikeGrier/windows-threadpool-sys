@@ -1530,3 +1530,19 @@ loaded run in about thirty did hit the 60 s bound in `runner_log`, in both of it
 recur, and its cause is not established. The timeout message now says how many bytes were delivered, what the file holds and whether the
 child has exited, so a recurrence tells a starved child from a reader that stopped delivering. The bound is within a factor of two of what
 this load makes the target take, which is the likely reading and not a finding.
+
+## Moved 2026-10-18 13:27:24 -04:00 -- TW-10.5: a refused poll wakes the engine
+
+### <a id="tw-105"></a>TW-10.5 -- A poll refused as in flight wakes the reading engine, so that a poll held up by an error a run returned, which leaves nothing in flight and rings no doorbell, is not refused for ever now that the reader's gate is in front of the watcher's. *(completed 2026-10-18 13:27:24 -04:00)*
+
+The second review of the branch (M10) found it by tracing, with no reproduction: a failed `batch.submit()` returns an error with
+its reads still queued and `unsubmitted` set, and the engine runs again only when a doorbell wakes it. Before TW-10.3 the next
+`poll` supplied that wake through the watcher; the reader's gate now refuses it first. The reviewer's suggested fix, ringing the
+resume doorbell from the refusal, was taken; ringing it from `Core::record` was not, because a persistent failure would loop.
+Reasoning and costs are in [TW-D-16](DESIGN-NOTES.md#tw-d-16). `TailReader::poll` and `take_failure` document it.
+
+The failure cannot be made on demand, so the test holds the gate by hand: with nothing stalled the engine does not run on its own,
+a refused poll runs it. One sabotage entry removes the ring. Its first run was caught as a hang, because the test's 30 s deadline
+was longer than the harness's 15 s bound; the deadline is now 10 s so it fails by assertion.
+
+The `try_pop` error path the reviewer also named was not examined and is not covered by this change beyond the same wake.

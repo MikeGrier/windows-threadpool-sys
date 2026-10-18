@@ -481,6 +481,34 @@ fn a_shut_down_reader_refuses_a_poll_as_shut_down_even_while_one_is_in_flight() 
 }
 
 #[test]
+fn a_poll_refused_as_in_flight_runs_the_engine_again() {
+    let layer = layer();
+    // A poll in flight, held by hand, as one stalled by an error a run returned is: nothing in the
+    // ring and no doorbell rung, so nothing else would run the engine.
+    assert!(layer.poll_gate.begin());
+    std::thread::sleep(Duration::from_millis(100));
+    let settled = runs(&layer);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        runs(&layer),
+        settled,
+        "the engine runs on its own while nothing is stalled or rung"
+    );
+
+    assert!(matches!(layer.poll(), Err(crate::PollError::InFlight)));
+    // Ten seconds for a thread-pool callback to start, which is far longer than one takes and
+    // shorter than a sabotage sweep's hang bound, so a missing kick fails by this assertion.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while runs(&layer) == settled {
+        assert!(
+            Instant::now() < deadline,
+            "a refused poll did not run the engine"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn a_poll_the_watcher_refuses_leaves_the_gate_as_it_was() {
     let layer = layer();
     // The watcher is stopped on its own, as `shutdown` would, and the layer is not: the layer takes

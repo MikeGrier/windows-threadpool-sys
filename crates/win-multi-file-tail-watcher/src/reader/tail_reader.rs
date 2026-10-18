@@ -188,6 +188,10 @@ impl<T: Clone + Send + 'static> TailReader<T> {
     /// the last reads are only waiting to be delivered. So a poll-done ends the poll it follows, and
     /// a caller that has read one may poll again at once.
     ///
+    /// A call that is refused as in flight also runs the reader once more, so that a poll held up by
+    /// an error a run returned ([`take_failure`](Self::take_failure)) gets the wake it needs from the
+    /// next call and is not refused for ever. It is harmless when nothing is held up.
+    ///
     /// # Errors
     ///
     /// A [`PollError`]: a poll is already in flight ([`PollError::InFlight`]), the reader has been
@@ -214,7 +218,8 @@ impl<T: Clone + Send + 'static> TailReader<T> {
     }
 
     /// The first error a run of the reader returned to its caller, if one has, taken. The reader
-    /// goes on: the state is consistent after one, and the next wake runs it again.
+    /// goes on: the state is consistent after one, and the next wake runs it again. A call to
+    /// [`poll`](Self::poll) that is refused as in flight is such a wake.
     #[must_use]
     pub fn take_failure(&self) -> Option<io::Error> {
         self.layer.take_failure()
