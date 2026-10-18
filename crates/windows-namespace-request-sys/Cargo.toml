@@ -56,8 +56,9 @@ windows-thread-ambient-sys = { version = "0.3.0", path = "../windows-thread-ambi
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
 # they are the state `GetFullPathNameW` reads and rewrites when it roots a
 # drive-relative path, so a test that does not control them can only bound that
-# behaviour rather than pin it. A dev-dependency, so no consumer inherits the
-# feature.
+# behaviour rather than pin it. `Win32_System_IO` and `Win32_System_Pipes` are for
+# `tests/device_handle_evidence.rs`, which sends a device control and makes a named
+# pipe. A dev-dependency, so no consumer inherits the features.
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -65,7 +66,13 @@ default-features = false
 # below: reading an entry has to clear and re-read the last error to tell an
 # empty value from an absent one, and a test target must not depend on a
 # feature staying enabled for a reason unrelated to it.
-features = ["Win32_Foundation", "Win32_System_Environment"]
+features = [
+	"Win32_Foundation",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Environment",
+	"Win32_System_IO",
+	"Win32_System_Pipes",
+]
 
 [dependencies.windows-sys]
 version = "0.61.2"
