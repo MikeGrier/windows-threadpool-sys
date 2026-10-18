@@ -3171,3 +3171,13 @@ raw `GetHandleInformation`, which [DI-14.8.4](CHECKLIST.md) replaces with the sa
 its constants, `EVENT_MODIFY_STATE` included though it is an event's right, because an associated constant can
 be declared only where the type is and moving it would have broken `Access::EVENT_MODIFY_STATE`; that is
 recorded in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-1`.
+
+### <a id="di-1484"></a>DI-14.8.4 -- `GetHandleInformation` as a safe query in `win-handles-sys`. *(completed 2026-10-18 01:52:00 -04:00)*
+
+`get_handle_information(handle)` returns `HandleFlags`, a typed set of `INHERIT` and `PROTECT_FROM_CLOSE` that keeps
+a bit it does not name. Tests set the flags through raw `SetHandleInformation` and read them back through the
+query (neither flag, either, both, set and cleared, a handle `std` opens, a duplicate of an inheritable source,
+and the handle borrowed, owned and by reference), with five sabotage entries caught and one declared blind spot,
+and 100 repeat runs without a failure. The duplicate's inheritance test, which read the flag through the raw
+call, reads it through this query. The error path has no test, since `AsHandle` makes a handle that is not open
+unrepresentable, and says so where it is defined. What was measured is in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-2`.

@@ -21,3 +21,19 @@ decision to name more rights, or to move the event's, would be made.
 
 The doc comment on `Access` was the one line changed in the move besides the provenance header: it said the
 constants were "this crate's own objects", which is no longer true of this crate.
+
+## WH-D-2: `get_handle_information` returns the flags as Windows gives them
+
+`GetHandleInformation` is `get_handle_information(handle)`, returning `HandleFlags` (`DI-14.8.4`): a newtype over
+the Win32 bits with `INHERIT` and `PROTECT_FROM_CLOSE` named, `contains`, `|`, and `from_bits` and `bits` for the
+rest. A bit Windows defines that is not named is kept and not an error, since this crate does not narrow what
+the call reports. The handle is `impl AsHandle`, so it is open for the borrow and the call cannot be refused for
+a handle that is not; the error path is the one edge with no test, and the definition says so (its sabotage entry
+is a declared blind spot).
+
+Measured on Windows 11 build 26300, and none of it a ruling: a handle `std` opens carries no flag; an event made
+with an inheritable attribute carries `INHERIT` and only it; a duplicate made by `duplicate_handle_with_access` is
+not inheritable even when its source is; and protecting a handle from close reads back as `PROTECT_FROM_CLOSE`
+and clears when the protection is removed. The tests set the flags through raw `SetHandleInformation`, so the
+query is never checked against itself, and the protection is cleared by a guard before the handle is dropped,
+since closing a protected handle is refused.

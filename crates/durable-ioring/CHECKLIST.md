@@ -305,8 +305,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
   - [x] **DI-14.8.3** -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask move into it from `win-sync-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1483)
 
-  - [ ] **DI-14.8.4** -- `GetHandleInformation` as a safe query in `win-handles-sys`: whether a handle is
-    inheritable and whether it is protected from close, as a typed set of the two flags the page documents.
+  - [x] **DI-14.8.4** -- `GetHandleInformation` as a safe query in `win-handles-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1484)
 
   - [ ] **DI-14.8.5** -- `win-durable-ioring`'s `DI-14.3` tests read back through the two queries, and the
     sabotage entry for the inheritance choice gains the test that sees the handle.
