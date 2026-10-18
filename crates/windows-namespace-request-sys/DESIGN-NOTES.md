@@ -1122,3 +1122,34 @@ This crate re-exports that crate as `security` and at its root, so no published 
 names `src/security.rs` or `src/security/sddl.rs` (including `NR-3.1`'s) describes where the code was when the
 decision was made; the same files are now `crates/win-authorization-sys/src/security.rs` and
 `security/sddl.rs`, moved with `git mv`.
+
+## <a id="d-29"></a>D-29: `GetFileType` is its own entry, an unknown type is a failure only by the call's own report, and the value is carried as it came
+
+**Decided by the engineer, 2026-10-18** ("build both of these now"), so that a caller can ask what kind of
+handle an opened file is of an observer, and the opener need not return it. Sources read that day: the
+`GetFileType` page (`ms.date` 12/05/2018).
+
+**One entry, `QueryFileType`, in the shape of its neighbours:** a captured duplicate of the handle, a
+`perform` that returns the call's outcome with the code snapshotted before anything else runs, and
+`try_clone`. Learn files the call under File Management Functions, with `CreateFile` and
+`GetFinalPathNameByHandle`, so it is here.
+
+**The value is carried as it came.** `FileType` holds what the call returned and names the five values the
+page lists; a value outside them is held and printed as it is. The entry says nothing of what a type means
+beyond the page's own description of each.
+
+**An unknown type is a failure only when the call says so.** The page makes `FILE_TYPE_UNKNOWN` both a result
+and a failure and tells them apart by `GetLastError`: `NO_ERROR` after a call that worked, the code after one
+that failed. So the last error is cleared before the call, and an unknown type read with `NO_ERROR` is
+`FileType::UNKNOWN`, while one read with any other code is that code, unaltered. The mapping is a function of
+those two values, and is tested as one.
+
+**Observed on 2026-10-18, Windows 11 build 26300, local NTFS, unelevated.** A disk file and a directory
+returned `FILE_TYPE_DISK`. A volume opened with no access returned `FILE_TYPE_DISK`. `NUL` returned
+`FILE_TYPE_CHAR`. The read end of an anonymous pipe returned `FILE_TYPE_PIPE`. An event, which is not a file,
+made the call fail with `ERROR_INVALID_HANDLE`. A handle whose call worked and returned an unknown type was not
+found, so the clearing of the last error is not exercised by any handle here; its sabotage is declared as
+surviving, with that reason, and the clearing rests on the page.
+
+**Scheduled work:** none in this crate. [DI-14.12](../durable-ioring/CHECKLIST.md) is the consumer, with
+`WV-3.1` in [win-volume-sys](../win-volume-sys/CHECKLIST.md).

@@ -386,3 +386,12 @@ A working position recorded with them, not a decision: the entries keep taking t
 and raw access masks they take now, and the typed vocabulary for rights, share mode, disposition and
 attributes belongs to durable-ioring's `DI-13.3`, `DI-13.4` and `DI-13.7`, so this crate stays the
 policy-free catalogue.
+
+## Moved 2026-10-18 17:04:20 -04:00 -- `GetFileType`
+
+### <a id="nr-39-filetype"></a>NR-3.9 -- `GetFileType` is a `QueryFileType` entry on a captured handle, with the value carried as it came. *(completed 2026-10-18 17:04:20 -04:00)*
+
+The engineer, 2026-10-18 ("build both of these now"), so that a caller can ask what kind of handle an opened
+file is without the opener returning it. The decision and what was observed are
+[D-29](DESIGN-NOTES.md#d-29). Four sabotages, one declared as surviving because no handle tried returns an unknown
+type from a call that worked.

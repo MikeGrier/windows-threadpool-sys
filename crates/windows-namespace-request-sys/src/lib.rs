@@ -112,6 +112,7 @@
 mod anchored;
 pub mod close;
 pub mod file_info;
+pub mod file_type;
 pub mod final_path;
 pub mod full_path;
 pub mod handle;
@@ -127,6 +128,7 @@ pub mod watch;
 pub use anchored::PathCaptureError;
 pub use close::{CloseFn, CloseRequest};
 pub use file_info::QueryFileInformationByHandle;
+pub use file_type::{FileType, QueryFileType};
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
 pub use full_path::{FullPathError, ResolveFullPath};
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};

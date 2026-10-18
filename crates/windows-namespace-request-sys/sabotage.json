@@ -508,6 +508,38 @@
       "why": "A control: a string has an interior NUL when its units contain a zero, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        if path.has_interior_nul() {\n            return Err(PathCaptureError::InteriorNul);\n"],
       "replace": ["        if path.as_units().contains(&0) {\n            return Err(PathCaptureError::InteriorNul);\n"]
+    },
+    {
+      "name": "NR-3.9: an unknown type from a call that worked is reported as a failure",
+      "file": "src/file_type.rs",
+      "expect": "caught",
+      "why": "The call's page says an unknown type with NO_ERROR is a result, not a failure; reading every unknown as a failure turns a handle of a type the system does not name into an error.",
+      "find": ["        Err(error) if error.code() == NO_ERROR => Ok(FileType::UNKNOWN),"],
+      "replace": ["        Err(error) if error.code() != NO_ERROR => Ok(FileType::UNKNOWN),"]
+    },
+    {
+      "name": "NR-3.9: a failure of the call is reported as an unknown type",
+      "file": "src/file_type.rs",
+      "expect": "caught",
+      "why": "A handle the call fails on, an event for one, must report the call's code and not a type, or a caller cannot tell a handle that has no type from one that has an unknown one.",
+      "find": ["        Err(error) => Err(error),\n    }\n}"],
+      "replace": ["        Err(_) => Ok(FileType::UNKNOWN),\n    }\n}"]
+    },
+    {
+      "name": "NR-3.9: the disk value is another type's",
+      "file": "src/file_type.rs",
+      "expect": "caught",
+      "why": "The values are the call's page's, and a constant that held another's would make a file read as a device.",
+      "find": ["    pub const DISK: Self = Self(FILE_TYPE_DISK);"],
+      "replace": ["    pub const DISK: Self = Self(FILE_TYPE_CHAR);"]
+    },
+    {
+      "name": "NR-3.9: the last error is not cleared before the call",
+      "file": "src/file_type.rs",
+      "expect": "survives",
+      "why": "Declared: clearing the last error matters only to a call that returns an unknown type and worked, and no handle kind tried on the measuring machine does (an event fails with ERROR_INVALID_HANDLE), so a stale code cannot be made to change an answer here. The clearing rests on the call's page, which is the reason it is made.",
+      "find": ["                unsafe { SetLastError(NO_ERROR) };\n"],
+      "replace": ["                let _ = SetLastError;\n"]
     }
   ]
 }

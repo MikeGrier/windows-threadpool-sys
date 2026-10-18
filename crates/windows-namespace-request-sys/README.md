@@ -119,6 +119,7 @@ rather than chosen by taste:
 | `CloseHandle` and variant close routines | `CloseRequest` |
 | `GetFileInformationByHandleEx` | `QueryFileInformation` |
 | `GetFileInformationByHandle` | `QueryFileInformationByHandle` |
+| `GetFileType` | `QueryFileType` |
 | `GetFinalPathNameByHandleW` | `QueryFinalPath` |
 | `GetVolumeInformationByHandleW` | `QueryVolumeInformation` |
 | `GetFullPathNameW` | `ResolveFullPath` |
