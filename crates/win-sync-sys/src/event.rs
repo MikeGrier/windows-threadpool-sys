@@ -10,7 +10,7 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
-use crate::duplicate::{Access, duplicate_handle_with_access};
+use win_handles_sys::{Access, duplicate_handle_with_access};
 
 /// How an event returns to unsignalled after it is set.
 ///

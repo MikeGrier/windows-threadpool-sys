@@ -18,6 +18,10 @@ categories = ["api-bindings", "os::windows-apis", "concurrency"]
 # safe layer more or less directly over a Win32 API area, synchronization.
 
 [dependencies]
+# `DuplicateHandle` and the `Access` mask, which were this crate's `duplicate` module until they were
+# moved to where Microsoft Learn files them. Re-exported at the paths they had.
+win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
+
 # `default-features = false` matches every other crate in the workspace.
 #
 # `Win32_System_Threading` is `CreateEventW`, `SetEvent` and `ResetEvent`.
