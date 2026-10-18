@@ -277,6 +277,9 @@ fn a_locked_raw_volume_is_written_and_the_lock_is_given_up_when_it_closes() {
 #[test]
 #[ignore = "needs an administrator: creates and attaches a virtual disk"]
 fn an_exclusive_raw_volume_refuses_a_second_open_until_it_closes() {
+    // Also the evidence that the `CreateFileW` page's "must have the FILE_SHARE_WRITE flag" for a
+    // volume is not what the kernel does, which is why `VolumeOptions::share` does not refuse a mode
+    // without it (DI-14.11).
     let scratch = ScratchVolume::create(MEGABYTES).expect("a scratch volume");
     let path = scratch.path();
     let exclusive = open_when_free(&path, VolumeOptions::new().share(ShareMode::NONE));

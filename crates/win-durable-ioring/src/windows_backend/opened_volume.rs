@@ -147,6 +147,13 @@ impl VolumeOptions {
     /// volume exclusively. An open the sharing of either side does not allow fails with a
     /// [`SharingViolation`](super::SharingViolation). Calling this again replaces the mode.
     ///
+    /// The `CreateFileW` page says that "When opening a volume or floppy disk, the *dwShareMode*
+    /// parameter must have the `FILE_SHARE_WRITE` flag" (read 2026-10-18). A mode without it is not
+    /// refused here, because the measurement contradicts the page: on Windows 11 build 26300, elevated,
+    /// an exclusive open of a volume succeeded and refused a second open until it closed (the test
+    /// `an_exclusive_raw_volume_refuses_a_second_open_until_it_closes`). Where the documentation is
+    /// shown to be wrong, this crate does not build the documented condition in as a refusal.
+    ///
     /// This is not the lock: [`lock`](Self::lock) is a device control made once the volume is open,
     /// and the share mode is judged by the open itself.
     pub fn share(mut self, share: ShareMode) -> Self {
