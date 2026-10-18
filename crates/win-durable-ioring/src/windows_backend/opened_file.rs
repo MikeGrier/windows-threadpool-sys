@@ -20,7 +20,6 @@
 //! [`OpenedFile::open`] the two run together.
 
 use std::fmt;
-use std::fs;
 use std::io;
 use std::marker::PhantomData;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
@@ -28,7 +27,9 @@ use std::path::{Component, Path, PathBuf, Prefix};
 
 use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::open::OpenFile;
-use windows_namespace_request_sys::{SecurityAttributes, SecurityDescriptor};
+use windows_namespace_request_sys::{
+    CapturedHandle, FinalPathError, QueryFinalPath, SecurityAttributes, SecurityDescriptor,
+};
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -641,24 +642,16 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
     /// # Errors
     ///
     /// [`RemoteDevice`] (as an [`io::ErrorKind::Unsupported`] error) when `B` can claim its warranty
-    /// only on a local device and the path is on a remote one, decided from the path's final location,
-    /// which resolves links and mapped drives, before anything is created; the file can still be
-    /// replaced by a link in the time between. Otherwise whatever the open reports, among them
-    /// [`SharingViolation`] (as an [`io::ErrorKind::ResourceBusy`] error) when the file is open in a
-    /// way that conflicts with this open's access or sharing.
+    /// only on a local device and the opened handle is on a remote one. That is decided from the
+    /// handle's final path, which `GetFinalPathNameByHandleW` resolves through links and mapped
+    /// drives, so there is no window between the check and the open in which a link can be
+    /// swapped. It is made after the open, so a file created before the refusal stays created and
+    /// the open has already reached the network. A handle whose final path cannot be read is
+    /// refused with that call's error, since its device is then not known to be local. Otherwise
+    /// whatever the open reports, among them [`SharingViolation`] (as an
+    /// [`io::ErrorKind::ResourceBusy`] error) when the file is open in a way that conflicts with
+    /// this open's access or sharing.
     pub fn perform(&self) -> io::Result<OpenedFile<B, A>> {
-        if B::LOCAL_DEVICE_ONLY {
-            // The one place a `Path` is needed, until `DI-14.5` moves the check to the opened
-            // handle. It looks at the path the call is given, fixed to the directory the request
-            // was built in, so it is the file the call will open that is judged.
-            let location = final_location(Path::new(&self.request.win32_path().to_os_string()))?;
-            if names_a_remote_device(&location) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    RemoteDevice { location },
-                ));
-            }
-        }
         let handle = open_request::perform(&self.request).map_err(|error| {
             refine_sharing(
                 error,
@@ -668,8 +661,18 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
                 self.share,
             )
         })?;
+        let handle = SharedHandle::from(handle);
+        if B::LOCAL_DEVICE_ONLY {
+            let location = final_location(handle.as_handle())?;
+            if names_a_remote_device(&location) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    RemoteDevice { location },
+                ));
+            }
+        }
         Ok(OpenedFile {
-            handle: SharedHandle::from(handle),
+            handle,
             geometry: B::geometry(),
             mode: PhantomData,
         })
@@ -703,18 +706,23 @@ impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedFile<B, A> {
     }
 }
 
-/// Where `path` finally lands: itself if it exists, else the directory it would be created in.
-fn final_location(path: &Path) -> io::Result<PathBuf> {
-    match fs::canonicalize(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let parent = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            fs::canonicalize(parent)
-        }
-        other => other,
-    }
+/// Where an opened handle is: its final path, in `GetFinalPathNameByHandleW`'s default form, which
+/// follows links and mapped drives to the object the handle names. A handle opened on a link itself
+/// (`FILE_FLAG_OPEN_REPARSE_POINT`) names the link, on its own volume.
+fn final_location(handle: BorrowedHandle<'_>) -> io::Result<PathBuf> {
+    let captured = CapturedHandle::capture(handle).map_err(|error| match error.raw_os_error() {
+        Some(code) => io::Error::from_raw_os_error(code),
+        None => io::Error::other(error),
+    })?;
+    let path = QueryFinalPath::new(captured)
+        .perform()
+        .map_err(|error| match error {
+            FinalPathError::Win32(code) => {
+                io::Error::from_raw_os_error(open_request::raw_code(code.code()))
+            }
+            other => io::Error::other(other),
+        })?;
+    Ok(PathBuf::from(path.to_os_string()))
 }
 
 /// Whether a resolved path names a device of another machine: a UNC share, in either of its

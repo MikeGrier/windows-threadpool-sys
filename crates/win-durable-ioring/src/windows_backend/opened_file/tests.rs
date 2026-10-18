@@ -279,8 +279,8 @@ fn the_options_decide_what_is_opened_and_created() {
 
 #[test]
 fn an_unbuffered_file_can_be_created_where_none_exists_yet() {
-    // The remote check looks at the directory a file would be created in, so a new path is judged
-    // before anything is created, and a missing directory is the open's own NotFound.
+    // The remote check is made on the opened handle, so a file that is created is judged where it
+    // was created, and a missing directory is the open's own NotFound.
     let temp = TempFile::new("of-new");
     let fresh = temp.0.with_extension("fresh");
     let created = OpenedFile::<Unbuffered>::open(
@@ -342,26 +342,55 @@ fn a_path_on_a_local_volume_does_not() {
 }
 
 #[test]
-fn where_a_path_lands_is_itself_when_it_exists_and_its_directory_when_it_does_not() {
+fn where_a_handle_is_is_the_final_path_of_the_file_it_names() {
     let temp = TempFile::new("of-location");
-    let existing = final_location(&temp.0).expect("an existing file");
-    assert_eq!(existing, fs::canonicalize(&temp.0).expect("canonical"));
+    let file = File::open(&temp.0).expect("open");
+    let location = final_location(file.as_handle()).expect("the final path of an open file");
+    assert_eq!(location, fs::canonicalize(&temp.0).expect("canonical"));
+    assert!(!names_a_remote_device(&location));
+}
 
-    let absent = temp.0.with_extension("absent");
-    let landed = final_location(&absent).expect("the directory of a new file");
-    let directory = temp.0.parent().expect("a directory");
-    assert_eq!(landed, fs::canonicalize(directory).expect("canonical"));
+#[test]
+fn a_handle_whose_final_path_cannot_be_read_is_refused_with_that_calls_error() {
+    // `NUL` is a handle that is not a file of a volume, so it has no final path. An unbuffered open
+    // of such a device is therefore refused, since it is not known to be on a local device, and the
+    // error is the call's own rather than a made-up one. What an open of a device should do is
+    // DI-14.6's to settle; this is the behaviour until it does.
+    let nul = File::open("NUL").expect("open NUL");
+    let error = final_location(nul.as_handle()).expect_err("NUL has no final path");
+    assert!(error.raw_os_error().is_some(), "{error:?}");
+    assert_ne!(error.kind(), io::ErrorKind::Unsupported);
+}
 
-    let relative = final_location(Path::new("absent-in-the-current-directory"))
-        .expect("a bare name is judged by the current directory");
+#[test]
+fn an_open_is_judged_where_the_handle_is_so_a_link_is_followed_unless_the_link_is_opened() {
+    let temp = TempFile::new("of-link-location");
+    let link = temp.0.with_extension("link");
+    if let Err(error) = std::os::windows::fs::symlink_file(&temp.0, &link) {
+        eprintln!("skipped: a symbolic link cannot be made here: {error}");
+        return;
+    }
+
+    // Followed: the handle is the target's.
+    let followed = OpenedFile::<Cached>::open(wtf(&link), read_write()).expect("open the target");
     assert_eq!(
-        relative,
-        fs::canonicalize(".").expect("the current directory")
+        final_location(followed.as_handle()).expect("a location"),
+        fs::canonicalize(&temp.0).expect("canonical")
     );
 
-    let error = final_location(&temp.0.join("no-such-directory").join("file"))
-        .expect_err("its directory is missing too");
-    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    // Not followed: the handle is the link's own.
+    let own = OpenedFile::<Cached>::open(wtf(&link), read_write().open_reparse_point(true))
+        .expect("open the link");
+    let expected = fs::canonicalize(link.parent().expect("a directory"))
+        .expect("canonical")
+        .join(link.file_name().expect("a name"));
+    assert_eq!(
+        final_location(own.as_handle()).expect("a location"),
+        expected
+    );
+
+    drop((followed, own));
+    fs::remove_file(&link).expect("remove the link");
 }
 
 /// The administrative share of this volume, `\\localhost\X$\...`, naming `local`. Reachable on an
@@ -397,6 +426,40 @@ fn an_unbuffered_file_is_refused_on_a_remote_device_and_a_cached_one_is_not() {
 
     OpenedFile::<Cached>::open(wtf(&remote), read_write())
         .expect("a cached file on a share claims only best effort, and is allowed");
+}
+
+#[test]
+#[ignore = "needs the administrative share \\\\localhost\\C$, which a CI runner has"]
+fn a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle()
+ {
+    let temp = TempFile::new("of-remote-late");
+
+    // The documented cost of checking the opened handle: the create has happened when it is refused.
+    let fresh = temp.0.with_extension("fresh");
+    let fresh_share = admin_share(&fresh);
+    let error = OpenedFile::<Unbuffered>::open(
+        wtf(&fresh_share),
+        read_write().disposition(Disposition::CreateNew),
+    )
+    .expect_err("an unbuffered file on a share");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert!(fresh.exists(), "the file was created before the refusal");
+    fs::remove_file(&fresh).expect("remove");
+
+    // A local link to a file on a share: followed, the handle is on the share and is refused;
+    // opened, the handle is the link's own, on this volume, and is not.
+    let link = temp.0.with_extension("link");
+    if let Err(error) = std::os::windows::fs::symlink_file(admin_share(&temp.0), &link) {
+        eprintln!("skipped: a symbolic link cannot be made here: {error}");
+        return;
+    }
+    let error = OpenedFile::<Unbuffered>::open(wtf(&link), read_write())
+        .expect_err("the link leads to a share");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let own = OpenedFile::<Unbuffered>::open(wtf(&link), read_write().open_reparse_point(true))
+        .expect("the link itself is on a local volume");
+    drop(own);
+    fs::remove_file(&link).expect("remove the link");
 }
 
 // --- What an open asks of CreateFileW -------------------------------------------------------

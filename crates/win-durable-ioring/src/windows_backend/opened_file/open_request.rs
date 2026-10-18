@@ -65,6 +65,6 @@ fn path_error(error: PathCaptureError) -> io::Error {
 }
 
 /// A Win32 error code as the signed value `io::Error` holds, bit for bit.
-fn raw_code(code: u32) -> i32 {
+pub(super) fn raw_code(code: u32) -> i32 {
     i32::from_ne_bytes(code.to_ne_bytes())
 }

@@ -957,12 +957,20 @@
       "replace": ["            if matches!(prefix.kind(), Prefix::UNC(..))"]
     },
     {
-      "name": "DI-10.1: a new file's remote check is skipped by looking nowhere",
+      "name": "DI-14.5: the location of a handle is not the handle's final path",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "A path that does not exist yet is judged by the directory it would be created in; without that, creating an unbuffered file fails or goes unchecked.",
-      "find": ["        Err(error) if error.kind() == io::ErrorKind::NotFound => {"],
-      "replace": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {"]
+      "why": "The remote check is made on what the opened handle is. A location that was a constant, or the path the caller gave, would judge every handle local.",
+      "find": ["    Ok(PathBuf::from(path.to_os_string()))"],
+      "replace": ["    Ok(PathBuf::from(r\"C:\\\"))"]
+    },
+    {
+      "name": "DI-14.5: a handle whose final path cannot be read loses the call's error",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "A handle whose device is not known to be local is refused with the call's own code, not with an invented one that no caller can act on.",
+      "find": ["                io::Error::from_raw_os_error(open_request::raw_code(code.code()))"],
+      "replace": ["                io::Error::other(code)"]
     },
     {
       "name": "DI-10.1: a target takes its class from a declaration instead of its file",

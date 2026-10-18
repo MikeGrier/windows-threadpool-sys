@@ -81,7 +81,8 @@ which no disposition implies: without it a link is followed, including by `Creat
 and opens nothing, fixing a relative path to the current directory as it is then, and
 `OpenRequest::perform` makes the call on whatever thread the caller chooses. A request is `Send`, and
 performing it again opens the file again. The refusal of an unbuffered file on a remote device is made in
-`perform`.
+`perform`, on the opened handle from its final path, so a file the open created is still there when it is
+refused.
 
 A file the open creates is given `FileOptions::attributes`, a `FileAttributes` set of `ARCHIVE`, `HIDDEN`,
 `OFFLINE`, `READONLY`, `SYSTEM` and `TEMPORARY` (`FILE_ATTRIBUTE_NORMAL`, the absence of attributes, is the
@@ -139,7 +140,9 @@ drop(opened);
 # Ok::<(), std::io::Error>(())
 ```
 
-An unbuffered file is refused on a remote device, where the claim cannot hold.
+An unbuffered file is refused on a remote device, where the claim cannot hold. The handle is asked where it
+is after the open, so a link is judged by the handle it opens: followed, the file it leads to; opened with
+`open_reparse_point`, the link itself.
 
 ### A raw volume
 
