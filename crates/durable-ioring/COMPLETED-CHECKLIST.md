@@ -3159,3 +3159,15 @@ object that has no descriptor, which reads as one with no parts, and a kind Wind
 is in [win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-2`. The request crate's test that
 created files with a descriptor now reads them back through this query and no longer needs the authorization
 feature of `windows-sys`.
+
+### <a id="di-1483"></a>DI-14.8.3 -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask move into it from `win-sync-sys`. *(completed 2026-10-18 01:42:00 -04:00)*
+
+Two commits, as for [DI-14.8.1](#di-1481): the crate added with the code copied (`Split-Source` and `Split-Into`
+trailers), then `win-sync-sys` switched over and its copy, its tests and its seven sabotage entries moved or
+deleted. `win-sync-sys` re-exports both names at the paths they had, and `win-durable-ioring`, which takes them
+from `win-sync-sys`, is unchanged. The tests observe a duplicate through raw calls, so they now make their events
+with `CreateEventW` where they used the sync crate's `Event`; one of them reads the inheritance flag back through
+raw `GetHandleInformation`, which [DI-14.8.4](CHECKLIST.md) replaces with the safe query. `Access` keeps both of
+its constants, `EVENT_MODIFY_STATE` included though it is an event's right, because an associated constant can
+be declared only where the type is and moving it would have broken `Access::EVENT_MODIFY_STATE`; that is
+recorded in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-1`.
