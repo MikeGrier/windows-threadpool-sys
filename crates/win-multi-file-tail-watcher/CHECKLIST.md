@@ -178,7 +178,7 @@ initiated before the previous one completes should fail. fix all".
 
 - [x] **TW-10.1** -- A sabotage entry made stale by TW-9.6 is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-101)
 
-- [ ] **TW-10.2** -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so.
+- [x] **TW-10.2** -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-102)
 
 - [ ] **TW-10.3** -- `TailReader::poll` is refused while the previous poll is not complete, and a poll is complete when its poll-done has been queued for the client, after every read of it is delivered, and not when the watcher has finished announcing; a client that has read poll-done may poll again at once.
 

@@ -560,8 +560,15 @@ module within the crate".
   - **`TailReaderError` is its own enum**, one variant per cause, each carrying the error behind it as
     its `source`: `Options` (a refused size), `Watcher` and `ClientSq` (a queue that could not be
     made), `Allocation` (the buffers), `Ring` (the I/O ring could not be made or cannot read, which
-    is what a Windows without I/O ring support reports) and `Io` (anything else the operating system
-    refused). It is `#[non_exhaustive]`.
+    is what a Windows without I/O ring support reports, or its limits could not be read) and `Io`
+    (anything else the operating system refused). It is `#[non_exhaustive]`.
+  - **A failure to read the ring's limits is `Ring`, not `Options`** ([TW-10.2](CHECKLIST.md)). The
+    options check the ring's two sizes against what `capabilities()` reports, and that call can
+    fail, which `OptionsError::RingCapabilities` carries. No size was refused then, so reporting it
+    as `Options` ("a size was refused") sent a caller looking for a mistake in their options that
+    was not there. `TailReaderOptions::validate` still returns `OptionsError::RingCapabilities`
+    unchanged; it is the conversion into `TailReaderError` that routes it. Found by the review of
+    M9; the first of two fixes the review offered, the other being to word `Options` more broadly.
   - **The names `TailRegistration` and `TailReaderError` were chosen by the assistant**, as `Data`,
     `Shrink`, `ReadSq` and `ReadDrain` were, and not asked of the engineer.
   - **What the watcher's public surface keeps out**: `register_with`, `stop_handle`,

@@ -14,12 +14,14 @@ use crate::read_engine::EngineError;
 /// Each variant is one cause, and carries the error behind it as its
 /// [`source`](std::error::Error::source), so a caller reads why without parsing text. A refused
 /// size is [`Options`](Self::Options), found before anything is allocated; every other variant is
-/// something a size that passed could still run into.
+/// something a size that passed could still run into, or a failure that no size explains: when the
+/// ring's limits cannot be read, so its two sizes cannot be checked, that is [`Ring`](Self::Ring)
+/// and not a refused size.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TailReaderError {
-    /// A size in the [`TailReaderOptions`](super::TailReaderOptions) was refused. Nothing was
-    /// allocated.
+    /// A size in the [`TailReaderOptions`](super::TailReaderOptions) was refused: the error names
+    /// the option, the value and the cause. Nothing was allocated.
     Options(OptionsError),
     /// The watcher could not be made: the capacity given for its submission queue is not one it can
     /// have ([`CreateError::Capacity`]), is one it can have and the memory for it could not be
@@ -35,8 +37,9 @@ pub enum TailReaderError {
     /// The pool's buffers could not be allocated: `buffer_len` times `buffer_count` bytes is more
     /// than the allocator would give. The options accept any count, and the allocator answers here.
     Allocation(TryReserveError),
-    /// The I/O ring could not be made, or cannot read. On a Windows without I/O ring support this
-    /// is the error that says so.
+    /// The I/O ring could not be made, or cannot read, or its limits could not be read, which is
+    /// what its two sizes are checked against ([`OptionsError::RingCapabilities`]). On a Windows
+    /// without I/O ring support this is the error that says so.
     Ring(io::Error),
     /// The operating system refused something else the layer needs: a doorbell for the buffer
     /// pool, a duplicate of an event, a thread-pool wait, or attaching the ring's completion event.
@@ -98,7 +101,13 @@ impl std::error::Error for TailReaderError {
 }
 
 impl From<OptionsError> for TailReaderError {
+    /// A refused size is [`Options`](Self::Options). The one error of the options that is not a
+    /// size, the ring's limits being unreadable, is the operating system's and is
+    /// [`Ring`](Self::Ring), as the ring failing to be made is.
     fn from(error: OptionsError) -> Self {
-        Self::Options(error)
+        match error {
+            OptionsError::RingCapabilities(error) => Self::Ring(error),
+            other => Self::Options(other),
+        }
     }
 }

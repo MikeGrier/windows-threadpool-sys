@@ -344,6 +344,35 @@ fn what_an_engine_could_not_do_is_translated_to_the_cause() {
 }
 
 #[test]
+fn a_ring_whose_limits_cannot_be_read_is_a_ring_failure_and_not_a_refused_size() {
+    // `capabilities()` cannot be made to fail on demand, so the options' error is built.
+    let error = TailReaderError::from(OptionsError::RingCapabilities(
+        io::Error::from_raw_os_error(50),
+    ));
+    let TailReaderError::Ring(inner) = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(inner.raw_os_error(), Some(50));
+    let message = error.to_string();
+    assert!(message.contains("ring"), "{message}");
+    assert!(!message.contains("size was refused"), "{message}");
+    assert!(std::error::Error::source(&error).is_some());
+
+    // The other direction: what is a refused size stays one, whichever option it was.
+    let refused = TailReaderError::from(OptionsError::BufferLen {
+        given: 0,
+        cause: Cause::Zero,
+    });
+    assert!(
+        matches!(
+            refused,
+            TailReaderError::Options(OptionsError::BufferLen { .. })
+        ),
+        "{refused:?}"
+    );
+}
+
+#[test]
 fn every_error_names_its_cause_and_carries_its_source() {
     let reserve = Vec::<u8>::new().try_reserve(usize::MAX).unwrap_err();
     let cases: [(TailReaderError, &str); 6] = [

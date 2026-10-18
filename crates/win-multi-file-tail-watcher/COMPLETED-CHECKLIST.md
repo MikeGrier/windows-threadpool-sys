@@ -1453,3 +1453,18 @@ entry now swaps the two fields of the current expression and is caught.
 All five manifests of the crate were then swept in full against the tree as it stood: 7, 6, 23, 8 and 206 entries, all
 behaving as declared. That sweep is repeated at the end of M10, since the items after this one change the sources the
 entries patch.
+
+## Moved 2026-10-18 00:54:47 -04:00 -- TW-10.2: a failure to read the ring's limits is a ring failure
+
+### <a id="tw-102"></a>TW-10.2 -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so. *(completed 2026-10-18 00:54:47 -04:00)*
+
+`From<OptionsError> for TailReaderError` turned every options error into `Options`, whose message is "a size was
+refused", including `OptionsError::RingCapabilities`, which is the operating system failing to report the ring's limits.
+It now routes that one to `Ring`, and the documentation of `TailReaderError`, `Options` and `Ring` says so.
+`TailReaderOptions::validate` is unchanged and still returns `RingCapabilities`.
+
+The failure cannot be made on demand, so the test builds the options error and converts it; it asserts the code
+survives, the message names the ring and does not say a size was refused, and that a refused size is still `Options`.
+Two sabotage entries, one for each direction; both caught. Recorded in
+[TW-D-16](DESIGN-NOTES.md#tw-d-16). The review offered a second fix, wording `Options` more broadly; the first was taken
+because `Ring` already carries an operating-system error, and a client matching on the variant gets the right branch.
