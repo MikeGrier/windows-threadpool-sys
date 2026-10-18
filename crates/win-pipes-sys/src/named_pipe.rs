@@ -10,10 +10,10 @@
 use std::ffi::OsStr;
 use std::io;
 use std::ops::BitOr;
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::ptr;
 
+use crate::name::wide_name;
 use win_authorization_sys::SecurityAttributes;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Storage::FileSystem::{
@@ -291,14 +291,7 @@ pub fn create_named_pipe(
     options: &NamedPipeOptions,
     security: Option<&SecurityAttributes>,
 ) -> io::Result<OwnedHandle> {
-    let mut wide: Vec<u16> = name.as_ref().encode_wide().collect();
-    if wide.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a pipe name with an interior NUL",
-        ));
-    }
-    wide.push(0);
+    let wide = wide_name(name.as_ref())?;
 
     let raw_security = security.map(SecurityAttributes::to_raw);
     let security_pointer = raw_security.as_ref().map_or(ptr::null(), ptr::from_ref);

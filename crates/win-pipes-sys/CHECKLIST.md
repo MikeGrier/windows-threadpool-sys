@@ -17,8 +17,7 @@ Functions* Microsoft Learn lists under *System Services > Interprocess Communica
 
 - [x] **WP-1.5** -- `GetNamedPipeInfo`, `GetNamedPipeHandleStateW` and `SetNamedPipeHandleState`, taking and returning the typed modes. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-15)
 
-- [ ] **WP-1.6** -- `PeekNamedPipe`, `TransactNamedPipe`, `CallNamedPipe` and `WaitNamedPipe`, the operations on a
-  connected pipe and on a name.
+- [x] **WP-1.6** -- `PeekNamedPipe`, `TransactNamedPipe`, `CallNamedPipeW` and `WaitNamedPipeW`, the operations on a connected pipe and on a name. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-16)
 
 - [ ] **WP-1.7** -- `GetNamedPipeClientComputerName`, `GetNamedPipeClientProcessId`,
   `GetNamedPipeClientSessionId`, `GetNamedPipeServerProcessId` and `GetNamedPipeServerSessionId`, the queries of

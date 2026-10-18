@@ -29,7 +29,7 @@
     },
     {
       "name": "WP-1.1: a name with an interior NUL reaches the call",
-      "file": "src/named_pipe.rs",
+      "file": "src/name.rs",
       "expect": "caught",
       "why": "The call would read the name up to the NUL and make a pipe with a name the caller did not give.",
       "find": ["    if wide.contains(&0) {\n"],
@@ -37,11 +37,11 @@
     },
     {
       "name": "WP-1.1: the name is made lossy before it reaches the call",
-      "file": "src/named_pipe.rs",
+      "file": "src/name.rs",
       "expect": "caught",
       "why": "A name that is not valid UTF-16 must reach the call as it is; converting it through a String replaces a lone surrogate and names a different pipe.",
-      "find": ["    let mut wide: Vec<u16> = name.as_ref().encode_wide().collect();\n"],
-      "replace": ["    let mut wide: Vec<u16> = name.as_ref().to_string_lossy().encode_utf16().collect();\n"]
+      "find": ["    let mut wide: Vec<u16> = name.encode_wide().collect();\n"],
+      "replace": ["    let mut wide: Vec<u16> = name.to_string_lossy().encode_utf16().collect();\n"]
     },
     {
       "name": "WP-1.1: a failed call is not reported as one",
@@ -61,7 +61,7 @@
     },
     {
       "name": "WP-1.1: control, the terminator pushed as an extension",
-      "file": "src/named_pipe.rs",
+      "file": "src/name.rs",
       "expect": "survives",
       "why": "A control: pushing a zero and extending by one are the same operation, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    wide.push(0);\n"],
@@ -242,6 +242,118 @@
       "why": "Declared, for the reason the set side is: the call refuses both on a local pipe, so no local query returns either value, and a swapped pair of pointers is not observable.",
       "find": ["            out(query.max_collection_count, &mut max_collection_count),\n            out(query.collect_data_timeout, &mut collect_data_timeout),\n"],
       "replace": ["            out(query.max_collection_count, &mut collect_data_timeout),\n            out(query.collect_data_timeout, &mut max_collection_count),\n"]
+    },
+    {
+      "name": "WP-1.6: the peek buffer is passed as empty",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "The size is what lets the call copy anything, so a size of zero reads no bytes.",
+      "find": ["            output_len(buffer.len()),\n        ),\n"],
+      "replace": ["            0,\n        ),\n"]
+    },
+    {
+      "name": "WP-1.6: the available count and the left-this-message count are reported in each other's place",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "Both are u32 out pointers in adjacent positions, so a swap compiles; a message pipe with two messages tells them apart.",
+      "find": ["            &mut peeked.total_bytes_available,\n            &mut peeked.bytes_left_this_message,\n"],
+      "replace": ["            &mut peeked.bytes_left_this_message,\n            &mut peeked.total_bytes_available,\n"]
+    },
+    {
+      "name": "WP-1.6: a failed peek is taken for a success",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "The write end of an anonymous pipe has no read access, so the call fails, and zeros would come back as a report.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(peeked)"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(peeked)"]
+    },
+    {
+      "name": "WP-1.6: an input longer than the call can be told is passed truncated",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The call would write only the first u32::MAX bytes of a longer input and the caller would not be told.",
+      "find": ["    u32::try_from(len).map_err(|_| {\n"],
+      "replace": ["    Ok(len as u32).map_err(|_: std::convert::Infallible| {\n"]
+    },
+    {
+      "name": "WP-1.6: an output buffer longer than the call can be told is passed as empty",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The clamp is to u32::MAX so the call can still read into the buffer; zero reads nothing.",
+      "find": ["    u32::try_from(len).unwrap_or(u32::MAX)\n"],
+      "replace": ["    u32::try_from(len).unwrap_or(0)\n"]
+    },
+    {
+      "name": "WP-1.6: every failed transaction is taken for more data",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A handle in byte-read mode fails the call, and the failure would come back as a transaction.",
+      "find": ["        if u32::try_from(error.raw_os_error().unwrap_or(-1)) != Ok(ERROR_MORE_DATA) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "WP-1.6: more data is never reported",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A reply longer than the buffer would look complete, with the rest still in the pipe or discarded.",
+      "find": ["        true\n    };\n    Ok(Transaction {"],
+      "replace": ["        false\n    };\n    Ok(Transaction {"]
+    },
+    {
+      "name": "WP-1.6: a pending overlapped transaction is reported as finished",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The caller would take an operation that is still in progress for one whose buffers it can read.",
+      "find": ["        Ok(ERROR_IO_PENDING) => Ok(TransactStart::Pending),\n"],
+      "replace": ["        Ok(ERROR_IO_PENDING) => Ok(TransactStart::Finished),\n"]
+    },
+    {
+      "name": "WP-1.6: the call's time-out is not passed",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A time-out of zero is the server's default, which is not the time the caller gave, so the wait on a busy instance is shorter.",
+      "find": ["            &mut bytes_read,\n            timeout.millis(),\n"],
+      "replace": ["            &mut bytes_read,\n            0,\n"]
+    },
+    {
+      "name": "WP-1.6: the transaction's output size is not passed",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A size of zero leaves no room for the reply, so every reply is more data and nothing is read.",
+      "find": ["            output_len(output.len()),\n            &mut bytes_read,\n            ptr::null_mut(),\n"],
+      "replace": ["            0,\n            &mut bytes_read,\n            ptr::null_mut(),\n"]
+    },
+    {
+      "name": "WP-1.6: the wait's time-out is not passed",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "Zero is the server's default time-out, so the time the caller gave is not the time waited.",
+      "find": ["WaitNamedPipeW(wide.as_ptr(), timeout.0)"],
+      "replace": ["WaitNamedPipeW(wide.as_ptr(), 0)"]
+    },
+    {
+      "name": "WP-1.6: a failed wait is taken for a success",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A name with no instance fails the call, and the caller would be told an instance is available.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"]
+    },
+    {
+      "name": "WP-1.6: the no-wait time-out has another value",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The value is the page's, and it is also a millisecond count, so only a test of the constant sees it.",
+      "find": ["    pub const NO_WAIT: Self = Self(NMPWAIT_NOWAIT);"],
+      "replace": ["    pub const NO_WAIT: Self = Self(2);"]
+    },
+    {
+      "name": "WP-1.6: control, the time-out accessor written another way",
+      "file": "src/wait.rs",
+      "expect": "survives",
+      "why": "A control: reading the field and reading it through a copy are the same, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    pub const fn millis(self) -> u32 {\n        self.0\n    }"],
+      "replace": ["    pub const fn millis(self) -> u32 {\n        let Self(milliseconds) = self;\n        milliseconds\n    }"]
     }
   ]
 }

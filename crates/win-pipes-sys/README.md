@@ -24,8 +24,15 @@ Communications > Pipes*. Thin over Win32, adding no policy.
   names, because the pages make some of the call's optional outputs an error on some pipes; the state set changes
   only what a `PipeStateUpdate` carries. The modes in and out are `PipeMode`. See
   [WP-D-4](DESIGN-NOTES.md#wp-d-4).
+- `peek_named_pipe` is `PeekNamedPipe`: it copies data out of a pipe without removing it and reports the counts, as a
+  `PeekedPipe`, with the call's values as given.
+- `transact_named_pipe`, `transact_named_pipe_overlapped` and `call_named_pipe` are `TransactNamedPipe` in its two
+  forms and `CallNamedPipeW`. The page's `ERROR_MORE_DATA`, a reply longer than the buffer, is a result
+  (`Transaction::more_data`) and not an error. The synchronous form must not be given a handle opened overlapped, and
+  that is the caller's to keep; the overlapped form is `unsafe`. `PipeTimeout` is the time-out of this call and of
+  `wait_named_pipe`, which is `WaitNamedPipeW`. See [WP-D-5](DESIGN-NOTES.md#wp-d-5).
 
-The area has more in it: the rest of the *Pipe Functions* the section lists (`PeekNamedPipe` and the
+The area has more in it: the rest of the *Pipe Functions* the section lists (`GetNamedPipeClientProcessId` and the
 others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.
 
 ```rust

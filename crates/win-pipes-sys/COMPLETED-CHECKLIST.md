@@ -56,3 +56,11 @@ declared survivors.
 `PipeHandleState`; `set_named_pipe_handle_state` with `PipeStateUpdate`. The three raw reads in this crate's own
 `create_named_pipe` tests now go through them. Why the state read takes a request, the user name's capacity, and what
 was observed are [WP-D-4](DESIGN-NOTES.md#wp-d-4). Eleven sabotages, two of them declared survivors.
+
+### <a id="wp-16"></a>WP-1.6 -- `PeekNamedPipe`, `TransactNamedPipe`, `CallNamedPipeW` and `WaitNamedPipeW`, the operations on a connected pipe and on a name. *(completed 2026-10-18 18:56:30 -04:00)*
+
+`peek_named_pipe` with `PeekedPipe`; `transact_named_pipe`, `transact_named_pipe_overlapped` (`unsafe`) and
+`call_named_pipe` with `Transaction` and `TransactStart`; `wait_named_pipe` and `PipeTimeout`. The interior-NUL
+refusal moved out of `create_named_pipe` into one `wide_name` the three name-taking calls share. Why `ERROR_MORE_DATA`
+is a result, the time-out's type, and three behaviours that differ from the pages are
+[WP-D-5](DESIGN-NOTES.md#wp-d-5). Fourteen sabotages, one a control that survives.

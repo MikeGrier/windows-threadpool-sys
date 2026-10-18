@@ -177,3 +177,69 @@ read or wait mode is the call's refusal.
 
 **Not reached.** The two collection values are returned and set only for a client of a pipe on another computer, which
 nothing here has. The two sabotages that exchange their pointers are declared survivors. What would reach them is a remote server, and a consumer with one would measure them there.
+
+## <a id="wp-d-5"></a>WP-D-5: a reply longer than the buffer is a result, the time-out is a newtype, and the pages' account of three behaviours differs from what was observed
+
+The engineer, 2026-10-18, "implement wp-1.6". Pages read the same day: `PeekNamedPipe` and `TransactNamedPipe`,
+`ms.date` 12/05/2018; `CallNamedPipeW`, `ms.date` 04/19/2021; `WaitNamedPipeW`, `ms.date` 08/05/2022.
+
+**`ERROR_MORE_DATA` is a result, as `ERROR_PIPE_CONNECTED` is in [WP-D-2](#wp-d-2).** Both pages define it: the reply is
+longer than the buffer, the call returns zero with that code, and the page says what becomes of the rest (for
+`TransactNamedPipe` it stays in the pipe, for `CallNamedPipeW` it is discarded). The call did what it was asked and
+filled the buffer, so `Transaction` carries `bytes_read` and `more_data` for both. The overlapped form carries it as
+`TransactStart::MoreData`, for a call that reports it at once; one that reports it when the operation completes is
+the operation's result, which the caller reads as for any overlapped operation.
+
+**The synchronous transact has the connect's hazard, and the same answer.** The page says that with a NULL `OVERLAPPED`
+on a handle opened with `FILE_FLAG_OVERLAPPED` "the function can incorrectly report that the operation is complete",
+and no documented call reports how a handle was opened, so the caller keeps it, as in WP-D-2. The overlapped form is
+`unsafe` and takes raw buffer pointers and lengths, because the buffers must outlive the operation, which a borrow
+cannot say. It does not ask for the byte count: the page says an overlapped call's `lpBytesRead` "can be NULL" and the
+count comes from the overlapped result or the completion port.
+
+**Buffer lengths.** The calls take `u32` lengths. An input longer than `u32::MAX` is `InvalidInput` and the call is not
+made, because telling the call a shorter length would write part of the input and report success. An output buffer
+longer than that is passed as `u32::MAX` long, which can only read into less, and the byte count says how much it
+did. Both rules are in one place, `input_len` and `output_len`, and a unit test pins each across the boundary.
+
+**The name's one check is in one place.** `create_named_pipe`, `call_named_pipe` and `wait_named_pipe` take their name
+through `wide_name`, which holds the interior-NUL refusal; the first of them used to hold it inline, and the three
+would otherwise have been three copies of one rule.
+
+**`PipeTimeout` is a newtype over the page's `u32`.** The special values share the number space with milliseconds:
+`NMPWAIT_NOWAIT` is `1`, so a `CallNamedPipeW` time-out of one millisecond is the page's "does not wait", and
+`NMPWAIT_WAIT_FOREVER` is `0xffffffff`. A number type with named constants leaves the collision as the page has it and
+does not move a number out of the way. `NO_WAIT` is listed on the `CallNamedPipeW` page and not on `WaitNamedPipeW`'s;
+the type carries all three and the pages decide where each applies.
+
+**A wait that times out is an error, as the page says.** `WaitNamedPipeW` "will fail with the error `ERROR_SEM_TIMEOUT`",
+and `wait_named_pipe` returns it as the call's error. Whether a time-out is an outcome and not a failure is the
+caller's reading of that code.
+
+**Observed on 2026-10-18, Windows 11 build 26300, local, unelevated, and not a ruling. Three differ from the pages.**
+
+- `PeekNamedPipe`'s `lpBytesLeftThisMessage`: the page says it "will be zero for byte-type named pipes or for anonymous
+  pipes". For an anonymous pipe peeked with a buffer shorter than the data it was `0 - bytes_read` as a `u32`
+  (4294967293 for a 3-byte read of 5), and zero when no buffer was given. The wrapper returns the call's value and does
+  not correct it.
+- `WaitNamedPipeW`: the page says an instance is available when "the pipe's server process has a pending
+  `ConnectNamedPipe` operation on the pipe". An instance that had been created and had not started to connect was
+  reported available at once.
+- `CallNamedPipeW`: with an instance that is busy and a time-out of 150 ms the call returned `ERROR_PIPE_BUSY` (231) after
+  about that long, and `NMPWAIT_NOWAIT` returned the same error after about one timer tick; the page's description of
+  the equivalent `WaitNamedPipe` is `ERROR_SEM_TIMEOUT`, which `wait_named_pipe` itself returned.
+
+Also observed, and not in conflict with a page:
+
+- A handle in byte-read mode given to `TransactNamedPipe` fails with `ERROR_BAD_PIPE` (230).
+- After `ERROR_MORE_DATA` the output buffer was filled, `lpBytesRead` was the buffer's size, and the remainder was
+  readable with `ReadFile` and counted by `PeekNamedPipe`.
+- A wait of one millisecond on a busy instance returned after about one timer tick, near 16 ms, and so the tests assert
+  lower bounds of two thirds of the time asked and no upper bound.
+- `PeekNamedPipe` fails once the write end is closed and nothing is left, and still shows what was written before.
+- Whether an overlapped transaction with a short buffer reports `ERROR_MORE_DATA` at once or on completion was not
+  recorded; its test accepts both and asserts the operation's result.
+
+**Not reached.** The remote forms the pages describe (a `\\server\pipe\name`, whose redirector opens a pipe in message
+mode, and a transaction larger than the 64 KiB the page guarantees) are not exercised: nothing here has a remote
+server, and the sizes tested stay below 64 KiB.
