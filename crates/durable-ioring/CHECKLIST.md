@@ -59,8 +59,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`, and `DI-10.3` last. `DI-14.6.2` is a decision for the engineer and needs no other work,
-   `DI-14.6.3` waits on a serial port, and `DI-14.6.4` is documentation and may be done at any point.
+   `DI-M15`, and `DI-10.3` last. `DI-14.6.3` waits on a serial port, and `DI-14.6.4` is documentation and may be done at any point.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -256,19 +255,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.6.1** -- What an open handle reports about its own kind is measured over a disk file, a directory, `NUL`, a console, a pipe, a volume and a physical disk. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1461)
 
-- [ ] **DI-14.6.2** -- **What an open of a handle that is not a disk file does is decided with the
-  engineer.** It is refused, or classified and returned as such; what an `OpenedFile` claims for a
-  path that names a device (today a file's default geometry and no flush domains) follows from it.
-  An open that blocks is not this item's: [DI-D-67](DESIGN-NOTES.md#di-d-67) makes where a name leads
-  the caller's responsibility. Also this item's: the unbuffered open of `NUL`, refused today only
-  because its final path cannot be read.
-  The measurements are in [DI-D-64](DESIGN-NOTES.md#di-d-64), under "Measured for DI-14.6", and are
-  the input; this item is the decision, so it has no work until the engineer rules. A serial port,
-  and `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read, are unmeasured: no port
-  on the measuring machine could be opened repeatably. Whatever is decided is a refusal on a
-  documented condition or the crate's own narrowing named as its own, per
-  [the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract); the measurements
-  create none.
+- [x] **DI-14.6.2** -- A cached open of a handle that is not a disk file is accepted; an unbuffered one is refused as `UnknownLocation`, this crate's own narrowing, and no longer as the final-path call's error. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1462)
 
 - [ ] **DI-14.6.3** -- **Blocked: a serial port that opens repeatably.** Measure `GetFileType`, the
   device control and `FlushFileBuffers` on an open serial port, and whether `CancelIoEx` or

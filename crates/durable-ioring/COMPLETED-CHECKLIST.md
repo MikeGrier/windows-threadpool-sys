@@ -3274,3 +3274,13 @@ named in the item, `GetFileType`, answers `DISK` for a volume and a physical dis
 does not tell the two apart; the device-number control does. `FlushFileBuffers` on `NUL` fails with
 `ERROR_INVALID_FUNCTION`. The `ReadFile`/`CancelIoEx` part could not be measured: no serial port opened
 repeatably, one open blocked for over 45 seconds, and the process holding it was hard to kill.
+
+### <a id="di-1462"></a>DI-14.6.2 -- A cached open of a handle that is not a disk file is accepted; an unbuffered one is refused as `UnknownLocation`, this crate's own narrowing, and no longer as the final-path call's error. *(completed 2026-10-18 16:44:12 -04:00)*
+
+The item was a decision with the engineer and was implemented on his instruction after the value of refusing had
+been discussed and not ruled, so the positions are the assistant's and stand until amended. Recorded in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) under "What DI-14.6.2 settled". The discussion leaned toward removing the
+unbuffered refusal of `NUL`; building it showed that removal would let an unbuffered `NUL` claim
+`WarrantyClass::SharedDevice`, so it stays and is named. An open that blocks is not this item's
+([DI-D-67](DESIGN-NOTES.md#di-d-67)). Three sabotages in `win-durable-ioring`'s manifest, one of them refused by a
+`const` assertion at build.

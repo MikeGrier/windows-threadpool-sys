@@ -414,9 +414,9 @@ values of the item's text are not separately visible through the safe API.
   is the link, and the ruling that an unbuffered file must be local is a statement about the device the
   handle's I/O goes to. **Ruled by the engineer, 2026-10-18 ([DI-14.10](COMPLETED-CHECKLIST.md#di-1410)):** a
   handle opened on a link to a share is accepted, and is not refused for where the link leads.
-- **A handle whose final path cannot be read is refused with the call's own error.** `NUL` has no final
-  path; an unbuffered open of one is therefore refused, as it was before (the path form failed to canonicalise
-  it), and what an open of a device should do is [DI-14.6.2](CHECKLIST.md)'s.
+- **A handle whose final path cannot be read is refused, as the crate's own narrowing.** As first built the
+  refusal was the final-path call's own error; [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462) names it
+  `UnknownLocation`, with that error as its source. See "What DI-14.6.2 settled" below.
 - **What the unit tests reach and what they do not.** The location of a handle, the link cases on a local
   volume and the unreadable final path run everywhere. The refusal itself, the created-before-refused file and
   the link to a share need the administrative share and are ignored by default, as the earlier one was; they
@@ -532,6 +532,37 @@ tests red, and one that always reports a number turns the file, directory, `NUL`
   So the earlier observation, a read on `COM3` still blocked after eight seconds, could not be reproduced, and
   `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read remain unmeasured. What this crate
   does about a blocking open is [DI-D-67](#di-d-67).
+
+**What DI-14.6.2 settled** ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)). The engineer, 2026-10-18, "implement
+di-14.6.2", after the question of what refusing is worth had been discussed and not ruled; the positions below are
+the assistant's, taken on that instruction, and stand until amended.
+
+- **A cached open of a handle that is not a disk file is accepted, and nothing is added for it.** No
+  `CreateFileW` page makes it invalid ([the rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)),
+  where a name leads is the caller's ([DI-D-67](#di-d-67)), and a cached file claims only best effort, which a
+  device does not falsify. A pipe's or `NUL`'s `FlushFileBuffers` result is not a durability statement, and
+  the claim made does not rest on it.
+- **An unbuffered open of one is refused, and the refusal is the crate's own.** An unbuffered file claims
+  `WarrantyClass::SharedDevice`, that its writes reach a device shared with other writers, which `NUL`, a
+  pipe and a console cannot keep. Removing the refusal, which the discussion of 2026-10-18 had leaned
+  toward, would give an unbuffered `NUL` that claim, so it stays. What
+  changed is that it is no longer an accident: before, it followed from `GetFinalPathNameByHandleW` failing on
+  a handle with no final path, and was reported as that call's error, which says nothing of why the open was
+  refused. It is now `UnknownLocation`, kind `io::ErrorKind::Unsupported`, with the call's error as its source,
+  and its documentation says it is this crate's narrowing and not a condition `CreateFileW` documents. It sits
+  beside `RemoteDevice`, which is the same kind of refusal for a remote file.
+- **What the refusal says it knows.** That the final path could not be read, and so the handle is not known to
+  be a file on a local volume. It does not say what the handle is: the cause is any failure of that read, and
+  the [measurements](#di-d-64) show that `NUL`, a console, a pipe, a volume and a physical disk all fail it. `GetFileType` was not added to name the kind in the error; it separates `CHAR`, `PIPE`
+  and `DISK` and does not separate a file from a volume or disk, and an accessor that returned a class is a
+  separate decision, not made here.
+- **A volume or disk opened through `OpenedFile` unbuffered is refused for the same reason**, since neither has
+  a final path; they are opened as such by `OpenedVolume` and `OpenedDisk`, whose path types name the device.
+- **Tested** with a real unbuffered and a real cached open of `NUL`. Three sabotages: an unreadable location
+  accepted, the refusal reported as the call's error, and a cached open refused. The last is refused by a
+  `const` assertion at build, before any test runs, which is the stronger rung.
+- **Unchanged and still open:** a serial port ([DI-14.6.3](CHECKLIST.md)), and the open's documentation of
+  [DI-D-67](#di-d-67) ([DI-14.6.4](CHECKLIST.md)).
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
@@ -811,8 +842,8 @@ intermediate reparse points are still followed.
 **What this does not decide.** Whether an open that has returned a handle that is not a disk file is
 refused, or classified and returned as such, and what an `OpenedFile` on such a handle claims, stay
 [DI-14.6.2](CHECKLIST.md)'s: those concern what a durability claim on such a handle would mean, not the
-blocking open. So does the unbuffered open of `NUL`, refused today because its final path cannot be read
-([DI-D-64](#di-d-64), "What building DI-14.5 settled"), which no decision put there.
+blocking open. **Settled by [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)** ([DI-D-64](#di-d-64), "What DI-14.6.2
+settled"), which also names the unbuffered open of `NUL`'s refusal as this crate's own.
 [DI-14.6.3](CHECKLIST.md), the serial-port measurement, no longer gates a design decision; it is evidence.
 
 **Scheduled work.** [DI-14.6.4](CHECKLIST.md): the open's documentation states this responsibility, since
