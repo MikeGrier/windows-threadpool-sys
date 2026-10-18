@@ -14,7 +14,8 @@ Functions* Microsoft Learn lists under *System Services > Interprocess Communica
   ([the rule](../../DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under))
   means none is moved as a side effect of this crate; each is its own `test:` commit in its own crate, taking
   this one as a dev-dependency. A site that needs a parameter this crate does not carry is raised here and not
-  worked around there.
+  worked around there. `windows-namespace-request-sys`'s `tests/device_handle_evidence.rs`, which was the
+  first, already makes its pipe through this crate.
 
 - [ ] **WP-1.3** -- `ConnectNamedPipe` and `DisconnectNamedPipe`, the server end's connection, including its
   overlapped form and `ERROR_PIPE_CONNECTED` as the call reports it.
