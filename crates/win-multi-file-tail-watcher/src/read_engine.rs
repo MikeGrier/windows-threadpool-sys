@@ -325,7 +325,8 @@ impl<T: Clone> ReadEngine<T> {
     ///
     /// # Errors
     ///
-    /// [`EngineError::Sq`] for a capacity the SQ cannot have or a doorbell that cannot be made;
+    /// [`EngineError::Sq`] for a capacity the SQ cannot have, one whose memory cannot be allocated, or
+    /// a doorbell that cannot be made;
     /// [`EngineError::Ring`] when the ring cannot be made or cannot read.
     pub(crate) fn new(
         watcher: Watcher<Tracked<T>>,

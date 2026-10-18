@@ -1414,3 +1414,29 @@ respected), since the missing delivery is waited for up to the tests' own sixty-
 Found by writing the refusals, not by a test that could keep it: a `client_sq_capacity` of `1 << 40` is
 accepted by the options and aborts the process in the queue's infallible allocation. Recorded as TW-9.6.
 The README states what each size limits and the three stops, citing no figure.
+
+## Moved 2026-10-17 21:11:18 -04:00 -- TW-9.6: a queue the allocator will not give is an error
+
+### <a id="tw-96"></a>TW-9.6 -- A queue capacity that is valid but more than memory can hold is an error and not an abort: the queue crate's allocation refusal is mapped to a new `CreateError::Allocation` for the client queue and the watcher's own queue, and tested through the public constructor. *(completed 2026-10-17 21:11:18 -04:00)*
+
+The cause was found by TW-9.5 and fixed in `windows-waitable-queues` first (0.1.2). This crate then
+passed that crate's error through `SqCapacityError::from`, which copies three numbers and dropped the new
+cause: a client queue of `1 << 40` was reported as "not a power of two from 2 to 2^62", which is false.
+That was observed before changing anything.
+
+`sq.rs` has a crate-private `QueueError` that records whether a refusal was the rule or the allocator,
+chosen by the queue crate's `is_allocation_failure`; `queue` and `queue_of` return it, and it converts to
+`CreateError`. `CreateError` gains `Allocation(SqCapacityError)` and is now `#[non_exhaustive]`. The variant
+has no `source` (see [TW-D-16](DESIGN-NOTES.md#tw-d-16)). The docs of `TailReaderError::Watcher` and `::ClientSq`,
+`TailReader::new`, `Watcher::new` and the README state it. The engineer chose the variant ("option 1") from
+three offered; `non_exhaustive` was the assistant's addition and was flagged.
+
+Tests: the watcher's constructor, `ReadEngine::new`, the reader's two queues and the public constructor
+(at `1 << 40`, the capacity that used to abort, and at the queue's own largest, which is refused before the
+allocator is asked), each asserting the variant, the capacity carried, and that the message names the memory and
+does not call the capacity a mistake of the rule; and the reverse, that every refusal of the rule is still
+`Capacity`. Six entries in `sabotage.json` (five caught, one control that survives) and one in
+`sabotage-reader-integration.json`; all behave as declared.
+
+Breaking: `CreateError` gains a variant, so a caller that matched it exhaustively no longer compiles. The commit
+is `feat!` and the next release is 0.2.0.

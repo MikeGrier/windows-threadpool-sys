@@ -570,6 +570,32 @@ module within the crate".
   - **Callback hazards are stated on the type**, as the watcher states them: `T::clone`, `T`'s `Drop`
     and the sink run on thread-pool callbacks, a panic out of one aborts the process, and a `Drop`
     must not release the last owner of the reader.
+- **A queue the allocator will not give is `CreateError::Allocation`, and it is not a refused
+  capacity** ([TW-9.6](CHECKLIST.md)). Found by [TW-9.5](CHECKLIST.md): a client queue of `1 << 40`
+  entries is a capacity the queue accepts, and the process aborted allocating it. The fix was made
+  in `windows-waitable-queues` ([D-42](../windows-waitable-queues/DESIGN-NOTES.md#d-42)), which now
+  returns an error for it; this crate maps that error and does not probe.
+  - **The two answers are kept apart.** A capacity that is not a power of two within the queue's
+    bounds is wrong on every machine and stays `CreateError::Capacity`. One within them whose memory
+    is not there is this machine's answer, and a smaller capacity may succeed, so it is the new
+    `CreateError::Allocation`. Both carry the capacity asked for and the bounds, which are what the
+    queue accepts and not what the machine can hold. It reaches a caller as
+    `TailReaderError::ClientSq` or `TailReaderError::Watcher`, whichever queue it was, as the other
+    causes of `CreateError` do.
+  - **The engineer chose a variant over a cause field or an `Io` mapping**, 2026-10-17: "option 1".
+    A cause field on `SqCapacityError` would have broken its public fields, and `Io` would have lost
+    the capacity and stretched its meaning, which is the operating system refusing a doorbell.
+  - **It has no `source`.** `SqCapacityError` says "not a power of two", which is false here, and the
+    allocator's refusal carries no error value to chain. The variant's own message says the memory
+    was the problem.
+  - **`CreateError` is `#[non_exhaustive]` from this change.** The new variant is a breaking change
+    for any caller that matched it exhaustively, so the commit is `feat!` and the next release of
+    this crate is 0.2.0. The attribute is the assistant's addition, not asked of the engineer: it
+    makes the next added cause additive, as `TailReaderError` and `OptionsError` already are.
+  - **The options still accept any capacity the queue does.** Whether a machine can hold it is the
+    allocator's answer at construction, as for the buffers, and is documented as such in the README.
+    No probe in `validate`: a probe that succeeds says nothing about whether the allocation a moment
+    later will.
 
 ## Working positions (not decisions)
 

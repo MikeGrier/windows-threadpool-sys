@@ -849,6 +849,17 @@ fn an_engine_whose_sq_capacity_is_invalid_says_so() {
 }
 
 #[test]
+fn an_engine_whose_sq_cannot_be_allocated_says_so_and_does_not_abort() {
+    let watcher = Watcher::<Tracked<u32>>::new(4).expect("watcher");
+    let pool = BufferPool::new(8, 1).expect("pool");
+    let result = ReadEngine::new(watcher, pool, 1 << 50, 8, 16);
+    assert!(
+        matches!(result, Err(EngineError::Sq(CreateError::Allocation(_)))),
+        "a valid capacity no machine holds"
+    );
+}
+
+#[test]
 fn an_engine_whose_ring_cannot_be_made_says_so() {
     let watcher = Watcher::<Tracked<u32>>::new(4).expect("watcher");
     let pool = BufferPool::new(8, 1).expect("pool");

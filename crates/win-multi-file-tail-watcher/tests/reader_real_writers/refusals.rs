@@ -6,6 +6,7 @@
 //! opened by `register`, which a refused reader never offers. So that no file is opened is the same
 //! fact as the construction failing.
 
+use win_multi_file_tail_watcher::CreateError;
 use win_multi_file_tail_watcher::reader::{
     Cause, OptionsError, TailReader, TailReaderError, TailReaderOptions,
 };
@@ -164,6 +165,34 @@ fn buffers_the_allocator_will_not_give_are_an_error_and_not_an_abort() {
             Err(TailReaderError::Allocation(_)) => {}
             Err(other) => panic!("{len} x {count}: {other}"),
             Ok(_) => panic!("{len} x {count} was given"),
+        }
+    }
+}
+
+#[test]
+fn queues_the_allocator_will_not_give_are_an_error_and_not_an_abort() {
+    // A capacity the queue accepts, so the options pass it: the memory is what is missing. `1 << 40`
+    // is the capacity that used to abort the process, and the queue's own largest is refused before
+    // the allocator is asked.
+    for capacity in [1usize << 40, 1 << (usize::BITS - 2)] {
+        let client = with(|o| o.client_sq_capacity = capacity);
+        client
+            .validate()
+            .expect("the options accept a valid capacity");
+        match TailReader::<u32>::new(&client, 64) {
+            Err(TailReaderError::ClientSq(CreateError::Allocation(error))) => {
+                assert_eq!(error.requested, capacity);
+            }
+            Err(other) => panic!("a client queue of {capacity}: {other:?}"),
+            Ok(_) => panic!("a client queue of {capacity} was given"),
+        }
+
+        match TailReader::<u32>::new(&TailReaderOptions::default(), capacity) {
+            Err(TailReaderError::Watcher(CreateError::Allocation(error))) => {
+                assert_eq!(error.requested, capacity);
+            }
+            Err(other) => panic!("a watcher queue of {capacity}: {other:?}"),
+            Ok(_) => panic!("a watcher queue of {capacity} was given"),
         }
     }
 }

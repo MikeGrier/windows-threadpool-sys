@@ -22,10 +22,15 @@ pub enum TailReaderError {
     /// allocated.
     Options(OptionsError),
     /// The watcher could not be made: the capacity given for its submission queue is not one it can
-    /// have, or the operating system refused to create a doorbell.
+    /// have ([`CreateError::Capacity`]), is one it can have and the memory for it could not be
+    /// allocated ([`CreateError::Allocation`]), or the operating system refused to create a
+    /// doorbell.
     Watcher(CreateError),
     /// The client's queue could not be made. The options refuse the capacities it cannot have
-    /// first, so this is reached only for a doorbell the operating system refused to create.
+    /// first, so this is reached for a doorbell the operating system refused to create, or for a
+    /// capacity the queue accepts and the memory for it could not be allocated
+    /// ([`CreateError::Allocation`]): the options accept any capacity the queue does, and the
+    /// allocator answers here.
     ClientSq(CreateError),
     /// The pool's buffers could not be allocated: `buffer_len` times `buffer_count` bytes is more
     /// than the allocator would give. The options accept any count, and the allocator answers here.

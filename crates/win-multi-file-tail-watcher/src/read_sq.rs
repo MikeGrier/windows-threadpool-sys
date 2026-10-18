@@ -167,6 +167,7 @@ impl<T> ReadSq<T> {
     /// # Errors
     ///
     /// [`CreateError::Capacity`] unless `capacity` is a power of two of at least two.
+    /// [`CreateError::Allocation`] when the memory for the queue's slots cannot be allocated.
     /// [`CreateError::Io`] when a doorbell cannot be created.
     pub(crate) fn new(capacity: usize) -> Result<Self, CreateError> {
         let (writer, reader) = queue_of(capacity)?;

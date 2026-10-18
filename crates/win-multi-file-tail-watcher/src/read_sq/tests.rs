@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 use super::{Data, ReadEntry, ReadSq, Shrink};
 use crate::pool::{BufferPool, Chunk};
-use crate::sq::{PushFailure, Terminal, queue};
+use crate::sq::{PushFailure, QueueError, Terminal, queue};
 use crate::test_support::is_signalled;
 use crate::{CreateError, SqCapacityError};
 
@@ -39,7 +39,15 @@ fn capacity_error(capacity: usize) -> SqCapacityError {
 fn capacities_are_refused_and_accepted_by_the_watchers_rule() {
     for capacity in [0, 1, 3, 5, 6, 100] {
         let expected = queue::<u32>(capacity).expect_err("refused for the watcher");
-        assert_eq!(capacity_error(capacity), expected, "capacity {capacity}");
+        assert!(
+            matches!(expected, QueueError::Capacity(_)),
+            "a rule refusal, not an allocation failure"
+        );
+        assert_eq!(
+            capacity_error(capacity),
+            expected.capacity(),
+            "capacity {capacity}"
+        );
     }
     for capacity in [2, 4, 64, 1024] {
         assert!(queue::<u32>(capacity).is_ok());

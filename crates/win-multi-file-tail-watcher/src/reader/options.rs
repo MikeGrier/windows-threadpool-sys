@@ -241,7 +241,10 @@ fn check_power_of_two(given: u64, least: u64, most: u64) -> Result<(), Cause> {
 /// second time here; a test compares it with the queue's verdict over a range of capacities.
 fn client_queue_bounds() -> (u64, u64) {
     match queue_of::<()>(0) {
-        Err(refusal) => (wide(refusal.min_valid), wide(refusal.max_valid)),
+        Err(refusal) => {
+            let bounds = refusal.capacity();
+            (wide(bounds.min_valid), wide(bounds.max_valid))
+        }
         Ok(_) => unreachable!("the queue refuses a capacity of zero"),
     }
 }

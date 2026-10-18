@@ -108,8 +108,8 @@ fn the_queue_bounds_are_read_from_its_refusal_of_zero() {
     assert_eq!(
         client_queue_bounds(),
         (
-            u64::try_from(refusal.min_valid).expect("fits"),
-            u64::try_from(refusal.max_valid).expect("fits")
+            u64::try_from(refusal.capacity().min_valid).expect("fits"),
+            u64::try_from(refusal.capacity().max_valid).expect("fits")
         )
     );
 }
@@ -154,7 +154,7 @@ fn the_client_sq_capacity_is_refused_exactly_when_the_queue_refuses_it() {
         };
         let expected = if capacity.is_power_of_two() {
             Cause::Above {
-                most: u64::try_from(theirs.max_valid).expect("fits"),
+                most: u64::try_from(theirs.capacity().max_valid).expect("fits"),
             }
         } else {
             Cause::NotAPowerOfTwo

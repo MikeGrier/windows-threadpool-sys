@@ -256,6 +256,43 @@ fn a_watcher_capacity_it_cannot_have_is_reported_as_the_watchers() {
 }
 
 #[test]
+fn a_watcher_queue_the_allocator_will_not_give_is_the_watchers_allocation_failure() {
+    // A capacity the queue accepts, so it is not a rule refusal: the memory is what is missing.
+    let Err(error) = TailReader::<u32>::new(&small(), 1 << 50) else {
+        panic!("no machine holds a queue of 2^50 entries");
+    };
+    let TailReaderError::Watcher(CreateError::Allocation(SqCapacityError { requested, .. })) =
+        &error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(*requested, 1 << 50);
+    assert!(error.to_string().contains("memory"), "{error}");
+}
+
+#[test]
+fn a_client_queue_the_allocator_will_not_give_is_the_client_queues_allocation_failure() {
+    let options = TailReaderOptions {
+        client_sq_capacity: 1 << 50,
+        ..small()
+    };
+    assert!(
+        options.validate().is_ok(),
+        "the options accept any capacity the queue does: the allocator answers when it is made"
+    );
+    let Err(error) = TailReader::<u32>::new(&options, 64) else {
+        panic!("no machine holds a queue of 2^50 entries");
+    };
+    let TailReaderError::ClientSq(CreateError::Allocation(SqCapacityError { requested, .. })) =
+        &error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(*requested, 1 << 50);
+    assert!(error.to_string().contains("memory"), "{error}");
+}
+
+#[test]
 fn buffers_the_allocator_will_not_give_are_an_error_not_an_abort() {
     let options = TailReaderOptions {
         buffer_count: usize::MAX,

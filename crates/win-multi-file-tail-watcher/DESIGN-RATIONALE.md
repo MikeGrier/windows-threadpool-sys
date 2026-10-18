@@ -391,6 +391,12 @@ a new crate: "I would put this in a distinct new module within the crate".
   below the ring's floor, or a completion queue below twice the submission queue, is still raised,
   and the assistant's own first default of 64 and 64 was one such case. The engineer said to refuse
   those too, so the default became 64 and 128.
+- **A queue the allocator refuses.** TW-9.5 found that the options accept a client queue capacity the
+  queue crate also accepts and the process aborts allocating it. The engineer asked whether the fix
+  belonged in `windows-waitable-queues` and, once it was released, chose a new `CreateError` variant
+  from three offered: a variant, a cause field on `SqCapacityError`, or an `Io` mapping with
+  `OutOfMemory`. The assistant had recommended the variant. The attribute `#[non_exhaustive]` on
+  `CreateError` was added by the assistant with the change and flagged in the same message.
 - **The error carries its cause.** The engineer asked that the error enum have a cause. The assistant
   read that as each variant naming the rule it broke and a lower layer's error being its `source`,
   and said so in the notes in case another reading was meant.

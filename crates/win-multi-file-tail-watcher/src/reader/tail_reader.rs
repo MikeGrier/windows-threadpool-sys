@@ -115,8 +115,8 @@ impl<T: Clone + Send + 'static> TailReader<T> {
     /// # Errors
     ///
     /// A [`TailReaderError`] naming the cause: a refused size, a capacity the watcher cannot have,
-    /// buffers the allocator would not give, an I/O ring that could not be made, or something else
-    /// the operating system refused.
+    /// a queue or buffers the allocator would not give, an I/O ring that could not be made, or
+    /// something else the operating system refused.
     pub fn new(
         options: &TailReaderOptions,
         watcher_sq_capacity: usize,

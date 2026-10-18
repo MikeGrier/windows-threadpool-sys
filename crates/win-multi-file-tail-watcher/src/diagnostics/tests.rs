@@ -143,6 +143,7 @@ fn a_bad_capacity_is_refused_whichever_constructor_is_used() {
         match Watcher::<u32>::with_diagnostics(requested, sink.clone()).expect_err("invalid") {
             CreateError::Capacity(error) => assert_eq!(error.requested, requested),
             CreateError::Io(error) => panic!("a capacity error, not {error}"),
+            other => panic!("a rule refusal, not {other}"),
         }
     }
     assert!(Watcher::<u32>::with_diagnostics(2, sink).is_ok());

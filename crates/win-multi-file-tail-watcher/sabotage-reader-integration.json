@@ -52,6 +52,14 @@
       "replace": ["    if false && given < least {"]
     },
     {
+      "name": "a queue the allocator refuses is reported as a refused capacity",
+      "file": "src/create_error.rs",
+      "expect": "caught",
+      "why": "The public constructor of the reader is where a caller meets the difference: a refused capacity is wrong on every machine, an allocation failure is this machine's answer and a smaller capacity may succeed. Asserted for both queues, at the capacity that used to abort and at the queue's largest.",
+      "find": ["            QueueError::Allocation(error) => Self::Allocation(error),"],
+      "replace": ["            QueueError::Allocation(error) => Self::Capacity(error),"]
+    },
+    {
       "name": "the text of an expect that cannot fail is changed",
       "file": "src/read_engine.rs",
       "expect": "survives",

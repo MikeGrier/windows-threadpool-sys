@@ -27,7 +27,9 @@ the ring can have it.
   the memory is `buffer_len` times it, allocated when the layer is made. Whether that memory is
   there is the allocator's answer at that point, not a refused size.
 - `client_sq_capacity` is how many entries the client's queue holds, a power of two within the
-  bounds the queue reports.
+  bounds the queue reports. Those bounds are what the queue can represent, not what a machine can
+  hold: a capacity within them whose memory is not there is refused when the layer is made, as
+  `CreateError::Allocation`, as the buffers' memory is.
 - `ring_sq_size` and `ring_cq_size` are the I/O ring's two queue sizes. Each is a power of two, no
   larger than the ring reports for the machine, and `ring_sq_size` is at least
   `TailReaderOptions::MIN_RING_SQ_SIZE`. `ring_cq_size` is at least `ring_sq_size` times
