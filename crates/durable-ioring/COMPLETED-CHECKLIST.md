@@ -3284,3 +3284,12 @@ unbuffered refusal of `NUL`; building it showed that removal would let an unbuff
 `WarrantyClass::SharedDevice`, so it stays and is named. An open that blocks is not this item's
 ([DI-D-67](DESIGN-NOTES.md#di-d-67)). Three sabotages in `win-durable-ioring`'s manifest, one of them refused by a
 `const` assertion at build.
+
+### <a id="di-103"></a>DI-10.3 -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. *(completed 2026-10-18 19:23:26 -04:00)*
+
+Decided by the engineer, 2026-10-18, on the assistant's recommendation: [DI-D-68](DESIGN-NOTES.md#di-d-68). The item
+bundled two questions. Foreign handles stay out, with a `ReOpenFile` route that needs no attestation
+([DI-15.4](CHECKLIST.md), amended to take any handle) and a measured residue parked as `DI-10.6` with its blocker
+named. The attestation of exclusivity needs no foreign handle, since the handle is one this crate opened, and is
+`DI-10.5`. The item's own argument for `unsafe` is not followed: the class is information only, so a wrong claim
+mislabels a report and changes nothing the layer does.

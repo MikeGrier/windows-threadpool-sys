@@ -59,7 +59,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`, and `DI-10.3` last. `DI-14.6.3` waits on a serial port, and `DI-14.6.4` is documentation and may be done at any point.
+   `DI-M15`. `DI-10.5` needs none of them and may be done at any point, as may `DI-14.6.4`, which is documentation; `DI-14.6.3` waits on a serial port, and `DI-10.6` is parked.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -202,9 +202,19 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.4** -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-104)
 
-`DI-10.3`, whether a handle opened elsewhere can be given to a file target, is parked behind
-`DI-M15` as `DI-M15+` below; it kept its ID because [DI-D-60](DESIGN-NOTES.md#di-d-60),
-[DI-D-61](DESIGN-NOTES.md#di-d-61) and [DI-D-62](DESIGN-NOTES.md#di-d-62) cite it.
+- [ ] **DI-10.5** -- **A consumer who knows a device is theirs alone can attest it, and the target is then `Complete`** ([DI-D-68](DESIGN-NOTES.md#di-d-68)).
+  Three constructors on `Win32FileTarget`, `new_attested_exclusive`, `from_volume_attested_exclusive` and
+  `from_disk_attested_exclusive`, each taking only a handle this crate opened `Unbuffered`, so a cached one is a
+  compile error. They claim that nothing else writes the device and that the flush domains reported are all of
+  them, and change nothing else: the domains, geometry and capabilities are what the unbuffered handle gives. The
+  documentation says what is claimed, that a wrong claim mislabels a report and changes nothing the layer does
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50) P3), and that a cached handle cannot be attested and why. Tests: each
+  constructor reports `Complete` with the domains and geometry of its unbuffered sibling; a cached handle is refused
+  (`compile_fail`); a declaration of domains still adds and never removes. Sabotage: the three constructors
+  claiming `SharedDevice`, and one dropping the found domains.
+
+`DI-10.3`, whether a handle opened elsewhere can be given to a file target, is decided by
+[DI-D-68](DESIGN-NOTES.md#di-d-68) and is stubbed below; what it leaves is `DI-10.6`, parked under `DI-M15+`.
 
 ## DI-M13 -- Opening a file: the surface and its home
 
@@ -212,7 +222,7 @@ Why this milestone exists. [DI-D-60](DESIGN-NOTES.md#di-d-60) made a file target
 crate opened and from nothing else, and [`FileOptions`](../win-durable-ioring/src/windows_backend/opened_file.rs)
 carries only `read`, `write`, `create`, `create_new` and `truncate`. A consumer whose open needs more
 (a share mode, a security descriptor, delete-on-close, an open by file ID) cannot say so, and would
-want a handle from elsewhere ([DI-10.3](#di-m15----handles-opened-elsewhere-parked-behind-di-m15)).
+want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](#di-m15----handles-opened-elsewhere-parked-behind-di-m15)).
 Widening what this crate can open is the structural answer: every option a consumer can pass is an
 option recorded by construction. The rule throughout is documented APIs only
 ([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
@@ -318,7 +328,8 @@ option recorded by construction. The rule throughout is documented APIs only
   take the child's ID, open it by ID (`DI-15.2`). If a documented route exists, it is an item here.
 
 - [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2, A2>` from an
-  owned one, changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
+  owned one **or from any handle** ([DI-D-68](DESIGN-NOTES.md#di-d-68): the route for a handle opened elsewhere, since the new
+  handle's mode is this crate's choice; the residue it cannot convert is `DI-10.6`), changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
   lets a reopen widen the access is a test here), sharing and flags: cached to unbuffered and back, a read-only handle for
   a scrubber beside the writer. The target's alignment is recomputed for the new mode, and going
   unbuffered runs the remote check. `ReOpenFile` documents that the new access and sharing cannot
@@ -329,7 +340,9 @@ option recorded by construction. The rule throughout is documented APIs only
 
 ## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
 
-- [ ] **DI-10.3** -- **Whether a handle opened elsewhere can be given to a file target, and under what attestation, asked of what `DI-M13` to `DI-M15` leave.** Disallowed in this version by the engineer's ruling ([DI-D-60](DESIGN-NOTES.md#di-d-60)): the open mode of a handle cannot be read with a documented call, so the only routes are a consumer's declaration, which can be wrong, or an `unsafe` attestation in the style of `WaitableHandle`'s seam for handles from elsewhere. The blocker is that ruling and not the lack of a consumer. It is parked here because most reasons to want a foreign handle are opens this crate could not express, which the milestones above remove, and what remains is the handle a broker or another library hands over. Decide which route, if either, and what class such a handle may claim: at most `BestEffort` unless the consumer attests more. The same mechanism is how a raw volume or a whole disk could claim `Complete` ([DI-D-61](DESIGN-NOTES.md#di-d-61), [DI-D-62](DESIGN-NOTES.md#di-d-62)): a handle cannot show that nothing else writes the disks, so only an attestation by a consumer that knows could. A wrong attestation is silent, which for a durability layer is the worst failure; that is the argument for `unsafe` over a builder method.
+- [x] **DI-10.3** -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-103)
+
+- [ ] **DI-10.6** -- **A handle opened elsewhere that `ReOpenFile` cannot convert: restrictive sharing, an access the caller was never itself granted, and an object that was not created by `CreateFile`.** Parked, with the blocker named: an open handle's mode is reported only by an undocumented call, which this repository does not make, so such a handle's class is a consumer's declaration, and the engineer has not ruled on an `unsafe` attestation for one ([DI-D-68](DESIGN-NOTES.md#di-d-68)). Everything else a handle from elsewhere is wanted for is [DI-15.4](#di-154), taking any handle. When picked up: decide whether a declaration is accepted at all, in what form, and that the class is at most `BestEffort` unless the consumer attests more through the mechanism of `DI-10.5`.
 
 ## DI-M11 -- The core driven by script
 
