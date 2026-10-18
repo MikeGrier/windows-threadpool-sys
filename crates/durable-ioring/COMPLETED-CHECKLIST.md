@@ -3133,3 +3133,16 @@ same result for every step in each buffering mode, and with the option left off 
 the flag is not set unasked. The table row in [DI-D-64](DESIGN-NOTES.md#di-d-64) is amended. Three sabotage
 entries. `opened_file.rs` is past 32 KiB with this; the one fracture candidate, the two refusal types with
 their helpers, would need the helpers' visibility changed, which a pure relocation does not do, so it is left whole.
+
+### <a id="di-1481"></a>DI-14.8.1 -- `win-authorization-sys` is created and the request crate's `security` module is moved into it and re-exported. *(completed 2026-10-18 00:51:00 -04:00)*
+
+The engineer ruled on 2026-10-18 that the crate is named `win-authorization-sys` and that the types move with
+it. `SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState` and the capture errors, with
+their tests and eighteen sabotage entries (all behaving as declared), are in the new crate, and the request
+crate re-exports it as `security` and at its root. It is two commits so the request crate's release is not
+attributed to the move: the crate added with the code copied (`Split-Source` and `Split-Into` trailers, and
+`blame -w -C1 -C1` traces all but four lines of `sddl.rs` back through it), then the request crate switched over
+and its copy deleted. What changed in the code: `SecurityCaptureError::into_source` is `pub`, and the tests that
+open a file through a request stayed in the request crate. The request crate's own tests that built an absolute
+descriptor now build one from SDDL, since the absolute form is the new crate's to test. See
+[win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-1`.

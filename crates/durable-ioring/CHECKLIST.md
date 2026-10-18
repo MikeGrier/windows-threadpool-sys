@@ -299,11 +299,7 @@ option recorded by construction. The rule throughout is documented APIs only
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
 
-  - [ ] **DI-14.8.1** -- `win-authorization-sys` is created and the request crate's `security` module
-    (`SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState`, the capture errors, and
-    their tests and sabotage entries) is moved into it, moved with `git mv` so history follows. The request
-    crate depends on it and re-exports it at the paths it had. **CROSS-COMPONENT:** the moved code is in
-    [windows-namespace-request-sys](../windows-namespace-request-sys/CHECKLIST.md) today.
+  - [x] **DI-14.8.1** -- `win-authorization-sys` is created and the request crate's `security` module is moved into it and re-exported. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1481)
 
   - [ ] **DI-14.8.2** -- `GetSecurityInfo` as a safe query in `win-authorization-sys`: the descriptor of an
     open handle, as an owned `SecurityDescriptor`. Tests cover a file, a directory and a handle that is not a
