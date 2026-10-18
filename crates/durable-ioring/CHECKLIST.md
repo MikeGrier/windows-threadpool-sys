@@ -297,13 +297,7 @@ option recorded by construction. The rule throughout is documented APIs only
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
 
-- [ ] **DI-14.9** -- **Rule on `FILE_FLAG_OVERLAPPED`: does `FileOptions` offer it?** Spawned by `DI-14.7`,
-  whose run is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.7 settled" and which decided
-  nothing. The engineer rules; if the flag is offered, the same item adds the builder method (a bool setting
-  its own bit, as the other flags are), a test that the ring completes the sequence of
-  `tests/overlapped_evidence.rs` on a handle opened through it, and the table row's change in
-  [DI-D-64](DESIGN-NOTES.md#di-d-64). If it is not offered, that row records the ruling and its reason. Not
-  reached by the run, and a reason a ruling may wait: a remote file, a device, and a volume that is not NTFS.
+- [x] **DI-14.9** -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-149)
 
 - [ ] **DI-14.10** -- **Rule on an unbuffered open of a link to a share, opened as the link.** Spawned by
   `DI-14.5`, which judges an opened handle by where it is

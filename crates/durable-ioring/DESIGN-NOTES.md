@@ -203,7 +203,7 @@ for this table.
 | `FILE_FLAG_OPEN_NO_RECALL` (CF, ID, RO) | Exposed | Builder method | None. Intended for remote storage systems. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_POSIX_SEMANTICS` (CF, RO) | Exposed | Builder method | None. The page says files made with it may not be reachable by older applications. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. | engineer 2026-10-15 |
-| `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Not in v1, unless the ring needs it | None | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; whether the ring accepts, refuses or behaves differently on such a handle is measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147) and not recalled; whether to offer it is [DI-14.9](CHECKLIST.md). | engineer 2026-10-15, 2026-10-16 |
+| `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Exposed | Builder method, [DI-14.9](COMPLETED-CHECKLIST.md#di-149) | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; what the ring does on such a handle was measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147). The run opened through `CreateFileW` only, which is all `FileOptions` reaches today. Earlier ruled out of v1 unless the ring needed it. | engineer 2026-10-15, 2026-10-16, 2026-10-18 |
 | `FILE_FLAG_SESSION_AWARE` (CF) | Not in v1 | None | The page says it matters to processes in session 0 and is supported only on server editions; a small interest and hard to test. | engineer 2026-10-15 |
 | `SECURITY_SQOS_PRESENT` and the `SECURITY_*` flags (CF, RO) | Excluded | None | The `ReOpenFile` page confines them to the client side of a named pipe, and the `CreateFileW` page does not say what they do for a file. A file target does not impersonate a server. | engineer 2026-10-15 |
 | `FILE_FLAG_FIRST_PIPE_INSTANCE` | Excluded | None | It is for pipes and is not a parameter of these calls. | standing |
@@ -308,8 +308,7 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   succeeds on a local file and the file is usable. What either does is not, since neither affects a target
   and the measurement needs remote storage and a case-sensitive directory respectively.
 - `FILE_FLAG_OVERLAPPED` is not offered by this item: the run in [DI-14.7](COMPLETED-CHECKLIST.md#di-147)
-  measured the ring on such a handle, and whether to offer it is [DI-14.9](CHECKLIST.md). [DI-D-64](#di-d-64)
-  keeps it out of v1 until that is ruled.
+  measured the ring on such a handle, and whether to offer it was left to [DI-14.9](COMPLETED-CHECKLIST.md#di-149).
 
 **What building DI-14.3 settled** ([DI-14.3](COMPLETED-CHECKLIST.md#di-143)). None of these was a ruling.
 
@@ -342,7 +341,7 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
 - The security quality-of-service flags are excluded by the table, so none is offered.
 
 **What building DI-14.7 settled** ([DI-14.7](COMPLETED-CHECKLIST.md#di-147)). None of these was a ruling, and
-none decides whether `FileOptions` offers `FILE_FLAG_OVERLAPPED`: that is [DI-14.9](CHECKLIST.md).
+none decides whether `FileOptions` offers `FILE_FLAG_OVERLAPPED`: that was [DI-14.9](COMPLETED-CHECKLIST.md#di-149)'s.
 
 Measured on Windows 11 build 26300, local NTFS (the volume of the temporary directory), through
 `windows-ioring-sys` 0.7.1, by `win-durable-ioring`'s `tests/overlapped_evidence.rs`. Four handles, each

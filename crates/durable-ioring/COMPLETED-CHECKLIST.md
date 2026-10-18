@@ -3123,3 +3123,13 @@ local volume; the item's text asked that the check see the target, and this item
 The ruling is [DI-14.10](CHECKLIST.md).
 Two sabotage entries replace the one that named the removed path function; the refusal itself is reached only by
 the ignored administrative-share tests, which were run with the ignored tests included.
+
+### <a id="di-149"></a>DI-14.9 -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. *(completed 2026-10-18 00:36:00 -04:00)*
+
+The engineer ruled that it is offered. `FileOptions::overlapped` is a bool that sets its own bit, is passed to a
+cached and an unbuffered file alike, and is kept when the data access changes. `tests/overlapped_evidence.rs`
+now drives the [DI-14.7](#di-147) sequence on handles opened through it as well as on the raw ones, with the
+same result for every step in each buffering mode, and with the option left off the completions are inline, so
+the flag is not set unasked. The table row in [DI-D-64](DESIGN-NOTES.md#di-d-64) is amended. Three sabotage
+entries. `opened_file.rs` is past 32 KiB with this; the one fracture candidate, the two refusal types with
+their helpers, would need the helpers' visibility changed, which a pure relocation does not do, so it is left whole.
