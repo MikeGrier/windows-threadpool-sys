@@ -754,6 +754,38 @@
       "why": "A control: an or-pattern's alternatives are unordered, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["            ERROR_INSUFFICIENT_BUFFER | ERROR_MORE_DATA => {\n"],
       "replace": ["            ERROR_MORE_DATA | ERROR_INSUFFICIENT_BUFFER => {\n"]
+    },
+    {
+      "name": "WV-3.1: the device number control sends a different code",
+      "file": "src/device_number.rs",
+      "expect": "caught",
+      "why": "The function's whole meaning is the control code it sends; the geometry control answers a volume with a structure whose first fields are not a device number.",
+      "find": ["    let written = device_control(device, IOCTL_STORAGE_GET_DEVICE_NUMBER, &[], &mut buffer)?;"],
+      "replace": ["    let written = device_control(device, windows_sys::Win32::System::Ioctl::IOCTL_DISK_GET_DRIVE_GEOMETRY, &[], &mut buffer)?;"]
+    },
+    {
+      "name": "WV-3.1: the device number is read from the partition number's place",
+      "file": "src/device_number.rs",
+      "expect": "caught",
+      "why": "The number and the partition are told apart only by their place in the structure; a volume's disk and its partition differ.",
+      "find": ["            device_number: read(offset_of!(STORAGE_DEVICE_NUMBER, DeviceNumber))?,"],
+      "replace": ["            device_number: read(offset_of!(STORAGE_DEVICE_NUMBER, PartitionNumber))?,"]
+    },
+    {
+      "name": "WV-3.1: a reply too short for the structure is read as zeros",
+      "file": "src/device_number.rs",
+      "expect": "caught",
+      "why": "A reply that does not hold the structure must be refused; zeros would be taken for a device number.",
+      "find": ["                .ok_or_else(|| invalid_data(\"a reply shorter than a device number\"))"],
+      "replace": ["                .or(Some(0))\n                .ok_or_else(|| invalid_data(\"a reply shorter than a device number\"))"]
+    },
+    {
+      "name": "WV-3.1: control, the reply buffer sized by its constant and not its type",
+      "file": "src/device_number.rs",
+      "expect": "survives",
+      "why": "A control: the structure is three u32s, twelve bytes, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    let mut buffer = [0u8; size_of::<STORAGE_DEVICE_NUMBER>()];"],
+      "replace": ["    let mut buffer = [0u8; 12];"]
     }
   ]
 }

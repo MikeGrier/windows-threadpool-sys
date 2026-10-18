@@ -56,13 +56,8 @@ Opened 2026-10-18 by [DI-14.12](../durable-ioring/CHECKLIST.md). `GetFileType` a
 a volume and a physical disk alike, so a caller that must tell them apart needs a control that only a
 volume or a disk answers.
 
-- [ ] **WV-3.1** -- **`IOCTL_STORAGE_GET_DEVICE_NUMBER`: `storage_device_number`, the device type, number
-  and partition number a volume or disk reports, as it wrote them.** The engineer, 2026-10-18 ("build both
-  of these now"). Documented on Learn (`ms.date` 08/18/2022, with `STORAGE_DEVICE_NUMBER` at 03/29/2018),
-  needing no access to the handle, which is how the crate's other controls are called. The partition number
-  is `0xFFFFFFFF` for a device that cannot be partitioned and the device number is `0xFFFFFFFF` for the
-  physical paths of an MPIO disk, both per the structure's page, so neither is read as a count. Records: a
-  `WV-D` decision and sabotage entries.
+- [x] **WV-3.1** -- `storage_device_number`, the device type, number and partition number a volume or disk reports (`IOCTL_STORAGE_GET_DEVICE_NUMBER`), as it wrote them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wv-31)
+
   **Next:** [DI-14.12](../durable-ioring/CHECKLIST.md), which also needs
   [NR-3.9](../windows-namespace-request-sys/CHECKLIST.md).
 
