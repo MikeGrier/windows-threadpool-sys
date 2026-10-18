@@ -268,11 +268,7 @@ option recorded by construction. The rule throughout is documented APIs only
   `DI-14.6.2` can be taken from the kinds already measured, and a blocking open is the caller's
   ([DI-D-67](DESIGN-NOTES.md#di-d-67)). It is evidence, recorded as such when it can be made.
 
-- [ ] **DI-14.6.4** -- **The open's documentation states that where a name leads is the caller's
-  responsibility** ([DI-D-67](DESIGN-NOTES.md#di-d-67)). On `OpenedFile`'s open and `OpenRequest`: a
-  name may be redirected to a device by a reparse point or an object-manager link whatever the open's
-  flags, an open of such a device may not return, and this crate neither checks nor cancels it. Stated
-  as observed and cited, with no advice to the caller.
+- [x] **DI-14.6.4** -- The open's documentation states that where a name leads is the caller's responsibility. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1464)
 
 - [ ] **DI-14.12** -- **A caller asks what kind of handle an opened file is, of an observer, and the
   opener does not return it.** The engineer, 2026-10-18: "There is no need to return the type to the

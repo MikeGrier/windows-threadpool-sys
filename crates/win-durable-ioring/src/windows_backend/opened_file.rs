@@ -603,6 +603,15 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     /// lock break can be a long time. A caller that cannot block builds the request here and performs
     /// it on a thread it chooses.
     ///
+    /// **Where the name leads is the caller's to know.** A name can be redirected to a device by a
+    /// reparse point in an intermediate directory, which `FILE_FLAG_OPEN_REPARSE_POINT` does not stop
+    /// (it applies to the final component), or by an object-manager link such as a drive letter, which
+    /// is resolved before a file system sees the name, so no reparse flag applies to it. An open of
+    /// a serial port's name was observed not to return. This crate does not inspect the name, refuse it,
+    /// bound the open or cancel it: the open is `CreateFileW`'s, and `CancelSynchronousIo` is documented
+    /// as a use and not as a guarantee, and targets a thread and not a call. The design notes' `DI-D-67`
+    /// has the sources and the measurement.
+    ///
     /// # Errors
     ///
     /// Those of [`request`](Self::request) and of [`perform`](OpenRequest::perform).
@@ -690,7 +699,8 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
         }
     }
 
-    /// Open the file, on the calling thread. **This blocks for as long as `CreateFileW` does.**
+    /// Open the file, on the calling thread. **This blocks for as long as `CreateFileW` does**, and
+    /// where the name leads is the caller's to know, as [`OpenedFile::open`] says.
     ///
     /// # Errors
     ///

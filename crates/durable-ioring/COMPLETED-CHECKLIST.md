@@ -3302,3 +3302,12 @@ private function makes the claim, and the domains, geometry, capabilities and ac
 through the plain constructor, as tests of each of the three kinds compare. A declaration of domains still adds and
 never removes. The constructors are not `unsafe`, for the reason in [DI-D-68](DESIGN-NOTES.md#di-d-68), which is the
 assistant's position until amended. Six sabotages, one of them a control that survives.
+
+### <a id="di-1464"></a>DI-14.6.4 -- The open's documentation states that where a name leads is the caller's responsibility. *(completed 2026-10-18 19:35:11 -04:00)*
+
+The statement is on `OpenedFile::open`, which `OpenRequest::perform` points to: a name can be redirected to a device
+by a reparse point in an intermediate directory or an object-manager link, no reparse flag applies to the second, an
+open of a serial port's name was observed not to return, and this crate does not inspect, refuse, bound or cancel it.
+It cites what `CancelSynchronousIo` is documented as, and names [DI-D-67](DESIGN-NOTES.md#di-d-67) for the sources and
+the measurement; it gives no advice, and carries no figure from the measurement. Documentation only: no behaviour
+changed, so no sabotage applies.
