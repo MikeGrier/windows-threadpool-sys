@@ -273,6 +273,18 @@ option recorded by construction. The rule throughout is documented APIs only
   flags, an open of such a device may not return, and this crate neither checks nor cancels it. Stated
   as observed and cited, with no advice to the caller.
 
+- [ ] **DI-14.12** -- **A caller asks what kind of handle an opened file is, of an observer, and the
+  opener does not return it.** The engineer, 2026-10-18: "There is no need to return the type to the
+  caller", and, on the layering, that the `win-*-sys` crates are built and then the observer. The kinds the
+  measurements in [DI-D-64](DESIGN-NOTES.md#di-d-64) separate are a file or directory, a volume, a physical
+  disk, a character device and a pipe. It is made of two observers that do not exist yet, so it waits on
+  them; its shape, a function over any handle that lends itself or a type, is not decided and is settled
+  when they are built.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** [NR-3.9](../windows-namespace-request-sys/CHECKLIST.md)
+  > (`QueryFileType`, in `crates/windows-namespace-request-sys`) and
+  > [WV-3.1](../win-volume-sys/CHECKLIST.md) (`storage_device_number`, in `crates/win-volume-sys`).
+
 - [x] **DI-14.7** -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-147)
 
 - [x] **DI-14.8** -- Safe read-backs of what an open was given, in the two crates the Learn-section rule names: `win-authorization-sys` and `win-handles-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-148)

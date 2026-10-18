@@ -119,7 +119,16 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
   > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
   > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
 
-## NR-M-inf -- The horizon (ungated)
+- [ ] **NR-3.9** -- **`GetFileType`: a `QueryFileType` entry on a captured handle.** The engineer,
+  2026-10-18 ("build both of these now"), after the question of how a caller asks what kind of handle an
+  opened file is, without the opener returning it. Learn files `GetFileType` under File Management
+  Functions, beside `CreateFile` and `GetFinalPathNameByHandle`, so it is this crate's. It reports what the
+  call returned. A returned `FILE_TYPE_UNKNOWN` is either a result or a failure, and the call's own page
+  tells them apart by `GetLastError`, so the last error is cleared before the call and `NO_ERROR` after an
+  unknown means the call worked. Records: a decision in [DESIGN-NOTES.md](DESIGN-NOTES.md), a sabotage
+  entry for the clearing, and the measurement of what each kind of handle returns.
+  **Next:** [WV-3.1](../win-volume-sys/CHECKLIST.md), which is independent; then
+  [DI-14.12](../durable-ioring/CHECKLIST.md), which needs both.
 
 ## NR-M-inf -- The horizon (ungated)
 
