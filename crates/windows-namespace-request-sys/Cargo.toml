@@ -53,13 +53,14 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 windows-thread-ambient-sys = { version = "0.3.0", path = "../windows-thread-ambient-sys" }
 
 # Test-only: `tests/device_handle_evidence.rs` asks a volume or a disk for its device number, which
-# this crate does not wrap because Learn files it with the volume controls. `win-volume-sys` does not
-# depend on this crate.
-win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
-
-# Test-only: `tests/device_handle_evidence.rs` makes a named pipe, which this crate does not wrap because
-# Learn files it with the pipe functions. `win-pipes-sys` does not depend on this crate.
-win-pipes-sys = { version = "0.1.0", path = "../win-pipes-sys" }
+# this crate does not wrap because Learn files it with the volume controls, and makes a named pipe,
+# which Learn files with the pipe functions. Neither crate depends on this one.
+#
+# Path-only, with no `version`, as `windows-ioring-sys`'s dev-dependencies are and for the reason it
+# gives: Cargo checks a pinned version against the path at every build, so a release of either crate
+# would break this one, and a versionless dev-dependency is left out of the published manifest.
+win-volume-sys = { path = "../win-volume-sys" }
+win-pipes-sys = { path = "../win-pipes-sys" }
 
 # Test-only. `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
