@@ -3766,3 +3766,56 @@ explains are binding where they are stated; the encodings taken at the time of w
 `is_nameable_in_a_mask` and `undirected` as single definitions, and an integration test asserting
 which probes emit a machine-readable row -- are in the commits that added this section and the one
 that corrected it.
+
+## <a id="refusals-rest-on-the-documented-contract"></a>A refusal rests on the documented contract; a measurement is documentation
+
+**The engineer, 2026-10-18, for the whole repository:** "If something has only been discovered experimentally,
+it is anecdotal data which we can provide as documentation but it must not become part of our own validation,
+as a rule. Now, if it leads to a combination of behaviors that we do not support, we should refuse it early but
+that is an implementation choice to narrow our focus, not attempting to embody the kernel's anticipated
+rejection." And: the principle "applies across the entire repository and should be encoded to be applied
+uniformly."
+
+It arose from `win-durable-ioring`'s open ([DI-14.4](crates/durable-ioring/CHECKLIST.md)), where measurements
+had already shown the kernel both stricter and more lenient than its pages. It is the consumer-side rule of
+PLATFORM INTEGRITY ("depend on specified primitives, never on incidental current behavior") applied to the
+platform itself: what one Windows build accepts on one machine is incidental behaviour, and the documented
+contract is the specification. It is the sibling of
+[DOCUMENTED APIS ONLY](.github/copilot-instructions.md), which governs which calls are made; this governs what
+is refused before one.
+
+**Three kinds of refusal, and one thing that is never a refusal.**
+
+1. **The documented contract.** Where a page says a combination of a call's arguments is invalid, the
+   repository may refuse it before the call. Each such refusal carries its citation -- the page, the condition
+   as the page states it, and the date it was read -- and is written only after the sentence has been read
+   again, not recalled. When the page changes, the refusal is changed on purpose, never discovered by a test.
+   This holds where the kernel is more lenient than the page: the contract is refused even if this machine
+   accepts it.
+2. **Our own narrowing.** Where a combination leads to behaviour a component does not support, it is refused as
+   early as the information to judge it exists, and named as the component's choice -- a separate error kind
+   from (1), since a narrowing is revisable and a contract refusal moves only when the contract does. It does
+   not claim to predict the platform's rejection.
+3. **The platform's own refusal.** Everything else reaches the call, and its error reaches the caller as the
+   platform gave it, refined into a typed error after the fact where the code is specific enough.
+4. **Never a refusal: a measurement.** Behaviour discovered by running is anecdote. It is documented, and pinned
+   by an evidence test so that a change is seen, but it is not a validation path, in either direction.
+
+**What a check ahead of the call can judge.** Only a condition on the arguments alone. A condition on the
+target -- whether a file exists, which file system or device it is on, whether it is local, the caller's token,
+who else holds it -- is the call's to judge: a check ahead of it is a guess, or a second open with a race window
+between them. Such a documented condition stays documentation, and the platform's error answers it.
+
+**What is not a contract of invalidity.** "Self-defeating", "is ignored", "has no effect", and a sentence that
+can be read two ways. Those pass through, and are documented as what the page says.
+
+**The default mechanism**, the assistant's proposal given leeway by the engineer on 2026-10-18: one pure check
+at the build step, over a table of conditions each with its predicate, its kind and its citation, tested in
+memory. A condition is made structural only where it falls on a type parameter the component already has; a
+type parameter is not added for a flag, since every one multiplies the conversions that carry the others. A
+component may choose otherwise and says why.
+
+**Scope.** Every component that validates ahead of a platform call. A `-sys` crate that decides nothing refuses
+nothing and is consistent with the rule as it stands. Applying it to refusals that already exist is
+[M42](CHECKLIST.md) in the root checklist; applying it to the open of `win-durable-ioring` is
+[DI-14.4](crates/durable-ioring/CHECKLIST.md).

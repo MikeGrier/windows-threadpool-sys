@@ -477,6 +477,27 @@ as one domain -- so it does not belong in a `-sys` crate. It is built on the per
   which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
   domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
 
+## M42 -- Apply the documented-contract rule to the refusals that already exist
+
+The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
+2026-10-18): a refusal ahead of a platform call rests on the documented contract and carries its citation,
+a component's own narrowing is named as its own, and a measurement is never a check. These items apply it to
+code written before it was stated. `win-durable-ioring`'s open is not here; it is
+[DI-14.4](crates/durable-ioring/CHECKLIST.md).
+
+- [ ] **M42.1** -- **Census every refusal made ahead of a platform call, across the workspace.** Every place a
+  component returns an error, panics or asserts on its arguments before the call they are for. The census is
+  produced by a search recorded with it, not from recollection, and lists each site with its crate.
+
+- [ ] **M42.2** -- **Classify each one against the rule:** a documented condition on the arguments alone (with
+  the citation, re-read), the component's own narrowing, or neither -- a check resting on a measurement or on
+  a target condition judged ahead of the call. The classification is recorded beside the census.
+
+- [ ] **M42.3** -- **Bring each site of the third kind to the engineer**, with what it rests on and what
+  removing it would let through, before anything is changed. Then carry out what is ruled, one crate per
+  commit, and give each contract refusal its citation and each narrowing its own error kind where it lacks
+  them.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

@@ -196,6 +196,27 @@ an assistant does not reach for it again.
   the published versions that carried them yanked
   ([the decision](../crates/windows-thread-ambient-sys/DESIGN-NOTES.md#d-transaction-removed)).
 
+## DOCUMENTED CONTRACT — refuse on what the page says, never on what a run showed
+
+**A refusal made ahead of a platform call rests on the documented contract. A measurement is
+documentation, never validation.** The engineer, 2026-10-18, for the whole repository; the rule and its
+reasoning are in [DESIGN-NOTES.md](../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract).
+
+- **Refuse ahead of the call only what a page calls invalid, on the arguments alone**, and carry the
+  citation (page, condition, date read). Re-read the sentence before writing the refusal; a recalled
+  citation is not one. Where the kernel is more lenient than the page, the page wins.
+- **A condition on the target is the call's to judge** -- existence, file system, device, local or
+  remote, token, sharing. Checking it first is a guess or a second open with a race between them.
+- **Our own narrowing is refused as ours**, with an error kind distinct from a contract refusal, and
+  never framed as predicting the platform's rejection.
+- **"Self-defeating", "ignored", "has no effect", and ambiguous sentences are not invalidity.** They
+  pass through and are documented.
+- **What a run showed goes in documentation and an evidence test**, and never into a check -- not when
+  the kernel refused something the page allows, and not when it allowed something the page forbids.
+- **Default mechanism:** one pure check at the build step over a table of (predicate, kind, citation),
+  tested in memory. Make a condition structural only on a type parameter the component already has; do
+  not add a type parameter for a flag.
+
 ## Line endings in tool parameters
 
 All text content passed to tpu tools (`content`, `replacement`, `data` in edit ops) is
