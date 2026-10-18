@@ -1546,3 +1546,28 @@ a refused poll runs it. One sabotage entry removes the ring. Its first run was c
 was longer than the harness's 15 s bound; the deadline is now 10 s so it fails by assertion.
 
 The `try_pop` error path the reviewer also named was not examined and is not covered by this change beyond the same wake.
+
+## Moved 2026-10-18 15:01:34 -04:00 -- TW-10.6: the run-counting tests wait for the setup drives
+
+### <a id="tw-106"></a>TW-10.6 -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. *(completed 2026-10-18 15:01:34 -04:00)*
+
+The third review of the branch found that the TW-10.5 test took its baseline after a 100 ms sleep, but the setup signal's two drives
+are made on a pool thread whenever the scheduler reaches it. Late, they fail the "runs on its own" assertion on correct code, or
+arrive after it and satisfy the post-poll check with the kick removed. The reviewer reproduced it with the process and twelve CPU
+workers pinned to one logical processor.
+
+That reproduction was repeated here against the old and new test binaries side by side: the old tests failed eight rounds of
+eight, and the new passed eight of eight. The old failures were two tests, not one: the TW-10.5 test, and
+`a_new_layer_with_nothing_to_do_runs_the_engine_once_for_its_setup_and_then_not`, an older test with the same sleep and the same
+baseline that the review did not name. Setup was measured to make exactly two drives, arriving together, about 1.6 ms after
+construction on an idle host.
+
+`await_setup` waits, bounded, until `runs` reaches `SETUP_DRIVES` (2), and is called right after the layer is made in the five
+tests that take a baseline, including the one in `child_tests.rs`. The older test now also asserts that the count is exactly the
+setup drives and nothing else, and is renamed to match. The negative assertions ("a stalled layer runs nothing") keep their
+sleeps: nothing can be waited for there, and they can only fail if the layer runs, so a slow host weakens them and never makes
+them flaky. The constant ties the tests to the setup protocol of `CompletionWake` (drain, re-arm, drain); if that changed, the
+wait would time out with a message naming the count.
+
+The kick's sabotage entry is caught again by assertion. The same pinned-processor run was not applied to the integration tests,
+whose sleeps TW-10.4 already reviewed under CPU load, nor to the rest of the library tests.

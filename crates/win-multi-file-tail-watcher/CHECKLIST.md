@@ -185,3 +185,5 @@ initiated before the previous one completes should fail. fix all".
 - [x] **TW-10.4** -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe, that the poll cannot complete and nothing is lost, and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-104)
 
 - [x] **TW-10.5** -- A poll refused as in flight wakes the reading engine, so that a poll held up by an error a run returned, which leaves nothing in flight and rings no doorbell, is not refused for ever now that the reader's gate is in front of the watcher's. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-105)
+
+- [x] **TW-10.6** -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-106)

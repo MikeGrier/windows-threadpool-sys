@@ -101,6 +101,26 @@ pub(super) fn runs(layer: &ReadLayer<u32>) -> usize {
     layer.core.runs.load(Ordering::Relaxed)
 }
 
+/// How many times the ring's setup signal drives the engine: its callback drains, re-arms and
+/// drains again ([`CompletionWake`](windows_ioring_sys::CompletionWake)).
+const SETUP_DRIVES: usize = 2;
+
+/// Wait until the setup signal's drives have happened, so that a count of runs taken afterwards
+/// is the layer's own and not the tail of its construction. They are made on a pool thread when
+/// the scheduler reaches it, about a millisecond after the layer is made on an idle host and
+/// without a bound on a loaded one, so no fixed sleep can stand in for waiting for them.
+pub(super) fn await_setup(layer: &ReadLayer<u32>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while runs(layer) < SETUP_DRIVES {
+        assert!(
+            Instant::now() < deadline,
+            "the ring's setup signal never drove the engine: {} of {SETUP_DRIVES}",
+            runs(layer)
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn append(path: &PathBuf, bytes: &[u8]) {
     OpenOptions::new()
         .append(true)
@@ -159,6 +179,7 @@ fn several_files_are_each_read_in_full() {
 fn a_client_that_stops_draining_stalls_the_layer_until_it_rings_back() {
     let dir = TempDir::new("rl-client");
     let layer = layer_with(64, 16, 2);
+    await_setup(&layer);
     let content = pattern(100);
     let path = dir.file("a.log", &content);
     let _registration = layer.register(&wtf(&path), 0, 7).expect("register");
@@ -239,6 +260,7 @@ fn a_poll_parked_on_a_full_watcher_sq_goes_on_as_the_layer_drains_it() {
 fn nothing_runs_between_polls() {
     let dir = TempDir::new("rl-idle");
     let layer = layer();
+    await_setup(&layer);
     let path = dir.file("a.log", &pattern(40));
     let _registration = layer.register(&wtf(&path), 0, 7).expect("register");
     layer.poll().expect("poll");
@@ -299,11 +321,16 @@ fn dropping_an_idle_layer_returns() {
 }
 
 #[test]
-fn a_new_layer_with_nothing_to_do_runs_the_engine_once_for_its_setup_and_then_not() {
+fn a_new_layer_with_nothing_to_do_runs_the_engine_for_its_setup_and_then_not() {
     let layer = layer();
-    std::thread::sleep(Duration::from_millis(100));
+    await_setup(&layer);
     let settled = runs(&layer);
-    assert!(settled >= 1, "the ring's setup signal drives it once");
+    assert_eq!(
+        settled, SETUP_DRIVES,
+        "the ring's setup signal drives it, and nothing else"
+    );
+    // Nothing happening is not something to wait for, so this gives the layer time to run when it
+    // should not. It can only fail if the layer runs; a slow host weakens it and never flakes it.
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(runs(&layer), settled);
 }
@@ -483,10 +510,12 @@ fn a_shut_down_reader_refuses_a_poll_as_shut_down_even_while_one_is_in_flight() 
 #[test]
 fn a_poll_refused_as_in_flight_runs_the_engine_again() {
     let layer = layer();
+    // The setup signal's drives are waited for, not slept past: arriving late they would otherwise
+    // fail the assertion below on correct code, or satisfy the one after it with the kick removed.
+    await_setup(&layer);
     // A poll in flight, held by hand, as one stalled by an error a run returned is: nothing in the
     // ring and no doorbell rung, so nothing else would run the engine.
     assert!(layer.poll_gate.begin());
-    std::thread::sleep(Duration::from_millis(100));
     let settled = runs(&layer);
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
