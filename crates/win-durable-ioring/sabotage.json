@@ -1429,6 +1429,30 @@
       "replace": ["            posix_semantics: false,\n"]
     },
     {
+      "name": "DI-14.9: overlapped sets nothing",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "An option that reaches CreateFileW as no flag is a request dropped without a word; the handle would be a synchronous one.",
+      "find": ["            named |= FILE_FLAG_OVERLAPPED;\n"],
+      "replace": ["            named |= 0;\n"]
+    },
+    {
+      "name": "DI-14.9: overlapped is set whether asked for or not",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "Every open would become an overlapped one, which changes when a ring operation's completion is there.",
+      "find": ["        if self.overlapped {\n"],
+      "replace": ["        if self.overlapped || true {\n"]
+    },
+    {
+      "name": "DI-14.9: changing the data access forgets overlapped",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "caught",
+      "why": "read() and write() move the type and carry everything else.",
+      "find": ["            overlapped: self.overlapped,\n"],
+      "replace": ["            overlapped: false,\n"]
+    },
+    {
       "name": "DI-13.8 control: the same test of containment with its operands the other way round",
       "file": "src/windows_backend/file_rights.rs",
       "expect": "survives",

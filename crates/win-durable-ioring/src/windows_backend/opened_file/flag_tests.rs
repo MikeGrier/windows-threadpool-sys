@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Mike Grier
-//! The namespace and lifetime flags of an open (DI-14.2): `FILE_FLAG_DELETE_ON_CLOSE`,
-//! `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS`.
+//! The namespace, lifetime and I/O-mode flags of an open (DI-14.2, DI-14.9):
+//! `FILE_FLAG_DELETE_ON_CLOSE`, `FILE_FLAG_OPEN_NO_RECALL`, `FILE_FLAG_POSIX_SEMANTICS` and
+//! `FILE_FLAG_OVERLAPPED`.
 
 use std::fs;
 use std::io;
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS,
+    FILE_FLAG_OVERLAPPED, FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS,
 };
 
 use super::{
@@ -31,14 +32,24 @@ fn each_flag_sets_its_own_bit_and_no_other() {
     assert_eq!(flags(base.delete_on_close(true)), FILE_FLAG_DELETE_ON_CLOSE);
     assert_eq!(flags(base.open_no_recall(true)), FILE_FLAG_OPEN_NO_RECALL);
     assert_eq!(flags(base.posix_semantics(true)), FILE_FLAG_POSIX_SEMANTICS);
+    assert_eq!(flags(base.overlapped(true)), FILE_FLAG_OVERLAPPED);
     assert_eq!(
         flags(
             base.delete_on_close(true)
                 .open_no_recall(true)
                 .posix_semantics(true)
+                .overlapped(true)
         ),
-        FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_POSIX_SEMANTICS,
+        FILE_FLAG_DELETE_ON_CLOSE
+            | FILE_FLAG_OPEN_NO_RECALL
+            | FILE_FLAG_POSIX_SEMANTICS
+            | FILE_FLAG_OVERLAPPED,
         "together, they are joined and none replaces another"
+    );
+    assert_eq!(
+        flags(base.overlapped(true).overlapped(false)),
+        0,
+        "the flag can be taken back"
     );
     assert_eq!(
         flags(base.delete_on_close(true).delete_on_close(false)),
@@ -70,11 +81,15 @@ fn changing_the_data_access_keeps_the_flags() {
         .delete_on_close(true)
         .open_no_recall(true)
         .posix_semantics(true)
+        .overlapped(true)
         .read()
         .write();
     assert_eq!(
         flags(moved),
-        FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_POSIX_SEMANTICS
+        FILE_FLAG_DELETE_ON_CLOSE
+            | FILE_FLAG_OPEN_NO_RECALL
+            | FILE_FLAG_POSIX_SEMANTICS
+            | FILE_FLAG_OVERLAPPED
     );
 }
 

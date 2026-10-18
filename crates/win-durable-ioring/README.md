@@ -67,6 +67,12 @@ well as a cached one, never refused, and change nothing a target claims: the cla
 what it offers follow from the buffering mode alone. What the `CreateFileW` documentation says about them
 on an unbuffered file can be read two ways, and the methods' own documentation says what was measured.
 
+`FileOptions::overlapped` sets `FILE_FLAG_OVERLAPPED`. The ring takes such a handle and gives the result
+for each operation that it gives without the flag; what the flag changes is when a completion is there and,
+for an unbuffered file, the order a batch's completions come in. The handle the open lends is the same
+overlapped handle, so I/O a caller makes on it directly, without an offset, is I/O on a handle for which
+`CreateFileW` says the file pointer is not maintained.
+
 The path is a `Wtf16String`, handed to Win32 as the caller gave it: nothing lengthens, shortens or
 refuses it, so a path past `MAX_PATH` without a `\\?\` prefix, and an empty one, are what `CreateFileW`
 makes of them. Convert a `Path` with `Wtf16String::from_os_str`, which loses nothing.

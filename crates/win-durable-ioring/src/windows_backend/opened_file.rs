@@ -33,8 +33,8 @@ use windows_namespace_request_sys::{
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA,
-    FILE_WRITE_DATA,
+    FILE_FLAG_OVERLAPPED, FILE_FLAG_POSIX_SEMANTICS, FILE_FLAG_RANDOM_ACCESS,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_READ_DATA, FILE_WRITE_DATA,
 };
 use wtf_string::{Wtf16Str, Wtf16String};
 
@@ -182,6 +182,7 @@ pub struct FileOptions<A: DataAccess = NoData> {
     delete_on_close: bool,
     open_no_recall: bool,
     posix_semantics: bool,
+    overlapped: bool,
     random_access: bool,
     sequential_scan: bool,
 }
@@ -206,6 +207,7 @@ impl FileOptions<NoData> {
             delete_on_close: false,
             open_no_recall: false,
             posix_semantics: false,
+            overlapped: false,
             random_access: false,
             sequential_scan: false,
         }
@@ -258,6 +260,7 @@ impl<A: DataAccess> FileOptions<A> {
             delete_on_close: self.delete_on_close,
             open_no_recall: self.open_no_recall,
             posix_semantics: self.posix_semantics,
+            overlapped: self.overlapped,
             random_access: self.random_access,
             sequential_scan: self.sequential_scan,
         }
@@ -331,6 +334,22 @@ impl<A: DataAccess> FileOptions<A> {
         self
     }
 
+    /// Open the file for overlapped I/O (`FILE_FLAG_OVERLAPPED`). Every operation this crate's targets
+    /// make is addressed by offset, so the file pointer the system then stops keeping is not one they
+    /// read. Measured on Windows 11 build 26300 (the run is in `DI-D-64`), the ring takes such a
+    /// handle and reports the same result for each operation as for one opened without the flag, in
+    /// each buffering mode. What differs is when a completion is there: a handle opened without the
+    /// flag completes during the submit, and an unbuffered one opened with it was not complete then
+    /// for its reads, which then completed in an order that was not always the order queued.
+    ///
+    /// The handle this crate lends is the same one, so I/O a caller makes on it directly without an
+    /// offset, with a `std::fs::File` for one, is I/O on an overlapped handle, where the
+    /// `CreateFileW` page says the file pointer is not maintained and operations are not serialised.
+    pub fn overlapped(mut self, overlapped: bool) -> Self {
+        self.overlapped = overlapped;
+        self
+    }
+
     /// Hint that the file will be accessed at random (`FILE_FLAG_RANDOM_ACCESS`), which the system
     /// may use to tune its caching.
     ///
@@ -375,6 +394,9 @@ impl<A: DataAccess> FileOptions<A> {
         }
         if self.posix_semantics {
             named |= FILE_FLAG_POSIX_SEMANTICS;
+        }
+        if self.overlapped {
+            named |= FILE_FLAG_OVERLAPPED;
         }
         let mut hints = 0;
         if self.random_access {

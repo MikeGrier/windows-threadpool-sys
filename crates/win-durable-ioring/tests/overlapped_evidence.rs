@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Mike Grier
-//! Evidence for DI-14.7: the ring on a handle opened with `FILE_FLAG_OVERLAPPED`, which the typed
-//! surface of `win-durable-ioring` does not offer, against the same handle opened without it.
+//! Evidence for DI-14.7: the ring on a handle opened with `FILE_FLAG_OVERLAPPED`, against the same
+//! handle opened without it. The handles are opened through the request crate with the flag written
+//! out, which is how it was measured, and then (DI-14.9) through `FileOptions::overlapped`, which
+//! must give the ring the same.
 //!
 //! # Why this is an integration test
 //!
@@ -28,6 +30,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use io_buffers::AlignedBuf;
+use win_durable_ioring::windows_backend::{
+    Buffering, Cached, Disposition, FileOptions, OpenedFile, ReadOnly, ReadWrite, Unbuffered,
+};
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PushOptions, SharedHandle,
     WriteCaching,
@@ -127,24 +132,67 @@ where
     )
 }
 
+/// Where the handles of a sequence come from: the request crate's `OpenFile` with the flags written
+/// out, which is how DI-14.7 measured, or `OpenedFile` with `FileOptions::overlapped`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opener {
+    Raw,
+    Typed,
+}
+
+/// A read-write handle and a read-only one to the file at `path`, created if it is not there.
+fn handles(
+    opener: Opener,
+    path: &Path,
+    unbuffered: bool,
+    overlapped: bool,
+) -> (SharedHandle, SharedHandle) {
+    match opener {
+        Opener::Raw => {
+            let flags = (if unbuffered {
+                FILE_FLAG_NO_BUFFERING
+            } else {
+                0
+            }) | (if overlapped { FILE_FLAG_OVERLAPPED } else { 0 });
+            (
+                open(path, FILE_READ_DATA | FILE_WRITE_DATA, OPEN_ALWAYS, flags),
+                open(path, FILE_READ_DATA, OPEN_EXISTING, flags),
+            )
+        }
+        Opener::Typed if unbuffered => typed::<Unbuffered>(path, overlapped),
+        Opener::Typed => typed::<Cached>(path, overlapped),
+    }
+}
+
+fn typed<B: Buffering>(path: &Path, overlapped: bool) -> (SharedHandle, SharedHandle) {
+    let name = || Wtf16String::from_os_str(path.as_os_str());
+    let file = OpenedFile::<B, ReadWrite>::open(
+        name(),
+        FileOptions::new()
+            .read()
+            .write()
+            .disposition(Disposition::OpenAlways)
+            .overlapped(overlapped),
+    )
+    .expect("the typed open");
+    let reader =
+        OpenedFile::<B, ReadOnly>::open(name(), FileOptions::new().read().overlapped(overlapped))
+            .expect("the typed read-only open");
+    (file.handle().clone(), reader.handle().clone())
+}
+
 /// The sequence against one pair of handles, as `(steps, the order a batch of four completed in)`.
-fn sequence(unbuffered: bool, overlapped: bool, tag: &str) -> (Vec<Step>, Vec<usize>) {
+fn sequence(
+    opener: Opener,
+    unbuffered: bool,
+    overlapped: bool,
+    tag: &str,
+) -> (Vec<Step>, Vec<usize>) {
     let scratch = Scratch(std::env::temp_dir().join(format!(
         "durable-ioring-overlapped-{}-{tag}.tmp",
         std::process::id()
     )));
-    let flags = (if unbuffered {
-        FILE_FLAG_NO_BUFFERING
-    } else {
-        0
-    }) | (if overlapped { FILE_FLAG_OVERLAPPED } else { 0 });
-    let file = open(
-        &scratch.0,
-        FILE_READ_DATA | FILE_WRITE_DATA,
-        OPEN_ALWAYS,
-        flags,
-    );
-    let reader = open(&scratch.0, FILE_READ_DATA, OPEN_EXISTING, flags);
+    let (file, reader) = handles(opener, &scratch.0, unbuffered, overlapped);
 
     let mut ring: Ring = IoRing::with_inventory(16, 32).expect("a ring");
     let mut steps = Vec::new();
@@ -317,10 +365,18 @@ fn is_a_permutation(order: &[usize]) -> bool {
 #[test]
 fn the_ring_reports_the_same_results_on_an_overlapped_handle() {
     for unbuffered in [false, true] {
-        let (plain, plain_order) =
-            sequence(unbuffered, false, if unbuffered { "up" } else { "cp" });
-        let (overlapped, overlapped_order) =
-            sequence(unbuffered, true, if unbuffered { "uo" } else { "co" });
+        let (plain, plain_order) = sequence(
+            Opener::Raw,
+            unbuffered,
+            false,
+            if unbuffered { "up" } else { "cp" },
+        );
+        let (overlapped, overlapped_order) = sequence(
+            Opener::Raw,
+            unbuffered,
+            true,
+            if unbuffered { "uo" } else { "co" },
+        );
 
         assert_eq!(
             outcomes(&plain),
@@ -342,6 +398,36 @@ fn the_ring_reports_the_same_results_on_an_overlapped_handle() {
         assert_eq!(plain_order, [0, 1, 2, 3]);
 
         // An overlapped handle may complete asynchronously, so only the set of completions is fixed.
+        assert!(is_a_permutation(&overlapped_order), "{overlapped_order:?}");
+    }
+}
+
+/// `FileOptions::overlapped` (DI-14.9) gives the ring a handle that does what the raw one does: the
+/// same result for every step, in each buffering mode, with the flag and without it. Without it the
+/// completions are inline, as for the raw plain handle, so the option does not set the flag unasked.
+#[test]
+fn the_typed_open_offers_the_flag_and_the_ring_reports_the_same_results() {
+    for unbuffered in [false, true] {
+        let tag = if unbuffered { "t-u" } else { "t-c" };
+        let (plain, plain_order) = sequence(Opener::Typed, unbuffered, false, &format!("{tag}p"));
+        let (overlapped, overlapped_order) =
+            sequence(Opener::Typed, unbuffered, true, &format!("{tag}o"));
+
+        assert_eq!(
+            outcomes(&plain),
+            expected(unbuffered),
+            "typed, plain, unbuffered={unbuffered}"
+        );
+        assert_eq!(
+            outcomes(&overlapped),
+            expected(unbuffered),
+            "typed, overlapped, unbuffered={unbuffered}"
+        );
+        assert!(
+            plain.iter().all(|step| step.already_there),
+            "a typed open without the flag completes inline, unbuffered={unbuffered}"
+        );
+        assert_eq!(plain_order, [0, 1, 2, 3]);
         assert!(is_a_permutation(&overlapped_order), "{overlapped_order:?}");
     }
 }
