@@ -25,11 +25,10 @@ use std::marker::PhantomData;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
+use win_authorization_sys::{SecurityAttributes, SecurityDescriptor};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::open::OpenFile;
-use windows_namespace_request_sys::{
-    CapturedHandle, FinalPathError, QueryFinalPath, SecurityAttributes, SecurityDescriptor,
-};
+use windows_namespace_request_sys::{CapturedHandle, FinalPathError, QueryFinalPath};
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -648,8 +647,9 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
     ///
     /// The `CreateFileW` page says the descriptor is for a file that is created and is ignored when
     /// the file exists (measured: an open of an existing file with a descriptor that denies reading
-    /// leaves the file as it was). This crate does not apply the descriptor itself and has no
-    /// `unsafe` with which to read a file's descriptor back.
+    /// leaves the file as it was). This crate does not apply the descriptor itself; a created
+    /// file's descriptor reads back as the one given, through `win-authorization-sys`'s
+    /// `get_security_info`, for a file opened with [`FileRights::READ_CONTROL`].
     pub fn with_security_descriptor(self, descriptor: SecurityDescriptor) -> Self {
         Self {
             request: self

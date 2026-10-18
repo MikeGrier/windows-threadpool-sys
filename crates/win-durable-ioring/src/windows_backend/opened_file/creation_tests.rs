@@ -4,8 +4,11 @@
 
 use std::fs;
 use std::os::windows::fs::MetadataExt;
+use std::os::windows::io::AsHandle;
 use std::path::Path;
 
+use win_authorization_sys::{ObjectType, SecurityInformation, get_security_info};
+use win_handles_sys::{HandleFlags, get_handle_information};
 use windows_namespace_request_sys::OpenFile;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 use windows_sys::Win32::Storage::FileSystem::{
@@ -16,8 +19,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::Wtf16String;
 
 use super::{
-    Cached, DataAccess, Disposition, FileAttributes, FileOptions, OpenedFile, ReadWrite,
-    SecurityDescriptor, Unbuffered,
+    Cached, DataAccess, Disposition, FileAttributes, FileOptions, FileRights, OpenedFile,
+    ReadWrite, SecurityDescriptor, Unbuffered,
 };
 use crate::dioring::tests::{TempFile, wtf};
 
@@ -259,9 +262,8 @@ fn create_with(path: &Path, descriptor: &str) -> OpenedFile {
 
 #[test]
 fn a_created_file_is_given_the_descriptor_and_a_later_open_is_judged_by_it() {
-    // The descriptor is read back through the one documented query this crate can make without
-    // `unsafe`, an open by path: a DACL that denies read to everyone refuses a later open for
-    // reading, and one that allows it admits it.
+    // The descriptor is judged by behaviour as well as read back (below): a DACL that denies read to
+    // everyone refuses a later open for reading, and one that allows it admits it.
     let temp = TempFile::new("cr-judged");
     let denied = temp.0.with_extension("denied");
     let allowed = temp.0.with_extension("allowed");
@@ -281,6 +283,98 @@ fn a_created_file_is_given_the_descriptor_and_a_later_open_is_judged_by_it() {
     drop((held, kept));
     fs::remove_file(&denied).expect("remove");
     fs::remove_file(&allowed).expect("remove");
+}
+
+/// The DACL of the file `file` holds a handle to, as the text Windows renders it as, read through
+/// `win-authorization-sys`'s `GetSecurityInfo`. The file has to have been opened with the right to
+/// read its security.
+fn dacl_of<B: super::Buffering>(file: &OpenedFile<B, ReadWrite>) -> String {
+    get_security_info(
+        file.as_handle(),
+        ObjectType::FILE,
+        SecurityInformation::DACL,
+    )
+    .expect("read the file's security")
+    .to_sddl(SecurityInformation::DACL)
+    .expect("write the descriptor as text")
+    .to_string_lossy()
+}
+
+#[test]
+fn a_created_file_is_given_exactly_the_descriptor_it_was_asked_for() {
+    // Protected, so nothing is inherited from the directory and added; and file rights by name,
+    // because the file system stores a generic right as the file rights it maps to.
+    let temp = TempFile::new("cr-read-back");
+    for (index, descriptor) in [
+        "D:P(A;;FA;;;WD)",
+        "D:P(A;;FR;;;WD)",
+        "D:P(A;;FR;;;WD)(A;;FA;;;BA)",
+        "D:P(D;;FW;;;WD)(A;;FR;;;WD)",
+        "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = temp.0.with_extension(format!("read-back-{index}"));
+        let file = OpenedFile::<Cached>::request(
+            wtf(&path),
+            create_new().rights(FileRights::READ_CONTROL),
+        )
+        .expect("build")
+        .with_security_descriptor(sddl(descriptor))
+        .perform()
+        .expect("create with the descriptor");
+
+        assert_eq!(dacl_of(&file), descriptor);
+
+        drop(file);
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn an_unbuffered_create_is_given_the_descriptor_as_a_cached_one_is() {
+    let temp = TempFile::new("cr-read-back-unbuffered");
+    let path = temp.0.with_extension("fresh");
+    let file = OpenedFile::<Unbuffered>::request(
+        wtf(&path),
+        create_new().rights(FileRights::READ_CONTROL),
+    )
+    .expect("build")
+    .with_security_descriptor(sddl("D:P(A;;FR;;;WD)(A;;FA;;;BA)"))
+    .perform()
+    .expect("create unbuffered with the descriptor");
+
+    assert_eq!(dacl_of(&file), "D:P(A;;FR;;;WD)(A;;FA;;;BA)");
+
+    drop(file);
+    fs::remove_file(&path).expect("remove");
+}
+
+#[test]
+fn the_handle_an_open_makes_is_not_inheritable_with_a_descriptor_or_without() {
+    // `bInheritHandle` is false whether the request carries a descriptor or none (the request is
+    // where the choice is made), and the handle that results says so.
+    let temp = TempFile::new("cr-not-inheritable");
+    let with_descriptor = temp.0.with_extension("described");
+    let described = create_with(&with_descriptor, "D:P(A;;FA;;;WD)");
+    assert_eq!(
+        get_handle_information(described.as_handle()).expect("query"),
+        HandleFlags::NONE
+    );
+
+    let plain = OpenedFile::<Cached>::open(
+        wtf(&temp.0),
+        create_new().disposition(Disposition::OpenExisting),
+    )
+    .expect("open the file that is there");
+    assert_eq!(
+        get_handle_information(plain.as_handle()).expect("query"),
+        HandleFlags::NONE
+    );
+
+    drop((described, plain));
+    fs::remove_file(&with_descriptor).expect("remove");
 }
 
 #[test]

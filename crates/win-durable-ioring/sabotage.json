@@ -1352,7 +1352,7 @@
       "name": "DI-14.3: a created file's handle is asked to be inheritable",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "Handles are never inheritable in v1 (the engineer's ruling, DI-13.1): an inheritable handle reaches child processes that can write through it. The request is where the choice is made.",
+      "why": "Handles are never inheritable in v1 (the engineer's ruling, DI-13.1): an inheritable handle reaches child processes that can write through it. The request is where the choice is made. Caught twice over: by the test that pins the choice on the request, and, since DI-14.8.5, by the test that reads the opened handle's flags back through GetHandleInformation and sees the handle inheritable.",
       "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
       "replace": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), true))),\n"]
     },
@@ -1360,7 +1360,7 @@
       "name": "DI-14.3: the descriptor is not given to the call",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
-      "why": "A descriptor that never reaches CreateFileW leaves the file with the parent's defaults and no error. Caught by the test that a deny-read descriptor refuses a later open.",
+      "why": "A descriptor that never reaches CreateFileW leaves the file with the parent's defaults and no error. Caught by the test that a deny-read descriptor refuses a later open, and, since DI-14.8.5, by the test that reads the created file's DACL back through GetSecurityInfo.",
       "find": ["                .with_security(Some(SecurityAttributes::new(Some(descriptor), false))),\n"],
       "replace": ["                .with_security(Some(SecurityAttributes::new(None, false))),\n"]
     },

@@ -40,6 +40,14 @@ win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
 windows-namespace-request-sys = { version = "0.4.0", path = "../windows-namespace-request-sys" }
 # The path type that crate takes, and the flags and access constants an open is made from.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
+# The security descriptor a created file is given (DI-14.3), taken from the crate Microsoft Learn
+# files it under, and read back from an open handle by the tests (DI-14.8.5). It was the request
+# crate's until DI-14.8.1 moved it.
+win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
+# `DuplicateHandle`, which the readiness event's wait-only copy is made with (DI-7.5), taken from
+# the crate Microsoft Learn files it under, and the flags of a handle, which the tests read back
+# (DI-14.8.5). It was `win-sync-sys`'s until DI-14.8.3 moved it.
+win-handles-sys = { version = "0.1.0", path = "../win-handles-sys" }
 # The rule that wraps a Win32 code as an `HRESULT` and reads one back out (DI-9.7.11): this crate
 # owns the numbering of the codes it reports, and that crate owns the rule.
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }

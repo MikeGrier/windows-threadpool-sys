@@ -31,7 +31,7 @@ use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
 use std::time::Duration;
 
-use win_sync_sys::{Access, duplicate_handle_with_access};
+use win_handles_sys::{Access, duplicate_handle_with_access};
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, OperationId, Owned,
     PushOptions, PushRefused, RegisteredBuffers, RegisteredFile, RegisteredSpan, RingCondition,
@@ -81,7 +81,7 @@ pub use opened_volume::{
 pub use share_mode::ShareMode;
 // The descriptor a created file is given, owned and freed by the type that built it, so a caller
 // never holds a raw pointer (DI-14.3).
-pub use windows_namespace_request_sys::{SecurityCaptureError, SecurityDescriptor};
+pub use win_authorization_sys::{SecurityCaptureError, SecurityDescriptor};
 
 #[cfg(test)]
 mod tests;

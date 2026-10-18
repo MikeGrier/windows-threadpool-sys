@@ -131,8 +131,10 @@ version = "0.2.0"
 dependencies = [
  "durable-ioring",
  "io-buffers",
+ "win-authorization-sys",
  "win-durable-ioring",
  "win-error-codes",
+ "win-handles-sys",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
