@@ -22,13 +22,17 @@ A line starting `# ` is the path of section titles that reaches a list of symbol
 
 1. Find the symbol: `Select-String -Path WIN32-LEARN-MAP-DATA.txt -Pattern '\tGetSecurityInfo$'` gives
    the line, and the `# ` line above it, the section.
-2. A name can be a different symbol under a different header (`DuplicateHandle` is both
-   `handleapi.h`'s and `ntsecpkg.h`'s). The pair of header and name is the key, so check the header is the
-   one the `windows-sys` binding the wrapper calls comes from.
+2. A title can be shared by different symbols: Learn lists a callback titled `DuplicateHandle` under
+   `ntsecpkg.h` and the function of that name under `handleapi.h`. Learn's pages convey meaning to people
+   and a reader looks them up by title, so this is not an error and the record keeps it. The kind and
+   header with the name identify the symbol; check them against the `windows-sys` binding the wrapper calls.
 3. Take the second-level topic under the area (for `GetSecurityInfo`, *Authorization*; for
    `GetHandleInformation`, *Handles and Objects*), and look for a crate that already covers it.
-4. A symbol listed in more than one section is placed by the section whose reference group is its own
-   (the *Functions* group of the topic it is about), and the choice is written in the crate's notes.
+4. **The record is a relation and not a function.** The same symbol can be listed under several sections,
+   because the documentation puts it where a reader would look for it, and that is Learn doing its job
+   and not a fault in it. The record keeps every listing and this recipe does not pick one for you: when a
+   symbol is listed more than once, the placement is a judgement by meaning, and the crate's notes say
+   which section was chosen and which others list it.
 
 ## Keeping it
 

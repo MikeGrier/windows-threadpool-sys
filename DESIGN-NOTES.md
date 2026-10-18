@@ -445,9 +445,17 @@ crate holds something filed elsewhere, which it does for the SDDL conversions an
 `duplicate_handle_with_access` in `win-sync-sys` (`DuplicateHandle` is documented under *Handles and
 Objects*), the move is a separate scheduled item and is not done as a side effect of adding a wrapper.
 
+**Learn's listings are a relation, not a function (the engineer, 2026-10-17).** The documentation's job is
+to convey meaning to people, so the same symbol can appear under several sections and different symbols
+can share a title; neither is an error. The snapshot therefore keeps every listing, and the rule does not
+say which one is "the" section: a symbol listed more than once is placed by judgement of its meaning, and
+the crate's notes name the section chosen and the others that list it.
+
 **Not decided, and scheduling no work:** an umbrella crate that only re-exports the others, which would
 decide no placement and is not needed to follow the rule; and a machine check that a crate's contents match
-the snapshot, which is possible and has no consumer until there is more than one wrapper placed by it.
+the snapshot, which is possible and has no consumer until there is more than one wrapper placed by it. Any
+such check has to treat the listings as many-to-many, and report a symbol listed elsewhere as information
+and not as a violation.
 
 ## Windows SDK model and constraints
 
