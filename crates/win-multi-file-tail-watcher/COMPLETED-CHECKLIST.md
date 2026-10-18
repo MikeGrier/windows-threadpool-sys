@@ -1571,3 +1571,22 @@ wait would time out with a message naming the count.
 
 The kick's sabotage entry is caught again by assertion. The same pinned-processor run was not applied to the integration tests,
 whose sleeps TW-10.4 already reviewed under CPU load, nor to the rest of the library tests.
+
+## Moved 2026-10-18 15:14:50 -04:00 -- TW-10.7: two public documentation claims corrected
+
+### <a id="tw-107"></a>TW-10.7 -- Two public documentation claims are corrected to what the code does: `Terminal` says its `last_known` and `win32_code` mean something different for a failed read than for a failed probe, and `TailReader` no longer promises that no wake follows a poll-done. *(completed 2026-10-18 15:14:50 -04:00)*
+
+The fourth review of the branch found two public claims that the code contradicts. Neither is a code defect, and both were checked
+against the code before changing anything.
+
+`Terminal` documented `last_known` as "the length last reported" and `win32_code` as the failed probe's code, and the reading layer
+also reports `Terminal` for a failed read, with `last_known` the offset the read began at, which can be past the length last
+reported. `ReadEntry::Terminal` and the design notes already said so, so the three disagreed. The type and both fields now describe
+both producers. A reader-specific payload type was the review's other suggestion and was not taken: it would be a breaking change to
+a public type that the watcher also uses, for a distinction the docs can carry.
+
+`TailReader` promised "no thread, no timer, no wake" between polls. The run that queues a poll-done rings the client's doorbell as
+it ends, after the gate has opened, so one empty ring can follow it. The integration tests' quiet check already lets exactly one go
+by (TW-10.4); the type's documentation now states the exception, and [TW-D-16](DESIGN-NOTES.md#tw-d-16) records it.
+
+Documentation only: no code changed, so no test or sabotage entry applies. The documentation builds with the link lints denied.

@@ -609,6 +609,11 @@ module within the crate".
     in a loop. A refused poll costs one extra run of the engine, and when the client's SQ is full that
     run rings the client's doorbell, which is a hint and not a proof. The failure cannot be made on
     demand, so the test holds the gate by hand.
+  - **One empty ring can follow a poll-done** ([TW-10.7](CHECKLIST.md)). The engine rings the client's
+    doorbell when a run ends, and the run that queued the poll-done ends after the gate has opened,
+    so a client that has read the poll-done, and may have polled again, can still see one ring with
+    nothing new behind it. `TailReader`'s statement that nothing runs between polls says so, and the
+    integration tests' quiet check lets exactly one such ring go by ([TW-10.4](CHECKLIST.md)).
   - **A poll is therefore in flight through everything the client controls**: a full client SQ, and
     chunks held until the pool is empty. A client that never drains never polls again. That is
     stated on `TailReader::poll` and `PollError::InFlight`.

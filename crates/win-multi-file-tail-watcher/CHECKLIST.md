@@ -187,3 +187,5 @@ initiated before the previous one completes should fail. fix all".
 - [x] **TW-10.5** -- A poll refused as in flight wakes the reading engine, so that a poll held up by an error a run returned, which leaves nothing in flight and rings no doorbell, is not refused for ever now that the reader's gate is in front of the watcher's. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-105)
 
 - [x] **TW-10.6** -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-106)
+
+- [x] **TW-10.7** -- Two public documentation claims are corrected to what the code does: `Terminal` says its `last_known` and `win32_code` mean something different for a failed read than for a failed probe, and `TailReader` no longer promises that no wake follows a poll-done. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-107)

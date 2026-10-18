@@ -26,7 +26,10 @@ mod tests;
 /// drains. Each data entry carries a clone of the value the file was registered with, the range of
 /// the file its bytes are from, and a [`Chunk`](super::Chunk) of them. A poll's last entry is
 /// [`ReadEntry::PollDone`](super::ReadEntry::PollDone). Nothing runs between polls: no thread, no
-/// timer, no wake.
+/// timer, and nothing the caller did not start wakes it. The one exception is the tail of the run
+/// that queued a poll-done: it may ring the caller's doorbell once more, after the caller has read
+/// the poll-done and may already have polled again, with nothing new to read. A caller that waits on
+/// the doorbell sees it as an empty wake.
 ///
 /// The sizes it works to are the caller's, in a [`TailReaderOptions`].
 ///

@@ -63,13 +63,18 @@ pub struct Attention<T> {
 
 /// A report that a registration can never be probed again: the handle it holds answered with a
 /// code that means it never will. The registration stays until it is dropped, and is reported once.
+///
+/// The watcher reports it for a failed probe. The reading layer reports it too, for a failed read,
+/// and two of the fields then mean something a little different, as each says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Terminal<T> {
     /// A clone of the value the registration was made with.
     pub value: T,
-    /// The Win32 code the failed probe carried.
+    /// The Win32 code the failed probe carried, or for a failed read, the one the read did.
     pub win32_code: u32,
-    /// The length last reported for the registration.
+    /// For a failed probe, the length last reported for the registration. For a failed read, the
+    /// offset the read began at, which can be past the length last reported, and the bytes from there
+    /// are not read again.
     pub last_known: u64,
 }
 
