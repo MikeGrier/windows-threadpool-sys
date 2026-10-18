@@ -9,9 +9,11 @@
 use std::time::{Duration, Instant};
 
 use win_multi_file_tail_watcher::PollError;
-use win_multi_file_tail_watcher::reader::{ReadEntry, TailReader, TailReaderOptions};
+use win_multi_file_tail_watcher::reader::{TailReader, TailReaderOptions};
 
-use crate::harness::{Client, TempDir, crlf, for_lines, hold_data, script, spawn, wtf};
+use crate::harness::{
+    Client, TempDir, crlf, for_lines, hold_data, script, spawn, wait_until_rung, wtf,
+};
 
 const FILE: u32 = 3;
 
@@ -51,6 +53,8 @@ fn holding_every_buffer_stops_reads_until_one_is_dropped_and_loses_nothing() {
     // Four chunks are every buffer there is: the reader has nothing more to read into.
     reader.poll().expect("start a poll");
     let held = hold_data(&reader, 4);
+    // Nothing happens is not something to wait for, so this gives the reader time to do something it
+    // should not. It can only fail if the reader delivers; a slow host makes it weaker, not flaky.
     std::thread::sleep(Duration::from_millis(500));
     let sq = reader.read_sq();
     sq.reset_doorbell();
@@ -114,7 +118,7 @@ fn a_poll_before_the_previous_one_is_complete_is_refused_and_the_next_is_accepte
 }
 
 #[test]
-fn an_undrained_client_queue_stops_the_reader_at_its_capacity_and_loses_nothing() {
+fn an_undrained_client_queue_holds_the_poll_open_and_loses_nothing() {
     let dir = TempDir::new("held-queue");
     let path = written(&dir, 40);
 
@@ -126,28 +130,25 @@ fn an_undrained_client_queue_stops_the_reader_at_its_capacity_and_loses_nothing(
     let mut client = Client::new(&reader, options.buffer_len);
     let _registration = reader.register(&wtf(&path), 0, FILE).expect("register");
 
-    // Far more than two reads are wanted, and nobody takes any.
+    // Far more than two reads are wanted, and nobody takes any. How full the queue is cannot be
+    // seen through the public API, and a drain is not a count of it: taking an entry can let the
+    // reader write the one it was holding, and the drain goes on to take that too. So what is
+    // asserted is what an undrained queue of two does to a poll of about a hundred reads whatever
+    // the timing: it cannot be complete, so it is in flight and another is refused. That the stop
+    // is at exactly the capacity is asserted by the engine's own test,
+    // `a_full_client_sq_stops_the_engine_and_ringing_back_continues_it`, which drives it
+    // synchronously.
+    assert_eq!(reader.read_sq().capacity(), 2);
     reader.poll().expect("start a poll");
-    std::thread::sleep(Duration::from_millis(500));
+    wait_until_rung(&reader);
+    assert!(
+        matches!(reader.poll(), Err(PollError::InFlight)),
+        "a poll that cannot be queued in full is not complete"
+    );
 
-    // The queue holds what it can: two entries, though dozens of reads have been wanted.
-    let sq = reader.read_sq();
-    assert_eq!(sq.capacity(), 2);
-    let mut first = 0;
-    for entry in sq.drain() {
-        let ReadEntry::Data(data) = entry else {
-            panic!("a data entry was expected, not {entry:?}");
-        };
-        client.add_piece(*data.value(), data.range(), data.chunk().to_vec());
-        first += 1;
-    }
-    assert_eq!(first, 2, "the queue holds its capacity and no more");
-
-    // Room has been made, and the reader goes on from where it stopped.
-    sq.ring_resume();
+    // Room is made, the reader is told, and it goes on from where it stopped.
     let polled = client.finish_poll();
     assert!(polled.other.is_empty(), "{:?}", polled.other);
-
     let (bytes, _) = client.assemble(FILE);
     assert_eq!(bytes, content(40), "every byte, once, in order");
     assert!(reader.take_failure().is_none());

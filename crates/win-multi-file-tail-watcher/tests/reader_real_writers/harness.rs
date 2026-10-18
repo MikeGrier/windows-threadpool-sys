@@ -275,21 +275,43 @@ impl<'a> Client<'a> {
         (bytes, ranges)
     }
 
-    /// After the poll just finished, nothing rings the doorbell for `millis`: the reader does
-    /// nothing between polls. A ring that lands just after the poll-done was drained, because it
-    /// was made at the end of the run that wrote it, is let go by first.
+    /// After the poll just finished, the reader does nothing between polls: no entry is written
+    /// and the doorbell is rung at most once more, for `millis` and then for good.
+    ///
+    /// That one ring is the end of the run that wrote the poll-done. It is made after the entries
+    /// are, so it can land after the client has already drained the poll-done, and how long after
+    /// is the scheduler's. It is let go of, once, wherever it lands, and carries nothing; a second
+    /// ring, or an entry, is the reader doing something with no poll running. It is not waited out
+    /// with a sleep, which a loaded host can outlast. A reader that rang exactly once, spuriously,
+    /// right after a poll-done is therefore not told apart from this one.
     pub fn assert_quiet(&self, millis: u32) {
         let sq = self.reader.read_sq();
-        std::thread::sleep(Duration::from_millis(100));
-        sq.reset_doorbell();
-        assert!(
-            sq.drain().next().is_none(),
-            "an entry with no poll to bring it"
-        );
-        assert!(
-            !signalled_within(sq.doorbell(), millis),
-            "the reader rang its doorbell with no poll running"
-        );
+        let mut rings = 0;
+        loop {
+            sq.reset_doorbell();
+            assert!(
+                sq.drain().next().is_none(),
+                "an entry with no poll to bring it"
+            );
+            if !signalled_within(sq.doorbell(), millis) {
+                return;
+            }
+            rings += 1;
+            assert!(
+                rings <= 1,
+                "the reader rang its doorbell with no poll running"
+            );
+        }
+    }
+}
+
+/// Wait, as a client does, until the reader has rung the doorbell, and leave the doorbell rung and
+/// the SQ undrained. The wait is bounded by [`BOUND`] and ends when the ring is seen.
+pub fn wait_until_rung(reader: &TailReader<u32>) {
+    let sq = reader.read_sq();
+    let started = Instant::now();
+    while !signalled_within(sq.doorbell(), 500) {
+        assert!(started.elapsed() < BOUND, "the doorbell was never rung");
     }
 }
 

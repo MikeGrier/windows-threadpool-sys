@@ -1495,3 +1495,33 @@ asserted `Shutdown` after a shutdown while stalled, but a shutdown lets the engi
 asks, so the poll was only sometimes in flight. The new test holds the gate by hand and is deterministic.
 
 All existing tests passed unchanged, so none relied on overlapped polls.
+
+## Moved 2026-10-18 01:39:34 -04:00 -- TW-10.4: the integration tests do not sleep as proof
+
+### <a id="tw-104"></a>TW-10.4 -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe, that the poll cannot complete and nothing is lost, and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it. *(completed 2026-10-18 01:39:34 -04:00)*
+
+The review named two sleeps. The quiet check slept 100 ms to let one late ring land. That ring is the end of the run that
+wrote the poll-done, made after the entries, so it can land after the client has drained them, at the scheduler's pleasure.
+`assert_quiet` now lets go of one empty ring wherever it lands and then requires a full quiet window; a second ring, or an
+entry, fails. It cannot tell a reader that rang exactly once, spuriously, right after a poll-done from that ring; the
+documentation says so.
+
+The undrained-queue test slept 500 ms and then required a drain of exactly two. A first rewrite, a wait for the first ring and
+then a drain of at most two, failed two runs in five under CPU load, and the reason is the one this crate's own notes record:
+a drain is not a count of the queue. Taking an entry lets the reader, woken by a completion, write the entry it was holding,
+and the drain goes on to take that too, so one drain can legitimately yield more than the capacity. Neither bound is valid.
+What an undrained queue of two does deterministically to a poll of about a hundred reads is that it cannot be complete, so
+the test asserts that a second poll is refused with `InFlight` (which needs no sleep), then drains, resumes and checks nothing
+is lost. That the stop is at exactly the capacity is asserted by `a_full_client_sq_stops_the_engine_and_ringing_back_continues_it`,
+which drives the engine synchronously. The test is renamed to say what it now asserts. The TW-9.5 entry above still describes the
+earlier test, and is left as history.
+
+The held-buffers test keeps its sleep, now commented: it asserts that nothing arrives, which no event can wait for, and it can
+only fail if the reader delivers, so a slow host weakens it and never makes it flaky.
+
+Verified under load as well as idle: the target was run idle, and in batches under twice as many spinning processes as cores, which
+slows the whole target to about a minute. The first rewrite failed in that way; the final form passed twelve of twelve. One earlier
+loaded run in about thirty did hit the 60 s bound in `runner_log`, in both of its tests at once, before the final form existed; it did not
+recur, and its cause is not established. The timeout message now says how many bytes were delivered, what the file holds and whether the
+child has exited, so a recurrence tells a starved child from a reader that stopped delivering. The bound is within a factor of two of what
+this load makes the target take, which is the likely reading and not a finding.

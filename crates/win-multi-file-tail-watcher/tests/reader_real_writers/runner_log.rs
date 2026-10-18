@@ -82,7 +82,11 @@ fn run(options: &TailReaderOptions) {
         while client.delivered(FILE) < want {
             assert!(
                 started.elapsed() < crate::harness::BOUND,
-                "the burst did not arrive"
+                "the burst did not arrive: {} of {want} bytes delivered, the file holds {:?}, and the \
+                 child has {}exited",
+                client.delivered(FILE),
+                std::fs::read(&path).map(|bytes| bytes.len()),
+                if command.exited() { "" } else { "not " }
             );
             let polled = client.poll_once();
             assert!(polled.other.is_empty(), "{:?}", polled.other);
