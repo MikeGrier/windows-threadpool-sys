@@ -318,6 +318,7 @@ name = "windows-overlapped-io-sys"
 version = "0.2.0"
 dependencies = [
  "io-buffers",
+ "win-pipes-sys",
  "windows-sys",
 ]
 

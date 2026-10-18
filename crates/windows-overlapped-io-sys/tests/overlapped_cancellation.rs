@@ -9,49 +9,33 @@
 #![cfg(windows)]
 
 use std::io;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 use windows_overlapped_io_sys::{
     CompletionPort, Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
 };
-use windows_sys::Win32::Foundation::{
-    ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE,
-};
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX};
-use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT,
-};
+use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
+use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
 
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
+/// An overlapped, duplex, byte-mode named-pipe server instance with no client, so that a connect
+/// on it pends.
+fn overlapped_server(name: &str) -> OwnedHandle {
+    let options = NamedPipeOptions {
+        open_mode: PipeOpenMode::ACCESS_DUPLEX | PipeOpenMode::OVERLAPPED,
+        pipe_mode: PipeMode::TYPE_BYTE | PipeMode::WAIT,
+        max_instances: 1,
+        out_buffer_size: 4096,
+        in_buffer_size: 4096,
+        default_timeout_ms: 0,
+    };
+    create_named_pipe(name, &options, None).expect("create the overlapped pipe")
 }
 
 #[test]
 fn connect_named_pipe_is_cancellable_and_completes_as_aborted() {
     let name = format!(r"\\.\pipe\windows-overlapped-io-sys-{}", std::process::id());
-    let wide_name = wide(&name);
-
-    // SAFETY: standard creation of an overlapped named-pipe server instance.
-    let raw = unsafe {
-        CreateNamedPipeW(
-            wide_name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            std::ptr::null(),
-        )
-    };
-    assert_ne!(
-        raw,
-        INVALID_HANDLE_VALUE,
-        "CreateNamedPipeW failed: {}",
-        io::Error::last_os_error()
-    );
-    // SAFETY: CreateNamedPipeW returned a fresh, exclusively owned handle.
-    let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let owned = overlapped_server(&name);
 
     let port = CompletionPort::new(0).expect("create port");
     // SAFETY: the pipe was created with FILE_FLAG_OVERLAPPED, is unassociated,
@@ -104,29 +88,7 @@ fn run_down_drains_a_cancelled_operation() {
         r"\\.\pipe\windows-overlapped-io-sys-rundown-{}",
         std::process::id()
     );
-    let wide_name = wide(&name);
-
-    // SAFETY: standard creation of an overlapped named-pipe server instance.
-    let raw = unsafe {
-        CreateNamedPipeW(
-            wide_name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            std::ptr::null(),
-        )
-    };
-    assert_ne!(
-        raw,
-        INVALID_HANDLE_VALUE,
-        "CreateNamedPipeW failed: {}",
-        io::Error::last_os_error()
-    );
-    // SAFETY: CreateNamedPipeW returned a fresh, exclusively owned handle.
-    let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let owned = overlapped_server(&name);
 
     let port = CompletionPort::new(0).expect("create port");
     // SAFETY: fresh overlapped pipe, unassociated, unique, moved in exclusively.
@@ -170,29 +132,7 @@ fn dropping_an_endpoint_drains_its_own_outstanding_operation_before_closing() {
         r"\\.\pipe\windows-overlapped-io-sys-endpoint-drop-{}",
         std::process::id()
     );
-    let wide_name = wide(&name);
-
-    // SAFETY: standard creation of an overlapped named-pipe server instance.
-    let raw = unsafe {
-        CreateNamedPipeW(
-            wide_name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            std::ptr::null(),
-        )
-    };
-    assert_ne!(
-        raw,
-        INVALID_HANDLE_VALUE,
-        "CreateNamedPipeW failed: {}",
-        io::Error::last_os_error()
-    );
-    // SAFETY: CreateNamedPipeW returned a fresh, exclusively owned handle.
-    let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let owned = overlapped_server(&name);
 
     let port = CompletionPort::new(0).expect("create port");
     // SAFETY: fresh overlapped pipe, unassociated, unique, moved in exclusively.
