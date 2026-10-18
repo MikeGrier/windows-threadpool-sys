@@ -570,6 +570,122 @@
         "                self.shared.metrics.record_refusal();",
         "                return Err(PushError::Full(item));"
       ]
+    },
+    {
+      "name": "the ring is reserved with the infallible call",
+      "file": "src/capacity.rs",
+      "expect": "caught",
+      "why": "The defect this guards is the process aborting on a capacity the shape accepts and the machine cannot hold. `reserve_exact` is that abort, so the suite is caught by the process dying rather than by an assertion. Unlike a heap-corruption crash this is deterministic: the allocator's refusal is the same on every run, so it is not the kind of crash-caught result that flips between sweeps.",
+      "find": [
+        "    slots",
+        "        .try_reserve_exact(capacity)",
+        "        .map_err(|_| CapacityError::allocation(capacity, bounds))?;"
+      ],
+      "replace": [
+        "    slots.reserve_exact(capacity);"
+      ]
+    },
+    {
+      "name": "a refused allocation is reported as a capacity that is too large",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "The two read alike in a message and differ in what a caller does next: too large is a rule the request broke on every machine, an allocation failure is this machine's answer and a smaller capacity may succeed.",
+      "find": [
+        "        Self::new(requested, bounds, CapacityErrorKind::Allocation)"
+      ],
+      "replace": [
+        "        Self::new(requested, bounds, CapacityErrorKind::TooLarge)"
+      ]
+    },
+    {
+      "name": "is_allocation_failure is true for a capacity that is too small as well",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "The other direction of the same guard: a predicate that is true for the rule refusals too would have every caller retrying a smaller capacity on a request that no capacity of that kind can fix.",
+      "find": [
+        "        matches!(self.kind, CapacityErrorKind::Allocation)"
+      ],
+      "replace": [
+        "        matches!(self.kind, CapacityErrorKind::Allocation | CapacityErrorKind::TooSmall)"
+      ]
+    },
+    {
+      "name": "an allocation failure suggests the shape's minimum as the next capacity",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "The crate cannot know how much memory a machine would give, and a suggestion that is itself refused is worse than none.",
+      "find": [
+        "            CapacityErrorKind::TooLarge | CapacityErrorKind::Allocation => None,"
+      ],
+      "replace": [
+        "            CapacityErrorKind::TooLarge => None,",
+        "            CapacityErrorKind::Allocation => Some(self.min_valid),"
+      ]
+    },
+    {
+      "name": "spsc panics on an allocation failure",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "A constructor that unwraps what the helper returned is the natural way to lose the property, and it fails by panic, not by abort, so the test names what was wrong.",
+      "find": [
+        "    let slots = allocate_slots(capacity, BOUNDS, |_| UnsafeCell::new(MaybeUninit::uninit()))?;"
+      ],
+      "replace": [
+        "    let slots = allocate_slots(capacity, BOUNDS, |_| UnsafeCell::new(MaybeUninit::uninit()))",
+        "        .expect(\"the ring is allocated\");"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc panics on an allocation failure",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "As for spsc: each constructor has to propagate the helper's refusal, and each is a separate site.",
+      "find": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })?;",
+        "",
+        "    let shared = Arc::new(Shared {",
+        "        teardown: Teardown::new(options.disposal),"
+      ],
+      "replace": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })",
+        "    .expect(\"the ring is allocated\");",
+        "",
+        "    let shared = Arc::new(Shared {",
+        "        teardown: Teardown::new(options.disposal),"
+      ]
+    },
+    {
+      "name": "reserving_mpsc panics on an allocation failure",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "As for spsc; the shape's three layouts share the one site.",
+      "find": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })?;",
+        "",
+        "    // Names `L::VALID` so the layout's own const assertions are evaluated."
+      ],
+      "replace": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })",
+        "    .expect(\"the ring is allocated\");",
+        "",
+        "    // Names `L::VALID` so the layout's own const assertions are evaluated."
+      ]
+    },
+    {
+      "name": "the ring is reserved with the amortised call instead of the exact one",
+      "file": "src/capacity.rs",
+      "expect": "survives",
+      "why": "Control: `try_reserve` refuses exactly what `try_reserve_exact` refuses and the boxed slice is trimmed to its length either way, so no test can tell them apart. If this were caught, the manifest would be measuring something other than what these tests do.",
+      "find": [
+        "        .try_reserve_exact(capacity)"
+      ],
+      "replace": [
+        "        .try_reserve(capacity)"
+      ]
     }
   ]
 }

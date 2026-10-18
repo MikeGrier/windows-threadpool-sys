@@ -16,6 +16,9 @@ use super::{
     BOUNDS_MAX, Balanced, ClaimLayout, Consumer, Enduring, Perpetual, Producer, Reservation,
     advance, bounded, bounded_as, bounded_with, claim_word, position_of, reserved_of,
 };
+#[cfg(target_pointer_width = "64")]
+use crate::capacity::tests::BEYOND_MEMORY;
+use crate::capacity::tests::{Huge, assert_allocation_refusal};
 use crate::error::TryRecvError;
 
 /// The default layout's constants, named once so the packing tests read as
@@ -138,6 +141,38 @@ fn a_capacity_above_this_shapes_ceiling_is_refused_even_though_others_accept_it(
     );
 }
 
+/// The refusal for a ring `L` accepts and memory cannot hold, in each of the two
+/// ways a request fails.
+fn assert_refused_for_memory<L: ClaimLayout>() {
+    let bounds = super::bounds::<L>();
+    let Err(error) = bounded_as::<Huge, L>(bounds.max) else {
+        panic!(
+            "a ring of {} items of {} bytes was made",
+            bounds.max,
+            size_of::<Huge>()
+        );
+    };
+    assert_allocation_refusal(error, bounds.max, bounds);
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let Err(error) = bounded_as::<Huge, L>(BEYOND_MEMORY) else {
+            panic!(
+                "a ring of {BEYOND_MEMORY} items of {} bytes was made",
+                size_of::<Huge>()
+            );
+        };
+        assert_allocation_refusal(error, BEYOND_MEMORY, bounds);
+    }
+}
+
+#[test]
+fn a_capacity_the_shape_accepts_but_memory_cannot_hold_is_an_error_and_not_an_abort() {
+    // Each layout has its own ceiling, so each is its own largest request.
+    assert_refused_for_memory::<Balanced>();
+    assert_refused_for_memory::<Enduring>();
+    assert_refused_for_memory::<Perpetual>();
+}
 // ---------------------------------------------------------------------------
 // The reservation guarantee.
 // ---------------------------------------------------------------------------

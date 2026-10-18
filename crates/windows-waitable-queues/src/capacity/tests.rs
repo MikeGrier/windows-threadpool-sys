@@ -13,7 +13,37 @@
 //! and the bounds, so the ceiling can be checked without asking an allocator
 //! for exabytes.
 
-use super::{Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, validate_capacity};
+use super::{
+    Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, allocate_slots, validate_capacity,
+};
+use crate::error::CapacityError;
+
+/// A slot too large for a ring of any size worth asking for to fit in memory.
+pub(crate) type Huge = [u8; 1 << 20];
+
+/// What every shape answers for a capacity it accepts and the machine cannot
+/// hold, stated once so four constructors' tests cannot disagree about it.
+///
+/// A capacity the rule refuses is a different error and is not what this checks:
+/// it is [`CapacityError::is_allocation_failure`] being true *and* the numbers
+/// being the shape's own, with no suggestion the crate cannot vouch for.
+pub(crate) fn assert_allocation_refusal(error: CapacityError, requested: usize, bounds: Bounds) {
+    assert!(error.is_allocation_failure(), "{error}");
+    assert_eq!(error.requested(), requested);
+    assert_eq!(error.min_valid(), bounds.min);
+    assert_eq!(error.max_valid(), bounds.max);
+    assert_eq!(error.previous_valid(), None, "{error}");
+    assert_eq!(error.next_valid(), None, "{error}");
+    assert!(error.to_string().contains("allocated"), "{error}");
+}
+
+/// A capacity whose ring of `Huge` is describable and still far beyond any
+/// machine: two pebibytes, which the allocator is asked for and refuses. The
+/// other way a request fails, a size past `isize::MAX`, is reached by a shape's
+/// own maximum capacity, which is why that is the other case each shape tests.
+/// Absent on a narrower word, where that is the only case there is.
+#[cfg(target_pointer_width = "64")]
+pub(crate) const BEYOND_MEMORY: usize = 1 << 31;
 
 /// The bounds of the widest shape in this crate.
 ///
@@ -230,4 +260,71 @@ fn the_shapes_ceilings_are_what_the_public_documentation_claims() {
             "the clamp binds here, so both shapes land on the same ceiling"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The one place a ring is allocated.
+// ---------------------------------------------------------------------------
+
+const SMALL: Bounds = Bounds {
+    min: 1,
+    max: 1 << 20,
+};
+
+#[test]
+fn the_slots_are_made_in_order_and_there_are_exactly_as_many_as_asked_for() {
+    for shift in 0..=10 {
+        let capacity = 1_usize << shift;
+        let slots = allocate_slots(capacity, SMALL, |index| index * 3 + 1).expect("a small ring");
+        assert_eq!(slots.len(), capacity);
+        for (index, slot) in slots.iter().enumerate() {
+            assert_eq!(*slot, index * 3 + 1, "slot {index} of {capacity}");
+        }
+    }
+}
+
+#[test]
+fn a_ring_the_allocator_refuses_is_an_allocation_failure_and_makes_no_slot() {
+    // Two refusals reach here by different routes: a size past `isize::MAX`,
+    // which `try_reserve_exact` reports without asking the allocator, and one
+    // the allocator itself declines. Both must come back as the same error.
+    let mut made = 0_usize;
+    let mut make = |_| {
+        made += 1;
+        [0_u8; 1 << 20]
+    };
+
+    let overflow = allocate_slots(1_usize << (usize::BITS - 2), SMALL, &mut make);
+    assert_allocation_refusal(
+        overflow.expect_err("past isize::MAX"),
+        1 << (usize::BITS - 2),
+        SMALL,
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let declined = allocate_slots(BEYOND_MEMORY, SMALL, &mut make);
+        assert_allocation_refusal(declined.expect_err("past any memory"), BEYOND_MEMORY, SMALL);
+    }
+    assert_eq!(
+        made, 0,
+        "a slot is made only once the memory for them is held"
+    );
+}
+
+#[test]
+fn only_an_allocation_failure_reports_itself_as_one() {
+    // The other direction of the guard above: the refusals that are a mistake
+    // in the request must not read as a machine's answer, because a caller who
+    // retries a smaller capacity on one would be retrying a rule.
+    let bounds = Bounds {
+        min: 2,
+        max: 1 << 20,
+    };
+    // Zero, not a power of two, below the least, above the most.
+    for capacity in [0, 3, 1, 1 << 21] {
+        let error = validate_capacity(capacity, bounds).expect_err("each breaks a rule");
+        assert!(!error.is_allocation_failure(), "{error}");
+    }
+    assert!(CapacityError::allocation(8, bounds).is_allocation_failure());
 }
