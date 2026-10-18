@@ -50,6 +50,8 @@ features = [
 # the attributes parameter decides. `Win32_System_Threading` is the manual-reset event an overlapped
 # connect signals through; the overlapped read that pends on a pipe created overlapped, and its
 # cancellation, are `Win32_System_IO` and `ReadFile` is `Win32_Storage_FileSystem`, both above.
+# `Win32_System_RemoteDesktop` is `ProcessIdToSessionId`, the documented route to the session a process
+# is in, which the session identifiers a pipe reports are compared with.
 #
 # Path-only, with no `version`, as `windows-ioring-sys`'s dev-dependencies are and for the reason it
 # gives: Cargo checks a pinned version against the path at every build, so a release of
@@ -61,7 +63,11 @@ win-handles-sys = { path = "../win-handles-sys" }
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_System_Threading"]
+features = [
+	"Win32_Foundation",
+	"Win32_System_RemoteDesktop",
+	"Win32_System_Threading",
+]
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it

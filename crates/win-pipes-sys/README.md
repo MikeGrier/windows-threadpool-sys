@@ -31,9 +31,10 @@ Communications > Pipes*. Thin over Win32, adding no policy.
   (`Transaction::more_data`) and not an error. The synchronous form must not be given a handle opened overlapped, and
   that is the caller's to keep; the overlapped form is `unsafe`. `PipeTimeout` is the time-out of this call and of
   `wait_named_pipe`, which is `WaitNamedPipeW`. See [WP-D-5](DESIGN-NOTES.md#wp-d-5).
-
-The area has more in it: the rest of the *Pipe Functions* the section lists (`GetNamedPipeClientProcessId` and the
-others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.
+- `get_named_pipe_client_process_id`, `get_named_pipe_client_session_id`, `get_named_pipe_server_process_id`,
+  `get_named_pipe_server_session_id` and `get_named_pipe_client_computer_name` say who is at each end of a pipe
+  instance. The computer name takes the buffer's capacity from the caller, in bytes as the page gives it. See
+  [WP-D-6](DESIGN-NOTES.md#wp-d-6).
 
 ```rust
 use std::fs::{File, OpenOptions};

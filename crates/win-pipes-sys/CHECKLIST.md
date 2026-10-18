@@ -3,7 +3,7 @@
 Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md). The crate was made by the engineer's ruling of
 2026-10-18, in answer to which crate `CreateNamedPipeW` should be exposed from. The area is the *Pipe
 Functions* Microsoft Learn lists under *System Services > Interprocess Communications > Pipes*
-([WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt)); one function is built, and the rest are queued.
+([WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt)).
 
 - [x] **WP-1.1** -- `create_named_pipe`, `CreateNamedPipeW` with typed open and pipe modes. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-11)
 
@@ -19,6 +19,4 @@ Functions* Microsoft Learn lists under *System Services > Interprocess Communica
 
 - [x] **WP-1.6** -- `PeekNamedPipe`, `TransactNamedPipe`, `CallNamedPipeW` and `WaitNamedPipeW`, the operations on a connected pipe and on a name. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-16)
 
-- [ ] **WP-1.7** -- `GetNamedPipeClientComputerName`, `GetNamedPipeClientProcessId`,
-  `GetNamedPipeClientSessionId`, `GetNamedPipeServerProcessId` and `GetNamedPipeServerSessionId`, the queries of
-  who is at the other end.
+- [x] **WP-1.7** -- `GetNamedPipeClientComputerNameW`, `GetNamedPipeClientProcessId`, `GetNamedPipeClientSessionId`, `GetNamedPipeServerProcessId` and `GetNamedPipeServerSessionId`, the queries of who is at each end. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-17)

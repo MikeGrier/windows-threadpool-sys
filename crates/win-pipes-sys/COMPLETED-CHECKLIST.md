@@ -64,3 +64,10 @@ was observed are [WP-D-4](DESIGN-NOTES.md#wp-d-4). Eleven sabotages, two of them
 refusal moved out of `create_named_pipe` into one `wide_name` the three name-taking calls share. Why `ERROR_MORE_DATA`
 is a result, the time-out's type, and three behaviours that differ from the pages are
 [WP-D-5](DESIGN-NOTES.md#wp-d-5). Fourteen sabotages, one a control that survives.
+
+### <a id="wp-17"></a>WP-1.7 -- `GetNamedPipeClientComputerNameW`, `GetNamedPipeClientProcessId`, `GetNamedPipeClientSessionId`, `GetNamedPipeServerProcessId` and `GetNamedPipeServerSessionId`, the queries of who is at each end. *(completed 2026-10-18 19:04:23 -04:00)*
+
+The four identifier functions and `get_named_pipe_client_computer_name`. The `ULONG`-writing shape is written once,
+the NUL-terminated string decoding is one helper shared with the user name of `get_named_pipe_handle_state`, and
+each is tested directly. Why, and what was observed, are [WP-D-6](DESIGN-NOTES.md#wp-d-6). Ten sabotages, two of
+them declared survivors. This closes the checklist.

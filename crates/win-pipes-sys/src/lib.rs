@@ -9,6 +9,7 @@ mod connect;
 mod name;
 mod named_pipe;
 mod peek;
+mod peer;
 mod pipe_state;
 mod transact;
 mod wait;
@@ -20,6 +21,11 @@ pub use connect::{
 };
 pub use named_pipe::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 pub use peek::{PeekedPipe, peek_named_pipe};
+pub use peer::{
+    get_named_pipe_client_computer_name, get_named_pipe_client_process_id,
+    get_named_pipe_client_session_id, get_named_pipe_server_process_id,
+    get_named_pipe_server_session_id,
+};
 pub use pipe_state::{
     PipeHandleState, PipeInfo, PipeInfoFlags, PipeStateQuery, PipeStateUpdate,
     get_named_pipe_handle_state, get_named_pipe_info, set_named_pipe_handle_state,

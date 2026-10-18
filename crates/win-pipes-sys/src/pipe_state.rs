@@ -10,7 +10,6 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::ptr;
 
@@ -21,6 +20,7 @@ use windows_sys::Win32::System::Pipes::{
 };
 
 use crate::PipeMode;
+use crate::name::from_wide_until_nul;
 
 #[cfg(test)]
 mod tests;
@@ -285,13 +285,9 @@ pub fn get_named_pipe_handle_state(
         current_instances: query.current_instances.then_some(current_instances),
         max_collection_count: query.max_collection_count.then_some(max_collection_count),
         collect_data_timeout_ms: query.collect_data_timeout.then_some(collect_data_timeout),
-        user_name: query.user_name_capacity.map(|_| {
-            let end = user_name
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(user_name.len());
-            OsString::from_wide(&user_name[..end])
-        }),
+        user_name: query
+            .user_name_capacity
+            .map(|_| from_wide_until_nul(&user_name)),
     })
 }
 

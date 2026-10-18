@@ -243,3 +243,45 @@ Also observed, and not in conflict with a page:
 **Not reached.** The remote forms the pages describe (a `\\server\pipe\name`, whose redirector opens a pipe in message
 mode, and a transaction larger than the 64 KiB the page guarantees) are not exercised: nothing here has a remote
 server, and the sizes tested stay below 64 KiB.
+
+## <a id="wp-d-6"></a>WP-D-6: the peer queries share one shape in one place, and the computer name's decoding is tested where a local pipe cannot reach it
+
+The engineer, 2026-10-18, "implement wp-1.7". Pages read the same day: the four identifier calls, `ms.date`
+12/05/2018, and `GetNamedPipeClientComputerNameW`, `ms.date` 08/05/2022. The pages are short: each takes "a handle to
+an instance of a named pipe", which "must be created by the `CreateNamedPipe` function", and returns the identifier or
+name "for the specified named pipe".
+
+**One site for the four identifiers.** The four calls write a `ULONG` through a pointer and are otherwise the same, so
+one private `identifier` function holds the call, the local, the failure test and the error, and each public function
+names which call to pass. A swap of client for server is then one token, and the tests tell the two apart with a client
+in another process and with an instance that has no client.
+
+**The result is `u32`, as the page's `PULONG` is.** A process identifier and a session identifier are returned as the
+call gave them; nothing is wrapped in a type that would say more than the page does.
+
+**The computer name takes a capacity in bytes.** The page gives `ClientComputerNameLength` as "the size of the
+`ClientComputerName` buffer, in bytes" and no figure for how long a name can be, so the caller says how much room to
+give the call. The buffer is made of whole UTF-16 units that fit in that many bytes and the call is told the size of the
+buffer it was given, which is never more than the buffer holds; a capacity of one byte gives a buffer of none. The result
+is the string up to its first NUL.
+
+**The decoding is shared and tested on its own.** `from_wide_until_nul` is the one place that reads a
+NUL-terminated string out of a buffer the caller sized: the computer name uses it, and so does the user name of
+[WP-D-4](#wp-d-4), which had the same lines inline. Both it and the buffer sizing are unit-tested directly, because the
+call that would exercise them with a real name is not reachable here (below).
+
+**Observed on 2026-10-18, Windows 11 build 26300, local, unelevated, and not a ruling.**
+
+- The four identifier calls succeed on the handle of a client as well as on a server's, against the pages' "must be created
+  by the `CreateNamedPipe` function". Both ends of an anonymous pipe's handles are accepted, and a handle that is not a
+  pipe fails.
+- For an instance that has no client the server's process and session identifiers are returned and the client's two fail
+  with `ERROR_NOT_FOUND` (1168).
+- For a client in another process, here `cmd` reading a line from the pipe, the client's process identifier was that
+  process's, and its session identifier was the one `ProcessIdToSessionId` gave for it. The server's was this process's.
+- `GetNamedPipeClientComputerNameW` failed with `ERROR_PIPE_LOCAL` (229) for every capacity from zero to 4096 bytes, from
+  either end's handle, for a client on the same computer.
+
+**Not reached.** A computer name for a client on another computer, a client in a session other than the server's, and a
+server in another process. The sabotages that tell the call a wrong size and that discard the decoded name are declared
+survivors for the first; what would reach it is a client on another computer.

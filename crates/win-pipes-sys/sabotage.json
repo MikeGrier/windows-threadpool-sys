@@ -197,11 +197,11 @@
     },
     {
       "name": "WP-1.5: the user name is the whole buffer and not the string in it",
-      "file": "src/pipe_state.rs",
+      "file": "src/name.rs",
       "expect": "caught",
       "why": "The call writes a NUL-terminated string into the buffer, so a name taken to the end of the buffer carries its zeros, and two capacities give two different names.",
-      "find": ["                .position(|&unit| unit == 0)\n"],
-      "replace": ["                .position(|&unit| unit == 0xffff)\n"]
+      "find": ["        .position(|&unit| unit == 0)\n"],
+      "replace": ["        .position(|&unit| unit == 0xffff)\n"]
     },
     {
       "name": "WP-1.5: the user name capacity is not passed",
@@ -346,6 +346,86 @@
       "why": "The value is the page's, and it is also a millisecond count, so only a test of the constant sees it.",
       "find": ["    pub const NO_WAIT: Self = Self(NMPWAIT_NOWAIT);"],
       "replace": ["    pub const NO_WAIT: Self = Self(2);"]
+    },
+    {
+      "name": "WP-1.7: the client's process id is read from the server's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "The two calls have one shape, so a swap compiles; a client in another process then reports this process.",
+      "find": ["    identifier(pipe, GetNamedPipeClientProcessId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeServerProcessId)\n"]
+    },
+    {
+      "name": "WP-1.7: the server's process id is read from the client's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "As above, from the other side: a client in another process is not the server's id.",
+      "find": ["    identifier(pipe, GetNamedPipeServerProcessId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeClientProcessId)\n"]
+    },
+    {
+      "name": "WP-1.7: a failed identifier call is taken for a success",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe fails the call, and the zero left in the local would be reported as an identifier.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(value)"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(value)"]
+    },
+    {
+      "name": "WP-1.7: the computer name buffer is told it is twice its size",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "The size the call is told must never be more than the buffer holds, or the call writes past it; the unit test of the arithmetic sees what no local call can, since a local client has no computer name.",
+      "find": ["    (vec![0u16; units as usize], units * 2)"],
+      "replace": ["    (vec![0u16; units as usize], units * 4)"]
+    },
+    {
+      "name": "WP-1.7: a failed computer name call is taken for a success",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "Every local pipe fails the call with ERROR_PIPE_LOCAL, and the suite expects the failure.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(from_wide_until_nul(&buffer))"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(from_wide_until_nul(&buffer))"]
+    },
+    {
+      "name": "WP-1.7: a string that has no NUL is taken as empty",
+      "file": "src/name.rs",
+      "expect": "caught",
+      "why": "A buffer the call filled to the end has no terminator, and the whole of it is the string.",
+      "find": ["        .unwrap_or(units.len());\n"],
+      "replace": ["        .unwrap_or(0);\n"]
+    },
+    {
+      "name": "WP-1.7: the client's session identifier is read from the server's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "Both ends of every connected pipe here are in one session, so only an instance with no client tells the calls apart: the client's call fails there and the server's does not.",
+      "find": ["    identifier(pipe, GetNamedPipeClientSessionId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeServerSessionId)\n"]
+    },
+    {
+      "name": "WP-1.7: the server's session identifier is read from the client's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "As above, from the other side: the instance with no client has a server session and no client session.",
+      "find": ["    identifier(pipe, GetNamedPipeServerSessionId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeClientSessionId)\n"]
+    },
+    {
+      "name": "WP-1.7: the computer name call is told the buffer has no room",
+      "file": "src/peer.rs",
+      "expect": "survives",
+      "why": "Declared: a local pipe fails the call with ERROR_PIPE_LOCAL before the size matters, so no local call reaches the part that uses it. The arithmetic that produces the size is tested on its own, and what would reach this is a client on another computer.",
+      "find": ["            buffer.as_mut_ptr(),\n            buffer_bytes,\n"],
+      "replace": ["            buffer.as_mut_ptr(),\n            0,\n"]
+    },
+    {
+      "name": "WP-1.7: the computer name that was read is discarded",
+      "file": "src/peer.rs",
+      "expect": "survives",
+      "why": "Declared, for the same reason: the call that fills the buffer fails for every local client, so no local test sees what is made of a name. The decoding it goes through is `from_wide_until_nul`, which has its own tests and sabotage; what would reach this is a client on another computer.",
+      "find": ["    Ok(from_wide_until_nul(&buffer))\n"],
+      "replace": ["    Ok(OsString::new())\n"]
     },
     {
       "name": "WP-1.6: control, the time-out accessor written another way",
