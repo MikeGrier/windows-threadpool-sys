@@ -9,14 +9,17 @@
 #![cfg(windows)]
 
 use std::io;
-use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 
-use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use win_pipes_sys::{
+    ConnectOutcome, ConnectStart, NamedPipeOptions, PipeMode, PipeOpenMode,
+    connect_named_pipe_overlapped, create_named_pipe,
+};
 use windows_overlapped_io_sys::{
     CompletionPort, Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
 };
-use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
-use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
+use windows_sys::Win32::Foundation::{ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED};
+use windows_sys::Win32::System::IO::OVERLAPPED;
 
 /// An overlapped, duplex, byte-mode named-pipe server instance with no client, so that a connect
 /// on it pends.
@@ -32,6 +35,29 @@ fn overlapped_server(name: &str) -> OwnedHandle {
     create_named_pipe(name, &options, None).expect("create the overlapped pipe")
 }
 
+/// Issues one overlapped connect and classifies it for the port: an operation that started, or that
+/// finished at once, is `Pending`, because a packet is coming either way; a client that was already
+/// connected is an error.
+///
+/// # Safety
+///
+/// `overlapped` must satisfy [`connect_named_pipe_overlapped`]'s contract, which `submit` gives its
+/// closure's pointer, and `handle` must be the server end of an overlapped pipe instance.
+unsafe fn issue_connect(
+    handle: BorrowedHandle<'_>,
+    overlapped: *mut OVERLAPPED,
+) -> io::Result<Issued> {
+    // SAFETY: forwarded from this function's own contract.
+    match unsafe { connect_named_pipe_overlapped(handle, overlapped) }? {
+        ConnectStart::Pending | ConnectStart::Finished(ConnectOutcome::Succeeded) => {
+            Ok(Issued::Pending)
+        }
+        ConnectStart::Finished(ConnectOutcome::AlreadyConnected) => {
+            Err(io::Error::from_raw_os_error(ERROR_PIPE_CONNECTED as i32))
+        }
+    }
+}
+
 #[test]
 fn connect_named_pipe_is_cancellable_and_completes_as_aborted() {
     let name = format!(r"\\.\pipe\windows-overlapped-io-sys-{}", std::process::id());
@@ -43,20 +69,11 @@ fn connect_named_pipe_is_cancellable_and_completes_as_aborted() {
     let unassociated = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
     let endpoint = port.associate(unassociated, 1).expect("associate");
 
-    // SAFETY: the closure issues exactly one overlapped ConnectNamedPipe using
-    // the provided OVERLAPPED pointer and classifies its outcome.
+    // SAFETY: the closure issues exactly one overlapped connect using the provided OVERLAPPED
+    // pointer, on an overlapped pipe, and classifies its outcome.
     let submitted = unsafe {
         endpoint.submit(Operation::new(()), |handle, overlapped| {
-            let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
-            if ok != 0 {
-                return Ok(Issued::Pending);
-            }
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(Issued::Pending)
-            } else {
-                Err(error)
-            }
+            issue_connect(handle, overlapped)
         })
     };
 
@@ -95,20 +112,11 @@ fn run_down_drains_a_cancelled_operation() {
     let unassociated = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
     let endpoint = port.associate(unassociated, 1).expect("associate");
 
-    // SAFETY: the closure issues exactly one overlapped ConnectNamedPipe using
-    // the provided OVERLAPPED pointer and classifies its outcome.
+    // SAFETY: the closure issues exactly one overlapped connect using the provided OVERLAPPED
+    // pointer, on an overlapped pipe, and classifies its outcome.
     let submitted = unsafe {
         endpoint.submit(Operation::new(()), |handle, overlapped| {
-            let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
-            if ok != 0 {
-                return Ok(Issued::Pending);
-            }
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(Issued::Pending)
-            } else {
-                Err(error)
-            }
+            issue_connect(handle, overlapped)
         })
     };
     assert!(matches!(submitted, Submitted::Pending(_)));
@@ -139,20 +147,11 @@ fn dropping_an_endpoint_drains_its_own_outstanding_operation_before_closing() {
     let unassociated = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
     let endpoint = port.associate(unassociated, 1).expect("associate");
 
-    // SAFETY: the closure issues exactly one overlapped ConnectNamedPipe using
-    // the provided OVERLAPPED pointer and classifies its outcome.
+    // SAFETY: the closure issues exactly one overlapped connect using the provided OVERLAPPED
+    // pointer, on an overlapped pipe, and classifies its outcome.
     let submitted = unsafe {
         endpoint.submit(Operation::new(()), |handle, overlapped| {
-            let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
-            if ok != 0 {
-                return Ok(Issued::Pending);
-            }
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(Issued::Pending)
-            } else {
-                Err(error)
-            }
+            issue_connect(handle, overlapped)
         })
     };
     assert!(matches!(submitted, Submitted::Pending(_)));

@@ -37,3 +37,9 @@ work carried a version and were corrected first, in `chore` commits of their own
 what was observed are [WP-D-2](DESIGN-NOTES.md#wp-d-2). Twelve tests and seven sabotages, one a control that survives
 and one caught by the suite hanging. The first consumer, `windows-overlapped-io-sys`'s raw calls, is
 [WP-1.3.1](CHECKLIST.md).
+
+### <a id="wp-131"></a>WP-1.3.1 -- `windows-overlapped-io-sys`'s `tests/overlapped_cancellation.rs` issues its three `ConnectNamedPipe` calls through `connect_named_pipe_overlapped`. *(completed 2026-10-18 18:18:56 -04:00)*
+
+The three raw calls became one `unsafe` helper in that file, which maps `Pending` and a finished `Succeeded` to the
+port's `Issued::Pending` and an already connected client to `ERROR_PIPE_CONNECTED`, as the raw closures did. The
+`Win32_System_Pipes` dev feature, which only that file used, is removed from the crate's manifest.

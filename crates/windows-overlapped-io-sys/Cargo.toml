@@ -76,7 +76,6 @@ win-pipes-sys = { path = "../win-pipes-sys" }
 
 # Extra windows-sys features used only by tests that issue real overlapped I/O.
 # These stay out of the published crate's feature set for downstream consumers.
-# `Win32_System_Pipes` is for the raw `ConnectNamedPipe` that `overlapped_cancellation.rs` issues.
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -85,5 +84,4 @@ features = [
 	"Win32_System_IO",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
-	"Win32_System_Pipes",
 ]

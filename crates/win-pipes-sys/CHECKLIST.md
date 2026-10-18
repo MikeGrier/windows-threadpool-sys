@@ -11,11 +11,7 @@ Functions* Microsoft Learn lists under *System Services > Interprocess Communica
 
 - [x] **WP-1.3** -- `ConnectNamedPipe` in its two forms and `DisconnectNamedPipe`, with `ERROR_PIPE_CONNECTED` and `ERROR_IO_PENDING` named as results. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-13)
 
-- [ ] **WP-1.3.1** -- **`windows-overlapped-io-sys`'s `tests/overlapped_cancellation.rs` issues its three
-  `ConnectNamedPipe` calls through `connect_named_pipe_overlapped`.** Each is now an `unsafe` raw call in a
-  `submit` closure that maps the result onto the port's `Issued`. Its own `test(overlapped-io)` commit, as
-  [WP-1.2](COMPLETED-CHECKLIST.md#wp-12) was, and the `Win32_System_Pipes` test feature that file alone still
-  uses goes with it.
+- [x] **WP-1.3.1** -- `windows-overlapped-io-sys`'s `tests/overlapped_cancellation.rs` issues its three `ConnectNamedPipe` calls through `connect_named_pipe_overlapped`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-131)
 
 - [ ] **WP-1.4** -- `CreatePipe`, the anonymous pipe, returning the two ends as owned handles.
 
