@@ -281,34 +281,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.7** -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-147)
 
-- [ ] **DI-14.8** -- **Safe read-backs of what an open was given: a handle's inheritability and a file's
-  security descriptor.** `DI-14.3` could not read either back, because this crate forbids `unsafe` and no
-  crate of the workspace offers the two queries safely (`GetHandleInformation`; `GetSecurityInfo`, which
-  returns a descriptor the request crate's `SecurityDescriptor::capture` can take and `to_sddl` can print).
-  **Where they belong is ruled by the rule of the
-  [root DESIGN-NOTES.md](../../DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under)
-  (the engineer, 2026-10-17), read from [WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt):**
-  `GetSecurityInfo` is documented under *Security and Identity > Authorization* and `GetHandleInformation`
-  under *System Services > Windows System Information > Handles and Objects*, so they are two new crates
-  and not one, and neither is the request crate or `win-sync-sys`. **The engineer ruled on 2026-10-18** that
-  the two crates are `win-authorization-sys` and `win-handles-sys`, and that the function and the types
-  that belong move with them: `SecurityDescriptor`, its SDDL conversions and the rest of the request crate's
-  `security` module go to the first, and `DuplicateHandle` (`duplicate_handle_with_access` and its `Access`
-  mask) from `win-sync-sys` goes to the second, each left re-exported where it was so no caller breaks.
-  The five items below do it in dependency order. `DI-14.3`'s two behavioural tests gain the read-back the
-  item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
-  sabotage entry for the inheritance choice gains a test that sees the handle.
-
-  - [x] **DI-14.8.1** -- `win-authorization-sys` is created and the request crate's `security` module is moved into it and re-exported. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1481)
-
-  - [x] **DI-14.8.2** -- `GetSecurityInfo` as a safe query in `win-authorization-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1482)
-
-  - [x] **DI-14.8.3** -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask move into it from `win-sync-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1483)
-
-  - [x] **DI-14.8.4** -- `GetHandleInformation` as a safe query in `win-handles-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1484)
-
-  - [ ] **DI-14.8.5** -- `win-durable-ioring`'s `DI-14.3` tests read back through the two queries, and the
-    sabotage entry for the inheritance choice gains the test that sees the handle.
+- [x] **DI-14.8** -- Safe read-backs of what an open was given, in the two crates the Learn-section rule names: `win-authorization-sys` and `win-handles-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-148)
 
 - [x] **DI-14.9** -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-149)
 

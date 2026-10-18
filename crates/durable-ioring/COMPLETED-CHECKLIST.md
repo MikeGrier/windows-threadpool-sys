@@ -3181,3 +3181,28 @@ and the handle borrowed, owned and by reference), with five sabotage entries cau
 and 100 repeat runs without a failure. The duplicate's inheritance test, which read the flag through the raw
 call, reads it through this query. The error path has no test, since `AsHandle` makes a handle that is not open
 unrepresentable, and says so where it is defined. What was measured is in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-2`.
+
+### <a id="di-1485"></a>DI-14.8.5 -- `win-durable-ioring`'s `DI-14.3` tests read back through the two queries. *(completed 2026-10-18 02:05:00 -04:00)*
+
+A created file's DACL reads back, through `get_security_info`, as the one it was given, for five descriptors on a
+cached file and one on an unbuffered one; a created file's handle, with a descriptor and without, reads back
+through `get_handle_information` as carrying neither flag. Each was seen to fail alone, in a run with the
+mutation it guards applied by hand (the descriptor withheld from the call fails the read-back tests; the
+inheritance choice flipped fails the handle test), and the two sabotage entries now say so; the five `DI-14.3`
+entries still behave as declared. The crate also takes `SecurityDescriptor` from `win-authorization-sys` and
+`duplicate_handle_with_access` from `win-handles-sys`, the crates the Learn-section rule gives them, instead of
+through the request and sync crates, which still re-export them; the types are the same, so no public path
+changed.
+
+### <a id="di-148"></a>DI-14.8 -- Safe read-backs of what an open was given, in the two crates the Learn-section rule names: `win-authorization-sys` and `win-handles-sys`. *(completed 2026-10-18 02:06:00 -04:00)*
+
+`DI-14.3` could not read back a handle's inheritability or a file's descriptor, because this crate forbids `unsafe`
+and no crate offered `GetHandleInformation` or `GetSecurityInfo` safely. The engineer ruled on 2026-10-18 that the
+crates are `win-authorization-sys` (Security and Identity > Authorization) and `win-handles-sys` (System Services >
+Windows System Information > Handles and Objects), and that the function and the types that belong move with
+them. It was five items: [DI-14.8.1](#di-1481) (the request crate's `security` module moved to the first),
+[DI-14.8.2](#di-1482) (`GetSecurityInfo`), [DI-14.8.3](#di-1483) (`duplicate_handle_with_access` and `Access`
+moved to the second), [DI-14.8.4](#di-1484) (`GetHandleInformation`) and [DI-14.8.5](#di-1485) (the read-backs).
+The remaining functions of the two Learn sections are queued in the two crates' own checklists
+([win-authorization-sys](../win-authorization-sys/CHECKLIST.md), [win-handles-sys](../win-handles-sys/CHECKLIST.md)),
+and not here.
