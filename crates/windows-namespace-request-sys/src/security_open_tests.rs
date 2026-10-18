@@ -4,14 +4,12 @@
 //! parsing and rendering are `win-authorization-sys`'s and are tested there; what is checked here is
 //! that the request hands the descriptor to `CreateFileW` as it was given.
 
-use std::ffi::c_void;
-use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::ptr;
+use std::os::windows::io::{AsHandle, OwnedHandle};
 
-use win_authorization_sys::{SecurityAttributes, SecurityDescriptor, SecurityInformation};
-use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, LocalFree};
-use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
-use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+use win_authorization_sys::{
+    ObjectType, SecurityAttributes, SecurityDescriptor, SecurityInformation, get_security_info,
+};
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
@@ -30,36 +28,18 @@ fn parse(sddl: &str) -> SecurityDescriptor {
 
 const EVERYONE_ALL: &str = "D:P(A;;GA;;;WD)";
 
-/// The DACL of the file `handle` is open on, as the text Windows renders it as, read through a
-/// documented query.
-fn dacl_of(handle: *mut c_void) -> String {
-    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
-    // SAFETY: the handle is open with `READ_CONTROL`, the unwanted out-parameters are null, and
-    // `descriptor` is a writable pointer for the allocation Windows makes.
-    let status = unsafe {
-        GetSecurityInfo(
-            handle,
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            &raw mut descriptor,
-        )
-    };
-    assert_eq!(status, 0, "read the file's security");
-
-    // SAFETY: Windows returned a valid self-relative descriptor, which stays allocated until freed
-    // below, after the copy.
-    let captured = unsafe { SecurityDescriptor::capture(descriptor) };
-    // SAFETY: the descriptor was allocated with `LocalAlloc` for this call to free, once.
-    unsafe { LocalFree(descriptor) };
-    captured
-        .expect("capture the file's security")
-        .to_sddl(SecurityInformation::DACL)
-        .expect("write the descriptor as text")
-        .to_string_lossy()
+/// The DACL of the file `handle` is open on, as the text Windows renders it as, read through
+/// `win-authorization-sys`'s safe query.
+fn dacl_of(handle: &OwnedHandle) -> String {
+    get_security_info(
+        handle.as_handle(),
+        ObjectType::FILE,
+        SecurityInformation::DACL,
+    )
+    .expect("read the file's security")
+    .to_sddl(SecurityInformation::DACL)
+    .expect("write the descriptor as text")
+    .to_string_lossy()
 }
 
 fn create_with(fixture: &Fixture, name: &str, sddl: &str) -> OwnedHandle {
@@ -87,15 +67,12 @@ fn a_file_created_with_a_descriptor_from_text_is_given_that_dacl() {
     let everyone = create_with(&fixture, "everyone.bin", everyone_all);
     let read_only = create_with(&fixture, "read-only.bin", "D:P(A;;FR;;;WD)(A;;FA;;;BA)");
 
-    assert_eq!(dacl_of(everyone.as_raw_handle()), everyone_all);
+    assert_eq!(dacl_of(&everyone), everyone_all);
     assert_eq!(
-        dacl_of(create_with(&fixture, "generic.bin", EVERYONE_ALL).as_raw_handle()),
+        dacl_of(&create_with(&fixture, "generic.bin", EVERYONE_ALL)),
         everyone_all
     );
-    assert_eq!(
-        dacl_of(read_only.as_raw_handle()),
-        "D:P(A;;FR;;;WD)(A;;FA;;;BA)"
-    );
+    assert_eq!(dacl_of(&read_only), "D:P(A;;FR;;;WD)(A;;FA;;;BA)");
 }
 
 #[test]
