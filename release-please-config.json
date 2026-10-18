@@ -45,6 +45,10 @@
             "package-name": "win-authorization-sys",
             "component": "win-authorization-sys"
         },
+        "crates/win-handles-sys": {
+            "package-name": "win-handles-sys",
+            "component": "win-handles-sys"
+        },
         "crates/win-durable-ioring": {
             "package-name": "win-durable-ioring",
             "component": "win-durable-ioring"

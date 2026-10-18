@@ -1,0 +1,64 @@
+{
+  "package": "win-handles-sys",
+  "description": "Sabotages for win-handles-sys's duplicate_handle_with_access and Access, which were win-sync-sys's duplicate module until DI-14.8.3 moved them. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "DuplicateHandle's failure other than for a mask Windows refuses is absent: it fails only when the process cannot get another handle, which no test can produce on demand. duplicate.rs says so at the definition.",
+  "testArgs": ["-p", "win-handles-sys", "--lib", "--locked"],
+  "sabotages": [
+    {
+      "name": "WS-1+.5: the duplicate ignores the access asked for",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "The access is the whole point. A duplicate that gets none cannot be waited on, which the wait tests see, and cannot set, which the modify-state test sees.",
+      "find": ["            access.bits(),\n"],
+      "replace": ["            0,\n"]
+    },
+    {
+      "name": "WS-1+.5: the duplicate keeps the source's access",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "DUPLICATE_SAME_ACCESS (2) makes the call ignore the mask, so every duplicate would be a full-access clone: the narrowing, which is the reason for the function, silently not happening. The synchronize-only tests see it as a set that succeeds.",
+      "find": ["            FALSE,\n            0,\n        )\n"],
+      "replace": ["            FALSE,\n            2,\n        )\n"]
+    },
+    {
+      "name": "WS-1+.5: the duplicate is inheritable",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "A handle that a child process inherits is one the caller did not decide to hand over; the documented contract is that it is not inheritable.",
+      "find": ["            &mut duplicate,\n            access.bits(),\n            FALSE,\n"],
+      "replace": ["            &mut duplicate,\n            access.bits(),\n            1,\n"]
+    },
+    {
+      "name": "WS-1+.5: a refused duplicate is reported as success",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "The error path is reached by a mask Windows refuses. Swallowing it would hand back a handle that is not one.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n"]
+    },
+    {
+      "name": "WS-1+.5: combining access masks intersects them",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "A mask built with | that comes out as the common bits asks for nothing: the modify-state-and-synchronize duplicates cannot set or cannot wait.",
+      "find": ["        Self(self.0 | other.0)\n"],
+      "replace": ["        Self(self.0 & other.0)\n"]
+    },
+    {
+      "name": "WS-1+.5: the SYNCHRONIZE constant is the modify-state right",
+      "file": "src/duplicate.rs",
+      "expect": "caught",
+      "why": "The named right the wait-only handle is built from. Wrong, the handle can set and cannot wait.",
+      "find": ["    pub const SYNCHRONIZE: Self = Self(SYNCHRONIZATION_SYNCHRONIZE);\n"],
+      "replace": ["    pub const SYNCHRONIZE: Self = Self(EVENT_MODIFY_STATE);\n"]
+    },
+    {
+      "name": "CONTROL: the duplicate's failure is tested against 0 rather than FALSE",
+      "file": "src/duplicate.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself on the new module: FALSE is 0, so this is an equivalent change on code every duplicate runs. If it comes back caught, something is reacting to text rather than behaviour.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n"],
+      "replace": ["    if ok == 0 {\n        return Err(io::Error::last_os_error());\n"]
+    }
+  ]
+}

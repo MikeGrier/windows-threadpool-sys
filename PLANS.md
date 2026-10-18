@@ -5,6 +5,7 @@ plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 [crates/io-buffers/PLANS.md](crates/io-buffers/PLANS.md),
 [crates/win-authorization-sys/PLANS.md](crates/win-authorization-sys/PLANS.md),
 [crates/win-error-codes/PLANS.md](crates/win-error-codes/PLANS.md),
+[crates/win-handles-sys/PLANS.md](crates/win-handles-sys/PLANS.md),
 [crates/win-shared-os-owned-handle/PLANS.md](crates/win-shared-os-owned-handle/PLANS.md),
 [crates/win-sync-sys/PLANS.md](crates/win-sync-sys/PLANS.md),
 [crates/win-time-sys/PLANS.md](crates/win-time-sys/PLANS.md),
@@ -43,6 +44,7 @@ plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 | [crates/win-time-sys/CHECKLIST.md](crates/win-time-sys/CHECKLIST.md) | in progress | Safe Rust over the Windows clocks, in two layers -- timelines (a tick and what zero means) and the getters that read them -- so the workspace reads its one time base, interrupt time, in one place. Created because durable-ioring forbids `unsafe` and the only reader was `windows-threadpool-sys`' crate-private one. The cycle counter is parked. | [crates/win-time-sys/DESIGN-NOTES.md](crates/win-time-sys/DESIGN-NOTES.md) |
 | [crates/win-volume-sys/CHECKLIST.md](crates/win-volume-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 volume device controls: the disks a volume sits on, its sector size and its lock, which durable-ioring's raw volume backing is built on. | [crates/win-volume-sys/DESIGN-NOTES.md](crates/win-volume-sys/DESIGN-NOTES.md) |
 | [crates/win-authorization-sys/CHECKLIST.md](crates/win-authorization-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 authorization API (Learn: Security and Identity > Authorization): the owned security descriptor, moved from the request crate, and the queries that read and write a descriptor on an object. | [crates/win-authorization-sys/DESIGN-NOTES.md](crates/win-authorization-sys/DESIGN-NOTES.md) |
+| [crates/win-handles-sys/CHECKLIST.md](crates/win-handles-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 handle and object API (Learn: System Services > Windows System Information > Handles and Objects): duplicating a handle with a chosen access, moved from `win-sync-sys`, and the handle-information queries. | [crates/win-handles-sys/DESIGN-NOTES.md](crates/win-handles-sys/DESIGN-NOTES.md) |
 | [crates/win-sync-sys/CHECKLIST.md](crates/win-sync-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Win32 synchronization API, which began with `Event`; `windows-threadpool-sys` builds its wait targets on it, and durable-ioring's readiness event is the reason it exists now. The other kernel objects follow. | [crates/win-sync-sys/DESIGN-NOTES.md](crates/win-sync-sys/DESIGN-NOTES.md) |
 
 Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or any crate's.
