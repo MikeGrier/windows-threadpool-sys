@@ -256,22 +256,7 @@ option recorded by construction. The rule throughout is documented APIs only
   combination refused only after a file was created is the worse outcome, so the refusal is ahead of
   the open wherever the table lets it be.
 
-- [ ] **DI-14.5** -- **The remote-device check is made on the opened handle, and nowhere else.**
-  [DI-D-60](DESIGN-NOTES.md#di-d-60) records a window between canonicalising the path and opening it,
-  in which a link can be swapped, and the canonicalising itself opens the path. A documented query of
-  the handle closes the window, and it is also what an open by ID needs, since it has no path. The
-  assistant must say which documented handle queries it checked and which it chose. (A lead from
-  the investigation for `DI-13.7`, checked only for existing: the request crate already has
-  `QueryFinalPath`, over `GetFinalPathNameByHandleW`, and queries for file information by handle; whether
-  the final path of a handle on a remote file names it as a UNC path was not measured.) **If none can tell
-  a remote file from a local one, the check cannot be made on the handle, and the caller declares where
-  the file is**, which is what this repository does for a fact only an undocumented call gives; that is
-  raised with the engineer before anything is built. The check must see a reparse point's target and
-  not the reparse point ([DI-13.7.3](#di-137-rework) offers the flag that opens the point). There is **no check before the open**: the
-  engineer ruled on 2026-10-16 that finding out late is acceptable, and that an unbuffered file is still
-  refused on a remote device, since `OpenedFile<Unbuffered>` promises `SharedDevice` and a remote file
-  cannot keep it. The costs are documented and not prevented: an unbuffered create refused on the
-  handle has already created the file, and the open touches the network before it is refused.
+- [x] **DI-14.5** -- The remote-device check is made on the opened handle, and nowhere else. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-145)
 
 - [ ] **DI-14.6** -- **What an open can reach that is not a disk file is measured, and what this
   crate does about it is decided from the measurements.** The request crate passes every path to
@@ -319,6 +304,16 @@ option recorded by construction. The rule throughout is documented APIs only
   `tests/overlapped_evidence.rs` on a handle opened through it, and the table row's change in
   [DI-D-64](DESIGN-NOTES.md#di-d-64). If it is not offered, that row records the ruling and its reason. Not
   reached by the run, and a reason a ruling may wait: a remote file, a device, and a volume that is not NTFS.
+
+- [ ] **DI-14.10** -- **Rule on an unbuffered open of a link to a share, opened as the link.** Spawned by
+  `DI-14.5`, which judges an opened handle by where it is
+  ([DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled"): a link on a local volume that
+  leads to a share, opened with `open_reparse_point`, is a local handle and is accepted, where the item's
+  text asked that the check see the target. The engineer rules whether the handle should instead be refused
+  because of where the link leads. Following it needs a query that follows the link, which is a second open
+  and brings back the window `DI-14.5` closed; if the ruling is to accept, the test
+  `a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle`
+  already records it and no work follows.
 
 ## DI-M15 -- Opening by identity, and reopening
 

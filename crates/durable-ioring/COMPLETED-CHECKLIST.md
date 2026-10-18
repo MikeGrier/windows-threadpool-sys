@@ -3110,3 +3110,16 @@ as written:** the item asked for the status and information values, which the sa
 separately from the completion's result and byte count, so those are what was compared. The ruling the
 item's text left to the engineer is [DI-14.9](CHECKLIST.md). The test adds no public API, so there is no
 sabotage entry.
+
+### <a id="di-145"></a>DI-14.5 -- The remote-device check is made on the opened handle, and nowhere else. *(completed 2026-10-18 00:10:00 -04:00)*
+
+`OpenRequest::perform` opens the file and then asks the handle where it is, with `GetFinalPathNameByHandleW`
+through the request crate's `QueryFinalPath`, and refuses an unbuffered file whose final path is a UNC share.
+The path canonicalised ahead of the open is gone, and with it the window in which a link could be swapped.
+Which documented queries were checked, why the final path was chosen, how a link is judged, and what was
+measured are in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled". **Not decided:** whether a
+handle opened on a link to a share (`open_reparse_point`) should be refused, since the handle is the link on a
+local volume; the item's text asked that the check see the target, and this item judges what the handle is.
+The ruling is [DI-14.10](CHECKLIST.md).
+Two sabotage entries replace the one that named the removed path function; the refusal itself is reached only by
+the ignored administrative-share tests, which were run with the ignored tests included.
