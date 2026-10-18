@@ -254,29 +254,34 @@ option recorded by construction. The rule throughout is documented APIs only
   and nowhere else on the platform's account.** Re-planned 2026-10-18 under
   [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract), which the
   engineer ruled for the whole repository after this item, as first written, would have refused what the
-  kernel refused on this machine. It was "refused where the kernel refuses them"; it is now:
+  kernel refused on this machine. It was "refused where the kernel refuses them". Split 2026-10-18 into
+  three, because the reading pass decides the size of the rest, and because moving a measurement out of
+  the check cannot be separated from the check (a refused combination can no longer be opened through
+  `OpenedFile` to measure it):
 
-  - **A reading pass first.** Re-read the `CreateFileW` page, the "File Access Rights Constants" page and the
-    "File Buffering" page for every condition they state on a combination of the open's arguments. Sort each
-    into: a condition on the arguments alone that the page calls invalid; one that depends on the target
-    (existence, file system, device, local or remote, token, sharing); or one that is not invalidity
-    ("self-defeating", "ignored", "has no effect", or a sentence that reads two ways). Record the list in
-    [DI-D-64](DESIGN-NOTES.md#di-d-64) with each condition's citation and the date read. The size of the rest
-    of this item is known from that list, before any code; if no condition is of the first kind, no check is
-    built, and that is recorded.
-  - **The check.** For the first kind only: one pure function of the options, the buffering mode and the data
-    access, called by `OpenedFile::request` before anything touches the system, over a table whose rows carry
-    the predicate, the kind and the citation. Its refusal is a typed error that names the citation, and is a
-    different error kind from a refusal of this crate's own narrowing. Tested in memory. Made structural only
-    where the condition falls on `B` or `A`, never by a new type parameter.
-  - **The measurements become evidence.** What earlier items measured -- `FILE_ALL_ACCESS` refused unbuffered,
-    the hints accepted in every combination, delete-on-close taken without the right to delete -- are
-    documented and kept as evidence tests through the request crate, and are not the check. Where the page and
-    the kernel disagree (delete-on-close is the known candidate), the page wins: `DI-14.2`'s "not refused for
-    want of the right to delete" is then reversed, and its documentation and tests are swept with it.
-  - **For the engineer:** whether this crate chooses not to support `FILE_ATTRIBUTE_TEMPORARY` on an
-    unbuffered file. The page is silent on the pair, so it is not a contract refusal; the question is whether
-    `SharedDevice`, which is not demonstrated for it, is a reason to narrow.
+  - [ ] **DI-14.4.1** -- **The reading pass.** Re-read the `CreateFileW` page, the "File Access Rights
+    Constants" page and the "File Buffering" page for every condition they state on a combination of the
+    open's arguments. Sort each into: a condition on the arguments alone that the page calls invalid; one
+    that depends on the target (existence, file system, device, local or remote, token, sharing); or one
+    that is not invalidity ("self-defeating", "ignored", "has no effect", or a sentence that reads two
+    ways). Record the list in [DI-D-64](DESIGN-NOTES.md#di-d-64) with each condition's citation and the
+    date read. If no condition is of the first kind, `DI-14.4.2` is recorded as having nothing to build.
+
+  - [ ] **DI-14.4.2** -- **The check, and the measurements moved to evidence.** For the first kind only:
+    one pure function of the options, the buffering mode and the data access, called by
+    `OpenedFile::request` before anything touches the system, over a table whose rows carry the
+    predicate, the kind and the citation. Its refusal is a typed error that names the citation, and is a
+    different error kind from a refusal of this crate's own narrowing. Tested in memory; made structural
+    only where the condition falls on `B` or `A`, never by a new type parameter. In the same commit, every
+    earlier measurement of a combination it now refuses is moved to an evidence test through the request
+    crate, and documentation that says the combination is accepted is swept. Where the page and the
+    kernel disagree (delete-on-close without the right to delete is the known candidate), the page wins,
+    and `DI-14.2`'s "not refused for want of the right to delete" is reversed with its tests.
+
+  - [ ] **DI-14.4.3** -- **For the engineer:** whether this crate chooses not to support
+    `FILE_ATTRIBUTE_TEMPORARY` on an unbuffered file. The page is silent on the pair, so it is not a
+    contract refusal; the question is whether `SharedDevice`, which is not demonstrated for it, is a
+    reason to narrow. If it is, the refusal is a row of `DI-14.4.2`'s table of the narrowing kind.
 
 - [x] **DI-14.5** -- The remote-device check is made on the opened handle, and nowhere else. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-145)
 
