@@ -30,8 +30,9 @@ win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
 # because `CreateNamedPipeW`'s attributes parameter is a `SECURITY_ATTRIBUTES` pointer and the
 # binding is gated on it. `Win32_Storage_FileSystem` is the open-mode flags `PIPE_ACCESS_*` and
 # `FILE_FLAG_*` and the access rights `WRITE_DAC` and `WRITE_OWNER`; `Win32_System_SystemServices` is
-# the third, `ACCESS_SYSTEM_SECURITY`. `Win32_System_Pipes` is `CreateNamedPipeW` and the pipe-mode
-# flags.
+# the third, `ACCESS_SYSTEM_SECURITY`. `Win32_System_Pipes` is `CreateNamedPipeW`, `ConnectNamedPipe`,
+# `DisconnectNamedPipe` and the pipe-mode flags. `Win32_System_IO` is `OVERLAPPED`, which the
+# overlapped connect takes.
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -39,13 +40,15 @@ features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
 	"Win32_System_Pipes",
 	"Win32_System_SystemServices",
 ]
 
 # Test-only. `win-handles-sys` reads whether a created pipe's handle is inheritable, which is what
-# the attributes parameter decides. `Win32_System_IO` is the overlapped read that pends on a pipe
-# created overlapped, and its cancellation; `ReadFile` is `Win32_Storage_FileSystem`, already above.
+# the attributes parameter decides. `Win32_System_Threading` is the manual-reset event an overlapped
+# connect signals through; the overlapped read that pends on a pipe created overlapped, and its
+# cancellation, are `Win32_System_IO` and `ReadFile` is `Win32_Storage_FileSystem`, both above.
 #
 # Path-only, with no `version`, as `windows-ioring-sys`'s dev-dependencies are and for the reason it
 # gives: Cargo checks a pinned version against the path at every build, so a release of
@@ -57,7 +60,7 @@ win-handles-sys = { path = "../win-handles-sys" }
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_System_IO"]
+features = ["Win32_Foundation", "Win32_System_Threading"]
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it

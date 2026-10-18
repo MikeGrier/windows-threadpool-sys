@@ -48,3 +48,48 @@ one created with the byte modes reports none; an overlapped pipe starts a read w
 `ERROR_IO_PENDING`, and cancelling it ends it with `ERROR_OPERATION_ABORTED`; dropping the server end of the only
 instance makes the name not found. What `FILE_FLAG_WRITE_THROUGH`, `PIPE_REJECT_REMOTE_CLIENTS` and the three
 security access modes do was not observed, only their values; the sabotage manifest says so.
+
+## <a id="wp-d-2"></a>WP-D-2: a connect is two functions, because the call has two forms and no documented call says which a handle is
+
+The engineer, 2026-10-18, "implement wp-1.3". Pages read the same day: `ConnectNamedPipe` and `DisconnectNamedPipe`,
+both `ms.date` 12/05/2018.
+
+**The forms.** `ConnectNamedPipe` takes an optional `OVERLAPPED`. The page says that for a handle "opened with
+`FILE_FLAG_OVERLAPPED`, the `lpOverlapped` parameter must not be NULL", that with one and a NULL "the function can
+incorrectly report that the connect operation is complete", and that for a handle not opened that way "the function
+does not return until a client is connected or an error occurs". So there is a synchronous form, with no
+`OVERLAPPED`, and an overlapped one, with one, and which applies is a property of how the handle was created.
+
+**No documented call reports it.** `GetNamedPipeInfo` and `GetNamedPipeHandleState` give the type, the read mode,
+the wait mode and the instance counts, and not whether the handle is overlapped; the call that does is undocumented
+and is not available to this repository ([DOCUMENTED APIS ONLY](../../.github/copilot-instructions.md)). So the
+synchronous function cannot refuse an overlapped pipe, and its documentation puts that on the caller, quoting the
+page's own consequence. **Rejected: one synchronous function that always passes an `OVERLAPPED` of its own with an
+event and waits**, as `win-volume-sys` does for device controls. That depends on what the call does with a non-NULL
+`OVERLAPPED` on a handle that is not overlapped, which the page does not say, and this crate binds to the page and
+not to what the call happens to do.
+
+**The overlapped form is `unsafe`.** `connect_named_pipe_overlapped(pipe, overlapped)` hands the kernel a pointer
+that it writes to when the operation completes, so the caller must keep it valid and unmoved until then, and the
+pipe open. The crate cannot check either. It takes a `BorrowedHandle` and a `*mut OVERLAPPED`, the shape
+`windows-overlapped-io-sys`'s `submit` closure gives its caller.
+
+**What the call returns is named, and not interpreted.** Two zero returns are not errors, and are results:
+`ERROR_PIPE_CONNECTED`, which the page says is "a good connection between client and server, even though the
+function returns zero" (`ConnectOutcome::AlreadyConnected`), and, in the overlapped form, `ERROR_IO_PENDING`
+(`ConnectStart::Pending`). A nonzero return is `ConnectOutcome::Succeeded` and is not said to mean "connected": the
+page says that for a handle in nonblocking mode it means only that "the pipe is now available to be connected to a
+new client". Every other zero is the call's code, among them `ERROR_PIPE_LISTENING` and `ERROR_NO_DATA`, which the
+page names for nonblocking mode and for a previous client that closed.
+
+**Observed on 2026-10-18, Windows 11 build 26300, local, unelevated, and not a ruling:** connecting twice with the
+client still open reports an already connected client both times; connecting after the previous client closed, with
+no disconnect, is `ERROR_NO_DATA`, as the page says; after `DisconnectNamedPipe` a client that opens before the
+server connects again is refused with `ERROR_PIPE_BUSY`, which the page does not say, and one that opens while the
+server is connecting is accepted; a client forced off by a disconnect fails on its next write; in nonblocking mode
+with no client the call is `ERROR_PIPE_LISTENING`. A NULL `OVERLAPPED` on an overlapped pipe was not made except by
+the sabotage that does it, which hangs the suite.
+
+**Not here:** `FlushFileBuffers`, which the `DisconnectNamedPipe` page says lets a server "make sure data is not
+lost by calling" it before disconnecting. It is documented under File Management Functions with `CreateFile`, so it
+is not this crate's.

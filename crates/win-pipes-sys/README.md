@@ -9,9 +9,16 @@ Communications > Pipes*. Thin over Win32, adding no policy.
   `|`, with every mode the call's page lists named. A combination the page calls invalid is not prevented here;
   the call refuses it, and its error reaches the caller as the call gave it.
 - `NamedPipeOptions` carries the rest of the parameters, none defaulted.
+- `connect_named_pipe` and `connect_named_pipe_overlapped` are `ConnectNamedPipe` in its two documented forms: with no
+  `OVERLAPPED`, which waits, and with one, which starts the operation and returns. The synchronous form must not be
+  given a pipe created overlapped, and no documented call reports how a handle was created, so that is the caller's to
+  keep; the overlapped form is `unsafe`, because the `OVERLAPPED` must outlive the operation. A client that connected
+  before the call, which the call reports as zero with `ERROR_PIPE_CONNECTED`, is a result (`AlreadyConnected`) and
+  not an error. See [WP-D-2](DESIGN-NOTES.md#wp-d-2).
+- `disconnect_named_pipe` is `DisconnectNamedPipe`.
 
-The area has more in it: the rest of the *Pipe Functions* the section lists (`ConnectNamedPipe`, `CreatePipe`,
-`PeekNamedPipe` and the others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.
+The area has more in it: the rest of the *Pipe Functions* the section lists (`CreatePipe`, `PeekNamedPipe` and the
+others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.
 
 ```rust
 use std::fs::{File, OpenOptions};

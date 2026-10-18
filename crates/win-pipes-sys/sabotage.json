@@ -66,6 +66,62 @@
       "why": "A control: pushing a zero and extending by one are the same operation, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["    wide.push(0);\n"],
       "replace": ["    wide.extend([0]);\n"]
+    },
+    {
+      "name": "WP-1.3: a client that connected first is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The call returns zero for it and the page says there is a good connection, so reading every zero as a failure turns a connected pipe into an error.",
+      "find": ["    if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.3: a nonzero return is reported as an already connected client",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The two outcomes are told apart by what the call returned; a client that arrived after the call and one that was there before it are different results.",
+      "find": ["    if connected != FALSE {\n        return Ok(ConnectOutcome::Succeeded);\n    }\n"],
+      "replace": ["    if connected != FALSE {\n        return Ok(ConnectOutcome::AlreadyConnected);\n    }\n"]
+    },
+    {
+      "name": "WP-1.3: a pending overlapped connect is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "ERROR_IO_PENDING is how the call says an operation was started, so reading it as a failure makes every overlapped connect with no client fail.",
+      "find": ["        Ok(ERROR_IO_PENDING) => Ok(ConnectStart::Pending),\n"],
+      "replace": ["        Ok(ERROR_IO_PENDING) => Err(error),\n"]
+    },
+    {
+      "name": "WP-1.3: an overlapped connect to a client already there is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The page says a client that connects before the call is a good connection with a zero return, in the overlapped form as in the synchronous one.",
+      "find": ["        Ok(ERROR_PIPE_CONNECTED) => Ok(ConnectStart::Finished(ConnectOutcome::AlreadyConnected)),\n"],
+      "replace": ["        Ok(ERROR_PIPE_CONNECTED) => Err(error),\n"]
+    },
+    {
+      "name": "WP-1.3: the overlapped connect is made without its OVERLAPPED",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The page says that on an overlapped pipe a null OVERLAPPED can incorrectly report the connect complete, so a connect made that way does not pend. The sabotaged suite may be caught by hanging instead.",
+      "find": ["    let connected = unsafe { ConnectNamedPipe(pipe.as_raw_handle(), overlapped) };\n"],
+      "replace": ["    let connected = unsafe { ConnectNamedPipe(pipe.as_raw_handle(), ptr::null_mut()) };\n"]
+    },
+    {
+      "name": "WP-1.3: a failed disconnect is not reported",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe instance is refused by the call, and that refusal must reach the caller.",
+      "find": ["    if disconnected == FALSE {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.3: control, the already-connected comparison written the other way round",
+      "file": "src/connect.rs",
+      "expect": "survives",
+      "why": "A control: equality is symmetric, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {\n"],
+      "replace": ["    if Some(ERROR_PIPE_CONNECTED as i32) == error.raw_os_error() {\n"]
     }
   ]
 }

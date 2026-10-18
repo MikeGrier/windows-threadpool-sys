@@ -29,3 +29,11 @@ Each crate's tests passed unchanged, and the `win-volume-sys` sabotages that dep
 depending crate, and a versionless dev-dependency is left out of the published manifest
 (`windows-ioring-sys`'s manifest records the reason). The dev-dependencies added in the previous two commits of this
 work carried a version and were corrected first, in `chore` commits of their own.
+
+### <a id="wp-13"></a>WP-1.3 -- `ConnectNamedPipe` in its two forms and `DisconnectNamedPipe`, with `ERROR_PIPE_CONNECTED` and `ERROR_IO_PENDING` named as results. *(completed 2026-10-18 18:11:42 -04:00)*
+
+`connect_named_pipe`, `connect_named_pipe_overlapped` (`unsafe`), `disconnect_named_pipe`, `ConnectOutcome` and
+`ConnectStart`. Why there are two connect functions and not one, why the synchronous one cannot check the handle, and
+what was observed are [WP-D-2](DESIGN-NOTES.md#wp-d-2). Twelve tests and seven sabotages, one a control that survives
+and one caught by the suite hanging. The first consumer, `windows-overlapped-io-sys`'s raw calls, is
+[WP-1.3.1](CHECKLIST.md).
