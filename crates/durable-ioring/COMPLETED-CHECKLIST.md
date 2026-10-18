@@ -3293,3 +3293,12 @@ bundled two questions. Foreign handles stay out, with a `ReOpenFile` route that 
 named. The attestation of exclusivity needs no foreign handle, since the handle is one this crate opened, and is
 `DI-10.5`. The item's own argument for `unsafe` is not followed: the class is information only, so a wrong claim
 mislabels a report and changes nothing the layer does.
+
+### <a id="di-105"></a>DI-10.5 -- A consumer who knows a device is theirs alone can attest it through `new_attested_exclusive`, `from_volume_attested_exclusive` and `from_disk_attested_exclusive`, and the target is then `Complete`. *(completed 2026-10-18 19:29:21 -04:00)*
+
+Three constructors on `Win32FileTarget`, each taking only a handle this crate opened `Unbuffered`, so a cached one is a
+compile error (a `compile_fail` doctest, and a sabotage that widens the type, which only that doctest catches). One
+private function makes the claim, and the domains, geometry, capabilities and access are those of the same handle
+through the plain constructor, as tests of each of the three kinds compare. A declaration of domains still adds and
+never removes. The constructors are not `unsafe`, for the reason in [DI-D-68](DESIGN-NOTES.md#di-d-68), which is the
+assistant's position until amended. Six sabotages, one of them a control that survives.

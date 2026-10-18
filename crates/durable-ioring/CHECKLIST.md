@@ -202,16 +202,7 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.4** -- A whole physical disk is a file target made from a disk this crate opened by number, its own flush domain and never `Complete`. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#di-104)
 
-- [ ] **DI-10.5** -- **A consumer who knows a device is theirs alone can attest it, and the target is then `Complete`** ([DI-D-68](DESIGN-NOTES.md#di-d-68)).
-  Three constructors on `Win32FileTarget`, `new_attested_exclusive`, `from_volume_attested_exclusive` and
-  `from_disk_attested_exclusive`, each taking only a handle this crate opened `Unbuffered`, so a cached one is a
-  compile error. They claim that nothing else writes the device and that the flush domains reported are all of
-  them, and change nothing else: the domains, geometry and capabilities are what the unbuffered handle gives. The
-  documentation says what is claimed, that a wrong claim mislabels a report and changes nothing the layer does
-  ([DI-D-50](DESIGN-NOTES.md#di-d-50) P3), and that a cached handle cannot be attested and why. Tests: each
-  constructor reports `Complete` with the domains and geometry of its unbuffered sibling; a cached handle is refused
-  (`compile_fail`); a declaration of domains still adds and never removes. Sabotage: the three constructors
-  claiming `SharedDevice`, and one dropping the found domains.
+- [x] **DI-10.5** -- A consumer who knows a device is theirs alone can attest it through `new_attested_exclusive`, `from_volume_attested_exclusive` and `from_disk_attested_exclusive`, and the target is then `Complete`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-105)
 
 `DI-10.3`, whether a handle opened elsewhere can be given to a file target, is decided by
 [DI-D-68](DESIGN-NOTES.md#di-d-68) and is stubbed below; what it leaves is `DI-10.6`, parked under `DI-M15+`.
