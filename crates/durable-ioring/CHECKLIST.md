@@ -59,8 +59,8 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`, and `DI-10.3` last. `DI-14.6.2` is a decision for the engineer and needs no other work, and
-   `DI-14.6.3` waits on a serial port.
+   `DI-M15`, and `DI-10.3` last. `DI-14.6.2` is a decision for the engineer and needs no other work,
+   `DI-14.6.3` waits on a serial port, and `DI-14.6.4` is documentation and may be done at any point.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -259,6 +259,9 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-14.6.2** -- **What an open of a handle that is not a disk file does is decided with the
   engineer.** It is refused, or classified and returned as such; what an `OpenedFile` claims for a
   path that names a device (today a file's default geometry and no flush domains) follows from it.
+  An open that blocks is not this item's: [DI-D-67](DESIGN-NOTES.md#di-d-67) makes where a name leads
+  the caller's responsibility. Also this item's: the unbuffered open of `NUL`, refused today only
+  because its final path cannot be read.
   The measurements are in [DI-D-64](DESIGN-NOTES.md#di-d-64), under "Measured for DI-14.6", and are
   the input; this item is the decision, so it has no work until the engineer rules. A serial port,
   and `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read, are unmeasured: no port
@@ -273,8 +276,15 @@ option recorded by construction. The rule throughout is documented APIs only
   work: of three ports named on the measuring machine one blocked in `CreateFileW` for over 45
   seconds and later returned 5, one returned 31 and one returned 5, so the read was never reached.
   A loopback or virtual port, or a machine with a real one, unblocks it; the kinds already measured
-  are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". It does not gate
-  `DI-14.6.2`'s decision, which can be taken from them.
+  are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". It gates no decision:
+  `DI-14.6.2` can be taken from the kinds already measured, and a blocking open is the caller's
+  ([DI-D-67](DESIGN-NOTES.md#di-d-67)). It is evidence, recorded as such when it can be made.
+
+- [ ] **DI-14.6.4** -- **The open's documentation states that where a name leads is the caller's
+  responsibility** ([DI-D-67](DESIGN-NOTES.md#di-d-67)). On `OpenedFile`'s open and `OpenRequest`: a
+  name may be redirected to a device by a reparse point or an object-manager link whatever the open's
+  flags, an open of such a device may not return, and this crate neither checks nor cancels it. Stated
+  as observed and cited, with no advice to the caller.
 
 - [x] **DI-14.7** -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-147)
 

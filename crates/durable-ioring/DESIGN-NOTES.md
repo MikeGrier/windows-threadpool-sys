@@ -78,6 +78,7 @@ appear here.
 | <a id="di-d-64-index"></a>DI-D-64 | **The open surface, parameter by parameter (`DI-13.1`): which parameters of `CreateFileW`, `CreateFile2`, `OpenFileById` and `ReOpenFile` are exposed and as which type, which are excluded and why, and what each does to a target's claim.** The engineer, 2026-10-15 and 2026-10-16. This crate reflects Win32 and not `std`, so [DI-D-63](#di-d-63)'s parity with `std` is amended. The table, its sources, what was not verified and the engineer's rulings of 2026-10-16 on the calls the assistant had made are in [the section below](#di-d-64). **Amended by [DI-D-65](#di-d-65) for the data rights.** |
 | <a id="di-d-65-index"></a>DI-D-65 | **Data access is a type parameter of every handle this crate opens, and the rights set carries only the rest.** The engineer, 2026-10-16, on the observation that requiring a data right of the type while access is a parameter of the open is odd, and that the pattern should reach disks and volumes and not only a file in the ring. Four markers, `NoData`, `ReadOnly`, `WriteOnly` and `ReadWrite`; a file target is made only from a handle with a data right, at compile time. The ring sees it through [DI-D-66](#di-d-66). [Section below](#di-d-65). |
 | <a id="di-d-66-index"></a>DI-D-66 | **A target states its data access to the core, and a key can carry it.** The engineer, 2026-10-16: "it seems like IoTarget should have the same sort of type-based encoding of the access to the target that we just litigated in di-13.8", then "do both, schedule both". `IoTarget` gains a required `access()` read once into its description, the core refuses what the access does not cover, and a typed `Key<A>` lets a wrong submission fail to compile. [Section below](#di-d-66). |
+| <a id="di-d-67-index"></a>DI-D-67 | **What a name reaches is the caller's responsibility: an open is not checked, refused, bounded or cancelled on account of where its name leads.** The engineer, 2026-10-18: "The responsibility is only on the caller." No check of a name can be complete, since object-manager links and intermediate reparse points redirect regardless of `FILE_FLAG_OPEN_REPARSE_POINT`; a check of the handle cannot reach an open that has not returned; and `CancelSynchronousIo` targets a thread rather than a call and is not guaranteed by its documentation. See [DI-D-67](#di-d-67). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -174,7 +175,7 @@ for this table.
 | `CreateFileTransacted` | Excluded | None | A transacted write is durable at the transaction's commit, so an epoch's warranty would mean nothing. | engineer 2026-10-15 |
 | `OpenFileById` as a call | Exposed | `OpenedFile::open_by_id` ([DI-15.2](CHECKLIST.md)) | Its page lists no creation disposition, takes no attributes, and marks the security-attributes parameter reserved. It lists SMB as not supported, so an open by ID on a remote share is the kernel's to refuse. | engineer 2026-10-15 |
 | `ReOpenFile` as a call | Exposed | `OpenedFile::reopen` ([DI-15.4](CHECKLIST.md)) | Takes access, share mode and flags only; its page says the flags cannot include attributes, and that the original must have been created by `CreateFile`. Reopening with a different buffering mode is a new `OpenedFile` of the other type. | engineer 2026-10-15 |
-| `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
+| `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and where a name leads is the caller's responsibility ([DI-D-67](#di-d-67)); what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
 | `hVolumeHint` (ID) | Exposed | A file or volume this crate opened | Provenance-checked like every handle here. The page accepts any file on the volume or share; this crate takes only what it opened. | plan, [DI-15.2](CHECKLIST.md) |
 | `lpFileId` (ID) | Exposed | The identifier kinds the request crate's `OpenFileByIdentifier` carries: the 64-bit file ID, the 128-bit extended ID, the object ID | The `FILE_ID_DESCRIPTOR` page was not read for this table, so the list of kinds is the request crate's and the ruling's, not the page's. | engineer 2026-10-15 |
 | `hOriginalFile` (RO) | Exposed | An `OpenedFile` | The page says it must have been created by `CreateFile`; whether a handle that came from `OpenFileById` is accepted was not measured. | plan, [DI-15.4](CHECKLIST.md) |
@@ -529,7 +530,8 @@ tests red, and one that always reports a number turns the file, directory, `NUL`
   stopped. A later run of the same open, on a thread so that `CancelSynchronousIo` could be tried, returned
   `ERROR_ACCESS_DENIED` at once, so the cancel was never exercised. `COM4` failed with 31 and `COM22` with 5.
   So the earlier observation, a read on `COM3` still blocked after eight seconds, could not be reproduced, and
-  `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read remain unmeasured.
+  `CancelIoEx` and `CancelSynchronousIo` against a blocked serial read remain unmeasured. What this crate
+  does about a blocking open is [DI-D-67](#di-d-67).
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
@@ -746,3 +748,72 @@ method on a published trait breaks every other implementor; the implementors in 
 `MemoryTarget`, `Win32FileTarget` and the test targets.
 
 **Scheduled work.** [DI-13.9](CHECKLIST.md#di-139) and [DI-13.10](CHECKLIST.md#di-1310).
+
+## <a id="di-d-67"></a>DI-D-67: what a name reaches is the caller's responsibility
+
+**What is decided.** The engineer, 2026-10-18: "The responsibility is only on the caller." An open of a
+name may reach something whose open does not return. This crate does not check the name for it, does not
+refuse it, and does not bound or cancel the open. Where a name leads, and whether its open can block, is
+the caller's to know.
+
+**The hazard.** Measured on one machine for [DI-14.6.1](COMPLETED-CHECKLIST.md#di-1461), in
+[DI-D-64](#di-d-64) under "Measured for DI-14.6": `CreateFileW` on `COM3` had not returned after 15, 25
+and 45 seconds, and a later run of the same open returned `ERROR_ACCESS_DENIED` at once. The open itself
+blocked, so no handle existed to judge. That none of the machine's three named ports is listed by the
+device manager fits a Bluetooth serial port, whose open attempts a connection; that is a guess and was
+not measured.
+
+**Why no check of the name can be complete.** A name can be redirected to a device by three routes, and
+only part of one is under an open's control:
+
+- *A file-system reparse point.* `FILE_FLAG_OPEN_REPARSE_POINT` stops reparse at the final component
+  only; a junction or symbolic link in an intermediate directory is still followed. No documented Win32
+  flag was found that refuses reparse along the whole path; the lower layer's is out of reach under the
+  [DOCUMENTED APIS ONLY rule](../../.github/copilot-instructions.md).
+- *An object-manager link*: a drive letter, `subst`, `DefineDosDevice`, the `\??\` namespace. These are
+  resolved before a file system sees the name, so no reparse flag applies. `DefineDosDevice` in the
+  caller's own session needs no privilege.
+- *A device named directly*: `\\.\COM3`, or `COM3`. The caller wrote it.
+
+So restricting the hazard to opens that follow reparse points does not separate the names that carry
+it from those that do not. The engineer, 2026-10-18, on that: "The problem is that you don't know which
+names may carry the hazard."
+
+**Why a check of the handle does not answer it.** Classifying the handle after the open
+(`GetFileType`, a device control) can say what was reached, and is how [DI-14.5](COMPLETED-CHECKLIST.md#di-145)
+judges a remote file. It cannot reach an open that has not returned.
+
+**Why no bounded open.** Read 2026-10-18: `CancelSynchronousIo` (`ms.date` 12/05/2018) and "Canceling
+Pending I/O Operations" (05/31/2018).
+
+- *Documented as a use, never as a guarantee.* The second page's motivating example is an open "blocked
+  because the call is to a very slow device", and its sample cancels a sequence that begins with
+  `CreateFileA`. It also says "There is no guarantee that underlying drivers correctly support
+  cancellation", and the function's page says that "other operations can continue toward completion
+  before they are actually canceled", and that a cancelled operation may complete normally.
+- *It targets a thread, not a call.* The page warns that "the wrong call in a series of calls could get
+  canceled", and of the race on a shared thread. The engineer, 2026-10-18: "it could end up cancelling
+  something other than the target API. There is no synchronization with the thread unless you build some
+  gating with every API that you think you may need to cancel."
+- *The gating such an open would need:* a thread of its own making that one call and no other, a cancel
+  repeated until the thread reports done (a cancel issued before the call enters the kernel finds nothing),
+  and a thread lost for good when the driver does not cancel.
+- *The open is the case with no handle.* After the open, `CancelIoEx` names a handle and an `OVERLAPPED`.
+  The open has neither, which leaves only the thread. `IoRing` has no open operation, so the ring does not
+  change this.
+
+**Which opens take no name.** Recorded as fact, not as advice to a caller. An open by file identity
+([DI-15.2](CHECKLIST.md)) is relative to a volume handle and has no name to redirect, and an identity can
+be read from enumerating a directory without opening each entry. A path beginning `\\?\Volume{GUID}\`
+does not pass through drive letters or `subst`; the `Volume{GUID}` link is the mount manager's, and
+intermediate reparse points are still followed.
+
+**What this does not decide.** Whether an open that has returned a handle that is not a disk file is
+refused, or classified and returned as such, and what an `OpenedFile` on such a handle claims, stay
+[DI-14.6.2](CHECKLIST.md)'s: those concern what a durability claim on such a handle would mean, not the
+blocking open. So does the unbuffered open of `NUL`, refused today because its final path cannot be read
+([DI-D-64](#di-d-64), "What building DI-14.5 settled"), which no decision put there.
+[DI-14.6.3](CHECKLIST.md), the serial-port measurement, no longer gates a design decision; it is evidence.
+
+**Scheduled work.** [DI-14.6.4](CHECKLIST.md): the open's documentation states this responsibility, since
+a caller cannot carry one it is not told of.
