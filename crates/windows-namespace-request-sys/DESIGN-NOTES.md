@@ -1111,3 +1111,14 @@ normalisation, the claim rule 6 made with no measurement recorded.
 
 **Scheduled work:** none. `NR-5.2` to `NR-5.4` are withdrawn, as
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-52-withdrawn) says, with what would reopen them.
+
+## The `security` module moved to win-authorization-sys
+
+The engineer, 2026-10-18. `SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState` and the
+capture errors, which this crate held only because a request takes a descriptor, are in
+[win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md), where Microsoft Learn files them
+([the rule](../../DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under)).
+This crate re-exports that crate as `security` and at its root, so no published path changed. Text above that
+names `src/security.rs` or `src/security/sddl.rs` (including `NR-3.1`'s) describes where the code was when the
+decision was made; the same files are now `crates/win-authorization-sys/src/security.rs` and
+`security/sddl.rs`, moved with `git mv`.

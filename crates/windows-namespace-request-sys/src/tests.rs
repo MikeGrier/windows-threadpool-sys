@@ -18,7 +18,6 @@ use std::os::windows::io::AsHandle;
 use wtf_string::Wtf16String;
 
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::security::tests::Absolute;
 use crate::{AclState, CapturedHandle, OpenFile, SecurityAttributes, SecurityDescriptor};
 
 /// Everything an entry will hold, standing in for the entries themselves,
@@ -35,17 +34,13 @@ impl Foundations {
     fn capture(fixture: &Fixture) -> Self {
         let directory = fixture.open_directory();
         let file = fixture.open_file();
-        let absolute = Absolute::with_populated_dacl();
-
         let text = fixture
             .directory()
             .to_str()
             .expect("the fixture path is valid UTF-8");
 
-        // SAFETY: the absolute descriptor and everything it names are alive for
-        // the duration of this call.
-        let descriptor = unsafe { SecurityDescriptor::capture(absolute.as_ptr()) }
-            .expect("capture a descriptor");
+        let descriptor = SecurityDescriptor::from_sddl(&Wtf16String::from("D:(A;;GA;;;WD)"))
+            .expect("a descriptor with one entry");
 
         Self {
             path: OpenFile::new(Wtf16String::from(text)).expect("build the request"),

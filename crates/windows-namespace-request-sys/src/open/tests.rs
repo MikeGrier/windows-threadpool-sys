@@ -18,7 +18,6 @@ use wtf_string::Wtf16String;
 
 use super::OpenFile;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::security::tests::Absolute;
 use crate::{CapturedHandle, SecurityAttributes, SecurityDescriptor};
 
 /// The share mode all three audited consumers use: a watcher or an enumerator
@@ -195,6 +194,12 @@ fn a_missing_directory_is_distinguishable_from_a_missing_file() {
     assert_eq!(error.code(), ERROR_PATH_NOT_FOUND);
 }
 
+/// A descriptor with a DACL of one entry, which is what these requests carry.
+fn populated_descriptor() -> SecurityDescriptor {
+    SecurityDescriptor::from_sddl(&Wtf16String::from("D:(A;;GA;;;WD)"))
+        .expect("a descriptor with one entry")
+}
+
 #[test]
 fn security_attributes_are_expressible_though_no_consumer_uses_them() {
     // Kept because an entry that cannot express two of its own call's
@@ -203,11 +208,7 @@ fn security_attributes_are_expressible_though_no_consumer_uses_them() {
         .read()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("open-security");
-    let absolute = Absolute::with_populated_dacl();
-
-    // SAFETY: the absolute descriptor and everything it names outlive the call.
-    let descriptor =
-        unsafe { SecurityDescriptor::capture(absolute.as_ptr()) }.expect("capture a descriptor");
+    let descriptor = populated_descriptor();
     let request = request_for(&fixture.file())
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
@@ -251,11 +252,7 @@ fn a_request_survives_every_input_it_was_built_from() {
     let (request, expected_len) = {
         let fixture = Fixture::new("open-outlives");
         let template_source = fixture.open_file();
-        let absolute = Absolute::with_populated_dacl();
-
-        // SAFETY: the absolute descriptor is alive for this call.
-        let descriptor = unsafe { SecurityDescriptor::capture(absolute.as_ptr()) }
-            .expect("capture a descriptor");
+        let descriptor = populated_descriptor();
 
         let request = request_for(&fixture.file())
             .with_desired_access(FILE_GENERIC_READ)
@@ -357,10 +354,7 @@ fn a_copy_owns_its_own_copy_of_the_security_attributes() {
         .read()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("open-copy-security");
-    let absolute = Absolute::with_populated_dacl();
-    // SAFETY: the absolute descriptor and everything it names outlive the call.
-    let descriptor =
-        unsafe { SecurityDescriptor::capture(absolute.as_ptr()) }.expect("capture a descriptor");
+    let descriptor = populated_descriptor();
     let request = request_for(&fixture.file())
         .with_security(Some(SecurityAttributes::new(Some(descriptor), true)));
 

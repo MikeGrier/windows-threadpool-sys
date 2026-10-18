@@ -284,6 +284,7 @@ name = "windows-namespace-request-sys"
 version = "0.4.0"
 dependencies = [
  "io-buffers",
+ "win-authorization-sys",
  "win-error-codes",
  "windows-sys",
  "windows-thread-ambient-sys",
