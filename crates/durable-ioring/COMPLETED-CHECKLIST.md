@@ -3146,3 +3146,16 @@ and its copy deleted. What changed in the code: `SecurityCaptureError::into_sour
 open a file through a request stayed in the request crate. The request crate's own tests that built an absolute
 descriptor now build one from SDDL, since the absolute form is the new crate's to test. See
 [win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-1`.
+
+### <a id="di-1482"></a>DI-14.8.2 -- `GetSecurityInfo` as a safe query in `win-authorization-sys`. *(completed 2026-10-18 01:22:00 -04:00)*
+
+`get_security_info(handle, ObjectType, SecurityInformation)` returns an owned `SecurityDescriptor`; Windows'
+refusal comes back with its own code. Tests cover files created with ten different DACLs, a file made without a
+descriptor (owner, group and DACL), the selection of single parts, a directory, a handle without the right to
+read, a SACL without the right, a named event as a kernel object, and a descriptor outliving its handle; five
+sabotage entries, all caught, and 100 repeat runs without a failure. **Not done as written:** the item named "a
+handle that is not a securable object". Every handle measured is securable, and what stands in for it is an
+object that has no descriptor, which reads as one with no parts, and a kind Windows refuses. What was measured
+is in [win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-2`. The request crate's test that
+created files with a descriptor now reads them back through this query and no longer needs the authorization
+feature of `windows-sys`.

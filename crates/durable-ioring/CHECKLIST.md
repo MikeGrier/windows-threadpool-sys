@@ -301,9 +301,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
   - [x] **DI-14.8.1** -- `win-authorization-sys` is created and the request crate's `security` module is moved into it and re-exported. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1481)
 
-  - [ ] **DI-14.8.2** -- `GetSecurityInfo` as a safe query in `win-authorization-sys`: the descriptor of an
-    open handle, as an owned `SecurityDescriptor`. Tests cover a file, a directory and a handle that is not a
-    securable object, and the descriptor read back equals the one a created file was given.
+  - [x] **DI-14.8.2** -- `GetSecurityInfo` as a safe query in `win-authorization-sys`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1482)
 
   - [ ] **DI-14.8.3** -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask
     move into it from `win-sync-sys`, which depends on it and re-exports them at the paths they had.

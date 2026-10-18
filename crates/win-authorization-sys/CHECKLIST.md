@@ -3,8 +3,7 @@
 Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md). The crate was made by
 [DI-14.8.1](../durable-ioring/CHECKLIST.md), moving the request crate's `security` module here.
 
-- [ ] **WA-1.1** -- `GetSecurityInfo` as a safe query: the descriptor of an open handle, as an owned
-  `SecurityDescriptor`. This is [DI-14.8.2](../durable-ioring/CHECKLIST.md), which carries its tests.
+- [x] **WA-1.1** -- `GetSecurityInfo` as a safe query. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wa-11)
 
 - [ ] **WA-1.2** -- `SetSecurityInfo`, the write half of the query above, taking a `SecurityDescriptor` and
   a `SecurityInformation` that selects which parts are written. It is documented under the same Learn
