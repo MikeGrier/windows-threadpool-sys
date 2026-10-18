@@ -609,6 +609,11 @@ module within the crate".
     in a loop. A refused poll costs one extra run of the engine, and when the client's SQ is full that
     run rings the client's doorbell, which is a hint and not a proof. The failure cannot be made on
     demand, so the test holds the gate by hand.
+  - **`ReadSq::capacity` never takes the reader's lock** ([TW-10.8](CHECKLIST.md)). A `ReadDrain`
+    holds that lock for as long as it lives, and `capacity` took it too, so asking for the capacity
+    inside `for entry in sq.drain()` waited for itself for ever. The capacity never changes, so it is
+    read once when the SQ is made. `Watcher::sq_capacity` has the same pattern and is not changed
+    here: it is a published method of the watcher, outside what this branch alters.
   - **One empty ring can follow a poll-done** ([TW-10.7](CHECKLIST.md)). The engine rings the client's
     doorbell when a run ends, and the run that queued the poll-done ends after the gate has opened,
     so a client that has read the poll-done, and may have polled again, can still see one ring with
@@ -713,7 +718,8 @@ bind to them as settled.
   size is at most `u32::MAX`, the SQ's capacity is a power of two, the ring's queue sizes are
   whatever the ring accepts), and an arbitrary ceiling chosen to protect the defaults is below the
   floor. The pool allocates and zeroes every buffer when it is made, so a large count is a large
-  allocation at construction; that cost is the caller's to choose and the docs say so.- **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
+  allocation at construction; that cost is the caller's to choose and the docs say so.
+- **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on
   demand, so no test reaches `submit_queued`'s work; it is written and not exercised.

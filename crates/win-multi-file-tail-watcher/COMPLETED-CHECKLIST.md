@@ -1590,3 +1590,24 @@ it ends, after the gate has opened, so one empty ring can follow it. The integra
 by (TW-10.4); the type's documentation now states the exception, and [TW-D-16](DESIGN-NOTES.md#tw-d-16) records it.
 
 Documentation only: no code changed, so no test or sabotage entry applies. The documentation builds with the link lints denied.
+
+## Moved 2026-10-18 15:58:23 -04:00 -- TW-10.8 and TW-10.9: the fifth review's two code-adjacent findings
+
+### <a id="tw-108"></a>TW-10.8 -- `ReadSq::capacity` no longer takes the lock a `ReadDrain` holds, so asking for the capacity while draining does not wait for the drain, on the thread that holds it or on another. *(completed 2026-10-18 15:58:23 -04:00)*
+
+`ReadDrain` is a `MutexGuard` over the reader and `capacity` locked the same mutex, so `for entry in sq.drain() { sq.capacity() }`
+waited for itself for ever, in safe code, on a type that this branch made public. Confirmed by reading the code. The capacity is read
+once when the SQ is made and returned from a field. `drain`'s documentation now says a second drain on the thread that holds the first
+never returns, and that `capacity` does not wait for a drain.
+
+The test asks from threads of its own with a bound, because asked on the test's own thread a regression would deadlock the suite
+instead of failing it: my first version did exactly that, and was rewritten before it was run against the sabotage. The sabotage entry
+puts the lock back and is caught by assertion (14 s, exit 101) rather than by the hang bound.
+
+`Watcher::sq_capacity` has the identical pattern and was not changed: it is a published method of the watcher and outside what this
+branch alters. It is the same one-line fix if wanted.
+
+### <a id="tw-109"></a>TW-10.9 -- A design-notes bullet that an earlier commit joined onto the end of the one before it is on its own line again. *(completed 2026-10-18 15:58:23 -04:00)*
+
+The "short read" decision had been glued to the end of the preceding bullet's last sentence, so it rendered as text inside it. The
+file was searched for any other list marker glued to a sentence, as were the other planning documents of the crate: none.

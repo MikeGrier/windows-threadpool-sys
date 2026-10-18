@@ -189,3 +189,7 @@ initiated before the previous one completes should fail. fix all".
 - [x] **TW-10.6** -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-106)
 
 - [x] **TW-10.7** -- Two public documentation claims are corrected to what the code does: `Terminal` says its `last_known` and `win32_code` mean something different for a failed read than for a failed probe, and `TailReader` no longer promises that no wake follows a poll-done. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-107)
+
+- [x] **TW-10.8** -- `ReadSq::capacity` no longer takes the lock a `ReadDrain` holds, so asking for the capacity while draining does not wait for the drain, on the thread that holds it or on another. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-108)
+
+- [x] **TW-10.9** -- A design-notes bullet that an earlier commit joined onto the end of the one before it is on its own line again. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-109)

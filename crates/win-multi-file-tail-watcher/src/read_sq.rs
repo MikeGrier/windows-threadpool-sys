@@ -159,6 +159,9 @@ pub struct ReadSq<T> {
     // the lock is not held while one is made.
     writer: Mutex<QueueWriter<ReadEntry<T>>>,
     reader: Mutex<QueueReader<ReadEntry<T>>>,
+    // Read once, when the SQ is made, so that asking for it never takes the reader's lock, which a
+    // `ReadDrain` holds for as long as it lives.
+    capacity: usize,
     doorbell: Doorbell,
     resume: Doorbell,
 }
@@ -173,9 +176,11 @@ impl<T> ReadSq<T> {
     /// [`CreateError::Io`] when a doorbell cannot be created.
     pub(crate) fn new(capacity: usize) -> Result<Self, CreateError> {
         let (writer, reader) = queue_of(capacity)?;
+        let capacity = reader.capacity();
         Ok(Self {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
+            capacity,
             doorbell: Doorbell::new()?,
             resume: Doorbell::new()?,
         })
@@ -197,18 +202,18 @@ impl<T> ReadSq<T> {
     /// The entries in the SQ, oldest first, until there are none.
     ///
     /// Taking an entry makes room for another. Only one drain is live at a time: a second waits for
-    /// the first to drop. It never waits for the layer's writing.
+    /// the first to drop, so a second drain asked for on the thread that holds the first never
+    /// returns. It never waits for the layer's writing, and [`capacity`](Self::capacity) does not
+    /// wait for a drain.
     pub fn drain(&self) -> ReadDrain<'_, T> {
         ReadDrain(self.reader.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// How many entries the SQ holds when full.
+    /// How many entries the SQ holds when full. It never changes, and asking for it never waits,
+    /// so it may be asked for while a [`ReadDrain`] is held, including on the thread that holds it.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.reader
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .capacity()
+        self.capacity
     }
 
     /// The event the layer rings when entries are ready, the SQ is full, or a poll is done. It is
