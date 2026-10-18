@@ -16,21 +16,21 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 use windows_overlapped_io_sys::{
     Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
 };
 use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_OVERLAPPED, ReadFile, SetFileCompletionNotificationModes, WriteFile,
+    ReadFile, SetFileCompletionNotificationModes, WriteFile,
 };
-use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
 
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
@@ -39,16 +39,6 @@ use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
 /// `SetFileCompletionNotificationModes`; windows-sys does not export it.
 /// Changing this value is a breaking change.
 const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 0x1;
-
-/// Named-pipe creation flags; windows-sys exports these only as loose constants
-/// in feature-gated modules, so the two this file needs are named here.
-/// Changing either value is a breaking change.
-mod pipe_mode {
-    /// `PIPE_ACCESS_DUPLEX`.
-    pub const ACCESS_DUPLEX: u32 = 0x0000_0003;
-    /// `PIPE_TYPE_BYTE`.
-    pub const TYPE_BYTE: u32 = 0x0000_0000;
-}
 
 /// How long a test will wait for the pool to deliver expected callbacks before
 /// declaring the backend broken. Generous enough to absorb a loaded CI machine,
@@ -192,30 +182,18 @@ fn pending_pipe(tag: &str) -> (UnassociatedEndpoint, std::fs::File) {
         tag,
         std::process::id()
     );
-    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-
-    // SAFETY: creates a fresh overlapped named pipe from a valid wide name.
-    let handle = unsafe {
-        CreateNamedPipeW(
-            wide.as_ptr(),
-            pipe_mode::ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            pipe_mode::TYPE_BYTE,
-            1,
-            4096,
-            4096,
-            0,
-            ptr::null(),
-        )
+    let options = NamedPipeOptions {
+        open_mode: PipeOpenMode::ACCESS_DUPLEX | PipeOpenMode::OVERLAPPED,
+        pipe_mode: PipeMode::TYPE_BYTE,
+        max_instances: 1,
+        out_buffer_size: 4096,
+        in_buffer_size: 4096,
+        default_timeout_ms: 0,
     };
-    assert!(
-        !handle.is_null() && handle as isize != -1,
-        "CreateNamedPipeW failed: {}",
-        io::Error::last_os_error()
-    );
+    let handle = create_named_pipe(&name, &options, None).expect("create the overlapped pipe");
 
-    // SAFETY: fresh, exclusively owned, and opened with FILE_FLAG_OVERLAPPED.
-    let endpoint =
-        unsafe { UnassociatedEndpoint::assume_overlapped(OwnedHandle::from_raw_handle(handle)) };
+    // SAFETY: fresh, exclusively owned, and created with `PipeOpenMode::OVERLAPPED`.
+    let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(handle) };
 
     // Connecting a client makes a server read pend rather than fail with
     // ERROR_PIPE_LISTENING; no data is ever written, so it never completes.

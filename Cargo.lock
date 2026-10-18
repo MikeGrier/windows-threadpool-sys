@@ -387,6 +387,7 @@ dependencies = [
 name = "windows-threadpool-sys"
 version = "0.2.1"
 dependencies = [
+ "win-pipes-sys",
  "win-sync-sys",
  "win-time-sys",
  "windows-overlapped-io-sys",
