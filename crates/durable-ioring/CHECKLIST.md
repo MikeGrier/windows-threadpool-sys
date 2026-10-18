@@ -290,12 +290,33 @@ option recorded by construction. The rule throughout is documented APIs only
   (the engineer, 2026-10-17), read from [WIN32-LEARN-MAP-DATA.txt](../../WIN32-LEARN-MAP-DATA.txt):**
   `GetSecurityInfo` is documented under *Security and Identity > Authorization* and `GetHandleInformation`
   under *System Services > Windows System Information > Handles and Objects*, so they are two new crates
-  and not one, and neither is the request crate or `win-sync-sys`. Their names are the engineer's to
-  choose. The handles crate would also be where `DuplicateHandle` is documented, which `win-sync-sys` holds
-  today; moving it, and moving `SecurityDescriptor` and the SDDL conversions out of the request crate, are
-  separate items this one does not do. When they exist, `DI-14.3`'s two behavioural tests gain the read-back the
+  and not one, and neither is the request crate or `win-sync-sys`. **The engineer ruled on 2026-10-18** that
+  the two crates are `win-authorization-sys` and `win-handles-sys`, and that the function and the types
+  that belong move with them: `SecurityDescriptor`, its SDDL conversions and the rest of the request crate's
+  `security` module go to the first, and `DuplicateHandle` (`duplicate_handle_with_access` and its `Access`
+  mask) from `win-sync-sys` goes to the second, each left re-exported where it was so no caller breaks.
+  The five items below do it in dependency order. `DI-14.3`'s two behavioural tests gain the read-back the
   item asked for (the descriptor's SDDL equals the one given; the handle is not inheritable), and the
   sabotage entry for the inheritance choice gains a test that sees the handle.
+
+  - [ ] **DI-14.8.1** -- `win-authorization-sys` is created and the request crate's `security` module
+    (`SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState`, the capture errors, and
+    their tests and sabotage entries) is moved into it, moved with `git mv` so history follows. The request
+    crate depends on it and re-exports it at the paths it had. **CROSS-COMPONENT:** the moved code is in
+    [windows-namespace-request-sys](../windows-namespace-request-sys/CHECKLIST.md) today.
+
+  - [ ] **DI-14.8.2** -- `GetSecurityInfo` as a safe query in `win-authorization-sys`: the descriptor of an
+    open handle, as an owned `SecurityDescriptor`. Tests cover a file, a directory and a handle that is not a
+    securable object, and the descriptor read back equals the one a created file was given.
+
+  - [ ] **DI-14.8.3** -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask
+    move into it from `win-sync-sys`, which depends on it and re-exports them at the paths they had.
+
+  - [ ] **DI-14.8.4** -- `GetHandleInformation` as a safe query in `win-handles-sys`: whether a handle is
+    inheritable and whether it is protected from close, as a typed set of the two flags the page documents.
+
+  - [ ] **DI-14.8.5** -- `win-durable-ioring`'s `DI-14.3` tests read back through the two queries, and the
+    sabotage entry for the inheritance choice gains the test that sees the handle.
 
 - [x] **DI-14.9** -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-149)
 
