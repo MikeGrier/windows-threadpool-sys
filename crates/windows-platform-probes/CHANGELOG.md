@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026.1018.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1017.1...windows-platform-probes-v2026.1018.0) (2026-10-18)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-waitable-queues bumped from 0.1.1 to 0.1.2
+
 ## [2026.1017.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1017.0...windows-platform-probes-v2026.1017.1) (2026-10-17)
 
 
