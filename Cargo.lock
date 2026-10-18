@@ -340,6 +340,7 @@ version = "2026.1016.0"
 dependencies = [
  "serde",
  "serde_json",
+ "win-pipes-sys",
  "windows-namespace-request-sys",
  "windows-placement-probe",
  "windows-sys",

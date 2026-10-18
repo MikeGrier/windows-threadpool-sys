@@ -43,20 +43,17 @@
 
 use std::ffi::c_void;
 use std::io::Write;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, S_OK};
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use windows_sys::Win32::Foundation::{HANDLE, S_OK};
 use windows_sys::Win32::Storage::FileSystem::{
     BuildIoRingReadFile, BuildIoRingRegisterFileHandles, CloseIoRing, CreateIoRing, HIORING,
     IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_CQE, IORING_CREATE_FLAGS, IORING_HANDLE_REF,
     IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_REF_REGISTERED, IORING_VERSION_3,
     PopIoRingCompletion, SubmitIoRing,
-};
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_INBOUND};
-use windows_sys::Win32::System::Pipes::{
-    CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 
 /// How long a submit may wait for its completions.
@@ -301,33 +298,16 @@ impl PipePair {
             r"\\.\pipe\windows-platform-probes-{}-{label}-{unique}",
             std::process::id()
         );
-        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-
-        // SAFETY: `wide` is NUL-terminated and every other argument is a plain
-        // value; a null security descriptor requests the default.
-        let raw = unsafe {
-            CreateNamedPipeW(
-                wide.as_ptr(),
-                PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                1,
-                READ_LEN,
-                READ_LEN,
-                0,
-                std::ptr::null(),
-            )
+        // No security attributes are passed, which requests the default descriptor.
+        let options = NamedPipeOptions {
+            open_mode: PipeOpenMode::ACCESS_INBOUND | PipeOpenMode::OVERLAPPED,
+            pipe_mode: PipeMode::TYPE_BYTE | PipeMode::READMODE_BYTE | PipeMode::WAIT,
+            max_instances: 1,
+            out_buffer_size: READ_LEN,
+            in_buffer_size: READ_LEN,
+            default_timeout_ms: 0,
         };
-        // Both halves of the condition are ways `CreateNamedPipeW` reports
-        // failure, and it is the only call between here and the code being
-        // read, so the code belongs to it either way.
-        assert!(
-            !raw.is_null() && raw != INVALID_HANDLE_VALUE,
-            "create the probe pipe: {}",
-            std::io::Error::last_os_error()
-        );
-
-        // SAFETY: `raw` is a fresh, valid handle this type now owns solely.
-        let server = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+        let server = create_named_pipe(&name, &options, None).expect("create the probe pipe");
 
         // Opening the client end is what connects it, so no ConnectNamedPipe
         // is needed.
