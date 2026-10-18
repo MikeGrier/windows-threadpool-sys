@@ -31,7 +31,7 @@ win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
 # binding is gated on it. `Win32_Storage_FileSystem` is the open-mode flags `PIPE_ACCESS_*` and
 # `FILE_FLAG_*` and the access rights `WRITE_DAC` and `WRITE_OWNER`; `Win32_System_SystemServices` is
 # the third, `ACCESS_SYSTEM_SECURITY`. `Win32_System_Pipes` is `CreateNamedPipeW`, `ConnectNamedPipe`,
-# `DisconnectNamedPipe` and the pipe-mode flags. `Win32_System_IO` is `OVERLAPPED`, which the
+# `DisconnectNamedPipe`, `CreatePipe`, the three state calls and the pipe-mode flags. `Win32_System_IO` is `OVERLAPPED`, which the
 # overlapped connect takes.
 [dependencies.windows-sys]
 version = "0.61.2"

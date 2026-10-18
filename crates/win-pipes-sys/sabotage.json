@@ -154,6 +154,94 @@
       "why": "Declared: no argument this crate can give makes the call fail on the measuring machine (the largest size succeeds), so no test traverses the error edge. What would reach it is a condition that exhausts the system, which a unit test does not make. A failed call here would take two handles from output parameters the page calls indeterminate.",
       "find": ["    if created == FALSE {\n"],
       "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.5: the two buffer sizes are reported in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "Both are u32s in adjacent out pointers, so a swap compiles; the pipe is made with different sizes in each direction, so the report differs.",
+      "find": ["            &mut out_buffer_size,\n            &mut in_buffer_size,\n"],
+      "replace": ["            &mut in_buffer_size,\n            &mut out_buffer_size,\n"]
+    },
+    {
+      "name": "WP-1.5: a failed info call is taken for a success",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe makes the call fail, and the outputs are then zeros the caller would take for a report.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(PipeInfo {"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(PipeInfo {"]
+    },
+    {
+      "name": "WP-1.5: the server end is read from the client bit",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The client bit is zero, so every value contains it and every handle would report as the server end.",
+      "find": ["        self.contains(Self::SERVER_END)\n"],
+      "replace": ["        self.contains(Self::CLIENT_END)\n"]
+    },
+    {
+      "name": "WP-1.5: the state is read from the instance count",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "Both are u32 locals asked for together in a query, so a wrong one compiles; the instance count is one where the state is a mode.",
+      "find": ["        state: query.state.then(|| PipeMode::from_bits(state)),\n"],
+      "replace": ["        state: query.state.then(|| PipeMode::from_bits(current_instances)),\n"]
+    },
+    {
+      "name": "WP-1.5: a value that was not asked for is reported anyway",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The result says which values were requested by which are Some; reporting the instance count unasked makes the zero a local held, and not a value the call wrote, look like one.",
+      "find": ["        current_instances: query.current_instances.then_some(current_instances),\n"],
+      "replace": ["        current_instances: Some(current_instances),\n"]
+    },
+    {
+      "name": "WP-1.5: the user name is the whole buffer and not the string in it",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The call writes a NUL-terminated string into the buffer, so a name taken to the end of the buffer carries its zeros, and two capacities give two different names.",
+      "find": ["                .position(|&unit| unit == 0)\n"],
+      "replace": ["                .position(|&unit| unit == 0xffff)\n"]
+    },
+    {
+      "name": "WP-1.5: the user name capacity is not passed",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A buffer the call is told has no room is refused, so a query that asks for the name fails.",
+      "find": ["            user_name_pointer,\n            query.user_name_capacity.unwrap_or(0),\n"],
+      "replace": ["            user_name_pointer,\n            0,\n"]
+    },
+    {
+      "name": "WP-1.5: the new mode is not passed",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The state is read back after each set, so a mode that was dropped leaves the old one.",
+      "find": ["            optional(&mode),\n"],
+      "replace": ["            ptr::null(),\n"]
+    },
+    {
+      "name": "WP-1.5: a failed set is taken for a success",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A message read mode for a byte pipe is refused by the call, and the test expects the refusal.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"]
+    },
+    {
+      "name": "WP-1.5: the collection count and the timeout are set in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a local test could close: the call refuses either on a pipe whose client and server are on the same computer, with the same error, so a swap is not observable without a remote server. What would reach it is a client of a pipe on another computer.",
+      "find": ["            optional(&max_collection_count),\n            optional(&collect_data_timeout),\n"],
+      "replace": ["            optional(&collect_data_timeout),\n            optional(&max_collection_count),\n"]
+    },
+    {
+      "name": "WP-1.5: the collection count and the timeout are read in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "survives",
+      "why": "Declared, for the reason the set side is: the call refuses both on a local pipe, so no local query returns either value, and a swapped pair of pointers is not observable.",
+      "find": ["            out(query.max_collection_count, &mut max_collection_count),\n            out(query.collect_data_timeout, &mut collect_data_timeout),\n"],
+      "replace": ["            out(query.max_collection_count, &mut collect_data_timeout),\n            out(query.collect_data_timeout, &mut max_collection_count),\n"]
     }
   ]
 }

@@ -7,6 +7,7 @@
 mod anonymous_pipe;
 mod connect;
 mod named_pipe;
+mod pipe_state;
 
 pub use anonymous_pipe::{AnonymousPipe, create_pipe};
 pub use connect::{
@@ -14,3 +15,7 @@ pub use connect::{
     disconnect_named_pipe,
 };
 pub use named_pipe::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+pub use pipe_state::{
+    PipeHandleState, PipeInfo, PipeInfoFlags, PipeStateQuery, PipeStateUpdate,
+    get_named_pipe_handle_state, get_named_pipe_info, set_named_pipe_handle_state,
+};

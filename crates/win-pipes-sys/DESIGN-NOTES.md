@@ -125,3 +125,55 @@ and did not return for some size in its list, which is the page's account of a f
 own thread, and which sizes held the write was not recorded. After the write end is dropped a read reads zero bytes, which `File` reports as the end of the stream;
 after the read end is dropped a write fails with `ErrorKind::BrokenPipe`; a write on the read end and a read on the
 write end both fail.
+
+## <a id="wp-d-4"></a>WP-D-4: the state calls take the caller's request and return what was asked, because the pages make some optional outputs an error
+
+The engineer, 2026-10-18, "implement wp-1.5". Pages read the same day: `GetNamedPipeInfo` and
+`SetNamedPipeHandleState`, `ms.date` 12/05/2018, and `GetNamedPipeHandleStateW`, `ms.date` 08/05/2022.
+
+**`get_named_pipe_info` asks for everything.** All four of its outputs are optional and none is an error to ask
+for, so it requests all four and returns a `PipeInfo` with the flags and the three numbers as the call gave them. The
+flags are `PipeInfoFlags`, a bit set for the reason `PipeMode` is one; two of the page's four values are zero, so
+`is_server_end` and `is_message_type` are the questions a value can answer, as the page words them ("if this value
+is not specified, the handle refers to the client end").
+
+**`get_named_pipe_handle_state` does not ask for everything.** The page says the collection count and the timeout
+"must be NULL if the specified pipe handle is to the server end of a named pipe or if client and server processes
+are on the same computer", and the user name "must be NULL if the specified pipe handle is to the client end", so a
+call that asked for all of it would fail on every local pipe. The caller says what to ask for in a `PipeStateQuery`,
+nothing by default, and the result has `Some` for what was asked and `None` for the rest. A caller who asks for what
+the call refuses gets the call's error and not a refusal from the crate, which would be this crate's narrowing of a
+condition the page states and the call enforces.
+
+**The user name is a capacity the caller gives.** The page gives the buffer's size in "TCHARs" and no figure. The
+query carries the capacity in UTF-16 units, the result carries the string up to its first NUL, and a capacity that
+does not hold it is the call's error. This crate does not choose a size for the caller.
+
+**The state is `PipeMode`.** `lpState` holds `PIPE_NOWAIT` and `PIPE_READMODE_MESSAGE`, which `PipeMode` already
+names, and `lpMode` of the set takes the same two kinds of flag. The set passes the bits as given: a bit that is not a
+read or wait mode is the call's refusal.
+
+**The set is a struct of options.** `PipeStateUpdate` has three optional fields, two of them `u32`, which positional
+`Option` arguments would leave to be told apart by order; nothing is changed by default.
+
+**Observed on 2026-10-18, Windows 11 build 26300, local, unelevated, and not a ruling.**
+
+- The read end of an anonymous pipe reports as the server end and the write end as the client end; the default buffer
+  size, a `CreatePipe` size of zero, is reported as 4096 in both directions, where a named pipe made with zero reports
+  zero.
+- The user name of a client that asked for `SECURITY_IMPERSONATION`, and of one that asked for no quality of
+  service, is returned once the client has written and the server has read. Before that, for the second the call fails
+  with `ERROR_CANNOT_IMPERSONATE` (1368), and for the first it succeeded. A client that asked for `SECURITY_ANONYMOUS`
+  is refused after the read.
+- A capacity equal to the name's length in units is refused with `ERROR_INSUFFICIENT_BUFFER` (122); one more is
+  accepted.
+- A client of a message pipe begins in byte-read mode while the server end begins in the mode it was made with; the
+  mode of each handle is its own.
+- The mode bits `PIPE_TYPE_MESSAGE` and `PIPE_REJECT_REMOTE_CLIENTS` given to the set are refused with
+  `ERROR_INVALID_PARAMETER`.
+- A client opened read-only without `FILE_WRITE_ATTRIBUTES` is refused by the set with `ERROR_ACCESS_DENIED`, as the
+  page says. The page's matching condition for the info call on a write-only pipe was not seen to fail without
+  `FILE_READ_ATTRIBUTES`, and only the satisfied direction is tested.
+
+**Not reached.** The two collection values are returned and set only for a client of a pipe on another computer, which
+nothing here has. The two sabotages that exchange their pointers are declared survivors. What would reach them is a remote server, and a consumer with one would measure them there.

@@ -21,11 +21,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-use windows_sys::Win32::System::Pipes::{
-    GetNamedPipeHandleStateW, GetNamedPipeInfo, PIPE_SERVER_END,
-};
 
 use super::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use crate::{PipeInfoFlags, PipeStateQuery, get_named_pipe_handle_state, get_named_pipe_info};
 
 const FILE_SHARE_ALL: u32 = 7;
 
@@ -281,52 +279,21 @@ fn a_dropped_server_end_deletes_the_instance() {
 
 // --- What the pipe mode did -----------------------------------------------------------------
 
-/// What `GetNamedPipeInfo` reports as the pipe's flags.
-fn info_flags(pipe: &OwnedHandle) -> u32 {
-    let mut flags = 0u32;
-    // SAFETY: the handle is open for the call and `flags` is a valid out pointer; the other four
-    // are optional and null.
-    let ok = unsafe {
-        GetNamedPipeInfo(
-            pipe.as_raw_handle(),
-            &mut flags,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    assert_ne!(
-        ok,
-        0,
-        "GetNamedPipeInfo: {}",
-        std::io::Error::last_os_error()
-    );
-    flags
+/// What `get_named_pipe_info` reports as the pipe's flags.
+fn info_flags(pipe: &OwnedHandle) -> PipeInfoFlags {
+    get_named_pipe_info(pipe).expect("the info").flags
 }
 
-/// What `GetNamedPipeHandleStateW` reports as the handle's state.
-fn handle_state(pipe: &OwnedHandle) -> u32 {
-    let mut state = 0u32;
-    // SAFETY: the handle is open for the call and `state` is a valid out pointer; the rest are
-    // optional and null, and a null user name needs a zero length.
-    let ok = unsafe {
-        GetNamedPipeHandleStateW(
-            pipe.as_raw_handle(),
-            &mut state,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-        )
+/// What `get_named_pipe_handle_state` reports as the handle's state.
+fn handle_state(pipe: &OwnedHandle) -> PipeMode {
+    let query = PipeStateQuery {
+        state: true,
+        ..PipeStateQuery::default()
     };
-    assert_ne!(
-        ok,
-        0,
-        "GetNamedPipeHandleStateW: {}",
-        std::io::Error::last_os_error()
-    );
-    state
+    get_named_pipe_handle_state(pipe, &query)
+        .expect("the state")
+        .state
+        .expect("the state asked for")
 }
 
 #[test]
@@ -338,16 +305,16 @@ fn the_type_and_the_read_and_wait_modes_reach_the_pipe() {
     let pipe = create_named_pipe(unique_name("message"), &message, None).expect("a message pipe");
     assert_eq!(
         info_flags(&pipe),
-        PIPE_SERVER_END | PipeMode::TYPE_MESSAGE.bits()
+        PipeInfoFlags::SERVER_END | PipeInfoFlags::TYPE_MESSAGE
     );
     assert_eq!(
         handle_state(&pipe),
-        (PipeMode::READMODE_MESSAGE | PipeMode::NOWAIT).bits()
+        PipeMode::READMODE_MESSAGE | PipeMode::NOWAIT
     );
 
     let byte = create_named_pipe(unique_name("byte"), &byte_duplex(), None).expect("a byte pipe");
-    assert_eq!(info_flags(&byte), PIPE_SERVER_END);
-    assert_eq!(handle_state(&byte), 0);
+    assert_eq!(info_flags(&byte), PipeInfoFlags::SERVER_END);
+    assert_eq!(handle_state(&byte), PipeMode::default());
 }
 
 // --- The security attributes ----------------------------------------------------------------

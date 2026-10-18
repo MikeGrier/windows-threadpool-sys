@@ -19,6 +19,11 @@ Communications > Pipes*. Thin over Win32, adding no policy.
 - `create_pipe` is `CreatePipe`: it creates an anonymous pipe and returns the two ends as an `AnonymousPipe` with
   `read` and `write` fields, each an `OwnedHandle`. The one attributes parameter applies to both ends. See
   [WP-D-3](DESIGN-NOTES.md#wp-d-3).
+- `get_named_pipe_info`, `get_named_pipe_handle_state` and `set_named_pipe_handle_state` are `GetNamedPipeInfo`,
+  `GetNamedPipeHandleStateW` and `SetNamedPipeHandleState`. The state read asks only for what a `PipeStateQuery`
+  names, because the pages make some of the call's optional outputs an error on some pipes; the state set changes
+  only what a `PipeStateUpdate` carries. The modes in and out are `PipeMode`. See
+  [WP-D-4](DESIGN-NOTES.md#wp-d-4).
 
 The area has more in it: the rest of the *Pipe Functions* the section lists (`PeekNamedPipe` and the
 others) are queued in [CHECKLIST.md](CHECKLIST.md), and are not here yet.

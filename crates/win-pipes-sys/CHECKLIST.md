@@ -15,8 +15,7 @@ Functions* Microsoft Learn lists under *System Services > Interprocess Communica
 
 - [x] **WP-1.4** -- `CreatePipe`, the anonymous pipe, returning the two ends as owned handles. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-14)
 
-- [ ] **WP-1.5** -- `GetNamedPipeInfo`, `GetNamedPipeHandleState` and `SetNamedPipeHandleState`, taking and
-  returning the typed modes, so the tests of this crate that read them through raw calls can stop.
+- [x] **WP-1.5** -- `GetNamedPipeInfo`, `GetNamedPipeHandleStateW` and `SetNamedPipeHandleState`, taking and returning the typed modes. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wp-15)
 
 - [ ] **WP-1.6** -- `PeekNamedPipe`, `TransactNamedPipe`, `CallNamedPipe` and `WaitNamedPipe`, the operations on a
   connected pipe and on a name.

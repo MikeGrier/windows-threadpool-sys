@@ -49,3 +49,10 @@ port's `Issued::Pending` and an already connected client to `ERROR_PIPE_CONNECTE
 `create_pipe` and `AnonymousPipe`, with `read` and `write` fields. Why a struct, why one attributes parameter serves
 both ends, and the error edge no test reaches are [WP-D-3](DESIGN-NOTES.md#wp-d-3). Four sabotages, two of them
 declared survivors.
+
+### <a id="wp-15"></a>WP-1.5 -- `GetNamedPipeInfo`, `GetNamedPipeHandleStateW` and `SetNamedPipeHandleState`, taking and returning the typed modes. *(completed 2026-10-18 18:45:44 -04:00)*
+
+`get_named_pipe_info` with `PipeInfo` and `PipeInfoFlags`; `get_named_pipe_handle_state` with `PipeStateQuery` and
+`PipeHandleState`; `set_named_pipe_handle_state` with `PipeStateUpdate`. The three raw reads in this crate's own
+`create_named_pipe` tests now go through them. Why the state read takes a request, the user name's capacity, and what
+was observed are [WP-D-4](DESIGN-NOTES.md#wp-d-4). Eleven sabotages, two of them declared survivors.
