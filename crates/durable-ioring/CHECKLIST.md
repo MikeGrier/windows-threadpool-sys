@@ -250,36 +250,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.3** -- Creation attributes (`FileAttributes`), a security descriptor on the request, and no inheritance. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#di-143)
 
-- [ ] **DI-14.4** -- **The open's arguments are refused where the documented contract calls them invalid,
-  and nowhere else on the platform's account.** Re-planned 2026-10-18 under
-  [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract), which the
-  engineer ruled for the whole repository after this item, as first written, would have refused what the
-  kernel refused on this machine. It was "refused where the kernel refuses them". Split 2026-10-18 into
-  three, because the reading pass decides the size of the rest, and because moving a measurement out of
-  the check cannot be separated from the check (a refused combination can no longer be opened through
-  `OpenedFile` to measure it):
-
-  - [x] **DI-14.4.1** -- The reading pass: every condition the pages state on the open's arguments, sorted and cited. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1441)
-
-  - [ ] **DI-14.4.2** -- **The check, and the measurements moved to evidence, once the engineer has ruled.**
-    The reading pass found no condition of the first kind that `OpenedFile`'s v1 surface can express: each
-    one is already unrepresentable ([DI-D-64](DESIGN-NOTES.md#di-d-64), "What the reading pass of
-    DI-14.4.1 found"). It also found that the two conditions this item was expected to refuse --
-    delete-on-close without the right to delete, and the append right with no-buffering -- are stated on
-    `ZwCreateFile`'s page and not on any page `CreateFileW` is governed by. **For the engineer:** does a
-    documented condition of the layer below (`ZwCreateFile`, which this repository does not call) count as
-    the contract of the call that is made? If not, this item has nothing to build and is closed recording
-    that. If so, those two become rows of the check: one pure function of the options, the buffering mode
-    and the data access, called by `OpenedFile::request` before anything touches the system, over a table
-    whose rows carry the predicate, the kind and the citation, refusing with a typed error that names the
-    citation, tested in memory; and in the same commit the measurements of the two are moved to evidence
-    tests through the request crate, and `DI-14.2`'s "not refused for want of the right to delete" is
-    reversed with its documentation and tests.
-
-  - [ ] **DI-14.4.3** -- **For the engineer:** whether this crate chooses not to support
-    `FILE_ATTRIBUTE_TEMPORARY` on an unbuffered file. The page is silent on the pair, so it is not a
-    contract refusal; the question is whether `SharedDevice`, which is not demonstrated for it, is a
-    reason to narrow. If it is, the refusal is a row of `DI-14.4.2`'s table of the narrowing kind.
+- [x] **DI-14.4** -- The open's arguments, read against the documented contract: no condition `OpenedFile` can express is invalid, so no check is built. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-144)
 
 - [x] **DI-14.5** -- The remote-device check is made on the opened handle, and nowhere else. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-145)
 
@@ -312,18 +283,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.10** -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1410)
 
-- [ ] **DI-14.11** -- **For the engineer: a volume opened without sharing writes.** Found by
-  [DI-14.4.1](COMPLETED-CHECKLIST.md#di-1441)'s reading. The `CreateFileW` page's "Physical Disks and
-  Volumes" section says that "When opening a volume or floppy disk, the *dwShareMode* parameter must have the
-  `FILE_SHARE_WRITE` flag". For `OpenedVolume` the path is a volume by its type, so this is a condition on
-  the arguments, and under [the documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)
-  a share mode without `FILE_SHARE_WRITE` is refused ahead of the open, `ShareMode::NONE` included -- although
-  [DI-13.12](COMPLETED-CHECKLIST.md#di-1312) measured the exclusive open succeeding elevated, and
-  [DI-13.11](COMPLETED-CHECKLIST.md#di-1311) offered it. The engineer rules whether the page wins here as
-  the rule says, which removes the exclusive volume open and leaves the lock as the way to hold a volume
-  alone. If so: the refusal is a row of the check `DI-14.4.2` describes, built for the device open, with the
-  exclusive-volume test turned into evidence and `VolumeOptions::share`'s documentation swept. The section
-  states no share-mode requirement for a physical disk, so `OpenedDisk` is unaffected.
+- [x] **DI-14.11** -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1411)
 
 ## DI-M15 -- Opening by identity, and reopening
 

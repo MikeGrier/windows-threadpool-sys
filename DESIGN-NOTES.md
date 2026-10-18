@@ -3790,8 +3790,15 @@ is refused before one.
    repository may refuse it before the call. Each such refusal carries its citation -- the page, the condition
    as the page states it, and the date it was read -- and is written only after the sentence has been read
    again, not recalled. When the page changes, the refusal is changed on purpose, never discovered by a test.
-   This holds where the kernel is more lenient than the page: the contract is refused even if this machine
-   accepts it.
+   **Amended by the engineer, 2026-10-18:** "If we have evidence that the documentation is wrong, I believe
+   the remedy is to not embody the documentation structurally. This is unfortunate." So a documented
+   condition that a measurement contradicts -- the platform accepts what the page calls invalid -- is not
+   refused; the discrepancy is documented beside the condition and pinned by the evidence test that shows it.
+   (This replaces the first wording, that the page was refused even where this machine accepted it.)
+   **Only the call's own pages are its contract.** A condition stated for a lower layer this repository does
+   not call -- `ZwCreateFile` beneath `CreateFileW`, for instance -- is not direct evidence of the upper
+   call's contract (the engineer, 2026-10-18); it is a good lead for an experiment whose findings are then
+   documented as such.
 2. **Our own narrowing.** Where a combination leads to behaviour a component does not support, it is refused as
    early as the information to judge it exists, and named as the component's choice -- a separate error kind
    from (1), since a narrowing is revisable and a contract refusal moves only when the contract does. It does
@@ -3799,7 +3806,9 @@ is refused before one.
 3. **The platform's own refusal.** Everything else reaches the call, and its error reaches the caller as the
    platform gave it, refined into a typed error after the fact where the code is specific enough.
 4. **Never a refusal: a measurement.** Behaviour discovered by running is anecdote. It is documented, and pinned
-   by an evidence test so that a change is seen, but it is not a validation path, in either direction.
+   by an evidence test so that a change is seen, but it never creates a refusal. It can only withhold one: a
+   measurement that shows the documentation wrong keeps the documented condition from being embodied, as (1)
+   says.
 
 **What a check ahead of the call can judge.** Only a condition on the arguments alone. A condition on the
 target -- whether a file exists, which file system or device it is on, whether it is local, the caller's token,

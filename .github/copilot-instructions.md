@@ -204,15 +204,19 @@ reasoning are in [DESIGN-NOTES.md](../DESIGN-NOTES.md#refusals-rest-on-the-docum
 
 - **Refuse ahead of the call only what a page calls invalid, on the arguments alone**, and carry the
   citation (page, condition, date read). Re-read the sentence before writing the refusal; a recalled
-  citation is not one. Where the kernel is more lenient than the page, the page wins.
+  citation is not one. Only the call's own pages count: a lower layer's page (`ZwCreateFile` beneath
+  `CreateFileW`) is a lead for an experiment, not the contract.
+- **Evidence that the page is wrong withholds the refusal.** Where a measurement shows the platform
+  accepting what the page calls invalid, do not embody the condition; document the discrepancy beside
+  it and keep the evidence test (the engineer, 2026-10-18).
 - **A condition on the target is the call's to judge** -- existence, file system, device, local or
   remote, token, sharing. Checking it first is a guess or a second open with a race between them.
 - **Our own narrowing is refused as ours**, with an error kind distinct from a contract refusal, and
   never framed as predicting the platform's rejection.
 - **"Self-defeating", "ignored", "has no effect", and ambiguous sentences are not invalidity.** They
   pass through and are documented.
-- **What a run showed goes in documentation and an evidence test**, and never into a check -- not when
-  the kernel refused something the page allows, and not when it allowed something the page forbids.
+- **What a run showed goes in documentation and an evidence test**, and never creates a check -- not
+  even when the kernel refused something the page allows. It can only withhold one, as above.
 - **Default mechanism:** one pure check at the build step over a table of (predicate, kind, citation),
   tested in memory. Make a condition structural only on a type parameter the component already has; do
   not add a type parameter for a flag.

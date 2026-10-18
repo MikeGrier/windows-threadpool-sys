@@ -3230,3 +3230,35 @@ no-buffering, are on `ZwCreateFile`'s page and not on any page `CreateFileW` is 
 corrected, and whether the lower layer's conditions count is asked in [DI-14.4.2](CHECKLIST.md). The volume
 section's requirement of `FILE_SHARE_WRITE` is a condition on `OpenedVolume`'s arguments that its share option
 does not honour, raised as [DI-14.11](CHECKLIST.md).
+
+### <a id="di-1442"></a>DI-14.4.2 -- No check ahead of `OpenedFile`'s open: a lower layer's page is not the call's contract. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The engineer ruled on 2026-10-18 that `ZwCreateFile`'s page "is not direct evidence" of `CreateFileW`'s contract,
+though it is "good evidence to use for an experiment". With the reading pass having found every other documented
+condition unrepresentable, there is nothing to check, and nothing was built. Delete-on-close without `DELETE` and
+the append right with no-buffering stay what they were measured to be, evidence and not checks. The rule is
+amended to say so ([DESIGN-NOTES.md](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
+
+### <a id="di-1443"></a>DI-14.4.3 -- `FILE_ATTRIBUTE_TEMPORARY` on an unbuffered file is supported. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The engineer, 2026-10-18: "I think we should support it." The pages are silent on the pair, so it was never a
+contract refusal; the assistant had raised it as a possible narrowing because the warranty was not demonstrated
+for it, and there is no analytic ground for that: the attribute concerns when cached data is written back, and an
+epoch's durability comes from the flush this crate issues. No code changed; the attribute was already offered.
+
+### <a id="di-144"></a>DI-14.4 -- The open's arguments, read against the documented contract: no condition `OpenedFile` can express is invalid, so no check is built. *(completed 2026-10-18 15:26:12 -04:00)*
+
+Re-planned under the documented-contract rule and split in three: [DI-14.4.1](#di-1441) (the reading pass),
+[DI-14.4.2](#di-1442) (no check, ruled) and [DI-14.4.3](#di-1443) (`TEMPORARY` supported, ruled). As first written
+the item would have refused what the kernel refused on this machine. What it produced is a sorted, cited list of
+every condition the pages state on the open's arguments, in [DI-D-64](DESIGN-NOTES.md#di-d-64); two corrected
+citations; the conditions that return with `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, recorded on
+[DI-6+.11](CHECKLIST.md); and [DI-14.11](#di-1411).
+
+### <a id="di-1411"></a>DI-14.11 -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The `CreateFileW` page says a volume open "must have the `FILE_SHARE_WRITE` flag"; `DI-13.12`'s elevated test
+opened a volume exclusively and was refused a second open until it closed. The engineer's amendment of
+2026-10-18 settles it: "If we have evidence that the documentation is wrong, I believe the remedy is to not embody
+the documentation structurally." `VolumeOptions::share` keeps every mode, and its documentation quotes the page and
+names the test; the test's comment says it is that evidence.

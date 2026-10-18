@@ -196,7 +196,7 @@ for this table.
 | `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back. | assistant |
 | `dwCreationDisposition` (CF) | Exposed, **narrowed for v1** | An enum of `CREATE_NEW`, `OPEN_EXISTING` and `OPEN_ALWAYS`. **`CREATE_ALWAYS` and `TRUNCATE_EXISTING` are excluded for v1 and are to be revisited** ([DI-6+.11](CHECKLIST.md)) | Three of the call's five: the three that never change or empty a file that exists, so no data access is gated by the disposition. The two left out are unrepresentable, so nothing is refused at run time on their account. `create`, `create_new` and `truncate` go, and with them the `OPEN_ALWAYS` plus an emptying that [DI-D-63](#di-d-63) used; a caller empties a file through the lent handle. What an answer to the two needs is measured below. | engineer 2026-10-15 (the five); engineer 2026-10-16 (the two left out for v1, "just to simplify the matrix", to be revisited at a later date) |
 | `FILE_ATTRIBUTE_ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` (CF) | Exposed | Members of the attributes set, for a created file | None. The page says an existing file's attributes are generally combined with the flags and the supplied attributes ignored, and says applications should not change `OFFLINE` arbitrarily. `ID` ignores attributes and `RO` cannot take them, so those entries have none. | plan, [DI-14.3](CHECKLIST.md) |
-| `FILE_ATTRIBUTE_TEMPORARY` (CF) | Exposed | Member | The page says it lets a file system hold data in the cache and avoid writing it back while memory allows, which is within `BestEffort` for a cached file. For an unbuffered file the page does not say what it does, so the pair is not a contract refusal; whether this crate chooses not to support it, since the class `SharedDevice` is not demonstrated for it, is the engineer's question in [DI-14.4](CHECKLIST.md). | standing |
+| `FILE_ATTRIBUTE_TEMPORARY` (CF) | Exposed | Member | The page says it lets a file system hold data in the cache and avoid writing it back while memory allows, which is within `BestEffort` for a cached file. For an unbuffered file the pages do not say what it does, so the pair is not a contract refusal, and it is **supported** (the engineer, 2026-10-18, [DI-14.4.3](COMPLETED-CHECKLIST.md#di-1443)): the attribute concerns when cached data is written back, and an epoch's durability here comes from the flush this crate issues, never from write-back timing, so there is no analytic ground to narrow. | standing |
 | `FILE_ATTRIBUTE_NORMAL` (CF) | Not a member | The empty set | The page says it is valid only alone and that any other attribute overrides it, so it is the absence of attributes and not one. What is passed for an empty set, zero or `NORMAL`, and whether it matters, is for [DI-14.3](CHECKLIST.md)'s tests. | engineer 2026-10-16; assistant |
 | `FILE_ATTRIBUTE_ENCRYPTED` (CF) | Excluded | None | It brings a set of certificate problems this crate does not take on; the page says it is not supported on every edition. | engineer 2026-10-15 |
 | `FILE_FLAG_NO_BUFFERING` (CF, ID, RO) | Exposed | The buffering type, `Unbuffered` | It is the type, not a separate option: the class `SharedDevice`, a sector's alignment of offset, length and buffer, per-write write-through, and a local device only. | [DI-D-60](#di-d-60) |
@@ -460,7 +460,7 @@ about the arguments; each hint "has no effect if the file system does not suppor
 `FILE_FLAG_NO_BUFFERING`", which reads two ways and depends on the file system; `FILE_FLAG_WRITE_THROUGH` and
 `FILE_FLAG_NO_BUFFERING` "are independent and may be combined"; no-buffering with overlapped, a statement
 about performance; `FILE_ATTRIBUTE_TEMPORARY`, of which the pages say what it does to caching and say nothing
-about an unbuffered file ([DI-14.4.3](CHECKLIST.md)); and `FILE_APPEND_DATA` without `FILE_WRITE_DATA`, which
+about an unbuffered file, supported ([DI-14.4.3](COMPLETED-CHECKLIST.md#di-1443)); and `FILE_APPEND_DATA` without `FILE_WRITE_DATA`, which
 the rights page says changes what a write does, not that it is invalid.
 
 *Two conditions this crate had attributed to the `CreateFileW` pages are not on them.* That delete-on-close
@@ -472,19 +472,22 @@ the *DesiredAccess* parameter's FILE_APPEND_DATA flag". This crate opens through
 the call's own contract, the rule makes neither a contract refusal: what `CreateFileW` does with its flags
 on the way down is not documented on its pages, so the lower call's conditions describe the layer below and
 not the call. The measurements stay what they were, as anecdote: delete-on-close is taken without the right
-to delete, and `FILE_ALL_ACCESS` is refused unbuffered with `ERROR_INVALID_PARAMETER`. Whether a documented
-lower layer's conditions should count is the engineer's to rule, and is asked in
-[DI-14.4.2](CHECKLIST.md); until then nothing is refused on their account.
+to delete, and `FILE_ALL_ACCESS` is refused unbuffered with `ERROR_INVALID_PARAMETER`. **Ruled by the
+engineer, 2026-10-18 ([DI-14.4.2](COMPLETED-CHECKLIST.md#di-1442)):** the lower layer's page "is not direct
+evidence", and is "good evidence to use for an experiment" whose findings are documented as such. Nothing is
+refused on its account, so `OpenedFile`'s open has no check ahead of it.
 
 *Outside `OpenedFile`:* the "Physical Disks and Volumes" section says that "When opening a volume or floppy
 disk, the *dwShareMode* parameter must have the `FILE_SHARE_WRITE` flag", and that the disposition must be
 `OPEN_EXISTING`. For `OpenedVolume` the path is a volume by its type, so this is a condition on its
 arguments, and `VolumeOptions::share` offers modes without `FILE_SHARE_WRITE`, including `ShareMode::NONE`,
 which [DI-13.12](COMPLETED-CHECKLIST.md#di-1312) measured succeeding elevated. The disposition is already
-`OPEN_EXISTING`, since the device open uses `std`'s with no create option. Under the rule the page wins
-over the measurement; that reverses a surface the engineer asked for, so it is raised in
-[DI-14.11](CHECKLIST.md) and not changed here. The section states no share-mode requirement for a physical
-disk.
+`OPEN_EXISTING`, since the device open uses `std`'s with no create option. **Settled by the engineer's
+amendment of 2026-10-18 ([DI-14.11](COMPLETED-CHECKLIST.md#di-1411)):** "If we have evidence that the
+documentation is wrong ... the remedy is to not embody the documentation structurally." `DI-13.12`'s
+exclusive-volume test is that evidence, so the share option stays as it is, and `VolumeOptions::share`
+documents the page's requirement and the measurement beside it. The section states no share-mode requirement
+for a physical disk.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
