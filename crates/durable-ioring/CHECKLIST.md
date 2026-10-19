@@ -280,13 +280,6 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-15.2** -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-152)
 
-- [ ] **DI-15.3** -- **Opening relative to a directory handle: confirm there is no documented route,
-  then record what stands in for it.** The assistant knows of no documented Win32 call that opens a
-  name relative to a directory handle; the only one it knows is `NtCreateFile` with a root directory,
-  which is out under the repository's rule. That is a reading to verify against the documentation and
-  not a finding. If it holds, the decision records it and names the substitute: list the directory,
-  take the child's ID, open it by ID (`DI-15.2`). If a documented route exists, it is an item here.
-
 - [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2, A2>` from an
   owned one **or from any handle** ([DI-D-68](DESIGN-NOTES.md#di-d-68): the route for a handle opened elsewhere, since the new
   handle's mode is this crate's choice; the residue it cannot convert is `DI-10.6`), changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
@@ -522,3 +515,27 @@ implementation before it is answerable.
   [WS-1+.3](../win-sync-sys/CHECKLIST.md). Working position, not a decision: each is a change to a crate that
   is not this one, and what the seam should look like is shaped by the first failure it has to produce.
   Gated on a consumer, or this crate's own review, wanting those paths tested.
+
+## DI-M-inf -- The horizon (parked, no gating deliverable)
+
+- [ ] **DI-15.3** -- **Opening relative to a directory handle.** **Deferred by the engineer, 2026-10-19: "let's
+  defer any relative opening work at this time."** Parked from `DI-M15` with no gate; it is picked up when the
+  engineer brings it back. The item as written: confirm that no documented Win32 call opens a name relative to a
+  directory handle (the only route the assistant knows is `NtCreateFile` with a root directory, which the
+  repository's rule forbids), and if none does, record the substitute: list the directory through its handle, take
+  the child's identity, and open it by identity ([DI-15.2](COMPLETED-CHECKLIST.md#di-152)). What was found before
+  the deferral, so it is not redone:
+  - `GetFileInformationByHandleEx` takes the handle, the class, the buffer and its size, and nothing else, so its
+    directory classes (`FileIdExtdDirectoryInfo` and its restart form) return every entry and cannot be narrowed to
+    a name. `windows-file-enumeration-sys` filters after the read, by its own compiled patterns.
+  - `FindFirstFileExW` takes a name with wildcards, but by path, which walks the directory's name again and so
+    reopens the race a relative open exists to avoid. `NtQueryDirectoryFile`, which filters on a handle, is an
+    `Nt*` call.
+  - The substitute differs from `openat` in three ways a decision would have to state: it pins the object found
+    when the directory was listed, not the one the name reaches at the open; it cannot create a file, since
+    `OpenFileById` has no disposition; and finding one name costs reading entries until it appears, the whole
+    directory at worst.
+  - Not yet checked against the documentation: `CreateFile2`'s extended parameters, and the documented `FSCTL_*`
+    controls. A directory opens by identity without the backup flag ([DI-D-70](DESIGN-NOTES.md#di-d-70)), which
+    [DI-15.5](#di-m15----opening-by-identity-and-reopening) is to rule on, and which decides whether the substitute
+    reaches directories.
