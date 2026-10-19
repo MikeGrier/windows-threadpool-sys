@@ -478,11 +478,11 @@ figures predate a correction to the probe's timing window, which timed from the
 coordinator's clock rather than the producers' own and overstated throughput by a
 margin that grew with producer count; and neither of those machines is available
 here to retake them. The ARM64 data point is therefore gone rather than stale,
-which is the lesser of the two problems. Nothing currently restores it: the probe
-crate's CI job runs on an ARM64 runner since its
-[M2.15](../windows-platform-probes/COMPLETED-CHECKLIST.md#m215), but
-`probe-queue-contention` is deliberately not in that job -- see its
-[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md).
+which is the lesser of the two problems. The probe crate's CI job now runs
+`probe-queue-contention` on an ARM64 runner at 1, 2 and 4 producers in every build
+-- see its [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-coherence-probes-in-ci)
+-- so an ARM64 reading is in each build's log; the table above still has no ARM64
+column, because a hosted runner's log is not an attributed capture.
 
 That comparison did carry one finding worth keeping, because it was structural
 rather than numeric: it was designed on the assumption that `slotwise_mpsc` would
