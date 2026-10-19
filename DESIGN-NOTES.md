@@ -2822,36 +2822,41 @@ backstop. The layers, cheapest first, are the items from
 
 - Every entry's patch is checked against the source on every push, with no build, since a patch
   the code has moved away from needs nothing else to find.
-- The post-merge sweep plans only the manifests of crates the change touched, or that build on one
-  it touched; an input every sweep shares selects all of them. A manifest whose crate builds on a
-  changed crate takes every entry, since a change below can alter what any test above observes. So
-  does a manifest whose ``testArgs`` also runs another package's tests, when that package or one it
-  builds on changes: the durable-ioring core is swept with its Windows driver's tests, and some of
-  its defects only those catch.
-- Within a manifest, an entry runs when it is new or changed, when the file it patches changed, or
-  when a test that caught it last time changed or is gone. An entry with no record of what caught
-  it, or caught by a doctest, runs whenever its crate changed: telling a test file from source by
-  its path is guesswork here, and a doctest can come from a file spliced into the documentation.
+- The post-merge sweep plans only the manifests a change could have reached, and within each, only
+  the entries. A manifest takes every entry when the change touched an input every sweep shares
+  (the workspace manifest and lockfile, the toolchain, the sabotage tools, the sweep workflow, and
+  `win-job-launcher`, which supervises every sweep); a crate its crate builds on; another package
+  whose tests it runs, or one that builds on; its crate's own build settings (`Cargo.toml`,
+  `build.rs`, `.cargo/`), which can switch a test off without touching it; or its own settings. A
+  manifest's `testArgs` replace `test -p <package>`, so the packages it runs are the ones they name,
+  and with none named, every crate in the workspace: the durable-ioring core is swept with its
+  Windows driver's tests, which catch some of its defects alone, and `windows-file-watcher`'s
+  manifest names no package at all.
+- Within a manifest reached only through its own crate, an entry runs when it is new or changed,
+  when the file it patches changed, or when a test that caught it last time changed or is gone --
+  a file that defines it now, or did before the change. An entry with no record of what caught it,
+  or caught by a doctest, runs whenever its crate changed: telling a test file from source by its
+  path is guesswork here, and a doctest can come from a file spliced into the documentation. A
+  manifest whose `root` is another directory is reached by a change there too.
+- An entry recorded at a commit before the change's base is judged against everything since that
+  commit as well. A record is refreshed only when a run sweeps the entry and saves, and a run
+  cancelled, failed or overlapping another may not; judged from the base alone, an entry could
+  then miss a change made while its record was stale. A record is used only if it was learned at a
+  commit the checkout contains, and only from a tree that was that commit: a sweep with
+  uncommitted edits records what it learned with no commit, and no later run uses it.
+- When the base is not an ancestor of the checkout -- a force-push, or a branch behind it -- what
+  the base changed since the merge base counts too, so a reverted change is still a change.
 - In a scoped run, an entry is first run against the tests that caught it last time, and against
-  the whole suite only if they do not catch it. A full sweep always runs the whole suite, so the
-  nightly backstop is exactly the sweep from before scoping, and it re-learns every entry's catching
-  tests. The narrow run can differ in one way: a patch that also stops a doctest compiling is
-  reported caught when a recorded unit test fails, where the whole suite reports the manifest as not
-  compiling. The nightly sweep still reports that.
+  the whole suite only if they do not report a test failure. A full sweep always runs the whole
+  suite, so the nightly backstop is exactly the sweep from before scoping, and it re-learns every
+  entry's catching tests. The narrow run can differ in one way: a patch that also stops a doctest
+  compiling is reported caught when a recorded unit test fails, where the whole suite reports the
+  manifest as not compiling. The nightly sweep still reports that.
 
 **What scoping does not see, which is what the nightly sweep is for.** A change elsewhere in a crate
 than the file an entry patches can make that entry's defect unreachable or harmless, and a test
 helper shared across a crate's tests can weaken many tests at once. Neither selects the entry, and
-neither is caught until the nightly run. The record of which tests caught an entry narrows which test changes select it: a
-change to any file that defines one of those tests now or did at the base, or that test's removal,
-still selects the entry, and an entry with no record is selected by any change in its crate. A
-record is used only if it was learned at a commit the checkout contains: runs overlap, and an older
-run cannot tell from its own change what a newer commit did to the tests a record names. A change
-to a manifest's own settings selects all of its entries, and a manifest whose `root` is another
-directory is reached by a change there. When the base is not an ancestor of the checkout -- a
-force-push, or a branch behind it -- what the base changed since the merge base counts too, so a
-reverted change is still a change.
-
+neither is caught until the nightly run.
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI

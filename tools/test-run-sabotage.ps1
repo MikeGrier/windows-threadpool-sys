@@ -216,7 +216,7 @@ function New-Stub {
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
             'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
-            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses')] [string] $Behaviour,
+            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses', 'narrow-refused')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -266,6 +266,14 @@ function New-Stub {
         'narrow-catches' {
             "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
             "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        # A narrowed run that fails before any test runs, as libtest does on an
+        # argument it refuses; the whole suite fails as a catch does.
+        'narrow-refused' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul || goto :whole`r`n" +
+            "echo error: Option 'exact' given more than once 1>&2`r`nexit /b 101`r`n" +
+            ":whole`r`necho test marker::is_present ... FAILED`r`nexit /b 101`r`n"
         }
         'narrow-misses' {
             "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
@@ -2018,7 +2026,9 @@ function New-ScopeFixture {
     [System.IO.File]::WriteAllText((Join-Path $root 'src\other.rs'), "fn t_other() {}`n")
     [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[package]`nname = `"fixture`"`nversion = `"0.1.0`"`nedition = `"2021`"`n")
     [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "fixture`n")
-    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`nCargo.lock`ntarget/`n")
+    # The stubs are written after the commit, and are no part of the tree being
+    # swept; ignored, so that a fixture left as committed is a clean tree.
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`nCargo.lock`ntarget/`nstubs/`n")
     Invoke-Native { git -C $root add -A } | Out-Null
     Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
     # Learned at the commit just made, so a scoped run uses it.
@@ -2053,10 +2063,12 @@ Test-Case '-Since sweeps the entries it selected, and nothing else' {
         Assert-Match 'Sweeping 1 entry' $result.Output
         Assert-Match 'other is broken' $result.Output
         Assert-False ($result.Output -match 'the marker is removed') 'not swept'
-        # What it learned is recorded at the commit it swept, so a later run can use it.
-        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        # The tree it swept had an uncommitted edit, so what it learned names no
+        # commit, and no later run will use it.
         $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
-        Assert-Equal $head $record['sabotage.json']['other is broken'].Commit 'recorded at HEAD'
+        Assert-True $record['sabotage.json'].ContainsKey('other is broken') 'recorded'
+        Assert-True (-not $record['sabotage.json']['other is broken'].Commit) 'with no commit'
+        Assert-Match 'recorded without a commit' $result.Output
     }
     finally { Remove-Fixture $root }
 }
@@ -2117,6 +2129,21 @@ Test-Case '-Since runs the whole suite when the recorded tests do not catch it' 
     Assert-False ($case.Runs[1] -match '--exact') 'the second is the whole suite'
 }
 
+Test-Case 'a narrowed run that fails without a failed test is no catch, and the whole suite decides' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-refused' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the refused narrow run, then the whole suite'
+}
+
+Test-Case 'a manifest that already passes --exact to libtest is narrowed without a second one' {
+    $once = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--', '--exact', '--test-threads=1') -Tests @('a::b')
+    Assert-Equal 'test|-p|x|--|--exact|--test-threads=1|a::b' ($once -join '|') 'kept, not repeated'
+    $added = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--', '--test-threads=1') -Tests @('a::b', 'c')
+    Assert-Equal 'test|-p|x|--|--test-threads=1|a::b|c|--exact' ($added -join '|') 'added after the names'
+    $bare = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--exact-feature') -Tests @('a::b')
+    Assert-Equal 'test|-p|x|--exact-feature|--|a::b|--exact' ($bare -join '|') 'an --exact before -- is cargo''s, not libtest''s'
+}
 Test-Case 'the whole suite alone runs without -Since, for an entry with no recorded test, and for one a doctest caught' {
     foreach ($variant in @(
             @{ Recorded = @('marker::is_present'); Full = $true; Why = 'a full sweep' },
@@ -2129,6 +2156,19 @@ Test-Case 'the whole suite alone runs without -Since, for an entry with no recor
     }
 }
 
+Test-Case 'a sweep of a clean tree records what it learned at HEAD' {
+    $root = New-ScopeFixture
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Name', 'the marker*')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-False ($result.Output -match 'recorded without a commit') 'the tree is clean'
+        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-Equal $head $record['sabotage.json']['the marker is removed'].Commit 'recorded at HEAD'
+    }
+    finally { Remove-Fixture $root }
+}
 Test-Case '-Since with nothing affected sweeps nothing and builds nothing' {
     $root = New-ScopeFixture
     try {

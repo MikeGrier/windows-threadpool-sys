@@ -919,6 +919,11 @@ Test-Case 'the packages a manifest tests are its package and every one its testA
     Assert-Equal 'a|b' (& $names @{ package = 'a'; testArgs = @('test', '-p', 'a', '-p', 'b@1.2.3') }) 'once each, without a version'
     Assert-Equal 'a' (& $names @{ package = 'a'; testArgs = @('-p', 'a', '--', '-p', 'b') }) 'not past --, which are the test binary''s'
     Assert-Equal 'a' (& $names @{ package = 'a'; testArgs = @('--features', 'b/x', '--lib') }) 'a dependency''s feature is not a package tested'
+    # testArgs replace `test -p <package>`; with no package of their own, cargo
+    # tests the workspace's default members.
+    Assert-Equal $true (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('--features', 'b/x') })).Workspace 'no package named'
+    Assert-Equal $true (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('test', '--lib', '--', '-p', 'a') })).Workspace 'a -p past -- is not cargo''s'
+    Assert-Equal $false (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('-p', 'a', '--lib') })).Workspace 'its own package named'
     $workspace = Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('--workspace') })
     Assert-Equal $true $workspace.Workspace '--workspace'
     Assert-Equal $true (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ testArgs = @('--all') })).Workspace '--all'
@@ -997,6 +1002,67 @@ Test-Case 'a path with a character git would quote is reported as it is, committ
         Assert-Equal $true $sel.All 'and it reaches what builds on its crate'
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Test-Case 'a change to a crate''s own build settings selects every entry' {
+    foreach ($path in 'crates/a/Cargo.toml', 'crates/a/build.rs', 'crates/a/.cargo/config.toml') {
+        $fixture = New-EntryScopeFixture
+        try {
+            $sel = Get-ScopedEntries $fixture {
+                param($r)
+                $full = Join-Path $r $path
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $full) | Out-Null
+                [System.IO.File]::WriteAllText($full, "[lib]`ntest = false`n")
+            }.GetNewClosure()
+            Assert-Equal $true $sel.All "every entry for $path"
+            Assert-Equal "every entry: the crate's build settings changed: $path" $sel.Reason 'why'
+        }
+        finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Test-Case 'a record older than the base is judged against everything since it, so a missed run cannot hide a change' {
+    $fixture = New-EntryScopeFixture
+    try {
+        # The records are learned at the fixture's base, A. Commit B weakens E1's
+        # catching test, and its own sweep never saved a record. A push from B,
+        # touching nothing, must still find E1 changed since it was last swept.
+        $a = $fixture.Base
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'crates/a/src/tests.rs'), "#[test]`nfn t_one() { /* weakened */ }`n")
+        $b = Save-GitFixture $fixture.Root 'weaken t_one'
+        $fixture.Base = $b
+        $sel = Get-ScopedEntries $fixture { param($r) } -RecordCommit $a
+        $short = $a.Substring(0, 8)
+        Assert-Equal "since it was last swept, at ${short}: its catching test's file changed: crates/a/src/tests.rs" $sel.Reasons['E1'] 'E1'
+        if ($sel.Reasons.ContainsKey('E2')) { throw "E2's test and file are untouched since A: $($sel.Reasons['E2'])" }
+        if ($sel.Reasons.ContainsKey('E3')) { throw "E3 has no record and the push touched nothing: $($sel.Reasons['E3'])" }
+        # A record from B itself has nothing to answer for since.
+        $current = Get-ScopedEntries $fixture { param($r) } -RecordCommit $b
+        Assert-Equal 0 @($current.Entries).Count 'nothing since B'
+        # A crate below changing between A and B reaches every recorded entry.
+        $fixture2 = New-EntryScopeFixture
+        try {
+            [System.IO.File]::WriteAllText((Join-Path $fixture2.Root 'crates/z/src/lib.rs'), "fn below() { /* changed */ }`n")
+            $a2 = $fixture2.Base
+            $fixture2.Base = Save-GitFixture $fixture2.Root 'change z'
+            $sel = Get-ScopedEntries $fixture2 { param($r) } -RecordCommit $a2
+            Assert-Equal "since it was last swept, at $($a2.Substring(0, 8)): a crate it builds on or tests changed: crates/z" $sel.Reasons['E2'] 'E2'
+            if ($sel.Reasons.ContainsKey('E3')) { throw 'E3 has no record, so nothing since it applies' }
+        }
+        finally { Remove-Item -LiteralPath $fixture2.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'win-job-launcher, and every workspace crate it builds on, is an input every sweep shares' {
+    if (-not (Test-SabotageSharedInput 'crates/win-job-launcher/src/main.rs')) { throw 'the launcher' }
+    if (Test-SabotageSharedInput 'crates/win-job-launcherx/src/main.rs') { throw 'a sibling sharing its prefix' }
+    # Against cargo, so a path dependency the launcher gains later is not missed.
+    $root = Split-Path -Parent $PSScriptRoot
+    $deps = Get-SabotageCrateDependency -RepositoryRoot $root
+    if ($null -eq $deps) { throw 'cargo metadata did not answer' }
+    foreach ($dir in @(Get-SabotageCrateReach -Crate 'crates/win-job-launcher' -Dependencies $deps)) {
+        if (-not (Test-SabotageSharedInput "$dir/src/lib.rs")) { throw "the launcher builds on $dir, which is not a shared input" }
+    }
 }
 Test-Case 'every entry for a change below, a shared input, or a change that cannot be measured; none for nothing reached' {
     $fixture = New-EntryScopeFixture

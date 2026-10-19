@@ -424,21 +424,94 @@ function Test-SabotagePatch {
 
 # Paths every sweep depends on, whichever crate it sweeps, so a change to one
 # reaches every manifest: the workspace's manifest, lockfile and toolchain, the
-# sabotage tools and the helper they share, and the sweep workflow. `Path` is
-# relative to the repository root; either slash.
+# sabotage tools and the helper they share, the sweep workflow, and
+# win-job-launcher, which supervises every phase of every sweep and decides what
+# its exit means. It has no path dependency on any workspace crate; a test checks
+# that against cargo, so one added later is not missed. `Path` is relative to the
+# repository root; either slash.
 function Test-SabotageSharedInput {
     param([string] $Path)
     $normal = $Path.Replace('\', '/')
     foreach ($pattern in @('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain', '.cargo/*',
-            'tools/common.ps1', 'tools/*sabotage*.ps1', '.github/workflows/sabotage-sweep.yml')) {
+            'tools/common.ps1', 'tools/*sabotage*.ps1', '.github/workflows/sabotage-sweep.yml', 'crates/win-job-launcher/*')) {
         if ($normal -like $pattern) { return $true }
     }
     return $false
 }
 
-# What differs between `Since` and the working tree: committed, staged, unstaged,
-# and untracked files git does not ignore, which is what a sweep of the working
-# copy would sweep, measured from the merge base of `Since` and HEAD.
+# Splits git's -z output into paths. -z, so each path arrives exactly as git holds
+# it: by default git quotes a path with a non-ASCII byte in it --
+# `"crates/x/caf\303\251.rs"` -- and a quoted path matches no crate and no shared
+# input, so a change would be read as unrelated. Separated by NUL, joined back
+# across the newlines the capture split on.
+function Split-SabotageGitPaths {
+    param($Lines)
+    foreach ($path in ((@($Lines) -join "`n") -split "`0")) { if ($path) { $path } }
+}
+
+# What differs between commit `From` and the working tree -- committed, staged,
+# unstaged, and untracked files git does not ignore -- as paths relative to the
+# root, forward slashes, sorted ordinally, each once. $null when git cannot say,
+# or reports a path this host could not decode. Cached per repository and commit,
+# since a sweep or a plan asks the same question of many entries recorded at the
+# same commit; the working tree can change between measurements, so
+# Get-SabotageChange, which begins every one, empties the cache first.
+function Get-SabotageWorkingPaths {
+    param([string] $RepositoryRoot, [string] $From)
+    $key = "$RepositoryRoot|$From"
+    if ($script:SabotageWorkingPaths.ContainsKey($key)) { return , $script:SabotageWorkingPaths[$key] }
+    $result = $null
+    $diff = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $From }))
+    if ($LASTEXITCODE -eq 0) {
+        $untracked = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot ls-files -z --others --exclude-standard }))
+        if ($LASTEXITCODE -eq 0) {
+            $result = Join-SabotagePaths @(@($diff) + @($untracked))
+        }
+    }
+    $script:SabotageWorkingPaths[$key] = $result
+    return , $result
+}
+
+# `Paths`, each once, slashes forward, sorted ordinally -- or $null if one is a path
+# this host decoded with a replacement character, which is not the path git meant
+# and could match nothing it should. No test reaches that: both PowerShell hosts
+# here decode git's UTF-8 paths, as the test of a non-ASCII path shows. It is for a
+# host whose output encoding is set otherwise, where a wrong path would pass
+# silently.
+function Join-SabotagePaths {
+    param([string[]] $Paths)
+    # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object
+    # -Unique orders by culture and folds case, so its answer depends on the host.
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($Paths)) {
+        if (-not $path) { continue }
+        if ($path.Contains([string][char]0xFFFD)) { return $null }
+        [void]$set.Add($path.Replace('\', '/'))
+    }
+    [string[]] $sorted = @($set)
+    [Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+    return , $sorted
+}
+
+# The text of `Path` at `Commit`, or $null when that commit has no such file. Cached.
+function Get-SabotageFileAt {
+    param([string] $RepositoryRoot, [string] $Commit, [string] $Path)
+    $key = "$RepositoryRoot|$Commit|$Path"
+    if (-not $script:SabotageFileAt.ContainsKey($key)) {
+        $text = Invoke-NativeStdout { git -C $RepositoryRoot show "${Commit}:$Path" } | Out-String
+        if ($LASTEXITCODE -ne 0) { $text = $null }
+        $script:SabotageFileAt[$key] = $text
+    }
+    return $script:SabotageFileAt[$key]
+}
+
+# Per-process caches for the three functions above, declared as common.ps1 is
+# dot-sourced because strict mode refuses to read a variable that was never set.
+$script:SabotageWorkingPaths = @{}
+$script:SabotageFileAt = @{}
+
+# What differs between `Since` and the working tree, measured from the merge base
+# of `Since` and HEAD (Get-SabotageWorkingPaths).
 #
 # When `Since` is not an ancestor of HEAD, the paths `Since` changed after the
 # merge base count too. That is a push that dropped commits -- a force-push --
@@ -455,6 +528,7 @@ function Test-SabotageSharedInput {
 # does not have; `Reason` says which.
 function Get-SabotageChange {
     param([string] $RepositoryRoot, [string] $Since)
+    $script:SabotageWorkingPaths = @{}
     $unknown = { param($why) [pscustomobject]@{ Known = $false; Base = $null; Divergent = $false; Paths = @(); Reason = $why } }
     if ([string]::IsNullOrWhiteSpace($Since)) { return & $unknown 'no base revision was given' }
     if ($Since -match '^0+$') { return & $unknown "the base revision $Since is the all-zero one a new branch pushes" }
@@ -462,48 +536,26 @@ function Get-SabotageChange {
     if ($LASTEXITCODE -ne 0 -or $base.Count -eq 0) {
         return & $unknown "this clone has no merge base with '$Since'"
     }
-    # -z, so each path arrives exactly as git holds it: by default git quotes a
-    # path with a non-ASCII byte in it -- `"crates/x/caf\303\251.rs"` -- and a
-    # quoted path matches no crate and no shared input, so the change would be
-    # read as unrelated. Separated by NUL, joined back across the newlines the
-    # capture split on.
-    $split = {
-        param($lines)
-        foreach ($path in ((@($lines) -join "`n") -split "`0")) { if ($path) { $path } }
-    }
-    $diff = @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $base[0] }))
-    if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff against $($base[0])" }
+    $mergeBase = $base[0].Trim()
+    $working = Get-SabotageWorkingPaths -RepositoryRoot $RepositoryRoot -From $mergeBase
+    if ($null -eq $working) { return & $unknown "git could not say what differs from $mergeBase" }
     # 0 is an ancestor, 1 is not, and anything else is git unable to say.
     Invoke-NativeStdout { git -C $RepositoryRoot merge-base --is-ancestor $Since HEAD } | Out-Null
     $ancestry = $LASTEXITCODE
     $divergent = $false
+    $dropped = @()
     if ($ancestry -eq 1) {
         $divergent = $true
-        $diff += @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $base[0] $Since }))
-        if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff $($base[0]) against '$Since'" }
+        $dropped = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $mergeBase $Since }))
+        if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff $mergeBase against '$Since'" }
     }
     elseif ($ancestry -ne 0) { return & $unknown "git could not say whether '$Since' is an ancestor of HEAD" }
-    $untracked = @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot ls-files -z --others --exclude-standard }))
-    if ($LASTEXITCODE -ne 0) { return & $unknown 'git could not list untracked files' }
-    # A path this host decoded with a replacement character is not the path git
-    # meant, and could match nothing it should, so the change cannot be measured.
-    # No test reaches this: both PowerShell hosts here decode git's UTF-8 paths, as
-    # the test of a non-ASCII path shows. It is for a host whose output encoding
-    # is set otherwise, where a wrong path would otherwise pass silently.
-    foreach ($path in @(@($diff) + @($untracked))) {
-        if ($path -and $path.Contains([string][char]0xFFFD)) { return & $unknown "git reported a path this host could not decode: $path" }
-    }
-    # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object -Unique
-    # orders by culture and folds case, so its answer depends on the host.
-    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-    foreach ($path in @(@($diff) + @($untracked))) { if ($path) { [void]$set.Add($path.Replace('\', '/')) } }
-    [string[]] $paths = @($set)
-    [Array]::Sort($paths, [System.StringComparer]::Ordinal)
-    $reason = "$($paths.Count) path(s) differ from $($base[0])"
+    $paths = Join-SabotagePaths @(@($working) + @($dropped))
+    if ($null -eq $paths) { return & $unknown 'git reported a path this host could not decode' }
+    $reason = "$($paths.Count) path(s) differ from $mergeBase"
     if ($divergent) { $reason += ", counting what '$Since' changed since then, as it is not an ancestor of HEAD" }
-    return [pscustomobject]@{ Known = $true; Base = $base[0].Trim(); Divergent = $divergent; Paths = $paths; Reason = $reason }
+    return [pscustomobject]@{ Known = $true; Base = $mergeBase; Divergent = $divergent; Paths = $paths; Reason = $reason }
 }
-
 # Which workspace crates each crate depends on, through path dependencies of every
 # kind: a dev-dependency builds the tests that catch a sabotage, so it counts. Keyed
 # by the crate's directory relative to the root ('crates/x'), each value the
@@ -570,7 +622,10 @@ function Get-SabotageCratePackage {
 # The packages a manifest's sweep runs the tests of: its `package`, and every
 # package its `testArgs` names with `-p`/`--package` before the `--` that ends
 # cargo's own arguments. `Workspace` is set by `--workspace` or `--all`, which
-# test every crate. `Unknown` says why the answer cannot be trusted -- a package
+# test every crate, and by `testArgs` that name no package at all: the harness
+# runs `testArgs` in place of `test -p <package>`, from the workspace root, so
+# with no package named cargo tests the workspace's default members, which here
+# are all of them. `Unknown` says why the answer cannot be trusted -- a package
 # given as a pattern, which cargo matches against names this does not know --
 # and is $null otherwise.
 function Get-SabotageTestedPackage {
@@ -600,6 +655,9 @@ function Get-SabotageTestedPackage {
         }
         $names.Add($name)
     }
+    $named = $names.Count
+    if ($Spec.PSObject.Properties.Name -contains 'package' -and $Spec.package) { $named-- }
+    if ($arguments.Count -gt 0 -and $named -eq 0 -and -not $unknown) { $workspace = $true }
     return [pscustomobject]@{ Names = [string[]]@($names | Select-Object -Unique); Workspace = $workspace; Unknown = $unknown }
 }
 
@@ -729,7 +787,7 @@ $script:SabotageAncestry = @{}
 # from a commit this checkout does not contain can only make a sweep run more.
 function Get-SabotageCatcherTests {
     param([string] $RepositoryRoot, [hashtable] $Record, [string] $Manifest, [string] $Entry)
-    $none = [pscustomobject]@{ Usable = $false; Tests = [string[]]@() }
+    $none = [pscustomobject]@{ Usable = $false; Tests = [string[]]@(); Commit = $null }
     if ($null -eq $Record -or -not $Record.ContainsKey($Manifest) -or -not $Record[$Manifest].ContainsKey($Entry)) { return $none }
     $value = $Record[$Manifest][$Entry]
     if (-not $value.Commit) { return $none }
@@ -739,7 +797,7 @@ function Get-SabotageCatcherTests {
         $script:SabotageAncestry[$key] = ($LASTEXITCODE -eq 0)
     }
     if (-not $script:SabotageAncestry[$key]) { return $none }
-    return [pscustomobject]@{ Usable = $true; Tests = [string[]]@($value.Tests) }
+    return [pscustomobject]@{ Usable = $true; Tests = [string[]]@($value.Tests); Commit = [string]$value.Commit }
 }
 
 # One record holding, for every entry any of `Records` has, the latest of them.
@@ -790,24 +848,32 @@ function Write-SabotageCatcherRecord {
 # Which entries of one manifest a change could have affected, and why each.
 #
 # `Manifest` is the manifest's path from the root, forward slashes; `Entries` its
-# entries as parsed; `SourceRoot` the directory their `file` is relative to.
-# `Change` is Get-SabotageChange's result, `Dependencies` the crate map, and
-# `Record` the record of which tests caught each entry. The manifest's crate is
-# its directory.
+# entries as parsed; `SourceRoot` the directory their `file` is relative to; `Spec`
+# the manifest as parsed. `Change` is Get-SabotageChange's result, `Dependencies`
+# Get-SabotageCrateDependency's map, `Packages` Get-SabotageCratePackage's, and
+# `Record` the record of which tests caught each entry. The manifest's crate is its
+# directory.
 #
-# Every entry is affected when the change cannot be measured, the crate map is
-# missing, a shared input changed, a crate the manifest's crate builds on changed
-# (a change below can alter what any test above it observes), another package the
-# manifest tests changed (`Spec`'s `package` and `testArgs`, found in `Packages`,
-# Get-SabotageCratePackage's map), or the manifest's own settings changed. No entry is when nothing the crate reaches changed, and
-# nothing under the manifest's `root` either. Otherwise, an entry is affected when
-#   - it is new, or differs from the manifest at the base revision;
-#   - the file it patches changed;
-#   - no usable record names a test catching it (Get-SabotageCatcherTests), or a
-#     doctest caught it, whose source may be a file spliced into the crate's
-#     documentation rather than the one it names;
-#   - a file defining a function named as one of its catching tests changed, or
-#     defined one at the base, or no file of the crate defines one any more.
+# Every entry is affected when the change cannot be measured, a map is missing, or
+# the manifest's packages cannot be resolved. Otherwise each entry is judged
+# against two changes, and is affected if either reaches it: the one given, from
+# its base, and -- for an entry whose usable record was learned at another
+# commit -- everything since that commit. The second is what keeps a record honest
+# when the run that should have refreshed it never saved one: a sweep cancelled,
+# failed, or overlapping another. Against a change from a commit X:
+#   - every entry, when it touched an input every sweep shares; a crate the
+#     manifest's crate builds on, or another package it tests (`Spec`'s `package`
+#     and `testArgs`, Get-SabotageTestedPackage), or one of those builds on; the
+#     crate's own build settings (its Cargo.toml, build.rs, .cargo/), which can
+#     switch tests off without touching one; or the manifest's own settings;
+#   - no entry, when it touched nothing in the crate or under the manifest's
+#     `root`;
+#   - otherwise the entry, when it is new or differs from the manifest at X; the
+#     file it patches changed; no usable record names a test catching it
+#     (Get-SabotageCatcherTests), or a doctest caught it, whose source may be a
+#     file spliced into the crate's documentation rather than the one it names;
+#     or a file defining a function named as one of its catching tests changed,
+#     or defined one at X, or no file of the crate defines one any more.
 # A change elsewhere in the crate selects nothing on its own. That, and a test
 # helper changing under the tests that call it, are what the nightly sweep is for
 # (DESIGN-NOTES.md, "sabotage-scope").
@@ -829,15 +895,11 @@ function Select-SabotageEntry {
         return & $every $why
     }
     if ($null -eq $Dependencies) { return & $every 'cargo metadata could not say which crates build on which' }
-    $changed = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-    foreach ($path in @($Change.Paths)) { if ($path) { [void]$changed.Add($path) } }
-    foreach ($path in $changed) {
-        if (Test-SabotageSharedInput $path) { return & $every "a shared input changed: $path" }
-    }
-    # The crates whose tests the sweep runs: the manifest's own, and every package
-    # its settings name, which may be one that builds on it -- a driver whose
-    # tests are the ones that catch a sabotage of the core it is built on.
     if ($null -eq $Spec) { return & $every 'the manifest''s settings were not given' }
+
+    # The crates whose tests the sweep runs: the manifest's own, and every package
+    # its settings name, which may be one that builds on it -- a driver whose tests
+    # are the ones that catch a sabotage of the core it is built on.
     $tested = Get-SabotageTestedPackage -Spec $Spec
     if ($tested.Unknown) { return & $every $tested.Unknown }
     $crate = Get-SabotageManifestCrate $Manifest
@@ -850,12 +912,9 @@ function Select-SabotageEntry {
         }
         $roots.Add($Packages[$name])
     }
-    $reached = { param($dir) foreach ($path in $changed) { if (Test-SabotagePathInCrate $path $dir) { return $true } }; $false }
     $reach = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($dir in $roots) { foreach ($at in @(Get-SabotageCrateReach -Crate $dir -Dependencies $Dependencies)) { [void]$reach.Add($at) } }
-    foreach ($below in $reach) {
-        if ($below -ne $crate -and (& $reached $below)) { return & $every "a crate it builds on or tests changed: $below" }
-    }
+
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
     $relative = {
         param($full)
@@ -869,45 +928,74 @@ function Select-SabotageEntry {
     # change under that root reaches it as a change in its own crate does.
     $sourceDir = & $relative $SourceRoot
     if ($sourceDir -eq $root.Replace('\', '/')) { $sourceDir = '' }
-    if (-not (& $reached $crate) -and -not (& $reached $sourceDir)) {
-        return [pscustomobject]@{ All = $false; Entries = @(); Reasons = @{}; Reason = 'nothing it builds on changed' }
+    # What is worked out once and read by the blocks below. A hashtable, because a
+    # block run with & has a scope of its own, and a variable assigned there would
+    # be gone when it returned; a table it was given is the same table.
+    $memo = @{ Settings = $null; Definitions = $null }
+
+    # The manifest's own settings, which decide how every entry is patched and
+    # judged: everything but `sabotages`.
+    $settingsOf = {
+        param($spec)
+        $kept = [ordered]@{}
+        foreach ($name in @($spec.PSObject.Properties.Name | Where-Object { $_ -ne 'sabotages' } | Sort-Object)) {
+            $kept[$name] = $spec.$name
+        }
+        $kept | ConvertTo-Json -Depth 8 -Compress
+    }
+    # The manifest at commit X, as entry name to its JSON, or $null when X has no
+    # such manifest or it does not parse. Cached per commit.
+    $specsAt = @{}
+    $specAt = {
+        param($commit)
+        if (-not $specsAt.ContainsKey($commit)) {
+            $parsed = $null
+            $text = Get-SabotageFileAt -RepositoryRoot $RepositoryRoot -Commit $commit -Path $Manifest
+            if ($null -ne $text) { try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null } }
+            $specsAt[$commit] = $parsed
+        }
+        $specsAt[$commit]
     }
 
-    # The manifest's entries at the base, to tell which are new or changed, and
-    # its own settings -- `package`, `testArgs`, `root`, a sweep-wide timeout --
-    # which decide how every entry is patched and judged, so a change to them
-    # reaches every entry. A manifest the base does not have is new, and so is
-    # each of its entries.
-    $before = @{}
-    $manifestChanged = $changed.Contains($Manifest)
-    if ($manifestChanged -and $Change.Base) {
-        $text = Invoke-NativeStdout { git -C $RepositoryRoot show "$($Change.Base):$Manifest" } | Out-String
-        if ($LASTEXITCODE -eq 0) {
-            $settings = {
-                param($spec)
-                $kept = [ordered]@{}
-                foreach ($name in @($spec.PSObject.Properties.Name | Where-Object { $_ -ne 'sabotages' } | Sort-Object)) {
-                    $kept[$name] = $spec.$name
-                }
-                $kept | ConvertTo-Json -Depth 8 -Compress
-            }
-            $oldSpec = $null
-            try { $oldSpec = $text | ConvertFrom-Json } catch { $oldSpec = $null }
-            if ($null -eq $oldSpec) { return & $every 'the manifest at the base could not be read' }
-            $nowSpec = [System.IO.File]::ReadAllText((Join-Path $RepositoryRoot $Manifest)) | ConvertFrom-Json
-            if (-not [string]::Equals((& $settings $oldSpec), (& $settings $nowSpec), [System.StringComparison]::Ordinal)) {
-                return & $every 'the manifest''s own settings changed'
-            }
-            foreach ($old in @($oldSpec.sabotages)) {
-                $before[$old.name] = ($old | ConvertTo-Json -Depth 8 -Compress)
+    # What a change, from commit X over the paths `Changed` (a HashSet), does to the
+    # manifest as a whole: `Every` is why every entry is reached, or $null, and
+    # `Reached` whether the crate, or the manifest's `root`, is touched at all.
+    $judgeManifest = {
+        param([string] $commit, $changed)
+        $inDir = { param($dir) foreach ($path in $changed) { if (Test-SabotagePathInCrate $path $dir) { return $true } }; $false }
+        foreach ($path in $changed) {
+            if (Test-SabotageSharedInput $path) { return [pscustomobject]@{ Every = "a shared input changed: $path"; Reached = $true } }
+        }
+        foreach ($below in $reach) {
+            if ($below -ne $crate -and (& $inDir $below)) {
+                return [pscustomobject]@{ Every = "a crate it builds on or tests changed: $below"; Reached = $true }
             }
         }
+        if ($crate) {
+            foreach ($path in $changed) {
+                if ($path -eq "$crate/Cargo.toml" -or $path -eq "$crate/build.rs" -or $path.StartsWith("$crate/.cargo/", [System.StringComparison]::Ordinal)) {
+                    return [pscustomobject]@{ Every = "the crate's build settings changed: $path"; Reached = $true }
+                }
+            }
+        }
+        if ($changed.Contains($Manifest)) {
+            $old = & $specAt $commit
+            if ($null -ne $old) {
+                if ($null -eq $memo.Settings) {
+                    $memo.Settings = & $settingsOf ([System.IO.File]::ReadAllText((Join-Path $RepositoryRoot $Manifest)) | ConvertFrom-Json)
+                }
+                if (-not [string]::Equals((& $settingsOf $old), $memo.Settings, [System.StringComparison]::Ordinal)) {
+                    return [pscustomobject]@{ Every = 'the manifest''s own settings changed'; Reached = $true }
+                }
+            }
+        }
+        [pscustomobject]@{ Every = $null; Reached = ((& $inDir $crate) -or (& $inDir $sourceDir)) }
     }
 
     # Every function the crate defines, by name, to the files defining it: test
     # names are function names, and the same name is often defined in several
-    # files, so a test is looked for in all of them. Built once, on first need.
-    $definitions = $null
+    # files, so a test is looked for in all of them. Built once, on first need, into
+    # $memo.Definitions.
     $define = {
         $map = @{}
         $crateDir = if ($crate) { Join-Path $RepositoryRoot $crate } else { $RepositoryRoot }
@@ -923,52 +1011,99 @@ function Select-SabotageEntry {
         }
         $map
     }
-    # The same, for the changed files of the crate as they were at the base: a
-    # recorded test deleted from one of them may share its name with a function
-    # elsewhere, which would make it look present still. Built once, on first need.
-    $baseDefinitions = $null
-    $defineAtBase = {
-        $map = @{}
-        foreach ($path in $changed) {
-            if (-not $path.EndsWith('.rs') -or -not (Test-SabotagePathInCrate $path $crate)) { continue }
-            $text = Invoke-NativeStdout { git -C $RepositoryRoot show "$($Change.Base):$path" } | Out-String
-            if ($LASTEXITCODE -ne 0) { continue }
-            foreach ($match in [regex]::Matches($text, '\bfn\s+(\w+)')) {
-                $name = $match.Groups[1].Value
-                if (-not $map.ContainsKey($name)) {
-                    $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    # The functions the crate's changed files defined at commit X: a recorded test
+    # deleted from one of them may share its name with a function elsewhere, which
+    # would make it look present still. Cached per commit.
+    $definedAt = @{}
+    $defineAt = {
+        param([string] $commit, $changed)
+        if (-not $definedAt.ContainsKey($commit)) {
+            $map = @{}
+            foreach ($path in $changed) {
+                if (-not $path.EndsWith('.rs') -or -not (Test-SabotagePathInCrate $path $crate)) { continue }
+                $text = Get-SabotageFileAt -RepositoryRoot $RepositoryRoot -Commit $commit -Path $path
+                if ($null -eq $text) { continue }
+                foreach ($match in [regex]::Matches($text, '\bfn\s+(\w+)')) {
+                    $name = $match.Groups[1].Value
+                    if (-not $map.ContainsKey($name)) {
+                        $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                    }
+                    [void]$map[$name].Add($path)
                 }
-                [void]$map[$name].Add($path)
             }
+            $definedAt[$commit] = $map
         }
-        $map
+        $definedAt[$commit]
+    }
+
+    # Why a change from commit X over `Changed` reaches one entry, in a crate it
+    # touched, or $null. `Tests` are the entry's usable recorded catching tests.
+    $judgeEntry = {
+        param([string] $commit, $changed, $entry, [string[]] $tests)
+        if ($changed.Contains($Manifest)) {
+            $old = & $specAt $commit
+            $before = $null
+            if ($null -ne $old) { $before = @($old.sabotages | Where-Object { $_.name -eq $entry.name }) | Select-Object -First 1 }
+            if ($null -eq $before) { return 'the entry is new' }
+            $then = $before | ConvertTo-Json -Depth 8 -Compress
+            $now = $entry | ConvertTo-Json -Depth 8 -Compress
+            if (-not [string]::Equals($then, $now, [System.StringComparison]::Ordinal)) { return 'the entry changed' }
+        }
+        if ($changed.Contains((& $relative (Join-Path $SourceRoot $entry.file)))) {
+            return "the file it patches changed: $($entry.file)"
+        }
+        $tests = @($tests)
+        if ($tests.Count -eq 0) { return 'no test is recorded as catching it' }
+        if (@($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { return 'a doctest caught it' }
+        if ($null -eq $memo.Definitions) { $memo.Definitions = & $define }
+        $definitions = $memo.Definitions
+        $before = & $defineAt $commit $changed
+        foreach ($test in $tests) {
+            $function = ($test -split '::')[-1]
+            if (-not $definitions.ContainsKey($function)) { return "its catching test is gone: $test" }
+            $moved = @($definitions[$function] | Where-Object { $changed.Contains($_) })
+            if ($before.ContainsKey($function)) { $moved += @($before[$function]) }
+            if ($moved.Count -gt 0) { return "its catching test's file changed: $($moved[0])" }
+        }
+        return $null
+    }
+
+    $changedNow = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($Change.Paths)) { if ($path) { [void]$changedNow.Add($path) } }
+    $now = & $judgeManifest $Change.Base $changedNow
+    if ($now.Every) { return & $every $now.Every }
+
+    # The change since each other commit an entry was recorded at, and what it
+    # does to the manifest, worked out once per commit.
+    $since = @{}
+    $sinceRecord = {
+        param([string] $commit)
+        if (-not $since.ContainsKey($commit)) {
+            $paths = Get-SabotageWorkingPaths -RepositoryRoot $RepositoryRoot -From $commit
+            $value = $null
+            if ($null -ne $paths) {
+                $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                foreach ($path in $paths) { [void]$set.Add($path) }
+                $value = [pscustomobject]@{ Changed = $set; Manifest = (& $judgeManifest $commit $set) }
+            }
+            $since[$commit] = $value
+        }
+        $since[$commit]
     }
 
     $reasons = @{}
     $affected = @(foreach ($entry in $Entries) {
+            $known = Get-SabotageCatcherTests -RepositoryRoot $RepositoryRoot -Record $Record -Manifest $Manifest -Entry $entry.name
             $why = $null
-            if ($manifestChanged) {
-                $now = $entry | ConvertTo-Json -Depth 8 -Compress
-                if (-not $before.ContainsKey($entry.name)) { $why = 'the entry is new' }
-                elseif (-not [string]::Equals($before[$entry.name], $now, [System.StringComparison]::Ordinal)) { $why = 'the entry changed' }
-            }
-            if (-not $why -and $changed.Contains((& $relative (Join-Path $SourceRoot $entry.file)))) {
-                $why = "the file it patches changed: $($entry.file)"
-            }
-            if (-not $why) {
-                $tests = @((Get-SabotageCatcherTests -RepositoryRoot $RepositoryRoot -Record $Record -Manifest $Manifest -Entry $entry.name).Tests)
-                if ($tests.Count -eq 0) { $why = 'no test is recorded as catching it' }
-                elseif (@($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { $why = 'a doctest caught it' }
-                else {
-                    if ($null -eq $definitions) { $definitions = & $define }
-                    if ($null -eq $baseDefinitions) { $baseDefinitions = & $defineAtBase }
-                    foreach ($test in $tests) {
-                        $function = ($test -split '::')[-1]
-                        if (-not $definitions.ContainsKey($function)) { $why = "its catching test is gone: $test"; break }
-                        $moved = @($definitions[$function] | Where-Object { $changed.Contains($_) })
-                        if ($baseDefinitions.ContainsKey($function)) { $moved += @($baseDefinitions[$function]) }
-                        if ($moved.Count -gt 0) { $why = "its catching test's file changed: $($moved[0])"; break }
-                    }
+            if ($now.Reached) { $why = & $judgeEntry $Change.Base $changedNow $entry $known.Tests }
+            if (-not $why -and $known.Usable -and -not [string]::Equals($known.Commit, $Change.Base, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $short = $known.Commit.Substring(0, [Math]::Min(8, $known.Commit.Length))
+                $then = & $sinceRecord $known.Commit
+                if ($null -eq $then) { $why = "git could not say what changed since it was last swept, at $short" }
+                elseif ($then.Manifest.Every) { $why = "since it was last swept, at ${short}: $($then.Manifest.Every)" }
+                elseif ($then.Manifest.Reached) {
+                    $was = & $judgeEntry $known.Commit $then.Changed $entry $known.Tests
+                    if ($was) { $why = "since it was last swept, at ${short}: $was" }
                 }
             }
             if ($why) {
@@ -976,10 +1111,25 @@ function Select-SabotageEntry {
                 $entry
             }
         })
-    return [pscustomobject]@{
-        All = $false; Entries = $affected; Reasons = $reasons
-        Reason = "$($affected.Count) of $($Entries.Count) entries; its crate changed"
-    }
+    $reason = "$($affected.Count) of $($Entries.Count) entries; "
+    if ($now.Reached) { $reason += 'its crate changed' } else { $reason += 'nothing it builds on changed' }
+    if ($affected.Count -eq 0 -and -not $now.Reached) { $reason = 'nothing it builds on changed' }
+    return [pscustomobject]@{ All = $false; Entries = $affected; Reasons = $reasons; Reason = $reason }
+}
+# `CargoArgs` narrowed to the tests named, each matched exactly: the names go
+# after cargo's `--`, where libtest reads them, and every test binary is given
+# them, so a binary holding none runs nothing and passes. The sweep harness's
+# run of an entry's recorded catching tests (run-sabotage.ps1, Invoke-Sabotaged). `--exact` is added only
+# if the arguments after `--` do not carry it already: libtest refuses it twice,
+# before running anything.
+function Add-TestFilter {
+    param([string[]] $CargoArgs, [string[]] $Tests)
+    $separator = [array]::IndexOf($CargoArgs, '--')
+    if ($separator -lt 0) { return @($CargoArgs) + @('--') + @($Tests) + @('--exact') }
+    $tail = @($CargoArgs | Select-Object -Skip ($separator + 1))
+    $extra = @($Tests)
+    if ($tail -notcontains '--exact') { $extra += '--exact' }
+    return @($CargoArgs) + $extra
 }
 
 # What the host looked like at the moment of a failure, as plain lines. Best

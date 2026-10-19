@@ -229,8 +229,11 @@
     the working tree, so `-Since origin/main` sweeps what a branch changed; when
     the base is not an ancestor of HEAD -- a branch behind it, or a force-push --
     what the base changed since the merge base counts too. A recorded catching
-    test is used only if it was recorded at HEAD or an ancestor of it. Needs
-    cargo on PATH, for `cargo metadata`. `-List` shows each entry's reason.
+    test is used only if it was recorded at HEAD or an ancestor of it, and an
+    entry recorded before the base is judged against everything since its
+    record as well. A sweep of a tree with uncommitted changes records what it
+    learned with no commit, so a later run does not use it. Needs cargo on
+    PATH, for `cargo metadata`. `-List` shows each entry's reason.
 
 .PARAMETER CatcherRecord
     The record of which tests caught each entry that `-Since` reads, and a
@@ -606,16 +609,6 @@ function Invoke-Bounded {
 # instead of merely building them, and then fail for a reason unrelated to the
 # sabotage. The manifest format allows that vector (`testArgs`), so this is the
 # manifest author's mistake to be immune to rather than to warn about.
-# `CargoArgs` narrowed to the tests named, each matched exactly: the names go
-# after cargo's `--`, where libtest reads them, and every test binary is given
-# them, so a binary holding none runs nothing and passes.
-function Add-TestFilter {
-    param([string[]] $CargoArgs, [string[]] $Tests)
-    $tail = @($Tests) + @('--exact')
-    if ([array]::IndexOf($CargoArgs, '--') -lt 0) { return @($CargoArgs) + @('--') + $tail }
-    return @($CargoArgs) + $tail
-}
-
 function Add-CargoFlag {
     param([string[]] $CargoArgs, [string[]] $Flag)
 
@@ -714,10 +707,20 @@ function Invoke-Sabotaged {
     # there, it is caught, and the whole suite is not run. Not caught there, or not
     # judged at all, the whole suite runs as it always did, and its transcript
     # replaces the narrow one.
+    #
+    # A failure counts only when libtest reported a test FAILED. A narrowed run can
+    # also fail before running any test -- arguments it refuses, a filter it cannot
+    # parse -- and crediting that as a catch would report a defect caught that no
+    # test noticed. Such a run, and any other that is not a reported test failure
+    # or a hang, falls through to the whole suite.
     if ($FirstTests -and @($FirstTests).Count -gt 0) {
         $narrow = Invoke-RunPhase -CargoArgs (Add-TestFilter -CargoArgs $CargoArgs -Tests $FirstTests) `
             -WorkingDirectory $WorkingDirectory -TranscriptPath $TranscriptPath -Seconds $TestSeconds
-        if (@('failed', 'hung') -contains $narrow.Outcome) {
+        $credited = $narrow.Outcome -eq 'hung'
+        if ($narrow.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
+            $credited = @(Get-FailedTestName (Read-SharedText -Path $TranscriptPath)).Count -gt 0
+        }
+        if ($credited) {
             $narrow | Add-Member -NotePropertyName Narrowed -NotePropertyValue $true
             return $narrow
         }
@@ -1657,10 +1660,24 @@ function Get-FirstTests {
 }
 # The commit the swept tree is at, recorded with what each entry was caught by,
 # so a later run uses that only in a checkout that contains it (common.ps1,
-# Get-SabotageCatcherTests). Uncommitted edits are swept too and are not in it;
-# a later run measures its change from its own base, which covers them.
-$sweptCommit = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
-if ($sweptCommit) { $sweptCommit = $sweptCommit.Trim() }
+# Get-SabotageCatcherTests). Only for a tree that IS that commit: a sweep reads
+# the working tree, uncommitted edits included, and what it learns there is
+# about a tree no commit names. Recorded at HEAD, it would be taken for HEAD's;
+# once those edits were discarded, a later run would judge an entry by tests
+# that caught it only in a tree that no longer exists. So a tree with any change
+# git sees -- staged, unstaged, or an untracked file it does not ignore -- is
+# recorded with no commit, which no later run uses. Said, so it is not a surprise
+# that a local sweep with edits in hand narrows nothing afterwards.
+$sweptCommit = $null
+$dirty = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $repoRoot status --porcelain -z --untracked-files=normal }))
+if ($LASTEXITCODE -eq 0 -and $dirty.Count -eq 0) {
+    $sweptCommit = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
+    if ($sweptCommit) { $sweptCommit = $sweptCommit.Trim() }
+}
+elseif ($dirty.Count -gt 0) {
+    Write-Report ("The tree has uncommitted changes, so what this sweep learns is recorded without a commit, " +
+        'and will not narrow a later scoped sweep.') -Level note
+}
 # The outcomes in which the patch was judged. Every other one -- the
 # infrastructure outcomes, and a hung build -- says nothing about the tests, and
 # would overwrite what an earlier run learned with nothing.

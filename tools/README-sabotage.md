@@ -608,7 +608,9 @@ entry as it was. It is what lets a later sweep tell which test changes could
 alter an entry's result. Each entry is recorded with the commit it was swept at,
 and a later run uses it only if that commit is in its own history, so a record
 from another branch, or from a run of a later commit, makes it run more, never
-less. It is never committed, and deleting it only makes a scoped sweep run more.
+less; one from an earlier commit is judged against everything since. A sweep of
+a tree with uncommitted changes records no commit, so what it learns there does
+not narrow a later run, and it says so. It is never committed, and deleting it only makes a scoped sweep run more.
 In CI the plan job restores the latest record from the Actions cache once and
 passes that one snapshot to every shard, so the shards select the entries the
 plan counted; each shard uploads its copy, and the `record` job merges them with
