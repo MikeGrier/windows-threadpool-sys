@@ -109,10 +109,6 @@ fn a_failed_completion_keeps_its_identity_and_the_rings_accounting_balances() {
     let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 16).expect("a ring");
     let (faults, control) = call_faults();
     let _registration = register(&ring, Box::new(faults));
-    control.fail_next_completions(1, device());
-    // An empty pop is not a completion, so it spends nothing: the failure waits for a real one.
-    assert!(ring.try_pop().expect("an empty pop").is_none());
-    control.clear();
 
     {
         let mut batch = Batch::new(&mut ring);
@@ -147,6 +143,35 @@ fn a_failed_completion_keeps_its_identity_and_the_rings_accounting_balances() {
     let failed = results[2].as_ref().expect_err("the third was failed");
     assert_eq!(code(failed), DEVICE);
     assert_eq!(ring.outstanding(), 0, "and all retired");
+    ring.run_down().expect("the ring runs down");
+}
+
+#[test]
+fn an_empty_pop_spends_nothing_of_a_failed_completion_plan() {
+    let (_path, file) = scratch("empty-pop");
+    let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 16).expect("a ring");
+    let (faults, control) = call_faults();
+    let _registration = register(&ring, Box::new(faults));
+    control.fail_next_completions(1, device());
+    // An empty pop is not a completion, so it spends nothing: the failure waits for a real one,
+    // which is the next thing popped.
+    assert!(ring.try_pop().expect("an empty pop").is_none());
+
+    let mut batch = Batch::new(&mut ring);
+    batch
+        .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
+        .expect("a flush builds");
+    batch.submit().expect("submitted");
+    let (completion, held) = ring
+        .pop_within(BOUND)
+        .expect("the pop is answered")
+        .expect("a completion arrives");
+    assert!(held.is_some(), "the ring found what it held");
+    let failed = completion
+        .result()
+        .expect_err("the plan was not spent on the empty pop");
+    assert_eq!(code(&failed), DEVICE);
+    assert_eq!(ring.outstanding(), 0);
     ring.run_down().expect("the ring runs down");
 }
 
