@@ -1127,7 +1127,7 @@ The decision is [DI-D-30](DESIGN-NOTES.md#di-d-30); the authoritative text is [C
   3. [x] **Other lineages' gates on it.** The hard part: a gate in another lineage naming an epoch
      that will now never be durable can never release. Those writes must end -- refused, or reported
      never issued -- rather than wait forever, and this is the case cycle detection cannot see.
-  4. [x] **Relation to cancel.** Not operation cancel, which [DI-6+.4](CHECKLIST.md) parks; this is
+  4. [x] **Relation to cancel.** Not operation cancel, which [DI-6+.4](PARKED.md) parks; this is
      cancelling a lineage's future. Whether the two share a mechanism is open.
   5. [x] **Ending a lineage does not wait.** The engineer, 2026-10-06: shutting down a lineage "does
      not have to wait because there is not a lifetime issue and there is not a dependency around
@@ -2772,7 +2772,7 @@ Done by the assistant, as the item was its own. Of the gaps the Windows driver's
 - **Not covered, with what would cover them:** the wait ending *abandoned* needs a mutex to abandon, which
   is [WS-1+.3](../win-sync-sys/CHECKLIST.md); and the creation failures (events, thread-pool waits,
   duplicating the notification) need a fault seam in `win-sync-sys` and `windows-threadpool-sys`. Both are
-  parked as [DI-6+.10](CHECKLIST.md), and the manifest's `notCoveredHere` says each.
+  parked as [DI-6+.10](PARKED.md), and the manifest's `notCoveredHere` says each.
 
 Changed in `win-durable-ioring`: a test-only [held_pool.rs](../win-durable-ioring/src/held_pool.rs), four
 tests, and the manifest.
@@ -3224,7 +3224,7 @@ Access Rights Constants" and "File Attribute Constants". The sorted list, with c
 [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What the reading pass of DI-14.4.1 found". Findings: every condition on the
 arguments alone that a page calls invalid is already unrepresentable in v1 (`FILE_ATTRIBUTE_NORMAL` alone, the
 reparse flag with `CREATE_ALWAYS`, `TRUNCATE_EXISTING` with `GENERIC_WRITE`, the dispositions not combinable), and
-the two that return with [DI-6+.11](CHECKLIST.md) are recorded there. **Two citations this crate carried were
+the two that return with [DI-6+.11](PARKED.md) are recorded there. **Two citations this crate carried were
 wrong:** that delete-on-close needs the `DELETE` right, and that the append right is incompatible with
 no-buffering, are on `ZwCreateFile`'s page and not on any page `CreateFileW` is governed by; both statements are
 corrected, and whether the lower layer's conditions count is asked in [DI-14.4.2](CHECKLIST.md). The volume
@@ -3253,7 +3253,7 @@ Re-planned under the documented-contract rule and split in three: [DI-14.4.1](#d
 the item would have refused what the kernel refused on this machine. What it produced is a sorted, cited list of
 every condition the pages state on the open's arguments, in [DI-D-64](DESIGN-NOTES.md#di-d-64); two corrected
 citations; the conditions that return with `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, recorded on
-[DI-6+.11](CHECKLIST.md); and [DI-14.11](#di-1411).
+[DI-6+.11](PARKED.md); and [DI-14.11](#di-1411).
 
 ### <a id="di-1411"></a>DI-14.11 -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. *(completed 2026-10-18 15:26:12 -04:00)*
 
@@ -3489,3 +3489,12 @@ want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](COMP
 Widening what this crate can open is the structural answer: every option a consumer can pass is an
 option recorded by construction. The rule throughout is documented APIs only
 ([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
+
+## Moved 2026-10-19 12:13:59 -04:00 -- DI-6+.3, withdrawn, on the parked work's move to PARKED.md
+
+The parked milestones moved from [CHECKLIST.md](CHECKLIST.md) to [PARKED.md](PARKED.md), which holds no checked
+items; this withdrawn item, checked in place in `DI-M6+`, comes here instead, verbatim.
+
+- [x] **DI-6+.3** -- **Withdrawn: rebinding a file to a new handle is not this layer's**
+  ([DI-D-11](DESIGN-NOTES.md#di-d-11)). Nothing remains to do here; the obligation it left is in
+  DI-2.2.
