@@ -264,13 +264,7 @@ changes.
 
 - [x] **M34.12** -- Plan only the sabotage manifests a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3412)
 
-- [ ] **M34.13** -- **Record which tests caught each entry.** A sweep writes, beside its transcripts,
-  the tests that failed under each entry it reports caught: library and integration tests by name,
-  doctests by file. An entry caught by a hang, a crash, or a refused build has no names and is
-  recorded as having none. The record is derived data and is not committed: locally it stays in the
-  output directory, and the sweep workflow saves and restores it through the Actions cache. A sweep
-  merges what it learns into what it found, so a scoped sweep does not forget the entries it did
-  not run.
+- [x] **M34.13** -- Record which tests caught each sabotage entry, and keep the record across runs. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3413)
 
 - [ ] **M34.14** -- **Within a manifest, run only the entries a change could have affected.** One
   selection function, used by the harness and by the planner so that both count the same entries

@@ -1525,6 +1525,22 @@ $results = @()
 $sweepClock = [System.Diagnostics.Stopwatch]::StartNew()
 $entryIndex = 0
 
+# Which tests caught each entry (common.ps1, "Which tests caught each entry"),
+# kept beside the transcripts and carried across runs, so a later sweep can tell
+# which test changes could alter an entry's result. Read before the sweep and
+# written after it, keeping what this run did not touch. Keyed by the manifest's
+# path from the repository root.
+$catcherPath = Join-Path $OutputDirectory 'catchers.json'
+$catcherRecord = Read-SabotageCatcherRecord -Path $catcherPath
+$catcherKey = if ($manifestPath.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $manifestPath.Substring($repoRootPrefix.Length).Replace('\', '/')
+}
+else { $manifestPath.Replace('\', '/') }
+# The outcomes in which the patch was judged. Every other one -- the
+# infrastructure outcomes, and a hung build -- says nothing about the tests, and
+# would overwrite what an earlier run learned with nothing.
+$judgedOutcomes = @('passed', 'failed', 'hung', 'build-failed', 'doc-compile-failed')
+
 foreach ($sabotage in $selected) {
     $entryIndex++
     # Announced BEFORE the work, not only after it. A sweep is tens of minutes
@@ -1673,6 +1689,18 @@ foreach ($sabotage in $selected) {
         Actual   = $actual; Ok = $ok; Patch = (Format-Patch -Find $find -Replace $replace)
     }
 
+    if ($judgedOutcomes -contains $run.Outcome) {
+        # The tests that failed are the ones that caught it. A run that passed, or
+        # never ran its tests, is recorded as caught by none, which a later sweep
+        # reads as "any test of the crate might matter".
+        $caughtBy = @()
+        if (@('failed', 'hung') -contains $run.Outcome -and (Test-Path -LiteralPath $transcript)) {
+            $caughtBy = @(Get-FailedTestName (Read-SharedText -Path $transcript))
+        }
+        Set-SabotageCatcher -Record $catcherRecord -Manifest $catcherKey -Entry $sabotage.name `
+            -Tests $caughtBy -At ([DateTime]::UtcNow.ToString('o'))
+    }
+
     $level = if ($ok) { 'good' } else { 'bad' }
     # The completion line carries what the start line could not: how long this
     # entry took, and -- from the mean so far -- roughly how much sweep is left.
@@ -1692,6 +1720,8 @@ foreach ($sabotage in $selected) {
 Write-Report ''
 $results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize -Wrap |
     Out-String | ForEach-Object { $_.TrimEnd("`r", "`n") } | Write-Report
+
+Write-SabotageCatcherRecord -Path $catcherPath -Record $catcherRecord
 
 $unexpected = @($results | Where-Object { -not $_.Ok })
 # Said before the verdict, on every path out, so a sweep that was helped past a

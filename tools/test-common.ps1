@@ -613,6 +613,81 @@ Test-Case 'crate dependencies come from cargo, of every kind, keyed by directory
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# --- Which tests caught each entry ---------------------------------------------
+
+Test-Case 'failed tests are named once each, in order, with doctests and should-panic tests named as their functions' {
+    $text = @(
+        'running 4 tests'
+        'test a::b ... ok'
+        'test a::c ... FAILED'
+        'test a::d - should panic ... FAILED'
+        "test src\lib.rs - Reader (line 12) ... FAILED`r"
+        'test a::c ... FAILED'
+        'test a::e ... ignored'
+        'failures:'
+        '    a::c'
+        'test result: FAILED. 1 passed; 3 failed'
+    ) -join "`n"
+    Assert-Equal 'a::c|a::d|src\lib.rs - Reader (line 12)' (@(Get-FailedTestName $text) -join '|') 'failed ones, deduplicated'
+    Assert-Equal 0 @(Get-FailedTestName "test a::b ... ok`ntest result: ok.").Count 'none failed'
+    Assert-Equal 0 @(Get-FailedTestName $null).Count 'no text'
+}
+
+Test-Case 'a record round-trips through its file, and writes the same bytes whatever order it was built in' {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('catchers-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $one = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $one -Manifest 'crates/b/sabotage.json' -Entry 'z' -Tests @() -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $one -Manifest 'crates/a/sabotage.json' -Entry 'y' -Tests @('t::one') -At '2026-01-02T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $one -Manifest 'crates/a/sabotage.json' -Entry 'x' -Tests @('t::two', 't::three') -At '2026-01-03T00:00:00.0000000Z'
+        $two = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $two -Manifest 'crates/a/sabotage.json' -Entry 'x' -Tests @('t::two', 't::three') -At '2026-01-03T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $two -Manifest 'crates/a/sabotage.json' -Entry 'y' -Tests @('t::one') -At '2026-01-02T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $two -Manifest 'crates/b/sabotage.json' -Entry 'z' -Tests @() -At '2026-01-01T00:00:00.0000000Z'
+        $p1 = Join-Path $dir 'one.json'; $p2 = Join-Path $dir 'nested\two.json'
+        Write-SabotageCatcherRecord -Path $p1 -Record $one
+        Write-SabotageCatcherRecord -Path $p2 -Record $two
+        Assert-Equal ([System.IO.File]::ReadAllText($p1)) ([System.IO.File]::ReadAllText($p2)) 'same bytes'
+        $back = Read-SabotageCatcherRecord -Path $p1
+        Assert-Equal 't::two|t::three' ($back['crates/a/sabotage.json']['x'].Tests -join '|') 'two tests, in order'
+        Assert-Equal 't::one' ($back['crates/a/sabotage.json']['y'].Tests -join '|') 'one test stays a list'
+        Assert-Equal 0 @($back['crates/b/sabotage.json']['z'].Tests).Count 'no tests'
+        Assert-Equal '2026-01-03T00:00:00.0000000Z' $back['crates/a/sabotage.json']['x'].At 'when'
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a record that is missing, not JSON, or of another version reads as empty' {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('catchers-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        Assert-Equal 0 (Read-SabotageCatcherRecord -Path (Join-Path $dir 'none.json')).Count 'missing'
+        foreach ($text in 'not json', '{"version":2,"manifests":{"m":{"e":{"tests":[],"at":"x"}}}}', '{"manifests":{}}', '[]') {
+            $path = Join-Path $dir 'r.json'
+            [System.IO.File]::WriteAllText($path, $text)
+            Assert-Equal 0 (Read-SabotageCatcherRecord -Path $path).Count "read as empty: $text"
+        }
+        [System.IO.File]::WriteAllText($path, '{"version":1,"manifests":{"m":{"e":{"tests":["a"],"at":"x"}}}}')
+        Assert-Equal 1 (Read-SabotageCatcherRecord -Path $path).Count 'and one of this version is read'
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'merging keeps every entry any record has, and the latest of each' {
+    $old = New-SabotageCatcherRecord
+    Set-SabotageCatcher -Record $old -Manifest 'm' -Entry 'shared' -Tests @('old') -At '2026-01-01T00:00:00.0000000Z'
+    Set-SabotageCatcher -Record $old -Manifest 'm' -Entry 'only-old' -Tests @('o') -At '2026-01-01T00:00:00.0000000Z'
+    $new = New-SabotageCatcherRecord
+    Set-SabotageCatcher -Record $new -Manifest 'm' -Entry 'shared' -Tests @('new') -At '2026-01-02T00:00:00.0000000Z'
+    Set-SabotageCatcher -Record $new -Manifest 'n' -Entry 'only-new' -Tests @() -At '2026-01-02T00:00:00.0000000Z'
+    foreach ($order in @(@($old, $new), @($new, $old))) {
+        $merged = Merge-SabotageCatcherRecord -Records $order
+        Assert-Equal 'new' ($merged['m']['shared'].Tests -join '|') 'the latest, whichever came first'
+        Assert-Equal 'o' ($merged['m']['only-old'].Tests -join '|') 'kept from the old'
+        if (-not ($merged.ContainsKey('n') -and $merged['n'].ContainsKey('only-new'))) { throw 'kept from the new' }
+    }
+}
+
 # --- ConvertTo-NativeArgument: one argument, quoted for a command line --------
 
 Test-Case 'a plain argument is left unquoted' {

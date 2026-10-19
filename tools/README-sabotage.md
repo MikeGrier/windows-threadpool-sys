@@ -567,5 +567,17 @@ entry's evidence with another's. A stem of `baseline` is rejected for the same
 reason: that name is taken by the baseline's own transcript, which is the
 evidence that the suite was green before any patching.
 
+`catchers.json` beside them is the one file a sweep keeps across runs: for every
+entry it judged, the tests that failed under its patch, read from the
+transcript, and when. A sweep reads it first and writes it back with what it
+ran, so entries it did not run keep their last result; an outcome that says
+nothing about the tests, such as a binary that was never executed, leaves the
+entry as it was. It is what lets a later sweep tell which test changes could
+alter an entry's result. It is never committed, and deleting it only makes a
+scoped sweep run more. In CI each shard uploads its copy and the `record` job of
+the sweep workflow merges them with
+[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1) into the Actions
+cache, where the next run restores it.
+
 **`-List` is inert**: it creates no directories, copies no tree, and writes and
 deletes nothing. All of that setup happens after the listing path has exited.

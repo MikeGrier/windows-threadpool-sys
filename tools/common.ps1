@@ -539,6 +539,126 @@ function Select-SabotageManifest {
     $reason = if ($crates.Count -eq 0) { 'no crate changed' } else { "crates changed: $($crates -join ', ')" }
     return [pscustomobject]@{ All = $false; Manifests = $affected; Reason = $reason }
 }
+# --- Which tests caught each entry ---------------------------------------------
+#
+# A sweep records, per entry it judged, the tests that failed under its patch,
+# so that a later sweep can tell which test changes could alter that entry's
+# result. It is derived data, not committed: a sweep writes it beside its
+# transcripts and CI keeps it in the Actions cache. Its absence only makes a
+# scoped sweep larger; see DESIGN-NOTES.md, "sabotage-scope".
+#
+# The shape, written by Write-SabotageCatcherRecord:
+#
+#   { "version": 1, "manifests": { "crates/x/sabotage.json": {
+#       "<entry name>": { "tests": ["module::test", ...], "at": "<UTC, round-trip format>" } } } }
+#
+# `at` is when the entry was run. Records from several shards are merged by
+# keeping each entry's latest, and the round-trip format orders as text in the
+# order it orders as time.
+
+# The names of the tests libtest reported FAILED in `Text`, in the order they
+# first appear, each once. A doctest's name is its file and item, `src\lib.rs -
+# Item (line 12)`; a `#[should_panic]` test's ` - should panic` suffix is dropped
+# so the name is the function's.
+function Get-FailedTestName {
+    param([AllowNull()][string] $Text)
+    if (-not $Text) { return }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($match in [regex]::Matches($Text, '(?m)^test (.+?) \.\.\. FAILED[ \t]*\r?$')) {
+        $name = $match.Groups[1].Value -replace ' - should panic$', ''
+        if ($seen.Add($name)) { $name }
+    }
+}
+
+# An empty record.
+function New-SabotageCatcherRecord {
+    return @{}
+}
+
+# The record at `Path` as nested hashtables, manifest to entry to
+# @{ Tests; At }. A file that is missing, unreadable, or not a record of this
+# version reads as empty: the record only ever narrows a sweep, so losing it
+# costs time and nothing else.
+function Read-SabotageCatcherRecord {
+    param([string] $Path)
+    $record = New-SabotageCatcherRecord
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $record }
+    try { $parsed = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json }
+    catch { return $record }
+    if ($null -eq $parsed -or -not ($parsed.PSObject.Properties.Name -contains 'version') -or $parsed.version -ne 1 -or
+        -not ($parsed.PSObject.Properties.Name -contains 'manifests') -or $null -eq $parsed.manifests) {
+        return $record
+    }
+    foreach ($manifest in $parsed.manifests.PSObject.Properties) {
+        $entries = @{}
+        foreach ($entry in $manifest.Value.PSObject.Properties) {
+            $value = $entry.Value
+            if ($null -eq $value -or -not ($value.PSObject.Properties.Name -contains 'at')) { continue }
+            $tests = @()
+            if ($value.PSObject.Properties.Name -contains 'tests' -and $null -ne $value.tests) { $tests = @($value.tests) }
+            # ConvertFrom-Json turns an ISO 8601 string into a DateTime on its own, so a
+            # parsed date is turned back into the round-trip text the merge compares.
+            $at = $value.at
+            if ($at -is [datetime]) { $at = $at.ToUniversalTime().ToString('o') }
+            $entries[$entry.Name] = @{ Tests = [string[]]$tests; At = [string]$at }
+        }
+        $record[$manifest.Name] = $entries
+    }
+    return $record
+}
+
+# Set what caught `Entry` of `Manifest` (a path relative to the root, forward
+# slashes), as of `At`.
+function Set-SabotageCatcher {
+    param([hashtable] $Record, [string] $Manifest, [string] $Entry, [string[]] $Tests, [string] $At)
+    if (-not $Record.ContainsKey($Manifest)) { $Record[$Manifest] = @{} }
+    $Record[$Manifest][$Entry] = @{ Tests = [string[]]@($Tests | Where-Object { $_ }); At = $At }
+}
+
+# One record holding, for every entry any of `Records` has, the latest of them.
+function Merge-SabotageCatcherRecord {
+    param([hashtable[]] $Records)
+    $merged = New-SabotageCatcherRecord
+    foreach ($record in $Records) {
+        if ($null -eq $record) { continue }
+        foreach ($manifest in $record.Keys) {
+            foreach ($entry in $record[$manifest].Keys) {
+                $value = $record[$manifest][$entry]
+                $held = $null
+                if ($merged.ContainsKey($manifest) -and $merged[$manifest].ContainsKey($entry)) { $held = $merged[$manifest][$entry] }
+                if ($null -eq $held -or [string]::CompareOrdinal($value.At, $held.At) -gt 0) {
+                    Set-SabotageCatcher -Record $merged -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At
+                }
+            }
+        }
+    }
+    return $merged
+}
+
+# Write `Record` to `Path` as JSON, keys in ordinal order so that two writes of
+# the same record are the same bytes.
+function Write-SabotageCatcherRecord {
+    param([string] $Path, [hashtable] $Record)
+    $sortedKeys = {
+        param($keys)
+        [string[]] $list = @($keys)
+        [Array]::Sort($list, [System.StringComparer]::Ordinal)
+        , $list
+    }
+    $manifests = [ordered]@{}
+    foreach ($manifest in (& $sortedKeys $Record.Keys)) {
+        $entries = [ordered]@{}
+        foreach ($entry in (& $sortedKeys $Record[$manifest].Keys)) {
+            $value = $Record[$manifest][$entry]
+            $entries[$entry] = [ordered]@{ tests = @($value.Tests); at = $value.At }
+        }
+        $manifests[$manifest] = $entries
+    }
+    $json = [ordered]@{ version = 1; manifests = $manifests } | ConvertTo-Json -Depth 6
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+    [System.IO.File]::WriteAllText($Path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
+}
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than
 # failing the report, because this runs on a path that is already failing.

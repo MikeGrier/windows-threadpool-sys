@@ -3980,3 +3980,15 @@ workflow plans a push against its previous head, skips the sweep when the plan i
 which was a second copy of the shared-input list. Planned against the merge of PR #150 it takes the five tail-watcher manifests
 alone. The patch check of M34.11 also takes in the harness's own [tools/sabotage2.json](tools/sabotage2.json), which nothing in CI
 had read.
+
+## Moved 2026-10-19 01:24:44 -04:00 -- sabotage scope, M34.13: the record of which tests caught each entry
+
+### <a id="m3413"></a>M34.13 -- Record which tests caught each sabotage entry, and keep the record across runs. *(completed 2026-10-19 01:24:44 -04:00)*
+
+A sweep reads `catchers.json` from its output directory, records for every entry it judged the tests libtest reported `FAILED`
+under its patch and when, and writes it back keeping what it did not run; an outcome that says nothing about the tests, and a stale
+patch, leave the entry as it was. The functions are in [tools/common.ps1](tools/common.ps1), "Which tests caught each entry". In CI
+each shard restores the record from the Actions cache, uploads its own, and the sweep workflow's `record` job merges them with
+[tools/merge-sabotage-catchers.ps1](tools/merge-sabotage-catchers.ps1), keeping every entry's latest, and saves the result. Run
+on the two `win-sync-sys` APC entries M34.9 repaired, the record names the test M34.9 added for them and no other. Its tests
+found that `ConvertFrom-Json` turns the timestamp into a date on read, which the reader now turns back.

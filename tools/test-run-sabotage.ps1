@@ -216,7 +216,7 @@ function New-Stub {
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
             'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
-            'link-echoed')] [string] $Behaviour,
+            'link-echoed', 'fail-named')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -259,6 +259,13 @@ function New-Stub {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
         'fail' { "@echo off`r`n$skipBuild`r`n$intact`r`necho test failed`r`nexit /b 101`r`n" }
+        # Fails as libtest reports it, naming the test that caught it and one that
+        # did not, so a case can see which tests a sweep records.
+        'fail-named' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`n" +
+            "echo test marker::is_untouched ... ok`r`necho test marker::is_present ... FAILED`r`n" +
+            "echo test result: FAILED. 1 passed; 1 failed`r`nexit /b 101`r`n"
+        }
         'doc-fail' {
             "@echo off`r`n$skipBuild`r`n$intact`r`n" +
             "echo Couldn't compile the test.`r`nexit /b 101`r`n"
@@ -1891,6 +1898,92 @@ Test-Case 'a command the launcher cannot start is reported as not started, with 
         Assert-Match 'The baseline could not run: cargo could not be started' $result.Output
     }
     finally { Remove-Fixture $root }
+}
+
+# --- the record of which tests caught each entry -------------------------------
+
+Write-Line ''
+Write-Line 'the record of which tests caught each entry'
+
+Test-Case 'a caught entry is recorded with the tests that failed, and a survived one with none' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a comment is added'; file = 'src/lib.rs'; expect = 'survives'; why = 'x'
+        find = @('fn main() {}'); replace = @("fn main() {}`n// harmless")
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $stub = New-Stub -Behaviour 'fail-named' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-True $record.ContainsKey('sabotage.json') 'keyed by the manifest''s path from the root'
+        Assert-Equal 'marker::is_present' ($record['sabotage.json']['the marker is removed'].Tests -join '|') 'the failing test alone'
+        Assert-Equal 0 @($record['sabotage.json']['a comment is added'].Tests).Count 'a survived entry has none'
+        Assert-True ($record['sabotage.json']['the marker is removed'].At -match '^\d{4}-\d\d-\d\dT') 'when it ran'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a sweep keeps what it did not run, and an infrastructure outcome or a stale patch overwrites nothing' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a stale entry'; file = 'src/lib.rs'; expect = 'caught'; why = 'x'
+        find = @('not in the file'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $path = Join-Path $root '.scratch\sabotage\catchers.json'
+        $seed = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $seed -Manifest 'crates/other/sabotage.json' -Entry 'elsewhere' -Tests @('o::t') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $seed -Manifest 'sabotage.json' -Entry 'a stale entry' -Tests @('s::t') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $seed -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('m::t') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path $path -Record $seed
+        # The binary is never executed, so the run says nothing about the tests.
+        $stub = New-Stub -Behaviour 'not-executed' -Root $root
+        Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub) | Out-Null
+        $record = Read-SabotageCatcherRecord -Path $path
+        Assert-Equal 'o::t' ($record['crates/other/sabotage.json']['elsewhere'].Tests -join '|') 'another manifest''s entry is kept'
+        Assert-Equal 's::t' ($record['sabotage.json']['a stale entry'].Tests -join '|') 'a stale patch was not run, so it is kept'
+        Assert-Equal 'm::t' ($record['sabotage.json']['the marker is removed'].Tests -join '|') 'an infrastructure outcome is not a result'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'merge-sabotage-catchers keeps the latest of each entry across shards, and finds records in directories' {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('merge-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $base = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $base -Manifest 'm' -Entry 'a' -Tests @('old') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $base -Manifest 'm' -Entry 'b' -Tests @('kept') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'base.json') -Record $base
+        $shard = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $shard -Manifest 'm' -Entry 'a' -Tests @('new') -At '2026-01-02T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $shard -Manifest 'm' -Entry 'b' -Tests @('kept') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'shards\catchers-m-0\catchers.json') -Record $shard
+        $other = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $other -Manifest 'n' -Entry 'c' -Tests @() -At '2026-01-02T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'shards\catchers-n-0\catchers.json') -Record $other
+
+        $out = Join-Path $dir 'out\catchers.json'
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $script = Join-Path $PSScriptRoot 'merge-sabotage-catchers.ps1'
+        $paths = @((Join-Path $dir 'base.json'), (Join-Path $dir 'shards'), (Join-Path $dir 'missing.json')) -join ','
+        $text = Invoke-Native { & $shell -NoProfile -Command "& '$script' -Path $paths -Output '$out'" } | Out-String
+        Assert-Equal 0 $LASTEXITCODE $text
+        $merged = Read-SabotageCatcherRecord -Path $out
+        Assert-Equal 'new' ($merged['m']['a'].Tests -join '|') 'the shard''s later result'
+        Assert-Equal 'kept' ($merged['m']['b'].Tests -join '|') 'unchanged'
+        Assert-True $merged['n'].ContainsKey('c') 'another shard''s manifest'
+        Assert-Match '3 of 4 record\(s\) found: 3 entries across 2 manifest' $text
+
+        # The workflow writes over its own input; a missing one is still not found.
+        $same = Join-Path $dir 'fresh\catchers.json'
+        $text = Invoke-Native { & $shell -NoProfile -Command "& '$script' -Path '$same' -Output '$same'" } | Out-String
+        Assert-Match '0 of 1 record\(s\) found' $text
+        Assert-True (Test-Path -LiteralPath $same) 'an empty record is still written'
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 # --- the working tree is never touched --------------------------------------

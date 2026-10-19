@@ -190,6 +190,17 @@ jobs:
           # Every shard is a separate job building a different slice, so they
           # must not share a key.
           key: sabotage-${{ matrix.label }}-${{ matrix.shard }}
+      # The record of which tests caught each entry (DESIGN-NOTES.md,
+      # "sabotage-scope"), as the last run left it. Restored by prefix, because
+      # each run saves its own; the exact key below never exists yet, and is
+      # named only because the action requires one. A miss is not an error: the
+      # sweep then records from nothing.
+      - name: Restore the record of which tests caught each entry
+        uses: actions/cache/restore@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sabotage-catchers-
       # Unconditional. A dispatch that named one manifest has already been
       # resolved by `plan`, which emitted jobs for that manifest alone, so there
       # is nothing left for a step-level `if` to decide. The pair of conditional
@@ -229,3 +240,45 @@ jobs:
           path: .scratch/sabotage/*.txt*
           if-no-files-found: ignore
           retention-days: 14
+      # This shard's record, for the `record` job to merge. Whatever the sweep's
+      # verdict: an entry that did not behave as declared was still run, and
+      # what caught it, or did not, is still what the next run needs.
+      - name: Upload the record of which tests caught each entry
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: catchers-${{ matrix.label }}-${{ matrix.shard }}
+          path: .scratch/sabotage/catchers.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # One record for the next run: what this run's shards learned, over what the
+  # last run left. Each shard wrote only the entries it ran on top of the record
+  # it restored, and the merge keeps every entry's latest result, so neither a
+  # shard's slice nor an entry this run did not reach is lost.
+  record:
+    name: keep the record of which tests caught each entry
+    needs: [plan, sweep]
+    if: always() && needs.plan.outputs.jobs != '0'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the record the shards started from
+        uses: actions/cache/restore@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sabotage-catchers-
+      - name: Download the shards' records
+        uses: actions/download-artifact@v8
+        with:
+          pattern: catchers-*
+          path: .scratch/catchers-shards
+      - name: Merge them
+        shell: pwsh
+        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/sabotage/catchers.json, .scratch/catchers-shards -Output .scratch/sabotage/catchers.json
+      - name: Save the record for the next run
+        uses: actions/cache/save@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
