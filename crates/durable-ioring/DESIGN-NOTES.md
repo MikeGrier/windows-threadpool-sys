@@ -81,6 +81,7 @@ appear here.
 | <a id="di-d-67-index"></a>DI-D-67 | **What a name reaches is the caller's responsibility: an open is not checked, refused, bounded or cancelled on account of where its name leads.** The engineer, 2026-10-18: "The responsibility is only on the caller." No check of a name can be complete, since object-manager links and intermediate reparse points redirect regardless of `FILE_FLAG_OPEN_REPARSE_POINT`; a check of the handle cannot reach an open that has not returned; and `CancelSynchronousIo` targets a thread rather than a call and is not guaranteed by its documentation. See [DI-D-67](#di-d-67). |
 | <a id="di-d-68-index"></a>DI-D-68 | **A handle opened elsewhere is not accepted by a file target in this version, and a consumer who knows a device is theirs alone can attest it, which is the only way a Win32 target is `Complete`.** The engineer, 2026-10-18, closing `DI-10.3`: "do the attestation approach", on the assistant's recommendation. Foreign handles stay out, with the residue a `ReOpenFile` cannot convert named; the attestation is a constructor for each of the three kinds of target that takes an unbuffered handle this crate opened. [Section below](#di-d-68). |
 | <a id="di-d-69-index"></a>DI-D-69 | **A file's identity is this crate's `FileId`: the volume serial and the 128-bit identifier `FileIdInfo` reports, read through the handle shared.** The assistant, implementing `DI-15.1`. The type is owned here and not the request crate's; it is read from any `SharedHandle` and from an `OpenedFile` of any access, and nothing is duplicated to read it. [Section below](#di-d-69). |
+| <a id="di-d-70-index"></a>DI-D-70 | **An open by identifier is `OpenedFile::open_by_id`, taking one of three identifier kinds, its own `ByIdOptions`, and any handle as the hint; a `FileId` is checked against the file opened.** The assistant, implementing `DI-15.2`. The checks are the path open's, by the same code; a sharing violation names the file by `OpenedBy`. Observed: a directory opens by identifier without the backup flag, which is [DI-15.5](CHECKLIST.md)'s to rule on. [Section below](#di-d-70). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -175,7 +176,7 @@ for this table.
 | `CreateFileW` as the route | Exposed | The open goes through it | As [DI-D-63](#di-d-63) records. | engineer 2026-10-15 |
 | `CreateFile2` as a second route | Excluded | None | Its parameters are `CreateFileW`'s, packed into `CREATEFILE2_EXTENDED_PARAMETERS` (attributes, flags, security quality of service, security attributes, template), so a second route adds a second set of behaviours to test and expresses nothing the first cannot. Its page documents two share-mode conditions that `CreateFileW`'s does not (exclusive access is granted only to a caller with write access, and a missing `FILE_SHARE_READ` fails a caller without it); whether that is a behavioural difference was not measured. | engineer 2026-10-16 (excluded; see Rulings below); assistant (the text) |
 | `CreateFileTransacted` | Excluded | None | A transacted write is durable at the transaction's commit, so an epoch's warranty would mean nothing. | engineer 2026-10-15 |
-| `OpenFileById` as a call | Exposed | `OpenedFile::open_by_id` ([DI-15.2](CHECKLIST.md)), with an options type of its own | Its page lists no creation disposition, takes no attributes, and marks the security-attributes parameter reserved. It lists SMB as not supported, so an open by ID on a remote share is the kernel's to refuse. So its options are its own type, carrying the access, share mode and flags it takes, and not `FileOptions`, whose disposition and attributes it has no place for. | engineer 2026-10-15; its own options type, engineer 2026-10-18 ("I would assume its own type") |
+| `OpenFileById` as a call | Exposed | `OpenedFile::open_by_id` and `request_by_id` ([DI-15.2](COMPLETED-CHECKLIST.md#di-152)), with an options type of its own, `ByIdOptions` ([DI-D-70](#di-d-70)) | Its page lists no creation disposition, takes no attributes, and marks the security-attributes parameter reserved. It lists SMB as not supported, so an open by ID on a remote share is the kernel's to refuse. So its options are its own type, carrying the access, share mode and flags it takes, and not `FileOptions`, whose disposition and attributes it has no place for. | engineer 2026-10-15; its own options type, engineer 2026-10-18 ("I would assume its own type") |
 | `ReOpenFile` as a call | Exposed | `OpenedFile::reopen` ([DI-15.4](CHECKLIST.md)) | Takes access, share mode and flags only; its page says the flags cannot include attributes, and that the original must have been created by `CreateFile`. Reopening with a different buffering mode is a new `OpenedFile` of the other type. | engineer 2026-10-15 |
 | `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and where a name leads is the caller's responsibility ([DI-D-67](#di-d-67)); what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
 | `hVolumeHint` (ID) | Exposed | Any handle | The hint only tells the call which volume the ID is on and is never the file opened, so its mode reaches nothing the result claims: the opened handle's buffering and access are this crate's choice, and the checks run on it ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)). The page accepts any file on the volume or share. The same reasoning as `hOriginalFile`'s ([DI-D-68](#di-d-68)). | engineer 2026-10-18 ("It should be any handle"), replacing the plan that took only what this crate opened |
@@ -196,7 +197,7 @@ for this table.
 | `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
 | `lpSecurityAttributes`: `bInheritHandle` (CF) | Not in v1 | None; the handle is never inheritable | An inheritable handle reaches child processes that can write through it, and no call this crate makes chooses inheritance. A ruling for v1, not a rejection. | engineer 2026-10-15 |
-| `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back. | assistant |
+| `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back: observed not inheritable ([DI-D-70](#di-d-70)). | assistant |
 | `dwCreationDisposition` (CF) | Exposed, **narrowed for v1** | An enum of `CREATE_NEW`, `OPEN_EXISTING` and `OPEN_ALWAYS`. **`CREATE_ALWAYS` and `TRUNCATE_EXISTING` are excluded for v1 and are to be revisited** ([DI-6+.11](CHECKLIST.md)) | Three of the call's five: the three that never change or empty a file that exists, so no data access is gated by the disposition. The two left out are unrepresentable, so nothing is refused at run time on their account. `create`, `create_new` and `truncate` go, and with them the `OPEN_ALWAYS` plus an emptying that [DI-D-63](#di-d-63) used; a caller empties a file through the lent handle. What an answer to the two needs is measured below. | engineer 2026-10-15 (the five); engineer 2026-10-16 (the two left out for v1, "just to simplify the matrix", to be revisited at a later date) |
 | `FILE_ATTRIBUTE_ARCHIVE`, `HIDDEN`, `OFFLINE`, `READONLY`, `SYSTEM` (CF) | Exposed | Members of the attributes set, for a created file | None. The page says an existing file's attributes are generally combined with the flags and the supplied attributes ignored, and says applications should not change `OFFLINE` arbitrarily. `ID` ignores attributes and `RO` cannot take them, so those entries have none. | plan, [DI-14.3](CHECKLIST.md) |
 | `FILE_ATTRIBUTE_TEMPORARY` (CF) | Exposed | Member | The page says it lets a file system hold data in the cache and avoid writing it back while memory allows, which is within `BestEffort` for a cached file. For an unbuffered file the pages do not say what it does, so the pair is not a contract refusal, and it is **supported** (the engineer, 2026-10-18, [DI-14.4.3](COMPLETED-CHECKLIST.md#di-1443)): the attribute concerns when cached data is written back, and an epoch's durability here comes from the flush this crate issues, never from write-back timing, so there is no analytic ground to narrow. | standing |
@@ -209,7 +210,7 @@ for this table.
 | `FILE_FLAG_OPEN_REPARSE_POINT` (CF, ID, RO) | Exposed | Builder method, explicit | The handle is to the reparse point and not its target, so the remote check has to look at the target ([DI-14.5](CHECKLIST.md)). No longer set automatically on a new file. | engineer 2026-10-15 |
 | `FILE_FLAG_OPEN_NO_RECALL` (CF, ID, RO) | Exposed | Builder method | None. Intended for remote storage systems. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_POSIX_SEMANTICS` (CF, RO) | Exposed | Builder method | None. The page says files made with it may not be reachable by older applications. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
-| `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. | engineer 2026-10-15 |
+| `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. An open by identifier was observed to open a directory without it, though the `OpenFileById` page says it is required ([DI-D-70](#di-d-70)); whether that is refused is [DI-15.5](CHECKLIST.md). | engineer 2026-10-15 |
 | `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Exposed | Builder method, [DI-14.9](COMPLETED-CHECKLIST.md#di-149) | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; what the ring does on such a handle was measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147). The run opened through `CreateFileW` only, which is all `FileOptions` reaches today. Earlier ruled out of v1 unless the ring needed it. | engineer 2026-10-15, 2026-10-16, 2026-10-18 |
 | `FILE_FLAG_SESSION_AWARE` (CF) | Not in v1 | None | The page says it matters to processes in session 0 and is supported only on server editions; a small interest and hard to test. | engineer 2026-10-15 |
 | `SECURITY_SQOS_PRESENT` and the `SECURITY_*` flags (CF, RO) | Excluded | None | The `ReOpenFile` page confines them to the client side of a named pipe, and the `CreateFileW` page does not say what they do for a file. A file target does not impersonate a server. | engineer 2026-10-15 |
@@ -229,7 +230,8 @@ documentation, never made a check ([the documented-contract rule](../../DESIGN-N
 **Not verified, and stated as such.**
 
 - Whether `CreateFile2` behaves differently from `CreateFileW` beyond what the pages say.
-- Whether the handles `OpenFileById` and `ReOpenFile` return are inheritable; their pages do not say.
+- Whether the handle `ReOpenFile` returns is inheritable; its page does not say. (`OpenFileById`'s, whose page
+  does not say either, was observed not to be: [DI-D-70](#di-d-70).)
 - What `FILE_ATTRIBUTE_TEMPORARY` does with `FILE_FLAG_NO_BUFFERING`.
 - What an `OpenedFile` claims for a stream name or a device name.
 - Whether `ReOpenFile` accepts a handle that came from `OpenFileById`.
@@ -265,7 +267,8 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   documents two conditions, an open asking for what the other does not share and an open not sharing what
   the other holds, and fails both with `ERROR_SHARING_VIOLATION`; no documented call reports the other
   open's access or sharing. So the error is a `SharingViolation`, with the kind `ResourceBusy`, that
-  carries what *this* open asked for (data access, rights, sharing, path) and keeps the kernel's own
+  carries what *this* open asked for (data access, rights, sharing, and the path or, since
+  [DI-D-70](#di-d-70), the identifier it named the file by) and keeps the kernel's own
   error as its `source`, which satisfies both statements. It does not name a side.
 - Measured on local NTFS, Windows 11 build 26300: every pair of opens over the three accesses a share mode
   judges (read, write, delete) and the eight share modes on each side, 576 pairs, is accepted or refused
@@ -961,7 +964,7 @@ blocker), and [DI-15.4](CHECKLIST.md) amended to reopen from any handle.
    The `FILE_ID_INFO` page: "The file identifier and the volume serial number uniquely identify a file on a single
    computer." As an identifier for `OpenFileById` it is `ExtendedFileIdType`, which the `FILE_ID_DESCRIPTOR` page
    ties to ReFS and which an NTFS file's bytes were observed to open as; that the open succeeds is
-   [DI-15.2](CHECKLIST.md)'s to test, not this decision's to assume. The 64-bit `FileIdType` and `ObjectIdType` are
+   [DI-15.2](COMPLETED-CHECKLIST.md#di-152)'s to test, not this decision's to assume (it does, [DI-D-70](#di-d-70)). The 64-bit `FileIdType` and `ObjectIdType` are
    the other two kinds [DI-D-64](#di-d-64)'s `lpFileId` row exposes; they are not forms of `FileId`.
 3. **It is read through the handle shared.** `FileId::of(&SharedHandle)` hands the request crate's `QueryFileIdInfo`
    a clone of the `SharedHandle`, and `OpenedFile::file_id` calls it with the file's own, so no handle is duplicated
@@ -980,3 +983,53 @@ an OS code. These are anecdote, and the page is the authority.
 
 **Scheduled work.** [DI-15.2](CHECKLIST.md), amended in the same change to open by all three kinds of identifier,
 `FileId` among them.
+
+## <a id="di-d-70"></a>DI-D-70: an open by identifier, and the check a FileId needs
+
+**What is decided.** The assistant, implementing [DI-15.2](COMPLETED-CHECKLIST.md#di-152), within the engineer's
+rulings of 2026-10-15 and 2026-10-18 recorded in [DI-D-64](#di-d-64)'s `OpenFileById`, `hVolumeHint` and `lpFileId`
+rows:
+
+1. **`FileIdentifier` names the three kinds**: `Extended(FileId)` for `ExtendedFileIdType`, `FileId64(u64)` for
+   `FileIdType`, and `ObjectId([u8; 16])` for `ObjectIdType`. A `FileId` converts into one. The object ID is carried as
+   the bytes of the `GUID` as Windows lays one out, which is how `FSCTL_CREATE_OR_GET_OBJECT_ID` reports it and
+   `fsutil objectid` prints it, and is turned into the request crate's `u128` at the boundary: that value is the
+   `GUID` read as `GUID::from_u128` reads one, so the three little-endian fields are turned around. A test opens a
+   file by the object ID `fsutil` created for it, which is what shows the reading is right.
+2. **`ByIdOptions<A>` carries what the page lists and [DI-D-64](#di-d-64) exposes**: the data access `A`, the other
+   rights, the share mode, and the reparse-point, no-recall, overlapped, random-access and sequential-scan flags. No
+   disposition, attributes or security, which the page does not take; no delete-on-close or POSIX semantics, which it
+   does not list; no backup semantics or write-through, which are not in v1 for any open. The buffering flag is `B`'s.
+3. **Built and performed in two steps**, as an open by path is (`DI-13.7.4`): `OpenedFile::request_by_id` builds a
+   `ByIdRequest`, which is `Send` and can be performed more than once, and `open_by_id` runs the two together. The
+   hint is any `impl Into<SharedHandle>`, held shared.
+4. **An open by `Extended` reads the opened file's identity and refuses it if it is not the one asked for**, with
+   `IdentityMismatch` as an `InvalidInput` error, and the handle is closed. The call takes the volume from the hint
+   and never sees the `FileId`'s serial, so without the check a hint on another volume opens whatever has that
+   identifier there and returns it as the file asked for: a wrong answer, and a silent one. The cost is one
+   `FileIdInfo` query on each open by `FileId`. `FileId64` and `ObjectId` name no volume, so there is nothing to
+   compare and no check.
+5. **The checks on the opened handle are the path open's, made by the same function** (`OpenedFile::admit`), so the
+   two cannot drift: for `Unbuffered`, the remote check and `UnknownLocation`. No test reaches them by identifier,
+   since the page lists SMB as not supported and the call opens only a file on a file system; the sabotage manifest
+   declares that survivor.
+6. **`SharingViolation` names the file by `OpenedBy`**, a path or an identifier, in place of the `path` field it had.
+   It was not in a release, so its shape changed rather than a second error being added for the same condition.
+
+**Observed, on Windows 11 build 26300 on NTFS, unelevated, by the tests.** These are anecdote, and the pages are the
+authority.
+
+- The file's own handle, its directory, and the volume opened asking for no access are each a hint that works.
+- The 64-bit ID `GetFileInformationByHandle` reports, the object ID `fsutil objectid create` made, and an identity
+  from a directory listing (`FileIdExtdDirectoryInfo`, read through `windows-file-enumeration-sys`) each open the file.
+- An identifier that names nothing fails with error 87; an event as the hint, with error 6.
+- The handle is not inheritable; the page does not say.
+- **A directory opens by identifier without `FILE_FLAG_BACKUP_SEMANTICS`**, for every data access and in either
+  buffering mode, though the page says the flag is required to obtain a handle to a directory; an open of the same
+  directory by path without it fails with error 5. So an `OpenedFile`, and a target made from one, can be a
+  directory, which nothing before could make. Nothing refuses it; [DI-15.5](CHECKLIST.md) is the engineer's to rule on.
+- **A file deleted by name while held open still opens by identifier.** The page says that a file "pending deletion as
+  a result of a previous call to `DeleteFile`" fails with `ERROR_ACCESS_DENIED`; what state `std::fs::remove_file`
+  left the file in was not examined. Nothing here depends on it.
+
+**Scheduled work.** [DI-15.5](CHECKLIST.md): whether an open by identifier that reaches a directory is refused.

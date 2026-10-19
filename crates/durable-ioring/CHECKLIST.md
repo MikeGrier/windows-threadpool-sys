@@ -278,20 +278,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-15.1** -- A file's identity, `FileId`, is read from an opened file or any shared handle, and the `lpFileId` row cites the `FILE_ID_DESCRIPTOR` page. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-151)
 
-- [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open through `OpenFileById` by an identifier of
-  any of the three kinds [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `lpFileId` row exposes: a `FileId`
-  ([DI-D-69](DESIGN-NOTES.md#di-d-69)) as `ExtendedFileIdType`, the 64-bit `FileIdType`, and the
-  `ObjectIdType`; how the latter two are named is decided here. With a
-  volume hint that is **any handle** on the volume (the engineer, 2026-10-18,
-  [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `hVolumeHint` row): the hint is never the file opened, so its mode
-  reaches nothing the result claims. **Its options are a type of its own**
-  (the engineer, 2026-10-18), carrying the typed access, share mode and flags `OpenFileById` takes, with
-  the data access `A` ([DI-13.8](#di-138)); its page has no disposition and no attributes, and its
-  security parameter is reserved. The checks are the open's, made on the opened handle and nowhere else
-  ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)): the remote check and, unbuffered, `UnknownLocation`
-  ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)). Tests: round trip of a file opened by path and again
-  by ID; an ID from a directory listing (`FileIdExtdDirectoryInfo`) opens by ID; a stale ID is the
-  kernel's error; whether the handle it returns is inheritable, which the page does not say.
+- [x] **DI-15.2** -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-152)
 
 - [ ] **DI-15.3** -- **Opening relative to a directory handle: confirm there is no documented route,
   then record what stands in for it.** The assistant knows of no documented Win32 call that opens a
@@ -310,12 +297,23 @@ option recorded by construction. The rule throughout is documented APIs only
   from any handle can meet, since the original may be a pipe or `NUL`. `ReOpenFile` documents that the
   new access and sharing cannot conflict with a previous open that is still open; each conflict the
   table lists is a test, and a sharing violation reaches the caller as the typed error from `DI-13.4`,
-  not a panic. Documented as well: the object must have been created by `CreateFile`; an
+  not a panic: `SharingViolation` names what was opened by `OpenedBy` ([DI-D-70](DESIGN-NOTES.md#di-d-70)),
+  which gains a form for what a reopen names. Documented as well: the object must have been created by `CreateFile`; an
   `OpenedVolume` and an `OpenedDisk` are opened through `CreateFileW` too, so whether a volume or a disk
   reopens is a test, not an assumption. The request crate's tests already show a reopen widening read to
   write on a file; this layer tests it again on its own types. Also tests, from
   [DI-D-64](DESIGN-NOTES.md#di-d-64)'s unverified list: whether a handle that came from `OpenFileById`
   (`DI-15.2`) reopens, and whether the reopened handle is inheritable.
+
+- [ ] **DI-15.5** -- **Decide whether an open by identifier that reaches a directory is refused.** Observed
+  ([DI-D-70](DESIGN-NOTES.md#di-d-70)): `OpenFileById` opened a directory without `FILE_FLAG_BACKUP_SEMANTICS`, for
+  every data access and in either buffering mode, though its page says the flag is required to obtain a handle to a
+  directory, and an open of the same directory by path is refused by the kernel. So an `OpenedFile`, and a
+  `Win32FileTarget` made from one, can now be a directory, which no open before could make. The engineer's to rule:
+  refuse it on the opened handle, where the other checks are made ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)); leave
+  it to the caller, as [DI-D-67](DESIGN-NOTES.md#di-d-67) leaves where a name leads; or something else. The test
+  `a_directory_was_observed_to_open_by_identity_where_by_path_it_is_refused` states today's behaviour and follows the
+  ruling.
 
 ## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
 

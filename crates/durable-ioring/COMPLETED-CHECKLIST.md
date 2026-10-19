@@ -3342,3 +3342,13 @@ through the handle shared; `FileId::of(&SharedHandle)` and `OpenedFile::file_id`
 [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `lpFileId` row now cites it and the ruling stands; [DI-15.2](CHECKLIST.md) was
 amended to open by all three. The tests include the item's two (stable across two opens, different between two files),
 and the sabotages include a control.
+
+### <a id="di-152"></a>DI-15.2 -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. *(completed 2026-10-19 00:22:26 -04:00)*
+
+`FileIdentifier` names the three kinds of the `FILE_ID_DESCRIPTOR` page (`Extended(FileId)`, `FileId64(u64)`,
+`ObjectId([u8; 16])`); `ByIdOptions<A>` carries what `OpenFileById` takes and [DI-D-64](DESIGN-NOTES.md#di-d-64)
+exposes; `request_by_id` and `open_by_id` build and perform the open, with the path open's checks made by the same
+function. An open by `FileId` reads the opened file's identity and refuses another volume's file with
+`IdentityMismatch`, and `SharingViolation` now names the file by `OpenedBy`. The decision and what was observed are
+[DI-D-70](DESIGN-NOTES.md#di-d-70). The observation that a directory opens by identifier without the backup flag is
+queued as [DI-15.5](CHECKLIST.md) for the engineer to rule on.
