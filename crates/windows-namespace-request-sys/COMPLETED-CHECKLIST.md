@@ -415,3 +415,37 @@ Queued from the review of durable-ioring's `DI-M15`, for `DI-15.1`. The decision
 [D-31](DESIGN-NOTES.md#d-31). The untyped entry's own test now checks that its bytes and the typed entry agree,
 and the agreement with what `windows-file-enumeration-sys` reports is a test in that crate. Four sabotages caught
 and one control survived.
+
+## Moved 2026-10-18 21:05:37 -04:00 -- `NR-2`, `NR-3` and `NR-4` are complete
+
+Every item of the three groups is archived above under its own heading; their stubs were deleted with this move.
+What follows is each group's opening text, which was in the checklist and is recorded nowhere else.
+
+### NR-2 -- Storage-locality queries, one entry per call
+
+Opened 2026-10-06 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
+durable-ioring lets a consumer declare each file's **flush domains** -- the disks, caches, virtual
+disks or shares its writes depend on
+([DI-D-21](../durable-ioring/DESIGN-NOTES.md#di-d-21)) -- and a locality helper (root `M39`) derives
+them from Windows' storage topology. Each call was a catalogue entry of its own, per [D-3](DESIGN-NOTES.md#d-3),
+and the entries moved to `win-volume-sys` with `NR-2.6` and `NR-2.8`.
+
+### NR-4 -- Adopt `win-error-codes`
+
+Opened 2026-10-15. This crate had its own `Win32Error`, which converted a code of 2^31 or more to
+`io::Error` without keeping the code. See [WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1).
+
+### NR-3 -- What durable-ioring's open surface needs of this crate
+
+Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
+`OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
+consumer are the ones this crate can carry, and some were missing or in the way. All are policy-free,
+like the rest of this crate: durable-ioring decides which of them a consumer may use.
+
+The path work was **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the
+whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and split into
+`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile`, `WatchDirectory` and
+`ResolveFullPath`. Every other entry takes a handle, an identifier or a class. All three take a
+`Wtf16String`, and none has a length limit, a validation of its own beyond an interior NUL, or a
+`\\?\` rewrite.

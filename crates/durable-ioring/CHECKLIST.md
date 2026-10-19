@@ -284,9 +284,10 @@ option recorded by construction. The rule throughout is documented APIs only
   if it differs. Tests: the ID of an opened file is stable across two opens and differs between two
   files.
 
-  > **-> CROSS-COMPONENT PREREQUISITE:** [NR-3.10](../windows-namespace-request-sys/CHECKLIST.md)
-  > (a typed `FileIdInfo` read, in `crates/windows-namespace-request-sys`). The 128-bit ID is
-  > `GetFileInformationByHandleEx`'s `FileIdInfo`, which that crate gives only as raw bytes; this crate
+  > **-> CROSS-COMPONENT PREREQUISITE (met 2026-10-18):** [NR-3.10](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-310-fileid)
+  > (a typed `FileIdInfo` read, in `crates/windows-namespace-request-sys`), now `QueryFileIdInfo`
+  > ([D-31](../windows-namespace-request-sys/DESIGN-NOTES.md#d-31)). The 128-bit ID is
+  > `GetFileInformationByHandleEx`'s `FileIdInfo`, which that crate gave only as raw bytes; this crate
   > forbids `unsafe`, and the typed decode belongs with the call.
 
 - [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
