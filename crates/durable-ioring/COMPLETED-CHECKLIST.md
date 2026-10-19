@@ -376,7 +376,7 @@ The decision is [DI-D-17](DESIGN-NOTES.md#di-d-17), and the authoritative text i
 
 The decision is [DI-D-18](DESIGN-NOTES.md#di-d-18). The item as it stood at completion, with each point's outcome, follows verbatim. Point 11's prerequisite moved to `DI-3+.2` on the engineer's agreement: the design binds to the contract `M31.1` states, and the first code that relies on it is `DI-3+.2`.
 
-- [ ] **DI-2.3** -- **Completion routing under Model A and Model B.** The two delivery
+- [x] **DI-2.3** -- **Completion routing under Model A and Model B.** The two delivery
   architectures `windows-ioring-sys` supports ([D-3](../windows-ioring-sys/DESIGN-NOTES.md#d-3)):
   **Model A, threadless dispatch**, is the thread pool's -- the ring's completion event is wired to
   a pool wait (`EventDelivery`), and a pool thread runs a callback when completions arrive, so no
@@ -442,7 +442,7 @@ The decision is [DI-D-18](DESIGN-NOTES.md#di-d-18). The item as it stood at comp
 
 The decision is [DI-D-19](DESIGN-NOTES.md#di-d-19), whose closing summary states the settled specifics, and the authoritative text is [API.md](API.md) section 12. Point 8's outcome is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose specifics continue as `DI-2.10`. The item as it stood at completion follows verbatim, including point 1's superseded answer and point 5's correction.
 
-- [ ] **DI-2.9** -- **Durability lineages: the specifics** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
+- [x] **DI-2.9** -- **Durability lineages: the specifics** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
   Lineages are adopted as the normal way to get independent durability within one instance; this
   item settles how they work. Working position from the session (not decided):
 
@@ -541,7 +541,7 @@ The decision is [DI-D-19](DESIGN-NOTES.md#di-d-19), whose closing summary states
 
 The decision is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose closing summary states the settled specifics, and the authoritative text is [API.md](API.md) section 13 and [CONTRACT.md](CONTRACT.md)'s failures section and requirements. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.10** -- **Caller-declared flush domains: the specifics**
+- [x] **DI-2.10** -- **Caller-declared flush domains: the specifics**
   ([DI-D-21](DESIGN-NOTES.md#di-d-21)). Graduated from the parked `DI-6+.2`, whose concept and
   handover are recorded at `M33+.5` in [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md).
   Reworked 2026-10-06 from "one declared regime per file" to **a set of flush domains per file**.
@@ -604,7 +604,7 @@ The decision is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose closing summary states
 
 The decisions are [DI-D-22](DESIGN-NOTES.md#di-d-22) (completion-gated flushes only) and [DI-D-23](DESIGN-NOTES.md#di-d-23) (gate cycles detected); the contract change is [CONTRACT.md](CONTRACT.md)'s non-guarantee `Nothing about writes outside the seal`. Point 2 moved to DI-2.12, point 3's optimization is DI-6+.7, and the redefinition of `covered` that point 5 surfaced is DI-2.12 point 9. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.4** -- **Multi-file epochs.** The set of files each epoch wrote, and how
+- [x] **DI-2.4** -- **Multi-file epochs.** The set of files each epoch wrote, and how
   `make_durable_through(n)` over epochs that touched N files is done: a chain of N covering flushes
   (serialised device flushes, and a barrier that also waits on writes of still-open epochs above
   `n`) or host sequencing (observe only the writes tagged at or below `n`, then N unordered flushes
@@ -691,7 +691,7 @@ The decisions are [DI-D-22](DESIGN-NOTES.md#di-d-22) (completion-gated flushes o
 
 The decision is [DI-D-24](DESIGN-NOTES.md#di-d-24). The readiness signal's form and wake-up rules continue as DI-2.14, restating [API.md](API.md) as the trait is DI-2.15, and the conformance oracle is DI-3+.7. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.5** -- **A trait or a concrete type first.** The contract is something layers above may
+- [x] **DI-2.5** -- **A trait or a concrete type first.** The contract is something layers above may
   implement as well as consume; decide whether it is a trait from the start, or a concrete type
   until the fault-injecting implementation (DI-3+.3) gives a second implementation to extract one
   from.
@@ -730,7 +730,7 @@ The decision is [DI-D-24](DESIGN-NOTES.md#di-d-24). The readiness signal's form 
 
 The authoritative text is [API.md](API.md) section 11 (`WriteOptions::caching`, no consumer flush). The completion fence is parked as DI-6+.8, and per-operation cancel stays parked as DI-6+.4. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.6** -- **The operation set.** Reads go through the ring and are not epoch members;
+- [x] **DI-2.6** -- **The operation set.** Reads go through the ring and are not epoch members;
   tagged writes; `make_durable_through`. No consumer operation may interfere with dioring's control
   of the ring ([DI-D-10](DESIGN-NOTES.md#di-d-10)), so what remains open is which *mediated*
   operations dioring offers. **Cancel: the engineer leans towards not offering it in v1**, because
@@ -764,7 +764,7 @@ The authoritative text is [API.md](API.md) section 11 (`WriteOptions::caching`, 
 
 The decision is [DI-D-25](DESIGN-NOTES.md#di-d-25); the authoritative text is [CONTRACT.md](CONTRACT.md)'s `Ending an instance` and [API.md](API.md) section 14. Ending a lineage, which need not wait, continues under DI-2.13. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.7** -- **Review what dropping a dioring instance means.** Raised by the engineer while
+- [x] **DI-2.7** -- **Review what dropping a dioring instance means.** Raised by the engineer while
   approving DI-1.2 Q3 ("I suspect none but something that should be reviewed"). Points to settle,
   each with the assistant's first view:
 
@@ -858,7 +858,7 @@ The decision is [DI-D-25](DESIGN-NOTES.md#di-d-25); the authoritative text is [C
 
 The decision is [DI-D-26](DESIGN-NOTES.md#di-d-26). What each event names, the time base, the provider's name and GUID, and installing the manifest continue as DI-3+.6. The ring crate's `M31+.1` was queued and withdrawn during this item. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.11** -- **ETW events for delays.** The engineer, 2026-10-06: "delays are inevitable
+- [x] **DI-2.11** -- **ETW events for delays.** The engineer, 2026-10-06: "delays are inevitable
   with shared resources. we should plan for etw logging for delays." Lineages and instances share
   submission-queue capacity, the deliverer, dioring's lock and (under Model B) a thread, so a seal
   can be delayed by work it has no durability relation to; the remedy is to make every such delay
@@ -928,7 +928,7 @@ The decision is [DI-D-26](DESIGN-NOTES.md#di-d-26). What each event names, the t
 
 The decision is [DI-D-27](DESIGN-NOTES.md#di-d-27). Points 2-9 were the assistant's stances, approved together by the engineer ("seems right, let's move on"). Writing them into [CONTRACT.md](CONTRACT.md) and [API.md](API.md) is DI-2.16; the router is DI-3+.8; the default provider's optimizations are DI-6+.6. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.12** -- **The durability provider.** From DI-2.4 point 2. The engineer first proposed
+- [x] **DI-2.12** -- **The durability provider.** From DI-2.4 point 2. The engineer first proposed
   registered domains and a three-phase flush session, so that coupled domains with different names
   could minimise the physical flush count. Reshaped 2026-10-06 after the assistant's feedback that
   per-domain participants and a session protocol add back the coupling they were meant to remove
@@ -1029,7 +1029,7 @@ The decision is [DI-D-27](DESIGN-NOTES.md#di-d-27). Points 2-9 were the assistan
 
 The decision is [DI-D-28](DESIGN-NOTES.md#di-d-28). Stating the wake-up rules in [CONTRACT.md](CONTRACT.md) and the signal in [API.md](API.md) is DI-2.16; the harness check is DI-3+.7. Point 5 went against the assistant's stance, and point 4's first stance is superseded in place. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.14** -- **The readiness signal: form and wake-up rules.** From DI-2.5 point 4: the trait
+- [x] **DI-2.14** -- **The readiness signal: form and wake-up rules.** From DI-2.5 point 4: the trait
   carries a signal set whenever an entry becomes available, from any source, so Model A and Model
   B are written once over the trait. To settle, and to state in CONTRACT.md rather than leave to
   each implementation:
@@ -1071,7 +1071,7 @@ The decision is [DI-D-28](DESIGN-NOTES.md#di-d-28). Stating the wake-up rules in
 
 The authoritative text is [CONTRACT.md](CONTRACT.md) (Terms `Durability provider` and `Covered`; guarantee 4; the non-guarantees on writes outside the seal, on what a commit waits for, and on timeouts; the provider warranty; `How a seal is made durable`; per-domain failure reach; `The readiness signal`) and [API.md](API.md) sections 15 and 16 with the sketch. Two restatements outside the item's list were corrected in the same sweep: guarantee 4's `never a silent stall` (with an amendment marker on [DI-D-13](DESIGN-NOTES.md#di-d-13)), and `No bound on what a commit waits for`, which still described the ring barrier DI-D-22 had removed. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.16** -- **Write the durability provider into [CONTRACT.md](CONTRACT.md) and
+- [x] **DI-2.16** -- **Write the durability provider into [CONTRACT.md](CONTRACT.md) and
   [API.md](API.md)** ([DI-D-27](DESIGN-NOTES.md#di-d-27)). CONTRACT.md: redefine "Covered" in
   Terms; restate DI-D-9 rule (c)'s incidental coverage; add the per-domain failure scope beside
   DI-D-21's rule; add the provider's success warranty to the consumer's requirements; state that a
@@ -1089,7 +1089,7 @@ The authoritative text is [CONTRACT.md](CONTRACT.md) (Terms `Durability provider
 
 The authoritative text is [API.md](API.md) section 17 and its sketch. One consequence was forced rather than chosen and is recorded as a refinement on [DI-D-24](DESIGN-NOTES.md#di-d-24): `Epoch` and every shared type that carries an identity is generic over one `Identities` bundle, because an epoch holds a lineage. The readiness signal is `readiness()` rather than a placeholder, DI-2.14 having settled its form. Renaming the concrete type to `Dioring` and the signal's move to dioring's own event left markers on DI-D-15, DI-D-17 and DI-D-18. One open question surfaced and is DI-2.17. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.15** -- **Restate [API.md](API.md) as the trait** ([DI-D-24](DESIGN-NOTES.md#di-d-24)).
+- [x] **DI-2.15** -- **Restate [API.md](API.md) as the trait** ([DI-D-24](DESIGN-NOTES.md#di-d-24)).
   The sketch becomes a core trait with associated identity types and a registered-buffer extension
   trait, `DurableRing` becomes dioring's implementation of both, and the prose sections that name
   concrete types are updated to match. The readiness signal is a placeholder until DI-2.14 settles
@@ -1101,7 +1101,7 @@ The authoritative text is [API.md](API.md) section 17 and its sketch. One conseq
 
 The decision, with the list of features such a type has, is [DI-D-29](DESIGN-NOTES.md#di-d-29); the type is in [API.md](API.md)'s sketch and section 17. The engineer asked whether a canonical type existed and, assuming not, for one of the crate's own: none fits -- `std::fs::File` is not cheap to share, the ring's `SharedFile` exposes no handle (so a provider could not flush it out of band), and the namespace crate's `CapturedHandle` owns a duplicate. Handing the ring the same handle needs `windows-ioring-sys` `M31.3`, added to DI-3+.2's prerequisite. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.17** -- **Does the contract own its file type?** Found while restating the API as the
+- [x] **DI-2.17** -- **Does the contract own its file type?** Found while restating the API as the
   trait (DI-2.15): the core trait names `windows-ioring-sys`' `SharedFile` in `add_file`,
   `remove_file` and `FileWrites`, so every implementation depends on the ring crate for that one
   type -- unlike `WriteCaching`, which the contract owns for exactly that reason (DI-2.6). Either
@@ -1114,7 +1114,7 @@ The decision, with the list of features such a type has, is [DI-D-29](DESIGN-NOT
 
 The decision is [DI-D-30](DESIGN-NOTES.md#di-d-30); the authoritative text is [CONTRACT.md](CONTRACT.md) `Ending a lineage` and [API.md](API.md) section 18 (`end_lineage`, `EndLineageError`, `Entry::LineageEnded`), compile-checked. The engineer approved the assistant's six stances together ("close it"). The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.13** -- **A lineage its holder will not finish.** Raised with DI-2.4 point 4; the
+- [x] **DI-2.13** -- **A lineage its holder will not finish.** Raised with DI-2.4 point 4; the
   engineer, 2026-10-06: "We may need to implementation cancellation just in general but only because
   somewhere along the line the holder of a lineage may decide not to finish it for whatever reason."
   Working position, hedged as the engineer hedged it -- whether v1 needs it is itself open:
@@ -1226,6 +1226,7 @@ Two findings. The kernel accepts queue sizes of zero, so ring creation is refuse
 and a zero-length buffer both registered -- so those error paths are unreached by tests;
 [dioring.rs](src/dioring.rs) says what would reach them, and [sabotage.json](sabotage.json) records
 it. Six sabotages, each caught, and a control that survives.
+
 ## Moved 2026-10-07 19:18:33 -04:00 -- DI-3.2.2.1: plain I/O and the shared delivery
 
 ### <a id="di-3221"></a>DI-3.2.2.1 -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. *(completed 2026-10-07 19:18:33 -04:00)*
@@ -2250,7 +2251,7 @@ what is left for it. The assistant's choices are queued in `DI-9.7`.
 
 The item as it stood at completion:
 
-- [ ] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
+- [x] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
   interrupt time and Windows faults today, so they move to a portable mock clock and fault, which
   the split needs: once `durable-ioring` has no Windows dependency, they could not build.
 
@@ -2280,7 +2281,7 @@ its own crate, and the core's runs both, because the driver's tests also pin the
 
 The item as it stood at completion:
 
-- [ ] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
+- [x] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
   the driver, the Windows backend and file target, `ErrorCode`'s reading from an `io::Error`, the
   readiness `Event`, the interrupt clock, the oracle's readiness check, and `DioringIds`' default
   time type; `durable-ioring` left with no Windows dependency. CONTRACT.md's worked examples drive
@@ -2304,7 +2305,7 @@ they are, and a failure there is the item's finding, not a regression in the spl
 
 The item as it stood at completion:
 
-- [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
+- [x] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
   tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
   describes for a crate with a portable core.
 
@@ -2838,6 +2839,7 @@ of [DI-D-46](DESIGN-NOTES.md#di-d-46): a panic is for a programming error, never
   panics; no test can reach it, since making one needs `unsafe`, so the manifest's `notCoveredHere` says so.
 - The manifest's `notCoveredHere` no longer says a failing pop and a full submission queue are
   untestable: a failing pop is reached through the ring crate's call responder, and a push no longer submits.
+
 ### <a id="di-7+4"></a>DI-7+.4 -- Model A's handler is told when the instance's pop fails, and the in-memory backend refuses what it cannot hold. *(completed 2026-10-14 18:04:18 -04:00)*
 
 From the second round of the review of [PR 126](https://github.com/MikeGrier/windows-threadpool-sys/pull/126).
@@ -2854,6 +2856,7 @@ From the second round of the review of [PR 126](https://github.com/MikeGrier/win
   panics if an operation is queued or a completion is waiting, since replacing the buffers would
   invalidate a region it names, a caller's programming error ([DI-D-59](DESIGN-NOTES.md#di-d-59)). Three
   sabotage entries.
+
 ## Moved 2026-10-14 19:26:34 -04:00 -- DI-9.8.2: the portable job's first CI run
 
 ### <a id="di-982"></a>DI-9.8.2 -- The portable CI job's first run is read: the crate's tests run on Linux and macOS. *(completed 2026-10-14 19:26:34 -04:00)*
@@ -3466,12 +3469,19 @@ written, which these items condense, is in git at the revision before the one th
 milestone; the decision rows named below carry the reasons.
 
 #### DI-9.1 -- Lineage handles ([DI-D-42](DESIGN-NOTES.md#di-d-42), from `DI-3.2.5.1`)
+
 #### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
+
 #### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
+
 #### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
+
 #### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
+
 #### DI-9.6 -- The driver on the core ([DI-3.10.3.5.6.1 to DI-3.10.3.5.6.2.6](COMPLETED-CHECKLIST.md))
+
 #### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
+
 #### DI-9.8 -- Owed by the assistant
 
 ### DI-M10 -- Target backings

@@ -1310,6 +1310,7 @@ instead prove it reached the state it claims to exercise.
   **Found while adding tests:** `temp_file` keyed its fixture on the process id alone, so the second test in
   this binary would have raced the first for one path -- libtest runs them as concurrent threads. Now tagged
   per test.
+
 ### M18 -- The population no runtime technique reaches
 
 Population C, and the one that produced the two most severe findings of the M14 review round. `get_mut`
@@ -2640,6 +2641,7 @@ almost every failing test in this crate.
 > in the field. What the paragraph got right is the finding that prompted it -- the guards were
 > genuinely uncovered. It is left standing rather than rewritten because the archive is history,
 > and because the error in it is instructive: it priced a seam it never checked was necessary.
+
 ### <a id="m235"></a>M23.5 -- Both asserts in `IoRing::drop` are now reached by tests, and the seam the item priced turned out not to be needed. *(completed 2026-09-23 23:20:27 -04:00)*
 
 M23.4 left both asserts in `IoRing::drop` uncovered: suppressing them entirely left every test in
@@ -3909,6 +3911,7 @@ The decision, including why naive pruning was rejected as worse than the leak, i
     so a flush could never say which group of writes it belonged to. It is
     `Option<(Option<T>, X)>` now: the outer option is whether the ring stowed anything, the
     inner one whether what it stowed included a buffer.
+
 ## Moved 2026-09-26 00:31:44 -04:00 -- M28.4.1d.2b, the cost of a single payload type
 
 ### <a id="m2841d2b"></a>M28.4.1d.2b -- Record what a single payload type costs a consumer holding heterogeneous buffers, and decide whether anything is owed. *(completed 2026-09-26 00:31:44 -04:00)*
@@ -3941,6 +3944,7 @@ that a consumer multiplexing buffer types over one ring "will not generally" fin
 each free. Of the seventeen ring types the conversion introduced, one carried two buffer
 types through what had been a single ring, and its writes were already sequential. The
 prediction was made from a single observation and tested against sixteen more.
+
 ## Moved 2026-09-26 10:26:56 -04:00 -- M28.4.1d.3, the commit that ended the break
 
 ### <a id="m2841d3"></a>M28.4.1d.3 -- Retire the token API and apply D-74. *(completed 2026-09-26 10:26:56 -04:00)*
@@ -4009,6 +4013,7 @@ including the README's headline example, which is the first thing a consumer rea
 rewritten. The census in [response_space_census.rs](tests/response_space_census.rs) also
 caught two unbounded `try_pop` spins that the rename made visible to it; both are now
 bounded pops.
+
 ## Moved 2026-09-26 11:54:28 -04:00 -- M28.4.2, sabotaging the inventory
 
 ### <a id="m2842"></a>M28.4.2 -- Sabotage the inventory: a push that does not record, and a pop that does not retire, must both turn the suite red. *(completed 2026-09-26 11:54:28 -04:00)*
@@ -4053,6 +4058,7 @@ one at a time, and `pop_within` went a full milestone without it.
 guarantee survived its type -- `Appender` keeps a `RingContract` and must observe both
 ends -- so it is relocated to the appender, alongside a new completion-side case that
 replaces the retired `M22.2` ordering one.
+
 ## Moved 2026-09-26 13:05:21 -04:00 -- M28.5, the tokenless push
 
 ### <a id="m285"></a>M28.5 -- Answer the tokenless push. *(completed 2026-09-26 13:05:21 -04:00)*
@@ -4088,6 +4094,7 @@ asserts with two cases rather than one. And the first manifest case was crash-ca
 (STATUS_STACK_BUFFER_OVERRUN): manufacturing a payload needs an `X` from nowhere, and
 `std::mem::zeroed()` on a ring whose sidecar is `&'static str` is a null reference.
 The case is arithmetic now, and fails by assertion on every ring.
+
 ## Moved 2026-09-26 13:30:33 -04:00 -- M28.6, sweeping what the break made false
 
 ### <a id="m286"></a>M28.6 -- Sweep what the break makes false. *(completed 2026-09-26 13:30:33 -04:00)*
@@ -4135,6 +4142,7 @@ documentation needs its output read, not just its exit code.
 `MUTATION-SURVIVORS.md` and the `M18.1` borrow-surface table are dated captures and
 were **annotated, not edited** -- the record of what was measured then is the thing worth
 keeping, but a reader should not learn from a compile error that an item is gone.
+
 ## Moved 2026-09-26 16:39:03 -04:00 -- M28.7, decided against
 
 ### <a id="m287"></a>M28.7 -- Decide whether the ring should check conservation itself. *(completed 2026-09-26 16:39:03 -04:00)*
@@ -4184,6 +4192,7 @@ becomes answerable and the question is live again.
 **Also fixed while here:** three links to `src/pending.rs`, which `M28.4.1d.3`
 deleted -- this item's own, and one each in `D-71` and `D-74`. All now point at the
 design session that holds the material.
+
 ## Moved 2026-09-26 17:24:22 -04:00 -- M28.8, the duplication closed properly
 
 ### <a id="m288"></a>M28.8 -- Give `RingContract` an in-flight count, and delete the counter that duplicates it. *(completed 2026-09-26 17:24:22 -04:00)*
@@ -4838,6 +4847,7 @@ a wedged pool and a broken probe are not confusable.
 never have dispatched in this process, or whether it was put into this state during setup. Nothing
 in these runs needs a callback before the deliveries are armed at about 2.5ms, so there is no
 earlier successful dispatch to compare against. A period of one or two milliseconds would give one.
+
 ### <a id="m261314"></a>M26.13.14 -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. *(completed 2026-09-27 16:59:53 -04:00)*
 
 **Same probe as [M26.13.13](COMPLETED-CHECKLIST.md#m261313), period changed from a hundred
@@ -4874,6 +4884,7 @@ without changing the machine's timer behaviour under the measurement. Item 0 is 
 wait on an **already-signalled** event at process start instead: due immediately, no timer
 resolution needed, and in the kernel-delivered class that fails.
 [measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+
 ### <a id="m261315"></a>M26.13.15 -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". *(completed 2026-09-27 19:43:47 -04:00)*
 
 **Three results, from one experiment and one census.**
@@ -4924,6 +4935,7 @@ is gone -- [M26.13.11](COMPLETED-CHECKLIST.md#m261311) found three parked worker
 growth is now accounted for. The question becomes: the factory holds parked workers and a queued
 packet and does not put them together. The next measurement is the factory's own counters via
 `NtQueryInformationWorkerFactory`, read from a dump taken while stalled.
+
 ### <a id="m261316"></a>M26.13.16 -- No thread alive at the stall ever runs a callback, in 12 of 12, while a passing run serves the delivery on a pre-existing thread in 30 of 30: the parked workers are present and unused, so `M26.13.11`'s "not starved" survives but the inference drawn from it does not. *(completed 2026-09-27 20:20:01 -04:00)*
 
 **Prompted by a question about [M26.13.15](COMPLETED-CHECKLIST.md#m261315):** was the thread that
@@ -4982,6 +4994,7 @@ sharpens rather than contradicts.
 whether the factory believes it has an available worker while three sit parked in
 `NtWaitForWorkViaWorkerFactory`. If the counters say zero available while the stacks say three
 parked, that disagreement is the fault.
+
 ### <a id="m261317"></a>M26.13.17 -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. *(completed 2026-09-27 21:46:03 -04:00)*
 
 **Built the instrument the question needed.** `windows-threadpool-sys` gained inline hooks on
@@ -5048,6 +5061,7 @@ carried here.
 asking each factory, never by reading stacks. A parked `TppWorkerThread` says *a* pool has a worker;
 in a process with more than one factory it does not say which, and here that distinction was the
 whole answer.
+
 ### <a id="m261318"></a>M26.13.18 -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. *(completed 2026-09-27 22:37:50 -04:00)*
 
 **From a suggestion in review**: the hooks were arriving after the tests started, so put something
@@ -5095,6 +5109,7 @@ because every observation is of a call *ntdll* makes and neither case involves o
 **What is left is outside this workspace's reach.** A worker factory with no workers, permitted to
 create one, not paused and not shut down, owes a callback and does not make the thread to run it
 until `NtReleaseWorkerFactoryWorker` asks. Why is inside the kernel.
+
 ### <a id="m261319"></a>M26.13.19 -- An ETW kernel trace confirms the missing worker independently of the ntdll hooks: across 900 traced runs exactly one process has a gap over a second, the failing one, at 5008.7ms against a healthy 0.232-17.928ms. *(completed 2026-09-28 00:08:32 -04:00)*
 
 **Why a second instrument.** Everything known about the missing worker came from hooks this
@@ -5140,6 +5155,7 @@ event anywhere for a packet arriving at a completion port or for a worker factor
 **Queued rather than taken:** `DISPATCHER`, which adds `ReadyThread` and would name what causes the
 worker to appear in a healthy run. Left out here to keep a machine-wide trace small; it is now the
 whole of M26.13 experiment 1.
+
 ### <a id="m261320"></a>M26.13.20 -- Re-verified the reproducer's premises from a clean build: the 3-test reduction matches the full binary (16 vs 18 in 4000), the trigger is necessary (0 in 4000 without it), one victim suffices at about half the rate, and "fail together, never singly" was wrong. *(completed 2026-09-28 08:27:01 -04:00)*
 
 **Why re-check the setup at all.** Nineteen findings had accumulated on top of a reproducer that was
@@ -5200,6 +5216,7 @@ about 2.4 ms later -- so the trigger has finished before the victims arrive. Tha
 passing ones, with an indistinguishable gap distribution, so it is simply how `libtest` schedules
 these three tests. Reading the failures alone would have promoted a constant to a discriminator;
 the passing control is the only reason that did not happen.
+
 ### <a id="m26141"></a>M26.14.1 -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. *(completed 2026-09-28 12:57:52 -04:00)*
 
 **From a review reading**: that `dropping_with_nothing_outstanding_does_not_hang` poisons the
@@ -5238,6 +5255,7 @@ once.
 and this cannot separate them. Nor why a ring is needed when the wait is on an ordinary event.
 Both are queued as M26.14.2.
 [measurements/2026-09-28-the-teardown-is-what-poisons/](../windows-threadpool-sys/measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
+
 ### <a id="m26142"></a>M26.14.2 -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. *(completed 2026-09-28 20:39:34 -04:00)*
 
 **The decisive run**: three arms interleaved, 20000 each, pipes drained asynchronously, 60s bound
@@ -5288,6 +5306,7 @@ why the decisive arms used 20000.
 **Raised, not taken:** M26.14.3 asks whether `windows-threadpool-sys` should adopt the draining
 teardown, which is a one-argument change with real semantic weight -- a drop that blocks until a
 pending callback runs can deadlock a caller. M26.14.4 asks for the threshold sweep if it does not.
+
 ## <a id="moved-2026-10-01-m20-through-m24"></a>Moved 2026-10-01 21:19:21 -04:00 -- M20 through M24, and the M21+/M22+/M28+ buckets they filled
 
 Eight milestones, every item in them complete. Each item was archived individually as it

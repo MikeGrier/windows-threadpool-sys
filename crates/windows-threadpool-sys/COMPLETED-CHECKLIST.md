@@ -179,6 +179,7 @@ implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIG
 The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
 as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
 in test commentary rather than in documentation or the pull request description.
+
 ## Moved 2026-08-21 -- M17 custom-close owner for non-`CloseHandle` wait targets
 
 - [x] **M17.1** -- Let `ThreadpoolWait` own a wait target whose close routine is **not** `CloseHandle`. Today
@@ -427,6 +428,7 @@ the already-traced `io` trampoline.
 **The one gap left open deliberately:** `CallbackEnviron::set_cleanup_group` is a public raw seam
 that lets a caller install their own cleanup-group cancel callback. That function would be the
 caller's, not ours, so there is nothing here to bracket.
+
 ## Moved 2026-10-01 11:54:34 -04:00 -- M-T4.9, which channel carries a developer-facing report
 
 ### <a id="m-t49"></a>M-T4.9 -- Decided: a developer-facing report is a trace event, and the crate writes nothing to stderr. *(completed 2026-10-01 11:54:34 -04:00)*
@@ -584,6 +586,7 @@ shows the cancelling form leaves the default pool unable to make its first worke
   Note what it does *not* establish: it excludes "the rate is unchanged", not "the rate is zero",
   and it is not a root cause. `M26.9` may be called closed on this; the open question is why the
   close-behind-disarm stalls the pool at all.
+
 ### M-T5 -- Why the pool stops making workers
 
 Opened 2026-09-30. `M-T4` shipped a fix whose correctness is structural rather than statistical --

@@ -1704,6 +1704,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   the tests, which is why the patch is now printed on every unexpected result; and a **too-short
   timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
   against, so the bound errs generous.
+
 ## Moved 2026-09-01 -- Thread ambient mutation gaps
 
 ### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
@@ -2185,6 +2186,7 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   Queued rather than left as a note precisely because a half-adopted abstraction is the state most
   likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
   reasonably conclude that is the house style.
+
 ## Moved 2026-09-07 -- M34.4: the native-command guard became shared support, proven on both hosts
 
 ### <a id="m344"></a>M34.4 -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route every capture site through it, and prove it on both PowerShell hosts. *(completed 2026-09-07 21:16:31 -04:00)*
@@ -2362,6 +2364,7 @@ namespace operation is.
   `#[cfg(doctest)] #[doc = include_str!("../README.md")]`, so a contract change breaks the build instead of
   leaving the README teaching the old answer. Verify by sabotage that the README examples are genuinely
   executed rather than merely parsed. M23.4 retains the *composite's* documentation.
+
 ## M23 -- `windows-thread-ambient-sys`: the composite
 
 - [x] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
@@ -2550,6 +2553,7 @@ assumed:
   holding a prepared path, two captured handles, and captured security attributes, outliving every input
   at once and still working on a thread that saw none of them -- plus the crate example, the README
   example compiled as a doctest, and confirmation that the changelog baseline matches its siblings.
+
 ## M25 -- `windows-namespace-request-sys`: the handle-producing entries
 
 Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.

@@ -509,6 +509,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
+
 ## Moved 2026-09-09 -- M2.6: what `GetFullPathNameW` does, and whether it stays
 
 ### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 UTC-04:00)*
@@ -608,6 +609,7 @@ request as it was written, and quotes the module doc as it read before the corre
   operation completed successfully" under a message saying something failed. And attach it only to a
   condition that is genuinely an OS failure: a call that returned a size rather than an error should
   not carry one, since `GetLastError` says nothing about it.
+
 ## Moved 2026-09-10 -- M2.1: the report oracle
 
 ### <a id="m21"></a>M2.1 -- Add a report oracle to this crate. *(completed 2026-09-10 19:45:50 UTC-04:00)*
