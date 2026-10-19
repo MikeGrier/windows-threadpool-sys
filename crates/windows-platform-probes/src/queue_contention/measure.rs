@@ -4,119 +4,35 @@
 //! The measurement: `measure` and the timer for each shape and regime it runs.
 
 use super::*;
+
+#[cfg(test)]
+mod tests;
+
 /// Time every configuration, sampled as `sampling` says.
 ///
-/// [`Sampling::default`] is the run the published figures came from.
+/// [`Sampling::default`] takes the published counts, interleaved; with
+/// [`Order::Sequential`] it is the procedure the figures published before `M4.4`
+/// came from.
 #[must_use]
 pub fn measure(sampling: &Sampling) -> Observation {
     let mut isolated = Vec::new();
     let mut drained = Vec::new();
 
     for &producers in &sampling.producer_counts {
-        isolated.push(median_run(
-            shapes::BASELINE_FETCH_ADD,
-            producers,
-            sampling,
-            time_contended_atomic,
-        ));
-        isolated.push(median_run(
-            shapes::SLOTWISE_MPSC,
-            producers,
-            sampling,
-            time_isolated_mpsc,
-        ));
-        isolated.push(median_run(
-            shapes::RESERVING_MPSC,
-            producers,
-            sampling,
-            time_isolated_reserving,
-        ));
-        isolated.push(median_run(
-            shapes::PERMIT_MPSC,
-            producers,
-            sampling,
-            time_isolated_permit,
-        ));
-
-        drained.push(median_run(
-            shapes::SLOTWISE_MPSC,
-            producers,
-            sampling,
-            time_drained_mpsc,
-        ));
-        drained.push(median_run(
-            shapes::RESERVING_MPSC,
-            producers,
-            sampling,
-            time_drained_reserving,
-        ));
-        drained.push(median_run(
-            shapes::PERMIT_MPSC,
-            producers,
-            sampling,
-            time_drained_permit,
-        ));
-
-        isolated.push(median_run(
-            shapes::CLAIM_NARROW,
-            producers,
-            sampling,
-            time_isolated_layout::<Balanced>,
-        ));
-        isolated.push(median_run(
-            shapes::CLAIM_DEEP,
-            producers,
-            sampling,
-            time_isolated_layout::<Enduring>,
-        ));
-        isolated.push(median_run(
-            shapes::CLAIM_PERPETUAL,
-            producers,
-            sampling,
-            time_isolated_layout::<Perpetual>,
-        ));
-        // Gated on the architectures where a 128-bit exchange is native; see the
-        // `Wide` import above. `#[cfg]` governs only the statement that follows
-        // it, so each of the two pushes carries its own.
-        #[cfg(any(
-            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
-            target_arch = "aarch64"
-        ))]
-        isolated.push(median_run(
-            shapes::CLAIM_WIDE,
-            producers,
-            sampling,
-            time_isolated_layout::<Wide>,
-        ));
-
-        drained.push(median_run(
-            shapes::CLAIM_NARROW,
-            producers,
-            sampling,
-            time_drained_layout::<Balanced>,
-        ));
-        drained.push(median_run(
-            shapes::CLAIM_DEEP,
-            producers,
-            sampling,
-            time_drained_layout::<Enduring>,
-        ));
-        drained.push(median_run(
-            shapes::CLAIM_PERPETUAL,
-            producers,
-            sampling,
-            time_drained_layout::<Perpetual>,
-        ));
-        #[cfg(any(
-            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
-            target_arch = "aarch64"
-        ))]
-        drained.push(median_run(
-            shapes::CLAIM_WIDE,
-            producers,
-            sampling,
-            time_drained_layout::<Wide>,
-        ));
+        let (regimes, mut timers): (Vec<Regime>, Vec<(&'static str, Timer<'static>)>) =
+            configurations()
+                .into_iter()
+                .map(|(regime, shape, timer)| (regime, (shape, timer)))
+                .unzip();
+        for (regime, run) in regimes
+            .into_iter()
+            .zip(runs(producers, sampling, &mut timers))
+        {
+            match regime {
+                Regime::Isolated => isolated.push(run),
+                Regime::Drained => drained.push(run),
+            }
+        }
     }
 
     Observation {
@@ -127,6 +43,118 @@ pub fn measure(sampling: &Sampling) -> Observation {
             .map(std::num::NonZeroUsize::get),
         sampling: sampling.clone(),
     }
+}
+
+/// Which table a configuration's row belongs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Regime {
+    Isolated,
+    Drained,
+}
+
+/// Boxes a timer, so the configurations can be listed together.
+fn timer(timer: fn(usize, usize) -> Repetition) -> Timer<'static> {
+    Box::new(timer)
+}
+
+/// Every configuration timed at one producer count.
+///
+/// **In the order the measurement took before `M4.4`, and that order is load
+/// bearing**: [`Order::Sequential`] walks this list, so it is what lets the
+/// published figures be retaken. The two regimes are interleaved in it -- the
+/// comparison shapes in both, then the layouts in both -- because that is how
+/// they were measured, and in each regime the same-code control's two halves,
+/// `reserving_mpsc` and `reserving(32/32)`, sit several entries apart.
+fn configurations() -> Vec<(Regime, &'static str, Timer<'static>)> {
+    let mut list = vec![
+        (
+            Regime::Isolated,
+            shapes::BASELINE_FETCH_ADD,
+            timer(time_contended_atomic),
+        ),
+        (
+            Regime::Isolated,
+            shapes::SLOTWISE_MPSC,
+            timer(time_isolated_mpsc),
+        ),
+        (
+            Regime::Isolated,
+            shapes::RESERVING_MPSC,
+            timer(time_isolated_reserving),
+        ),
+        (
+            Regime::Isolated,
+            shapes::PERMIT_MPSC,
+            timer(time_isolated_permit),
+        ),
+        (
+            Regime::Drained,
+            shapes::SLOTWISE_MPSC,
+            timer(time_drained_mpsc),
+        ),
+        (
+            Regime::Drained,
+            shapes::RESERVING_MPSC,
+            timer(time_drained_reserving),
+        ),
+        (
+            Regime::Drained,
+            shapes::PERMIT_MPSC,
+            timer(time_drained_permit),
+        ),
+        (
+            Regime::Isolated,
+            shapes::CLAIM_NARROW,
+            timer(time_isolated_layout::<Balanced>),
+        ),
+        (
+            Regime::Isolated,
+            shapes::CLAIM_DEEP,
+            timer(time_isolated_layout::<Enduring>),
+        ),
+        (
+            Regime::Isolated,
+            shapes::CLAIM_PERPETUAL,
+            timer(time_isolated_layout::<Perpetual>),
+        ),
+    ];
+    // Gated on the architectures where a 128-bit exchange is native; see the
+    // `Wide` import in the facade. `#[cfg]` governs only the statement that
+    // follows it, so each of the two pushes carries its own.
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
+        target_arch = "aarch64"
+    ))]
+    list.push((
+        Regime::Isolated,
+        shapes::CLAIM_WIDE,
+        timer(time_isolated_layout::<Wide>),
+    ));
+    list.push((
+        Regime::Drained,
+        shapes::CLAIM_NARROW,
+        timer(time_drained_layout::<Balanced>),
+    ));
+    list.push((
+        Regime::Drained,
+        shapes::CLAIM_DEEP,
+        timer(time_drained_layout::<Enduring>),
+    ));
+    list.push((
+        Regime::Drained,
+        shapes::CLAIM_PERPETUAL,
+        timer(time_drained_layout::<Perpetual>),
+    ));
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
+        target_arch = "aarch64"
+    ))]
+    list.push((
+        Regime::Drained,
+        shapes::CLAIM_WIDE,
+        timer(time_drained_layout::<Wide>),
+    ));
+    list
 }
 
 /// The floor: N threads incrementing one shared counter.

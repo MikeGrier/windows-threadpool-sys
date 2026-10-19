@@ -20,39 +20,7 @@ correctness in the archive.
 
 - [x] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of them rather than for the subset. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m41)
 
-- [ ] **M4.4** -- Interleave each candidate with a nearby control instead of measuring the control
-  four runs away from it, and re-measure everything that changes.
-
-  **Gap:** `measure()` runs, per producer count, `baseline_fetch_add`, `slotwise_mpsc`,
-  `reserving_mpsc`, `permit_mpsc`, then the three drained shapes, then the layout rows starting with
-  `reserving(32/32)`. The same-code control is the `reserving_mpsc` row against the
-  `reserving(32/32)` row -- **four measurements apart**, each five repetitions of 50,000 pushes per
-  producer. Frequency, thermal and scheduler drift across that interval is folded into the control,
-  and into every candidate the control is used to judge. At sixteen and thirty-two producers, where
-  the machine is oversubscribed and the layout differences are smallest, that is exactly where it
-  matters most.
-
-  This is the first *specific* mechanism proposed for the 7-61% same-configuration spread recorded in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding); the other candidates there are general.
-  Reported by review.
-
-  **Target:** measure each candidate adjacent to a control run of the same code, or randomise and
-  balance the order across repetitions so drift cannot align with position in the sequence. Whichever
-  is chosen, the control must end up measuring the same interval the candidate did.
-
-  **BLOCKER, same as M4.3:** interleaving changes the measurement, so every figure published in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) becomes a measurement of a different procedure. The item is
-  "change it *and* re-run the sweep *and* rewrite the sections", not a reordering. Doing it
-  mid-branch would invalidate figures that ten review rounds have been read against. Raised rather
-  than silently deferred, per the PRIME DIRECTIVE.
-
-  **Re-planned 2026-10-19: M4.2 was built first, and reading what it measures still waits on this
-  item.** A control that is not paired cannot answer whether lengthening the run narrows the spread
-  -- that answer is confounded by the same drift this item removes. But the order that matters is
-  between this item and *reading* a lengthened run, not building the means to take one: M4.2's
-  defaults are the old constants, so it moved no figure. See
-  [The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling), which
-  states the confound for anyone who runs the flags before this lands.
+- [x] **M4.4** -- Interleave each candidate with a nearby control instead of measuring the control four runs away from it, and re-measure everything that changes. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m44)
 
 - [x] **M4.2** -- Give the measurement probes the controls needed to act on a dispersion finding, so "gather more data along this axis" does not require editing a `const` and rebuilding. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m42)
 

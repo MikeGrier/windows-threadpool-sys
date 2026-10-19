@@ -141,13 +141,11 @@ pub const PRODUCER_COUNTS: &[usize] = &[1, 2, 4, 8, 16, 32];
 /// -- lengthen the span and raise the repetitions on the unchanged configuration
 /// -- is a command-line argument and not a source edit. The
 /// [default](Sampling::default) is the three constants above, so a run given no
-/// settings is the run the published figures came from. What a run used travels
-/// with its [`Observation`] and is printed in its report.
+/// settings takes the published counts. What a run used travels with its
+/// [`Observation`] and is printed in its report.
 ///
-/// **Until `M4.4` pairs each candidate with its control, a lengthened run cannot
-/// show whether the control narrowed**: the control is still measured several
-/// configurations away from what it is compared with, so drift across that
-/// interval lands in it either way.
+/// **The order passes are taken in is a setting too, since `M4.4`**, and its
+/// default changed there: see [`Order`] for what the figures measured before it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sampling {
     /// Pushes each producer performs in one timed pass: the length of the span.
@@ -159,6 +157,8 @@ pub struct Sampling {
     /// The producer counts measured, in the order given. Scaling is reported
     /// against the one-producer row, so a list without 1 reports no scaling.
     pub producer_counts: Vec<usize>,
+    /// The order the timed passes are taken in.
+    pub order: Order,
 }
 
 impl Default for Sampling {
@@ -167,6 +167,7 @@ impl Default for Sampling {
             pushes_per_producer: PUSHES_PER_PRODUCER,
             repetitions: REPETITIONS,
             producer_counts: PRODUCER_COUNTS.to_vec(),
+            order: Order::Interleaved,
         }
     }
 }
@@ -174,7 +175,7 @@ impl Default for Sampling {
 impl Sampling {
     /// The settings `probe-queue-contention` takes, which are this type's
     /// fields.
-    pub const FLAGS: [Flag; 3] = [
+    pub const FLAGS: [Flag; 4] = [
         Flag {
             name: "pushes-per-producer",
             value: "N",
@@ -189,6 +190,12 @@ impl Sampling {
             name: "producers",
             value: "N,N,...",
             help: "producer counts to measure, in order; 1,2,4,8,16,32 when not given",
+        },
+        Flag {
+            name: "order",
+            value: "interleaved|sequential",
+            help: "how passes are ordered; interleaved when not given, sequential being the \
+                   order of the figures published before M4.4",
         },
     ];
 
@@ -214,6 +221,13 @@ impl Sampling {
         }
         if let Some(value) = given.get("producers") {
             sampling.producer_counts = probe_args::positive_list("producers", value)?;
+        }
+        if let Some(value) = given.get("order") {
+            sampling.order = Order::from_name(value).ok_or_else(|| ArgError::Invalid {
+                flag: "order",
+                value: value.to_owned(),
+                reason: "is neither `interleaved` nor `sequential`".to_owned(),
+            })?;
         }
         let largest = sampling
             .producer_counts
@@ -241,6 +255,58 @@ impl Sampling {
     #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// The order a run takes its timed passes in (`M4.4`).
+///
+/// **Interleaved by default, because the same-code control is two rows.** The
+/// control is `reserving_mpsc` against `reserving(32/32)`: the same code measured
+/// twice in one run. Taken back to back, each configuration's passes fill their
+/// own stretch of the run, so the control's two halves were measured several
+/// configurations apart, and drift across that interval -- frequency, thermal,
+/// the scheduler -- landed inside the control and inside every comparison judged
+/// against it. Interleaved, every configuration at a producer count takes one pass
+/// per round, so each row's passes are spread across the same rounds.
+///
+/// **Sequential is kept, not replaced.** It is the order every figure published
+/// before `M4.4` was measured in, so it is what retakes them, and running both on
+/// one host is the measurement that says whether interleaving narrowed the
+/// control there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// One pass of every configuration per round, the first position moving on
+    /// by one each round so that no configuration is always measured first.
+    Interleaved,
+    /// Every pass of one configuration before the next configuration starts.
+    Sequential,
+}
+
+impl Order {
+    /// The name the command line and the test corpus give this order.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Interleaved => "interleaved",
+            Self::Sequential => "sequential",
+        }
+    }
+
+    /// The order a [`name`](Self::name) names, if it names one.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Interleaved, Self::Sequential]
+            .into_iter()
+            .find(|order| order.name() == name)
+    }
+
+    /// How the report's sampling line describes this order.
+    #[must_use]
+    pub const fn described(self) -> &'static str {
+        match self {
+            Self::Interleaved => "passes interleaved across configurations",
+            Self::Sequential => "each configuration's passes back to back",
+        }
     }
 }
 
@@ -566,10 +632,64 @@ fn median_run(
     // Both found by review.
     let _ = timer(producers, pushes_per_producer);
 
-    let repetitions = sampling.repetitions;
-    let mut results: Vec<Repetition> = (0..repetitions)
+    let results: Vec<Repetition> = (0..sampling.repetitions)
         .map(|_| timer(producers, pushes_per_producer))
         .collect();
+    summarise(shape, producers, pushes_per_producer, results)
+}
+
+/// A configuration's timer, boxed so a run's configurations can sit in one list.
+type Timer<'a> = Box<dyn FnMut(usize, usize) -> Repetition + 'a>;
+
+/// Time every configuration in `timers` at `producers`, in the order
+/// `sampling.order` says, and return one [`Run`] per timer in the order given.
+///
+/// [`Order::Sequential`] is [`median_run`] once per timer. [`Order::Interleaved`]
+/// gives every timer its untimed pass first -- the same pass, for the reason
+/// `median_run` records -- and then takes `sampling.repetitions` rounds of one
+/// pass each, starting each round one position later than the last. So all the
+/// timed passes of every configuration fall within the same rounds, and the
+/// median of each is taken over passes spread across the same interval.
+fn runs(
+    producers: usize,
+    sampling: &Sampling,
+    timers: &mut [(&'static str, Timer<'_>)],
+) -> Vec<Run> {
+    let pushes_per_producer = sampling.pushes_per_producer;
+    if sampling.order == Order::Sequential {
+        return timers
+            .iter_mut()
+            .map(|(shape, timer)| median_run(shape, producers, sampling, &mut **timer))
+            .collect();
+    }
+
+    for (_, timer) in timers.iter_mut() {
+        let _ = timer(producers, pushes_per_producer);
+    }
+    let count = timers.len();
+    let mut results: Vec<Vec<Repetition>> = vec![Vec::with_capacity(sampling.repetitions); count];
+    for round in 0..sampling.repetitions {
+        for position in 0..count {
+            let index = (round + position) % count;
+            results[index].push((timers[index].1)(producers, pushes_per_producer));
+        }
+    }
+    timers
+        .iter()
+        .zip(results)
+        .map(|((shape, _), results)| summarise(shape, producers, pushes_per_producer, results))
+        .collect()
+}
+
+/// The [`Run`] a configuration's timed passes make: the median, with the extremes
+/// beside it, each divided by the pushes every pass performed.
+fn summarise(
+    shape: &'static str,
+    producers: usize,
+    pushes_per_producer: usize,
+    mut results: Vec<Repetition>,
+) -> Run {
+    let repetitions = results.len();
     results.sort_by(|left, right| left.0.total_cmp(&right.0));
     let (elapsed_nanos, refusals) = results[repetitions / 2];
     // The sort is ascending by elapsed time, so the extremes are the ends. They

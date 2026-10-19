@@ -21,6 +21,7 @@ each is labelled with the instrument that produced it.
 | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
 | Profile | release |
 | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
+| Order | each configuration's passes back to back, the only order the probe had then; `--order sequential` retakes it since `M4.4` made interleaving the default |
 | Runs | 3 whole-probe invocations, in [run1.txt](run1.txt), [run2.txt](run2.txt), [run3.txt](run3.txt) |
 | Instrument | `probe-queue-contention`, built from `68198359` (the commit that made the consumer drain once before announcing readiness) |
 | Taken | 2026-09-16 18:12 UTC-04:00 |

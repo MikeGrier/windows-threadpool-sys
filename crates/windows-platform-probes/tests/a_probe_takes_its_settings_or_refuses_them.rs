@@ -74,6 +74,8 @@ fn a_queue_run_given_settings_reports_them_and_measures_only_the_counts_given() 
             "1",
             "--producers",
             "3,1",
+            "--order",
+            "sequential",
         ],
     );
     let stdout = String::from_utf8(output.stdout).expect("a probe's report is UTF-8");
@@ -85,7 +87,7 @@ fn a_queue_run_given_settings_reports_them_and_measures_only_the_counts_given() 
     assert!(
         stdout.contains(
             "sampling: 64 pushes per producer, median of 1 repetitions, one untimed warmup \
-             pass, producer counts 3, 1"
+             pass, each configuration's passes back to back, producer counts 3, 1"
         ),
         "{stdout}"
     );

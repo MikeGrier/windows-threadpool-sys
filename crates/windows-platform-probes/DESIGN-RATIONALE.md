@@ -728,3 +728,30 @@ its own figures. Carried inside, the label and the figures come from the one
 `measure` call. The test corpus accordingly requires a `sampling` key on every case
 rather than defaulting a missing one, because a defaulted key is exactly how a case
 written before this change would keep passing while describing a run nobody took.
+
+## Why the probe interleaves by rotation, and why the old order stays
+
+Decided in [The queue probe interleaves its passes](DESIGN-NOTES.md#d-interleaved-order).
+
+**The item allowed two designs.** One pairs each candidate with an adjacent control run of the same
+code; the other balances the order across repetitions so drift cannot align with position. Pairing
+adds a control measurement per candidate, lengthening every run, and gives each candidate its own
+copy of the control rather than the one row the published ratios divide by. Interleaving every
+configuration costs nothing extra -- the passes are the same passes, reordered -- and puts the
+control's two halves, and every candidate, inside the same rounds. So the rounds design was taken.
+
+**Rotation rather than shuffling.** A random order would balance position as well, but a run would
+then not be reproducible from its settings, and this repository's unit tests do not sample at
+runtime without the engineer's approval. Rotating the first position by one per round is
+deterministic, testable, and still keeps any configuration from always being measured first.
+
+**The old order stays, against the item's framing of it as something to replace.** The item treated
+interleaving as obsoleting every published figure. Keeping the sequential order turns that around:
+the published figures remain measurements of a procedure the probe still runs, and the two orders on
+one host are the comparison that says whether the change mattered. Removing it would have cost that
+comparison and the ability to retake any figure published before `M4.4`, to save one flag.
+
+**Every configuration at a producer count is interleaved together, both regimes**, rather than each
+regime on its own. The control exists in both regimes, and a single list of configurations is also
+what makes the sequential order exactly the old one: the old measurement already alternated between
+the regimes in a fixed pattern, and the list preserves it.

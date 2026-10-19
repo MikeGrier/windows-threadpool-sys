@@ -17,7 +17,7 @@
 use super::render_observation;
 use serde_json::Value;
 use std::panic::AssertUnwindSafe;
-use windows_platform_probes::queue_contention::{Observation, Run, Sampling};
+use windows_platform_probes::queue_contention::{Observation, Order, Run, Sampling};
 
 /// Asserts every line of a table shares its header's width.
 ///
@@ -162,6 +162,10 @@ fn sampling_from(value: &Value) -> Sampling {
                     .expect("a producer count fits a usize")
             })
             .collect(),
+        order: value["order"]
+            .as_str()
+            .and_then(Order::from_name)
+            .expect("`sampling.order` is `interleaved` or `sequential`"),
     }
 }
 

@@ -88,8 +88,9 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     // was. The dispersion belongs here as well, and is: each row carries the
     // range across its repetitions and the resulting spread. The sampling is
     // settable (M4.2), so it is read from the observation -- what produced these
-    // figures -- and a run that did not use the defaults says so, since the
-    // published figures are the defaults'.
+    // figures -- and a run that did not use the defaults says so. The order is
+    // printed too (M4.4): the figures published before it were taken
+    // sequentially, and the default is now interleaved.
     let _ = writeln!(
         out,
         "profile: {}",
@@ -108,9 +109,10 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     let _ = writeln!(
         out,
         "sampling: {} pushes per producer, median of {} repetitions, one untimed \
-         warmup pass, producer counts {}",
+         warmup pass, {}, producer counts {}",
         sampling.pushes_per_producer,
         sampling.repetitions,
+        sampling.order.described(),
         counts.join(", "),
     );
     let _ = writeln!(
@@ -119,7 +121,7 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
         if sampling.is_default() {
             "  (the defaults)"
         } else {
-            "  (NOT the defaults: set on the command line, so these figures are not the published ones)"
+            "  (NOT the defaults: set on the command line, so these figures are not the default run's)"
         }
     );
     // A debug build does not merely lose precision here: the un-inlined overhead

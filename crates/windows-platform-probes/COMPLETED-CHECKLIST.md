@@ -1857,3 +1857,21 @@ renamed the loop count; their finds were repaired. A deleted `described_relation
 reach `agree`, because a described relation also files `counts_include_unparsed_relations`; it is
 caught by a dedicated unit test and by the corpus rule. See
 [DESIGN-NOTES.md](DESIGN-NOTES.md#d-encoded-row-is-the-contract).
+
+## Moved 2026-10-19 15:43:40 -04:00 -- M4.4: the queue probe interleaves its passes
+
+### <a id="m44"></a>M4.4 -- Interleave each candidate with a nearby control instead of measuring the control four runs away from it, and re-measure everything that changes. *(completed 2026-10-19 15:43:40 -04:00)*
+
+The decision is
+[The queue probe interleaves its passes](DESIGN-NOTES.md#d-interleaved-order), with the alternatives
+in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md); the measurement is
+[captures/2026-10-19-interleaved-order/](captures/2026-10-19-interleaved-order/README.md), seven runs of
+each order alternating on the host the earlier figures came from.
+
+**The item's blocker did not apply as written.** It said interleaving makes every published figure a
+measurement of a different procedure, and that doing it mid-branch would invalidate figures review
+rounds had been read against. That branch had long since merged, and keeping the old order as
+`--order sequential` means the published figures remain measurements of a procedure the probe still
+runs: each place that gives them now names the order that produced them, and none is retaken.
+"Re-measure everything that changes" was met by the paired capture rather than by replacing the
+published figures.

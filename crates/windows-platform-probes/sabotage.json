@@ -356,6 +356,96 @@
       "replace": [
         "    if observation.numa_domains_unreported != 0 {"
       ]
+    },
+    {
+      "name": "M4.4: every run takes the sequential order",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The default would be back to back again while the report said interleaved, so the control would be measured apart under a line claiming it was not.",
+      "find": [
+        "    if sampling.order == Order::Sequential {"
+      ],
+      "replace": [
+        "    if true {"
+      ]
+    },
+    {
+      "name": "M4.4: interleaved rounds stop rotating",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "Without the rotation the same configuration is always measured first in a round, so position in the round can align with whatever the first pass after the previous round's last absorbs. The balance the item asked for is the rotation.",
+      "find": [
+        "            let index = (round + position) % count;"
+      ],
+      "replace": [
+        "            let index = position;"
+      ]
+    },
+    {
+      "name": "M4.4: --order is accepted and dropped",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A run asked for the sequential order would measure interleaved while the command line said otherwise, and the published figures could not be retaken.",
+      "find": [
+        "        if let Some(value) = given.get(\"order\") {"
+      ],
+      "replace": [
+        "        if let Some(value) = given.get(\"order\").filter(|_| false) {"
+      ]
+    },
+    {
+      "name": "M4.4: the sequential order is no longer the published one",
+      "file": "src/queue_contention/measure.rs",
+      "expect": "caught",
+      "why": "Swapping two configurations changes no row and no table, so only the test pinning the list notices -- and without it --order sequential would quietly stop retaking the figures it exists to retake.",
+      "find": [
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::SLOTWISE_MPSC,",
+        "            timer(time_isolated_mpsc),",
+        "        ),",
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::RESERVING_MPSC,",
+        "            timer(time_isolated_reserving),",
+        "        ),"
+      ],
+      "replace": [
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::RESERVING_MPSC,",
+        "            timer(time_isolated_reserving),",
+        "        ),",
+        "        (",
+        "            Regime::Isolated,",
+        "            shapes::SLOTWISE_MPSC,",
+        "            timer(time_isolated_mpsc),",
+        "        ),"
+      ]
+    },
+    {
+      "name": "M4.4: the report omits the order",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "The order is a capture parameter: figures taken interleaved and back to back are measurements of different procedures, and a captured report that does not say which cannot be compared with anything.",
+      "find": [
+        "        sampling.order.described(),"
+      ],
+      "replace": [
+        "        \"\","
+      ]
+    },
+    {
+      "name": "M4.4 control: the configuration count read another way",
+      "file": "src/queue_contention.rs",
+      "expect": "survives",
+      "why": "A control: the same count by iteration, which no test can tell apart.",
+      "find": [
+        "    let count = timers.len();"
+      ],
+      "replace": [
+        "    let count = timers.iter().count();"
+      ]
     }
   ]
 }

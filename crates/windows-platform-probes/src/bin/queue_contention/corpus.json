@@ -28,7 +28,7 @@
       "why": "A plausible run. Establishes that the tables render and line up at all, so the stressed cases below are testing something. It also carries measured `reserving(64/64)` rows in both regimes: that layout is cfg-gated behind a native 128-bit exchange, so without them the renderer's 64/64 columns were only ever exercised by the did-not-run path, and a width or alignment fault in a real Wide measurement would have rendered unseen.",
       "observation": {
         "available_parallelism": 8,
-        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32]},
+        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32], "order": "interleaved"},
         "isolated": [
           [
             "baseline_fetch_add",
@@ -314,7 +314,7 @@
         "contains": [
           "processors available to this process: 8",
           "reserving(64/64)",
-          "sampling: 50000 pushes per producer, median of 5 repetitions, one untimed warmup pass, producer counts 1, 2, 4, 8, 16, 32",
+          "sampling: 50000 pushes per producer, median of 5 repetitions, one untimed warmup pass, passes interleaved across configurations, producer counts 1, 2, 4, 8, 16, 32",
           "(the defaults)"
         ],
         "absent": []
@@ -325,7 +325,7 @@
       "why": "A cell's width is a function of measured data: `format_ratio_bounded` sizes its interval from the observed span, so no constant is provably sufficient. These values are chosen to exceed a fixed width rather than to depict a likely run -- and the margin matters, because the width of 22 that two tables carried was NOT overrun by an ordinary outlier. A 300ms repetition against a 4ns one renders 21 characters. Reaching 23 needs a hundredfold ratio as well. The argument for deriving the width is that the bound cannot be established, not that 22 was obviously too small.",
       "observation": {
         "available_parallelism": 8,
-        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32]},
+        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32], "order": "interleaved"},
         "isolated": [
           [
             "baseline_fetch_add",
@@ -583,7 +583,7 @@
       "why": "A row present but carrying the did-not-run sentinel. Zero is not an obviously broken value in any of this report's columns, so the rendered cells must be marked rather than published: `0.0` ns/op reads as immeasurably fast and `0.00x` as a ratio of one.",
       "observation": {
         "available_parallelism": 4,
-        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32]},
+        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32], "order": "interleaved"},
         "isolated": [
           [
             "baseline_fetch_add",
@@ -726,10 +726,10 @@
     },
     {
       "name": "a_run_sampled_other_than_the_defaults",
-      "why": "M4.2 made the sampling settable. The report must print what the run used -- the pushes, the repetitions and the producer counts, in the order given -- say that it was not the defaults, and draw its tables over the producer counts the run measured rather than the compiled-in ones.",
+      "why": "M4.2 made the sampling settable, and M4.4 made the order of the passes a setting. The report must print what the run used -- the pushes, the repetitions, the order and the producer counts, in the order given -- say that it was not the defaults, and draw its tables over the producer counts the run measured rather than the compiled-in ones.",
       "observation": {
         "available_parallelism": 8,
-        "sampling": {"pushes_per_producer": 1000, "repetitions": 3, "producer_counts": [1, 3]},
+        "sampling": {"pushes_per_producer": 1000, "repetitions": 3, "producer_counts": [1, 3], "order": "sequential"},
         "isolated": [],
         "drained": []
       },
@@ -740,8 +740,8 @@
           "atomic floor": 1
         },
         "contains": [
-          "sampling: 1000 pushes per producer, median of 3 repetitions, one untimed warmup pass, producer counts 1, 3",
-          "(NOT the defaults: set on the command line, so these figures are not the published ones)"
+          "sampling: 1000 pushes per producer, median of 3 repetitions, one untimed warmup pass, each configuration's passes back to back, producer counts 1, 3",
+          "(NOT the defaults: set on the command line, so these figures are not the default run's)"
         ],
         "absent": [
           "(the defaults)",
@@ -754,7 +754,7 @@
       "why": "Every shape absent, which is what a `cfg`-elided target or a failed run looks like from the renderer's side. It must still produce a report with its headers rather than panicking or printing figures it does not have.",
       "observation": {
         "available_parallelism": null,
-        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32]},
+        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32], "order": "interleaved"},
         "isolated": [],
         "drained": []
       },
@@ -780,7 +780,7 @@
       "why": "A median is not the only field a row publishes. `render_table` prints ops/sec and both range endpoints directly once `is_measured` says the row counts, so a plausible median beside a poisoned endpoint reached the report as an ordinary-looking cell. These rows keep an ordinary median and spoil one other field each: a zero slowest endpoint, a negative fastest one, a zero ops/sec. JSON cannot express infinity, so the non-finite half of the guard is not reachable from a corpus case and is covered by the same predicate.",
       "observation": {
         "available_parallelism": 4,
-        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32]},
+        "sampling": {"pushes_per_producer": 50000, "repetitions": 5, "producer_counts": [1, 2, 4, 8, 16, 32], "order": "interleaved"},
         "isolated": [
           [
             "baseline_fetch_add",
