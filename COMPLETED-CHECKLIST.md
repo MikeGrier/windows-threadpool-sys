@@ -3992,3 +3992,17 @@ each shard restores the record from the Actions cache, uploads its own, and the 
 [tools/merge-sabotage-catchers.ps1](tools/merge-sabotage-catchers.ps1), keeping every entry's latest, and saves the result. Run
 on the two `win-sync-sys` APC entries M34.9 repaired, the record names the test M34.9 added for them and no other. Its tests
 found that `ConvertFrom-Json` turns the timestamp into a date on read, which the reader now turns back.
+
+## Moved 2026-10-19 01:48:58 -04:00 -- sabotage scope, M34.14: entries selected within a manifest
+
+### <a id="m3414"></a>M34.14 -- Within a sabotage manifest, run only the entries a change could have affected. *(completed 2026-10-19 01:48:58 -04:00)*
+
+`Select-SabotageEntry` in [tools/common.ps1](tools/common.ps1) is the one rule, used by `run-sabotage.ps1 -Since` and by the
+planner, which now counts each manifest's selected entries for its shards and leaves out a manifest with none. It replaced
+`Select-SabotageManifest`, whose crate-level decision it repeated. One part differs from the plan as written: an entry with no
+record of what caught it, or caught by a doctest, runs whenever its crate changed, not only when a test file did, because telling a
+test file from source by its path is guesswork here and a doctest can come from a file spliced into the documentation;
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope) says so. A manifest at the repository root, the layout of the harness's own test
+fixtures, is its own crate. The sweep workflow restores the record before planning and gives every shard the plan's base and full
+history. A real sweep of `win-sync-sys` found that the harness's new `-CatcherRecord` parameter and its `$catcherRecord`
+variable were one variable, since PowerShell names ignore case, which the record tests then caught when it was put back.

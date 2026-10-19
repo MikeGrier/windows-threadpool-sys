@@ -373,6 +373,32 @@ $cases = @(
         }
     },
     @{
+        Name = 'since-counts-the-entries-a-change-reached-and-shards-for-them'
+        Run  = {
+            $root = New-ScopedFixture
+            # Crate d gets 25 entries: 24 patch src/lib.rs, one src/other.rs, all
+            # recorded as caught by a test defined in src/lib.rs.
+            $dir = Join-Path $root 'crates\d'
+            [System.IO.File]::WriteAllText((Join-Path $dir 'src\lib.rs'), "fn t_one() {}`n")
+            [System.IO.File]::WriteAllText((Join-Path $dir 'src\other.rs'), "fn other() {}`n")
+            $entries = @(1..25 | ForEach-Object { @{ name = "s$_"; file = $(if ($_ -eq 25) { 'src/other.rs' } else { 'src/lib.rs' }) } })
+            [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), (@{ package = 'd'; sabotages = $entries } | ConvertTo-Json -Depth 5))
+            Invoke-Native { git -C $root add -A } | Out-Null
+            Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m more } | Out-Null
+            $record = New-SabotageCatcherRecord
+            foreach ($n in 1..25) { Set-SabotageCatcher -Record $record -Manifest 'crates/d/sabotage.json' -Entry "s$n" -Tests @('t_one') -At '2026-01-01T00:00:00.0000000Z' }
+            $recordPath = Join-Path $root 'catchers.json'
+            Write-SabotageCatcherRecord -Path $recordPath -Record $record
+
+            Add-Content -LiteralPath (Join-Path $dir 'src\other.rs') -Value '// changed'
+            $json = & $planner -RepositoryRoot $root -Since 'HEAD' -CatcherRecord $recordPath 6>$null
+            $m = $json | ConvertFrom-Json
+            Assert-Equal 1 @($m.include).Count 'one entry reached, one shard'
+            $json = & $planner -RepositoryRoot $root -Since 'HEAD' 6>$null
+            $m = $json | ConvertFrom-Json
+            Assert-Equal 3 @($m.include).Count 'with no record, every entry of the crate counts: 25 at 10 a shard'
+        }
+    },    @{
         Name = 'since-and-a-named-manifest-plan-what-both-allow'
         Run  = {
             $root = New-ScopedFixture

@@ -215,6 +215,23 @@
     sweep. [check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs this
     over every manifest, and CI runs that on every push.
 
+.PARAMETER Since
+    A base revision. When given, only the entries a change since then could
+    have affected are swept: every entry when the change reached a crate this
+    manifest's crate builds on, or an input every sweep shares, and none when it
+    reached nothing the crate builds on. When it is in the crate itself, the
+    entries that are new or changed, whose patched file changed, whose
+    recorded catching tests changed or are gone, and those with no better
+    answer -- caught by nothing recorded, or by a doctest. The rule is
+    `Select-SabotageEntry` in [common.ps1](common.ps1); what it cannot see is
+    in DESIGN-NOTES.md, "sabotage-scope". Measured from the merge base, against
+    the working tree, so `-Since origin/main` sweeps what a branch changed.
+    Needs cargo on PATH, for `cargo metadata`. `-List` shows each entry's reason.
+
+.PARAMETER CatcherRecord
+    The record of which tests caught each entry that `-Since` reads, and a
+    sweep reads and writes. Defaults to `catchers.json` in the output directory.
+
 .PARAMETER CargoCommand
     The executable each phase runs, defaulting to `cargo`. Exists so this
     script's own tests can substitute a stub that exits, fails, or hangs on
@@ -264,6 +281,10 @@ param(
     [switch] $List,
 
     [switch] $CheckPatches,
+
+    [string] $Since,
+
+    [string] $CatcherRecord,
 
     [string] $CargoCommand = 'cargo',
 
@@ -897,6 +918,20 @@ foreach ($bound in $bounds) {
 
 $repoRoot = Get-RepoRoot
 
+# The output directory's path, resolved here and CREATED only once the sweep is set
+# up, below -List and -CheckPatches, which must stay inert. Resolved this early because
+# the record -Since reads defaults to a file in it.
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
+# Made absolute here, once, and relative to where the caller IS (the shell's location, which is
+# not always the process's current directory). Every transcript path is built from this and
+# handed to the launcher, which runs from the working copy: left relative, each of those paths
+# means a directory that does not exist there, and the first phase fails with "cannot find the
+# path" before any suite runs.
+if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    $OutputDirectory = Join-Path (Get-Location).Path $OutputDirectory
+}
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+
 # The repository root as a prefix to test paths against: canonical, and ending
 # in a separator so that a sibling directory whose name merely starts with the
 # root's ("...\repo-notes" against "...\repo") cannot pass as being inside it.
@@ -923,6 +958,12 @@ if (-not (Test-Path -LiteralPath $Manifest)) {
 }
 $manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
 $manifestDir = Split-Path -Parent $manifestPath
+# The manifest's path from the repository root, forward slashes: how the record of
+# which tests caught each entry, and the scope of -Since, name it.
+$catcherKey = if ($manifestPath.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $manifestPath.Substring($repoRootPrefix.Length).Replace('\', '/')
+}
+else { $manifestPath.Replace('\', '/') }
 
 try {
     $spec = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -1075,7 +1116,7 @@ foreach ($entry in @($spec.sabotages)) {
 # redirects that, for a manifest kept somewhere other than the code it patches.
 $sourceRoot = $manifestDir
 if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
-    $rootCandidate = Join-Path $manifestDir $spec.root
+    $rootCandidate = Get-SabotageSourceRoot -ManifestPath $manifestPath -Spec $spec
     if (-not (Test-Path -LiteralPath $rootCandidate)) {
         Exit-WithMessage (@(
                 "This manifest's 'root' does not exist:"
@@ -1138,6 +1179,55 @@ if ($manifestSelected.Count -eq 0) {
     Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
 }
 
+if ($CheckPatches) {
+    if ($List) { Exit-WithMessage '-CheckPatches and -List are separate modes; give one.' 2 }
+    # The whole selection, not this shard's: whether a patch applies is a property
+    # of the manifest, and a shard that checked only its own slice would pass the
+    # rest unexamined.
+    $problems = 0
+    foreach ($entry in $manifestSelected) {
+        $realTarget = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $entry.file))
+        if (-not (Test-Path -LiteralPath $realTarget -PathType Leaf)) {
+            $problems++
+            Write-Report "NO SUCH FILE: '$($entry.file)' -- $($entry.name)" -Level bad
+            continue
+        }
+        $check = Test-SabotagePatch -Original ([System.IO.File]::ReadAllText($realTarget)) `
+            -Find $entry.find -Replace $entry.replace
+        if ($check.Outcome -ne 'ok') {
+            $problems++
+            Write-Report "$(Format-PatchProblem $check) -- $($entry.name)" -Level bad
+            Write-Report (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
+        }
+    }
+    $checked = $manifestSelected.Count
+    if ($problems -gt 0) {
+        Write-Report "$problems of $checked patches in $manifestPath do not apply." -Level bad
+        exit 1
+    }
+    Write-Report "All $checked patches in $manifestPath apply." -Level good
+    exit 0
+}
+
+# The entries a change since -Since could have affected (common.ps1,
+# Select-SabotageEntry), which is what gets sharded and swept. `$manifestSelected`
+# stays the whole name-filtered set, because the checks below of what the
+# manifest is -- stem collisions -- must see all of it.
+$scoped = $manifestSelected
+$scopeReasons = $null
+$scopeNote = $null
+if (-not [string]::IsNullOrWhiteSpace($Since)) {
+    $recordForScope = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
+    $change = Get-SabotageChange -RepositoryRoot $repoRoot -Since $Since
+    $dependencies = $null
+    if ($change.Known) { $dependencies = Get-SabotageCrateDependency -RepositoryRoot $repoRoot }
+    $scope = Select-SabotageEntry -RepositoryRoot $repoRoot -Manifest $catcherKey -Entries $manifestSelected `
+        -SourceRoot $sourceRoot -Change $change -Dependencies $dependencies `
+        -Record (Read-SabotageCatcherRecord -Path $recordForScope)
+    $scoped = @($scope.Entries)
+    $scopeReasons = $scope.Reasons
+    $scopeNote = "Since ${Since}: $($scope.Reason)."
+}
 # Ordered by FILE, then cut into equal contiguous blocks. NOT whole groups
 # dealt to the lightest shard -- that is the earlier revision described further
 # down, and this comment went on describing it after the code had stopped. See
@@ -1171,7 +1261,7 @@ $selected = @(
         # Deterministic: group size descending, file name breaking ties. An
         # entry lands on the same shard every run, so a failing shard can be
         # re-run by number.
-        $ordered = @($manifestSelected |
+        $ordered = @($scoped |
                 Group-Object -Property file |
                 Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'Name'; Descending = $false } |
                 ForEach-Object { $_.Group })
@@ -1184,50 +1274,36 @@ $selected = @(
         $take = $block + $(if ($Shard -lt $remainder) { 1 } else { 0 })
         if ($take -gt 0) { $ordered[$start..($start + $take - 1)] }
     }
-    else { $manifestSelected }
+    else { $scoped }
 )
 
-if ($CheckPatches) {
-    if ($List) { Exit-WithMessage '-CheckPatches and -List are separate modes; give one.' 2 }
-    # The whole selection, not this shard's: whether a patch applies is a property
-    # of the manifest, and a shard that checked only its own slice would pass the
-    # rest unexamined.
-    $problems = 0
-    foreach ($entry in $manifestSelected) {
-        $realTarget = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $entry.file))
-        if (-not (Test-Path -LiteralPath $realTarget -PathType Leaf)) {
-            $problems++
-            Write-Report "NO SUCH FILE: '$($entry.file)' -- $($entry.name)" -Level bad
-            continue
-        }
-        $check = Test-SabotagePatch -Original ([System.IO.File]::ReadAllText($realTarget)) `
-            -Find $entry.find -Replace $entry.replace
-        if ($check.Outcome -ne 'ok') {
-            $problems++
-            Write-Report "$(Format-PatchProblem $check) -- $($entry.name)" -Level bad
-            Write-Report (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
-        }
-    }
-    $checked = $manifestSelected.Count
-    if ($problems -gt 0) {
-        Write-Report "$problems of $checked patches in $manifestPath do not apply." -Level bad
-        exit 1
-    }
-    Write-Report "All $checked patches in $manifestPath apply." -Level good
-    exit 0
-}
 
 if ($List) {
     Write-Report "Manifest : $manifestPath"
     Write-Report "Package  : $package"
     Write-Report "Command  : cargo $($testArgs -join ' ')"
+    if ($scopeNote) {
+        Write-Report "Scope    : $scopeNote"
+    }
     if ($ShardCount -gt 1) {
-        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($manifestSelected.Count) entries)"
+        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($scoped.Count) entries)"
     }
     Write-Report ''
     $selected | ForEach-Object {
-        Write-Report ("{0,-16} {1}" -f $_.expect, $_.name)
+        $line = "{0,-16} {1}" -f $_.expect, $_.name
+        if ($scopeReasons -and $scopeReasons.ContainsKey($_.name)) { $line += "  [$($scopeReasons[$_.name])]" }
+        Write-Report $line
     }
+    exit 0
+}
+
+if ($scopeNote) {
+    Write-Report $scopeNote -Level note
+}
+if ($scopeNote -and $scoped.Count -eq 0) {
+    # As for an empty shard below: a success, and before the baseline, which
+    # would otherwise build a crate this change could not have affected.
+    Write-Report "No entry of $manifestPath could have been affected; nothing to sweep." -Level good
     exit 0
 }
 
@@ -1318,16 +1394,6 @@ foreach ($sabotage in $selected) {
 # The output directory is CREATED here rather than earlier because -List must be
 # inert: it patches nothing, so it has no business creating directories or
 # copying a tree. Raised in the PR #64 review.
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
-# Made absolute here, once, and relative to where the caller IS (the shell's location, which is
-# not always the process's current directory). Every transcript path is built from this and
-# handed to the launcher, which runs from the working copy: left relative, each of those paths
-# means a directory that does not exist there, and the first phase fails with "cannot find the
-# path" before any suite runs.
-if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
-    $OutputDirectory = Join-Path (Get-Location).Path $OutputDirectory
-}
-$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 # The working copy must be somewhere git ignores, and this is not a tidiness
@@ -1529,13 +1595,9 @@ $entryIndex = 0
 # kept beside the transcripts and carried across runs, so a later sweep can tell
 # which test changes could alter an entry's result. Read before the sweep and
 # written after it, keeping what this run did not touch. Keyed by the manifest's
-# path from the repository root.
-$catcherPath = Join-Path $OutputDirectory 'catchers.json'
-$catcherRecord = Read-SabotageCatcherRecord -Path $catcherPath
-$catcherKey = if ($manifestPath.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    $manifestPath.Substring($repoRootPrefix.Length).Replace('\', '/')
-}
-else { $manifestPath.Replace('\', '/') }
+# path from the repository root, $catcherKey.
+$catcherPath = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
+$catchers = Read-SabotageCatcherRecord -Path $catcherPath
 # The outcomes in which the patch was judged. Every other one -- the
 # infrastructure outcomes, and a hung build -- says nothing about the tests, and
 # would overwrite what an earlier run learned with nothing.
@@ -1697,7 +1759,7 @@ foreach ($sabotage in $selected) {
         if (@('failed', 'hung') -contains $run.Outcome -and (Test-Path -LiteralPath $transcript)) {
             $caughtBy = @(Get-FailedTestName (Read-SharedText -Path $transcript))
         }
-        Set-SabotageCatcher -Record $catcherRecord -Manifest $catcherKey -Entry $sabotage.name `
+        Set-SabotageCatcher -Record $catchers -Manifest $catcherKey -Entry $sabotage.name `
             -Tests $caughtBy -At ([DateTime]::UtcNow.ToString('o'))
     }
 
@@ -1721,7 +1783,7 @@ Write-Report ''
 $results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize -Wrap |
     Out-String | ForEach-Object { $_.TrimEnd("`r", "`n") } | Write-Report
 
-Write-SabotageCatcherRecord -Path $catcherPath -Record $catcherRecord
+Write-SabotageCatcherRecord -Path $catcherPath -Record $catchers
 
 $unexpected = @($results | Where-Object { -not $_.Ok })
 # Said before the verdict, on every path out, so a sweep that was helped past a

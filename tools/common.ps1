@@ -449,7 +449,7 @@ function Test-SabotageSharedInput {
 # does not have; `Reason` says which.
 function Get-SabotageChange {
     param([string] $RepositoryRoot, [string] $Since)
-    $unknown = { param($why) [pscustomobject]@{ Known = $false; Paths = @(); Reason = $why } }
+    $unknown = { param($why) [pscustomobject]@{ Known = $false; Base = $null; Paths = @(); Reason = $why } }
     if ([string]::IsNullOrWhiteSpace($Since)) { return & $unknown 'no base revision was given' }
     if ($Since -match '^0+$') { return & $unknown "the base revision $Since is the all-zero one a new branch pushes" }
     $base = @(Invoke-NativeStdout { git -C $RepositoryRoot merge-base $Since HEAD })
@@ -466,7 +466,7 @@ function Get-SabotageChange {
     foreach ($path in @(@($diff) + @($untracked))) { if ($path) { [void]$set.Add($path.Replace('\', '/')) } }
     [string[]] $paths = @($set)
     [Array]::Sort($paths, [System.StringComparer]::Ordinal)
-    return [pscustomobject]@{ Known = $true; Paths = $paths; Reason = "$($paths.Count) path(s) differ from $($base[0])" }
+    return [pscustomobject]@{ Known = $true; Base = $base[0].Trim(); Paths = $paths; Reason = "$($paths.Count) path(s) differ from $($base[0])" }
 }
 
 # Which workspace crates each crate depends on, through path dependencies of every
@@ -498,47 +498,52 @@ function Get-SabotageCrateDependency {
     return $map
 }
 
-# Which of `Manifests` a change to `Changed` could have affected. Both are paths
-# relative to the root with forward slashes; `Dependencies` is
-# Get-SabotageCrateDependency's map. A manifest is affected when a path under its
-# own crate changed, or under a crate its crate depends on, directly or not, and
-# every manifest is when a shared input changed. A crate is the manifest's
-# directory. Returns `All`, the affected `Manifests` in the order given, and a
-# `Reason` for the log.
-function Select-SabotageManifest {
-    param([string[]] $Manifests, [string[]] $Changed, [hashtable] $Dependencies)
-    $Manifests = @($Manifests)
-    $Changed = @($Changed | Where-Object { $_ })
-    $shared = @($Changed | Where-Object { Test-SabotageSharedInput $_ })
-    if ($shared.Count -gt 0) {
-        return [pscustomobject]@{ All = $true; Manifests = $Manifests; Reason = "a shared input changed: $($shared[0])" }
-    }
-    $touched = @{}
-    foreach ($path in $Changed) {
-        if ($path -match '^(crates/[^/]+)/') { $touched[$Matches[1]] = $true }
-    }
-    $affected = @(foreach ($manifest in $Manifests) {
-            $crate = $manifest.Substring(0, $manifest.LastIndexOf('/'))
-            # Walk the crate and everything it builds on; a cycle is cut by `seen`.
-            $seen = @{}
-            $pending = New-Object System.Collections.Generic.Queue[string]
-            $pending.Enqueue($crate)
-            $hit = $false
-            while ($pending.Count -gt 0 -and -not $hit) {
-                $at = $pending.Dequeue()
-                if ($seen.ContainsKey($at)) { continue }
-                $seen[$at] = $true
-                if ($touched.ContainsKey($at)) { $hit = $true; break }
-                if ($Dependencies.ContainsKey($at)) {
-                    foreach ($next in $Dependencies[$at]) { $pending.Enqueue($next) }
-                }
-            }
-            if ($hit) { $manifest }
-        })
-    $crates = @($touched.Keys | Sort-Object)
-    $reason = if ($crates.Count -eq 0) { 'no crate changed' } else { "crates changed: $($crates -join ', ')" }
-    return [pscustomobject]@{ All = $false; Manifests = $affected; Reason = $reason }
+# Whether `Path` lies in the crate at `Crate`, both relative to the root with
+# forward slashes. A crate at the root, '', holds every path.
+function Test-SabotagePathInCrate {
+    param([string] $Path, [string] $Crate)
+    if (-not $Crate) { return $true }
+    return $Path.StartsWith($Crate + '/', [System.StringComparison]::Ordinal)
 }
+
+# A manifest's crate: the directory it is in, relative to the root, forward
+# slashes, and '' for one at the root.
+function Get-SabotageManifestCrate {
+    param([string] $Manifest)
+    $at = $Manifest.LastIndexOf('/')
+    if ($at -lt 0) { return '' }
+    return $Manifest.Substring(0, $at)
+}
+# `Crate` and every crate it builds on, directly or not, through
+# Get-SabotageCrateDependency's map. A crate the map does not know reaches only
+# itself, and a cycle is walked once.
+function Get-SabotageCrateReach {
+    param([string] $Crate, [hashtable] $Dependencies)
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+    $pending.Enqueue($Crate)
+    while ($pending.Count -gt 0) {
+        $at = $pending.Dequeue()
+        if (-not $seen.Add($at)) { continue }
+        if ($Dependencies -and $Dependencies.ContainsKey($at)) {
+            foreach ($next in $Dependencies[$at]) { $pending.Enqueue($next) }
+        }
+    }
+    $seen
+}
+
+# The directory a manifest's entries name their `file` relative to: the
+# manifest's own, or its `root`, relative to it, when it gives one. Not checked
+# for existence; the harness reports a `root` that is not there.
+function Get-SabotageSourceRoot {
+    param([string] $ManifestPath, $Spec)
+    $manifestDir = Split-Path -Parent $ManifestPath
+    if ($null -ne $Spec -and ($Spec.PSObject.Properties.Name -contains 'root') -and $Spec.root) {
+        return (Join-Path $manifestDir $Spec.root)
+    }
+    return $manifestDir
+}
+
 # --- Which tests caught each entry ---------------------------------------------
 #
 # A sweep records, per entry it judged, the tests that failed under its patch,
@@ -658,6 +663,144 @@ function Write-SabotageCatcherRecord {
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
     [System.IO.File]::WriteAllText($Path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
+}
+# Which entries of one manifest a change could have affected, and why each.
+#
+# `Manifest` is the manifest's path from the root, forward slashes; `Entries` its
+# entries as parsed; `SourceRoot` the directory their `file` is relative to.
+# `Change` is Get-SabotageChange's result, `Dependencies` the crate map, and
+# `Record` the record of which tests caught each entry. The manifest's crate is
+# its directory.
+#
+# Every entry is affected when the change cannot be measured, the crate map is
+# missing, a shared input changed, or a crate the manifest's crate builds on
+# changed: a change below can alter what any test above it observes. No entry is
+# when nothing the crate reaches changed. Otherwise the change is in the crate
+# itself, and an entry is affected when
+#   - it is new, or differs from the manifest at the base revision;
+#   - the file it patches changed;
+#   - no test is recorded as catching it, or a doctest is, whose source may be a
+#     file spliced into the crate's documentation rather than the one it names;
+#   - a file defining a function named as one of its catching tests changed, or
+#     no file of the crate defines one any more.
+# A change elsewhere in the crate selects nothing on its own. That, and a test
+# helper changing under the tests that call it, are what the nightly sweep is for
+# (DESIGN-NOTES.md, "sabotage-scope").
+#
+# Returns `All`, the affected `Entries` in the order given, `Reasons` (each
+# affected entry's name to why), and a `Reason` for the whole.
+function Select-SabotageEntry {
+    param([string] $RepositoryRoot, [string] $Manifest, [object[]] $Entries, [string] $SourceRoot,
+        $Change, [hashtable] $Dependencies, [hashtable] $Record)
+    $Entries = @($Entries)
+    $every = {
+        param($why)
+        $reasons = @{}
+        foreach ($entry in $Entries) { $reasons[$entry.name] = $why }
+        [pscustomobject]@{ All = $true; Entries = $Entries; Reasons = $reasons; Reason = "every entry: $why" }
+    }
+    if ($null -eq $Change -or -not $Change.Known) {
+        $why = if ($null -eq $Change) { 'no change was measured' } else { $Change.Reason }
+        return & $every $why
+    }
+    if ($null -eq $Dependencies) { return & $every 'cargo metadata could not say which crates build on which' }
+    $changed = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($Change.Paths)) { if ($path) { [void]$changed.Add($path) } }
+    foreach ($path in $changed) {
+        if (Test-SabotageSharedInput $path) { return & $every "a shared input changed: $path" }
+    }
+    $crate = Get-SabotageManifestCrate $Manifest
+    $reached = { param($dir) foreach ($path in $changed) { if (Test-SabotagePathInCrate $path $dir) { return $true } }; $false }
+    $reach = @(Get-SabotageCrateReach -Crate $crate -Dependencies $Dependencies)
+    foreach ($below in $reach) {
+        if ($below -ne $crate -and (& $reached $below)) { return & $every "a crate it builds on changed: $below" }
+    }
+    if (-not (& $reached $crate)) {
+        return [pscustomobject]@{ All = $false; Entries = @(); Reasons = @{}; Reason = 'nothing it builds on changed' }
+    }
+
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $relative = {
+        param($full)
+        $at = [System.IO.Path]::GetFullPath($full)
+        if ($at.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $at.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+        }
+        return $at.Replace('\', '/')
+    }
+
+    # The manifest's entries at the base, to tell which are new or changed.
+    $before = @{}
+    $manifestChanged = $changed.Contains($Manifest)
+    if ($manifestChanged -and $Change.Base) {
+        $text = Invoke-NativeStdout { git -C $RepositoryRoot show "$($Change.Base):$Manifest" } | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            try {
+                foreach ($old in @(($text | ConvertFrom-Json).sabotages)) {
+                    $before[$old.name] = ($old | ConvertTo-Json -Depth 8 -Compress)
+                }
+            }
+            catch { $before = @{} }
+        }
+    }
+
+    # Every function the crate defines, by name, to the files defining it: test
+    # names are function names, and the same name is often defined in several
+    # files, so a test is looked for in all of them. Built once, on first need.
+    $definitions = $null
+    $define = {
+        $map = @{}
+        $crateDir = if ($crate) { Join-Path $RepositoryRoot $crate } else { $RepositoryRoot }
+        foreach ($file in Get-ChildItem -LiteralPath $crateDir -Recurse -Filter '*.rs' -File) {
+            $rel = & $relative $file.FullName
+            foreach ($match in [regex]::Matches([System.IO.File]::ReadAllText($file.FullName), '\bfn\s+(\w+)')) {
+                $name = $match.Groups[1].Value
+                if (-not $map.ContainsKey($name)) {
+                    $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                }
+                [void]$map[$name].Add($rel)
+            }
+        }
+        $map
+    }
+
+    $recorded = @{}
+    if ($Record -and $Record.ContainsKey($Manifest)) { $recorded = $Record[$Manifest] }
+    $reasons = @{}
+    $affected = @(foreach ($entry in $Entries) {
+            $why = $null
+            if ($manifestChanged) {
+                $now = $entry | ConvertTo-Json -Depth 8 -Compress
+                if (-not $before.ContainsKey($entry.name)) { $why = 'the entry is new' }
+                elseif (-not [string]::Equals($before[$entry.name], $now, [System.StringComparison]::Ordinal)) { $why = 'the entry changed' }
+            }
+            if (-not $why -and $changed.Contains((& $relative (Join-Path $SourceRoot $entry.file)))) {
+                $why = "the file it patches changed: $($entry.file)"
+            }
+            if (-not $why) {
+                $tests = @()
+                if ($recorded.ContainsKey($entry.name)) { $tests = @($recorded[$entry.name].Tests) }
+                if ($tests.Count -eq 0) { $why = 'no test is recorded as catching it' }
+                elseif (@($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { $why = 'a doctest caught it' }
+                else {
+                    if ($null -eq $definitions) { $definitions = & $define }
+                    foreach ($test in $tests) {
+                        $function = ($test -split '::')[-1]
+                        if (-not $definitions.ContainsKey($function)) { $why = "its catching test is gone: $test"; break }
+                        $moved = @($definitions[$function] | Where-Object { $changed.Contains($_) })
+                        if ($moved.Count -gt 0) { $why = "its catching test's file changed: $($moved[0])"; break }
+                    }
+                }
+            }
+            if ($why) {
+                $reasons[$entry.name] = $why
+                $entry
+            }
+        })
+    return [pscustomobject]@{
+        All = $false; Entries = $affected; Reasons = $reasons
+        Reason = "$($affected.Count) of $($Entries.Count) entries; its crate changed"
+    }
 }
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than

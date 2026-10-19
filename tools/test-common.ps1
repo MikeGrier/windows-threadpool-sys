@@ -501,37 +501,41 @@ Test-Case 'the inputs every sweep shares are recognised, and a crate''s own file
 
 # Crates a <- b <- c (c only as a dev-dependency), d on its own, e on c.
 $script:Deps = @{ 'crates/a' = @(); 'crates/b' = @('crates/a'); 'crates/c' = @('crates/b'); 'crates/d' = @(); 'crates/e' = @('crates/c') }
-$script:AllManifests = @('crates/a/sabotage.json', 'crates/b/sabotage.json', 'crates/c/sabotage-doctests.json',
-    'crates/c/sabotage.json', 'crates/d/sabotage.json', 'crates/e/sabotage.json')
 
-Test-Case 'a change to a crate selects its manifests and those of every crate built on it, and no others' {
-    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/b/src/lib.rs') -Dependencies $script:Deps
-    Assert-Equal $false $sel.All 'not everything'
-    Assert-Equal 'crates/b/sabotage.json|crates/c/sabotage-doctests.json|crates/c/sabotage.json|crates/e/sabotage.json' ($sel.Manifests -join '|') 'b, and c and e above it, through two hops'
-    $leaf = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/e/tests/x.rs') -Dependencies $script:Deps
-    Assert-Equal 'crates/e/sabotage.json' ($leaf.Manifests -join '|') 'a crate nothing builds on selects only itself'
+function Get-Reach {
+    param([string] $Crate, [hashtable] $Dependencies)
+    [string[]] $reach = @(Get-SabotageCrateReach -Crate $Crate -Dependencies $Dependencies)
+    [Array]::Sort($reach, [System.StringComparer]::Ordinal)
+    return ($reach -join '|')
 }
 
-Test-Case 'a change outside every crate and every shared input selects nothing' {
-    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('README.md', 'tools/check-encoding.ps1') -Dependencies $script:Deps
-    Assert-Equal $false $sel.All 'not everything'
-    Assert-Equal 0 @($sel.Manifests).Count 'nothing'
-    Assert-Equal 0 @((Select-SabotageManifest -Manifests $script:AllManifests -Changed @() -Dependencies $script:Deps).Manifests).Count 'no change, nothing'
+Test-Case 'a crate reaches itself and every crate it builds on, through any number of hops, and no others' {
+    Assert-Equal 'crates/a|crates/b|crates/c|crates/e' (Get-Reach 'crates/e' $script:Deps) 'e, c, b, a'
+    Assert-Equal 'crates/a|crates/b' (Get-Reach 'crates/b' $script:Deps) 'b and a, not what builds on b'
+    Assert-Equal 'crates/d' (Get-Reach 'crates/d' $script:Deps) 'd alone'
 }
 
-Test-Case 'a change to a shared input selects every manifest and says why' {
-    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/d/src/lib.rs', 'Cargo.lock') -Dependencies $script:Deps
-    Assert-Equal $true $sel.All 'everything'
-    Assert-Equal ($script:AllManifests -join '|') ($sel.Manifests -join '|') 'every manifest, in order'
-    if ($sel.Reason -notlike '*Cargo.lock*') { throw "the reason names the input: $($sel.Reason)" }
-}
-
-Test-Case 'a dependency cycle does not hang the selection, and a crate cargo does not know still selects itself' {
+Test-Case 'a dependency cycle is walked once, and a crate cargo does not know reaches only itself' {
     $cycle = @{ 'crates/a' = @('crates/b'); 'crates/b' = @('crates/a') }
-    $sel = Select-SabotageManifest -Manifests @('crates/a/sabotage.json', 'crates/x/sabotage.json') -Changed @('crates/b/src/lib.rs', 'crates/x/src/lib.rs') -Dependencies $cycle
-    Assert-Equal 'crates/a/sabotage.json|crates/x/sabotage.json' ($sel.Manifests -join '|') 'through the cycle, and the unknown crate by its own change'
+    Assert-Equal 'crates/a|crates/b' (Get-Reach 'crates/a' $cycle) 'both, once'
+    Assert-Equal 'crates/x' (Get-Reach 'crates/x' $cycle) 'unknown'
+    Assert-Equal '' (Get-Reach '' @{}) 'the root crate'
 }
 
+Test-Case 'a manifest''s crate is its directory, and a path is in a crate only past its separator' {
+    Assert-Equal '' (Get-SabotageManifestCrate 'sabotage.json') 'a manifest at the root'
+    Assert-Equal 'crates/a' (Get-SabotageManifestCrate 'crates/a/sabotage-doctests.json') 'in a crate'
+    if (-not (Test-SabotagePathInCrate 'crates/a/src/x.rs' 'crates/a')) { throw 'inside' }
+    if (Test-SabotagePathInCrate 'crates/ab/src/x.rs' 'crates/a') { throw 'a sibling sharing a prefix is not inside' }
+    if (Test-SabotagePathInCrate 'crates/a' 'crates/a') { throw 'the directory itself is no file in it' }
+    if (-not (Test-SabotagePathInCrate 'README.md' '')) { throw 'the root holds every path' }
+}
+
+Test-Case 'a manifest''s source root is its directory, or its root relative to that' {
+    $dir = [System.IO.Path]::Combine('C:\', 'r', 'crates', 'a')
+    Assert-Equal $dir (Get-SabotageSourceRoot -ManifestPath (Join-Path $dir 'sabotage.json') -Spec ([pscustomobject]@{ sabotages = @() })) 'its own'
+    Assert-Equal (Join-Path $dir '..') (Get-SabotageSourceRoot -ManifestPath (Join-Path $dir 'sabotage.json') -Spec ([pscustomobject]@{ root = '..' })) 'its root'
+}
 function New-GitFixture {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ('scope-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -688,6 +692,142 @@ Test-Case 'merging keeps every entry any record has, and the latest of each' {
     }
 }
 
+# --- Which entries of a manifest a change could have affected -------------------
+
+# A committed crate, crates/a, with a manifest of six entries: E1 patches lib.rs
+# and was caught by a unit test in src/tests.rs; E2 patches other.rs and was
+# caught by an integration test in tests/it.rs; E3 has no recorded catcher; E4 was
+# caught by a doctest; E5 by a test no file defines any more; E6 is a survived
+# control patching lib.rs.
+function New-EntryScopeFixture {
+    $root = New-GitFixture
+    $files = [ordered]@{
+        'crates/a/src/lib.rs'   = "fn api() {}`n"
+        'crates/a/src/other.rs' = "fn helper() {}`n"
+        'crates/a/src/spare.rs' = "fn spare() {}`n"
+        'crates/a/src/tests.rs' = "#[test]`nfn t_one() {}`n"
+        'crates/a/tests/it.rs'  = "#[test]`nfn it_two() {}`n"
+        'crates/a/README.md'    = "docs`n"
+        'crates/z/src/lib.rs'   = "fn below() {}`n"
+    }
+    foreach ($rel in $files.Keys) {
+        $path = Join-Path $root $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        [System.IO.File]::WriteAllText($path, $files[$rel])
+    }
+    $entry = { param($name, $file) [ordered]@{ name = $name; file = $file; expect = 'caught'; why = 'w'; find = @('fn'); replace = @('') } }
+    $spec = [ordered]@{ package = 'a'; sabotages = @(
+            (& $entry 'E1' 'src/lib.rs'), (& $entry 'E2' 'src/other.rs'), (& $entry 'E3' 'src/other.rs'),
+            (& $entry 'E4' 'src/other.rs'), (& $entry 'E5' 'src/other.rs'), (& $entry 'E6' 'src/lib.rs')) }
+    [System.IO.File]::WriteAllText((Join-Path $root 'crates/a/sabotage.json'), ($spec | ConvertTo-Json -Depth 8))
+    $base = Save-GitFixture $root 'base'
+    return [pscustomobject]@{ Root = $root; Base = $base }
+}
+
+function Get-ScopeRecord {
+    $record = New-SabotageCatcherRecord
+    $at = '2026-01-01T00:00:00.0000000Z'
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1' -Tests @('tests::t_one') -At $at
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E2' -Tests @('it_two') -At $at
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E4' -Tests @('crates\a\src\lib.rs - api (line 1)') -At $at
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E5' -Tests @('tests::gone_test') -At $at
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E6' -Tests @() -At $at
+    return $record
+}
+
+# Which entries are selected after `Edit` changes the fixture, joined.
+function Get-ScopedEntries {
+    param($Fixture, [scriptblock] $Edit, [hashtable] $Dependencies = @{ 'crates/a' = @('crates/z'); 'crates/z' = @() })
+    & $Edit $Fixture.Root
+    $change = Get-SabotageChange -RepositoryRoot $Fixture.Root -Since $Fixture.Base
+    $spec = [System.IO.File]::ReadAllText((Join-Path $Fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
+    $selection = Select-SabotageEntry -RepositoryRoot $Fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
+        -SourceRoot (Join-Path $Fixture.Root 'crates/a') -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord)
+    return $selection
+}
+
+Test-Case 'a change to a test file selects the entries it caught and those with nothing better known, and no others' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/tests.rs') -Value '// x' }
+        Assert-Equal 'E1|E3|E4|E5|E6' (@($sel.Entries | ForEach-Object { $_.name }) -join '|') 'not E2, whose test is elsewhere'
+        Assert-Equal "its catching test's file changed: crates/a/src/tests.rs" $sel.Reasons['E1'] 'E1, by its test'
+        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E3'] 'E3, unknown'
+        Assert-Equal 'a doctest caught it' $sel.Reasons['E4'] 'E4, doctest'
+        Assert-Equal 'its catching test is gone: tests::gone_test' $sel.Reasons['E5'] 'E5, gone'
+        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E6'] 'E6, caught by none'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a change to a patched file selects its entries, and one elsewhere in the crate only what is always selected' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/tests/it.rs') -Value '// x' }
+        Assert-Equal 'E2|E3|E4|E5|E6' (@($sel.Entries | ForEach-Object { $_.name }) -join '|') 'E2 by its integration test, not E1'
+        $fixture2 = New-EntryScopeFixture
+        try {
+            $sel = Get-ScopedEntries $fixture2 { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/lib.rs') -Value '// x' }
+            Assert-Equal 'E1|E3|E4|E5|E6' (@($sel.Entries | ForEach-Object { $_.name }) -join '|') 'E1 by its file'
+            Assert-Equal 'the file it patches changed: src/lib.rs' $sel.Reasons['E1'] 'why'
+        }
+        finally { Remove-Item -LiteralPath $fixture2.Root -Recurse -Force -ErrorAction SilentlyContinue }
+        $fixture3 = New-EntryScopeFixture
+        try {
+            $sel = Get-ScopedEntries $fixture3 { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/spare.rs') -Value '// x' }
+            Assert-Equal 'E3|E4|E5|E6' (@($sel.Entries | ForEach-Object { $_.name }) -join '|') 'nothing that has a better answer'
+            Assert-Equal $false $sel.All 'and not all'
+        }
+        finally { Remove-Item -LiteralPath $fixture3.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'an entry that is new or changed in the manifest is selected, and an unchanged one is not' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture {
+            param($r)
+            $path = Join-Path $r 'crates/a/sabotage.json'
+            $spec = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+            $spec.sabotages[1].why = 'reworded'
+            $spec.sabotages += [pscustomobject]@{ name = 'E7'; file = 'src/spare.rs'; expect = 'caught'; why = 'w'; find = @('fn'); replace = @('') }
+            [System.IO.File]::WriteAllText($path, ($spec | ConvertTo-Json -Depth 8))
+        }
+        Assert-Equal 'the entry changed' $sel.Reasons['E2'] 'E2 changed'
+        Assert-Equal 'the entry is new' $sel.Reasons['E7'] 'E7 new'
+        if ($sel.Reasons.ContainsKey('E1')) { throw "E1 is unchanged and its file and test are untouched: $($sel.Reasons['E1'])" }
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'every entry for a change below, a shared input, or a change that cannot be measured; none for nothing reached' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/z/src/lib.rs') -Value '// x' }
+        Assert-Equal $true $sel.All 'a crate it builds on'
+        Assert-Equal 6 @($sel.Entries).Count 'all six'
+        Assert-Equal 'every entry: a crate it builds on changed: crates/z' $sel.Reason 'why'
+
+        $none = Get-ScopedEntries $fixture { param($r) } -Dependencies @{ 'crates/a' = @() }
+        Assert-Equal 0 @($none.Entries).Count 'z changed, but a does not build on it here'
+
+        Add-Content -LiteralPath (Join-Path $fixture.Root 'Cargo.lock') -Value 'x'
+        $shared = Get-ScopedEntries $fixture { param($r) } -Dependencies @{ 'crates/a' = @() }
+        Assert-Equal $true $shared.All 'a shared input'
+
+        $spec = [System.IO.File]::ReadAllText((Join-Path $fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
+        $unknown = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
+            -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since 'no-such') `
+            -Dependencies @{} -Record (Get-ScopeRecord)
+        Assert-Equal $true $unknown.All 'unmeasurable'
+        $nomap = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
+            -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since $fixture.Base) `
+            -Dependencies $null -Record (Get-ScopeRecord)
+        Assert-Equal $true $nomap.All 'no crate map'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
 # --- ConvertTo-NativeArgument: one argument, quoted for a command line --------
 
 Test-Case 'a plain argument is left unquoted' {

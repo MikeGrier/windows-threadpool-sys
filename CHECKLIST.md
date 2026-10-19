@@ -266,13 +266,7 @@ changes.
 
 - [x] **M34.13** -- Record which tests caught each sabotage entry, and keep the record across runs. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3413)
 
-- [ ] **M34.14** -- **Within a manifest, run only the entries a change could have affected.** One
-  selection function, used by the harness and by the planner so that both count the same entries
-  for sharding, picks an entry when the entry itself is new or changed, when its `file` changed, when
-  a file holding one of its recorded catching tests changed or the test can no longer be found, or
-  when it has no recorded catchers and any test file of its crate changed. A change that selected
-  the whole manifest under M34.12 for a shared input or a dependency selects every entry. The
-  harness takes the same base revision, so a local run can be scoped to a branch.
+- [x] **M34.14** -- Within a sabotage manifest, run only the entries a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3414)
 
 - [ ] **M34.15** -- **Run an entry's recorded catchers before its whole suite.** An entry with
   recorded catching tests is first run against those tests alone. Caught there, it is caught; not

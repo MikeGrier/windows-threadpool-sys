@@ -1986,6 +1986,103 @@ Test-Case 'merge-sabotage-catchers keeps the latest of each entry across shards,
     finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# --- -Since sweeps what a change could have affected ---------------------------
+
+Write-Line ''
+Write-Line '-Since sweeps what a change could have affected'
+
+# A committed fixture that is a cargo package, so `cargo metadata` answers, with
+# two entries and a record of what caught each: the marker entry patches
+# src/lib.rs and was caught by `checks::t_marker`, defined there; the other
+# patches src/other.rs and was caught by `checks::t_other`, defined there.
+function New-ScopeFixture {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'other is broken'; file = 'src/other.rs'; expect = 'caught'; why = 'x'
+        find = @('fn t_other() {}'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec -Source "// marker line`nfn main() {}`nfn t_marker() {}`n"
+    [System.IO.File]::WriteAllText((Join-Path $root 'src\other.rs'), "fn t_other() {}`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[package]`nname = `"fixture`"`nversion = `"0.1.0`"`nedition = `"2021`"`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "fixture`n")
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`nCargo.lock`ntarget/`n")
+    Invoke-Native { git -C $root add -A } | Out-Null
+    Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    $record = New-SabotageCatcherRecord
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('checks::t_marker') -At '2026-01-01T00:00:00.0000000Z'
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'other is broken' -Tests @('checks::t_other') -At '2026-01-01T00:00:00.0000000Z'
+    Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
+    return $root
+}
+
+Test-Case '-Since lists only the entries a change could have affected, and why' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'Scope    : Since HEAD: 1 of 2 entries' $result.Output
+        Assert-Match 'other is broken  \[the file it patches changed: src/other.rs\]' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'its file and its test are untouched'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since sweeps the entries it selected, and nothing else' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Since', 'HEAD')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'Sweeping 1 entry' $result.Output
+        Assert-Match 'other is broken' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'not swept'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since with shards splits only the selected entries among them' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $first = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD', '-Shard', '0', '-ShardCount', '2')
+        Assert-Equal 0 $first.ExitCode $first.Output
+        Assert-Match 'Shard    : 0 of 2 \(1 of 1 entries\)' $first.Output
+        Assert-Match 'other is broken' $first.Output
+        $second = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD', '-Shard', '1', '-ShardCount', '2')
+        Assert-Match 'Shard    : 1 of 2 \(0 of 1 entries\)' $second.Output
+        Assert-False ($first.Output + $second.Output -match 'the marker is removed') 'on neither shard'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since with nothing affected sweeps nothing and builds nothing' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'README.md') -Value 'changed'
+        $mark = Join-Path $root 'stubs\cargo-ran'
+        $stub = Join-Path $root 'stubs\marking.cmd'
+        [System.IO.File]::WriteAllText($stub, "@echo off`r`necho ran>`"$mark`"`r`nexit /b 0`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Since', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'could have been affected; nothing to sweep' $result.Output
+        Assert-False (Test-Path -LiteralPath $mark) 'not even the baseline was built'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since from a base it cannot measure from sweeps every entry' {
+    $root = New-ScopeFixture
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'no-such-revision')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'every entry: this clone has no merge base' $result.Output
+        Assert-Match 'the marker is removed' $result.Output
+        Assert-Match 'other is broken' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
 # --- the working tree is never touched --------------------------------------
 #
 # The premise of the whole design. Each of these was a real defect: the tree was

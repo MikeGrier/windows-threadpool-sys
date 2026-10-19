@@ -44,14 +44,21 @@
     exactly what CI will consume.
 
 .PARAMETER Since
-    Optional base revision. When given, only the manifests a change since then
-    could have affected are planned: those of crates with a changed file, or
-    that depend on one, directly or not, through any kind of path dependency.
-    A change to an input every sweep shares plans every manifest, and so does a
-    base that cannot be measured from -- blank, all zeros, or absent from this
-    clone. The rule is `Select-SabotageManifest` in [common.ps1](common.ps1),
-    and it reads the dependencies from `cargo metadata`, so cargo must be on
-    PATH when this is given. The matrix may then be empty, `{"include":[]}`.
+    Optional base revision. When given, each manifest is planned for the
+    entries a change since then could have affected, and a manifest with none is
+    left out: every entry when the change reached a crate the manifest's crate
+    builds on, directly or not, through any kind of path dependency, or an input
+    every sweep shares, or when its base cannot be measured from -- blank, all
+    zeros, or absent from this clone; within the crate, the entries the record
+    of which tests caught each entry cannot rule out. The rule is
+    `Select-SabotageEntry` in [common.ps1](common.ps1), the one the harness
+    applies with the same -Since, so the shard counts here are for the entries
+    each shard will find. It reads the dependencies from `cargo metadata`, so
+    cargo must be on PATH. The matrix may then be empty, `{"include":[]}`.
+
+.PARAMETER CatcherRecord
+    The record of which tests caught each entry, for -Since. Missing or empty,
+    every entry of an affected crate is planned.
 #>
 [CmdletBinding()]
 param(
@@ -59,7 +66,8 @@ param(
     [int] $EntriesPerShard = 10,
     [string] $RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string] $GitHubOutput = '',
-    [string] $Since = ''
+    [string] $Since = '',
+    [string] $CatcherRecord = ''
 )
 
 Set-StrictMode -Version Latest
@@ -126,30 +134,38 @@ function Write-PlanNote {
     Write-Host "plan: $Message"
 }
 
+# Each manifest's entry count under -Since, or $null when every entry counts.
+$scopedCounts = $null
 if (-not [string]::IsNullOrWhiteSpace($Since)) {
     $change = Get-SabotageChange -RepositoryRoot $RepositoryRoot -Since $Since
     $dependencies = $null
     if ($change.Known) { $dependencies = Get-SabotageCrateDependency -RepositoryRoot $RepositoryRoot }
-    if (-not $change.Known) {
-        Write-PlanNote "every manifest: $($change.Reason)."
+    $record = Read-SabotageCatcherRecord -Path $CatcherRecord
+    $scopedCounts = @{}
+    $planned = 0
+    foreach ($path in $chosen) {
+        $spec = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $scope = Select-SabotageEntry -RepositoryRoot $RepositoryRoot -Manifest (Get-RelativePath $path) `
+            -Entries $spec.sabotages -SourceRoot (Get-SabotageSourceRoot -ManifestPath $path -Spec $spec) `
+            -Change $change -Dependencies $dependencies -Record $record
+        $scopedCounts[$path] = @($scope.Entries).Count
+        if ($scopedCounts[$path] -gt 0) {
+            $planned++
+            Write-PlanNote "$(Get-RelativePath $path): $($scope.Reason)."
+        }
     }
-    elseif ($null -eq $dependencies) {
-        Write-PlanNote 'every manifest: cargo metadata could not say which crates build on which.'
-    }
-    else {
-        $relative = @($chosen | ForEach-Object { Get-RelativePath $_ })
-        $selection = Select-SabotageManifest -Manifests $relative -Changed $change.Paths -Dependencies $dependencies
-        Write-PlanNote "$(@($selection.Manifests).Count) of $($relative.Count) manifests since $Since; $($selection.Reason)."
-        $chosen = @($selection.Manifests | ForEach-Object { $known[$_] })
-    }
+    Write-PlanNote "$planned of $($chosen.Count) manifests since $Since."
 }
-
 $include = @()
 foreach ($path in $chosen) {
     $spec = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $count = @($spec.sabotages).Count
     if ($count -eq 0) {
         throw "Manifest '$(Get-RelativePath $path)' declares no sabotages."
+    }
+    if ($null -ne $scopedCounts) {
+        $count = $scopedCounts[$path]
+        if ($count -eq 0) { continue }
     }
 
     # One shard per `EntriesPerShard` entries, rounded up, so a manifest that

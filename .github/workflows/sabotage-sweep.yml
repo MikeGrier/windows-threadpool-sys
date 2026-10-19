@@ -107,6 +107,15 @@ jobs:
       # For `cargo metadata`, which says which crates build on which. It reads
       # manifests and builds nothing.
       - uses: dtolnay/rust-toolchain@stable
+      # The record of which tests caught each entry, as the last run left it, so
+      # the plan counts the entries each shard will find. See the same step in
+      # `sweep` below for why it is restored by prefix.
+      - name: Restore the record of which tests caught each entry
+        uses: actions/cache/restore@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sabotage-catchers-
       # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
       # `${{ }}` interpolation into the script body. An expression substituted
       # into `run:` is spliced in as source before PowerShell parses it, so a
@@ -120,7 +129,7 @@ jobs:
         env:
           SWEEP_MANIFEST: ${{ inputs.manifest }}
           SWEEP_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
-        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Since "${env:SWEEP_SINCE}" -GitHubOutput "${env:GITHUB_OUTPUT}"
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Since "${env:SWEEP_SINCE}" -CatcherRecord .scratch/sabotage/catchers.json -GitHubOutput "${env:GITHUB_OUTPUT}"
 
   sweep:
     name: sweep ${{ matrix.label }} ${{ matrix.shard }}/${{ matrix.shards }}
@@ -161,7 +170,12 @@ jobs:
     # applies its own per-entry bound inside this one.
     timeout-minutes: 60
     steps:
+      # The whole history, as in `plan`: the shard measures the same change from the
+      # same base, so it finds the entries the plan counted. A shallow clone would
+      # not have the base, and the shard would sweep every entry.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # The repository's pinned toolchain, not the floating stable the lint jobs
       # force: a sweep is asking whether *this* crate's suite notices a defect,
       # so it must build the crate the way the crate is specified to build.
@@ -224,7 +238,9 @@ jobs:
           SWEEP_SHARD: ${{ matrix.shard }}
           SWEEP_SHARDS: ${{ matrix.shards }}
           SWEEP_NAME: ${{ inputs.name || '*' }}
-        run: ./tools/run-sabotage.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceLaunches
+          # The plan's base, so this shard sweeps the entries the plan counted for it.
+          SWEEP_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: ./tools/run-sabotage.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -Since "${env:SWEEP_SINCE}" -TraceLaunches
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts
