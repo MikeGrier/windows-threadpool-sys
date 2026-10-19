@@ -71,7 +71,7 @@ fn holding_every_buffer_stops_reads_until_one_is_dropped_and_loses_nothing() {
     assert!(polled.other.is_empty(), "{:?}", polled.other);
 
     let (bytes, _) = client.assemble(FILE);
-    assert_eq!(bytes, content(40), "every byte, once, in order");
+    assert_eq!(bytes, content(40), "every byte, once, put back by range");
     assert!(reader.take_failure().is_none());
 }
 
@@ -112,7 +112,7 @@ fn a_poll_before_the_previous_one_is_complete_is_refused_and_the_next_is_accepte
     assert_eq!(
         client.assemble(FILE).0,
         content(40),
-        "every byte, once, in order"
+        "every byte, once, put back by range"
     );
     assert!(reader.take_failure().is_none());
 }
@@ -150,6 +150,6 @@ fn an_undrained_client_queue_holds_the_poll_open_and_loses_nothing() {
     let polled = client.finish_poll();
     assert!(polled.other.is_empty(), "{:?}", polled.other);
     let (bytes, _) = client.assemble(FILE);
-    assert_eq!(bytes, content(40), "every byte, once, in order");
+    assert_eq!(bytes, content(40), "every byte, once, put back by range");
     assert!(reader.take_failure().is_none());
 }

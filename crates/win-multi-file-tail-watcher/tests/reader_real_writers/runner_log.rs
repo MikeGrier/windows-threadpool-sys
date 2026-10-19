@@ -5,8 +5,9 @@
 //! The shape is from the [capture](../../bench-captures/2026-10-16-runner-log-shape.txt): bursts of
 //! many lines of mixed length, with silences between them, and a few lines far longer than a small
 //! buffer. The lines here are of four lengths, and the longer ones cross the boundary between
-//! buffers, which is what this checks: a line cut across chunks comes back whole, because the
-//! chunks are of one file and in order.
+//! buffers, which is what this checks: a line cut across chunks comes back whole once the chunks of
+//! the file are put back by their ranges. They are not delivered in file order, and are not joined
+//! as they arrive.
 
 use std::time::Duration;
 
@@ -102,7 +103,10 @@ fn run(options: &TailReaderOptions) {
     assert!(command.wait().success());
 
     let (bytes, ranges) = client.assemble(FILE);
-    assert_eq!(bytes, expected, "the log, whole and in order");
+    assert_eq!(
+        bytes, expected,
+        "the log, every byte once, put back by range"
+    );
     assert!(reader.take_failure().is_none());
 
     // Lines longer than a buffer were cut across chunks, and came back whole all the same.
