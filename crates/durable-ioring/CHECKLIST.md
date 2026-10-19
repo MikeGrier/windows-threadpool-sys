@@ -279,15 +279,27 @@ option recorded by construction. The rule throughout is documented APIs only
 - [ ] **DI-15.1** -- **A file's identity, read from an opened file.** A `FileId` type over the
   documented identity query (the 128-bit form that also covers 64-bit file systems), and the volume it
   belongs to. Which of the identifier kinds `FILE_ID_DESCRIPTOR` accepts are offered (the file ID,
-  the extended 128-bit ID, the legacy object ID) is a row in `DI-13.1`'s table. Tests: the ID of an
-  opened file is stable across two opens and differs between two files.
+  the extended 128-bit ID, the legacy object ID) is a row in `DI-13.1`'s table, whose list is the
+  request crate's and not the page's: the `FILE_ID_DESCRIPTOR` page is read here and the row corrected
+  if it differs. Tests: the ID of an opened file is stable across two opens and differs between two
+  files.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** [NR-3.10](../windows-namespace-request-sys/CHECKLIST.md)
+  > (a typed `FileIdInfo` read, in `crates/windows-namespace-request-sys`). The 128-bit ID is
+  > `GetFileInformationByHandleEx`'s `FileIdInfo`, which that crate gives only as raw bytes; this crate
+  > forbids `unsafe`, and the typed decode belongs with the call.
 
 - [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
   volume hint that must be a file this crate opened or a volume it opened, so the hint is
-  provenance-checked like everything else. It takes the full typed set from `DI-M13` and `DI-M14`, with the data access `A` ([DI-13.8](#di-138)). The
-  remote check runs on the hint's device (`DI-14.5`). Tests: round trip of a file opened by path and
-  again by ID; an ID from a directory listing (`FileIdExtdDirectoryInfo`) opens by ID; a stale ID is
-  the kernel's error.
+  provenance-checked like everything else (a plan, not a ruling: [DI-D-64](DESIGN-NOTES.md#di-d-64)'s
+  `hVolumeHint` row; to be settled when this is picked up). **Its options are a type of its own**
+  (the engineer, 2026-10-18), carrying the typed access, share mode and flags `OpenFileById` takes, with
+  the data access `A` ([DI-13.8](#di-138)); its page has no disposition and no attributes, and its
+  security parameter is reserved. The checks are the open's, made on the opened handle and nowhere else
+  ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)): the remote check and, unbuffered, `UnknownLocation`
+  ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)). Tests: round trip of a file opened by path and again
+  by ID; an ID from a directory listing (`FileIdExtdDirectoryInfo`) opens by ID; a stale ID is the
+  kernel's error; whether the handle it returns is inheritable, which the page does not say.
 
 - [ ] **DI-15.3** -- **Opening relative to a directory handle: confirm there is no documented route,
   then record what stands in for it.** The assistant knows of no documented Win32 call that opens a
@@ -300,12 +312,18 @@ option recorded by construction. The rule throughout is documented APIs only
   owned one **or from any handle** ([DI-D-68](DESIGN-NOTES.md#di-d-68): the route for a handle opened elsewhere, since the new
   handle's mode is this crate's choice; the residue it cannot convert is `DI-10.6`), changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
   lets a reopen widen the access is a test here), sharing and flags: cached to unbuffered and back, a read-only handle for
-  a scrubber beside the writer. The target's alignment is recomputed for the new mode, and going
-  unbuffered runs the remote check. `ReOpenFile` documents that the new access and sharing cannot
-  conflict with a previous open that is still open; each conflict the table lists is a test, and a
-  sharing violation reaches the caller as the typed error from `DI-13.4`, not a panic. Documented as
-  well: the object must have been created by `CreateFile`, which an `OpenedFile` is and an
-  `OpenedVolume` or `OpenedDisk` may not be, so whether those reopen is a test, not an assumption.
+  a scrubber beside the writer. The target's alignment is recomputed for the new mode, and the checks
+  are the open's, on the reopened handle ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)): the remote check
+  and, unbuffered, `UnknownLocation` ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)), which a reopen
+  from any handle can meet, since the original may be a pipe or `NUL`. `ReOpenFile` documents that the
+  new access and sharing cannot conflict with a previous open that is still open; each conflict the
+  table lists is a test, and a sharing violation reaches the caller as the typed error from `DI-13.4`,
+  not a panic. Documented as well: the object must have been created by `CreateFile`; an
+  `OpenedVolume` and an `OpenedDisk` are opened through `CreateFileW` too, so whether a volume or a disk
+  reopens is a test, not an assumption. The request crate's tests already show a reopen widening read to
+  write on a file; this layer tests it again on its own types. Also tests, from
+  [DI-D-64](DESIGN-NOTES.md#di-d-64)'s unverified list: whether a handle that came from `OpenFileById`
+  (`DI-15.2`) reopens, and whether the reopened handle is inheritable.
 
 ## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
 
