@@ -1401,7 +1401,7 @@
       "name": "DI-3.10.3.5.6.1: a drain stops after one pass",
       "file": "src/engine.rs",
       "expect": "caught",
-      "why": "The notification is an edge (the ring crate's D-19), so a drain runs until a pass pops nothing; one pass leaves what the completions made due unissued.",
+      "why": "The notification is an edge (the ring crate's D-19), so a drain runs until a pass pops nothing. A completion's act rings the doorbell itself, so one pass leaves something unissued only when that doorbell failed: the commit it pushed stays queued, and only the next pass issues it and pops what it completes.",
       "find": ["            if !popped {\n                return deliver;\n            }\n"],
       "replace": ["            return deliver;\n"]
     },
