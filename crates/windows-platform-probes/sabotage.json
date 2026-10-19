@@ -1164,6 +1164,76 @@
       ]
     },
     {
+      "name": "M8.11: the IoRing probe stops emitting its row",
+      "file": "src/bin/ioring.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&registration, &agnosticism, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.11: the two registration readings trade places",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "Index 0 is the control and index 1 the finding; swapped, a table that was replaced reads as a broken probe.",
+      "find": [
+        "                Value::from(observed.index_zero_usable_after_second),",
+        "            ),",
+        "            (",
+        "                \"index_one_usable_after_second\",",
+        "                Value::from(observed.index_one_usable_after_second),"
+      ],
+      "replace": [
+        "                Value::from(observed.index_one_usable_after_second),",
+        "            ),",
+        "            (",
+        "                \"index_one_usable_after_second\",",
+        "                Value::from(observed.index_zero_usable_after_second),"
+      ]
+    },
+    {
+      "name": "M8.11: the result code is published as a signed decimal",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "A failing HRESULT is negative as an i32; published as a decimal it is a number nobody can look up.",
+      "find": [
+        "                Value::from(format!(\"{:#010x}\", observed.result_code)),"
+      ],
+      "replace": [
+        "                Value::from(format!(\"{}\", observed.result_code)),"
+      ]
+    },
+    {
+      "name": "M8.11: a declined run loses the reason",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", reason)"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.11 control: the row names its build before its architecture",
+      "file": "src/ioring/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",

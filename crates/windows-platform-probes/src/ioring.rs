@@ -56,6 +56,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     PopIoRingCompletion, SubmitIoRing,
 };
 
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// How long a submit may wait for its completions.
 const SUBMIT_TIMEOUT_MS: u32 = 5_000;
 
