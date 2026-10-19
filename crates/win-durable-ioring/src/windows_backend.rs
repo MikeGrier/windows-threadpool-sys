@@ -70,14 +70,14 @@ pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };
 pub use file_attributes::FileAttributes;
-pub use file_id::FileId;
+pub use file_id::{FileId, FileIdentifier};
 pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use handle_kind::{HandleKind, HandleKindQuery};
 pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
 pub use opened_file::{
-    Buffering, Cached, FileOptions, OpenRequest, OpenedFile, RemoteDevice, SharingViolation,
-    Unbuffered, UnknownLocation,
+    Buffering, ByIdOptions, ByIdRequest, Cached, FileOptions, IdentityMismatch, OpenRequest,
+    OpenedBy, OpenedFile, RemoteDevice, SharingViolation, Unbuffered, UnknownLocation,
 };
 pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,

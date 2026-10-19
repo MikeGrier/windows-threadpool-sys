@@ -150,6 +150,39 @@ An unbuffered file is refused on a remote device, where the claim cannot hold. T
 is after the open, so a link is judged by the handle it opens: followed, the file it leads to; opened with
 `open_reparse_point`, the link itself.
 
+### By identity
+
+A file has an identity, `FileId`: its volume's serial number and a 128-bit identifier, read from any handle to
+it. `OpenedFile::open_by_id` opens it again by that, or by a 64-bit file ID or an object ID, on the volume of a
+hint, which is any handle on that volume ([DI-D-70](../durable-ioring/DESIGN-NOTES.md#di-d-70)). Its options are
+`ByIdOptions`, since `OpenFileById` takes no disposition and no attributes. The call never sees a `FileId`'s
+volume, so the file it opens is asked its identity, and one from another volume is refused as an
+`IdentityMismatch`.
+
+```rust
+use win_durable_ioring::windows_backend::{ByIdOptions, Cached, FileOptions, OpenedFile};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-by-id-{}", std::process::id()));
+std::fs::write(&path, b"by identity")?;
+let file = OpenedFile::<Cached, _>::open(
+    Wtf16String::from_os_str(path.as_os_str()),
+    FileOptions::new().read(),
+)?;
+let id = file.file_id()?;
+
+// Any handle on the volume is a hint: here, another file's, opened by std.
+let neighbour = path.with_extension("neighbour");
+std::fs::write(&neighbour, b"")?;
+let hint = std::fs::File::open(&neighbour)?;
+let again = OpenedFile::<Cached, _>::open_by_id(hint, id, ByIdOptions::new().read())?;
+assert_eq!(again.file_id()?, id);
+# drop((file, again));
+# std::fs::remove_file(&path)?;
+# std::fs::remove_file(&neighbour)?;
+# Ok::<(), std::io::Error>(())
+```
+
 ### A raw volume
 
 A raw volume is a target too ([DI-D-61](../durable-ioring/DESIGN-NOTES.md#di-d-61)): one handle, one

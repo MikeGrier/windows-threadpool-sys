@@ -43,10 +43,14 @@ use durable_ioring::{
 
 use super::disposition::Disposition;
 use super::file_attributes::FileAttributes;
+use super::file_id::FileIdentifier;
 use super::file_rights::FileRights;
 use super::share_mode::ShareMode;
 
+mod by_id;
 mod open_request;
+
+pub use by_id::{ByIdOptions, ByIdRequest, IdentityMismatch};
 
 #[cfg(test)]
 mod creation_tests;
@@ -479,12 +483,12 @@ impl std::error::Error for UnknownLocation {
 /// for and nothing about the other.
 ///
 /// It is the cause of an [`io::ErrorKind::ResourceBusy`] error from [`OpenedFile::open`], reached with
-/// [`io::Error::get_ref`] and a downcast. The kernel's own error, which carries the Win32 code, is its
-/// [`source`](std::error::Error::source).
+/// [`io::Error::get_ref`] and a downcast, and of the same error from [`OpenedFile::open_by_id`]. The
+/// kernel's own error, which carries the Win32 code, is its [`source`](std::error::Error::source).
 #[derive(Debug)]
 pub struct SharingViolation {
-    /// The path the open was made at, as it was given.
-    pub path: PathBuf,
+    /// What the open named the file by.
+    pub by: OpenedBy,
     /// The data access the open asked for, or `None` for one that asked for no data right.
     pub data: Option<Access>,
     /// The rights the open asked for besides the data access.
@@ -501,7 +505,7 @@ impl fmt::Display for SharingViolation {
             "{} is open in a way that conflicts with this open (data access {}, {:?}, sharing {:?}): \
              the other open does not share what this one asked for, or this one does not share what \
              the other holds",
-            self.path.display(),
+            self.by,
             self.data
                 .map_or_else(|| "none".to_owned(), |data| data.to_string()),
             self.rights,
@@ -513,6 +517,25 @@ impl fmt::Display for SharingViolation {
 impl std::error::Error for SharingViolation {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.os_error)
+    }
+}
+
+/// What an open named the file by: the path it was given, or the identifier it opened on the hint's
+/// volume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenedBy {
+    /// A path, as it was given.
+    Path(PathBuf),
+    /// An identifier, by [`OpenedFile::open_by_id`].
+    Identifier(FileIdentifier),
+}
+
+impl fmt::Display for OpenedBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(path) => write!(f, "{}", path.display()),
+            Self::Identifier(identifier) => write!(f, "the file identified by {identifier:?}"),
+        }
     }
 }
 
@@ -534,13 +557,30 @@ pub(super) fn refine_sharing(
     rights: FileRights,
     share: ShareMode,
 ) -> io::Error {
+    refine_sharing_by(
+        error,
+        || OpenedBy::Path(PathBuf::from(path.to_os_string())),
+        data,
+        rights,
+        share,
+    )
+}
+
+/// `error`, or the [`SharingViolation`] it is if the kernel said so, naming the file as `by` does.
+fn refine_sharing_by(
+    error: io::Error,
+    by: impl FnOnce() -> OpenedBy,
+    data: Option<Access>,
+    rights: FileRights,
+    share: ShareMode,
+) -> io::Error {
     if error.raw_os_error() != Some(ERROR_SHARING_VIOLATION.cast_signed()) {
         return error;
     }
     io::Error::new(
         io::ErrorKind::ResourceBusy,
         SharingViolation {
-            path: PathBuf::from(path.to_os_string()),
+            by: by(),
             data,
             rights,
             share,
@@ -727,7 +767,15 @@ impl<B: Buffering, A: DataAccess> OpenRequest<B, A> {
                 self.share,
             )
         })?;
-        let handle = SharedHandle::from(handle);
+        OpenedFile::admit(SharedHandle::from(handle))
+    }
+}
+
+impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
+    /// The checks every open makes on the handle it opened, whether by path or by identifier, and
+    /// the file it is if they pass (DI-14.5): when `B` claims its warranty only on a local device, the
+    /// handle's final path must be readable and must not name a device of another machine.
+    fn admit(handle: SharedHandle) -> io::Result<Self> {
         if B::LOCAL_DEVICE_ONLY {
             let location = final_location(handle.as_handle()).map_err(|cause| {
                 io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })

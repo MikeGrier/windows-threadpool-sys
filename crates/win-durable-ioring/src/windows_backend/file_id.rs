@@ -10,11 +10,16 @@
 //! `OpenFileById` takes, lists it as `ExtendedFileIdType`, beside the 64-bit `FileIdType` and
 //! `ObjectIdType`, and says it is "used on ReFS file systems"; an NTFS file's 16 bytes were observed
 //! to open it as that type (`D-31` in the request crate's design notes).
+//!
+//! [`FileIdentifier`] is what an open by identifier takes: a [`FileId`], or one of the page's two other
+//! kinds (DI-15.2, DI-D-70).
 
 use std::io;
+use std::ops::Range;
 
 use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::file_id::{FileIdInfo, QueryFileIdInfo};
+use windows_namespace_request_sys::open_by_id::FileIdentifier as RequestIdentifier;
 
 use super::{Buffering, DataAccess, OpenedFile};
 
@@ -94,6 +99,67 @@ impl FileId {
     fn from_info(info: FileIdInfo) -> Self {
         Self::new(info.volume_serial_number(), info.file_id())
     }
+}
+
+/// What an open by identifier names the file by: one of the three kinds the `FILE_ID_DESCRIPTOR` page
+/// lists. Each is opened on the volume of the hint the open is given, which is the only volume the
+/// call is told of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FileIdentifier {
+    /// `ExtendedFileIdType`: a [`FileId`]'s 128-bit identifier. A `FileId` also names a volume, which
+    /// the call does not take, so the opened file's identity is read and must be this one, volume
+    /// serial included; a hint on another volume is refused with
+    /// [`IdentityMismatch`](super::IdentityMismatch) and not answered with another volume's file.
+    Extended(FileId),
+    /// `FileIdType`: a 64-bit file ID, which `GetFileInformationByHandle` reports as
+    /// `nFileIndexHigh` and `nFileIndexLow`. It names no volume, so there is nothing to check.
+    FileId64(u64),
+    /// `ObjectIdType`: an object ID, as the 16 bytes of the `GUID` in the order Windows stores one in
+    /// memory, which is how `FSCTL_CREATE_OR_GET_OBJECT_ID` reports it (`FILE_OBJECTID_BUFFER`'s
+    /// `ObjectId`) and how `fsutil objectid` prints it. It names no volume.
+    ObjectId([u8; 16]),
+}
+
+impl From<FileId> for FileIdentifier {
+    fn from(id: FileId) -> Self {
+        Self::Extended(id)
+    }
+}
+
+impl FileIdentifier {
+    /// The identifier as the request crate's entry takes it.
+    pub(super) fn to_request(self) -> RequestIdentifier {
+        match self {
+            Self::Extended(id) => RequestIdentifier::ExtendedFileId(id.id()),
+            Self::FileId64(id) => RequestIdentifier::FileId(id),
+            Self::ObjectId(bytes) => RequestIdentifier::ObjectId(guid_value(bytes)),
+        }
+    }
+}
+
+/// Where each field of a `GUID` lies in its 16 bytes, as Windows lays one out: `Data1`, a `u32`, and
+/// `Data2` and `Data3`, each a `u16`, stored little-endian, then `Data4`, eight bytes in order.
+mod guid_layout {
+    use std::ops::Range;
+
+    pub const DATA1: Range<usize> = 0..4;
+    pub const DATA2: Range<usize> = 4..6;
+    pub const DATA3: Range<usize> = 6..8;
+}
+
+/// The `GUID` that `bytes` lay out, as the value the request crate's `ObjectId` takes: the `GUID`
+/// read as one big-endian number in the order of its canonical text form, which is what
+/// `GUID::from_u128` reads. The three little-endian fields are turned around and `Data4` is kept.
+fn guid_value(bytes: [u8; 16]) -> u128 {
+    let mut text_order = bytes;
+    for field in [guid_layout::DATA1, guid_layout::DATA2, guid_layout::DATA3] {
+        reverse(&mut text_order, field);
+    }
+    u128::from_be_bytes(text_order)
+}
+
+fn reverse(bytes: &mut [u8; 16], field: Range<usize>) {
+    bytes[field].reverse();
 }
 
 impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {

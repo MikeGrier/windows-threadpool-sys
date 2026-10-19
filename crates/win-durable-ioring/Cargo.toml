@@ -86,6 +86,10 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 # at every build, so a release of that crate would break this one, and a versionless dev-dependency is
 # left out of the published manifest.
 win-pipes-sys = { path = "../win-pipes-sys" }
+# A directory listing's identities, which the open by identifier is tested with (DI-15.2): the record
+# `FileIdExtdDirectoryInfo` fills, read by the crate that enumerates with it. Path-only, for the reason
+# given above.
+windows-file-enumeration-sys = { path = "../windows-file-enumeration-sys" }
 
 # A blocking push, built on the public API as a helper to use or adapt (DI-7.4, DI-D-56). Its own
 # tests run with the crate's: without `test = true` cargo builds an example and never runs them.

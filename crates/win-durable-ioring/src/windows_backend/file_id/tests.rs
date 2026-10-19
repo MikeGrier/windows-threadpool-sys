@@ -10,9 +10,10 @@ use std::os::windows::fs::OpenOptionsExt;
 use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_namespace_request_sys::file_id::QueryFileIdInfo;
+use windows_namespace_request_sys::open_by_id::FileIdentifier as RequestIdentifier;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 
-use super::FileId;
+use super::{FileId, FileIdentifier, guid_value};
 use crate::dioring::tests::{TempFile, wtf};
 use crate::windows_backend::{Cached, FileOptions, NoData, OpenedFile, ReadOnly, Unbuffered};
 
@@ -175,4 +176,43 @@ fn new_carries_its_fields_and_equality_and_hashing_use_both() {
         .into_iter()
         .collect();
     assert_eq!(set.len(), 3);
+}
+
+#[test]
+fn an_object_ids_bytes_are_the_guid_windows_lays_out_and_the_request_crate_reads() {
+    // `fsutil objectid create` printed these bytes for a file on Windows 11 build 26300; as a GUID
+    // they are 7383249c-cb6e-11f1-857d-7ced8d529076, its little-endian first three fields turned
+    // around. The open by object ID that confirms the reading is in the by-identifier tests.
+    let bytes = [
+        0x9c, 0x24, 0x83, 0x73, 0x6e, 0xcb, 0xf1, 0x11, 0x85, 0x7d, 0x7c, 0xed, 0x8d, 0x52, 0x90,
+        0x76,
+    ];
+    assert_eq!(guid_value(bytes), 0x7383_249c_cb6e_11f1_857d_7ced_8d52_9076);
+    assert_eq!(guid_value([0; 16]), 0);
+    let mut last = [0; 16];
+    last[15] = 1;
+    assert_eq!(guid_value(last), 1, "Data4 is kept in order");
+    let mut first = [0; 16];
+    first[0] = 1;
+    assert_eq!(guid_value(first), 1 << 96, "Data1 is little-endian");
+}
+
+#[test]
+fn each_identifier_reaches_the_request_crate_as_its_own_kind() {
+    let id = FileId::new(7, [3; 16]);
+    assert_eq!(FileIdentifier::from(id), FileIdentifier::Extended(id));
+    assert_eq!(
+        FileIdentifier::Extended(id).to_request(),
+        RequestIdentifier::ExtendedFileId([3; 16])
+    );
+    assert_eq!(
+        FileIdentifier::FileId64(0x1234).to_request(),
+        RequestIdentifier::FileId(0x1234)
+    );
+    let mut bytes = [0; 16];
+    bytes[15] = 9;
+    assert_eq!(
+        FileIdentifier::ObjectId(bytes).to_request(),
+        RequestIdentifier::ObjectId(9)
+    );
 }

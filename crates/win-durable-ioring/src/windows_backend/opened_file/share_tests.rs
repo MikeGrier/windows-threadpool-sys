@@ -10,7 +10,7 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
 use super::super::{FileRights, NoData, ReadWrite, ShareMode};
-use super::{Cached, FileOptions, OpenedFile, SharingViolation, data_access};
+use super::{Cached, FileOptions, OpenedBy, OpenedFile, SharingViolation, data_access};
 use crate::dioring::tests::{TempFile, wtf};
 use durable_ioring::Access;
 
@@ -232,7 +232,7 @@ fn the_error_names_what_this_open_asked_for_and_keeps_the_kernels_error() {
     )
     .expect_err("an exclusive open is open");
     let violation = sharing_violation(&error);
-    assert_eq!(violation.path, temp.0);
+    assert_eq!(violation.by, OpenedBy::Path(temp.0.clone()));
     assert_eq!(violation.data, Some(Access::ReadWrite));
     assert_eq!(violation.rights, FileRights::DELETE);
     assert_eq!(violation.share, ShareMode::READ);

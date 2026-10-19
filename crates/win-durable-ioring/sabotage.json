@@ -1916,6 +1916,86 @@
       "why": "A control: the same conversion through a differently named binding, which no test can tell apart.",
       "find": ["            .map_err(|error| error.to_io_error())"],
       "replace": ["            .map_err(|failure| failure.to_io_error())"]
+    },
+    {
+      "name": "DI-15.2: an open by FileId does not check the opened file's identity",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The call takes the volume from the hint and not from the FileId, so without the check a hint on another volume opens another volume's file and reports it as the one asked for (DI-D-70).",
+      "find": ["            if opened != asked {"],
+      "replace": ["            if false && opened != asked {"]
+    },
+    {
+      "name": "DI-15.2: the identity check compares the identifier and not the volume",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The identifier is the same on every volume that happens to have it; the volume serial is the half of the identity the call never sees, and the only half the check exists for.",
+      "find": ["            if opened != asked {"],
+      "replace": ["            if opened.id() != asked.id() {"]
+    },
+    {
+      "name": "DI-15.2: a sharing violation by identifier names the wrong identifier",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "The SharingViolation's OpenedBy is the caller's only way to say which open conflicted.",
+      "find": ["                || OpenedBy::Identifier(self.identifier),"],
+      "replace": ["                || OpenedBy::Identifier(FileIdentifier::FileId64(0)),"]
+    },
+    {
+      "name": "DI-15.2: the buffering mode's flags are not passed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An OpenedFile<Unbuffered> opened cached would claim SharedDevice for data the system cache holds.",
+      "find": ["            .with_flags_and_attributes(options.flags(B::FLAGS));"],
+      "replace": ["            .with_flags_and_attributes(options.flags(0));"]
+    },
+    {
+      "name": "DI-15.2: the share mode is not passed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An exclusive open by identifier would share everything.",
+      "find": ["            .with_share_mode(options.share.bits())"],
+      "replace": ["            .with_share_mode(ShareMode::ALL.bits())"]
+    },
+    {
+      "name": "DI-15.2: the data access is not asked for",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "An OpenedFile<_, ReadWrite> whose handle cannot read or write would fail every operation a target made of it is given.",
+      "find": ["        data_rights::<A>() | self.rights.bits()"],
+      "replace": ["        self.rights.bits()"]
+    },
+    {
+      "name": "DI-15.2: the overlapped option sets another flag",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "caught",
+      "why": "Each option must set its own flag and no other.",
+      "find": ["            flags |= FILE_FLAG_OVERLAPPED;"],
+      "replace": ["            flags |= FILE_FLAG_RANDOM_ACCESS;"]
+    },
+    {
+      "name": "DI-15.2: an object ID's first field is not turned around",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The bytes are a GUID as Windows lays one out; read in the wrong order they name another object, or none.",
+      "find": ["    for field in [guid_layout::DATA1, guid_layout::DATA2, guid_layout::DATA3] {"],
+      "replace": ["    for field in [guid_layout::DATA2, guid_layout::DATA3] {"]
+    },
+    {
+      "name": "DI-15.2: the open by identifier skips the location checks",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: the remote and unknown-location checks are the path open's, made by the same function and caught there, and no test reaches them by identifier, since the OpenFileById page lists SMB as not supported and the call opens only a file on a file system, whose final path is readable.",
+      "find": ["        OpenedFile::admit(handle)\n"],
+      "replace": ["        Ok(OpenedFile {\n            handle,\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+    },
+    {
+      "name": "DI-15.2 control: the open's error binding is renamed",
+      "file": "src/windows_backend/opened_file/by_id.rs",
+      "expect": "survives",
+      "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
+      "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
+      "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
     }
   ]
 }

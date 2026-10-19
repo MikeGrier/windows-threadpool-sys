@@ -8,8 +8,8 @@ use windows_sys::Win32::Storage::FileSystem::{FILE_READ_DATA, FILE_WRITE_DATA};
 use super::{RawOpen, open, raw_open_of};
 use crate::dioring::tests::TempFile;
 use crate::windows_backend::{
-    Buffering, Cached, FileRights, NoData, ReadOnly, ReadWrite, ShareMode, SharingViolation,
-    Unbuffered, WriteOnly,
+    Buffering, Cached, FileRights, NoData, OpenedBy, ReadOnly, ReadWrite, ShareMode,
+    SharingViolation, Unbuffered, WriteOnly,
 };
 use durable_ioring::{Access, DataAccess};
 
@@ -135,7 +135,7 @@ fn a_conflict_is_the_same_sharing_violation_a_file_reports() {
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<SharingViolation>())
         .expect("the cause is a SharingViolation");
-    assert_eq!(violation.path, temp.0);
+    assert_eq!(violation.by, OpenedBy::Path(temp.0.clone()));
     assert_eq!(violation.data, Some(Access::ReadOnly));
     assert_eq!(
         violation.rights,
