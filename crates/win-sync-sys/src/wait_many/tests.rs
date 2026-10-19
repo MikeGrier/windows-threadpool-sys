@@ -88,7 +88,7 @@ fn any_times_out_when_nothing_is_signalled_and_takes_at_least_its_time() {
 #[test]
 fn any_is_released_by_a_set_on_another_thread() {
     let events = events(3);
-    let signaller = events[2].try_clone().expect("clone");
+    let signaller = events[2].clone();
     let worker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
         signaller.set()
@@ -110,7 +110,7 @@ fn any_reports_an_abandoned_mutex_by_its_index_and_owns_it_after() {
 #[test]
 fn any_takes_a_mixture_of_object_kinds_as_borrowed_handles() {
     let event = auto(false);
-    let owned: OwnedHandle = manual(true).into();
+    let owned: OwnedHandle = manual(true).try_into_owned().expect("the only holder");
     let mutex = abandoned_mutex();
     let objects: [BorrowedHandle<'_>; 3] =
         [event.as_handle(), owned.as_handle(), mutex.as_handle()];
@@ -205,7 +205,7 @@ fn all_is_released_when_the_last_object_is_set_on_another_thread() {
     let events = events(3);
     events[0].set().expect("set");
     events[1].set().expect("set");
-    let signaller = events[2].try_clone().expect("clone");
+    let signaller = events[2].clone();
     let worker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
         signaller.set()
