@@ -6,10 +6,11 @@
 //! handle is signalled or the wait times out. Two SDK contracts shape this API:
 //!
 //! - **The handle must stay valid while a wait is pending.** [`ThreadpoolWait`]
-//!   therefore *owns* its handle rather than borrowing one, so it cannot be
-//!   closed underneath a pending wait. Use [`ThreadpoolWait::handle`] to
-//!   inspect it; to signal an event the wait owns, build the wait from a
-//!   `win-sync-sys` [`Event`] and keep a clone of it.
+//!   therefore holds its handle rather than borrowing one -- owning it, or
+//!   sharing it as a `SharedHandle` -- so it cannot be closed underneath a
+//!   pending wait. Use [`ThreadpoolWait::handle`] to inspect it; to signal an
+//!   event the wait holds, build the wait from a `win-sync-sys` [`Event`] and
+//!   keep a clone of it.
 //! - **A wait fires at most once per arming.** The SDK requires the wait to be
 //!   rearmed explicitly for each activation, so the callback receives a
 //!   [`WaitActivation`] carrying [`WaitActivation::rearm`]. A callback that does
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 use crate::rearm::RearmSuppression;
 
+use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
@@ -107,6 +109,10 @@ impl Drop for CustomClose {
 pub(crate) enum WaitTarget {
     /// The default: closed by [`OwnedHandle`]'s own drop, with `CloseHandle`.
     Owned(OwnedHandle),
+    /// One holder of a shared handle, closed with `CloseHandle` when the last
+    /// holder drops. The wait's clone is one of them, so the handle stays open
+    /// while the wait holds it.
+    Shared(SharedHandle),
     /// Closed with the caller-supplied routine.
     Custom(CustomClose),
 }
@@ -122,6 +128,7 @@ impl WaitTarget {
     pub(crate) fn raw(&self) -> HANDLE {
         match self {
             WaitTarget::Owned(handle) => handle.as_raw_handle(),
+            WaitTarget::Shared(handle) => handle.as_raw_handle(),
             WaitTarget::Custom(custom) => custom.raw,
         }
     }
@@ -130,6 +137,7 @@ impl WaitTarget {
     pub(crate) fn borrow(&self) -> BorrowedHandle<'_> {
         match self {
             WaitTarget::Owned(handle) => handle.as_handle(),
+            WaitTarget::Shared(handle) => handle.as_handle(),
             // SAFETY: the handle stays open for as long as `self` owns it, and
             // the returned borrow cannot outlive that.
             WaitTarget::Custom(custom) => unsafe { BorrowedHandle::borrow_raw(custom.raw) },
@@ -146,6 +154,7 @@ impl std::fmt::Debug for WaitTarget {
                 "close",
                 &match self {
                     WaitTarget::Owned(_) => "CloseHandle",
+                    WaitTarget::Shared(_) => "CloseHandle, by the last holder",
                     WaitTarget::Custom(_) => "custom",
                 },
             )
@@ -163,8 +172,9 @@ impl std::fmt::Debug for WaitTarget {
 /// Construct one safely from a `win-sync-sys` [`Event`] (`From<Event>`) or with
 /// [`WaitableHandle::event`], or vouch for a handle
 /// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam --
-/// or [`WaitableHandle::assume_waitable_with`] when the handle needs a close
-/// routine other than `CloseHandle`.
+/// [`WaitableHandle::assume_waitable_shared`] when the handle is shared with
+/// other holders, or [`WaitableHandle::assume_waitable_with`] when the handle
+/// needs a close routine other than `CloseHandle`.
 /// This mirrors `UnassociatedEndpoint` in `windows-overlapped-io-sys`, which
 /// pairs a safe `open` with an `assume_overlapped` escape hatch for the same
 /// reason.
@@ -254,6 +264,27 @@ impl WaitableHandle {
         }
     }
 
+    /// Wrap a shared handle whose wait support the caller vouches for.
+    ///
+    /// The wait holds `handle`, one clone of a [`SharedHandle`], and the
+    /// caller may keep others: to signal the object, or to hand it to another
+    /// waiter. The handle closes only when the last holder drops, so the clone
+    /// the wait holds keeps it open for as long as the wait does, which is the
+    /// guarantee [`assume_waitable`](Self::assume_waitable) gets from exclusive
+    /// ownership.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees that the handle is a waitable object the thread
+    /// pool supports, and in particular is **not a mutex**, which the SDK does
+    /// not support and which yields undefined behaviour rather than an error.
+    #[must_use]
+    pub unsafe fn assume_waitable_shared(handle: SharedHandle) -> Self {
+        Self {
+            target: WaitTarget::Shared(handle),
+        }
+    }
+
     /// Borrow the underlying handle, for signalling or inspecting it.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
@@ -270,9 +301,18 @@ impl WaitableHandle {
     /// precisely the wrong destructor for such a target, so there is no correct
     /// value to hand back. The handle is neither closed nor leaked -- ownership
     /// simply stays where it was.
+    ///
+    /// A shared target (see
+    /// [`assume_waitable_shared`](Self::assume_waitable_shared)) gives its
+    /// handle back only as its last holder, as
+    /// [`SharedHandle::try_into_owned`] does; while another holder remains, the
+    /// wrapper is returned unchanged, still holding its clone.
     pub fn into_handle(self) -> Result<OwnedHandle, Self> {
         match self.target {
             WaitTarget::Owned(handle) => Ok(handle),
+            WaitTarget::Shared(handle) => handle.try_into_owned().map_err(|handle| Self {
+                target: WaitTarget::Shared(handle),
+            }),
             target @ WaitTarget::Custom(_) => Err(Self { target }),
         }
     }

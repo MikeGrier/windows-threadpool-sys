@@ -36,6 +36,10 @@ windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-i
 # wait target. The crate makes no event of its own (WS-D-5 in win-sync-sys' DESIGN-NOTES.md).
 # Published independently, so both a path and a version.
 win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+# A wait target may be shared: the wait holds one clone and the caller keeps others (the workspace
+# DESIGN-NOTES.md, "A wait may hold its handle shared"). Published independently, so both a path and
+# a version.
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 # Interrupt time, which the self-heal stamps a cancellation and its repair with: the workspace reads
 # its one time base through this crate rather than each crate calling `QueryInterruptTime` itself
 # (WT-D-1 in win-time-sys' DESIGN-NOTES.md). Optional, pulled in by `self-heal` alone. Published

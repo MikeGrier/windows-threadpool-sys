@@ -1426,3 +1426,16 @@ The item as it stood at completion:
   > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end, whose readiness event is an `Event`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-18 22:58:35 -04:00 -- M-T15.1, a wait that shares its handle
+
+### <a id="m-t151"></a>M-T15.1 -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. *(completed 2026-10-18 22:58:35 -04:00)*
+
+Decided by the engineer on 2026-10-18 ("take the decision as yes now"); the decision, and the two points the
+assistant settled within it (the seam's contract, and what `into_handle` returns), are in the workspace
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle). `WaitTarget` has a `Shared(SharedHandle)` arm;
+releasing the wait's clone is the target's destructor, so both teardown paths already order it after the drain.
+Restructured while `WS-2.1` was implemented: switching `From<Event>` to the shared arm moved to
+[WS-2.1](../win-sync-sys/CHECKLIST.md), because it needs a shareable `Event` and `WS-2.1` needs this arm first.
+Six tests, and three sabotages (two caught, one control survived); one is caught by the pool failing fast on a
+null handle, which the manifest says.

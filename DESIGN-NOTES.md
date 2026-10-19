@@ -912,8 +912,16 @@ needs the caller's `unsafe` assertion. The teardown order needs nothing new: rel
 target's destructor, which [the close-routine decision](#a-wait-target-owns-its-close-routine-because-not-every-waitable-handle-closes-with-closehandle)
 already orders after the drain on both teardown paths.
 
-**Settled in `M-T15.1` and recorded here when it is:** what `into_handle` returns for a shared target, and the
-form of the `unsafe` seam for a shared handle of unknown kind.
+**The seam and the way back out, settled in `M-T15.1` by the assistant within the engineer's decision.** A shared
+handle of unknown kind enters through `unsafe fn assume_waitable_shared(SharedHandle)`, beside `assume_waitable`
+and `assume_waitable_with`, and its contract is the waitability one alone: exclusivity, which `assume_waitable`
+also asks for, is what the count replaces. `into_handle` gives a shared target's handle back only to its last
+holder, as `SharedHandle::try_into_owned` does, and otherwise returns the wrapper unchanged, still holding its
+clone; this is [the same rule](#into_handle-now-declines-rather-than-lying) as a custom-close target's, a refusal
+that hands the value back rather than an answer that is wrong.
+
+**Where the safe conversion from an `Event` lands.** `From<Event>` keeps building an owned target until
+`win-sync-sys`' `WS-2.1` makes an `Event` shareable, and moves to the shared arm with it.
 
 ## Re-arming is gated against teardown, under the same lock that arms
 

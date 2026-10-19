@@ -402,6 +402,30 @@
       "why": "The manifest checking itself. The forced keys are a multiset that is only searched, never read in order, so which removal is used changes nothing a test can see.",
       "find": ["                forced.swap_remove(at);\n"],
       "replace": ["                forced.remove(at);\n"]
+    },
+    {
+      "name": "M-T15.1: a shared target never gives its handle back",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "into_handle gives a shared target's handle to its last holder; refusing it always would leave a caller holding a wrapper it cannot unwrap.",
+      "find": ["            WaitTarget::Shared(handle) => handle.try_into_owned().map_err(|handle| Self {\n"],
+      "replace": ["            WaitTarget::Shared(handle) => Err::<OwnedHandle, SharedHandle>(handle).map_err(|handle| Self {\n"]
+    },
+    {
+      "name": "M-T15.1: a shared target arms the wait on no handle",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The raw handle is what the pool waits on; a shared target that reported another value would arm a wait that never fires on the event its holders set. Caught by the process ending with STATUS_STACK_BUFFER_OVERRUN: arming a wait on a null handle is a fail-fast in the pool, deterministic rather than a heap accident, so no assertion can run before it.",
+      "find": ["            WaitTarget::Shared(handle) => handle.as_raw_handle(),\n"],
+      "replace": ["            WaitTarget::Shared(_) => ptr::null_mut(),\n"]
+    },
+    {
+      "name": "CONTROL: M-T15.1: a shared target's debug label is reworded",
+      "file": "src/wait.rs",
+      "expect": "survives",
+      "why": "The manifest checking itself. The label is for a reader, and no test reads it.",
+      "find": ["                    WaitTarget::Shared(_) => \"CloseHandle, by the last holder\",\n"],
+      "replace": ["                    WaitTarget::Shared(_) => \"shared\",\n"]
     }
   ]
 }

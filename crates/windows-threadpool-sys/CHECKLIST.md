@@ -1318,21 +1318,10 @@ finding is of a different and worse kind: a rule nothing tests.
 
 ## M-T15 -- A wait that shares its handle
 
-- [ ] **M-T15.1** -- **A `ThreadpoolWait` can hold its handle shared, so a caller keeps a clone to signal it.**
-  Decided by the engineer on 2026-10-18 ("take the decision as yes now"), recorded in the workspace
-  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle). `WaitTarget` gains a shared arm holding a
-  `SharedHandle` clone; `From<Event>` builds one from a shared `win-sync-sys` `Event`
-  ([WS-2.1](../win-sync-sys/CHECKLIST.md)), and `M-T14+.1`'s `WaitOnlyEvent` conversion is decided alongside.
-  `WaitableHandle::event`'s documentation stops telling a caller to keep a duplicate. Settled here and recorded in
-  the same section: what `into_handle` returns for a shared target, and the form of the `unsafe` seam for a shared
-  handle of unknown kind. Tests: a wait on a shared event fires when a clone sets it; the handle stays open after
-  every other holder drops while the wait is armed; drop and cleanup-group release both drain before the wait's
-  clone is released.
+- [x] **M-T15.1** -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m-t151)
 
-  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.1](../win-sync-sys/CHECKLIST.md).
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-enumeration-sys` -> `SAFE` ->
-  > `SAFE-3`. See [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-sync-sys` -> `WS-M2` -> `WS-2.1`. See
+  > [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
 
 ## M-inf -- Diagnostic work with no gating deliverable
 
