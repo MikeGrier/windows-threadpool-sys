@@ -775,3 +775,27 @@ configurations, and the fixed list costs nothing on a runner with more processor
 inverts between the two architectures, it needs two threads, and the only reason recorded for its
 absence was the debug-build problem a release step solves. Leaving it out would have kept the ARM64
 gap open for the probe it matters most to.
+
+## Why the build identity is stamped by included code rather than a copy or a new crate
+
+Decided in [A queue report names the build that produced it](DESIGN-NOTES.md#d-report-names-its-build).
+
+The item pointed at `windows-placement-probe`'s build script as the worked example. Three ways to
+reuse it were weighed:
+
+- **A copy in this crate's build script** was rejected because that script is the record of several
+  measured staleness defects -- `HEAD` not changing on commit, packed refs, worktree `commondir` --
+  each fixed in place. A copy would carry today's fixes and miss tomorrow's.
+- **Reading `windows-placement-probe`'s own stamps at run time** was rejected because they describe
+  that crate's build: its version, and a dirty flag its script refreshes only when its own files
+  change.
+- **A shared build-dependency crate** would work, at the cost of a new crate for one function.
+
+So the stamping moved, unchanged, into `windows-placement-probe/build/stamp.rs` and became a function
+of a prefix; both build scripts include it with `include!`, which keeps it in each script's root
+module and changes no visibility. `windows-placement-probe` is `publish = false`, so a path outside
+this crate's directory costs no packaging.
+
+**Missing stays acceptable in the capture scripts** because every committed capture predates the
+line; refusing an unstamped run would have made all of them unregeneratable to gain nothing on runs
+nobody can retake.

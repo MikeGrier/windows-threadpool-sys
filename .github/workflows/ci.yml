@@ -437,6 +437,12 @@ jobs:
     timeout-minutes: 15
     env:
       RUSTUP_TOOLCHAIN: stable
+      # The probes' build script stamps these into the binaries (M4.8), so a
+      # report from this job names the commit it was built from and says it came
+      # from CI. The commit is what the checkout built: on a pull request, the
+      # merge commit.
+      PLATFORM_PROBES_COMMIT: ${{ github.sha }}
+      PLATFORM_PROBES_SOURCE: ci
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

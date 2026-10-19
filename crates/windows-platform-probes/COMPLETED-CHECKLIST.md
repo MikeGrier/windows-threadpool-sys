@@ -1917,3 +1917,27 @@ Verified before recording, from a throwaway branch carrying a temporary push tri
 afterwards): both steps passed on both entries, on runners whose banners read
 `aarch64 4p/4c smt- L2[1,1,1,1] ec[0:4] numa[4]` and `x86_64 4p/2c smt+ L2[2,2] ec[0:4] numa[4]` --
 four processors each, as the producer limit assumes.
+
+## Moved 2026-10-19 16:43:02 -04:00 -- M4.8: the queue report names its build
+
+### <a id="m48"></a>M4.8 -- Have the queue-contention report carry the build identity that produced it, and have the capture scripts require it to agree. *(completed 2026-10-19 16:43:02 -04:00)*
+
+The decision is
+[A queue report names the build that produced it](DESIGN-NOTES.md#d-report-names-its-build), and the
+choice of included code over a copy is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+**The item's premise that this crate had no build script was out of date** -- it has carried one
+since the long-path probe, which embeds a manifest -- so the stamping was added to it rather than to a
+new one. The stamping itself was moved out of `windows-placement-probe`'s build script into
+`build/stamp.rs` in two commits of that crate, a pure-relocation split and then a refactor making it a
+function of a prefix, with `BuildIdentity::from_stamps` added so both crates read the stamps alike.
+
+The capture scripts treat a missing build line as "not stamped", so every committed capture
+regenerates byte for byte; both copies of each script were changed identically. Two script comments
+claimed `M4.8` would replace their byte-identical-run check, which it does not: a build identity
+names the build, which every run in a capture shares. Those comments were corrected.
+
+The sabotage the item asked for -- runs of two builds being combined -- is in
+[sabotage.json](sabotage.json) and caught by
+`tests/the_capture_scripts_refuse_runs_of_different_builds.rs`, alongside the report dropping its
+build line (caught), the build script stamping nothing (refused by the build) and a control.

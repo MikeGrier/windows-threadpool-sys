@@ -92,6 +92,15 @@ fn a_queue_run_given_settings_reports_them_and_measures_only_the_counts_given() 
         "{stdout}"
     );
     assert!(stdout.contains("NOT the defaults"), "{stdout}");
+    // The build line (`M4.8`) names the build this test's own crate was stamped
+    // with, which is the same build script run.
+    assert!(
+        stdout.contains(&format!(
+            "build: {}",
+            windows_platform_probes::build_identity::this_build()
+        )),
+        "{stdout}"
+    );
 }
 
 #[test]

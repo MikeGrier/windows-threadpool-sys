@@ -394,6 +394,55 @@
       ]
     },
     {
+      "name": "M4.8: the capture script ignores the build",
+      "file": "captures/2026-10-19-interleaved-order/summarise.js",
+      "expect": "caught",
+      "why": "Runs of two builds would agree on every other attribution line and have their medians combined as though one procedure produced both -- the defect M4.8 exists to refuse.",
+      "find": [
+        "    build === undefined ? \"build: (not stamped)\" : build.trim(),"
+      ],
+      "replace": [
+        "    \"build: (ignored)\","
+      ]
+    },
+    {
+      "name": "M4.8: the queue report stops naming its build",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "A report without the line would read as unstamped, which the capture scripts accept beside other unstamped runs -- so the build check would silently stop applying to new captures.",
+      "find": [
+        "        \"build: {}\","
+      ],
+      "replace": [
+        "        \"built: {}\","
+      ]
+    },
+    {
+      "name": "M4.8: the build script stops stamping this crate",
+      "file": "build.rs",
+      "expect": "refused-by-build",
+      "buildError": "PLATFORM_PROBES_COMMIT_OUT",
+      "why": "The identity is read with env!, so a build script that stamps nothing cannot produce a binary that reports a made-up identity: the compiler refuses it. Kept to show that rung holds.",
+      "find": [
+        "    stamp_build_identity(\"PLATFORM_PROBES\");"
+      ],
+      "replace": [
+        "    let _ = stamp_build_identity;"
+      ]
+    },
+    {
+      "name": "M4.8 control: the script test's scratch directory renamed",
+      "file": "tests/the_capture_scripts_refuse_runs_of_different_builds.rs",
+      "expect": "survives",
+      "why": "A control: the directory's name is incidental to what the scripts are given.",
+      "find": [
+        "        \"capture-scripts-{}-{}\","
+      ],
+      "replace": [
+        "        \"capture-script-runs-{}-{}\","
+      ]
+    },
+    {
       "name": "M4.4: every run takes the sequential order",
       "file": "src/queue_contention.rs",
       "expect": "caught",

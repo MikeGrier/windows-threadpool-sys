@@ -2539,3 +2539,35 @@ produced them. Retaking them interleaved would replace one host's seven-run read
 and is not scheduled.
 
 **Scheduled work:** none.
+
+## A queue report names the build that produced it, and a capture refuses two builds
+
+<a id="d-report-names-its-build"></a>
+
+**Status: decided and implemented** by `M4.8`.
+
+A capture's runs are comparable only when one build produced them, and before `M4.8` nothing but the
+capture README -- a claim by whoever took it -- said which build that was. So:
+
+- **`probe-queue-contention` prints `build: <identity>` beside its banner.** The identity is
+  `windows-placement-probe`'s `BuildIdentity` -- crate version, commit, dirty flag, and whether the
+  build came from CI -- rendered the way that crate renders it, unofficial builds marked.
+- **It is stamped by the same build-script code, not a copy.** This crate's
+  [build.rs](build.rs) includes `windows-placement-probe`'s `build/stamp.rs` and calls it under the
+  `PLATFORM_PROBES` prefix, and `BuildIdentity::from_stamps` reads the stamps for both crates. The
+  git-watching rules in that file were each found by measuring a stale stamp; a second copy would be
+  the copy the next fix missed.
+- **The CI probe job stamps its builds as CI builds** with the commit it checked out, so a report
+  in a build log names that commit.
+- **The capture scripts include the build line in the attribution every run must share.** A set
+  mixing two builds, or a stamped run with an unstamped one, is refused. A run without the line is
+  read as "not stamped", so every capture committed before `M4.8` still regenerates, byte for byte.
+  `tests/the_capture_scripts_refuse_runs_of_different_builds.rs` runs every committed copy of both
+  scripts with `node`, in both directions.
+
+**What it does not establish.** A dirty build names its commit, not its tree, so two dirty builds at
+one commit agree while their sources may differ; the capture README is still the record of what was
+built for those, and for every capture taken before this. And the build identity does not replace
+the scripts' refusal of byte-identical runs: it names the build, which every run in a capture shares.
+
+**Scheduled work:** none.

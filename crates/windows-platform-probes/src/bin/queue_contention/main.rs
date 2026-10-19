@@ -60,6 +60,16 @@ fn render(out: &mut dyn std::fmt::Write, sampling: &Sampling) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
+    // The build that produced the figures, beside the banner and for the same
+    // reason: a capture's runs are comparable only when one build produced them,
+    // and the capture scripts refuse a set whose runs name different builds
+    // (`M4.8`). Written here rather than in `render_observation` because it is a
+    // fact about this binary, not about what was measured.
+    let _ = writeln!(
+        out,
+        "build: {}",
+        windows_platform_probes::build_identity::this_build()
+    );
     render_observation(out, &measure(sampling));
 }
 

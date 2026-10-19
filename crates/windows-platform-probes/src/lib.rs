@@ -144,6 +144,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod build_identity;
 pub mod cancel_io;
 pub mod completion_port;
 pub mod device_map;

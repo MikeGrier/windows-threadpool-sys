@@ -38,26 +38,7 @@ correctness in the archive.
 
 - [x] **M4.11** -- Run the queue-contention and peer-index probes in the CI probe job, so each build carries an ARM64 run of both. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m411)
 
-- [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
-  have the capture scripts require it to agree.
-
-  **Gap:** a run's report states its `host:`, `profile:` and `sampling:`, and the capture scripts
-  now refuse a set whose runs disagree on any of those. None of it identifies the *instrument*. Two
-  runs from different probe commits, on one machine, under one profile, pass that check -- and this
-  is the capture where that matters most, because `M4.3` changed the drained procedure, so a
-  pre-handshake and a post-handshake run would have their medians combined as though one procedure
-  produced both. The instrument commit is recorded in the capture README, which is an assertion by
-  whoever took the capture rather than something anything verifies.
-
-  **Target:** `windows-placement-probe`'s `build_identity` module is the worked example -- a build
-  script stamps the commit, the dirty flag and the build source into env vars that the binary reads
-  at run time, and `BuildIdentity::current()` renders them. `windows-platform-probes` has no build
-  script today, so this adds one. The report prints the identity beside the existing attribution
-  lines, `requireOneConfiguration` in both capture scripts includes it, and the sabotage is two runs
-  of different commits being refused.
-
-  **Blocker recorded when queued:** none. The dependency exists next door and is already proven by
-  that crate's own tests.
+- [x] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and have the capture scripts require it to agree. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m48)
 
 - [x] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
   panic, so a host that cannot be pinned is a reported observation rather than a crash.
