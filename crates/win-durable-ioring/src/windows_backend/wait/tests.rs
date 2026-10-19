@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The Windows backend's notification, waited on (DI-7.3): the `Waitable` a `CompletionEvent` is.
 
+use std::os::windows::io::AsHandle;
 use std::time::{Duration, Instant};
 
 use win_sync_sys::{Access, Event, ResetMode, duplicate_handle_with_access};
@@ -13,7 +14,7 @@ const BOUND: Duration = Duration::from_secs(5);
 /// An event, and the `CompletionEvent` a backend would hand out for it.
 fn event(reset: ResetMode, signalled: bool) -> (Event, CompletionEvent) {
     let event = Event::new(reset, signalled).expect("an event");
-    let handle = CompletionEvent::new(event.try_clone().expect("a duplicate").into());
+    let handle = CompletionEvent::new(event.as_handle().try_clone_to_owned().expect("a duplicate"));
     (event, handle)
 }
 

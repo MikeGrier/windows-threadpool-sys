@@ -460,10 +460,10 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
     ///
     /// # Errors
     ///
-    /// A [`DeliverySetupError`] handing back the instance and the handler, when duplicating the
-    /// readiness signal, creating the thread-pool wait, or setting the signal fails. Only the first
-    /// is reached by a test: the others fail when the process cannot get another handle or the
-    /// thread pool cannot create a wait.
+    /// A [`DeliverySetupError`] handing back the instance and the handler, when taking the
+    /// readiness signal from the instance, creating the thread-pool wait, or setting the signal
+    /// fails. Only the first is reached by a test: the others fail when the thread pool cannot
+    /// create a wait.
     pub fn new<F>(
         mut ring: D,
         on_entry: F,
@@ -472,11 +472,9 @@ impl<D: DurableRing<Readiness = Event> + Send + 'static> EntryDelivery<D> {
     where
         F: FnMut(DeliveryEvent<EntryOf<D>>, &DeliveryHandle<D>) + Send + 'static,
     {
-        let duplicates = ring
-            .readiness()
-            .and_then(|signal| Ok((signal.try_clone()?, signal)));
-        let (signal, kick) = match duplicates {
-            Ok(duplicates) => duplicates,
+        let clones = ring.readiness().map(|signal| (signal.clone(), signal));
+        let (signal, kick) = match clones {
+            Ok(clones) => clones,
             Err(error) => {
                 return Err(DeliverySetupError {
                     error,

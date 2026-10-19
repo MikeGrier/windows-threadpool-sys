@@ -105,9 +105,9 @@ impl DurableRing for Fake {
 
     fn readiness(&mut self) -> io::Result<Event> {
         if self.readiness_fails {
-            return Err(io::Error::other("the fake refuses to duplicate its signal"));
+            return Err(io::Error::other("the fake refuses to give its signal"));
         }
-        self.signal.try_clone()
+        Ok(self.signal.clone())
     }
 
     fn add_target<K: TargetKey>(

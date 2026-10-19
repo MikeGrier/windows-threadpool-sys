@@ -14,7 +14,7 @@
 //! blocked while completions sit in the ring.
 
 use std::io;
-use std::os::windows::io::OwnedHandle;
+use std::os::windows::io::AsHandle;
 use std::time::Duration;
 
 use win_sync_sys::{Event, ResetMode};
@@ -64,15 +64,18 @@ where
     ///
     /// # Errors
     ///
-    /// With the engine handed back: the event could not be made or duplicated, or the ring crate's
+    /// With the engine handed back: the event could not be made, or duplicated for the notification
+    /// that owns its handle, or the ring crate's
     /// wake could not be made or armed, as `CompletionWake::new`.
     pub(crate) fn new(
         mut engine: PoolEngine<E, B, C, K, R>,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> SignalledSetup<E, B, C, K, R> {
         let made = Event::new(ResetMode::Auto, false).and_then(|signal| {
-            let waker = signal.try_clone()?;
-            let notification = CompletionEvent::new(OwnedHandle::from(signal.try_clone()?));
+            let waker = signal.clone();
+            // A `CompletionEvent` owns its handle outright, so it is given a duplicate of its own;
+            // the waker and the signal handed out share the event's one handle.
+            let notification = CompletionEvent::new(signal.as_handle().try_clone_to_owned()?);
             Ok((signal, waker, notification))
         });
         let (signal, waker, notification) = match made {
@@ -95,13 +98,13 @@ where
         })
     }
 
-    /// A duplicate of the event the pool sets, for the consumer to wait on.
+    /// A clone of the event the pool sets, sharing its handle, for the consumer to wait on.
     ///
     /// # Errors
     ///
-    /// The duplication's: the process cannot get another handle.
+    /// None: a clone makes no handle. The `Result` is the shape of the call it answers.
     pub(crate) fn signal(&self) -> io::Result<Event> {
-        self.signal.try_clone()
+        Ok(self.signal.clone())
     }
 
     /// As [`PumpedDelivery::pump`], waiting on the signal.

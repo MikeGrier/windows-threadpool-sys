@@ -378,8 +378,8 @@ where
             });
         }
 
-        let signals = Event::new(ResetMode::Auto, false)
-            .and_then(|readiness| Ok((readiness.try_clone()?, readiness)));
+        let signals =
+            Event::new(ResetMode::Auto, false).map(|readiness| (readiness.clone(), readiness));
         let (ready, readiness) = match signals {
             Ok(signals) => signals,
             Err(error) => {
@@ -880,9 +880,9 @@ where
         pumped.waited.map(|_| pumped.ready)
     }
 
-    /// A duplicate of the event the thread pool sets whenever completions may be waiting, for the
+    /// A clone of the event the thread pool sets whenever completions may be waiting, for the
     /// consumer to wait on beside its own handles, and then to [`pump`](Self::pump) (DI-7.5). Each
-    /// call makes another duplicate of the one event.
+    /// call gives another clone, sharing the event's one handle.
     ///
     /// The event is the instance's own and shares nothing with the ring: it is auto-reset, so a wait
     /// takes the signal, and the consumer may set or reset it, which costs it nothing but its own
@@ -892,7 +892,6 @@ where
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] unless the instance was built with [`DeliveryMode::Signalled`].
-    /// Otherwise the duplication's: the process cannot get another handle.
     pub fn completion_signal(&self) -> io::Result<Event> {
         self.delivery
             .as_ref()
