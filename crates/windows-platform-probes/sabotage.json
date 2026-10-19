@@ -710,6 +710,96 @@
       ]
     },
     {
+      "name": "M8.5: the pool-growth probe stops emitting its row",
+      "file": "src/bin/pool_growth.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&growth, (RAISE_RUN, raise), &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.5: the runs-long flag is not taken from the run",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "Two runs share a maximum and a submission count and differ only in this flag; without it their rows are indistinguishable but for the name.",
+      "find": [
+        "                (\"runs_long\", Value::from(run.runs_long)),"
+      ],
+      "replace": [
+        "                (\"runs_long\", Value::from(false)),"
+      ]
+    },
+    {
+      "name": "M8.5: the two observed counts trade places",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "Callbacks started and threads used are equal on a healthy run, which is exactly why a swap would go unseen on one.",
+      "find": [
+        "                    Value::from(observed.started_while_blocked),",
+        "                ),",
+        "                (\"distinct_threads\", Value::from(observed.distinct_threads)),"
+      ],
+      "replace": [
+        "                    Value::from(observed.distinct_threads),",
+        "                ),",
+        "                (\"distinct_threads\", Value::from(observed.started_while_blocked)),"
+      ]
+    },
+    {
+      "name": "M8.5: whether the raise took effect is inverted",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "The elapsed time means the raise's delay or the settle window according to this flag alone.",
+      "find": [
+        "                (\"took_effect\", Value::from(observed.took_effect)),"
+      ],
+      "replace": [
+        "                (\"took_effect\", Value::from(!observed.took_effect)),"
+      ]
+    },
+    {
+      "name": "M8.5: the raise's elapsed time is published in microseconds",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "caught",
+      "why": "The arrivals are microseconds and the raise is nanoseconds; carrying the wrong unit under the `_ns` name is the plausible slip.",
+      "find": [
+        "                (\"elapsed_ns\", wide(observed.delay.as_nanos())),"
+      ],
+      "replace": [
+        "                (\"elapsed_ns\", wide(observed.delay.as_micros())),"
+      ]
+    },
+    {
+      "name": "M8.5: a yes-or-no renders backwards",
+      "file": "src/row.rs",
+      "expect": "caught",
+      "why": "Every boolean any row publishes goes through this one arm.",
+      "find": [
+        "            Self::Bool(held) => out.push_str(if *held { \"true\" } else { \"false\" }),"
+      ],
+      "replace": [
+        "            Self::Bool(held) => out.push_str(if *held { \"false\" } else { \"true\" }),"
+      ]
+    },
+    {
+      "name": "M8.5 control: the row names its build before its architecture",
+      "file": "src/pool_growth/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",

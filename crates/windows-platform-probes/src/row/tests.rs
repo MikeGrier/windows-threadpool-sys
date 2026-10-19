@@ -255,3 +255,15 @@ fn a_u64_is_lossless_on_a_64_bit_target() {
     let row = Row::new("x").with("u64", u64::MAX);
     assert_eq!(row.render(), r#"{"reason":"x","u64":18446744073709551615}"#);
 }
+
+#[test]
+fn a_yes_or_no_renders_as_a_json_boolean() {
+    let row = Row::new("x")
+        .with("yes", true)
+        .with("no", false)
+        .with("unknown", None::<bool>);
+    assert_eq!(
+        row.render(),
+        r#"{"reason":"x","yes":true,"no":false,"unknown":null}"#
+    );
+}

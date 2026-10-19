@@ -93,15 +93,17 @@ pub enum Shape {
 /// A value the row can carry.
 ///
 /// Deliberately not every JSON shape: there is no floating point, because every
-/// quantity this crate publishes is a count, an identifier or a list of them,
-/// and a float in a mined artifact invites a consumer to compare values that
-/// were never measured that precisely.
+/// quantity this crate publishes is a count, an identifier, a yes-or-no or a
+/// list of them, and a float in a mined artifact invites a consumer to compare
+/// values that were never measured that precisely.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
     /// A string, escaped on the way out.
     Text(String),
     /// A count.
     Number(usize),
+    /// A yes-or-no the probe observed, such as whether a raise took effect.
+    Bool(bool),
     /// The absent case, for a field whose answer is "there is none".
     ///
     /// A variant rather than an omitted key, because a consumer can tell `null`
@@ -146,7 +148,7 @@ fn assert_unique_names(at: &str, value: &Value) {
                 assert_unique_names(at, entry);
             }
         }
-        Value::Text(_) | Value::Number(_) | Value::Null => {}
+        Value::Text(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
     }
 }
 
@@ -171,6 +173,12 @@ impl From<usize> for Value {
 impl From<u8> for Value {
     fn from(count: u8) -> Self {
         Self::Number(count as usize)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(held: bool) -> Self {
+        Self::Bool(held)
     }
 }
 
@@ -219,6 +227,7 @@ impl Value {
             Self::Number(count) => {
                 let _ = write!(out, "{count}");
             }
+            Self::Bool(held) => out.push_str(if *held { "true" } else { "false" }),
             Self::Null => out.push_str("null"),
             Self::List(items) => {
                 out.push('[');

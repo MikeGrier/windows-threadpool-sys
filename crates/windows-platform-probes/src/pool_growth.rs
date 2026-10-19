@@ -38,6 +38,70 @@ use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::pool::ThreadpoolPool;
 use windows_threadpool_sys::work::ThreadpoolWork;
 
+mod raw_row;
+
+pub use self::raw_row::*;
+
+/// One growth run the probe binary makes: how the pool is configured, and the
+/// names it is reported under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrowthRun {
+    /// The heading the report prints over the run. Prose; may be reworded.
+    pub label: &'static str,
+    /// A stable identifier for a record.
+    pub name: &'static str,
+    /// The pool maximum.
+    pub maximum: u32,
+    /// How many callbacks are submitted.
+    pub submissions: usize,
+    /// Whether the callbacks are flagged as running long.
+    pub runs_long: bool,
+}
+
+/// The growth runs the probe binary makes, in order. One list, so the report
+/// and its row cannot describe different runs.
+pub const GROWTH_RUNS: [GrowthRun; 3] = [
+    GrowthRun {
+        label: "P1 growth curve, max 4:",
+        name: "max_4",
+        maximum: 4,
+        submissions: 8,
+        runs_long: false,
+    },
+    GrowthRun {
+        label: "P1 growth curve, max 8:",
+        name: "max_8",
+        maximum: 8,
+        submissions: 16,
+        runs_long: false,
+    },
+    GrowthRun {
+        label: "P2 the same, runs-long:",
+        name: "max_4_runs_long",
+        maximum: 4,
+        submissions: 8,
+        runs_long: true,
+    },
+];
+
+/// The raise the probe binary measures: saturate at `base_max`, then raise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaiseRun {
+    /// The maximum the pool is saturated at.
+    pub base_max: u32,
+    /// The maximum it is raised to.
+    pub raised_max: u32,
+    /// How many callbacks are submitted.
+    pub submissions: usize,
+}
+
+/// The raise the probe binary measures.
+pub const RAISE_RUN: RaiseRun = RaiseRun {
+    base_max: 2,
+    raised_max: 6,
+    submissions: 8,
+};
+
 /// A manual-reset event every callback parks on, so "blocked" means blocked.
 struct Gate(HANDLE);
 
