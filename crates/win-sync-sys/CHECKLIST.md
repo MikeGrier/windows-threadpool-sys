@@ -39,8 +39,8 @@ milestones when the next of these is taken up.
 ## WS-M2 -- An event's clones share one handle
 
 - [ ] **WS-2.1** -- **`Event` holds a `SharedHandle`; its clones share it, and the one operation on it that
-  makes a new handle is the one that narrows access.** **Proposed by the assistant on 2026-10-18 as the engineer's
-  ruling of that day applied here; the engineer gives the go-ahead before it is started.** The ruling, recorded in
+  makes a new handle is the one that narrows access.** Proposed by the assistant on 2026-10-18 as the engineer's
+  ruling of that day applied here, and started on the engineer's "implement ws-2.1" the same day. The ruling, recorded in
   the request crate's [D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32): a handle duplicated for no
   reason but that the code began that way is legacy.
   - **No new duplicating operations.** Asked whether duplication needs operations of its own names (2026-10-18):
@@ -58,14 +58,23 @@ milestones when the next of these is taken up.
   - **The conversions out.** `From<Event> for OwnedHandle` and `From<WaitOnlyEvent> for OwnedHandle` give way to a
     form that succeeds only for the last holder, as `SharedHandle::try_into_owned` does.
 
-  The decision is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) when it is made. Consumers that move with it:
-  `windows-threadpool-sys` (`From<Event> for WaitableHandle`, [M-T15.1](../windows-threadpool-sys/CHECKLIST.md)),
+  - **`From<Event> for WaitableHandle` uses the shared arm.** Moved here from `M-T15.1` on 2026-10-18: the
+    conversion took the event as an `OwnedHandle`, which a shareable event cannot give infallibly, so it moves to
+    the shared wait target [M-T15.1](../windows-threadpool-sys/CHECKLIST.md) adds, and the pool's documentation
+    and tests keep a clone where they kept a duplicate.
+
+  Landed in steps so that each commit builds and touches one crate: the additive change here (`Clone`, the
+  shared conversions, the renamed narrowing operation), carrying the `Release-As: 0.1.0` footer `WS-1+.6` asks
+  for; the consumers moving (`windows-threadpool-sys`, `win-durable-ioring`); then the deletion here. The decision
+  is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with the first step. Consumers: `windows-threadpool-sys`,
   `win-durable-ioring`'s event clones, and the enumeration crate's `SAFE-3`. Tests: a clone shares the handle;
   setting through one is seen through the other; the event lives until the last clone drops; recovering an
   `OwnedHandle` fails while a clone is held; the narrowed handle cannot set the event, as now.
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-threadpool-sys` -> `M-T15` ->
-  > `M-T15.1`. See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE:** [M-T15.1](../windows-threadpool-sys/CHECKLIST.md) (the shared wait target).
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-enumeration-sys` -> `SAFE` ->
+  > `SAFE-3`. See [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).
 
 ## M-inf -- Parked
 
