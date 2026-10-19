@@ -34,30 +34,7 @@ correctness in the archive.
 
 - [x] **M2.15** -- Run the probe suite on a second architecture in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m215)
 
-- [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
-
-  Re-scoped by M3.5: the dimensions worth crossing are the ROW's. Crossing prose shapes that have
-  since stopped being checked would have aimed at the retiring half.
-
-  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
-  builds each shape by taking `base()` and changing ONE thing. That makes every shape easy to read and
-  is why the corpus found what it found -- but it means any renderer branch selected by TWO
-  dimensions at once is unreachable by construction, and the corpus cannot report the gap because it
-  does not know the branch exists.
-
-  Measured: `CrossCheck` tags a `parse_incomplete` entry `- {caveat}` under `INCOMPLETE` but
-  `(parse incomplete) {caveat}` under `DISAGREE`. Anomalies appeared only in an agreeing-counter
-  shape and disagreements only in a zero-anomaly shape, so the second spelling was never rendered,
-  and the anomaly-count rule was silently unread on every disagreeing report -- while the comment
-  above it said it was read for every verdict. One hand-written crossed shape closed it, and the
-  accounting test went red under sabotage only once that shape existed.
-
-  Enumerate the dimensions the renderer actually branches on (verdict, bracket, coherence, the
-  partitioning arm, presence of each diagnostic list) and generate the cross product, or a pairwise
-  covering set if the full product is too slow. The corpus already asserts self-consistency and runs
-  the fact accounting per shape, so nothing new has to be written to check them -- only to produce
-  them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
-  the imagination-driven process M2.12 exists to replace.
+- [x] **M2.17** -- Cross the corpus dimensions instead of varying one at a time. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m217)
 
 - [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
   have the capture scripts require it to agree.

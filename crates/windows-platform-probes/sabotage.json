@@ -358,6 +358,42 @@
       ]
     },
     {
+      "name": "M2.17: coherence is checked only when the bracket held",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "A check selected by two dimensions at once: an unheld bracket hides a coherence disagreement, so the row publishes no enumerations_disagreed for an observation in that blocking state. The bracket once suppressed every parse check above it by an early return, so this is a defect this code has shipped. No hand-written shape varies the bracket and the coherence together; the generated cross product does.",
+      "find": [
+        "        match &self.coherence {"
+      ],
+      "replace": [
+        "        match if self.bracket == BracketOutcome::HeldStill { &self.coherence } else { &Coherence::Agreed } {"
+      ]
+    },
+    {
+      "name": "M2.17: a crossed value changes nothing",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "caught",
+      "why": "A dimension value that changes nothing collapses every combination it is in onto the one beside it: the product keeps its length and its names while reaching a third fewer states, and nothing that renders the shapes can tell. The independence test exists to refuse it.",
+      "find": [
+        "                o.bracket = BracketOutcome::NotEstablished;"
+      ],
+      "replace": [
+        "                let _ = o;"
+      ]
+    },
+    {
+      "name": "M2.17 control: a crossed value renamed",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "survives",
+      "why": "A control: the name is only how a failing shape is reported, so renaming one changes no state the corpus reaches.",
+      "find": [
+        "            (\"the bracket left open\", |o| {"
+      ],
+      "replace": [
+        "            (\"the bracket never closed\", |o| {"
+      ]
+    },
+    {
       "name": "M4.4: every run takes the sequential order",
       "file": "src/queue_contention.rs",
       "expect": "caught",

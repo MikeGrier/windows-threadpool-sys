@@ -1875,3 +1875,26 @@ rounds had been read against. That branch had long since merged, and keeping the
 runs: each place that gives them now names the order that produced them, and none is retaken.
 "Re-measure everything that changes" was met by the paired capture rather than by replacing the
 published figures.
+
+## Moved 2026-10-19 16:16:40 -04:00 -- M2.17: the shape corpus is crossed
+
+### <a id="m217"></a>M2.17 -- Cross the corpus dimensions instead of varying one at a time. *(completed 2026-10-19 16:16:40 -04:00)*
+
+[tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
+now ends with the full cross product of `crossed_dimensions()`: the partitioning arm, the bracket,
+coherence, the processor counter (which fills `disagreements`), the NUMA counter (`not_compared`),
+anomalies (`parse_incomplete`) and the efficiency classes, which the renderer gates on the parse being
+in doubt. The verdict is not its own dimension, being a function of the three lists. The full product
+is 720 shapes and the target runs in well under a second, so the pairwise fallback the item allowed
+was not needed. Every existing per-shape check runs over them unchanged, as the item expected.
+
+Two guards were added because a product can collapse silently:
+`the_crossed_dimensions_are_independent_of_each_other` requires each non-first value to change the
+observation and every cross-dimension pair to commute, and
+`the_crossed_corpus_reaches_each_verdict_under_each_partitioning_arm` requires the crossing to have
+produced crossed states, including a shape filling all three diagnostic lists.
+
+Evidence, in [sabotage.json](sabotage.json): checking coherence only when the bracket held -- a
+two-dimension defect of the kind this code has shipped -- **survived** the corpus before this change
+and is caught after it, by `every_state_that_blocks_agreement_reaches_the_row`. A crossed value that
+changes nothing is caught by the independence guard, and renaming a value survives as the control.

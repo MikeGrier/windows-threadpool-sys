@@ -105,7 +105,7 @@ use windows_platform_probes::topology::{BracketOutcome, CacheLevel, CoreShape, O
 
 /// A host shape, named by the renderer branch it exists to reach.
 struct Shape {
-    what: &'static str,
+    what: String,
     observation: Observation,
 }
 
@@ -174,16 +174,15 @@ fn base() -> Observation {
     }
 }
 
-/// Representative shapes this renderer can be driven into, by the branch each
-/// reaches.
+/// Shapes this renderer can be driven into: the hand-written ones, each named for
+/// the branch it reaches, then the generated cross product of [`crossed_dimensions`].
 ///
-/// **Not every shape, and the difference is recorded rather than glossed.** This
-/// said "every shape this renderer can be driven into", which describes a closed
-/// set. Each entry below varies ONE dimension, so a branch selected by two at
-/// once is unreachable here by construction -- the reason the crossed
-/// anomaly-and-disagreement case at the end had to be written by hand, and the
-/// reason M2.17 exists. Until the cross product is generated, read this as a
-/// sample chosen from the renderer's branches, not as a proof of coverage.
+/// **Still not every shape, and the difference is recorded rather than glossed.**
+/// Each hand-written entry varies ONE dimension, so a branch selected by two at
+/// once was unreachable here by construction -- the reason the crossed
+/// anomaly-and-disagreement case below had to be written by hand. `M2.17` added
+/// the cross product, which reaches every combination of the dimensions it
+/// names; a dimension it does not name is still varied only by hand.
 ///
 /// **Which combinations are legal is DERIVED from `cross_check`, not assumed.**
 /// It pushes a `parse_incomplete` entry for an empty cache survey, for a named
@@ -194,7 +193,12 @@ fn base() -> Observation {
 /// cannot produce.
 fn shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
-    let mut push = |what, observation| shapes.push(Shape { what, observation });
+    let mut push = |what: &str, observation| {
+        shapes.push(Shape {
+            what: what.to_owned(),
+            observation,
+        });
+    };
 
     push("the level arm, agreeing", base());
 
@@ -420,8 +424,9 @@ fn shapes() -> Vec<Shape> {
     // That is how the anomaly-count rule came to be unread on a disagreeing
     // report while a comment above it said it was read for every verdict:
     // corrupting the count there raised no violation, and no corpus report
-    // could show it. Found by a review. This shape is the cross, and it is the
-    // only one here that varies two dimensions at once.
+    // could show it. Found by a review. This shape was the cross, written by
+    // hand; the generated product below now reaches it and every combination
+    // like it, and it stays as the named case that motivated that.
     let mut anomalies_while_disagreeing = base();
     anomalies_while_disagreeing.raw_active_processors = 8;
     anomalies_while_disagreeing.enumeration_anomalies =
@@ -435,9 +440,9 @@ fn shapes() -> Vec<Shape> {
         anomalies_while_disagreeing,
     );
 
-    // **Several conditions in ONE list, which nothing else here reaches.** Every
-    // other shape varies one dimension, so each lands at most one entry per
-    // list -- and a one-element list has no order to get wrong. That made the
+    // **Several conditions in ONE list, which no other hand-written shape
+    // reaches.** Each of those varies one dimension, so each lands at most one
+    // entry per list -- and a one-element list has no order to get wrong. That made the
     // ordering half of `the_row_lists_exactly_the_conditions_the_cross_check_found`
     // vacuous: reversing the row's `parse_incomplete` reddened nothing at all.
     //
@@ -451,7 +456,238 @@ fn shapes() -> Vec<Shape> {
     several.processor_attribute_conflicts = 1;
     push("several conditions at once, in one list", several);
 
+    shapes.extend(cross(base(), &crossed_dimensions()));
     shapes
+}
+
+// --- M2.17: the corpus, crossed -----------------------------------------------
+
+/// A change to an observation, named for what it makes the observation.
+type Change = (&'static str, fn(&mut Observation));
+
+/// The values one dimension takes. The first is always the identity, so `base()`
+/// is the shape where every dimension is at its first value.
+type Dimension = Vec<Change>;
+
+/// The dimensions the cross product varies, each over every value it takes.
+///
+/// **The ones `cross_check`, the verdict and the row branch on**: the partitioning
+/// arm, the bracket, coherence, the two kinds of counter result that fill
+/// `disagreements` and `not_compared`, anomalies (which fill `parse_incomplete`
+/// through their own push), and the efficiency classes, which the renderer gates
+/// on the parse being in doubt. The verdict is not a dimension of its own: it is a
+/// function of the three lists, so crossing what fills them crosses it.
+///
+/// **Each dimension changes fields no other one does**, so a combination is one
+/// observation rather than a later change overwriting an earlier one.
+/// `the_crossed_dimensions_are_independent_of_each_other` checks that rather than
+/// trusting this sentence.
+fn crossed_dimensions() -> Vec<Dimension> {
+    vec![
+        vec![
+            ("the level arm", |_| {}),
+            ("no level partitions the machine", |o| {
+                o.partitioning_cache_level = None;
+            }),
+            ("no unique outermost level", |o| {
+                o.partitioning_cache_level = None;
+                o.caches = vec![CacheLevel {
+                    level: 2,
+                    processors_per_domain: vec![2, 2],
+                }];
+            }),
+            ("no cache levels", |o| {
+                o.partitioning_cache_level = None;
+                o.caches = Vec::new();
+            }),
+            ("a summary missing", |o| {
+                o.partitioning_cache_level = Some(9)
+            }),
+        ],
+        vec![
+            ("the bracket held", |_| {}),
+            ("the machine changed", |o| {
+                o.bracket = BracketOutcome::Changed
+            }),
+            ("the bracket left open", |o| {
+                o.bracket = BracketOutcome::NotEstablished;
+            }),
+        ],
+        vec![
+            ("the enumerations agreed", |_| {}),
+            ("the enumerations disagreed", |o| {
+                o.coherence = windows_topology_sys::Coherence::Disagreed {
+                    attempts: 2,
+                    walk_only: Vec::new(),
+                    cpu_sets_only: Vec::new(),
+                };
+            }),
+            ("coherence not collected", |o| {
+                o.coherence = windows_topology_sys::Coherence::NotCollected;
+            }),
+        ],
+        vec![
+            ("the processor counter agrees", |_| {}),
+            ("the processor counter disagrees", |o| {
+                o.raw_active_processors = 8;
+            }),
+        ],
+        vec![
+            ("the NUMA counter read", |_| {}),
+            ("the NUMA counter failed", |o| {
+                o.raw_highest_numa_node = None
+            }),
+        ],
+        vec![
+            ("no anomalies", |_| {}),
+            ("an anomaly", |o| {
+                o.enumeration_anomalies = vec![windows_topology_sys::EnumerationAnomaly {
+                    source: windows_topology_sys::Source::RelationshipWalk,
+                    offset: 0,
+                    kind: windows_topology_sys::AnomalyKind::TrailingBytes { remaining: 8 },
+                }];
+            }),
+        ],
+        vec![
+            ("one efficiency class", |_| {}),
+            ("two efficiency classes", |o| {
+                o.cores = vec![
+                    CoreShape {
+                        simultaneous_multithreading: true,
+                        efficiency_class: 0,
+                        processors: 2,
+                    },
+                    CoreShape {
+                        simultaneous_multithreading: true,
+                        efficiency_class: 1,
+                        processors: 2,
+                    },
+                ];
+            }),
+        ],
+    ]
+}
+
+/// Every combination of one value from each of `dimensions`, applied to `start`
+/// in dimension order, each named for the values it took.
+fn cross(start: Observation, dimensions: &[Dimension]) -> Vec<Shape> {
+    let mut shapes = vec![Shape {
+        what: String::new(),
+        observation: start,
+    }];
+    for dimension in dimensions {
+        shapes = shapes
+            .iter()
+            .flat_map(|shape| {
+                dimension.iter().map(move |(name, change)| {
+                    let mut observation = shape.observation.clone();
+                    change(&mut observation);
+                    let what = if shape.what.is_empty() {
+                        (*name).to_owned()
+                    } else {
+                        format!("{}; {name}", shape.what)
+                    };
+                    Shape { what, observation }
+                })
+            })
+            .collect();
+    }
+    shapes
+}
+
+#[test]
+fn the_crossed_dimensions_are_independent_of_each_other() {
+    // **What makes the product a product.** If two dimensions wrote the same
+    // field, the later would overwrite the earlier and a combination would
+    // quietly collapse into one of its halves -- reaching fewer states than its
+    // name claims, with nothing reporting it. So every value other than a
+    // dimension's first must change the observation, and any two values from
+    // different dimensions must give the same observation in either order.
+    //
+    // `Observation` has no `PartialEq`, so they are compared by their `Debug`
+    // rendering, which prints every field.
+    let after = |changes: &[&Change]| {
+        let mut observation = base();
+        for (_, change) in changes {
+            change(&mut observation);
+        }
+        format!("{observation:?}")
+    };
+    let unchanged = after(&[]);
+    let dimensions = crossed_dimensions();
+
+    for dimension in &dimensions {
+        let (first, rest) = dimension.split_first().expect("no dimension is empty");
+        assert_eq!(
+            after(&[first]),
+            unchanged,
+            "`{}` is a dimension's first value, which is base()",
+            first.0
+        );
+        for value in rest {
+            assert_ne!(after(&[value]), unchanged, "`{}` changes nothing", value.0);
+        }
+    }
+
+    for (index, left) in dimensions.iter().enumerate() {
+        for right in &dimensions[index + 1..] {
+            for a in left {
+                for b in right {
+                    assert_eq!(
+                        after(&[a, b]),
+                        after(&[b, a]),
+                        "`{}` and `{}` touch the same field",
+                        a.0,
+                        b.0
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_crossed_corpus_reaches_each_verdict_under_each_partitioning_arm() {
+    // **The crossing that M2.17 was written for, checked for having happened.** A
+    // product whose combinations collapsed -- say, a counter disagreement that
+    // a dimension silently cancelled -- would still be a long list of shapes. So
+    // under every partitioning arm the corpus must reach `incomplete` and
+    // `disagree`, and `agree` wherever the arm alone does not block it, and
+    // somewhere a shape must fill all three diagnostic lists at once, which is
+    // the combination no single-dimension shape can reach.
+    use windows_platform_probes::topology::Verdict;
+
+    let dimensions = crossed_dimensions();
+    let (arms, rest) = dimensions.split_first().expect("there are dimensions");
+    for (arm, change) in arms {
+        let mut alone = base();
+        change(&mut alone);
+        let reached: Vec<Verdict> = cross(alone.clone(), rest)
+            .iter()
+            .map(|shape| shape.observation.cross_check().verdict())
+            .collect();
+
+        let mut wanted = vec![Verdict::Incomplete, Verdict::Disagree];
+        if alone.cross_check().verdict() == Verdict::Agree {
+            wanted.push(Verdict::Agree);
+        }
+        for verdict in wanted {
+            assert!(
+                reached.contains(&verdict),
+                "under `{arm}` the crossed corpus never reaches {verdict:?}"
+            );
+        }
+    }
+
+    assert!(
+        cross(base(), &dimensions).iter().any(|shape| {
+            let check = shape.observation.cross_check();
+            !check.disagreements.is_empty()
+                && !check.not_compared.is_empty()
+                && !check.parse_incomplete.is_empty()
+        }),
+        "no crossed shape fills all three diagnostic lists at once"
+    );
 }
 
 #[test]
