@@ -39,15 +39,27 @@
 
 .PARAMETER GitHubOutput
     Optional path to the GitHub Actions step-output file. When given, the
-    matrix is appended as `matrix=<json>`; it is always written to stdout too,
-    so a local run shows exactly what CI will consume.
+    matrix is appended as `matrix=<json>`, and the number of jobs in it as
+    `jobs=<n>`; the matrix is always written to stdout too, so a local run shows
+    exactly what CI will consume.
+
+.PARAMETER Since
+    Optional base revision. When given, only the manifests a change since then
+    could have affected are planned: those of crates with a changed file, or
+    that depend on one, directly or not, through any kind of path dependency.
+    A change to an input every sweep shares plans every manifest, and so does a
+    base that cannot be measured from -- blank, all zeros, or absent from this
+    clone. The rule is `Select-SabotageManifest` in [common.ps1](common.ps1),
+    and it reads the dependencies from `cargo metadata`, so cargo must be on
+    PATH when this is given. The matrix may then be empty, `{"include":[]}`.
 #>
 [CmdletBinding()]
 param(
     [string] $Manifest = '',
     [int] $EntriesPerShard = 10,
     [string] $RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [string] $GitHubOutput = ''
+    [string] $GitHubOutput = '',
+    [string] $Since = ''
 )
 
 Set-StrictMode -Version Latest
@@ -107,6 +119,31 @@ Known manifests:
     $chosen = @($known[$wanted])
 }
 
+# Why the plan is what it is, on the host rather than stdout, which carries the
+# matrix alone. The one place this script says anything else.
+function Write-PlanNote {
+    param([string] $Message)
+    Write-Host "plan: $Message"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Since)) {
+    $change = Get-SabotageChange -RepositoryRoot $RepositoryRoot -Since $Since
+    $dependencies = $null
+    if ($change.Known) { $dependencies = Get-SabotageCrateDependency -RepositoryRoot $RepositoryRoot }
+    if (-not $change.Known) {
+        Write-PlanNote "every manifest: $($change.Reason)."
+    }
+    elseif ($null -eq $dependencies) {
+        Write-PlanNote 'every manifest: cargo metadata could not say which crates build on which.'
+    }
+    else {
+        $relative = @($chosen | ForEach-Object { Get-RelativePath $_ })
+        $selection = Select-SabotageManifest -Manifests $relative -Changed $change.Paths -Dependencies $dependencies
+        Write-PlanNote "$(@($selection.Manifests).Count) of $($relative.Count) manifests since $Since; $($selection.Reason)."
+        $chosen = @($selection.Manifests | ForEach-Object { $known[$_] })
+    }
+}
+
 $include = @()
 foreach ($path in $chosen) {
     $spec = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
@@ -147,4 +184,5 @@ Write-Output $json
 
 if (-not [string]::IsNullOrWhiteSpace($GitHubOutput)) {
     Add-Content -LiteralPath $GitHubOutput -Value "matrix=$json"
+    Add-Content -LiteralPath $GitHubOutput -Value "jobs=$(@($include).Count)"
 }

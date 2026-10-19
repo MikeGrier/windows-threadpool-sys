@@ -24,6 +24,11 @@
 # is whoever happens to look. The repository already pays for this shape in
 # `release-please.yml`.
 #
+# A push sweeps only the manifests its change could have affected: those of the
+# crates it touched and of every crate that builds on one, or all of them when it
+# touched an input every sweep shares. The rule, and what it cannot see, are in
+# DESIGN-NOTES.md, "sabotage-scope".
+#
 # WHY IT DOES NOT GATE ANYTHING. By the time this runs the merge has happened, so
 # a failure is a report rather than a block. That is the deliberate trade: the
 # alternative is adding tens of minutes to every pull request to re-check
@@ -33,38 +38,19 @@ name: sabotage sweeps
 on:
   push:
     branches: [main]
-    # Only when something a sweep could actually be affected by moves.
+    # No `paths:` filter. Which manifests a push could have affected is the
+    # planner's question, answered from the push's diff and the crates' path
+    # dependencies (`plan-sabotage-matrix.ps1 -Since`), and an empty answer
+    # skips the sweep. A filter here was a second copy of the list of inputs
+    # every sweep shares -- the lockfile, the toolchain, the sabotage tools and
+    # `tools/common.ps1` -- and the earlier versions of it show how such a copy
+    # goes: once it missed the matrix planner, once `common.ps1`. That list now
+    # lives once, in `Test-SabotageSharedInput` in `tools/common.ps1`.
     #
-    # Note that a crate's DOCUMENTATION is such a thing, and an earlier version
-    # of this comment claimed the opposite. Every crate here splices its README
-    # into the library under `cfg(doctest)`, and a sweep runs the crate's whole
-    # `cargo test` -- doctests included -- once per entry. So a README-only
-    # change really can move whether a sabotage is caught. `crates/**` below
-    # already covers it; what was wrong was the explanation, not the filter.
-    paths:
-      - 'crates/**'
-      # A glob rather than a list of script names. The list form is exactly what
-      # let the matrix planner be added without this filter learning about it,
-      # so a planner-only fix would have skipped the sweep it changes the shape
-      # of. Anything in `tools/` named for sabotage can move which jobs run or
-      # whether a defect is caught.
-      - 'tools/*sabotage*.ps1'
-      # And the shared helper those scripts dot-source. The glob above cannot
-      # reach it, because `common.ps1` is named for what it IS rather than for
-      # what uses it -- `run-sabotage.ps1` sources it for the native-command
-      # wrappers every sweep runs through, so a change that breaks the helper
-      # breaks the sweep. That is a DEPENDENCY, and no glob over names can
-      # express one; the glob fixed "somebody added a script", not this.
-      - 'tools/common.ps1'
-      # The toolchain the sweep compiles with. Changing the pin changes what
-      # every sweep builds, so it belongs here for the same reason the lockfile
-      # does.
-      - 'rust-toolchain.toml'
-      # A sweep builds the crates, so the workspace manifest and lockfile change
-      # what it compiles even when no crate source moves.
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/sabotage-sweep.yml'
+    # A crate's documentation is such an input too: every crate here splices
+    # its README into the library under `cfg(doctest)`, and a sweep runs the
+    # crate's whole `cargo test`, doctests included, once per entry. A file
+    # under `crates/<name>/` selects that crate whatever it is.
   workflow_dispatch:
     inputs:
       manifest:
@@ -110,22 +96,39 @@ jobs:
     runs-on: windows-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      jobs: ${{ steps.plan.outputs.jobs }}
     steps:
+      # The whole history, because a push is planned against its previous head,
+      # and a shallow clone does not have it: the planner would then plan every
+      # manifest, which is safe and is the cost this exists to avoid.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # For `cargo metadata`, which says which crates build on which. It reads
+      # manifests and builds nothing.
+      - uses: dtolnay/rust-toolchain@stable
       # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
       # `${{ }}` interpolation into the script body. An expression substituted
       # into `run:` is spliced in as source before PowerShell parses it, so a
       # value carrying a quote and a statement separator runs as a command on
       # the runner. Read back as `${env:...}` it can only ever be data.
+      #
+      # A push is planned against its previous head; a dispatch has none, and
+      # plans every manifest its input allows.
       - id: plan
         shell: pwsh
         env:
           SWEEP_MANIFEST: ${{ inputs.manifest }}
-        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -GitHubOutput "${env:GITHUB_OUTPUT}"
+          SWEEP_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Since "${env:SWEEP_SINCE}" -GitHubOutput "${env:GITHUB_OUTPUT}"
 
   sweep:
     name: sweep ${{ matrix.label }} ${{ matrix.shard }}/${{ matrix.shards }}
     needs: plan
+    # A plan with no jobs is a push that could not have affected any manifest.
+    # A matrix built from an empty list is an error, not a skip, so it is not
+    # built at all.
+    if: needs.plan.outputs.jobs != '0'
     runs-on: windows-latest
     # Sharded by crate AND within each crate, so the wall clock is the longest
     # *shard* rather than the longest manifest. Sharding by crate alone leaves

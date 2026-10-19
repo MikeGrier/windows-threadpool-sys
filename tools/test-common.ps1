@@ -475,7 +475,140 @@ Test-Case 'manifests are found under crates, in order, and nowhere else' {
         }
         $found = @(Get-SabotageManifest -RepositoryRoot $root | ForEach-Object { $_.Substring($root.Length + 1) })
         Assert-Equal 'crates\a\sabotage-doctests.json|crates\a\sabotage.json|crates\b\sabotage.json' ($found -join '|') 'a crate''s own manifests only'
+        [System.IO.File]::WriteAllText((New-Item -ItemType File -Force -Path (Join-Path $root 'tools\sabotage2.json')).FullName, '{}')
+        $found = @(Get-SabotageManifest -RepositoryRoot $root | ForEach-Object { $_.Substring($root.Length + 1) })
+        Assert-Equal 3 $found.Count 'the tools manifest only when asked for'
+        $found = @(Get-SabotageManifest -RepositoryRoot $root -IncludeTools | ForEach-Object { $_.Substring($root.Length + 1) })
+        Assert-Equal 'crates\a\sabotage-doctests.json|crates\a\sabotage.json|crates\b\sabotage.json|tools\sabotage2.json' ($found -join '|') 'with -IncludeTools'
         Assert-Equal 0 @(Get-SabotageManifest -RepositoryRoot (Join-Path $root 'nowhere')).Count 'no crates directory, none'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --- Which manifests a change could have affected -----------------------------
+
+Test-Case 'the inputs every sweep shares are recognised, and a crate''s own files are not' {
+    foreach ($path in 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'tools/common.ps1',
+        'tools/run-sabotage.ps1', 'tools\plan-sabotage-matrix.ps1', 'tools/check-sabotage-patches.ps1',
+        '.github/workflows/sabotage-sweep.yml') {
+        if (-not (Test-SabotageSharedInput $path)) { throw "not taken as shared: $path" }
+    }
+    foreach ($path in 'crates/a/Cargo.toml', 'crates/a/sabotage.json', 'tools/check-encoding.ps1', 'README.md',
+        '.github/workflows/ci.yml', 'docs/Cargo.toml') {
+        if (Test-SabotageSharedInput $path) { throw "taken as shared: $path" }
+    }
+}
+
+# Crates a <- b <- c (c only as a dev-dependency), d on its own, e on c.
+$script:Deps = @{ 'crates/a' = @(); 'crates/b' = @('crates/a'); 'crates/c' = @('crates/b'); 'crates/d' = @(); 'crates/e' = @('crates/c') }
+$script:AllManifests = @('crates/a/sabotage.json', 'crates/b/sabotage.json', 'crates/c/sabotage-doctests.json',
+    'crates/c/sabotage.json', 'crates/d/sabotage.json', 'crates/e/sabotage.json')
+
+Test-Case 'a change to a crate selects its manifests and those of every crate built on it, and no others' {
+    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/b/src/lib.rs') -Dependencies $script:Deps
+    Assert-Equal $false $sel.All 'not everything'
+    Assert-Equal 'crates/b/sabotage.json|crates/c/sabotage-doctests.json|crates/c/sabotage.json|crates/e/sabotage.json' ($sel.Manifests -join '|') 'b, and c and e above it, through two hops'
+    $leaf = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/e/tests/x.rs') -Dependencies $script:Deps
+    Assert-Equal 'crates/e/sabotage.json' ($leaf.Manifests -join '|') 'a crate nothing builds on selects only itself'
+}
+
+Test-Case 'a change outside every crate and every shared input selects nothing' {
+    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('README.md', 'tools/check-encoding.ps1') -Dependencies $script:Deps
+    Assert-Equal $false $sel.All 'not everything'
+    Assert-Equal 0 @($sel.Manifests).Count 'nothing'
+    Assert-Equal 0 @((Select-SabotageManifest -Manifests $script:AllManifests -Changed @() -Dependencies $script:Deps).Manifests).Count 'no change, nothing'
+}
+
+Test-Case 'a change to a shared input selects every manifest and says why' {
+    $sel = Select-SabotageManifest -Manifests $script:AllManifests -Changed @('crates/d/src/lib.rs', 'Cargo.lock') -Dependencies $script:Deps
+    Assert-Equal $true $sel.All 'everything'
+    Assert-Equal ($script:AllManifests -join '|') ($sel.Manifests -join '|') 'every manifest, in order'
+    if ($sel.Reason -notlike '*Cargo.lock*') { throw "the reason names the input: $($sel.Reason)" }
+}
+
+Test-Case 'a dependency cycle does not hang the selection, and a crate cargo does not know still selects itself' {
+    $cycle = @{ 'crates/a' = @('crates/b'); 'crates/b' = @('crates/a') }
+    $sel = Select-SabotageManifest -Manifests @('crates/a/sabotage.json', 'crates/x/sabotage.json') -Changed @('crates/b/src/lib.rs', 'crates/x/src/lib.rs') -Dependencies $cycle
+    Assert-Equal 'crates/a/sabotage.json|crates/x/sabotage.json' ($sel.Manifests -join '|') 'through the cycle, and the unknown crate by its own change'
+}
+
+function New-GitFixture {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('scope-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    Invoke-Native { git -C $root init --quiet } | Out-Null
+    return $root
+}
+
+function Save-GitFixture {
+    param([string] $Root, [string] $Message)
+    Invoke-Native { git -C $Root add -A } | Out-Null
+    Invoke-Native { git -C $Root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m $Message } | Out-Null
+    return ((Invoke-NativeStdout { git -C $Root rev-parse HEAD }) | Select-Object -First 1).Trim()
+}
+
+Test-Case 'what changed takes in commits, edits, and untracked files, measured from the merge base' {
+    $root = New-GitFixture
+    try {
+        foreach ($f in 'crates/a/src/lib.rs', 'crates/b/src/lib.rs', 'README.md') {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $root $f)) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root $f), "x`n")
+        }
+        $base = Save-GitFixture $root 'base'
+        [System.IO.File]::WriteAllText((Join-Path $root 'crates/a/src/lib.rs'), "changed`n")
+        Save-GitFixture $root 'commit' | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "edited, not committed`n")
+        [System.IO.File]::WriteAllText((Join-Path $root 'crates/b/src/new.rs'), "untracked`n")
+        $change = Get-SabotageChange -RepositoryRoot $root -Since $base
+        Assert-Equal $true $change.Known $change.Reason
+        Assert-Equal 'README.md|crates/a/src/lib.rs|crates/b/src/new.rs' ($change.Paths -join '|') 'committed, edited, untracked'
+
+        $none = Get-SabotageChange -RepositoryRoot $root -Since 'HEAD'
+        Assert-Equal $true $none.Known 'known'
+        Assert-Equal 'README.md|crates/b/src/new.rs' ($none.Paths -join '|') 'only the working tree against HEAD'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a base revision that is blank, all zeros, or unknown is reported as unknown, never as no change' {
+    $root = New-GitFixture
+    try {
+        [System.IO.File]::WriteAllText((Join-Path $root 'f'), "x`n")
+        Save-GitFixture $root 'base' | Out-Null
+        foreach ($since in '', '0000000000000000000000000000000000000000', 'no-such-revision') {
+            $change = Get-SabotageChange -RepositoryRoot $root -Since $since
+            Assert-Equal $false $change.Known "'$since' cannot be measured from"
+            if (-not $change.Reason) { throw "no reason for '$since'" }
+            if ($since -match '^0+$' -and $change.Reason -notlike '*all-zero*') { throw "the reason says it is the all-zero revision: $($change.Reason)" }
+        }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'crate dependencies come from cargo, of every kind, keyed by directory' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('deps-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[workspace]`nmembers = [`"crates/*`"]`nresolver = `"2`"`n")
+        $crates = [ordered]@{
+            a = ''
+            b = "[dependencies]`na = { path = `"../a`" }`n"
+            c = "[dev-dependencies]`nb = { path = `"../b`" }`n"
+            d = "[build-dependencies]`na = { path = `"../a`" }`n"
+        }
+        foreach ($name in $crates.Keys) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root "crates\$name\src") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$name\Cargo.toml"),
+                "[package]`nname = `"$name`"`nversion = `"0.1.0`"`nedition = `"2021`"`n`n$($crates[$name])")
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$name\src\lib.rs"), "`n")
+        }
+        $map = Get-SabotageCrateDependency -RepositoryRoot $root
+        if ($null -eq $map) { throw 'cargo metadata did not answer' }
+        Assert-Equal 'crates/a|crates/b|crates/c|crates/d' (($map.Keys | Sort-Object) -join '|') 'every crate'
+        Assert-Equal 0 @($map['crates/a']).Count 'a depends on nothing'
+        Assert-Equal 'crates/a' (@($map['crates/b']) -join '|') 'normal'
+        Assert-Equal 'crates/b' (@($map['crates/c']) -join '|') 'dev'
+        Assert-Equal 'crates/a' (@($map['crates/d']) -join '|') 'build'
+        if ($null -ne (Get-SabotageCrateDependency -RepositoryRoot (Join-Path $root 'nowhere'))) { throw 'no workspace is no answer' }
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }

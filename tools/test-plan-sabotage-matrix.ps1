@@ -43,6 +43,9 @@ if (-not (Test-Path -LiteralPath $planner)) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 
+# Invoke-Native, for the git calls the -Since fixtures make.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 function Assert-True {
     param([bool] $Condition, [string] $Message)
     if (-not $Condition) { throw $Message }
@@ -107,9 +110,50 @@ function New-FixtureRoot {
 # Run the planner and return the parsed matrix. Errors propagate, which is what
 # the refusal cases catch.
 function Invoke-Planner {
-    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '')
-    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput
+    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '', [string] $Since = '')
+    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput -Since $Since 6>$null
     return ($json | ConvertFrom-Json)
+}
+
+<#
+A committed git repository that is also a cargo workspace, for -Since: crates a,
+b on a, c on b as a dev-dependency, and d on nothing, each with a one-entry
+manifest. Nothing is ever built; `cargo metadata` only reads the manifests.
+#>
+function New-ScopedFixture {
+    $root = New-FixtureRootPath
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[workspace]`nmembers = [`"crates/*`"]`nresolver = `"2`"`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "fixture`n")
+    $crates = [ordered]@{
+        a = ''
+        b = "[dependencies]`na = { path = `"../a`" }`n"
+        c = "[dev-dependencies]`nb = { path = `"../b`" }`n"
+        d = ''
+    }
+    foreach ($crate in $crates.Keys) {
+        $dir = Join-Path (Join-Path $root 'crates') $crate
+        New-Item -ItemType Directory -Path (Join-Path $dir 'src') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir 'Cargo.toml'),
+            "[package]`nname = `"$crate`"`nversion = `"0.1.0`"`nedition = `"2021`"`n`n$($crates[$crate])")
+        [System.IO.File]::WriteAllText((Join-Path $dir 'src\lib.rs'), "`n")
+        $spec = @{ package = $crate; sabotages = @(@{ name = 's1'; file = 'src/lib.rs' }) }
+        [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), ($spec | ConvertTo-Json -Depth 5))
+    }
+    # Cargo.lock would be written by the first metadata call and then show as a
+    # change to a shared input, so it is ignored, as a build's output would be.
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), "Cargo.lock`ntarget/`n")
+    Invoke-Native { git -C $root init --quiet } | Out-Null
+    Invoke-Native { git -C $root add -A } | Out-Null
+    Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    return $root
+}
+
+# The manifests a -Since plan names, sorted ordinally and joined.
+function Get-PlannedManifests {
+    param([string] $Root, [string] $Since)
+    $m = Invoke-Planner -Root $Root -Since $Since
+    return ((Get-Ordinal @(@($m.include) | ForEach-Object { $_.manifest } | Select-Object -Unique)) -join '|')
 }
 
 $cases = @(
@@ -284,6 +328,59 @@ $cases = @(
             $root = New-FixtureRoot @{ 'crate-a' = 25; 'crate-b' = 25 }
             $json = & $planner -RepositoryRoot $root
             Assert-Equal 1 @($json).Count 'the planner must emit one line, or the step output truncates'
+        }
+    },
+    @{
+        Name = 'since-plans-a-changed-crate-and-every-crate-built-on-it'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\a\src\lib.rs') -Value '// changed'
+            Assert-Equal 'crates/a/sabotage.json|crates/b/sabotage.json|crates/c/sabotage.json' (Get-PlannedManifests $root 'HEAD') 'a, b on a, and c on b as a dev-dependency'
+        }
+    },
+    @{
+        Name = 'since-plans-a-leaf-crate-alone'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\c\src\lib.rs') -Value '// changed'
+            Assert-Equal 'crates/c/sabotage.json' (Get-PlannedManifests $root 'HEAD') 'nothing builds on c'
+        }
+    },
+    @{
+        Name = 'since-plans-nothing-for-a-change-outside-every-crate-and-says-so-in-the-output'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'README.md') -Value 'changed'
+            $out = Join-Path $root 'gh-output.txt'
+            Set-Content -LiteralPath $out -Value '' -Encoding utf8
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -GitHubOutput $out
+            Assert-Equal 0 @($m.include).Count 'an empty matrix'
+            Assert-Equal 1 @(Get-Content -LiteralPath $out | Where-Object { $_ -eq 'jobs=0' }).Count 'jobs=0, so the workflow can skip the sweep'
+        }
+    },
+    @{
+        Name = 'since-plans-everything-for-a-shared-input-or-a-base-it-cannot-measure-from'
+        Run  = {
+            $root = New-ScopedFixture
+            $all = 'crates/a/sabotage.json|crates/b/sabotage.json|crates/c/sabotage.json|crates/d/sabotage.json'
+            Add-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Value '# changed'
+            Assert-Equal $all (Get-PlannedManifests $root 'HEAD') 'the workspace manifest is shared'
+            Invoke-Native { git -C $root checkout -- Cargo.toml } | Out-Null
+            Assert-Equal '' (Get-PlannedManifests $root 'HEAD') 'and back to nothing once it is undone'
+            foreach ($since in 'no-such-revision', '0000000000000000000000000000000000000000') {
+                Assert-Equal $all (Get-PlannedManifests $root $since) "'$since' cannot be measured from"
+            }
+        }
+    },
+    @{
+        Name = 'since-and-a-named-manifest-plan-what-both-allow'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\a\src\lib.rs') -Value '// changed'
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -Manifest 'crates/b/sabotage.json'
+            Assert-Equal 'crates/b/sabotage.json' ((@($m.include | ForEach-Object { $_.manifest } | Sort-Object -Unique)) -join '|') 'affected and named'
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -Manifest 'crates/d/sabotage.json'
+            Assert-Equal 0 @($m.include).Count 'named, but not affected'
         }
     }
 )

@@ -6,7 +6,7 @@
 .DESCRIPTION
     Runs [run-sabotage.ps1](run-sabotage.ps1) `-CheckPatches` over every manifest
     [common.ps1](common.ps1) `Get-SabotageManifest` finds -- the same list the
-    sweep's planner builds its matrix from -- and reports each entry whose patch
+    sweep's planner builds its matrix from, and the harness's own in tools/ -- and reports each entry whose patch
     no longer matches its file exactly once, or no longer changes it.
 
     A patch the code has moved away from is found by reading two files, so it
@@ -34,9 +34,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path -Parent $PSScriptRoot }
 $harness = Join-Path $PSScriptRoot 'run-sabotage.ps1'
 
-$manifests = @(Get-SabotageManifest -RepositoryRoot $RepositoryRoot)
+$manifests = @(Get-SabotageManifest -RepositoryRoot $RepositoryRoot -IncludeTools)
 if ($manifests.Count -eq 0) {
-    Write-Host "No crates/*/sabotage*.json under '$RepositoryRoot'." -ForegroundColor Red
+    Write-Host "No sabotage manifests under '$RepositoryRoot'." -ForegroundColor Red
     exit 2
 }
 

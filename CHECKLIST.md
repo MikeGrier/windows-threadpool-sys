@@ -262,12 +262,7 @@ changes.
 
 - [x] **M34.11** -- Check every sabotage patch without building, on every push and pull request. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3411)
 
-- [ ] **M34.12** -- **Plan only the manifests a change could have affected.** The planner takes a base
-  revision and selects a manifest when a file under its crate changed, or a file under a workspace
-  crate it depends on, directly or not. A change to an input every sweep shares selects every
-  manifest: the root `Cargo.toml` and `Cargo.lock`, `rust-toolchain.toml`, the sabotage tools and
-  `tools/common.ps1`, and the sweep workflow. The post-merge sweep passes the push's previous head;
-  a push with no previous head, and a dispatch, select every manifest.
+- [x] **M34.12** -- Plan only the sabotage manifests a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3412)
 
 - [ ] **M34.13** -- **Record which tests caught each entry.** A sweep writes, beside its transcripts,
   the tests that failed under each entry it reports caught: library and integration tests by name,

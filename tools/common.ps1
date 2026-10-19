@@ -353,14 +353,23 @@ function Get-LinkOutputOpenFailure {
 # other way round. Sorted ordinally, so a matrix built from it is stable run to run and host to host.
 #
 # Returns full paths. A repository with no `crates` directory has none, and saying
-# so is the caller's business.
+# so is the caller's business. `-IncludeTools` adds the manifests in `tools/`,
+# which sabotage the harness itself and need a runner of their own, so the sweep
+# planner leaves them out and the patch check, which runs nothing, takes them in.
 function Get-SabotageManifest {
-    param([string] $RepositoryRoot)
+    param([string] $RepositoryRoot, [switch] $IncludeTools)
     $cratesDir = Join-Path $RepositoryRoot 'crates'
-    if (-not (Test-Path -LiteralPath $cratesDir)) { return }
-    [string[]] $found = @(Get-ChildItem -Path $cratesDir -Directory |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
-            ForEach-Object { $_.FullName })
+    [string[]] $found = @()
+    if (Test-Path -LiteralPath $cratesDir) {
+        $found += @(Get-ChildItem -Path $cratesDir -Directory |
+                ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
+                ForEach-Object { $_.FullName })
+    }
+    $toolsDir = Join-Path $RepositoryRoot 'tools'
+    if ($IncludeTools -and (Test-Path -LiteralPath $toolsDir)) {
+        $found += @(Get-ChildItem -Path $toolsDir -Filter 'sabotage*.json' -File | ForEach-Object { $_.FullName })
+    }
+    if ($found.Count -eq 0) { return }
     # Ordinal, not Sort-Object: that one is culture-sensitive, and the two hosts
     # order 'sabotage-x.json' and 'sabotage.json' differently under it.
     [Array]::Sort($found, [System.StringComparer]::Ordinal)
@@ -403,6 +412,132 @@ function Test-SabotagePatch {
         ReplaceText = $replaceText
         Patched     = $patched
     }
+}
+# --- Which manifests a change could have affected ------------------------------
+#
+# Every sabotage entry costs a build and a run of its crate's suite, so a change
+# is swept by the manifests it could have affected, and a nightly sweep of all of
+# them is the backstop (DESIGN-NOTES.md, "sabotage-scope"). These are the pieces:
+# what changed, which crates build on which, which paths every sweep shares, and
+# the selection. The planner and the harness both use them, so the two cannot
+# disagree about what a change reaches.
+
+# Paths every sweep depends on, whichever crate it sweeps, so a change to one
+# reaches every manifest: the workspace's manifest, lockfile and toolchain, the
+# sabotage tools and the helper they share, and the sweep workflow. `Path` is
+# relative to the repository root; either slash.
+function Test-SabotageSharedInput {
+    param([string] $Path)
+    $normal = $Path.Replace('\', '/')
+    foreach ($pattern in @('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain', '.cargo/*',
+            'tools/common.ps1', 'tools/*sabotage*.ps1', '.github/workflows/sabotage-sweep.yml')) {
+        if ($normal -like $pattern) { return $true }
+    }
+    return $false
+}
+
+# What differs between `Since` and the working tree: committed, staged, unstaged,
+# and untracked files git does not ignore, which is what a sweep of the working
+# copy would sweep. Measured from the merge base of `Since` and HEAD, so a branch
+# behind its base is not charged with the base's own changes.
+#
+# Returns `Known` and `Paths` (relative to the root, forward slashes) rather than
+# a bare list, because "nothing changed" and "cannot tell" must never look alike:
+# an empty list wrapped in @() is indistinguishable from a $null one, and treating
+# "cannot tell" as "nothing" would sweep nothing. It cannot tell for a blank or
+# all-zero revision (a push that created its branch) and a revision this clone
+# does not have; `Reason` says which.
+function Get-SabotageChange {
+    param([string] $RepositoryRoot, [string] $Since)
+    $unknown = { param($why) [pscustomobject]@{ Known = $false; Paths = @(); Reason = $why } }
+    if ([string]::IsNullOrWhiteSpace($Since)) { return & $unknown 'no base revision was given' }
+    if ($Since -match '^0+$') { return & $unknown "the base revision $Since is the all-zero one a new branch pushes" }
+    $base = @(Invoke-NativeStdout { git -C $RepositoryRoot merge-base $Since HEAD })
+    if ($LASTEXITCODE -ne 0 -or $base.Count -eq 0) {
+        return & $unknown "this clone has no merge base with '$Since'"
+    }
+    $diff = @(Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only --no-renames $base[0] })
+    if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff against $($base[0])" }
+    $untracked = @(Invoke-NativeStdout { git -C $RepositoryRoot ls-files --others --exclude-standard })
+    if ($LASTEXITCODE -ne 0) { return & $unknown 'git could not list untracked files' }
+    # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object -Unique
+    # orders by culture and folds case, so its answer depends on the host.
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @(@($diff) + @($untracked))) { if ($path) { [void]$set.Add($path.Replace('\', '/')) } }
+    [string[]] $paths = @($set)
+    [Array]::Sort($paths, [System.StringComparer]::Ordinal)
+    return [pscustomobject]@{ Known = $true; Paths = $paths; Reason = "$($paths.Count) path(s) differ from $($base[0])" }
+}
+
+# Which workspace crates each crate depends on, through path dependencies of every
+# kind: a dev-dependency builds the tests that catch a sabotage, so it counts. Keyed
+# by the crate's directory relative to the root ('crates/x'), each value the
+# directories it depends on directly. From `cargo metadata --no-deps`, which reads
+# manifests and builds nothing. $null when cargo cannot answer.
+function Get-SabotageCrateDependency {
+    param([string] $RepositoryRoot)
+    $manifest = Join-Path $RepositoryRoot 'Cargo.toml'
+    $json = Invoke-NativeStdout { cargo metadata --format-version 1 --no-deps --manifest-path $manifest } | Out-String
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $relative = {
+        param($full)
+        $at = [System.IO.Path]::GetFullPath($full)
+        if (-not $at.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+        $at.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+    }
+    $map = @{}
+    foreach ($package in ($json | ConvertFrom-Json).packages) {
+        $dir = & $relative (Split-Path -Parent $package.manifest_path)
+        if (-not $dir) { continue }
+        $map[$dir] = @($package.dependencies |
+                Where-Object { ($_.PSObject.Properties.Name -contains 'path') -and $_.path } |
+                ForEach-Object { & $relative $_.path } |
+                Where-Object { $_ } | Sort-Object -Unique)
+    }
+    return $map
+}
+
+# Which of `Manifests` a change to `Changed` could have affected. Both are paths
+# relative to the root with forward slashes; `Dependencies` is
+# Get-SabotageCrateDependency's map. A manifest is affected when a path under its
+# own crate changed, or under a crate its crate depends on, directly or not, and
+# every manifest is when a shared input changed. A crate is the manifest's
+# directory. Returns `All`, the affected `Manifests` in the order given, and a
+# `Reason` for the log.
+function Select-SabotageManifest {
+    param([string[]] $Manifests, [string[]] $Changed, [hashtable] $Dependencies)
+    $Manifests = @($Manifests)
+    $Changed = @($Changed | Where-Object { $_ })
+    $shared = @($Changed | Where-Object { Test-SabotageSharedInput $_ })
+    if ($shared.Count -gt 0) {
+        return [pscustomobject]@{ All = $true; Manifests = $Manifests; Reason = "a shared input changed: $($shared[0])" }
+    }
+    $touched = @{}
+    foreach ($path in $Changed) {
+        if ($path -match '^(crates/[^/]+)/') { $touched[$Matches[1]] = $true }
+    }
+    $affected = @(foreach ($manifest in $Manifests) {
+            $crate = $manifest.Substring(0, $manifest.LastIndexOf('/'))
+            # Walk the crate and everything it builds on; a cycle is cut by `seen`.
+            $seen = @{}
+            $pending = New-Object System.Collections.Generic.Queue[string]
+            $pending.Enqueue($crate)
+            $hit = $false
+            while ($pending.Count -gt 0 -and -not $hit) {
+                $at = $pending.Dequeue()
+                if ($seen.ContainsKey($at)) { continue }
+                $seen[$at] = $true
+                if ($touched.ContainsKey($at)) { $hit = $true; break }
+                if ($Dependencies.ContainsKey($at)) {
+                    foreach ($next in $Dependencies[$at]) { $pending.Enqueue($next) }
+                }
+            }
+            if ($hit) { $manifest }
+        })
+    $crates = @($touched.Keys | Sort-Object)
+    $reason = if ($crates.Count -eq 0) { 'no crate changed' } else { "crates changed: $($crates -join ', ')" }
+    return [pscustomobject]@{ All = $false; Manifests = $affected; Reason = $reason }
 }
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than

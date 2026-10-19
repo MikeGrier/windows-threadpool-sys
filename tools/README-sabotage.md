@@ -35,7 +35,16 @@ in memory to the file it names and reports `MANIFEST STALE` or `MANIFEST INERT`,
 the verdicts a sweep reaches first, for the whole manifest in seconds. Its exit
 codes are the ones below, with 1 meaning a patch does not apply.
 [check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs it over every
-manifest, and CI's `every sabotage patch applies` job runs that on every push.
+manifest, the harness's own [sabotage2.json](sabotage2.json) included, and CI's `every sabotage patch applies` job runs that on every push.
+
+In CI, [.github/workflows/sabotage-sweep.yml](../.github/workflows/sabotage-sweep.yml)
+sweeps after every merge to `main`, and only the manifests the merge could have
+affected: [plan-sabotage-matrix.ps1](plan-sabotage-matrix.ps1) `-Since` takes the
+crates the push touched, adds every crate that builds on one through a path
+dependency of any kind, and plans every manifest when the push touched an input
+all sweeps share or its base cannot be measured from. The rule is
+`Select-SabotageManifest` in [common.ps1](common.ps1), and what it cannot see is
+in [DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope).
 
 | Exit | Meaning |
 |---|---|

@@ -3966,3 +3966,17 @@ which CI's `every sabotage patch applies` job runs. Run against `main` before PR
 M34.9 repaired. Its tests found that a patch changing only case was reported `INERT`, because PowerShell's `-eq` ignores case,
 and that the manifest order differed between the two PowerShell hosts; both are fixed. The planner's matrix for this repository is
 unchanged.
+
+## Moved 2026-10-19 01:11:26 -04:00 -- sabotage scope, M34.12: the post-merge sweep plans affected manifests
+
+### <a id="m3412"></a>M34.12 -- Plan only the sabotage manifests a change could have affected. *(completed 2026-10-19 01:11:26 -04:00)*
+
+[tools/plan-sabotage-matrix.ps1](tools/plan-sabotage-matrix.ps1) `-Since` plans the manifests of crates with a changed file and of
+every crate that depends on one, directly or not, through a path dependency of any kind; a change to an input every sweep shares, or
+a base it cannot measure from, plans every manifest. The pieces are in [tools/common.ps1](tools/common.ps1): `Get-SabotageChange`,
+which reports whether the change could be measured rather than returning a list that could be empty for either reason;
+`Get-SabotageCrateDependency`, from `cargo metadata`; `Test-SabotageSharedInput`; and `Select-SabotageManifest`. The sweep
+workflow plans a push against its previous head, skips the sweep when the plan is empty, and no longer has a `paths:` filter,
+which was a second copy of the shared-input list. Planned against the merge of PR #150 it takes the five tail-watcher manifests
+alone. The patch check of M34.11 also takes in the harness's own [tools/sabotage2.json](tools/sabotage2.json), which nothing in CI
+had read.
