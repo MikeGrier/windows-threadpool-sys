@@ -3352,3 +3352,12 @@ function. An open by `FileId` reads the opened file's identity and refuses anoth
 `IdentityMismatch`, and `SharingViolation` now names the file by `OpenedBy`. The decision and what was observed are
 [DI-D-70](DESIGN-NOTES.md#di-d-70). The observation that a directory opens by identifier without the backup flag is
 queued as [DI-15.5](CHECKLIST.md) for the engineer to rule on.
+
+### <a id="di-154"></a>DI-15.4 -- A reopen, `OpenedFile::reopen`, makes a new file of the type asked for from any handle through `ReOpenFile`, with its own `ReopenOptions` and the path open's checks. *(completed 2026-10-19 09:44:07 -04:00)*
+
+`OpenedFile::reopen` and `request_reopen` take any handle as the original and `ReopenOptions<A>`, which carries what
+the `ReOpenFile` page lists and [DI-D-64](DESIGN-NOTES.md#di-d-64) exposes. The result's alignment is its new mode's,
+the checks on the reopened handle are the open's by the same function, and a sharing violation names the file by
+`OpenedBy::Reopen`. The decision and what was observed are [DI-D-71](DESIGN-NOTES.md#di-d-71): every pair of an
+original and a reopen follows the page's sharing rule, judged by the share-mode tests' statement of it; `NUL` reaches
+`UnknownLocation`; a handle from `OpenFileById` reopens; a volume and a disk do not, unelevated.

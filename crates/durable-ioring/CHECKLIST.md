@@ -280,24 +280,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-15.2** -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-152)
 
-- [ ] **DI-15.4** -- **`OpenedFile::reopen`, through `ReOpenFile`** (the entry is `DI-13.6`). A new `OpenedFile<B2, A2>` from an
-  owned one **or from any handle** ([DI-D-68](DESIGN-NOTES.md#di-d-68): the route for a handle opened elsewhere, since the new
-  handle's mode is this crate's choice; the residue it cannot convert is `DI-10.6`), changing access (a change of `A`, [DI-D-65](DESIGN-NOTES.md#di-d-65); whether the kernel
-  lets a reopen widen the access is a test here), sharing and flags: cached to unbuffered and back, a read-only handle for
-  a scrubber beside the writer. The target's alignment is recomputed for the new mode, and the checks
-  are the open's, on the reopened handle ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)): the remote check
-  and, unbuffered, `UnknownLocation` ([DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)), which a reopen
-  from any handle can meet, since the original may be a pipe or `NUL`. `ReOpenFile` documents that the
-  new access and sharing cannot conflict with a previous open that is still open; each conflict the
-  table lists is a test, and a sharing violation reaches the caller as the typed error from `DI-13.4`,
-  not a panic: `SharingViolation` names what was opened by `OpenedBy` ([DI-D-70](DESIGN-NOTES.md#di-d-70)),
-  which gains a form for what a reopen names. Documented as well: the object must have been created by `CreateFile`; an
-  `OpenedVolume` and an `OpenedDisk` are opened through `CreateFileW` too, so whether a volume or a disk
-  reopens is a test, not an assumption. The request crate's tests already show a reopen widening read to
-  write on a file; this layer tests it again on its own types. Also tests, from
-  [DI-D-64](DESIGN-NOTES.md#di-d-64)'s unverified list: whether a handle that came from `OpenFileById`
-  (`DI-15.2`) reopens, and whether the reopened handle is inheritable.
-
+- [x] **DI-15.4** -- A reopen, `OpenedFile::reopen`, makes a new file of the type asked for from any handle through `ReOpenFile`, with its own `ReopenOptions` and the path open's checks. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-154)
 - [ ] **DI-15.5** -- **Decide whether an open by identifier that reaches a directory is refused.** Observed
   ([DI-D-70](DESIGN-NOTES.md#di-d-70)): `OpenFileById` opened a directory without `FILE_FLAG_BACKUP_SEMANTICS`, for
   every data access and in either buffering mode, though its page says the flag is required to obtain a handle to a
@@ -312,7 +295,7 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-10.3** -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-103)
 
-- [ ] **DI-10.6** -- **A handle opened elsewhere that `ReOpenFile` cannot convert: restrictive sharing, an access the caller was never itself granted, and an object that was not created by `CreateFile`.** Parked, with the blocker named: an open handle's mode is reported only by an undocumented call, which this repository does not make, so such a handle's class is a consumer's declaration, and the engineer has not ruled on an `unsafe` attestation for one ([DI-D-68](DESIGN-NOTES.md#di-d-68)). Everything else a handle from elsewhere is wanted for is [DI-15.4](#di-154), taking any handle. When picked up: decide whether a declaration is accepted at all, in what form, and that the class is at most `BestEffort` unless the consumer attests more through the mechanism of `DI-10.5`.
+- [ ] **DI-10.6** -- **A handle opened elsewhere that `ReOpenFile` cannot convert: restrictive sharing, an access the caller was never itself granted, and an object that was not created by `CreateFile`.** Parked, with the blocker named: an open handle's mode is reported only by an undocumented call, which this repository does not make, so such a handle's class is a consumer's declaration, and the engineer has not ruled on an `unsafe` attestation for one ([DI-D-68](DESIGN-NOTES.md#di-d-68)). Everything else a handle from elsewhere is wanted for is [DI-15.4](COMPLETED-CHECKLIST.md#di-154), taking any handle. When picked up: decide whether a declaration is accepted at all, in what form, and that the class is at most `BestEffort` unless the consumer attests more through the mechanism of `DI-10.5`.
 
 ## DI-M16 -- Hand the request crate the handles already held
 
