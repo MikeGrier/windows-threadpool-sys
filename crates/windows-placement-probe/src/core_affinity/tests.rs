@@ -1235,6 +1235,9 @@ fn hop_row(
         placement: Placement::CrossNumaNode,
         strategy,
         nanos_per_item: nanos,
+        elapsed_nanos: nanos * ITEMS as f64,
+        consumer_refreshes: ITEMS as u64,
+        producer_refreshes: ITEMS as u64,
         consumer_batch: 1.0,
         producer_batch: 1.0,
         memory_node: achieved,
@@ -1406,4 +1409,32 @@ fn an_empty_plan_promises_no_time_at_all() {
 
     assert_eq!(empty.timed_runs(), 0);
     assert!((empty.estimated_seconds() - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn every_placement_has_a_distinct_record_name_that_is_not_its_label() {
+    let all = [
+        Placement::SameCoreSiblings,
+        Placement::SameCacheSameClass,
+        Placement::SameCacheCrossClass,
+        Placement::CrossCacheSameClass,
+        Placement::CrossCacheCrossClass,
+        Placement::CrossNumaNode,
+        Placement::UnknownCacheSameClass,
+        Placement::UnknownCacheCrossClass,
+    ];
+    let mut names: Vec<&str> = all.iter().map(|p| p.name()).collect();
+    for placement in all {
+        assert_ne!(placement.name(), placement.label(), "{placement:?}");
+        assert!(
+            placement
+                .name()
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'_'),
+            "{placement:?}: a record name is a lowercase token"
+        );
+    }
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), all.len(), "two placements share a record name");
 }
