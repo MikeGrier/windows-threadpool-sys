@@ -183,7 +183,7 @@ for this table.
 | `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and where a name leads is the caller's responsibility ([DI-D-67](#di-d-67)); what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
 | `hVolumeHint` (ID) | Exposed | Any handle | The hint only tells the call which volume the ID is on and is never the file opened, so its mode reaches nothing the result claims: the opened handle's buffering and access are this crate's choice, and the checks run on it ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)). The page accepts any file on the volume or share. The same reasoning as `hOriginalFile`'s ([DI-D-68](#di-d-68)). | engineer 2026-10-18 ("It should be any handle"), replacing the plan that took only what this crate opened |
 | `lpFileId` (ID) | Exposed | The three kinds the `FILE_ID_DESCRIPTOR` page lists: `FileIdType` (a 64-bit `LARGE_INTEGER`), `ObjectIdType` (a `GUID`), and `ExtendedFileIdType` (a `FILE_ID_128`, "not supported before Windows 8 and Windows Server 2012") | The page was read for [DI-15.1](COMPLETED-CHECKLIST.md#di-151) and its list is the request crate's `OpenFileByIdentifier`'s, so the ruling stands as made. The page says the extended ID "is used on ReFS file systems"; an NTFS file's 16 bytes from `FileIdInfo` were observed to open as it (`D-31` in [the request crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-31)). The identity this crate reads from a handle is the extended form, [DI-D-69](#di-d-69). | engineer 2026-10-15; the page read 2026-10-18 |
-| `hOriginalFile` (RO) | Exposed | Any handle ([DI-D-68](#di-d-68)) | The reopened handle's mode is this crate's choice, recorded by its type, so the original's provenance is not what the claim rests on. The page says the original must have been created by `CreateFile`; what it cannot convert is [DI-10.6](CHECKLIST.md). A handle that came from `OpenFileById` was observed to reopen, and a volume's and a disk's were observed not to, unelevated ([DI-D-71](#di-d-71)). | engineer 2026-10-18, [DI-D-68](#di-d-68) |
+| `hOriginalFile` (RO) | Exposed | Any handle ([DI-D-68](#di-d-68)) | The reopened handle's mode is this crate's choice, recorded by its type, so the original's provenance is not what the claim rests on. The page says the original must have been created by `CreateFile`; what it cannot convert stays out ([DI-D-68](#di-d-68), ruled 2026-10-19). A handle that came from `OpenFileById` was observed to reopen, and a volume's and a disk's were observed not to, unelevated ([DI-D-71](#di-d-71)). | engineer 2026-10-18, [DI-D-68](#di-d-68) |
 | `dwDesiredAccess` (CF, ID, RO): zero | **Superseded by [DI-D-65](#di-d-65):** the type `NoData`, excluded only from a file target | `NoData` | A zero-access open is valid Win32 (it queries attributes without access). A handle opened so cannot become a file target, which the `HasData` bound refuses at compile time and not when the first operation fails. | engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
 | `FILE_READ_DATA`, `FILE_WRITE_DATA` | **Superseded by [DI-D-65](#di-d-65):** the data access type, not members of the rights set | `ReadOnly`, `WriteOnly`, `ReadWrite` | Read and write operations. A target needs one of them, which is the `HasData` bound. | engineer 2026-10-15; engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
 | `FILE_APPEND_DATA` | Excluded as a member | None on its own | Its page says that without `FILE_WRITE_DATA` a write does not overwrite existing data, and the core addresses by offset, so an append-only handle would compute the wrong answer. With no member for it and no raw constructor, append-only access cannot be built; the bit is still carried by the generic rights below, each of which includes `FILE_WRITE_DATA`. | engineer 2026-10-15 (the rule); assistant (the representation) |
@@ -908,7 +908,13 @@ recommendation, which the engineer had asked for):
    handle's no-buffering and write-through modes are reported only by an undocumented call, which this repository
    does not make ([DOCUMENTED APIS ONLY](../../.github/copilot-instructions.md)), so a foreign handle's class could
    only be a consumer's declaration, and no ruling has been made on the `unsafe` form of one. What a
-   handle from elsewhere would need is [DI-10.6](CHECKLIST.md).
+   handle from elsewhere would need is [DI-10.6](COMPLETED-CHECKLIST.md#di-106).
+
+   **Ruled 2026-10-19, closing `DI-10.6`:** the engineer, "I say it's not accepted at this time." A consumer's
+   declaration of a foreign handle's mode is not accepted in any form, safe or `unsafe`, capped or not, so the
+   residue below stays out. The assistant had laid out a safe declaration capped at `BestEffort`, under which
+   every misdeclaration it could find fails loudly; that is a record of the option, not a plan. Nothing is
+   scheduled: revisiting it is a new item, raised by the engineer.
 2. **A consumer who knows a device is theirs alone can attest it, and an attested target is `Complete`.** It is
    the only way a Win32 target is `Complete`: [DI-D-60](#di-d-60), [DI-D-61](#di-d-61) and [DI-D-62](#di-d-62)
    stand that a handle cannot show it, and are amended only in that the claim can be made by someone who can.
@@ -933,8 +939,9 @@ script over `CreateFileW` and `ReOpenFile`, not kept. The page is the authority 
 
 The last row is the broker case: access is checked against the caller afresh, so a handle granted for a file the
 caller could not open itself cannot be converted. Restrictive sharing is the same, and the page says the object
-must have been created by `CreateFile`, which leaves out pipes and devices. That residue, and nothing else, is what
-[DI-10.6](CHECKLIST.md) parks.
+must have been created by `CreateFile`, which leaves out pipes and devices; a volume's and a disk's handles, which
+`CreateFile` did create, were observed not to reopen either ([DI-D-71](#di-d-71)). That residue, and nothing else, is
+what [DI-10.6](COMPLETED-CHECKLIST.md#di-106) decided stays out.
 
 **What the attestation is.** It claims one thing, that nothing else writes the device, and that the flush domains the
 target reports are all of them; it does not change which domains are reported ([DI-D-61](#di-d-61): a declaration adds
@@ -953,8 +960,8 @@ site instead, and the documentation says what is claimed and that the layer beha
 the constructors to `unsafe fn` is a breaking change to what [DI-10.5](CHECKLIST.md) adds, and is not one before it
 is released.
 
-**Scheduled work.** [DI-10.5](CHECKLIST.md) (the attestation), [DI-10.6](CHECKLIST.md) (the parked residue, with its
-blocker), and [DI-15.4](CHECKLIST.md) amended to reopen from any handle.
+**Scheduled work.** [DI-10.5](CHECKLIST.md) (the attestation), [DI-10.6](COMPLETED-CHECKLIST.md#di-106) (the residue,
+decided 2026-10-19: not accepted), and [DI-15.4](CHECKLIST.md) amended to reopen from any handle.
 
 ## <a id="di-d-69"></a>DI-D-69: a file's identity is the volume serial and the 128-bit identifier, read through the handle shared
 

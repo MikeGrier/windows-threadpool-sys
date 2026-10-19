@@ -3375,3 +3375,14 @@ the contract's first guarantee: a faulted write is covered by no durability repo
 read and write with the kernel's error and completes every commit. The decision and the measurements are
 [DI-D-72](DESIGN-NOTES.md#di-d-72); the ring's behaviour is a test in `win-durable-ioring`, and `open_by_id`'s
 documentation says it.
+
+## Moved 2026-10-19 11:54:55 -04:00 -- DI-M15+: handles opened elsewhere, decided
+
+`DI-10.3` is archived above. With `DI-10.6` decided, the parked milestone is empty and is removed.
+
+### <a id="di-106"></a>DI-10.6 -- A handle opened elsewhere that `ReOpenFile` cannot convert is not accepted at this time, in any form. *(completed 2026-10-19 11:54:55 -04:00)*
+
+The engineer, 2026-10-19: "I say it's not accepted at this time." The residue is restrictive sharing, an access the
+caller was never granted (the broker case), objects not created by `CreateFile`, and, observed in `DI-15.4`, volume
+and disk handles. A consumer's declaration of such a handle's mode is not accepted. The ruling and the option that
+was laid out are in [DI-D-68](DESIGN-NOTES.md#di-d-68); nothing is scheduled.

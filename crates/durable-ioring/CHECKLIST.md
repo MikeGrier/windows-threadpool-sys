@@ -59,7 +59,7 @@ Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; s
    [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
    crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
 7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
-   `DI-M15`. `DI-10.5` needs none of them and may be done at any point, and `DI-10.6` is parked.
+   `DI-M15`. `DI-10.5` needs none of them and may be done at any point.
 
 If you remember only one thing: **the request crate comes first, and its breaking commit moves three
 crates at once.**
@@ -204,8 +204,8 @@ milestone; the decision rows named below carry the reasons.
 
 - [x] **DI-10.5** -- A consumer who knows a device is theirs alone can attest it through `new_attested_exclusive`, `from_volume_attested_exclusive` and `from_disk_attested_exclusive`, and the target is then `Complete`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-105)
 
-`DI-10.3`, whether a handle opened elsewhere can be given to a file target, is decided by
-[DI-D-68](DESIGN-NOTES.md#di-d-68) and is stubbed below; what it leaves is `DI-10.6`, parked under `DI-M15+`.
+`DI-10.3` and `DI-10.6`, whether a handle opened elsewhere can be given to a file target, are decided by
+[DI-D-68](DESIGN-NOTES.md#di-d-68): not in this version, and not on a consumer's declaration of its mode.
 
 ## DI-M13 -- Opening a file: the surface and its home
 
@@ -213,7 +213,7 @@ Why this milestone exists. [DI-D-60](DESIGN-NOTES.md#di-d-60) made a file target
 crate opened and from nothing else, and [`FileOptions`](../win-durable-ioring/src/windows_backend/opened_file.rs)
 carries only `read`, `write`, `create`, `create_new` and `truncate`. A consumer whose open needs more
 (a share mode, a security descriptor, delete-on-close, an open by file ID) cannot say so, and would
-want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](#di-m15----handles-opened-elsewhere-parked-behind-di-m15)).
+want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](COMPLETED-CHECKLIST.md#di-106)).
 Widening what this crate can open is the structural answer: every option a consumer can pass is an
 option recorded by construction. The rule throughout is documented APIs only
 ([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
@@ -273,12 +273,6 @@ option recorded by construction. The rule throughout is documented APIs only
 - [x] **DI-14.10** -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1410)
 
 - [x] **DI-14.11** -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1411)
-
-## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
-
-- [x] **DI-10.3** -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-103)
-
-- [ ] **DI-10.6** -- **A handle opened elsewhere that `ReOpenFile` cannot convert: restrictive sharing, an access the caller was never itself granted, and an object that was not created by `CreateFile`.** Parked, with the blocker named: an open handle's mode is reported only by an undocumented call, which this repository does not make, so such a handle's class is a consumer's declaration, and the engineer has not ruled on an `unsafe` attestation for one ([DI-D-68](DESIGN-NOTES.md#di-d-68)). Everything else a handle from elsewhere is wanted for is [DI-15.4](COMPLETED-CHECKLIST.md#di-154), taking any handle. When picked up: decide whether a declaration is accepted at all, in what form, and that the class is at most `BestEffort` unless the consumer attests more through the mechanism of `DI-10.5`.
 
 ## DI-M16 -- Hand the request crate the handles already held
 
