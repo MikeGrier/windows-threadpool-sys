@@ -28,7 +28,8 @@ use std::process::Command;
 /// Measured, not recalled. A document that describes the split -- `M4.10` in
 /// CHECKLIST.md is the current one -- is corrected by this failing rather than
 /// by somebody noticing.
-const EMIT_A_ROW: [&str; 5] = [
+const EMIT_A_ROW: [&str; 6] = [
+    "probe-core-affinity",
     "probe-doorbell-cost",
     "probe-peer-index-cache",
     "probe-queue-contention",

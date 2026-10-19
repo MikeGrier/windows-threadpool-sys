@@ -22,7 +22,7 @@ which fails until it does.
 
 - [x] **M8.2** -- `probe-queue-contention` emits a row.
 - [x] **M8.3** -- `probe-peer-index-cache` emits a row.
-- [ ] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
+- [x] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
 - [ ] **M8.5** -- `probe-pool-growth` emits a row.
 
 - [ ] **M8.6** -- `probe-long-path-aware` and `probe-long-path-unaware` emit rows, one item because

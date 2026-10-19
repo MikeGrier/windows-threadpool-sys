@@ -52,8 +52,8 @@ pub fn raw_row(observation: &Observation, build: &str) -> Row {
                 Value::Object(vec![
                     ("strategy", Value::from(strategy.name())),
                     ("median_elapsed_ns", elapsed(&run)),
-                    ("consumer_refreshes", count(run.consumer_refreshes)),
-                    ("producer_refreshes", count(run.producer_refreshes)),
+                    ("consumer_refreshes", Value::from(run.consumer_refreshes)),
+                    ("producer_refreshes", Value::from(run.producer_refreshes)),
                 ])
             })
         })
@@ -97,11 +97,4 @@ fn preamble(build: &str) -> Row {
 /// The median pass's elapsed time, in whole nanoseconds.
 fn elapsed(run: &Run) -> Value {
     Value::from((run.nanos_per_item * ITEMS as f64).round() as usize)
-}
-
-/// A read count. A side spinning on a full or empty ring re-reads on every
-/// spin, so the count has no bound per item; on a 64-bit target the conversion
-/// cannot fail, and on a 32-bit one a count past `usize::MAX` saturates.
-fn count(reads: u64) -> Value {
-    Value::from(usize::try_from(reads).unwrap_or(usize::MAX))
 }

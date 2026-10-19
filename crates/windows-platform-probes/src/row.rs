@@ -174,6 +174,31 @@ impl From<u8> for Value {
     }
 }
 
+impl From<u16> for Value {
+    fn from(count: u16) -> Self {
+        Self::Number(usize::from(count))
+    }
+}
+
+/// Lossless on every target this crate builds for: Windows has no target whose
+/// `usize` is narrower than 32 bits.
+impl From<u32> for Value {
+    fn from(count: u32) -> Self {
+        Self::Number(count as usize)
+    }
+}
+
+/// **Saturates at `usize::MAX` on a 32-bit target**, the one place a count can
+/// be published wrong rather than refused. Every caller is a count of events
+/// within one run -- refusals, shared reads -- which no measured run has come
+/// within orders of magnitude of 2^32; lossless on a 64-bit target. One
+/// definition, so the saturation is decided here rather than at each call.
+impl From<u64> for Value {
+    fn from(count: u64) -> Self {
+        Self::Number(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+}
+
 impl<T: Into<Self>> From<Option<T>> for Value {
     fn from(value: Option<T>) -> Self {
         value.map_or(Self::Null, Into::into)

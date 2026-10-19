@@ -515,12 +515,12 @@
       "expect": "caught",
       "why": "The two counts carry the finding -- which side's reads the technique removed -- and nothing about their types tells them apart.",
       "find": [
-        "                    (\"consumer_refreshes\", count(run.consumer_refreshes)),",
-        "                    (\"producer_refreshes\", count(run.producer_refreshes)),"
+        "                    (\"consumer_refreshes\", Value::from(run.consumer_refreshes)),",
+        "                    (\"producer_refreshes\", Value::from(run.producer_refreshes)),"
       ],
       "replace": [
-        "                    (\"consumer_refreshes\", count(run.producer_refreshes)),",
-        "                    (\"producer_refreshes\", count(run.consumer_refreshes)),"
+        "                    (\"consumer_refreshes\", Value::from(run.producer_refreshes)),",
+        "                    (\"producer_refreshes\", Value::from(run.consumer_refreshes)),"
       ]
     },
     {
@@ -533,8 +533,8 @@
         "                (\"producer_refreshes\", Value::Null),"
       ],
       "replace": [
-        "                (\"consumer_refreshes\", count(observation.calibration.consumer_refreshes)),",
-        "                (\"producer_refreshes\", count(observation.calibration.producer_refreshes)),"
+        "                (\"consumer_refreshes\", Value::from(observation.calibration.consumer_refreshes)),",
+        "                (\"producer_refreshes\", Value::from(observation.calibration.producer_refreshes)),"
       ]
     },
     {
@@ -576,6 +576,128 @@
     {
       "name": "M8.3 control: the row names its build before its architecture",
       "file": "src/peer_index_cache.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.4: the core-affinity probe stops emitting its row",
+      "file": "src/bin/core_affinity.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a measured run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(",
+        "            observation,",
+        "            announced.as_ref().ok(),",
+        "            settled.as_ref().ok(),",
+        "            &this_build().to_string()",
+        "        )",
+        "        .render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.4: the row publishes the per-item figure as the elapsed time",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The raw elapsed time now travels on the measurement; publishing the derived per-item cost under an elapsed name is the plausible slip.",
+      "find": [
+        "            Value::from(row.elapsed_nanos.round() as usize),"
+      ],
+      "replace": [
+        "            Value::from(row.nanos_per_item.round() as usize),"
+      ]
+    },
+    {
+      "name": "M8.4: the consumer and producer read counts trade places",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "Nothing about their types tells the two counts apart.",
+      "find": [
+        "        (\"consumer_refreshes\", Value::from(row.consumer_refreshes)),",
+        "        (\"producer_refreshes\", Value::from(row.producer_refreshes)),"
+      ],
+      "replace": [
+        "        (\"consumer_refreshes\", Value::from(row.producer_refreshes)),",
+        "        (\"producer_refreshes\", Value::from(row.consumer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.4: the requested and achieved memory nodes trade places",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "A row whose request and result disagree did not measure the placement it names; swapping them reports the redirect backwards.",
+      "find": [
+        "            Value::from(row.requested_memory_node),",
+        "        ),",
+        "        (\"memory_node\", Value::from(row.memory_node)),"
+      ],
+      "replace": [
+        "            Value::from(row.memory_node),",
+        "        ),",
+        "        (\"memory_node\", Value::from(row.requested_memory_node)),"
+      ]
+    },
+    {
+      "name": "M8.4: an absent cache domain is published as not observed",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The prose keeps 'no level partitions the machine' and 'this processor was left out of the level' apart; conflating them states a negative where nothing was observed, or the reverse.",
+      "find": [
+        "                Observed::Absent => Value::from(\"absent\"),"
+      ],
+      "replace": [
+        "                Observed::Absent => Value::from(\"not_observed\"),"
+      ]
+    },
+    {
+      "name": "M8.4: the reading after the run is published as the measured one",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "The three readings are what a reader compares to know which machine the rows belong to; publishing one twice hides a change.",
+      "find": [
+        "        .with(\"host_after\", after.map(ToString::to_string))"
+      ],
+      "replace": [
+        "        .with(\"host_after\", Some(observation.host.to_string()))"
+      ]
+    },
+    {
+      "name": "M8.4: the by-class list publishes the placement rows",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "Each list is a different selection of pairs; filling one from another is a row that names the wrong question.",
+      "find": [
+        "        .with(\"by_class\", pairs(&observation.by_class))"
+      ],
+      "replace": [
+        "        .with(\"by_class\", pairs(&observation.measurements))"
+      ]
+    },
+    {
+      "name": "M8.4: a declined row loses the reason",
+      "file": "src/core_affinity.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(before, build).with(\"declined\", error.to_string())"
+      ],
+      "replace": [
+        "    preamble(before, build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.4 control: the row names its build before its architecture",
+      "file": "src/core_affinity.rs",
       "expect": "survives",
       "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
       "find": [

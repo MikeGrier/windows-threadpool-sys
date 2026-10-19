@@ -147,6 +147,7 @@
 pub mod build_identity;
 pub mod cancel_io;
 pub mod completion_port;
+pub mod core_affinity;
 pub mod device_map;
 pub mod doorbell_cost;
 pub mod error_mode;

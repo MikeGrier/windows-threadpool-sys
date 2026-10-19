@@ -48,12 +48,7 @@ pub fn raw_row(observation: &Observation, build: &str) -> Row {
                     ("median_elapsed_ns", elapsed(run.nanos_per_op)),
                     ("fastest_elapsed_ns", elapsed(run.fastest_nanos_per_op)),
                     ("slowest_elapsed_ns", elapsed(run.slowest_nanos_per_op)),
-                    // A pass refuses at most once per push, and the pushes are
-                    // counted in a `usize`, so the fallback is unreachable.
-                    (
-                        "refusals",
-                        Value::from(usize::try_from(run.refusals).unwrap_or(usize::MAX)),
-                    ),
+                    ("refusals", Value::from(run.refusals)),
                 ])
             })
             .collect()
