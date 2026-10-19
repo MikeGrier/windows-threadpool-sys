@@ -323,11 +323,21 @@ function Test-ProcessStartFailureText {
 #
 # Returns the path of the first file named, or $null when the text has no
 # LNK1104, or one that is not an output of this kind.
+#
+# The diagnostic is recognised only as a LINE of its own: the linker's `LINK :`
+# prefix, optionally behind cargo's `= note:` marker, at the start of the line
+# and ending at the line's last quote. Two ways of being wrong that avoids. The
+# same words inside a compiler's quoted source line -- a string in the patch
+# that spells the message -- are not a linker diagnostic, and reading one as
+# such would turn a compile failure into `INFRASTRUCTURE` and bypass
+# `refused-by-build` scoring. And a path may contain an apostrophe, so the
+# capture runs to the last quote on the line, not the first.
 function Get-LinkOutputOpenFailure {
     param([AllowNull()][string] $Text)
     if (-not $Text) { return $null }
     $first = $null
-    foreach ($match in [regex]::Matches($Text, "fatal error LNK1104: cannot open file '([^'\r\n]*)'")) {
+    $pattern = "(?m)^[ \t]*(?:=[ \t]*note:[ \t]*)?LINK : fatal error LNK1104: cannot open file '([^\r\n]+)'[ \t]*\r?$"
+    foreach ($match in [regex]::Matches($Text, $pattern)) {
         $path = $match.Groups[1].Value
         if ($path -notmatch '(?i)\.(exe|dll)$') { return $null }
         if ($null -eq $first) { $first = $path }

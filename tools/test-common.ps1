@@ -360,8 +360,36 @@ Test-Case 'the real link failure names the output file that could not be opened'
 Test-Case 'an output is recognised in any case, with spaces in its path, and as a library' {
     Assert-Equal 'C:\My Dir\x.EXE' (Get-LinkOutputOpenFailure "LINK : fatal error LNK1104: cannot open file 'C:\My Dir\x.EXE'") 'upper case with a space'
     Assert-Equal 'C:\t\deps\x.dll' (Get-LinkOutputOpenFailure "LINK : fatal error LNK1104: cannot open file 'C:\t\deps\x.dll'") 'a dll'
-    $two = "fatal error LNK1104: cannot open file 'C:\a.exe'`nfatal error LNK1104: cannot open file 'C:\b.exe'"
+    $two = "LINK : fatal error LNK1104: cannot open file 'C:\a.exe'`nLINK : fatal error LNK1104: cannot open file 'C:\b.exe'"
     Assert-Equal 'C:\a.exe' (Get-LinkOutputOpenFailure $two) 'the first of several'
+    Assert-Equal 'C:\a.exe' (Get-LinkOutputOpenFailure ($two -replace "`n", "`r`n")) 'CRLF line ends'
+}
+
+Test-Case 'a path with an apostrophe is named whole, and still judged by its extension' {
+    Assert-Equal "C:\O'Brien\target\fixture.exe" `
+        (Get-LinkOutputOpenFailure "  = note: LINK : fatal error LNK1104: cannot open file 'C:\O'Brien\target\fixture.exe'") `
+        'captured to the last quote, not the first'
+    # Cut at the first quote this would be `C:\O`, which is not an output, and a
+    # real held output would be misread as the build's own failure.
+    if (Get-LinkOutputOpenFailure "LINK : fatal error LNK1104: cannot open file 'C:\O'Brien\lib\kernel32.lib'") {
+        throw 'an input with an apostrophe in its path was taken for an output'
+    }
+}
+
+Test-Case 'the message quoted inside a compiler diagnostic is not a linker diagnostic' {
+    # A patch whose source spells the message: rustc echoes the line it points
+    # at, behind a gutter, and an unrelated error must stay the build's own.
+    $echoed = @'
+error[E0308]: mismatched types
+ --> src\lib.rs:3:18
+  |
+3 |     let x: u32 = "LINK : fatal error LNK1104: cannot open file 'fixture.exe'";
+  |            ---   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `&str`
+'@
+    if (Get-LinkOutputOpenFailure $echoed) { throw 'quoted source was taken for the linker' }
+    if (Get-LinkOutputOpenFailure 'let m = "fatal error LNK1104: cannot open file ''fixture.exe''";') { throw 'mid-line text was taken for the linker' }
+    # And the real line, with the same words, is still found beside it.
+    if (-not (Get-LinkOutputOpenFailure ($echoed + "`n" + $script:RealLinkFailure))) { throw 'the real failure was hidden by the echo' }
 }
 
 Test-Case 'an input the linker cannot find is not an output that was held open' {
@@ -377,9 +405,9 @@ Test-Case 'an input the linker cannot find is not an output that was held open' 
 }
 
 Test-Case 'one input among outputs makes the failure the build''s own' {
-    $mixed = "fatal error LNK1104: cannot open file 'C:\a.exe'`nfatal error LNK1104: cannot open file 'kernel32.lib'"
+    $mixed = "LINK : fatal error LNK1104: cannot open file 'C:\a.exe'`nLINK : fatal error LNK1104: cannot open file 'kernel32.lib'"
     if (Get-LinkOutputOpenFailure $mixed) { throw 'a missing library was ignored because an output was also named' }
-    $reversed = "fatal error LNK1104: cannot open file 'kernel32.lib'`nfatal error LNK1104: cannot open file 'C:\a.exe'"
+    $reversed = "LINK : fatal error LNK1104: cannot open file 'kernel32.lib'`nLINK : fatal error LNK1104: cannot open file 'C:\a.exe'"
     if (Get-LinkOutputOpenFailure $reversed) { throw 'order mattered' }
 }
 

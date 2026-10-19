@@ -215,7 +215,7 @@ function New-Stub {
     param(
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
-            'link-locked-always', 'link-locked-then-broken', 'link-missing-lib')] [string] $Behaviour,
+            'link-locked-always', 'link-locked-then-broken', 'link-missing-lib', 'link-echoed')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -335,6 +335,14 @@ function New-Stub {
             "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n" +
             "if exist `"%~dp0locked.once`" goto :broken`r`necho locked>`"%~dp0locked.once`"`r`n$lnkOutput" +
             ":broken`r`necho error[E0425]: cannot find value in this scope 1>&2`r`nexit /b 101`r`n$linkRunPhase"
+        }
+        # An unrelated compile error whose ECHOED SOURCE LINE spells the linker's
+        # message, behind rustc's gutter. It is not a linker diagnostic: one build.
+        'link-echoed' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n" +
+            "echo error[E0308]: mismatched types 1>&2`r`n" +
+            "echo 3 ^|     let x: u32 = `"LINK : fatal error LNK1104: cannot open file 'fixture.exe'`"; 1>&2`r`n" +
+            "exit /b 101`r`n$linkRunPhase"
         }
         # The linker cannot find an INPUT: the build's own failure, never retried.
         'link-missing-lib' {
@@ -855,6 +863,21 @@ Test-Case 'does not retry a linker that could not find an input' {
         Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
         $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
         Assert-Equal 1 $builds.Count 'a missing input is deterministic: one build'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not take a compiler-quoted linker message for a linker failure' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-echoed' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+        Assert-False ($result.Output -match 'INFRASTRUCTURE: the linker') 'the compile error was not the linker'
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 1 $builds.Count 'one build: nothing to retry'
     }
     finally { Remove-Fixture $root }
 }
