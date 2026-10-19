@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! Metadata and file-identity fidelity: what the crate delivers, cross-checked
-//! against what the standard library's own metadata query reports for the
-//! same real file.
+//! against what the standard library's own metadata query, and for identity the
+//! request crate's `QueryFileIdInfo`, report for the same real file.
 
 use windows_file_enumeration_sys::{Completion, EnumerationRequest, FileIdentityMode, Session};
 
@@ -128,4 +128,41 @@ fn two_entries_from_the_same_enumeration_share_a_volume_serial() {
         })
         .collect();
     assert_eq!(ids.len(), 2, "distinct files must carry distinct file ids");
+}
+
+#[test]
+fn a_required_identity_is_what_the_request_crate_reads_from_the_file_itself() {
+    // The enumeration reads the identifier from the listing and the serial from the directory; the
+    // request crate's `QueryFileIdInfo` reads both from a handle on the file. They describe one file.
+    use std::os::windows::io::AsHandle;
+
+    use windows_namespace_request_sys::{CapturedHandle, QueryFileIdInfo};
+
+    let scratch = Scratch::with_files(&["identified.txt"]);
+    let request = EnumerationRequest::for_path(scratch.path())
+        .expect("resolvable")
+        .with_file_identity(FileIdentityMode::Required);
+
+    let (session, receiver) = Session::new(8, 8).expect("room");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let (entries, outcome) = drain_to_terminal(&receiver, enumeration);
+    assert!(outcome.is_completed(), "{outcome:?}");
+    assert_eq!(entries.len(), 1);
+    let Completion::Entry { entry, .. } = &entries[0] else {
+        unreachable!();
+    };
+
+    let file = std::fs::File::open(scratch.child("identified.txt")).expect("open the file");
+    let read = QueryFileIdInfo::new(CapturedHandle::capture(file.as_handle()).expect("capture"))
+        .perform()
+        .expect("the file's identity");
+
+    assert_eq!(entry.identity().id_bytes(), read.file_id());
+    assert_eq!(
+        entry.identity().volume_serial(),
+        Some(read.volume_serial_number())
+    );
 }
