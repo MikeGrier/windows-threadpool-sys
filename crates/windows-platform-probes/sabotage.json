@@ -1,6 +1,7 @@
 {
-  "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1.",
+  "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1. Run with --all-features because the corpus target, tests/a_real_report_agrees_with_itself.rs, requires oracle-in-renderer: with default features it is not built, so an entry only that target catches -- a wrong arm in its codes_for, for one -- would be scored as surviving.",
   "package": "windows-platform-probes",
+  "testArgs": ["-p", "windows-platform-probes", "--locked", "--all-features"],
   "sabotages": [
     {
       "name": "row drops the packages field",
@@ -78,8 +79,9 @@
     {
       "name": "a blocking state with no perturbation",
       "file": "src/topology/invariant.rs",
-      "expect": "caught",
-      "why": "An untested blocking state. Adds rather than deletes, deliberately: the completeness guard exists to catch an ADDITION, and a hand-written `ALL` was measured to let exactly this through while all ten invariant tests stayed green.",
+      "expect": "refused-by-build",
+      "buildError": "SabotageSentinel` not covered",
+      "why": "An untested blocking state. Adds rather than deletes, deliberately: a hand-written `ALL` was measured to let exactly this through while all ten invariant tests stayed green. Declared refused-by-build since M4.1 put this manifest on --all-features: the corpus target's `codes_for` matches every state exhaustively, so a state with no row code no longer compiles, which is the stronger rung. The perturbation guard this entry used to reach is sabotaged by the entry below instead.",
       "find": [
         "    BracketNotHeld => \"the bracket did not establish that the machine held still\","
       ],
@@ -88,6 +90,19 @@
         "    /// A state added by a sabotage, with no perturbation behind it.",
         "    SabotageSentinel => \"a state no perturbation produces\","
       ]
+    },
+    {
+      "name": "a blocking state loses its perturbation",
+      "file": "src/topology/invariant/tests.rs",
+      "expect": "caught",
+      "why": "The deletion twin of the entry above, and since --all-features the one that reaches every_blocking_state_has_a_perturbation: the state still exists, so everything compiles, and only the comparison against BlockingState::ALL notices that nothing shows it fires.",
+      "find": [
+        "        (",
+        "            BlockingState::NotMeasured,",
+        "            Box::new(|o: &mut Observation| o.topology_was_measured = false),",
+        "        ),"
+      ],
+      "replace": []
     },
     {
       "name": "prose reworded to carry the same fact",
@@ -143,7 +158,7 @@
       "expect": "caught",
       "why": "M7.1: the row that times what a request now does with a handle would silently leave the report and its NDJSON line, which the census of every label exists to refuse.",
       "find": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || shared.clone()));"
       ],
       "replace": [
         "    let _ = time_loop(\"share_handle\", ITERATIONS, || shared.clone());"
@@ -155,10 +170,10 @@
       "expect": "survives",
       "why": "A control: the same clone spelled another way, which no test can tell apart.",
       "find": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || shared.clone()));"
       ],
       "replace": [
-        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || Clone::clone(&shared)));"
+        "    timings.push(time_loop(\"share_handle\", iterations, || Clone::clone(&shared)));"
       ]
     },
     {
@@ -255,6 +270,91 @@
       ],
       "replace": [
         "    let _warmup = timer(producers, pushes_per_producer);"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets overlapping walk relations",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "One of the eleven push sites blocking_states did not model before M4.1. Deleting it empties the list, so the verdict reaches agree beside an observation that still holds the overlap; only a rule reading the observation sees it.",
+      "find": [
+        "        if self.overlapping_walk_relations > 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets a cache level with no partitions",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "The same class through a condition computed from the caches rather than read from a count, which is the case the old exclusion argument mistook for the cross-check's own arithmetic.",
+      "find": [
+        "        if !empty_levels.is_empty() {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: cross_check forgets a described relation",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "Deleting this push does NOT reach agree: a described relation also files counts_include_unparsed_relations under not_compared, so the verdict stays incomplete and the invariant module has nothing to say. What is lost is the code a survey groups by. Two tests see that: a_relation_a_caller_described_is_not_a_measurement, which fails first and so is the one a sweep's transcript names, and the corpus's every_state_that_blocks_agreement_reaches_the_row, confirmed by running the corpus target alone against this patch.",
+      "find": [
+        "        if self.described_relations > 0 {"
+      ],
+      "replace": [
+        "        if false {"
+      ]
+    },
+    {
+      "name": "M4.1: blocking_states reads only the core half of an empty relation",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "The perturbation table reaches this state through the core field alone, so dropping the package half passes every test that iterates the table. A package covering no processors would then leave cross_check free to lose its push unnoticed.",
+      "find": [
+        "    if observation.cores_without_processors > 0 || observation.packages_without_processors > 0 {"
+      ],
+      "replace": [
+        "    if observation.cores_without_processors > 0 {"
+      ]
+    },
+    {
+      "name": "M4.1: blocking_states drops the measured guard on absent counts",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "cross_check files measured_but_counts_absent only for a measured topology. Without the guard the state fires for an unmeasured one too, and the per-state publication rule would demand a code the row never emits for it.",
+      "find": [
+        "    if observation.topology_was_measured",
+        "        && (observation.online_processors == 0 || observation.groups == 0)"
+      ],
+      "replace": [
+        "    if (observation.online_processors == 0 || observation.groups == 0)"
+      ]
+    },
+    {
+      "name": "M4.1: a state answers the wrong code",
+      "file": "tests/a_real_report_agrees_with_itself.rs",
+      "expect": "caught",
+      "why": "The schema between states and row codes is written by hand because neither side can derive it. A wrong arm leaves described_relations answered by no state, which the census test exists to refuse.",
+      "find": [
+        "        State::DescribedRelations => &[\"described_relations\"],"
+      ],
+      "replace": [
+        "        State::DescribedRelations => &[\"unreported_relations\"],"
+      ]
+    },
+    {
+      "name": "M4.1 control: a count compared with != rather than >",
+      "file": "src/topology/invariant.rs",
+      "expect": "survives",
+      "why": "A control: for a usize the two comparisons agree on every value, so no test can tell them apart.",
+      "find": [
+        "    if observation.numa_domains_unreported > 0 {"
+      ],
+      "replace": [
+        "    if observation.numa_domains_unreported != 0 {"
       ]
     }
   ]

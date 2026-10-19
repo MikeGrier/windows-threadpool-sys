@@ -355,6 +355,42 @@ fn shapes() -> Vec<Shape> {
     }];
     push("a cache level Windows does not number", unnumbered);
 
+    // **The states `M4.1` added, one shape each where none already reached
+    // them.** `numa_domains_only_in_cpu_sets` is reached by the parse-in-doubt
+    // shape above, and `cores_only_in_cpu_sets`, `numa_domains_unreported` and
+    // `processor_attribute_conflicts` by the several-at-once shape below.
+    let mut empty_level = base();
+    empty_level.partitioning_cache_level = None;
+    empty_level.caches = vec![CacheLevel {
+        level: 1,
+        processors_per_domain: Vec::new(),
+    }];
+    push("a cache level with no partitions", empty_level);
+
+    let mut no_groups = base();
+    no_groups.groups = 0;
+    push("a measured topology that reports no groups", no_groups);
+
+    let mut empty_core = base();
+    empty_core.cores_without_processors = 1;
+    push("a core that covers no processors", empty_core);
+
+    let mut overlapping = base();
+    overlapping.overlapping_walk_relations = 1;
+    push("two walk records claiming one processor", overlapping);
+
+    let mut described = base();
+    described.described_relations = 1;
+    push("a relation a caller described", described);
+
+    let mut unreported = base();
+    unreported.unreported_relations = 1;
+    push("a relation no source reported", unreported);
+
+    let mut conflicting_labels = base();
+    conflicting_labels.numa_domains_with_conflicting_labels = 1;
+    push("a NUMA domain with two node numbers", conflicting_labels);
+
     let mut anomalies = base();
     anomalies.enumeration_anomalies = vec![
         windows_topology_sys::EnumerationAnomaly {
@@ -629,6 +665,64 @@ fn codes_for(state: invariant::BlockingState) -> &'static [&'static str] {
         State::EnumerationsDisagreed => &["enumerations_disagreed"],
         State::CoherenceNotCollected => &["coherence_not_collected"],
         State::BracketNotHeld => &["machine_changed", "bracket_not_established"],
+        State::CacheLevelsWithoutPartitions => &["cache_levels_without_partitions"],
+        State::MeasuredButCountsAbsent => &["measured_but_counts_absent"],
+        State::NumaDomainsOnlyInCpuSets => &["numa_domains_only_in_cpu_sets"],
+        State::NumaDomainsUnreported => &["numa_domains_unreported"],
+        State::NumaDomainsWithConflictingLabels => &["numa_domains_with_conflicting_labels"],
+        State::CoresOnlyInCpuSets => &["cores_only_in_cpu_sets"],
+        State::RelationsWithoutProcessors => &["relations_without_processors"],
+        State::OverlappingWalkRelations => &["overlapping_walk_relations"],
+        State::DescribedRelations => &["described_relations"],
+        State::UnreportedRelations => &["unreported_relations"],
+        State::ProcessorAttributeConflicts => &["processor_attribute_conflicts"],
+    }
+}
+
+#[test]
+fn every_parse_incomplete_code_is_answered_by_a_blocking_state() {
+    // **The census `M4.1` closed, held closed.** `blocking_states` once modelled
+    // part of `parse_incomplete` and justified the rest by an argument that was
+    // false, so a push site deleted from `cross_check` for any of eleven
+    // conditions left the verdict free to reach `agree` with nothing noticing.
+    // Both sides of this comparison are generated: `ALL_CODES` from the list
+    // that defines `ParseIncomplete::code`, and `BlockingState::ALL` from the
+    // list that defines the enum. So a new condition with no state fails here,
+    // rather than waiting for a review to find it.
+    //
+    // **And the other direction**, because a guard tested one way is half a
+    // guard: every code a state names must be one the row can publish, or the
+    // per-state publication rule demands a code nothing emits.
+    use windows_platform_probes::topology::{Disagreement, NotCompared, ParseIncomplete};
+
+    let answered: Vec<&str> = invariant::BlockingState::ALL
+        .iter()
+        .flat_map(|state| codes_for(*state).iter().copied())
+        .collect();
+    let unanswered: Vec<&str> = ParseIncomplete::ALL_CODES
+        .iter()
+        .copied()
+        .filter(|code| !answered.contains(code))
+        .collect();
+    assert!(
+        unanswered.is_empty(),
+        "`cross_check` can file {unanswered:?} and no blocking state answers it, so \
+         deleting that push site lets the verdict reach `agree` unnoticed"
+    );
+
+    let publishable = [
+        ParseIncomplete::ALL_CODES,
+        NotCompared::ALL_CODES,
+        Disagreement::ALL_CODES,
+    ]
+    .concat();
+    for state in invariant::BlockingState::ALL {
+        for code in codes_for(*state) {
+            assert!(
+                publishable.contains(code),
+                "{state:?} names `{code}`, which no diagnostic list can publish"
+            );
+        }
     }
 }
 

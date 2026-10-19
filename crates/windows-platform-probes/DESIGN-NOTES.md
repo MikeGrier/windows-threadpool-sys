@@ -2040,6 +2040,29 @@ blocking states against the row's keys, and `publication_holds` is the shared
 predicate the corpus rule and its sabotage both call. Landed as M3.5, archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
+**Every `parse_incomplete` condition is a blocking state, and a test holds the
+census closed.** Until `M4.1` the states covered part of the list, and the rest
+were excused as "derived counts whose only source IS the cross-check's own
+arithmetic" -- false for every one of them, since each reads fields on
+`Observation` directly. `every_parse_incomplete_code_is_answered_by_a_blocking_state`
+compares `ParseIncomplete::ALL_CODES` with the codes the states answer to, both
+generated lists, so a new condition with no state fails a test rather than
+waiting for a review. The tautology test still governs membership: a state whose
+only source is `cross_check`'s own output restates `verdict()` and does not
+belong.
+
+A deleted push site is not always caught by the INVARIANT module, and the
+difference is worth knowing before reading a sabotage result. Where a condition
+also files a `not_compared` entry -- a described or unreported relation does,
+through `counts_include_unparsed_relations` -- the verdict stays `incomplete`
+without the push, so there is no agreeing verdict to forbid. What is lost is the
+code a survey groups by, and the corpus's per-state publication rule is what sees
+that in general; a described relation also has a dedicated unit test.
+
+[sabotage.json](sabotage.json) runs with `--all-features` because the corpus
+target requires `oracle-in-renderer`, and `codes_for` -- the schema between states
+and row codes -- lives there, so a defect in it is visible to no other target.
+
 (Until M3.5 landed this section said "nothing here enforces that rule yet" and
 pointed at CHECKLIST.md for the queued item. Both statements outlived the
 milestone that made them false -- the reason this Tier 1 file is swept against

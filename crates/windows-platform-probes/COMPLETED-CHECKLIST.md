@@ -1828,3 +1828,32 @@ reported `"arch":"aarch64"`, and the whole job passed -- the suite with `--inclu
 
 The engineer, 2026-10-19: "arm64 completes m2.15." The `i686-pc-windows-msvc` target the item
 also named, where the original five failures were measured, was therefore not added.
+
+## Moved 2026-10-19 14:51:46 -04:00 -- M4.1: every parse_incomplete condition is a blocking state
+
+### <a id="m41"></a>M4.1 -- Model the observation-readable `ParseIncomplete` conditions that `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of them rather than for the subset. *(completed 2026-10-19 14:51:46 -04:00)*
+
+All eleven passed the tautology test: each reads fields on `Observation`, none reads
+`cross_check`'s lists. Each gained a `BlockingState` variant, a `blocking_states` branch, a
+`codes_for` arm and a perturbation. Seven gained a corpus shape; the other four were already reached
+by existing shapes, which the shapes' comment names.
+
+Two additions beyond the item's target:
+
+- `every_parse_incomplete_code_is_answered_by_a_blocking_state` compares
+  `ParseIncomplete::ALL_CODES` with the codes the states answer to, both generated lists, so the
+  census stays closed for conditions added later. It also checks the other direction: every code a
+  state names is one some diagnostic list can publish.
+- `a_state_read_from_two_fields_is_reached_by_each_of_them_alone`, because the perturbation table
+  reaches `RelationsWithoutProcessors` and `MeasuredButCountsAbsent` through one field each, and
+  checks the measured guard both ways.
+
+[sabotage.json](sabotage.json) now runs with `--all-features`, because the corpus target requires
+`oracle-in-renderer` and `codes_for` lives there. That changed one existing entry: a state added with
+no perturbation is now refused by the build, since `codes_for` matches every state exhaustively, so
+the entry is declared `refused-by-build` and a new entry deletes a perturbation row to keep the
+unit-test guard sabotaged. The sweep also found the two `share_handle` entries stale since `M4.2`
+renamed the loop count; their finds were repaired. A deleted `described_relations` push does not
+reach `agree`, because a described relation also files `counts_include_unparsed_relations`; it is
+caught by a dedicated unit test and by the corpus rule. See
+[DESIGN-NOTES.md](DESIGN-NOTES.md#d-encoded-row-is-the-contract).

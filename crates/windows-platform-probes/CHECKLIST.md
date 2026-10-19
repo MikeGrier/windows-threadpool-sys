@@ -18,33 +18,7 @@ so renumbering would leave dangling references in a file that may not be edited 
 Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
 correctness in the archive.
 
-- [ ] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that
-  `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of
-  them rather than for the subset.
-
-  **Gap:** `blocking_states` justified its absentees as "derived counts whose only source IS the
-  cross-check's own arithmetic". That is false for most of them --
-  `CacheLevelsWithoutPartitions`, `NumaDomainsOnlyInCpuSets`, `CoresOnlyInCpuSets`,
-  `RelationsWithoutProcessors`, `UnreportedRelations`, `DescribedRelations`,
-  `OverlappingWalkRelations`, `ProcessorAttributeConflicts`, `NumaDomainsWithConflictingLabels`,
-  `NumaDomainsUnreported` and `MeasuredButCountsAbsent` all read fields sitting on `Observation`
-  in plain sight. Deleting one of those push sites lets `verdict()` reach `agree` with
-  `blocking_states` silent. Reported across three review rounds against two wordings of the claim;
-  the claims in [src/topology/invariant.rs](src/topology/invariant.rs) and in
-  `every_numa_counter_branch_...` were narrowed in the same review round that reported this,
-  to stop overstating the coverage,
-  which is why this item is the fix rather than the discovery.
-
-  **Target:** each gains a `BlockingState` variant, a `blocking_states` branch, a `codes_for` arm,
-  a perturbation in the invariant tests, and a corpus shape in
-  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) so
-  `the_corpus_reaches_every_blocking_state` still holds. **Do not add a variant without its corpus
-  shape** -- that test is what stops the mapping being written and never exercised, which is the
-  defect this whole area keeps producing.
-
-  Apply the tautology test to each before adding it: a state whose only source is the cross-check's
-  own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
-  header saying so by name rather than a silent absence.
+- [x] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of them rather than for the subset. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m41)
 
 - [ ] **M4.4** -- Interleave each candidate with a nearby control instead of measuring the control
   four runs away from it, and re-measure everything that changes.
