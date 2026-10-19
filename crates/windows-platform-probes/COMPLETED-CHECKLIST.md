@@ -2030,3 +2030,19 @@ Its completion was recorded in the item itself rather than here; the item as it 
   prohibits crates.io publication, not binary releases. The `x-probe-*` row
   it called for is deferred to `M4.10`, which turned out to be a larger question than these two
   probes.
+
+## Moved 2026-10-19 17:49:58 -04:00 -- M8.1: the row census runs the queue probe
+
+### <a id="m81"></a>M8.1 -- Run `probe-queue-contention` in the row census with a short sampling, replacing the exclusion whose reason `M4.2` made false. *(completed 2026-10-19 17:49:58 -04:00)*
+
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs)
+excluded the probe as "about sixty-five seconds, with no short mode"; `M4.2` gave it one. The census
+now runs it with `--producers 1 --repetitions 1 --pushes-per-producer 1000`, from a `SHORT_RUNS`
+table guarded like the exclusions are against a renamed probe, which costs about half a second. Only
+`probe-cancel-io` is still excluded, for its own reason, and the copilot instructions' description of
+the census was corrected from two exclusions to one.
+
+Evidence, in [sabotage.json](sabotage.json): the queue probe emitting a row built with `Row::new` --
+whose source carries no `"reason":"x-probe` literal for the old source check to find -- **survived**
+the census as it stood, checked by running the entry against the previous test file, and is caught by
+the census that runs the probe. A control changing the short run's push count survives.

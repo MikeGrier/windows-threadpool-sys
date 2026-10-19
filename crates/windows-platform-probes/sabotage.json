@@ -394,6 +394,35 @@
       ]
     },
     {
+      "name": "M8.1: the queue probe emits a row the census used to miss",
+      "file": "src/bin/queue_contention/main.rs",
+      "expect": "caught",
+      "why": "Before M8.1 the census did not run this probe and checked its sources for the literal \"reason\":\"x-probe instead, which a row built with Row::new never contains -- so this survived. Running the probe sees the row and the census reports a changed set.",
+      "find": [
+        "    render_observation(out, &measure(sampling));"
+      ],
+      "replace": [
+        "    let _ = writeln!(",
+        "        out,",
+        "        \"{}\",",
+        "        windows_platform_probes::row::Row::new(\"x-probe-queue-contention\").render()",
+        "    );",
+        "    render_observation(out, &measure(sampling));"
+      ]
+    },
+    {
+      "name": "M8.1 control: the short run takes two pushes fewer",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "survives",
+      "why": "A control: how much a short run measures is incidental to which lines its report carries.",
+      "find": [
+        "        \"1000\","
+      ],
+      "replace": [
+        "        \"998\","
+      ]
+    },
+    {
       "name": "M4.8: the capture script ignores the build",
       "file": "captures/2026-10-19-interleaved-order/summarise.js",
       "expect": "caught",

@@ -18,9 +18,7 @@ Each row item also moves its probe into `EMIT_A_ROW` in
 [tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs),
 which fails until it does.
 
-- [ ] **M8.1** -- Run `probe-queue-contention` in the row census with a short sampling, replacing
-  the exclusion whose reason ("no short mode") `M4.2` made false, so its row is established by
-  running it like the rest.
+- [x] **M8.1** -- Run `probe-queue-contention` in the row census with a short sampling, replacing the exclusion whose reason `M4.2` made false. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m81)
 
 - [ ] **M8.2** -- `probe-queue-contention` emits a row.
 - [ ] **M8.3** -- `probe-peer-index-cache` emits a row.

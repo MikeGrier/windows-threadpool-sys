@@ -40,9 +40,6 @@ const EMIT_A_ROW: [&str; 3] = [
 /// reason is indistinguishable from an oversight -- and the second entry here
 /// was exactly that until a review found it.
 ///
-/// - `probe-queue-contention` is the contention benchmark: a host-dependent run
-///   its own module doc puts at about sixty-five seconds, with no short mode.
-///   Ten seconds for the rest is worth paying every time; seventy-five is not.
 /// - `probe-cancel-io` measures a call that **can fail to return**. Its own
 ///   module doc says so and draws the conclusion: "Binary only, and deliberately
 ///   not a test ... a wedged `#[test]` would take the whole suite with it." It
@@ -50,14 +47,33 @@ const EMIT_A_ROW: [&str; 3] = [
 ///   the child without one, so running it here would reintroduce the hazard that
 ///   probe is shaped to avoid.
 ///
-/// Both are still censused, by the one question a source can answer soundly --
-/// whether the emission literal appears anywhere in their sources at all. That
-/// is weaker than running them, and it is stated as weaker rather than blended
-/// in with the rest.
-const NOT_RUN: [(&str, &str); 2] = [
-    ("probe-queue-contention", "src/bin/queue_contention"),
-    ("probe-cancel-io", "src/bin/cancel_io.rs"),
-];
+/// It is still censused, by the one question a source can answer soundly --
+/// whether the emission literal appears anywhere in its sources at all. That is
+/// weaker than running it, and it is stated as weaker rather than blended in
+/// with the rest: a row built with `Row::new` contains no such literal.
+///
+/// `probe-queue-contention` was excluded here too, as "about sixty-five
+/// seconds, with no short mode". `M4.2` gave it one, so it is run, with the
+/// command line in [`SHORT_RUNS`] (`M8.1`).
+const NOT_RUN: [(&str, &str); 1] = [("probe-cancel-io", "src/bin/cancel_io.rs")];
+
+/// Probes run with a command line that keeps them short, and that command line.
+///
+/// The settings change how much is measured, never which lines the report
+/// carries, so a short run answers the census's question as well as a full
+/// one. One producer, one repetition and a thousand pushes take a fraction of a
+/// second against the default's minute.
+const SHORT_RUNS: [(&str, &[&str]); 1] = [(
+    "probe-queue-contention",
+    &[
+        "--producers",
+        "1",
+        "--repetitions",
+        "1",
+        "--pushes-per-producer",
+        "1000",
+    ],
+)];
 
 /// Every `[[bin]]` name the manifest registers.
 fn registered_binaries(manifest: &str) -> Vec<String> {
@@ -130,6 +146,14 @@ fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
              probe nobody is censusing"
         );
     }
+    for (name, _) in SHORT_RUNS {
+        assert!(
+            registered.iter().any(|registered| registered == name),
+            "`{name}` is given a short command line by name, so it must still be \
+             a registered target; if it was renamed, the renamed probe is run at \
+             its full length"
+        );
+    }
 
     let directory = binary_directory();
     let mut emitting: Vec<String> = Vec::new();
@@ -138,7 +162,12 @@ fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
             continue;
         }
         let executable = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let arguments = SHORT_RUNS
+            .iter()
+            .find(|(short, _)| short == name)
+            .map_or(&[][..], |(_, arguments)| *arguments);
         let output = Command::new(&executable)
+            .args(arguments)
             .output()
             .unwrap_or_else(|error| panic!("{} could not be run: {error}", executable.display()));
         assert!(
