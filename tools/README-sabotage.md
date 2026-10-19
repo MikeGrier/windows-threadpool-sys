@@ -244,7 +244,9 @@ same entry linked when run alone. The harness therefore builds once
 more when, and only when, a build fails with `LNK1104` naming a `.exe` or `.dll`
 and no `LNK1104` naming anything else; the second build decides. The same
 message for a `.lib`, `.rlib` or `.obj` is a missing input, which is the
-build's own failure and is never retried. The signature is defined once, in
+build's own failure and is never retried. If the baseline's build cannot open its
+output on two builds, the sweep stops with exit 2 and says no test ran, rather
+than asking for the suite to be fixed. The signature is defined once, in
 `Get-LinkOutputOpenFailure` in [common.ps1](common.ps1). A retry is never
 silent: the first attempt's log is kept as `.build.attempt1.err` beside the
 build's transcript, and the summary says how many builds were run again. Only

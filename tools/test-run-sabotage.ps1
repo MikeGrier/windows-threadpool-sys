@@ -215,7 +215,8 @@ function New-Stub {
     param(
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
-            'link-locked-always', 'link-locked-then-broken', 'link-missing-lib', 'link-echoed')] [string] $Behaviour,
+            'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
+            'link-echoed')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -328,6 +329,10 @@ function New-Stub {
         # that is let go, and not one to try a third time.
         'link-locked-always' {
             "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n$lnkOutput$linkRunPhase"
+        }
+        # Every build cannot open its output, the baseline's included.
+        'link-locked-baseline-always' {
+            "@echo off`r`n$isBuild`r`n$countBuild`r`n$lnkOutput$linkRunPhase"
         }
         # The first build cannot open its output; the second fails for a reason
         # of its own, which is what the entry is judged on.
@@ -878,6 +883,23 @@ Test-Case 'does not take a compiler-quoted linker message for a linker failure' 
         Assert-False ($result.Output -match 'INFRASTRUCTURE: the linker') 'the compile error was not the linker'
         $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
         Assert-Equal 1 $builds.Count 'one build: nothing to retry'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'reports a baseline whose output could not be opened on two builds as infrastructure, not as a red suite' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-baseline-always' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'The baseline could not be built: the linker could not open' $result.Output
+        Assert-Match 'baseline\.txt\.build\.err' $result.Output
+        Assert-Match 'baseline\.txt\.build\.attempt1\.err' $result.Output
+        Assert-False ($result.Output -match 'Fix the suite first') 'no test ran, so the suite is not what to fix'
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 2 $builds.Count 'two builds, never a third'
     }
     finally { Remove-Fixture $root }
 }

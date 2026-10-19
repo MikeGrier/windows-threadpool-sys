@@ -629,8 +629,8 @@ function Invoke-Sabotaged {
             $kept = "$TranscriptPath.build.attempt1.err"
             [System.IO.File]::WriteAllText($kept, $firstLog, $utf8NoBom)
             $script:LinkRetries++
-            Write-Report ("    The linker could not open its output, '$locked' (LNK1104): another process " +
-                "held it. Building once more; this attempt's log is kept as $(Split-Path -Leaf $kept).") -Level note
+            Write-Report ("    The linker could not open its output, '$locked' (LNK1104). " +
+                "Building once more; this attempt's log is kept as $(Split-Path -Leaf $kept).") -Level note
 
             $build = Invoke-Bounded -CargoArgs $buildArgs -WorkingDirectory $WorkingDirectory `
                 -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
@@ -1400,6 +1400,14 @@ if ($baseline.Outcome -eq 'launcher-failed') {
     Exit-WithMessage (@(
             "The baseline could not be supervised: win-job-launcher failed, exit $(Format-ExitCode $baseline.Code)."
             "That is this tool's machinery, not the suite. Its errors are above."
+        ) -join "`n") 2
+}
+if ($baseline.Outcome -eq 'link-locked') {
+    Exit-WithMessage (@(
+            "The baseline could not be built: the linker could not open '$($baseline.Output)' on either of two builds (LNK1104)."
+            "No test ran, so this says nothing about the suite."
+            "Transcript: $(Get-EvidencePath -Outcome $baseline.Outcome -TranscriptPath $baselinePath)"
+            "The first attempt's log is beside it as $(Split-Path -Leaf "$baselinePath.build.attempt1.err")."
         ) -join "`n") 2
 }
 if ($baseline.Outcome -ne 'passed') {
