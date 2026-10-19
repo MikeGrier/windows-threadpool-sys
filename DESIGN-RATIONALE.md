@@ -934,3 +934,45 @@ for an event unrelated to the code. Using a different output path for each entry
 collision, at the cost of the warm incremental builds the harness keeps by reusing the target
 directory. Disabling the service: it is not the harness's to switch off on a developer's machine,
 and it was not reachable here.
+
+## <a id="how-sabotage-scope-was-reached"></a>How sabotage scope was reached
+
+The engineer, 2026-10-19: the sabotage discipline "has introduced a great deal of latency to almost all
+workloads", and "we do not need to mutate everything all the time, perhaps only over the deltas that
+are being introduced in any given commit". Mutation testing tools take the same position; cargo-mutants'
+`--in-diff` mutates only what a diff touched.
+
+**Why the delta is not simply "the entries whose file changed".** A generated mutant lives where the
+code changed. A sabotage entry is placed by hand, and the file it patches is not what decides whether it
+is caught. Of the six entries the post-merge sweep was failing on when this was raised
+([M34.9](COMPLETED-CHECKLIST.md#m349)), two were patches whose text the source had moved away from, three
+were defects no test reached, and one was declared weaker than the guard that refused it. A test that
+is weakened or deleted, or a change to a crate below, alters a result without touching the patched file.
+So the selection takes in the tests that caught an entry as well as the file it patches, and keeps a
+nightly sweep of everything for what neither sees.
+
+**The layers, and why in that order.** The patch check needs no build, so it can run on every push and
+is the cheapest finding there is. Narrowing to the manifests of affected crates is mechanical and removes
+most of the cost of a typical one-crate change. Narrowing within a manifest needs the record of which
+tests caught each entry, and running those tests first needs the same record, so both come after it.
+
+**Alternatives not taken.** Keeping the full post-merge sweep and only adding the nightly one: the cost
+that prompted this is the full sweep itself. Scoping by the patched file alone: it misses the test
+changes above, which are the case sabotage exists to check. Committing the record of catching tests to
+the repository: it is derived from a sweep, it would be a copy that drifts, and a sweep must not write
+into the developer's tree; it is kept where sweeps run instead, and its absence only makes a scoped run
+larger.
+
+**What review rounds added.** Each review round of the branch found a way the selection could take
+fewer entries than the change warranted, and each fix resolved the doubt toward running more. Two of
+them reversed an earlier choice. An entry with no usable record was first left to its crate's reach,
+so a lost record made a scoped run smaller where nothing was known; it is now always taken, so a lost
+record makes a run a full one. Whether a record carries its commit was first decided by asking git
+after the baseline whether the tree was clean; that misses a file git was told to stop looking at, so
+the harness now checks the copy it actually swept against the commit, file by file. And a test's own
+file was first taken as the only file that decides whether it runs; the file declaring its module
+decides too, since removing `mod tests;` drops every test in it untouched, so the files along a
+catching test's module path now count as its file.
+
+**Not decided.** Whether a scoped sweep should also run on pull requests, and whether it should gate
+anything, were not raised; the post-merge sweep remains a report and not a gate.

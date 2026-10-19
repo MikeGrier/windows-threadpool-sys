@@ -253,6 +253,27 @@ M34.6 owns that.
 
 - [x] **M34.10** -- A relative `-OutputDirectory` is resolved before the launcher is handed paths built from it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m3410)
 
+The items below scope sabotage sweeps to what a change could have affected, with a nightly sweep of
+everything behind them. The decision and what scoping cannot see are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope); the alternatives are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-sabotage-scope-was-reached). Each item lands with its
+own harness or planner tests, run on both PowerShell hosts, and with the documentation of what it
+changes.
+
+- [x] **M34.11** -- Check every sabotage patch without building, on every push and pull request. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3411)
+
+- [x] **M34.12** -- Plan only the sabotage manifests a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3412)
+
+- [x] **M34.13** -- Record which tests caught each sabotage entry, and keep the record across runs. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3413)
+
+- [x] **M34.14** -- Within a sabotage manifest, run only the entries a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3414)
+
+- [x] **M34.15** -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3415)
+
+- [x] **M34.16** -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3416)
+
+- [x] **M34.17** -- Teach the scoped sabotage run as the default local check. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3417)
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

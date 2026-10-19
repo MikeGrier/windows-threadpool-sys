@@ -18,11 +18,17 @@
 # minutes, and stays on every push. This workflow is the thing it is often
 # mistaken for: the real sweeps, against the real manifests.
 #
-# WHY POST-MERGE RATHER THAN NIGHTLY. A sweep that fails needs to name the change
-# that broke it. On `push: main` the run is attributable to one merge; on a
-# schedule it is attributable to a day's worth, and the person who has to read it
-# is whoever happens to look. The repository already pays for this shape in
-# `release-please.yml`.
+# WHY POST-MERGE AND NIGHTLY. A sweep that fails needs to name the change that
+# broke it. On `push: main` the run is attributable to one merge; on a schedule
+# it is attributable to a day's worth. So each merge is swept, but only for the
+# entries it could have affected: those of the crates it touched and of every
+# crate that builds on one, or all of them when it touched an input every sweep
+# shares. What that cannot see -- a change elsewhere in a crate making an entry's
+# defect unreachable, a shared test helper weakening the tests that call it -- is
+# what the nightly run is for: it sweeps every entry of every manifest, running
+# each entry's whole suite, exactly as a sweep did before scoping, and it
+# re-learns which tests catch each entry. The rule, and what it cannot see, are
+# in DESIGN-NOTES.md, "sabotage-scope".
 #
 # WHY IT DOES NOT GATE ANYTHING. By the time this runs the merge has happened, so
 # a failure is a report rather than a block. That is the deliberate trade: the
@@ -33,38 +39,23 @@ name: sabotage sweeps
 on:
   push:
     branches: [main]
-    # Only when something a sweep could actually be affected by moves.
+    # No `paths:` filter. Which manifests a push could have affected is the
+    # planner's question, answered from the push's diff and the crates' path
+    # dependencies (`plan-sabotage-matrix.ps1 -Since`), and an empty answer
+    # skips the sweep. A filter here was a second copy of the list of inputs
+    # every sweep shares -- the lockfile, the toolchain, the sabotage tools and
+    # `tools/common.ps1` -- and the earlier versions of it show how such a copy
+    # goes: once it missed the matrix planner, once `common.ps1`. That list now
+    # lives once, in `Test-SabotageSharedInput` in `tools/common.ps1`.
     #
-    # Note that a crate's DOCUMENTATION is such a thing, and an earlier version
-    # of this comment claimed the opposite. Every crate here splices its README
-    # into the library under `cfg(doctest)`, and a sweep runs the crate's whole
-    # `cargo test` -- doctests included -- once per entry. So a README-only
-    # change really can move whether a sabotage is caught. `crates/**` below
-    # already covers it; what was wrong was the explanation, not the filter.
-    paths:
-      - 'crates/**'
-      # A glob rather than a list of script names. The list form is exactly what
-      # let the matrix planner be added without this filter learning about it,
-      # so a planner-only fix would have skipped the sweep it changes the shape
-      # of. Anything in `tools/` named for sabotage can move which jobs run or
-      # whether a defect is caught.
-      - 'tools/*sabotage*.ps1'
-      # And the shared helper those scripts dot-source. The glob above cannot
-      # reach it, because `common.ps1` is named for what it IS rather than for
-      # what uses it -- `run-sabotage.ps1` sources it for the native-command
-      # wrappers every sweep runs through, so a change that breaks the helper
-      # breaks the sweep. That is a DEPENDENCY, and no glob over names can
-      # express one; the glob fixed "somebody added a script", not this.
-      - 'tools/common.ps1'
-      # The toolchain the sweep compiles with. Changing the pin changes what
-      # every sweep builds, so it belongs here for the same reason the lockfile
-      # does.
-      - 'rust-toolchain.toml'
-      # A sweep builds the crates, so the workspace manifest and lockfile change
-      # what it compiles even when no crate source moves.
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/sabotage-sweep.yml'
+    # A crate's documentation is such an input too: every crate here splices
+    # its README into the library under `cfg(doctest)`, and a sweep runs the
+    # crate's whole `cargo test`, doctests included, once per entry. A file
+    # under `crates/<name>/` selects that crate whatever it is.
+  # The backstop: every entry of every manifest, whole suites. At a time off the
+  # hour, when scheduled runs are least delayed.
+  schedule:
+    - cron: '17 7 * * *'
   workflow_dispatch:
     inputs:
       manifest:
@@ -79,19 +70,20 @@ on:
 permissions:
   contents: read
 
-# One sweep of `main` at a time. Later merges supersede earlier ones rather than
-# queueing behind them, because what matters is that the tip is swept.
+# Every run in a group of its own, so none cancels another. A post-merge run
+# sweeps only what its merge could have affected, so a later merge cancelling it
+# -- which is what one group per ref with `cancel-in-progress` did -- would leave
+# the earlier merge's crates unswept until the nightly run. Runs from close merges
+# therefore sweep side by side. Each saves its own record of which tests caught
+# each entry, so the record the next run restores may lack what a concurrent run
+# learned; that only makes a later scoped run larger, and the nightly run
+# re-learns all of it.
+#
+# The nightly run, and a dispatch, likewise never cancel or wait for a post-merge
+# run, nor it for them.
 concurrency:
-  # Push runs group by ref, so a later merge supersedes an earlier one: what
-  # matters is that the tip is swept.
-  #
-  # A DISPATCH must not join that group. It carries the same `github.ref` as the
-  # push runs on `main`, so manually dispatching even a one-manifest diagnostic
-  # would cancel the post-merge sweep for the latest merge -- and the next merge
-  # would cancel the diagnostic right back. `github.run_id` is unique per run,
-  # so each dispatch becomes its own group and neither can cancel the other.
-  group: sabotage-sweep-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: true
+  group: sabotage-sweep-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   # The matrix is DERIVED from the manifests, not listed here. A list stores two
@@ -110,22 +102,74 @@ jobs:
     runs-on: windows-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      jobs: ${{ steps.plan.outputs.jobs }}
     steps:
+      # The whole history, because a push is planned against its previous head,
+      # and a shallow clone does not have it: the planner would then plan every
+      # manifest, which is safe and is the cost this exists to avoid.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # For `cargo metadata`, which says which crates build on which. It reads
+      # manifests and builds nothing.
+      - uses: dtolnay/rust-toolchain@stable
+      # The record of which tests caught each entry (DESIGN-NOTES.md,
+      # "sabotage-scope"), as the latest run saved it. Restored by prefix, as
+      # each run saves its own; the exact key never exists yet, and is named only
+      # because the action requires one. This is the one restore in a run: the
+      # plan and every shard must work from the same record, or a shard would
+      # select different entries from the ones the plan counted for it and cut
+      # its slice from a different list. So it is passed on below as an artifact,
+      # not restored again. It may have been saved by a run of a later commit,
+      # since runs overlap; an entry learned at a commit this checkout does not
+      # contain is not used (tools/common.ps1, Get-SabotageCatcherTests).
+      - name: Restore the record of which tests caught each entry
+        uses: actions/cache/restore@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sabotage-catchers-
+      # Rewritten even when nothing was restored, so the snapshot always exists:
+      # a missing record merges as an empty one.
+      - name: Snapshot the record for this run
+        shell: pwsh
+        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/sabotage/catchers.json -Output .scratch/sabotage/catchers.json
+      # Overwritten, not refused, when the plan job runs again: an artifact
+      # belongs to the run, not to the attempt, so "re-run all jobs" uploads a
+      # name the first attempt already used. The shards a re-run starts download
+      # by this name, so they get the snapshot of the attempt that planned them;
+      # "re-run failed jobs" does not re-run the plan, and they get its first one.
+      - name: Upload the snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: catchers-snapshot
+          path: .scratch/sabotage/catchers.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
       # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
       # `${{ }}` interpolation into the script body. An expression substituted
       # into `run:` is spliced in as source before PowerShell parses it, so a
       # value carrying a quote and a statement separator runs as a command on
       # the runner. Read back as `${env:...}` it can only ever be data.
+      #
+      # A push is planned against its previous head. The nightly run and a
+      # dispatch have none, and plan every entry their inputs allow: the nightly
+      # run is the full sweep, the backstop for what scoping cannot see.
       - id: plan
         shell: pwsh
         env:
           SWEEP_MANIFEST: ${{ inputs.manifest }}
-        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -GitHubOutput "${env:GITHUB_OUTPUT}"
+          SWEEP_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Since "${env:SWEEP_SINCE}" -CatcherRecord .scratch/sabotage/catchers.json -GitHubOutput "${env:GITHUB_OUTPUT}"
 
   sweep:
     name: sweep ${{ matrix.label }} ${{ matrix.shard }}/${{ matrix.shards }}
     needs: plan
+    # A plan with no jobs is a push that could not have affected any manifest.
+    # A matrix built from an empty list is an error, not a skip, so it is not
+    # built at all.
+    if: needs.plan.outputs.jobs != '0'
     runs-on: windows-latest
     # Sharded by crate AND within each crate, so the wall clock is the longest
     # *shard* rather than the longest manifest. Sharding by crate alone leaves
@@ -158,7 +202,12 @@ jobs:
     # applies its own per-entry bound inside this one.
     timeout-minutes: 60
     steps:
+      # The whole history, as in `plan`: the shard measures the same change from the
+      # same base, so it finds the entries the plan counted. A shallow clone would
+      # not have the base, and the shard would sweep every entry.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # The repository's pinned toolchain, not the floating stable the lint jobs
       # force: a sweep is asking whether *this* crate's suite notices a defect,
       # so it must build the crate the way the crate is specified to build.
@@ -187,6 +236,13 @@ jobs:
           # Every shard is a separate job building a different slice, so they
           # must not share a key.
           key: sabotage-${{ matrix.label }}-${{ matrix.shard }}
+      # The record the plan counted entries from: the plan's snapshot, not a
+      # restore of its own, which could find a record another run saved since.
+      - name: Download the record the plan used
+        uses: actions/download-artifact@v8
+        with:
+          name: catchers-snapshot
+          path: .scratch/sabotage
       # Unconditional. A dispatch that named one manifest has already been
       # resolved by `plan`, which emitted jobs for that manifest alone, so there
       # is nothing left for a step-level `if` to decide. The pair of conditional
@@ -210,7 +266,9 @@ jobs:
           SWEEP_SHARD: ${{ matrix.shard }}
           SWEEP_SHARDS: ${{ matrix.shards }}
           SWEEP_NAME: ${{ inputs.name || '*' }}
-        run: ./tools/run-sabotage.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -TraceLaunches
+          # The plan's base, so this shard sweeps the entries the plan counted for it.
+          SWEEP_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: ./tools/run-sabotage.ps1 -Manifest "${env:SWEEP_MANIFEST}" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}" -Since "${env:SWEEP_SINCE}" -TraceLaunches
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts
@@ -226,3 +284,47 @@ jobs:
           path: .scratch/sabotage/*.txt*
           if-no-files-found: ignore
           retention-days: 14
+          # A re-run of a shard that fails again uploads under the same name.
+          overwrite: true
+      # This shard's record, for the `record` job to merge. Whatever the sweep's
+      # verdict: an entry that did not behave as declared was still run, and
+      # what caught it, or did not, is still what the next run needs.
+      # Overwritten for the same reason as the snapshot: a re-run of a failed
+      # shard uploads under the name its first attempt used, and refusing that
+      # would fail the very re-run a failed sweep is most often given.
+      - name: Upload the record of which tests caught each entry
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: catchers-${{ matrix.label }}-${{ matrix.shard }}
+          path: .scratch/sabotage/catchers.json
+          if-no-files-found: ignore
+          retention-days: 1
+          overwrite: true
+
+  # One record for the next run: what this run's shards learned, over the
+  # snapshot the run started from. Each shard wrote only the entries it ran on
+  # top of that snapshot, and the merge keeps every entry's latest result, so
+  # neither a shard's slice nor an entry this run did not reach is lost.
+  record:
+    name: keep the record of which tests caught each entry
+    needs: [plan, sweep]
+    if: always() && needs.plan.outputs.jobs != '0'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The snapshot, `catchers-snapshot`, and every shard's record,
+      # `catchers-<label>-<shard>`, each into a directory of its own.
+      - name: Download the snapshot and the shards' records
+        uses: actions/download-artifact@v8
+        with:
+          pattern: catchers-*
+          path: .scratch/catchers-shards
+      - name: Merge them
+        shell: pwsh
+        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/catchers-shards -Output .scratch/sabotage/catchers.json
+      - name: Save the record for the next run
+        uses: actions/cache/save@v6
+        with:
+          path: .scratch/sabotage/catchers.json
+          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}

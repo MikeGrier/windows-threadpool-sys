@@ -3954,3 +3954,88 @@ its own commit.
 The harness computed the full path for its ignore check and kept the relative one for every transcript path, which the launcher
 resolves from the working copy, where the directory does not exist. The path is made absolute once, from the caller's location. A
 test passes a relative directory and fails without the change.
+
+## Moved 2026-10-19 00:56:45 -04:00 -- sabotage scope, M34.11: the patch check needs no build
+
+### <a id="m3411"></a>M34.11 -- Check every sabotage patch without building, on every push and pull request. *(completed 2026-10-19 00:56:45 -04:00)*
+
+The exactly-once and changes-the-file rule is `Test-SabotagePatch` in [tools/common.ps1](tools/common.ps1), called by the sweep
+loop and by the new `-CheckPatches` mode of [tools/run-sabotage.ps1](tools/run-sabotage.ps1); manifest discovery is
+`Get-SabotageManifest` beside it, used by the planner and by [tools/check-sabotage-patches.ps1](tools/check-sabotage-patches.ps1),
+which CI's `every sabotage patch applies` job runs. Run against `main` before PR #152 it reports exactly the two stale entries
+M34.9 repaired. Its tests found that a patch changing only case was reported `INERT`, because PowerShell's `-eq` ignores case,
+and that the manifest order differed between the two PowerShell hosts; both are fixed. The planner's matrix for this repository is
+unchanged.
+
+## Moved 2026-10-19 01:11:26 -04:00 -- sabotage scope, M34.12: the post-merge sweep plans affected manifests
+
+### <a id="m3412"></a>M34.12 -- Plan only the sabotage manifests a change could have affected. *(completed 2026-10-19 01:11:26 -04:00)*
+
+[tools/plan-sabotage-matrix.ps1](tools/plan-sabotage-matrix.ps1) `-Since` plans the manifests of crates with a changed file and of
+every crate that depends on one, directly or not, through a path dependency of any kind; a change to an input every sweep shares, or
+a base it cannot measure from, plans every manifest. The pieces are in [tools/common.ps1](tools/common.ps1): `Get-SabotageChange`,
+which reports whether the change could be measured rather than returning a list that could be empty for either reason;
+`Get-SabotageCrateDependency`, from `cargo metadata`; `Test-SabotageSharedInput`; and `Select-SabotageManifest`. The sweep
+workflow plans a push against its previous head, skips the sweep when the plan is empty, and no longer has a `paths:` filter,
+which was a second copy of the shared-input list. Planned against the merge of PR #150 it takes the five tail-watcher manifests
+alone. The patch check of M34.11 also takes in the harness's own [tools/sabotage2.json](tools/sabotage2.json), which nothing in CI
+had read.
+
+## Moved 2026-10-19 01:24:44 -04:00 -- sabotage scope, M34.13: the record of which tests caught each entry
+
+### <a id="m3413"></a>M34.13 -- Record which tests caught each sabotage entry, and keep the record across runs. *(completed 2026-10-19 01:24:44 -04:00)*
+
+A sweep reads `catchers.json` from its output directory, records for every entry it judged the tests libtest reported `FAILED`
+under its patch and when, and writes it back keeping what it did not run; an outcome that says nothing about the tests, and a stale
+patch, leave the entry as it was. The functions are in [tools/common.ps1](tools/common.ps1), "Which tests caught each entry". In CI
+each shard restores the record from the Actions cache, uploads its own, and the sweep workflow's `record` job merges them with
+[tools/merge-sabotage-catchers.ps1](tools/merge-sabotage-catchers.ps1), keeping every entry's latest, and saves the result. Run
+on the two `win-sync-sys` APC entries M34.9 repaired, the record names the test M34.9 added for them and no other. Its tests
+found that `ConvertFrom-Json` turns the timestamp into a date on read, which the reader now turns back.
+
+## Moved 2026-10-19 01:48:58 -04:00 -- sabotage scope, M34.14: entries selected within a manifest
+
+### <a id="m3414"></a>M34.14 -- Within a sabotage manifest, run only the entries a change could have affected. *(completed 2026-10-19 01:48:58 -04:00)*
+
+`Select-SabotageEntry` in [tools/common.ps1](tools/common.ps1) is the one rule, used by `run-sabotage.ps1 -Since` and by the
+planner, which now counts each manifest's selected entries for its shards and leaves out a manifest with none. It replaced
+`Select-SabotageManifest`, whose crate-level decision it repeated. One part differs from the plan as written: an entry with no
+record of what caught it, or caught by a doctest, runs whenever its crate changed, not only when a test file did, because telling a
+test file from source by its path is guesswork here and a doctest can come from a file spliced into the documentation;
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope) says so. A manifest at the repository root, the layout of the harness's own test
+fixtures, is its own crate. The sweep workflow restores the record before planning and gives every shard the plan's base and full
+history. A real sweep of `win-sync-sys` found that the harness's new `-CatcherRecord` parameter and its `$catcherRecord`
+variable were one variable, since PowerShell names ignore case, which the record tests then caught when it was put back.
+
+## Moved 2026-10-19 02:07:39 -04:00 -- sabotage scope, M34.15: recorded catching tests run first
+
+### <a id="m3415"></a>M34.15 -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. *(completed 2026-10-19 02:07:39 -04:00)*
+
+[tools/run-sabotage.ps1](tools/run-sabotage.ps1) splits its run phase into `Invoke-RunPhase`, so a run narrowed with
+`Add-TestFilter` to an entry's recorded tests (`-- <names> --exact`) is classified as the whole suite is. Caught there, the
+entry is reported `caught (its recorded tests failed ...)`; otherwise the whole suite runs. Narrowing applies only with `-Since`,
+and never for an entry a doctest caught, which a filtered run does not build. That differs from the plan in one respect, recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope): the plan said the narrow run could not change a result, and it can, for a patch
+that also stops a doctest compiling, so a full sweep, the nightly backstop, always runs whole suites. On `win-sync-sys`, with every
+entry selected, the 45 entries with recorded catching tests were each caught by them alone, and the sweep took 149 s against 193 s
+for the full one; that crate's per-entry cost is mostly its rebuild.
+
+## Moved 2026-10-19 02:08:47 -04:00 -- sabotage scope, M34.16: the nightly backstop
+
+### <a id="m3416"></a>M34.16 -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. *(completed 2026-10-19 02:08:47 -04:00)*
+
+[.github/workflows/sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) runs on a schedule as well as after each merge; a
+scheduled run has no base, so it plans and sweeps every entry with whole suites. Writing it found a gap M34.12 had opened: post-merge
+runs shared one concurrency group with `cancel-in-progress`, which was harmless while every run swept everything and, once each
+swept only its merge's change, would have left a cancelled merge's crates unswept until the nightly run. Every run now has a group of
+its own. Two runs side by side can each save a record of which tests caught each entry without the other's, which only makes a later
+scoped run larger.
+
+## Moved 2026-10-19 02:09:51 -04:00 -- sabotage scope, M34.17: the scoped run is the default local check
+
+### <a id="m3417"></a>M34.17 -- Teach the scoped sabotage run as the default local check. *(completed 2026-10-19 02:09:51 -04:00)*
+
+The repository instructions' sabotage guidance in [.github/copilot-instructions.md](.github/copilot-instructions.md) and
+[tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with `-Since origin/main`, that `-List` shows which
+entries and why, that a clone takes every entry of a touched crate until it has swept the manifest once, and to sweep the whole
+manifest for a change scoping cannot see.

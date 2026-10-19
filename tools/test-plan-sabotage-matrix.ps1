@@ -43,6 +43,9 @@ if (-not (Test-Path -LiteralPath $planner)) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 
+# Invoke-Native, for the git calls the -Since fixtures make.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 function Assert-True {
     param([bool] $Condition, [string] $Message)
     if (-not $Condition) { throw $Message }
@@ -107,9 +110,75 @@ function New-FixtureRoot {
 # Run the planner and return the parsed matrix. Errors propagate, which is what
 # the refusal cases catch.
 function Invoke-Planner {
-    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '')
-    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput
+    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '', [string] $Since = '',
+        [string] $CatcherRecord = '')
+    # A fixture's own record, when it has one, unless the case names another.
+    if (-not $CatcherRecord -and (Test-Path -LiteralPath (Join-Path $Root 'catchers.json'))) { $CatcherRecord = Join-Path $Root 'catchers.json' }
+    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput -Since $Since -CatcherRecord $CatcherRecord 6>$null
     return ($json | ConvertFrom-Json)
+}
+
+<#
+Record every entry of every manifest under `Root` as swept at its HEAD and caught
+by no test it named, at `Root`\catchers.json: what a sweep of that commit leaves,
+which a scoped plan from it needs. An entry with no usable record is planned
+whatever the change.
+#>
+function Write-FixtureRecord {
+    param([string] $Root)
+    $head = ((Invoke-NativeStdout { git -C $Root rev-parse HEAD }) | Select-Object -First 1).Trim()
+    $record = New-SabotageCatcherRecord
+    foreach ($path in @(Get-SabotageManifest -RepositoryRoot $Root)) {
+        $key = $path.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+        foreach ($entry in @((Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).sabotages)) {
+            Set-SabotageCatcher -Record $record -Manifest $key -Entry $entry.name -Tests @() -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+        }
+    }
+    Write-SabotageCatcherRecord -Path (Join-Path $Root 'catchers.json') -Record $record
+    return $record
+}
+
+<#
+A committed git repository that is also a cargo workspace, for -Since: crates a,
+b on a, c on b as a dev-dependency, and d on nothing, each with a one-entry
+manifest. Nothing is ever built; `cargo metadata` only reads the manifests.
+#>
+function New-ScopedFixture {
+    $root = New-FixtureRootPath
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[workspace]`nmembers = [`"crates/*`"]`nresolver = `"2`"`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "fixture`n")
+    $crates = [ordered]@{
+        a = ''
+        b = "[dependencies]`na = { path = `"../a`" }`n"
+        c = "[dev-dependencies]`nb = { path = `"../b`" }`n"
+        d = ''
+    }
+    foreach ($crate in $crates.Keys) {
+        $dir = Join-Path (Join-Path $root 'crates') $crate
+        New-Item -ItemType Directory -Path (Join-Path $dir 'src') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir 'Cargo.toml'),
+            "[package]`nname = `"$crate`"`nversion = `"0.1.0`"`nedition = `"2021`"`n`n$($crates[$crate])")
+        [System.IO.File]::WriteAllText((Join-Path $dir 'src\lib.rs'), "`n")
+        $spec = @{ package = $crate; sabotages = @(@{ name = 's1'; file = 'src/lib.rs' }) }
+        [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), ($spec | ConvertTo-Json -Depth 5))
+    }
+    # Cargo.lock would be written by the first metadata call and then show as a
+    # change to a shared input, so it is ignored, as a build's output would be;
+    # and so is the record, which is no part of the tree.
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), "Cargo.lock`ntarget/`ncatchers.json`n")
+    Invoke-Native { git -C $root init --quiet } | Out-Null
+    Invoke-Native { git -C $root add -A } | Out-Null
+    Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    Write-FixtureRecord $root | Out-Null
+    return $root
+}
+
+# The manifests a -Since plan names, sorted ordinally and joined.
+function Get-PlannedManifests {
+    param([string] $Root, [string] $Since)
+    $m = Invoke-Planner -Root $Root -Since $Since
+    return ((Get-Ordinal @(@($m.include) | ForEach-Object { $_.manifest } | Select-Object -Unique)) -join '|')
 }
 
 $cases = @(
@@ -284,6 +353,86 @@ $cases = @(
             $root = New-FixtureRoot @{ 'crate-a' = 25; 'crate-b' = 25 }
             $json = & $planner -RepositoryRoot $root
             Assert-Equal 1 @($json).Count 'the planner must emit one line, or the step output truncates'
+        }
+    },
+    @{
+        Name = 'since-plans-a-changed-crate-and-every-crate-built-on-it'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\a\src\lib.rs') -Value '// changed'
+            Assert-Equal 'crates/a/sabotage.json|crates/b/sabotage.json|crates/c/sabotage.json' (Get-PlannedManifests $root 'HEAD') 'a, b on a, and c on b as a dev-dependency'
+        }
+    },
+    @{
+        Name = 'since-plans-a-leaf-crate-alone'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\c\src\lib.rs') -Value '// changed'
+            Assert-Equal 'crates/c/sabotage.json' (Get-PlannedManifests $root 'HEAD') 'nothing builds on c'
+        }
+    },
+    @{
+        Name = 'since-plans-nothing-for-a-change-outside-every-crate-and-says-so-in-the-output'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'README.md') -Value 'changed'
+            $out = Join-Path $root 'gh-output.txt'
+            Set-Content -LiteralPath $out -Value '' -Encoding utf8
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -GitHubOutput $out
+            Assert-Equal 0 @($m.include).Count 'an empty matrix'
+            Assert-Equal 1 @(Get-Content -LiteralPath $out | Where-Object { $_ -eq 'jobs=0' }).Count 'jobs=0, so the workflow can skip the sweep'
+        }
+    },
+    @{
+        Name = 'since-plans-everything-for-a-shared-input-or-a-base-it-cannot-measure-from'
+        Run  = {
+            $root = New-ScopedFixture
+            $all = 'crates/a/sabotage.json|crates/b/sabotage.json|crates/c/sabotage.json|crates/d/sabotage.json'
+            Add-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Value '# changed'
+            Assert-Equal $all (Get-PlannedManifests $root 'HEAD') 'the workspace manifest is shared'
+            Invoke-Native { git -C $root checkout -- Cargo.toml } | Out-Null
+            Assert-Equal '' (Get-PlannedManifests $root 'HEAD') 'and back to nothing once it is undone'
+            foreach ($since in 'no-such-revision', '0000000000000000000000000000000000000000') {
+                Assert-Equal $all (Get-PlannedManifests $root $since) "'$since' cannot be measured from"
+            }
+        }
+    },
+    @{
+        Name = 'since-counts-the-entries-a-change-reached-and-shards-for-them'
+        Run  = {
+            $root = New-ScopedFixture
+            # Crate d gets 25 entries: 24 patch src/lib.rs, one src/other.rs, all
+            # recorded as caught by a test defined in src/lib.rs.
+            $dir = Join-Path $root 'crates\d'
+            [System.IO.File]::WriteAllText((Join-Path $dir 'src\lib.rs'), "fn t_one() {}`n")
+            [System.IO.File]::WriteAllText((Join-Path $dir 'src\other.rs'), "fn other() {}`n")
+            $entries = @(1..25 | ForEach-Object { @{ name = "s$_"; file = $(if ($_ -eq 25) { 'src/other.rs' } else { 'src/lib.rs' }) } })
+            [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), (@{ package = 'd'; sabotages = $entries } | ConvertTo-Json -Depth 5))
+            Invoke-Native { git -C $root add -A } | Out-Null
+            Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m more } | Out-Null
+            $record = Write-FixtureRecord $root
+            $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+            foreach ($n in 1..25) { Set-SabotageCatcher -Record $record -Manifest 'crates/d/sabotage.json' -Entry "s$n" -Tests @('t_one') -At '2026-01-01T00:00:00.0000000Z' -Commit $head }
+            $recordPath = Join-Path $root 'catchers.json'
+            Write-SabotageCatcherRecord -Path $recordPath -Record $record
+
+            Add-Content -LiteralPath (Join-Path $dir 'src\other.rs') -Value '// changed'
+            $json = & $planner -RepositoryRoot $root -Since 'HEAD' -CatcherRecord $recordPath 6>$null
+            $m = $json | ConvertFrom-Json
+            Assert-Equal 1 @($m.include).Count 'one entry reached, one shard'
+            $json = & $planner -RepositoryRoot $root -Since 'HEAD' 6>$null
+            $m = $json | ConvertFrom-Json
+            Assert-Equal 6 @($m.include).Count 'with no record, every entry of every manifest: a, b and c one shard each, d''s 25 at 10 a shard'
+        }
+    },    @{
+        Name = 'since-and-a-named-manifest-plan-what-both-allow'
+        Run  = {
+            $root = New-ScopedFixture
+            Add-Content -LiteralPath (Join-Path $root 'crates\a\src\lib.rs') -Value '// changed'
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -Manifest 'crates/b/sabotage.json'
+            Assert-Equal 'crates/b/sabotage.json' ((@($m.include | ForEach-Object { $_.manifest } | Sort-Object -Unique)) -join '|') 'affected and named'
+            $m = Invoke-Planner -Root $root -Since 'HEAD' -Manifest 'crates/d/sabotage.json'
+            Assert-Equal 0 @($m.include).Count 'named, but not affected'
         }
     }
 )

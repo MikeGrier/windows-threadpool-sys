@@ -1360,6 +1360,20 @@ CI job exists because eleven review rounds on that harness produced thirteen lat
 *introduced by earlier fixes*, "because every verification was a one-off command that was then
 discarded and nothing re-checked an earlier guarantee."
 
+**Sweep what a change could have affected, not the whole manifest, by default.** A sweep builds
+and runs the crate's suite once per entry, so locally prefer
+`.\tools\run-sabotage.ps1 -Manifest <manifest> -Since origin/main` (or the branch's base). It sweeps
+the entries the branch could have affected, and runs each first against the tests recorded as
+catching it. `-List -Since origin/main` shows which entries, and why each. The record of what caught
+each entry is `catchers.json` in the output directory, written by every sweep; an entry with no
+usable record is always taken, so until a clone has swept a manifest from a clean checkout, a scoped
+run of it sweeps every entry. Sweep the whole
+manifest when the change is one scoping cannot see: a test helper shared by a crate's tests, or code
+elsewhere in a crate that decides whether a sabotaged line is reached. The nightly CI sweep is the
+backstop for both; the rule and its limits are in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope). To check only that every patch still applies,
+`tools/check-sabotage-patches.ps1` does it for every manifest in seconds, without building.
+
 Know the limit — but know that it is narrower than it first appears. **Sequencing rules
 (ordering, bracket entry states, what may follow what) are not value-level, and are still
 derivable**: define them once as a shared executable oracle — a state machine over the

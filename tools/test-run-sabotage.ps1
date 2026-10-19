@@ -216,7 +216,7 @@ function New-Stub {
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
             'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
-            'link-echoed')] [string] $Behaviour,
+            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses', 'narrow-refused', 'narrow-hangs')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -259,6 +259,41 @@ function New-Stub {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
         'fail' { "@echo off`r`n$skipBuild`r`n$intact`r`necho test failed`r`nexit /b 101`r`n" }
+        # The run phase logs its arguments to `runs.log` beside the stub, once the
+        # marker is gone, so a case can see which runs a sabotaged entry was given:
+        # a run narrowed to its recorded tests carries `--exact`. The first fails
+        # such a run; the second passes it, and only the whole suite fails.
+        'narrow-catches' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        # A narrowed run that hangs; the whole suite fails as a catch does.
+        'narrow-hangs' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul || goto :whole`r`n" +
+            "ping -n 900 127.0.0.1 >nul`r`n" +
+            ":whole`r`necho test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        # A narrowed run that fails before any test runs, as libtest does on an
+        # argument it refuses; the whole suite fails as a catch does.
+        'narrow-refused' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul || goto :whole`r`n" +
+            "echo error: Option 'exact' given more than once 1>&2`r`nexit /b 101`r`n" +
+            ":whole`r`necho test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        'narrow-misses' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul && exit /b 0`r`n" +
+            "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        # Fails as libtest reports it, naming the test that caught it and one that
+        # did not, so a case can see which tests a sweep records.
+        'fail-named' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`n" +
+            "echo test marker::is_untouched ... ok`r`necho test marker::is_present ... FAILED`r`n" +
+            "echo test result: FAILED. 1 passed; 1 failed`r`nexit /b 101`r`n"
+        }
         'doc-fail' {
             "@echo off`r`n$skipBuild`r`n$intact`r`n" +
             "echo Couldn't compile the test.`r`nexit /b 101`r`n"
@@ -673,6 +708,126 @@ Test-Case 'lists without creating its output directory' {
             'listing must not create the output directory'
     }
     finally { Remove-Fixture $root }
+}
+
+# --- -CheckPatches builds nothing ---------------------------------------------
+
+Write-Line ''
+Write-Line '-CheckPatches builds nothing'
+
+Test-Case 'a manifest whose patches all apply is accepted without building or writing anything' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        # A cargo that leaves a mark if it is ever started.
+        $mark = Join-Path $root 'stubs\cargo-ran'
+        $stub = Join-Path $root 'stubs\marking.cmd'
+        [System.IO.File]::WriteAllText($stub, "@echo off`r`necho ran>`"$mark`"`r`nexit /b 0`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'All 1 patches in .* apply' $result.Output
+        Assert-False (Test-Path -LiteralPath $mark) 'nothing was built'
+        Assert-False (Test-Path (Join-Path $root '.scratch\sabotage')) 'nothing was written'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a patch whose text is gone, or occurs twice, is reported stale and fails the check' {
+    foreach ($case in @(
+            @{ Find = 'no such line'; Count = 0 },
+            @{ Find = 'fn'; Count = 2 })) {
+        $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ find = @($case.Find) }) `
+            -Source "// marker line`nfn main() {}`nfn other() {}`n"
+        try {
+            $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+            Assert-Equal 1 $result.ExitCode $result.Output
+            Assert-Match "MANIFEST STALE: pattern found $($case.Count) times, expected 1 -- the marker is removed" $result.Output
+            Assert-Match '--- injected patch ---' $result.Output
+        }
+        finally { Remove-Fixture $root }
+    }
+}
+
+Test-Case 'a patch that changes nothing is reported inert, and one that changes only case is not' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ replace = @('// marker line') })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST INERT' $result.Output
+    }
+    finally { Remove-Fixture $root }
+    # PowerShell's -eq ignores case, which once made this read as inert.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ replace = @('// MARKER LINE') })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 0 $result.ExitCode $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'an entry naming a file that is not there fails the check and is named' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ file = 'src/gone.rs' })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "NO SUCH FILE: 'src/gone.rs'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'the check covers the whole manifest whatever the shard, and honours the name filter' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a stale second entry'; file = 'src/lib.rs'; expect = 'caught'; why = 'x'
+        find = @('not in the file'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        # Shard 0 of 2 holds one entry; the stale one may be on the other.
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-Shard', '0', '-ShardCount', '2')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match '1 of 2 patches' $result.Output
+        $named = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-Name', 'the marker*')
+        Assert-Equal 0 $named.ExitCode $named.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-CheckPatches with -List is refused' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-List')
+        Assert-Equal 2 $result.ExitCode $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'check-sabotage-patches checks every crate manifest and names the one that fails' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('sab-' + [guid]::NewGuid().ToString('N'))
+    try {
+        foreach ($crate in 'good', 'bad') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root "crates\$crate\src") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$crate\src\lib.rs"), "// marker line`n")
+            $spec = New-Spec
+            if ($crate -eq 'bad') { $spec.sabotages[0].find = @('gone') }
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$crate\sabotage.json"), ($spec | ConvertTo-Json -Depth 8))
+        }
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $checker = Join-Path $PSScriptRoot 'check-sabotage-patches.ps1'
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 1 $LASTEXITCODE $text
+        Assert-Match 'crates\\bad\\sabotage.json do not apply' $text
+        Assert-Match 'All 1 patches in .*crates\\good\\sabotage.json apply' $text
+
+        Remove-Item -LiteralPath (Join-Path $root 'crates\bad') -Recurse -Force
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 0 $LASTEXITCODE $text
+        Assert-Match 'Every patch in 1 manifests applies' $text
+
+        Remove-Item -LiteralPath (Join-Path $root 'crates') -Recurse -Force
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 2 $LASTEXITCODE $text
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 # --- classification ---------------------------------------------------------
@@ -1773,6 +1928,316 @@ Test-Case 'a command the launcher cannot start is reported as not started, with 
     finally { Remove-Fixture $root }
 }
 
+# --- the record of which tests caught each entry -------------------------------
+
+Write-Line ''
+Write-Line 'the record of which tests caught each entry'
+
+Test-Case 'a caught entry is recorded with the tests that failed, and a survived one with none' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a comment is added'; file = 'src/lib.rs'; expect = 'survives'; why = 'x'
+        find = @('fn main() {}'); replace = @("fn main() {}`n// harmless")
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $stub = New-Stub -Behaviour 'fail-named' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-True $record.ContainsKey('sabotage.json') 'keyed by the manifest''s path from the root'
+        Assert-Equal 'marker::is_present' ($record['sabotage.json']['the marker is removed'].Tests -join '|') 'the failing test alone'
+        Assert-Equal 0 @($record['sabotage.json']['a comment is added'].Tests).Count 'a survived entry has none'
+        Assert-True ($record['sabotage.json']['the marker is removed'].At -match '^\d{4}-\d\d-\d\dT') 'when it ran'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a manifest given in another case is recorded under the name git has for it' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail-named' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'SABOTAGE.JSON', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        $text = [System.IO.File]::ReadAllText((Join-Path $root '.scratch\sabotage\catchers.json'))
+        Assert-True ($text.Contains('"sabotage.json"')) "keyed as on disk: $text"
+        Assert-False ($text.Contains('"SABOTAGE.JSON"')) 'not as typed'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a sweep keeps what it did not run, and an infrastructure outcome or a stale patch overwrites nothing' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a stale entry'; file = 'src/lib.rs'; expect = 'caught'; why = 'x'
+        find = @('not in the file'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $path = Join-Path $root '.scratch\sabotage\catchers.json'
+        $seed = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $seed -Manifest 'crates/other/sabotage.json' -Entry 'elsewhere' -Tests @('o::t') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $seed -Manifest 'sabotage.json' -Entry 'a stale entry' -Tests @('s::t') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $seed -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('m::t') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path $path -Record $seed
+        # The binary is never executed, so the run says nothing about the tests.
+        $stub = New-Stub -Behaviour 'not-executed' -Root $root
+        Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub) | Out-Null
+        $record = Read-SabotageCatcherRecord -Path $path
+        Assert-Equal 'o::t' ($record['crates/other/sabotage.json']['elsewhere'].Tests -join '|') 'another manifest''s entry is kept'
+        Assert-Equal 's::t' ($record['sabotage.json']['a stale entry'].Tests -join '|') 'a stale patch was not run, so it is kept'
+        Assert-Equal 'm::t' ($record['sabotage.json']['the marker is removed'].Tests -join '|') 'an infrastructure outcome is not a result'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'merge-sabotage-catchers keeps the latest of each entry across shards, and finds records in directories' {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('merge-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $base = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $base -Manifest 'm' -Entry 'a' -Tests @('old') -At '2026-01-01T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $base -Manifest 'm' -Entry 'b' -Tests @('kept') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'base.json') -Record $base
+        $shard = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $shard -Manifest 'm' -Entry 'a' -Tests @('new') -At '2026-01-02T00:00:00.0000000Z'
+        Set-SabotageCatcher -Record $shard -Manifest 'm' -Entry 'b' -Tests @('kept') -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'shards\catchers-m-0\catchers.json') -Record $shard
+        $other = New-SabotageCatcherRecord
+        Set-SabotageCatcher -Record $other -Manifest 'n' -Entry 'c' -Tests @() -At '2026-01-02T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $dir 'shards\catchers-n-0\catchers.json') -Record $other
+
+        $out = Join-Path $dir 'out\catchers.json'
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $script = Join-Path $PSScriptRoot 'merge-sabotage-catchers.ps1'
+        $paths = @((Join-Path $dir 'base.json'), (Join-Path $dir 'shards'), (Join-Path $dir 'missing.json')) -join ','
+        $text = Invoke-Native { & $shell -NoProfile -Command "& '$script' -Path $paths -Output '$out'" } | Out-String
+        Assert-Equal 0 $LASTEXITCODE $text
+        $merged = Read-SabotageCatcherRecord -Path $out
+        Assert-Equal 'new' ($merged['m']['a'].Tests -join '|') 'the shard''s later result'
+        Assert-Equal 'kept' ($merged['m']['b'].Tests -join '|') 'unchanged'
+        Assert-True $merged['n'].ContainsKey('c') 'another shard''s manifest'
+        Assert-Match '3 of 4 record\(s\) found: 3 entries across 2 manifest' $text
+
+        # The workflow writes over its own input; a missing one is still not found.
+        $same = Join-Path $dir 'fresh\catchers.json'
+        $text = Invoke-Native { & $shell -NoProfile -Command "& '$script' -Path '$same' -Output '$same'" } | Out-String
+        Assert-Match '0 of 1 record\(s\) found' $text
+        Assert-True (Test-Path -LiteralPath $same) 'an empty record is still written'
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --- -Since sweeps what a change could have affected ---------------------------
+
+Write-Line ''
+Write-Line '-Since sweeps what a change could have affected'
+
+# A committed fixture that is a cargo package, so `cargo metadata` answers, with
+# two entries and a record of what caught each: the marker entry patches
+# src/lib.rs and was caught by `checks::t_marker`, defined there; the other
+# patches src/other.rs and was caught by `checks::t_other`, defined there.
+function New-ScopeFixture {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'other is broken'; file = 'src/other.rs'; expect = 'caught'; why = 'x'
+        find = @('fn t_other() {}'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec -Source "// marker line`nfn main() {}`nfn t_marker() {}`n"
+    [System.IO.File]::WriteAllText((Join-Path $root 'src\other.rs'), "fn t_other() {}`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'Cargo.toml'), "[package]`nname = `"fixture`"`nversion = `"0.1.0`"`nedition = `"2021`"`n")
+    [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "fixture`n")
+    # The stubs are written after the commit, and are no part of the tree being
+    # swept; ignored, so that a fixture left as committed is a clean tree.
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`nCargo.lock`ntarget/`nstubs/`n")
+    Invoke-Native { git -C $root add -A } | Out-Null
+    Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    # Learned at the commit just made, so a scoped run uses it.
+    $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+    $record = New-SabotageCatcherRecord
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('checks::t_marker') -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'other is broken' -Tests @('checks::t_other') -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+    Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
+    return $root
+}
+
+Test-Case '-Since lists only the entries a change could have affected, and why' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'Scope    : Since HEAD: 1 of 2 entries' $result.Output
+        Assert-Match 'other is broken  \[the file it patches changed: src/other.rs\]' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'its file and its test are untouched'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since sweeps the entries it selected, and nothing else' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Since', 'HEAD')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'Sweeping 1 entry' $result.Output
+        Assert-Match 'other is broken' $result.Output
+        Assert-False ($result.Output -match 'the marker is removed') 'not swept'
+        # The tree it swept had an uncommitted edit, so what it learned names no
+        # commit, and no later run will use it.
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-True $record['sabotage.json'].ContainsKey('other is broken') 'recorded'
+        Assert-True (-not $record['sabotage.json']['other is broken'].Commit) 'with no commit'
+        Assert-Match 'recorded without a commit' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since with shards splits only the selected entries among them' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'src\other.rs') -Value '// changed'
+        $first = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD', '-Shard', '0', '-ShardCount', '2')
+        Assert-Equal 0 $first.ExitCode $first.Output
+        Assert-Match 'Shard    : 0 of 2 \(1 of 1 entries\)' $first.Output
+        Assert-Match 'other is broken' $first.Output
+        $second = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'HEAD', '-Shard', '1', '-ShardCount', '2')
+        Assert-Match 'Shard    : 1 of 2 \(0 of 1 entries\)' $second.Output
+        Assert-False ($first.Output + $second.Output -match 'the marker is removed') 'on neither shard'
+    }
+    finally { Remove-Fixture $root }
+}
+
+# The marker entry, selected by a change to src/lib.rs, recorded as caught by the
+# named tests; returns the runs its sabotaged entry was given.
+function Invoke-NarrowCase {
+    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full, [string[]] $Extra = @(), [string[]] $TestArgs = @())
+    $root = New-ScopeFixture
+    try {
+        if ($TestArgs.Count -gt 0) {
+            $path = Join-Path $root 'sabotage.json'
+            $spec = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+            $spec | Add-Member -NotePropertyName testArgs -NotePropertyValue $TestArgs
+            [System.IO.File]::WriteAllText($path, ($spec | ConvertTo-Json -Depth 8))
+            Invoke-Native { git -C $root add -A } | Out-Null
+            Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m 'testArgs' } | Out-Null
+        }
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests $Recorded -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+        Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
+        Add-Content -LiteralPath (Join-Path $root 'src\lib.rs') -Value '// changed'
+        $stub = New-Stub -Behaviour $Behaviour -Root $root
+        $arguments = @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Name', 'the marker*')
+        if (-not $Full) { $arguments += @('-Since', 'HEAD') }
+        $arguments += $Extra
+        $result = Invoke-Harness -Root $root -Arguments $arguments
+        $log = Join-Path $root 'stubs\runs.log'
+        $runs = @()
+        if (Test-Path -LiteralPath $log) { $runs = @(Get-Content -LiteralPath $log) }
+        return [pscustomobject]@{ Result = $result; Runs = $runs }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since runs an entry''s recorded tests first, and is done when they catch it' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(its recorded tests failed' $case.Result.Output
+    Assert-Equal 1 $case.Runs.Count 'one run, narrowed'
+    # Each argument reaches the stub quoted by the launcher.
+    Assert-Match '"--" "marker::is_present" "--exact"' $case.Runs[0]
+}
+
+Test-Case '-Since runs the whole suite when the recorded tests do not catch it' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-misses' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the narrow run, then the whole suite'
+    Assert-Match '--exact' $case.Runs[0]
+    Assert-False ($case.Runs[1] -match '--exact') 'the second is the whole suite'
+}
+
+Test-Case 'a narrowed run that fails without a failed test is no catch, and the whole suite decides' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-refused' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the refused narrow run, then the whole suite'
+}
+
+Test-Case 'a narrowed run that hangs is no catch, and the whole suite decides' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-hangs' -Recorded @('marker::is_present') -Extra @('-TimeoutSeconds', '3')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the hung narrow run, then the whole suite'
+}
+
+Test-Case 'a manifest whose testArgs name tests for libtest is not narrowed, since a name would widen its run' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded @('marker::is_present') -TestArgs @('test', '-p', 'fixture', '--', 'marker')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Equal 1 $case.Runs.Count 'the whole suite alone'
+    Assert-False ($case.Runs[0] -match 'is_present') 'with no recorded test added'
+}
+
+Test-Case 'a manifest that already passes --exact to libtest is narrowed without a second one' {
+    $once = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--', '--exact', '--test-threads=1') -Tests @('a::b')
+    Assert-Equal 'test|-p|x|--|--exact|--test-threads=1|a::b' ($once -join '|') 'kept, not repeated'
+    $added = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--', '--test-threads=1') -Tests @('a::b', 'c')
+    Assert-Equal 'test|-p|x|--|--test-threads=1|a::b|c|--exact' ($added -join '|') 'added after the names'
+    $bare = Add-TestFilter -CargoArgs @('test', '-p', 'x', '--exact-feature') -Tests @('a::b')
+    Assert-Equal 'test|-p|x|--exact-feature|--|a::b|--exact' ($bare -join '|') 'an --exact before -- is cargo''s, not libtest''s'
+}
+Test-Case 'the whole suite alone runs without -Since, for an entry with no recorded test, and for one a doctest caught' {
+    foreach ($variant in @(
+            @{ Recorded = @('marker::is_present'); Full = $true; Why = 'a full sweep' },
+            @{ Recorded = @(); Full = $false; Why = 'no recorded test' },
+            @{ Recorded = @('marker::is_present', 'src\lib.rs - api (line 1)'); Full = $false; Why = 'a doctest' })) {
+        $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded $variant.Recorded -Full:$variant.Full
+        Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+        Assert-Equal 1 $case.Runs.Count "one run: $($variant.Why)"
+        Assert-False ($case.Runs[0] -match '--exact') "and not narrowed: $($variant.Why)"
+    }
+}
+
+Test-Case 'a sweep of a clean tree records what it learned at HEAD' {
+    $root = New-ScopeFixture
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Name', 'the marker*')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-False ($result.Output -match 'recorded without a commit') 'the tree is clean'
+        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-Equal $head $record['sabotage.json']['the marker is removed'].Commit 'recorded at HEAD'
+    }
+    finally { Remove-Fixture $root }
+}
+Test-Case '-Since with nothing affected sweeps nothing and builds nothing' {
+    $root = New-ScopeFixture
+    try {
+        Add-Content -LiteralPath (Join-Path $root 'README.md') -Value 'changed'
+        $mark = Join-Path $root 'stubs\cargo-ran'
+        $stub = Join-Path $root 'stubs\marking.cmd'
+        [System.IO.File]::WriteAllText($stub, "@echo off`r`necho ran>`"$mark`"`r`nexit /b 0`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Since', 'HEAD')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'could have been affected; nothing to sweep' $result.Output
+        Assert-False (Test-Path -LiteralPath $mark) 'not even the baseline was built'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since from a base it cannot measure from sweeps every entry' {
+    $root = New-ScopeFixture
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List', '-Since', 'no-such-revision')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'every entry: this clone has no merge base' $result.Output
+        Assert-Match 'the marker is removed' $result.Output
+        Assert-Match 'other is broken' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
 # --- the working tree is never touched --------------------------------------
 #
 # The premise of the whole design. Each of these was a real defect: the tree was
