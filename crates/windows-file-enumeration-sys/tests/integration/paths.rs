@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Mike Grier
 //! Invalid and inaccessible paths, a fully qualified `\\?\` path far beyond
-//! `MAX_PATH`, and native WTF-16 names -- including one with an unpaired
-//! surrogate, which is exactly the kind of filesystem content this crate's
-//! native-width name storage exists to survive without loss.
+//! `MAX_PATH`, a relative path fixed when the request is built, and native
+//! WTF-16 names -- including one with an unpaired surrogate, which is exactly
+//! the kind of filesystem content this crate's native-width name storage
+//! exists to survive without loss.
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use windows_file_enumeration_sys::{EnumerationError, EnumerationRequest, RequestFailure, Session};
+use windows_file_enumeration_sys::{EnumerationError, EnumerationRequest, Session};
 
 use crate::support::{Scratch, drain_to_terminal, entry_names};
 
@@ -104,11 +105,103 @@ fn a_verbatim_path_far_beyond_max_path_still_enumerates() {
 }
 
 #[test]
-fn an_ordinary_path_beyond_max_path_is_rejected_rather_than_silently_truncated() {
+fn an_ordinary_path_beyond_max_path_is_accepted_and_its_open_is_the_hosts() {
+    // The request keeps the path as given. Whether `CreateFileW` takes an
+    // unprefixed path past `MAX_PATH` depends on the host's long-path manifest
+    // and the machine's policy, so either outcome is a clean report.
     let long_name = "x".repeat(300);
     let path = PathBuf::from(r"C:\").join(long_name);
-    let error = EnumerationRequest::for_path(&path).expect_err("longer than MAX_PATH");
-    assert_eq!(error.failure(), RequestFailure::PathTooLong);
+    let request = EnumerationRequest::for_path(&path).expect("accepted as given");
+    assert_eq!(request.win32_path().len(), path.as_os_str().len());
+
+    let (session, receiver) = Session::new(8, 8).expect("room");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let (entries, outcome) = drain_to_terminal(&receiver, enumeration);
+    assert!(entries.is_empty());
+    let failure = outcome.failure().expect("no such directory");
+    assert!(
+        matches!(failure, EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn an_empty_path_is_reported_by_the_open() {
+    let request = EnumerationRequest::for_path(PathBuf::new().as_path()).expect("accepted");
+    let (session, receiver) = Session::new(8, 8).expect("room");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let (entries, outcome) = drain_to_terminal(&receiver, enumeration);
+    assert!(entries.is_empty());
+    let failure = outcome.failure().expect("an empty path names nothing");
+    assert!(
+        matches!(failure, EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+const CHILD_MARKER: &str = "WFE_RELATIVE_CHILD";
+const CHILD_TEST: &str =
+    "paths::a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes";
+
+// The process current directory is shared by every test in the process, so the
+// test that changes it runs in a child process of its own, as the request
+// crate's do. It is what tells the path the worker opens from the path as
+// given: the two name the same directory until the current directory moves.
+#[test]
+fn a_relative_path_names_the_directory_it_was_built_in_after_the_directory_changes() {
+    const NAME: &str = "wfe-relative-subject";
+
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let built_in = std::env::current_dir().expect("the current directory");
+        let request = EnumerationRequest::for_path(NAME.as_ref()).expect("accepted");
+        assert_eq!(request.path().to_string_lossy(), NAME);
+        assert_eq!(
+            request.win32_path().to_string_lossy(),
+            built_in.join(NAME).to_string_lossy(),
+            "grafted onto the current directory when the request was built"
+        );
+
+        let elsewhere = std::env::var_os("SystemRoot").expect("Windows names its directory");
+        std::env::set_current_dir(elsewhere).expect("change the current directory");
+
+        let (session, receiver) = Session::new(8, 8).expect("room");
+        let handle = session.try_begin(request).expect("room");
+        let enumeration = handle.id();
+        handle.detach();
+
+        let (entries, outcome) = drain_to_terminal(&receiver, enumeration);
+        assert!(outcome.is_completed(), "{outcome:?}");
+        assert_eq!(entry_names(&entries), ["here.txt"]);
+        return;
+    }
+
+    let scratch = Scratch::empty();
+    let subject = scratch.child(NAME);
+    std::fs::create_dir(&subject).expect("the subject directory");
+    std::fs::write(subject.join("here.txt"), b"").expect("a file in it");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(CHILD_TEST)
+        .arg("--nocapture")
+        .env(CHILD_MARKER, "1")
+        .current_dir(scratch.path())
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

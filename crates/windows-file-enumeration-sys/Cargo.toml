@@ -36,6 +36,12 @@ windows-threadpool-sys = { version = "0.2.1", path = "../windows-threadpool-sys"
 # Paths and returned names remain native-width WTF-16 without lossy conversion.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# The path contract (PATH-1): a path kept as given, and a relative one fixed to the current
+# directory when the request is built, so that it means the same directory on whichever worker
+# opens it. Taken from the crate that owns it, so this crate keeps no second copy (the request
+# crate's D-30), and below it in the layering, which is the direction D-9 recorded.
+windows-namespace-request-sys = { version = "0.4.0", path = "../windows-namespace-request-sys" }
+
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps a
 # code of 2^31 or more, where this crate's own earlier type panicked on one (WE-D-1).
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }

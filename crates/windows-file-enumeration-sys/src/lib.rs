@@ -130,7 +130,6 @@ mod engine;
 mod entry;
 mod error;
 mod native;
-mod path;
 mod pattern;
 mod predicate;
 mod record;

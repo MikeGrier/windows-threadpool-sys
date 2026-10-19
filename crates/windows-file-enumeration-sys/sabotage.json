@@ -1,0 +1,47 @@
+{
+  "package": "windows-file-enumeration-sys",
+  "description": "Sabotages for windows-file-enumeration-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are. Begun with PATH-1, so it covers the path contract this crate now takes from windows-namespace-request-sys and nothing older.",
+  "notCoveredHere": "The graft's own rules are the request crate's and are sabotaged in its manifest (the NR-3.3 entries); this one covers only this crate's use of them. A failure to read the current directory cannot be made by a test, so the code it carries is a declared survivor.",
+  "sabotages": [
+    {
+      "name": "PATH-1: the worker opens the path as given and not the grafted one",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The two name the same directory until the current directory moves, so only the child-process test that moves it after the request is built tells them apart.",
+      "find": ["native::open_directory(engine.request.win32_path(), &engine.token)"],
+      "replace": ["native::open_directory(engine.request.path(), &engine.token)"]
+    },
+    {
+      "name": "PATH-1: the path as given is reported as the grafted one",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "path() is documented as the path the caller gave, and a relative one differs from what the worker opens.",
+      "find": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.given()\n"],
+      "replace": ["    pub fn path(&self) -> &Wtf16Str {\n        self.path.win32()\n"]
+    },
+    {
+      "name": "PATH-1: an interior NUL is reported as a failure to read the current directory",
+      "file": "src/request.rs",
+      "expect": "caught",
+      "why": "The two failures say different things to the caller, and only the first is about the path itself.",
+      "find": ["        PathCaptureError::InteriorNul => RequestError::new(RequestFailure::InteriorNul),\n"],
+      "replace": ["        PathCaptureError::InteriorNul => RequestError::new(RequestFailure::PathCapture),\n"]
+    },
+    {
+      "name": "PATH-1: the code of a failure to read the current directory is dropped",
+      "file": "src/request.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: GetCurrentDirectoryW cannot be made to fail from a test without breaking the process it runs in. What would reach it is a fault seam in the request crate's current-directory read, which it does not have.",
+      "find": ["            RequestError::with_code(RequestFailure::PathCapture, code)\n"],
+      "replace": ["            {\n                let _ = code;\n                RequestError::new(RequestFailure::PathCapture)\n            }\n"]
+    },
+    {
+      "name": "PATH-1 control: the request's path is built through a binding",
+      "file": "src/request.rs",
+      "expect": "survives",
+      "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(Self {\n            path,\n"],
+      "replace": ["        Ok(Self {\n            path: { let anchored = path; anchored },\n"]
+    }
+  ]
+}
