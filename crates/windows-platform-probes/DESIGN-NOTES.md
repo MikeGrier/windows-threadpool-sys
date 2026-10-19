@@ -709,7 +709,10 @@ architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
 
-## The queue-contention probe, and why it must not run in the CI probe job
+## The queue-contention probe, and how much of it the CI probe job runs
+
+**Amended 2026-10-19: it now runs in the CI probe job at 1, 2 and 4 producers, on both architectures;
+see [The coherence probes run in CI](#d-coherence-probes-in-ci).**
 
 **Every figure this note gives from `probe-queue-contention` that predates `M4.4` was measured in
 the sequential order**, each configuration's passes back to back, because that was the only order
@@ -733,10 +736,12 @@ rest of the queue work -- so this note deliberately names the QUESTIONS rather t
 that would dangle. The probe is the instrument; it is useful before the plan that consumes it lands,
 and it is landed first precisely so the decision is made against measurement rather than argument.
 
-**It is deliberately absent from the `platform-probes` CI job, and the reasons are a core count and a
+**The full curve is not run in the `platform-probes` CI job, and the reasons are a core count and a
 clock rather than a preference.** A contention curve needs more cores than a hosted runner has: the
 sixteen- and thirty-two-producer rows on a four-core runner would measure the scheduler and report it as
-contention. And the run costs about 65 seconds, against a job whose other probes are seconds apiece.
+contention. And the full run costs about 65 seconds, against a job whose other probes are seconds
+apiece. Both reasons are about producer counts above the runner's processors, which is why the job now
+runs the counts below them.
 
 **It must be run in release, which is a measurement and not a preference.** In a debug build
 `slotwise_mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
@@ -765,10 +770,39 @@ paragraph confused the two -- it said the CI job "runs `cargo run` without `--re
 of the job it describes: `probe-doorbell-cost` and `probe-request-cost` already run there with `--release`,
 under a comment establishing exactly the rule this probe would fall under. It also said "unlike every other
 probe", and `probe-cancel-io` is likewise absent. Corrected by a review. The release precedent exists; what
-keeps this one out is that it costs an order of magnitude more than the two probes that use it, on hardware
-that cannot answer the question anyway.
+keeps the full curve out is that it costs an order of magnitude more than the probes that use it, on
+hardware that cannot answer the high-producer question anyway.
 
-So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
+So the full curve is run by hand, on a known machine, and its numbers are recorded with the machine
+attached.
+
+### The coherence probes run in CI, below the runner's processor count
+
+<a id="d-coherence-probes-in-ci"></a>
+
+**Status: decided and implemented** by `M4.11`, on the engineer's direction of 2026-10-19 to implement
+the ARM64 coverage that [the queue crate's README](../windows-waitable-queues/README.md) had recorded as
+missing.
+
+The `platform-probes` job runs on an x64 and an ARM64 runner since `M2.15`, and it is the only ARM64
+hardware this workspace reaches. So it now runs, in release, on both:
+
+- **`probe-queue-contention --producers 1,2,4`.** A hosted runner has four processors, so these are
+  the counts that measure contention rather than the scheduler. The list is fixed rather than read from
+  the runner, so rows from different builds are comparable; the report prints the processors the run
+  had, so a runner with fewer is visible. The rest of the sampling is the default, and the report says
+  the run was not the defaults.
+- **`probe-peer-index-cache`**, whose finding inverts between the two architectures. It uses two
+  threads, so it fits any runner. Its earlier absence rested on a debug build burying the effects it
+  studies, which a release step answers.
+
+At these settings each run takes seconds, against the full queue curve's minute. Neither step asserts a
+magnitude: a red step means the probe failed to run, and the figures are in the build's log, from one
+runner of a heterogeneous fleet, beside the banner that says which.
+
+The full queue curve stays a manual run on a known machine, for the reasons above.
+
+**Scheduled work:** none.
 
 ### Reading it
 
@@ -871,8 +905,10 @@ straight past. The warming variant is a control for the hypothesis that a discar
 substitute for the real thing; it removes no read and moves no time, which is exactly what a control
 that confirms the null should do.
 
-Like `probe-queue-contention`, this probe is **absent from the CI probe job**, and for the same
-measured reason: the effects it studies are coherence effects that a debug build's overhead buries.
+**It runs in the CI probe job, in release, on both architectures**; see
+[The coherence probes run in CI](#d-coherence-probes-in-ci). It was absent until 2026-10-19 because
+the effects it studies are coherence effects that a debug build's overhead buries, which is a reason
+to run it in release rather than not at all.
 
 ## The fingerprint carries provenance inside the string, not beside it
 

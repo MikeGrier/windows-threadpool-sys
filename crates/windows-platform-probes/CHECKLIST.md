@@ -36,6 +36,8 @@ correctness in the archive.
 
 - [x] **M2.17** -- Cross the corpus dimensions instead of varying one at a time. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m217)
 
+- [x] **M4.11** -- Run the queue-contention and peer-index probes in the CI probe job, so each build carries an ARM64 run of both. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m411)
+
 - [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
   have the capture scripts require it to agree.
 

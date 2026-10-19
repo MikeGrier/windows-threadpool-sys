@@ -755,3 +755,23 @@ comparison and the ability to retake any figure published before `M4.4`, to save
 regime on its own. The control exists in both regimes, and a single list of configurations is also
 what makes the sequential order exactly the old one: the old measurement already alternated between
 the regimes in a fixed pattern, and the list preserves it.
+
+## Why the coherence probes joined the CI job, and at what settings
+
+Decided in [The coherence probes run in CI](DESIGN-NOTES.md#d-coherence-probes-in-ci).
+
+**Prompted by a gap a previous round had only described.** `M2.15` put the probe suite on an ARM64
+runner, and correcting [the queue crate's README](../windows-waitable-queues/README.md) afterwards
+showed that the one probe whose ARM64 figures had been lost was not in that job. The engineer,
+2026-10-19: "please implement the missing coverage, I assume in the ci pipeline?"
+
+**The recorded reasons for keeping the queue probe out were a core count and a run time**, and both
+concern producer counts above the runner's processors. At 1, 2 and 4 producers neither applies, so
+the decision narrowed what CI runs rather than reversing why the full curve is manual. Reading the
+count from the runner instead was rejected: rows from different builds would then measure different
+configurations, and the fixed list costs nothing on a runner with more processors.
+
+**The peer-index probe was added in the same change, unasked**, because it is the probe whose finding
+inverts between the two architectures, it needs two threads, and the only reason recorded for its
+absence was the debug-build problem a release step solves. Leaving it out would have kept the ARM64
+gap open for the probe it matters most to.

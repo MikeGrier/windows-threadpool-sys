@@ -1898,3 +1898,22 @@ Evidence, in [sabotage.json](sabotage.json): checking coherence only when the br
 two-dimension defect of the kind this code has shipped -- **survived** the corpus before this change
 and is caught after it, by `every_state_that_blocks_agreement_reaches_the_row`. A crossed value that
 changes nothing is caught by the independence guard, and renaming a value survives as the control.
+
+## Moved 2026-10-19 16:29:02 -04:00 -- M4.11: the coherence probes run in CI on both architectures
+
+### <a id="m411"></a>M4.11 -- Run the queue-contention and peer-index probes in the CI probe job, so each build carries an ARM64 run of both. *(completed 2026-10-19 16:29:02 -04:00)*
+
+Added and completed in one step on the engineer's direction, 2026-10-19: "please implement the
+missing coverage, I assume in the ci pipeline?" -- the coverage being the ARM64 run of
+`probe-queue-contention` that the queue crate's README recorded as lost.
+
+The `platform-probes` job's two matrix entries now run `probe-queue-contention --producers 1,2,4` and
+`probe-peer-index-cache`, both in release. The decision is
+[The coherence probes run in CI](DESIGN-NOTES.md#d-coherence-probes-in-ci), and the queue section of
+[DESIGN-NOTES.md](DESIGN-NOTES.md) was amended from "must not run in the CI probe job" to say what CI
+runs and why the full curve stays manual.
+
+Verified before recording, from a throwaway branch carrying a temporary push trigger (deleted
+afterwards): both steps passed on both entries, on runners whose banners read
+`aarch64 4p/4c smt- L2[1,1,1,1] ec[0:4] numa[4]` and `x86_64 4p/2c smt+ L2[2,2] ec[0:4] numa[4]` --
+four processors each, as the producer limit assumes.
