@@ -800,6 +800,98 @@
       ]
     },
     {
+      "name": "M8.6: the long-path probes stop emitting their row",
+      "file": "src/long_path_report.rs",
+      "expect": "caught",
+      "why": "Both binaries share this renderer, so the census sees two probes lose their row at once.",
+      "find": [
+        "        crate::long_path::raw_row(",
+        "            &observation,",
+        "            &crate::build_identity::this_build().to_string()",
+        "        )",
+        "        .render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.6: the row claims the manifest whatever the binary declares",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the difference between the two binaries; a row that does not say which one it came from cannot be paired.",
+      "find": [
+        "        .with(\"manifest_aware\", observation.manifest_aware)"
+      ],
+      "replace": [
+        "        .with(\"manifest_aware\", true)"
+      ]
+    },
+    {
+      "name": "M8.6: an attempt that opened publishes the error it never read",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The apparatus leaves the error at zero on success without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "                    Value::from((!attempt.opened).then_some(attempt.error)),"
+      ],
+      "replace": [
+        "                    Value::from(Some(attempt.error)),"
+      ]
+    },
+    {
+      "name": "M8.6: a registry value never read is published as off",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "The module's own note records this exact defect in the prose: a refused run reporting the machine half absent on a host where it is set.",
+      "find": [
+        "        .with(\"registry_enabled\", observation.registry_enabled)"
+      ],
+      "replace": [
+        "        .with(\"registry_enabled\", observation.registry_enabled.unwrap_or(false))"
+      ]
+    },
+    {
+      "name": "M8.6: a refused run loses the reason",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "caught",
+      "why": "When the apparatus fails the attempts say nothing about the machine, and this field is the only thing that says so.",
+      "find": [
+        "        .with(\"declined\", observation.apparatus_error.clone())"
+      ],
+      "replace": [
+        "        .with(\"declined\", None::<String>)"
+      ]
+    },
+    {
+      "name": "M8.6: two shapes trade record names",
+      "file": "src/long_path.rs",
+      "expect": "caught",
+      "why": "The two shapes that do not survive verbatim parsing are the hypothesis; swapping their names attributes each one's result to the other.",
+      "find": [
+        "            Self::DotDot => \"dot_dot\",",
+        "            Self::ForwardSlash => \"forward_slash\","
+      ],
+      "replace": [
+        "            Self::DotDot => \"forward_slash\",",
+        "            Self::ForwardSlash => \"dot_dot\","
+      ]
+    },
+    {
+      "name": "M8.6 control: the row names its build before its architecture",
+      "file": "src/long_path/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",

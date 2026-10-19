@@ -25,8 +25,7 @@ which fails until it does.
 - [x] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
 - [x] **M8.5** -- `probe-pool-growth` emits a row.
 
-- [ ] **M8.6** -- `probe-long-path-aware` and `probe-long-path-unaware` emit rows, one item because
-  the finding is the difference between them.
+- [x] **M8.6** -- Both long-path probes emit one `x-probe-long-path` row, told apart by `manifest_aware`. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m86)
 
 - [ ] **M8.7** -- `probe-error-mode` emits a row.
 - [ ] **M8.8** -- `probe-handle-state` emits a row.

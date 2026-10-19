@@ -2047,3 +2047,23 @@ whose source carries no `"reason":"x-probe` literal for the old source check to 
 the census as it stood, checked by running the entry against the previous test file, and is caught by
 the census that runs the probe. A control changing the short run's push count survives. Once `M8.2`
 gave the probe its real row, the entry was re-targeted to delete that row, which the census catches.
+
+## Moved 2026-10-19 18:58:37 -04:00 -- M8.6: the long-path probes emit a row
+
+### <a id="m86"></a>M8.6 -- Both long-path probes emit one `x-probe-long-path` row, told apart by `manifest_aware`. *(completed 2026-10-19 18:58:37 -04:00)*
+
+The item as written: "`probe-long-path-aware` and `probe-long-path-unaware` emit rows, one item
+because the finding is the difference between them."
+
+One reason for both binaries, because their finding is the difference between two runs: a reader
+pairs two rows of one shape rather than two shapes. Each carries `manifest_aware`, the machine's
+`LongPathsEnabled` (`null` when a refused run never read it), the content ceiling, and every attempt
+by shape record name with its resolved length, whether it opened, and the Win32 error only when it
+did not. An apparatus failure is published as `declined`. The row is emitted after the shared
+renderer's body, which returns early on an apparatus failure. `Shape` gained a stable `name` beside
+its prose label.
+
+Evidence, in [sabotage.json](sabotage.json): six `M8.6` entries are each caught by their intended
+test -- among them the row claiming the manifest whatever the binary declares, and an unread
+registry value published as off, the defect the module's own note records against the prose -- and
+a key-order control survives.
