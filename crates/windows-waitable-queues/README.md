@@ -442,6 +442,7 @@ cannot be omitted again.
 | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
 | Profile | release |
 | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
+| Order | each configuration's passes back to back, the only order the probe had then; `--order sequential` retakes it, the probe's default having been interleaved since its `M4.4` |
 | Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
 | Instrument | `probe-queue-contention`, built from `fecd352` (the commit that added the range columns) |
 | Taken | 2026-09-15 UTC-07:00 |
@@ -477,8 +478,11 @@ figures predate a correction to the probe's timing window, which timed from the
 coordinator's clock rather than the producers' own and overstated throughput by a
 margin that grew with producer count; and neither of those machines is available
 here to retake them. The ARM64 data point is therefore gone rather than stale,
-which is the lesser of the two problems. Restoring one is what M2.15 in the
-probe crate's [CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) is for.
+which is the lesser of the two problems. Nothing currently restores it: the probe
+crate's CI job runs on an ARM64 runner since its
+[M2.15](../windows-platform-probes/COMPLETED-CHECKLIST.md#m215), but
+`probe-queue-contention` is deliberately not in that job -- see its
+[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md).
 
 That comparison did carry one finding worth keeping, because it was structural
 rather than numeric: it was designed on the assumption that `slotwise_mpsc` would
