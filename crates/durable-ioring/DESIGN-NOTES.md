@@ -139,7 +139,7 @@ this crate exposes and as which type, which it excludes and why, and what each d
 claim. The engineer's rulings of 2026-10-15 and 2026-10-16 are applied as given; a row that is the
 assistant's call and not a ruling says so in the last column and is listed again at the end for the
 engineer to confirm. It amends [DI-D-63](#di-d-63), which made the open match `std`; the code follows in
-[DI-13.7](CHECKLIST.md#di-137-rework).
+[DI-13.7](COMPLETED-CHECKLIST.md#di-137).
 
 **Sources.** The Microsoft Learn pages for the four calls and for "File Access Rights Constants", read
 on 2026-10-16. The `CreateFileW` remarks were read through the section on physical disks and volumes;
@@ -166,7 +166,7 @@ for this table.
 - **What a target claims follows from how the file was opened** ([DI-D-60](#di-d-60)). The buffering
   mode is the type: it decides the warranty class, the alignment and whether per-write write-through is
   offered, and no other row changes the class.
-- **`open` is a build and a perform** ([DI-13.7](CHECKLIST.md#di-137-rework)). The build is where a
+- **`open` is a build and a perform** ([DI-13.7](COMPLETED-CHECKLIST.md#di-137)). The build is where a
   refusal of the arguments is made ([DI-14.4](CHECKLIST.md)), and every validation of the result is made
   on the opened handle.
 
@@ -196,7 +196,7 @@ for this table.
 | `ACCESS_SYSTEM_SECURITY` | Exposed | Member | A caller who lacks what the kernel requires for it gets the kernel's error, not a panic; which privilege that is was not measured here. | standing |
 | `GENERIC_READ`, `GENERIC_WRITE`, `GENERIC_EXECUTE`, `GENERIC_ALL`, `FILE_ALL_ACCESS` | **Superseded for the data rights by [DI-D-65](#di-d-65):** not members of the rights set | Named constants of the same set, as ruled before [DI-D-65](#di-d-65) | These are the call's own documented values and the commonest ones. Each that includes a write right includes `FILE_WRITE_DATA`. Measured in `DI-13.3` on Windows 11 build 26300: `FILE_ALL_ACCESS`, which names the append bit itself, is refused by an unbuffered open with `ERROR_INVALID_PARAMETER`, while `GENERIC_WRITE` and `GENERIC_ALL` are taken unbuffered. The refusal is the kernel's and reaches the caller as it is; the constant stays and its documentation says so. **Corrected 2026-10-18 by [DI-14.4.1](CHECKLIST.md)'s reading:** this called the pair one "the kernel documents as incompatible". The pages `CreateFileW` is governed by do not say so; `ZwCreateFile`'s does, for its own flags, and this crate does not make that call. | engineer 2026-10-16; assistant |
 | `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_LIST_DIRECTORY`, `FILE_TRAVERSE`, `FILE_DELETE_CHILD`, `FILE_CREATE_PIPE_INSTANCE` | Excluded | None | These name the directory or pipe meaning of a right. A directory is opened only with `FILE_FLAG_BACKUP_SEMANTICS` (the page says so), which is not offered in v1, and a pipe is not a file; the bits shared with the file rights are already members. The directory rights are revisited when `FILE_FLAG_BACKUP_SEMANTICS` is offered. That the pipe right is never offered is a working position ("almost certainly never"), not a decision. | engineer 2026-10-16 (directory); assistant |
-| `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
+| `dwShareMode` (CF, ID, RO) | Exposed | A set of `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `FILE_SHARE_DELETE`, any subset including none | Does not change the class, the alignment or the offsets. The default stays today's all three; an exclusive open (none) is expressible, since a database that owns its file wants it. A sharing violation reaches the caller as a `SharingViolation` that keeps the kernel's error as its source ([DI-13.4](COMPLETED-CHECKLIST.md#di-134); see "What building DI-13.4 settled" below). | engineer 2026-10-15 (the set, the default, exclusive); assistant (the error's form) |
 | `lpSecurityAttributes`: the security descriptor (CF) | Exposed | A `SecurityDescriptor` built from SDDL ([DI-13.5](CHECKLIST.md)), owned by it | The page says an existing file's descriptor is ignored on open, so a caller who passes one to an open of an existing file gets none applied; that is Win32's and is documented here. | engineer 2026-10-15 |
 | `lpSecurityAttributes`: `bInheritHandle` (CF) | Not in v1 | None; the handle is never inheritable | An inheritable handle reaches child processes that can write through it, and no call this crate makes chooses inheritance. A ruling for v1, not a rejection. | engineer 2026-10-15 |
 | `lpSecurityAttributes` (ID) | Not exposed | None | The page marks it reserved. It does not say whether the handle is inheritable, so a test reads that back: observed not inheritable ([DI-D-70](#di-d-70)). | assistant |
@@ -259,7 +259,7 @@ the list is kept here so that the answers are in one place and are not asked aga
 **Zero access** (`dwDesiredAccess` of zero, which the engineer named "no access") was the one call not
 ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as the type `NoData`.
 
-**What building DI-13.4 settled** ([DI-13.4](CHECKLIST.md#di-134)). None of these was a ruling.
+**What building DI-13.4 settled** ([DI-13.4](COMPLETED-CHECKLIST.md#di-134)). None of these was a ruling.
 
 - `ShareMode` is a set of `READ`, `WRITE` and `DELETE` with `NONE` and `ALL`, built as `FileRights` is, with
   no constructor from a raw mask and no `Default`: the empty set is the exclusive one and the set a file
@@ -279,11 +279,11 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   as the page's two conditions say. An open that asks for no data right and no other right is not
   refused beside an exclusive one.
 - `OpenedDisk` and `OpenedVolume` took std's default sharing and had no share mode of their own, because
-  they open through `std::fs::OpenOptions`; [DI-13.11](CHECKLIST.md#di-1311) gave them one, below.
+  they open through `std::fs::OpenOptions`; [DI-13.11](COMPLETED-CHECKLIST.md#di-1311) gave them one, below.
 - `ReOpenFile` takes a share mode too, so [DI-15.4](CHECKLIST.md) takes a `ShareMode` and raises the same
   `SharingViolation`.
 
-**What building DI-13.11 settled** ([DI-13.11](CHECKLIST.md#di-1311)). None of these was a ruling.
+**What building DI-13.11 settled** ([DI-13.11](COMPLETED-CHECKLIST.md#di-1311)). None of these was a ruling.
 
 - `VolumeOptions::share` and a new `DiskOptions::share` take the same `ShareMode`, default all three, and a
   conflict is the same `SharingViolation` with no right beyond the data access. A disk had no options
@@ -297,7 +297,7 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   options' share mode to that function. A raw open needs an administrator and a scratch virtual disk, so
   the exclusive volume and disk tests are the ignored ones that run in CI, and an open that asks for no
   data right is not judged by the share mode, so a no-data handle cannot show it either. Run elevated on
-  2026-10-16 ([DI-13.12](CHECKLIST.md#di-1312)), both pass, and each wiring mutated to ignore the options
+  2026-10-16 ([DI-13.12](COMPLETED-CHECKLIST.md#di-1312)), both pass, and each wiring mutated to ignore the options
   fails its test. The two sabotage entries still expect to survive, because the sweep runs no ignored test.
   The first open of an exclusive volume was refused once in two runs as a sharing violation that was not
   the test's, something else holding the volume just after it appeared; the volume tests open it again for
@@ -309,7 +309,7 @@ ruled when the list above was written; it is resolved by [DI-D-65](#di-d-65), as
   when exclusive and an open when shared. An open that asks for no data right is admitted in all four.
   So a caller that locks sees the lock's refusal and never the share mode's.
 
-**What building DI-14.2 settled** ([DI-14.2](CHECKLIST.md#di-142-flags)). None of these was a ruling.
+**What building DI-14.2 settled** ([DI-14.2](COMPLETED-CHECKLIST.md#di-142)). None of these was a ruling.
 
 - `FileOptions::delete_on_close`, `open_no_recall` and `posix_semantics` are the three flags of the rows
   above, each a bool that sets its own bit, passed to a cached and an unbuffered file alike. Nothing is
@@ -632,7 +632,7 @@ and whether a handle typed not to write may be opened to overwrite, are not answ
 revisit.
 
 **Scheduled work:** none of its own. Each row's work is the item it names:
-[DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](CHECKLIST.md#di-137-rework)
+[DI-13.3](CHECKLIST.md) (rights), [DI-13.4](CHECKLIST.md) (share mode), [DI-13.7](COMPLETED-CHECKLIST.md#di-137)
 (the open, the disposition and the two-phase shape), [DI-14.1](CHECKLIST.md) to [DI-14.7](CHECKLIST.md)
 (flags, attributes, security, combinations, the remote check, devices, the overlapped evidence) and
 [DI-15.1](CHECKLIST.md) to [DI-15.4](CHECKLIST.md) (identity and reopening).
@@ -686,7 +686,7 @@ query succeeded for every set tried, including those without the read-attributes
 measured: `DELETE` gates rename and delete-on-close through `SetFileInformationByHandle`, and
 `SetFileValidData` needs `GENERIC_WRITE` and a privilege. If this crate later offers a method gated by
 one of those, that right becomes an axis, and the cost of one more axis is in
-[DI-13.8](CHECKLIST.md#di-138).
+[DI-13.8](COMPLETED-CHECKLIST.md#di-138).
 
 **What it fixes.**
 
@@ -709,7 +709,7 @@ existing test `a_write_through_a_read_only_handle_fails` expects. Whether the ta
 access to the core, as it states its warranty and geometry, so that the core can refuse at submission, and
 whether a key carries it, are decided by [DI-D-66](#di-d-66).
 
-**What building it settled** ([DI-13.8](CHECKLIST.md#di-138)). None of these was a ruling; each is
+**What building it settled** ([DI-13.8](COMPLETED-CHECKLIST.md#di-138)). None of these was a ruling; each is
 the choice the code made, with the measurement.
 
 - `read()` and `write()` ask for `FILE_READ_DATA` and `FILE_WRITE_DATA` alone, and no generic right. Reading,
@@ -732,8 +732,8 @@ runs only where the test run has one, in CI; and whether `ReOpenFile` can widen 
 is a test in [DI-15.4](COMPLETED-CHECKLIST.md#di-154): it was observed to, from read-only to read-write, where the
 file's security allows ([DI-D-71](#di-d-71)).
 
-**Scheduled work.** [DI-13.8](CHECKLIST.md#di-138), and [DI-13.9](CHECKLIST.md#di-139) and
-[DI-13.10](CHECKLIST.md#di-1310) from [DI-D-66](#di-d-66). Amended by this decision: [DI-13.7](CHECKLIST.md#di-137-rework), [DI-15.2](CHECKLIST.md) and
+**Scheduled work.** [DI-13.8](COMPLETED-CHECKLIST.md#di-138), and [DI-13.9](COMPLETED-CHECKLIST.md#di-139) and
+[DI-13.10](COMPLETED-CHECKLIST.md#di-1310) from [DI-D-66](#di-d-66). Amended by this decision: [DI-13.7](COMPLETED-CHECKLIST.md#di-137), [DI-15.2](CHECKLIST.md) and
 [DI-15.4](CHECKLIST.md).
 
 ## <a id="di-d-66"></a>DI-D-66: a target states its data access to the core, and a key can carry it
@@ -752,7 +752,7 @@ as a parameter. An associated type on `IoTarget` would let a ring hold targets o
 ring with a read-write log file and a read-only snapshot could not be built. The access is therefore a
 type where the target is constructed and a stated fact after it, as the buffering mode is.
 
-**Layer 1 -- the target states it** ([DI-13.9](CHECKLIST.md#di-139)).
+**Layer 1 -- the target states it** ([DI-13.9](COMPLETED-CHECKLIST.md#di-139)).
 
 ```rust
 // durable-ioring (portable): the markers and traits of DI-D-65 live here, so that MemoryTarget and
@@ -769,7 +769,7 @@ already runs before a gated operation is held ([DI-D-54](#di-d-54)), so a gated 
 target is refused at the consumer's push and not when its gate releases. The method has no default,
 because a default would state `ReadWrite` for a target that never said so.
 
-**Layer 2 -- a key carries it** ([DI-13.10](CHECKLIST.md#di-1310)), additive.
+**Layer 2 -- a key carries it** ([DI-13.10](COMPLETED-CHECKLIST.md#di-1310)), additive.
 
 ```rust
 pub struct Key<A: HasData>(IoTargetKey, PhantomData<fn() -> A>);  // the same number; the consumer's declaration
@@ -787,7 +787,7 @@ compile. Registration checks the key's declared access against the target's and 
 that check is at runtime because the target is erased, and it is the only runtime step a typed key adds.
 Entries, errors and events keep the untyped key.
 
-**What building it settled** ([DI-13.10](CHECKLIST.md#di-1310)). The four submit methods, and the four
+**What building it settled** ([DI-13.10](COMPLETED-CHECKLIST.md#di-1310)). The four submit methods, and the four
 registered-buffer ones beside them, are generic over `WriteKey` and `ReadKey` without harm to a caller
 that holds the ring through `DurableRing`: the trait was already generic-only ([DI-D-24](#di-d-24)), and
 every call that passed an `IoTargetKey` compiled unchanged. The two traits are supertraits of a sealed
@@ -823,7 +823,7 @@ refused at the push, with its buffer handed back, and no longer fails after the 
 method on a published trait breaks every other implementor; the implementors in this workspace are
 `MemoryTarget`, `Win32FileTarget` and the test targets.
 
-**Scheduled work.** [DI-13.9](CHECKLIST.md#di-139) and [DI-13.10](CHECKLIST.md#di-1310).
+**Scheduled work.** [DI-13.9](COMPLETED-CHECKLIST.md#di-139) and [DI-13.10](COMPLETED-CHECKLIST.md#di-1310).
 
 ## <a id="di-d-67"></a>DI-D-67: what a name reaches is the caller's responsibility
 

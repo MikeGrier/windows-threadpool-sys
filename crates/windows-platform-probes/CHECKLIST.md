@@ -306,7 +306,7 @@ IDs keep their M2 numbers, for the reason given under M4.
 - [x] **M6.1** -- Rewrite the `request_cost` probe against the new request path design. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#m61)
 
   **Next:** nothing further in this crate. The order across the crates is at the top of
-  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+  [durable-ioring's CHECKLIST.md](../durable-ioring/COMPLETED-CHECKLIST.md#open-surface-order).
 
 ## M7 -- Follow the request crate's shared handles
 

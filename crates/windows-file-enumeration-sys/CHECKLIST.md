@@ -10,7 +10,7 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
 
   **Next:** `REVIEW-1` below is re-read against the new contract. After that nothing further in this
   crate; the order across the crates is at the top of
-  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+  [durable-ioring's CHECKLIST.md](../durable-ioring/COMPLETED-CHECKLIST.md#open-surface-order).
 
 ## ERR -- One error code type across the crates
 

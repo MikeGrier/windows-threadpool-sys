@@ -3076,7 +3076,7 @@ neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`), [DI-13.7.3](#di-1373) (`Dispos
 [DI-D-63](DESIGN-NOTES.md#di-d-63)'s superseded list of what was kept so that a caller sees no difference from
 `std` is replaced by what the open is now, and its two checks and its unverified items are kept. The README's
 open section gains the path, the disposition, the reparse option and `request`/`perform`, with a doctest of the
-second; the module documentation of `opened_file.rs` says the same. [DI-14.2](CHECKLIST.md#di-142-flags) already
+second; the module documentation of `opened_file.rs` says the same. [DI-14.2](#di-142) already
 lacks the reparse flag.
 
 ### <a id="di-142"></a>DI-14.2 -- `FILE_FLAG_DELETE_ON_CLOSE`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are builder methods on `FileOptions`. *(completed 2026-10-17 16:05:14 -04:00)*
@@ -3386,3 +3386,106 @@ The engineer, 2026-10-19: "I say it's not accepted at this time." The residue is
 caller was never granted (the broker case), objects not created by `CreateFile`, and, observed in `DI-15.4`, volume
 and disk handles. A consumer's declaration of such a handle's mode is not accepted. The ruling and the option that
 was laid out are in [DI-D-68](DESIGN-NOTES.md#di-d-68); nothing is scheduled.
+
+## Moved 2026-10-19 12:04:14 -04:00 -- DI-M7+, DI-M9, DI-M10, DI-M13 and DI-M14 complete, with the open-surface order
+
+Every item of these milestones was already archived above when it completed; the stubs that stood in the checklist
+are dropped, and what follows is the prose each section carried, moved verbatim, with headings one level deeper.
+`DI-M7+` and `DI-M14` carried none. `DI-M15` was moved on 2026-10-19 10:51:05 -04:00, above.
+
+### <a id="open-surface-order"></a>Where the open-surface work goes next (read this first when picking the work back up)
+
+The open surface of a file ([DI-M13](#di-m13----opening-a-file-the-surface-and-its-home) to
+[DI-M15](COMPLETED-CHECKLIST.md#di-151)) cannot be done in this crate alone: it
+changes four others. This is the order across all of them. **No status is kept here**, because each
+item's own checkbox is the status and a copy would go stale; this list is only the order and the
+links. Each item below also ends with a `Next:` line pointing at the step after it.
+
+**Step 0, added 2026-10-15, before step 1** (the engineer ruled that volume operations belong in the
+volume crate and that the error codes become one shared type; see
+[WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5) and
+[WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1)):
+
+- 0.1. [WE-1.1 to WE-1.3](../win-error-codes/CHECKLIST.md) -- the new `win-error-codes` crate.
+- 0.2. In any order, each needing only `WE-1.1`:
+  [NR-4.1](../windows-namespace-request-sys/CHECKLIST.md) (request crate adopts it),
+  [ERR-1](../windows-file-enumeration-sys/CHECKLIST.md) (enumeration crate adopts it), and
+  [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) (the volume crate takes in the storage-locality
+  entries, in that order).
+- 0.3. [NR-2.8](../windows-namespace-request-sys/CHECKLIST.md) -- the request crate deletes the
+  originals. **It must land before step 4's release**, or the entries are published from the crate
+  they do not belong in. `NR-4.1` should land before it too, so that release carries the
+  `io::Error` fix.
+
+Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; step 4 does.
+
+1. [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the captured root and the
+   graft, as one internal type. Additive; nothing breaks.
+2. [NR-3.4](../windows-namespace-request-sys/CHECKLIST.md),
+   [NR-3.5](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.6](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: **one coupled breaking
+   commit.** `OpenFile` and `WatchDirectory` take a `Wtf16String`, an interior NUL is refused,
+   `prepare` is retired. `win-durable-ioring` and `windows-platform-probes` call `prepare` through
+   path dependencies, so **the same commit adapts both just enough to build**, and the request
+   crate's own tests and docs; a commit that leaves the workspace unbuilt is the worse outcome.
+3. [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the SDDL constructor and
+   the `ReOpenFile` entry. Additive, independent of steps 1 and 2; may be done first.
+4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
+   so a new minor. This is a release action and not a checklist item.
+5. `DI-13.1` is done: its table is [DI-D-64](DESIGN-NOTES.md#di-d-64), and `DI-13.3` onward build on
+   it.
+6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
+   consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
+   [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
+   crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
+7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
+   `DI-M15`. `DI-10.5` needs none of them and may be done at any point.
+
+If you remember only one thing: **the request crate comes first, and its breaking commit moves three
+crates at once.**
+
+### <a id="di-m9----reviews-the-engineer-confirms-or-amends-the-assistants-choices-ungated-gates-nothing"></a>DI-M9 -- Reviews: the engineer confirms or amends the assistant's choices (ungated; gates nothing)
+
+Each item is one choice the assistant made while building and the engineer has not yet confirmed.
+The code binds to each already, because the steps could not be built without choosing; what is open
+is the review. These reviews gate no other work (the engineer, 2026-10-10: "I cannot be the blocking
+factor"). Where the engineer had already decided part of a row, that part is not here. A rejected
+point is reworked as an item of the milestone current when it is rejected, with its decision row
+amended. Every item carries one of three tags, which say what is asked:
+
+- **DECIDE** -- the choice changes what a consumer can do or must avoid, or trades against a real
+  alternative. The action is to accept it or amend it; "accept 9.1.1" is a complete answer. Each says
+  what the code does now.
+- **RATIFY** -- a name, a placement, an internal shape or a test method. It stands unless the
+  engineer objects; "ratify 9.3.3" closes it.
+- **MINE** -- not a choice: a gap or check the assistant owes. Nothing is asked of the engineer.
+
+A group may be answered whole ("accept all DECIDE in 9.1"). The wording of each choice as first
+written, which these items condense, is in git at the revision before the one that restructured this
+milestone; the decision rows named below carry the reasons.
+
+#### DI-9.1 -- Lineage handles ([DI-D-42](DESIGN-NOTES.md#di-d-42), from `DI-3.2.5.1`)
+#### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
+#### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
+#### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
+#### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
+#### DI-9.6 -- The driver on the core ([DI-3.10.3.5.6.1 to DI-3.10.3.5.6.2.6](COMPLETED-CHECKLIST.md))
+#### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
+#### DI-9.8 -- Owed by the assistant
+
+### DI-M10 -- Target backings
+
+`DI-10.3` and `DI-10.6`, whether a handle opened elsewhere can be given to a file target, are decided by
+[DI-D-68](DESIGN-NOTES.md#di-d-68): not in this version, and not on a consumer's declaration of its mode.
+
+### <a id="di-m13----opening-a-file-the-surface-and-its-home"></a>DI-M13 -- Opening a file: the surface and its home
+
+Why this milestone exists. [DI-D-60](DESIGN-NOTES.md#di-d-60) made a file target from a file this
+crate opened and from nothing else, and [`FileOptions`](../win-durable-ioring/src/windows_backend/opened_file.rs)
+carries only `read`, `write`, `create`, `create_new` and `truncate`. A consumer whose open needs more
+(a share mode, a security descriptor, delete-on-close, an open by file ID) cannot say so, and would
+want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](COMPLETED-CHECKLIST.md#di-106)).
+Widening what this crate can open is the structural answer: every option a consumer can pass is an
+option recorded by construction. The rule throughout is documented APIs only
+([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
