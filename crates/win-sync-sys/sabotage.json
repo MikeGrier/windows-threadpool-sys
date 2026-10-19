@@ -351,7 +351,7 @@
       "name": "WS-1+.1: a refused APC is reported as queued",
       "file": "src/apc.rs",
       "expect": "caught",
-      "why": "The error path, reached by a handle that is not a thread. Swallowed, a routine that will never run is reported queued.",
+      "why": "The error path of the call itself, reached by a thread of this process whose handle lacks THREAD_SET_CONTEXT: a handle that is not a thread, or has no query access, is refused by the process check before the call is made. Swallowed, a routine that will never run is reported queued.",
       "find": ["    if queued == 0 {\n"],
       "replace": ["    if false {\n"]
     },
@@ -359,7 +359,7 @@
       "name": "WS-1+.1: a refused APC's routine is leaked",
       "file": "src/apc.rs",
       "expect": "caught",
-      "why": "When the call fails nothing was queued, so the routine is still the caller's to drop; kept alive it is a leak of everything it captured. The drop-count tests see it.",
+      "why": "When the call fails nothing was queued, so the routine is still the caller's to drop; kept alive it is a leak of everything it captured. The drop-count test of a handle the call itself refuses sees it; the refusals that come before the call never reach this line.",
       "find": ["        drop(unsafe { Box::from_raw(data) });\n"],
       "replace": ["        let _ = data;\n"]
     },
