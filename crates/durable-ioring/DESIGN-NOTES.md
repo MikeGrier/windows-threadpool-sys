@@ -81,8 +81,9 @@ appear here.
 | <a id="di-d-67-index"></a>DI-D-67 | **What a name reaches is the caller's responsibility: an open is not checked, refused, bounded or cancelled on account of where its name leads.** The engineer, 2026-10-18: "The responsibility is only on the caller." No check of a name can be complete, since object-manager links and intermediate reparse points redirect regardless of `FILE_FLAG_OPEN_REPARSE_POINT`; a check of the handle cannot reach an open that has not returned; and `CancelSynchronousIo` targets a thread rather than a call and is not guaranteed by its documentation. See [DI-D-67](#di-d-67). |
 | <a id="di-d-68-index"></a>DI-D-68 | **A handle opened elsewhere is not accepted by a file target in this version, and a consumer who knows a device is theirs alone can attest it, which is the only way a Win32 target is `Complete`.** The engineer, 2026-10-18, closing `DI-10.3`: "do the attestation approach", on the assistant's recommendation. Foreign handles stay out, with the residue a `ReOpenFile` cannot convert named; the attestation is a constructor for each of the three kinds of target that takes an unbuffered handle this crate opened. [Section below](#di-d-68). |
 | <a id="di-d-69-index"></a>DI-D-69 | **A file's identity is this crate's `FileId`: the volume serial and the 128-bit identifier `FileIdInfo` reports, read through the handle shared.** The assistant, implementing `DI-15.1`. The type is owned here and not the request crate's; it is read from any `SharedHandle` and from an `OpenedFile` of any access, and nothing is duplicated to read it. [Section below](#di-d-69). |
-| <a id="di-d-70-index"></a>DI-D-70 | **An open by identifier is `OpenedFile::open_by_id`, taking one of three identifier kinds, its own `ByIdOptions`, and any handle as the hint; a `FileId` is checked against the file opened.** The assistant, implementing `DI-15.2`. The checks are the path open's, by the same code; a sharing violation names the file by `OpenedBy`. Observed: a directory opens by identifier without the backup flag, which is [DI-15.5](CHECKLIST.md)'s to rule on. [Section below](#di-d-70). |
+| <a id="di-d-70-index"></a>DI-D-70 | **An open by identifier is `OpenedFile::open_by_id`, taking one of three identifier kinds, its own `ByIdOptions`, and any handle as the hint; a `FileId` is checked against the file opened.** The assistant, implementing `DI-15.2`. The checks are the path open's, by the same code; a sharing violation names the file by `OpenedBy`. Observed: a directory opens by identifier without the backup flag, which the engineer ruled allowed, [DI-D-72](#di-d-72). [Section below](#di-d-70). |
 | <a id="di-d-71-index"></a>DI-D-71 | **A reopen is `OpenedFile::reopen`, from any handle, with its own `ReopenOptions`; the result is a new file of the type asked for, judged by the path open's checks.** The assistant, implementing `DI-15.4`. A sharing violation names the file by `OpenedBy::Reopen`. Observed: every pair of an original and a reopen is refused or accepted as the page's sharing rule says; a volume and a disk do not reopen, unelevated. [Section below](#di-d-71). |
+| <a id="di-d-72-index"></a>DI-D-72 | **A directory reached by an open by identifier is allowed, and what it does is documented.** The engineer, 2026-10-19: "I think these results are 'harmless'. We can document our findings but there is no harm in allowing it to happen." A target made from one faults every read and write with the kernel's error and completes every commit; a faulted write is covered by no durability report, so the commits vouch for nothing. [Section below](#di-d-72). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -211,7 +212,7 @@ for this table.
 | `FILE_FLAG_OPEN_REPARSE_POINT` (CF, ID, RO) | Exposed | Builder method, explicit | The handle is to the reparse point and not its target, so the remote check has to look at the target ([DI-14.5](CHECKLIST.md)). No longer set automatically on a new file. | engineer 2026-10-15 |
 | `FILE_FLAG_OPEN_NO_RECALL` (CF, ID, RO) | Exposed | Builder method | None. Intended for remote storage systems. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
 | `FILE_FLAG_POSIX_SEMANTICS` (CF, RO) | Exposed | Builder method | None. The page says files made with it may not be reachable by older applications. `ID` does not list it. | plan, [DI-14.2](CHECKLIST.md); engineer 2026-10-16 |
-| `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. An open by identifier was observed to open a directory without it, though the `OpenFileById` page says it is required ([DI-D-70](#di-d-70)); whether that is refused is [DI-15.5](CHECKLIST.md). | engineer 2026-10-15 |
+| `FILE_FLAG_BACKUP_SEMANTICS` (CF, ID, RO) | Not in v1 | None | It serves backup and restore applications and is required to open a directory. A ruling for v1, with nothing against it. An open by identifier was observed to open a directory without it, though the `OpenFileById` page says it is required ([DI-D-70](#di-d-70)), and that is allowed ([DI-D-72](#di-d-72)). | engineer 2026-10-15; the directory by identifier, engineer 2026-10-19 |
 | `FILE_FLAG_OVERLAPPED` (CF, ID, RO) | Exposed | Builder method, [DI-14.9](COMPLETED-CHECKLIST.md#di-149) | The pages say the system then does not maintain the file pointer and I/O is not serialised. The core addresses every operation by offset, so the pointer is not what it reads; what the ring does on such a handle was measured in [DI-14.7](COMPLETED-CHECKLIST.md#di-147). The run opened through `CreateFileW` only, which is all `FileOptions` reaches today. Earlier ruled out of v1 unless the ring needed it. | engineer 2026-10-15, 2026-10-16, 2026-10-18 |
 | `FILE_FLAG_SESSION_AWARE` (CF) | Not in v1 | None | The page says it matters to processes in session 0 and is supported only on server editions; a small interest and hard to test. | engineer 2026-10-15 |
 | `SECURITY_SQOS_PRESENT` and the `SECURITY_*` flags (CF, RO) | Excluded | None | The `ReOpenFile` page confines them to the client side of a named pipe, and the `CreateFileW` page does not say what they do for a file. A file target does not impersonate a server. | engineer 2026-10-15 |
@@ -1032,12 +1033,14 @@ authority.
 - **A directory opens by identifier without `FILE_FLAG_BACKUP_SEMANTICS`**, for every data access and in either
   buffering mode, though the page says the flag is required to obtain a handle to a directory; an open of the same
   directory by path without it fails with error 5. So an `OpenedFile`, and a target made from one, can be a
-  directory, which nothing before could make. Nothing refuses it; [DI-15.5](CHECKLIST.md) is the engineer's to rule on.
+  directory, which nothing before could make. Nothing refuses it, which the engineer ruled is right
+  ([DI-D-72](#di-d-72)).
 - **A file deleted by name while held open still opens by identifier.** The page says that a file "pending deletion as
   a result of a previous call to `DeleteFile`" fails with `ERROR_ACCESS_DENIED`; what state `std::fs::remove_file`
   left the file in was not examined. Nothing here depends on it.
 
-**Scheduled work.** [DI-15.5](CHECKLIST.md): whether an open by identifier that reaches a directory is refused.
+**Scheduled work.** [DI-15.5](COMPLETED-CHECKLIST.md#di-155), whether an open by identifier that reaches a directory
+is refused, which [DI-D-72](#di-d-72) answers.
 
 ## <a id="di-d-71"></a>DI-D-71: a reopen, from any handle, into a file of the type asked for
 
@@ -1078,5 +1081,36 @@ the page is the authority.
   call does not do it.
 - On an account that reaches `\\localhost\C$`, a cached reopen of a file on the share succeeds and an unbuffered one
   is refused as `RemoteDevice`; that test is ignored by default, as the open's own is.
+
+**Scheduled work.** None.
+
+## <a id="di-d-72"></a>DI-D-72: a directory reached by an open by identifier is allowed
+
+**What is decided.** The engineer, 2026-10-19, closing [DI-15.5](COMPLETED-CHECKLIST.md#di-155) after the
+measurements below: "I think these results are 'harmless'. We can document our findings but there is no harm in
+allowing it to happen." Nothing checks whether an `OpenedFile` reached by identifier is a directory, and none is
+refused for being one; the behaviour is documented on `OpenedFile::open_by_id` and here. The assistant, asked
+whether it disagreed, agreed on the ground of [CONTRACT.md](CONTRACT.md)'s first guarantee: a write that completed
+with a fault is covered by no durability report. Every write to a directory faults, so a directory target is a
+target whose writes all fail, which the core already handles for a file whose writes are refused, and a commit
+that succeeds on it vouches for nothing.
+
+**Measured on Windows 11 build 26300 on NTFS, unelevated.** Directly, by a throwaway script over documented calls
+on a directory with one child: opened by path with `FILE_FLAG_BACKUP_SEMANTICS`, or by identifier without it, the
+two behave the same. `ReadFile` fails with error 1 (`ERROR_INVALID_FUNCTION`); `WriteFile` fails with error 1, or
+87 for an unaligned write on an unbuffered handle, or 5 without the write right; `FlushFileBuffers` succeeds with
+the write right and fails with error 5 without it; `GetFileSizeEx` reports 0. Through the ring, by
+[a test](../win-durable-ioring/src/windows_backend/tests/directory.rs): a directory registers at construction and
+attaches later; every write and read completes with a fault carrying `HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)`;
+every commit completes successfully; and the directory's contents are unchanged. Backup semantics changes nothing
+about I/O, only whether the handle can be had by path. These are anecdote; no page describes I/O on a directory
+handle.
+
+**What a consumer should know, and the documentation says.**
+
+- On a directory, `FILE_READ_DATA` and `FILE_WRITE_DATA` are the same bits as `FILE_LIST_DIRECTORY` and
+  `FILE_ADD_FILE`, so the handle an `OpenedFile<_, ReadWrite>` of a directory lends carries those rights.
+- What a flush of a directory makes durable is not stated by the `FlushFileBuffers` page, which speaks of files; a
+  commit that succeeds on a directory target is not a statement that the directory's entries are on stable media.
 
 **Scheduled work.** None.

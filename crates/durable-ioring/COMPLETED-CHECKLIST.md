@@ -3361,3 +3361,17 @@ the checks on the reopened handle are the open's by the same function, and a sha
 `OpenedBy::Reopen`. The decision and what was observed are [DI-D-71](DESIGN-NOTES.md#di-d-71): every pair of an
 original and a reopen follows the page's sharing rule, judged by the share-mode tests' statement of it; `NUL` reaches
 `UnknownLocation`; a handle from `OpenFileById` reopens; a volume and a disk do not, unelevated.
+
+## Moved 2026-10-19 10:51:05 -04:00 -- DI-M15: opening by identity, and reopening
+
+The milestone's items are complete: `DI-15.1`, `DI-15.2` and `DI-15.4` are archived above, and `DI-15.5` below.
+`DI-15.3`, opening relative to a directory handle, was deferred by the engineer and is parked in the checklist's
+horizon section, not completed.
+
+### <a id="di-155"></a>DI-15.5 -- A directory reached by an open by identifier is allowed, and what it does is documented. *(completed 2026-10-19 10:51:05 -04:00)*
+
+The engineer ruled it "harmless" after the measurements, directly and through the ring, and the assistant agreed on
+the contract's first guarantee: a faulted write is covered by no durability report. A directory target faults every
+read and write with the kernel's error and completes every commit. The decision and the measurements are
+[DI-D-72](DESIGN-NOTES.md#di-d-72); the ring's behaviour is a test in `win-durable-ioring`, and `open_by_id`'s
+documentation says it.

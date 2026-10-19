@@ -15,7 +15,7 @@ convention.
 ## Where the open-surface work goes next (read this first when picking the work back up)
 
 The open surface of a file ([DI-M13](#di-m13----opening-a-file-the-surface-and-its-home) to
-[DI-M15](#di-m15----opening-by-identity-and-reopening)) cannot be done in this crate alone: it
+[DI-M15](COMPLETED-CHECKLIST.md#di-151)) cannot be done in this crate alone: it
 changes four others. This is the order across all of them. **No status is kept here**, because each
 item's own checkbox is the status and a copy would go stale; this list is only the order and the
 links. Each item below also ends with a `Next:` line pointing at the step after it.
@@ -274,23 +274,6 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [x] **DI-14.11** -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-1411)
 
-## DI-M15 -- Opening by identity, and reopening
-
-- [x] **DI-15.1** -- A file's identity, `FileId`, is read from an opened file or any shared handle, and the `lpFileId` row cites the `FILE_ID_DESCRIPTOR` page. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-151)
-
-- [x] **DI-15.2** -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-152)
-
-- [x] **DI-15.4** -- A reopen, `OpenedFile::reopen`, makes a new file of the type asked for from any handle through `ReOpenFile`, with its own `ReopenOptions` and the path open's checks. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#di-154)
-- [ ] **DI-15.5** -- **Decide whether an open by identifier that reaches a directory is refused.** Observed
-  ([DI-D-70](DESIGN-NOTES.md#di-d-70)): `OpenFileById` opened a directory without `FILE_FLAG_BACKUP_SEMANTICS`, for
-  every data access and in either buffering mode, though its page says the flag is required to obtain a handle to a
-  directory, and an open of the same directory by path is refused by the kernel. So an `OpenedFile`, and a
-  `Win32FileTarget` made from one, can now be a directory, which no open before could make. The engineer's to rule:
-  refuse it on the opened handle, where the other checks are made ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)); leave
-  it to the caller, as [DI-D-67](DESIGN-NOTES.md#di-d-67) leaves where a name leads; or something else. The test
-  `a_directory_was_observed_to_open_by_identity_where_by_path_it_is_refused` states today's behaviour and follows the
-  ruling.
-
 ## DI-M15+ -- Handles opened elsewhere (parked behind DI-M15)
 
 - [x] **DI-10.3** -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-103)
@@ -520,5 +503,4 @@ implementation before it is answerable.
     directory at worst.
   - Not yet checked against the documentation: `CreateFile2`'s extended parameters, and the documented `FSCTL_*`
     controls. A directory opens by identity without the backup flag ([DI-D-70](DESIGN-NOTES.md#di-d-70)), which
-    [DI-15.5](#di-m15----opening-by-identity-and-reopening) is to rule on, and which decides whether the substitute
-    reaches directories.
+    the engineer ruled allowed ([DI-D-72](DESIGN-NOTES.md#di-d-72)), so the substitute reaches directories too.
