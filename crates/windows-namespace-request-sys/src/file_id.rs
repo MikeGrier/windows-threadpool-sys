@@ -21,7 +21,9 @@ use std::mem::MaybeUninit;
 
 use windows_sys::Win32::Storage::FileSystem::{FILE_ID_INFO, GetFileInformationByHandleEx};
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, perform_bool};
 use crate::query::FileInformationClass;
 
@@ -87,31 +89,34 @@ fn from_raw(info: &FILE_ID_INFO) -> FileIdInfo {
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request queries nothing"]
 pub struct QueryFileIdInfo {
-    handle: CapturedHandle,
+    handle: SharedHandle,
 }
 
 impl QueryFileIdInfo {
-    /// Begins a request against `handle`.
-    pub fn new(handle: CapturedHandle) -> Self {
-        Self { handle }
+    /// Begins a request against `handle`, which the request holds as one more holder of it.
+    pub fn new(handle: impl Into<SharedHandle>) -> Self {
+        Self {
+            handle: handle.into(),
+        }
     }
 
-    /// The owned duplicate of the handle being queried.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being queried, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
     }
 
-    /// Copies the request, duplicating the handle.
+    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
+    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
     ///
     /// # Errors
     ///
     /// Returns the handle-capture failure when the handle cannot be duplicated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         Ok(Self {
-            handle: self.handle.try_clone()?,
+            handle: duplicate(&self.handle)?,
         })
     }
 
@@ -126,7 +131,7 @@ impl QueryFileIdInfo {
             .expect("this fixed, small struct's size always fits a u32");
 
         perform_bool(|| {
-            // SAFETY: the handle is a duplicate this request owns and keeps open across the call, and
+            // SAFETY: the handle is one this request holds and keeps open across the call, and
             // the buffer is writable `FILE_ID_INFO` storage of exactly the size passed, which is the
             // structure this class writes.
             unsafe {

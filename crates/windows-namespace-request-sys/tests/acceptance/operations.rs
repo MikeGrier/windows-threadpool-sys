@@ -307,7 +307,7 @@ fn the_unused_createfilew_parameters_are_still_expressible() {
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(captured(&template_source)));
+        .with_template(Some(captured(&template_source).into()));
 
     assert!(request.template().is_some());
     let handle = request.perform().expect("open with a template");

@@ -34,7 +34,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::{Wtf16Str, Wtf16String};
 
 use crate::anchored::{AnchoredPath, PathCaptureError};
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, perform_handle};
 use crate::security::SecurityAttributes;
 
@@ -84,7 +86,7 @@ pub struct OpenFile {
     security: Option<SecurityAttributes>,
     creation_disposition: FILE_CREATION_DISPOSITION,
     flags_and_attributes: FILE_FLAGS_AND_ATTRIBUTES,
-    template: Option<CapturedHandle>,
+    template: Option<SharedHandle>,
 }
 
 impl OpenFile {
@@ -166,11 +168,11 @@ impl OpenFile {
         self
     }
 
-    /// Sets `hTemplateFile` from an already-captured handle.
+    /// Sets `hTemplateFile`.
     ///
-    /// The request owns a duplicate, so it cannot be left naming a template the
-    /// caller has since closed.
-    pub fn with_template(mut self, template: Option<CapturedHandle>) -> Self {
+    /// The request holds the template as one more holder of it, so it cannot be left naming a
+    /// template the caller has since closed.
+    pub fn with_template(mut self, template: Option<SharedHandle>) -> Self {
         self.template = template;
         self
     }
@@ -218,9 +220,9 @@ impl OpenFile {
         self.flags_and_attributes
     }
 
-    /// The captured template handle, if one was supplied.
+    /// The template handle, if one was supplied, shared with its other holders.
     #[must_use]
-    pub fn template(&self) -> Option<&CapturedHandle> {
+    pub fn template(&self) -> Option<&SharedHandle> {
         self.template.as_ref()
     }
 
@@ -228,8 +230,9 @@ impl OpenFile {
     ///
     /// This is not `Clone` because a request may own a handle, and duplicating
     /// a handle is fallible, as is copying the security attributes it may own.
-    /// The type inherits that from [`CapturedHandle::try_clone`] and
-    /// [`SecurityAttributes::try_clone`] rather than hiding it behind an infallible
+    /// The type inherits that from [`SecurityAttributes::try_clone`], and the template is
+    /// duplicated until `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`), rather than hiding it
+    /// behind an infallible
     /// signature that would have to panic.
     ///
     /// # Errors
@@ -238,11 +241,7 @@ impl OpenFile {
     /// duplicated, or [`crate::HandleCaptureFailure::CopySecurity`] when the memory for the
     /// security attributes cannot be allocated. A request with neither cannot fail.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        let template = self
-            .template
-            .as_ref()
-            .map(CapturedHandle::try_clone)
-            .transpose()?;
+        let template = self.template.as_ref().map(duplicate).transpose()?;
         let security = self
             .security
             .as_ref()
@@ -286,7 +285,7 @@ impl OpenFile {
             // built, is NUL-terminated and outlives the call; the
             // security attributes, when present, are a live struct pointing at
             // a self-relative descriptor this request owns; the template, when
-            // present, is a duplicate this request owns. Every other argument
+            // present, is one this request holds. Every other argument
             // is a plain value.
             unsafe {
                 CreateFileW(

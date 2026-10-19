@@ -38,7 +38,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE, ReOpenFile as Win32ReOpenFile,
 };
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, perform_handle};
 
 /// An owned, marshalable parameter set for `ReOpenFile`.
@@ -72,10 +74,10 @@ use crate::outcome::{Outcome, perform_handle};
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request reopens nothing"]
 pub struct ReOpenFile {
-    original: CapturedHandle,
+    original: SharedHandle,
     desired_access: u32,
     share_mode: FILE_SHARE_MODE,
     flags_and_attributes: FILE_FLAGS_AND_ATTRIBUTES,
@@ -84,10 +86,11 @@ pub struct ReOpenFile {
 impl ReOpenFile {
     /// Begins a request to reopen the file, directory or volume `original` names.
     ///
-    /// The remaining parameters start at "the caller said nothing" and are set explicitly.
-    pub fn new(original: CapturedHandle) -> Self {
+    /// The request holds `original` as one more holder of it. The remaining parameters start at
+    /// "the caller said nothing" and are set explicitly.
+    pub fn new(original: impl Into<SharedHandle>) -> Self {
         Self {
-            original,
+            original: original.into(),
             desired_access: 0,
             share_mode: 0,
             flags_and_attributes: 0,
@@ -115,8 +118,8 @@ impl ReOpenFile {
         self
     }
 
-    /// The owned duplicate of the handle being reopened.
-    pub fn original(&self) -> &CapturedHandle {
+    /// The handle being reopened, shared with its other holders.
+    pub fn original(&self) -> &SharedHandle {
         &self.original
     }
 
@@ -138,16 +141,15 @@ impl ReOpenFile {
         self.flags_and_attributes
     }
 
-    /// Copies the request, duplicating the handle.
-    ///
-    /// Not `Clone`, because this request always owns a handle and duplicating one is fallible.
+    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
+    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
     ///
     /// # Errors
     ///
     /// Returns the handle-capture failure when the handle cannot be duplicated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         Ok(Self {
-            original: self.original.try_clone()?,
+            original: duplicate(&self.original)?,
             desired_access: self.desired_access,
             share_mode: self.share_mode,
             flags_and_attributes: self.flags_and_attributes,
@@ -165,7 +167,7 @@ impl ReOpenFile {
     /// open still open is a sharing violation, which is the kernel's error and passes through.
     pub fn perform(&self) -> Outcome<OwnedHandle> {
         let raw = perform_handle(|| {
-            // SAFETY: the original is a duplicate this request owns and keeps open across the
+            // SAFETY: the original is one this request holds and keeps open across the
             // call; the other three arguments are plain values.
             unsafe {
                 Win32ReOpenFile(

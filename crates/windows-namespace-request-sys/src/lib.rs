@@ -156,6 +156,8 @@ struct ReadmeDoctests;
 #[cfg(test)]
 mod security_open_tests;
 #[cfg(test)]
+mod shared_handle_tests;
+#[cfg(test)]
 mod tests;
 
 pub use security::{

@@ -580,6 +580,30 @@
       "why": "Control: reading the initialised structure by value and borrowing it is the same read, so no test can tell the two apart; a catch here would mean the tests detect something other than what the entry reports.",
       "find": ["        Ok(from_raw(unsafe { information.assume_init_ref() }))\n"],
       "replace": ["        Ok(from_raw(&unsafe { information.assume_init() }))\n"]
+    },
+    {
+      "name": "NR-6.1: an entry holds a duplicate of the handle it is given",
+      "file": "src/file_type.rs",
+      "expect": "caught",
+      "why": "An entry is one more holder of the handle it is given (D-32); making a handle of its own is the duplication the change removes, and it would leave a caller that recovers its OwnedHandle unable to tell what still holds the object.",
+      "find": ["            handle: handle.into(),\n"],
+      "replace": ["            handle: crate::handle::duplicate(&handle.into()).expect(\"a duplicate\"),\n"]
+    },
+    {
+      "name": "NR-6.1: a reopen holds a duplicate of the original",
+      "file": "src/reopen.rs",
+      "expect": "caught",
+      "why": "As for the queries: the original is held shared, not copied, and a copy would be invisible to every behavioural test but the one that asks which handle is held.",
+      "find": ["            original: original.into(),\n"],
+      "replace": ["            original: crate::handle::duplicate(&original.into()).expect(\"a duplicate\"),\n"]
+    },
+    {
+      "name": "NR-6.1: control -- the accessor's documentation is reworded",
+      "file": "src/file_type.rs",
+      "expect": "survives",
+      "why": "Control: documentation that no test reads.",
+      "find": ["    /// The handle being queried, shared with its other holders.\n"],
+      "replace": ["    /// The handle the query is made on.\n"]
     }
   ]
 }

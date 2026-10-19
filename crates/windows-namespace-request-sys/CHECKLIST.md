@@ -18,15 +18,7 @@ The order across crates is `M43` in the workspace [CHECKLIST.md](../../CHECKLIST
 consumers move (the handoff below), then `NR-6.2`. `NR-6.3` to `NR-6.5` are additive and independent of those and
 of each other. Then this crate is released, a new minor.
 
-- [ ] **NR-6.1** -- **Every entry that takes a handle holds a `SharedHandle`.** The entries: `QueryFileType`,
-  `QueryFileIdInfo`, `QueryFileInformation`, `QueryFileInformationByHandle`, `QueryFinalPath`,
-  `QueryVolumeInformation`, `ReOpenFile`'s original and `OpenFileByIdentifier`'s volume hint. `new` takes
-  `impl Into<SharedHandle>`, and `From<CapturedHandle> for SharedHandle` is added for the transition only, so
-  every existing caller still builds; it is deleted by `NR-6.2`. `handle()` (and `original()`, `volume_hint()`)
-  return `&SharedHandle`, which breaks a caller of them, and the entries derive `Clone`. Adds the dependency on
-  `win-shared-os-owned-handle`. Tests: an entry built from a `SharedHandle` holds that handle and no new one
-  (`same_handle`); a clone of a request shares it; a request keeps the handle open after every other holder has
-  dropped; the existing tests pass unchanged.
+- [x] **NR-6.1** -- Every entry that takes a handle holds a `SharedHandle`, built from `impl Into<SharedHandle>`, and all but the two carrying security attributes derive `Clone`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#nr-61-shared)
 
   > **-> CROSS-COMPONENT HANDOFF:** the consumers move off `CapturedHandle` before `NR-6.2`:
   > [DI-16.1](../durable-ioring/CHECKLIST.md) (`win-durable-ioring`),
@@ -34,8 +26,10 @@ of each other. Then this crate is released, a new minor.
   > [SAFE-1](../windows-file-enumeration-sys/CHECKLIST.md) (`windows-file-enumeration-sys`' metadata test).
 
 - [ ] **NR-6.2** -- **Capture is deleted.** `CapturedHandle`, `capture`, `capture_raw`, `into_owned_handle`,
-  `HandleCaptureError`, `HandleCaptureFailure`, the transition `From`, each entry's `try_clone`, and the `handle`
-  module's tests of D-7's refusals. Whether `new` keeps `impl Into<SharedHandle>` (which takes an `OwnedHandle` or a
+  `HandleCaptureError`, `HandleCaptureFailure`, the transition `From`, the crate-private `duplicate` helper, each
+  `Clone` entry's `try_clone`, and the `handle` module's tests of D-7's refusals. `OpenFile`'s and
+  `OpenFileByIdentifier`'s `try_clone` stay, for their security attributes, and share the handle instead of
+  duplicating it; their error type then reports only the attributes' copy. Whether `new` keeps `impl Into<SharedHandle>` (which takes an `OwnedHandle` or a
   `File` as it is) or takes `SharedHandle` is settled here and recorded in D-32. [D-4](DESIGN-NOTES.md#d-4) is
   marked superseded and [D-7](DESIGN-NOTES.md#d-7) withdrawn, both by D-32. The crate documentation's "A path is
   copied; a handle is duplicated" and the README are rewritten for sharing; sweep `duplicat` and `captur` across

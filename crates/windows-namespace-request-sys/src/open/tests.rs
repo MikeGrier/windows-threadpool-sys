@@ -235,7 +235,7 @@ fn a_template_handle_is_expressible_though_no_consumer_uses_one() {
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(template));
+        .with_template(Some(template.into()));
 
     assert!(request.template().is_some());
     // OPEN_EXISTING ignores hTemplateFile, so this asserts the parameter is
@@ -261,7 +261,8 @@ fn a_request_survives_every_input_it_was_built_from() {
             .with_security(Some(SecurityAttributes::new(Some(descriptor), false)))
             .with_template(Some(
                 CapturedHandle::capture(template_source.as_handle())
-                    .expect("capture the template handle"),
+                    .expect("capture the template handle")
+                    .into(),
             ));
 
         // The fixture is deliberately leaked so the file outlives this scope;
@@ -388,7 +389,8 @@ fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
         .with_creation_disposition(OPEN_EXISTING)
         .with_template(Some(
             CapturedHandle::capture(template_source.as_handle())
-                .expect("capture the template handle"),
+                .expect("capture the template handle")
+                .into(),
         ));
 
     let copy = request.try_clone().expect("duplicate the template");

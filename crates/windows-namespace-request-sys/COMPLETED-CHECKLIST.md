@@ -475,3 +475,17 @@ Not completed: graduated to `NR-6` in [CHECKLIST.md](CHECKLIST.md) by the engine
 > - **Unchanged:** D-4's measured state-sharing. Shared or duplicated, the request names the caller's kernel
 >   object.
 > - A breaking change to the published crate.
+
+## Moved 2026-10-18 23:30:14 -04:00 -- A request holds a `SharedHandle`
+
+### <a id="nr-61-shared"></a>NR-6.1 -- Every entry that takes a handle holds a `SharedHandle`, built from `impl Into<SharedHandle>`, and all but the two carrying security attributes derive `Clone`. *(completed 2026-10-18 23:30:14 -04:00)*
+
+The first step of [D-32](DESIGN-NOTES.md#d-32). The entries: `QueryFileType`, `QueryFileIdInfo`,
+`QueryFileInformation`, `QueryFileInformationByHandle`, `QueryFinalPath`, `QueryVolumeInformation`,
+`ReOpenFile`'s original, `OpenFileByIdentifier`'s volume hint, and `OpenFile`'s template, which the item's list had
+missed. `From<CapturedHandle> for SharedHandle` keeps every caller that still captures building, so the workspace
+built with no change outside this crate; the crate's own callers of `with_template`, which takes an
+`Option<SharedHandle>`, add `.into()`. `try_clone` still duplicates until `NR-6.2`, so the tests that pin a copy's
+separate handle are unchanged. Two crate-private helpers carry the transition: `SharedRaw::raw` and `duplicate`.
+Tests in [shared_handle_tests.rs](src/shared_handle_tests.rs); three sabotages, two caught and a control that
+survives.

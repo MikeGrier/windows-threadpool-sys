@@ -312,6 +312,7 @@ dependencies = [
  "win-authorization-sys",
  "win-error-codes",
  "win-pipes-sys",
+ "win-shared-os-owned-handle",
  "win-volume-sys",
  "windows-sys",
  "windows-thread-ambient-sys",

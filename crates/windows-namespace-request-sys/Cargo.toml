@@ -44,6 +44,9 @@ win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 # io-buffers' COMPLETED-CHECKLIST.md). The version is the one io-buffers' first release is fixed to.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
+# The handle an entry takes, held shared with its other holders rather than duplicated (D-32).
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+
 # A *dev* dependency only. The crate itself deliberately does not depend on the
 # ambient-context crate (see DESIGN-NOTES.md, D-1); the acceptance test pairs
 # the two at a submission site, which is precisely the relationship being

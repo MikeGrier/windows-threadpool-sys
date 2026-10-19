@@ -20,6 +20,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
+use win_shared_os_owned_handle::SharedHandle;
+
 /// The handle values Windows reserves for pseudo-handles, as named constants
 /// rather than bare integers.
 ///
@@ -406,14 +408,6 @@ impl CapturedHandle {
     pub fn into_owned_handle(self) -> OwnedHandle {
         self.duplicate
     }
-
-    /// The duplicate's raw value, for passing to a Win32 call.
-    ///
-    /// The handle is borrowed, not transferred: it stays owned by this value
-    /// and must not outlive it or be closed by the caller.
-    pub(crate) fn raw(&self) -> HANDLE {
-        self.duplicate.as_raw_handle().cast::<c_void>()
-    }
 }
 
 impl AsHandle for CapturedHandle {
@@ -426,6 +420,34 @@ impl From<CapturedHandle> for OwnedHandle {
     fn from(captured: CapturedHandle) -> Self {
         captured.into_owned_handle()
     }
+}
+
+/// The duplicate, as the shared handle the entries hold (`D-32` in the crate's `DESIGN-NOTES.md`).
+///
+/// For the transition only: an entry's `new` takes `impl Into<SharedHandle>`, so a caller that
+/// still captures keeps building until it moves, and `NR-6.2` deletes this with the type.
+impl From<CapturedHandle> for SharedHandle {
+    fn from(captured: CapturedHandle) -> Self {
+        SharedHandle::new(captured.into_owned_handle())
+    }
+}
+
+/// The raw value of a shared handle, for passing to a Win32 call. Borrowed, not transferred.
+pub(crate) trait SharedRaw {
+    fn raw(&self) -> HANDLE;
+}
+
+impl SharedRaw for SharedHandle {
+    fn raw(&self) -> HANDLE {
+        self.as_raw_handle().cast::<c_void>()
+    }
+}
+
+/// A new handle to the object `handle` names, shared by nothing yet: what the entries' `try_clone`
+/// makes while capture remains, so that it keeps meaning a copy with its own handle. `NR-6.2`
+/// deletes it with them.
+pub(crate) fn duplicate(handle: &SharedHandle) -> Result<SharedHandle, HandleCaptureError> {
+    Ok(CapturedHandle::capture(handle.as_handle())?.into())
 }
 
 // Visible to the crate's own cross-module tests, which reuse this module's

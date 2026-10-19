@@ -1245,5 +1245,11 @@ kernel object, and a request is not an independent enumeration.
 **What a caller sees differently.** The handle stays open until the last holder drops, and an `OwnedHandle` can
 be taken back (`SharedHandle::try_into_owned`) only when no request still holds a clone.
 
+**Two entries are not `Clone`, and the reason is not the handle.** `OpenFile` and `OpenFileByIdentifier` carry
+`SecurityAttributes`, whose copy allocates and can fail, so they keep `try_clone` for that; after `NR-6.2` it shares
+the handle and copies only the attributes. Every other handle-taking entry derives `Clone`. `new` takes
+`impl Into<SharedHandle>`, so an `OwnedHandle` or a `File` is given as it is; `OpenFile::with_template` takes an
+`Option<SharedHandle>`, since `None` would leave a generic parameter with nothing to infer from.
+
 **Scheduled work:** `NR-6.1` and `NR-6.2` in [CHECKLIST.md](CHECKLIST.md), with the consumers' moves named in
 `NR-6.1`'s handoff.
