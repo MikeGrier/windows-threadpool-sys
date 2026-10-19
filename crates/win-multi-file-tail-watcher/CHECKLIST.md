@@ -199,3 +199,5 @@ initiated before the previous one completes should fail. fix all".
 - [x] **TW-10.11** -- `CreateError`, which is now the error of the watcher's queue and of the reading layer's client queue, words its messages for a submission queue and not for the watcher. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1011)
 
 - [x] **TW-10.12** -- The README says a data entry carries the value, range and bytes, and what the other entries carry, instead of saying every entry does. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1012)
+
+- [x] **TW-10.13** -- The tiny option set is no longer documented as reaching the ring-full stop, which it cannot, and the README says which small set reaches which stop. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1013)

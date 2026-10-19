@@ -1634,3 +1634,11 @@ not "watcher"; one sabotage entry puts the old wording back and is caught. Decis
 
 Only `ReadEntry::Data` carries the value, range and chunk; a shrink and a terminal entry carry the value and what they report, and a
 poll-done carries nothing. The `TailReader` rustdoc already said "data entry".
+
+### <a id="tw-1013"></a>TW-10.13 -- The tiny option set is no longer documented as reaching the ring-full stop, which it cannot, and the README says which small set reaches which stop. *(completed 2026-10-18 21:24:00 -04:00)*
+
+The tiny set has four buffers and a completion queue of sixteen, so the pool runs out before the ring holds as many reads as its
+completion queue, and a batch never pushes more reads than the ring's submission queue takes. It reaches the pool-empty and
+client-full stops, and the ring-full stop is reached by the test whose pool is larger than the ring. The comment in `option_sets.rs`
+and the README said otherwise, the README as "every stop is reached all the time", which no test observes. Both now say which set
+reaches which stop. No test asserts which stop was reached, and the engine's own tests are where that is asserted.

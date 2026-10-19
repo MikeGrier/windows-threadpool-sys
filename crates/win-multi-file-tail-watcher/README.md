@@ -64,7 +64,9 @@ polls again; a caller that has read a poll-done may poll again at once.
 
 The integration tests of this layer, [tests/reader_real_writers](tests/reader_real_writers), run
 each of these over files that child processes write, with the defaults, with sizes well above
-them, and with sizes small enough that every stop is reached all the time.
+them, and with two small sets: one with fewer buffers than the ring holds reads, which stops on an
+empty pool and on a full client queue, and one with more buffers than the ring holds reads, which
+stops on a full ring.
 
 What was decided, and why: [DESIGN-NOTES.md](DESIGN-NOTES.md). The work, in order:
 [CHECKLIST.md](CHECKLIST.md).

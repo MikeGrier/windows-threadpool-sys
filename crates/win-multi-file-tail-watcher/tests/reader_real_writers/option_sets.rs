@@ -111,8 +111,9 @@ fn every_byte_is_delivered_once_under_options_well_above_the_defaults() {
 
 #[test]
 fn every_byte_is_delivered_once_under_the_tiny_options() {
-    // Four buffers of eight bytes and a client queue of two: the pool is empty, the ring is full
-    // or the client queue is full at almost every step, and the reader goes on from each.
+    // Four buffers of eight bytes and a client queue of two: the pool is empty or the client queue
+    // is full at almost every step, and the reader goes on from each. The ring's completion queue
+    // is larger than the pool, so this set does not reach the ring-full stop; the next test does.
     let options = options(8, 4, 2, 8, 16);
     deliver_every_byte_once("tiny", &options, 2, 4, 80);
 }
