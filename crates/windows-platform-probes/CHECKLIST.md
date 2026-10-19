@@ -29,7 +29,7 @@ which fails until it does.
 
 - [x] **M8.7** -- `probe-error-mode` emits a row.
 - [x] **M8.8** -- `probe-handle-state` emits a row.
-- [ ] **M8.9** -- `probe-worker-context` emits a row.
+- [x] **M8.9** -- `probe-worker-context` emits a row.
 - [ ] **M8.10** -- `probe-device-map` emits a row.
 - [ ] **M8.11** -- `probe-ioring` emits a row.
 - [ ] **M8.12** -- `probe-completion-port` emits a row.

@@ -1032,6 +1032,58 @@
       ]
     },
     {
+      "name": "M8.9: the worker-context probe stops emitting its row",
+      "file": "src/bin/worker_context.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(plain, impersonating, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.9: the submitter and its worker trade places",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the asymmetry; swapping the two sides reports the worker as the one holding the token.",
+      "find": [
+        "                (\"submitter\", context(impersonating.submitter)),",
+        "                (\"worker\", context(impersonating.worker)),"
+      ],
+      "replace": [
+        "                (\"submitter\", context(impersonating.worker)),",
+        "                (\"worker\", context(impersonating.submitter)),"
+      ]
+    },
+    {
+      "name": "M8.9: a thread with a token publishes the error it never read",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe leaves the error at zero when the token opens, without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "            Value::from((!seen.has_thread_token).then_some(seen.open_token_error)),"
+      ],
+      "replace": [
+        "            Value::from(Some(seen.open_token_error)),"
+      ]
+    },
+    {
+      "name": "M8.9 control: the row names its build before its architecture",
+      "file": "src/worker_context/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",
