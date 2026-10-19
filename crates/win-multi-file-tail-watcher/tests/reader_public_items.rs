@@ -6,6 +6,7 @@
 //! to have. These tests compile only while that holds; a signature that changed, or an item made
 //! private again, fails the build of this file. What the items do is tested through the layer, which
 //! is public in TW-9.4 and run over real files in TW-9.5.
+#![cfg(windows)]
 
 use std::io;
 use std::ops::Range;
