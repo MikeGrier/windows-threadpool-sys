@@ -192,9 +192,9 @@ impl WaitableHandle {
     /// makes it the usual choice for handing off work one activation at a time.
     ///
     /// The event is a `win-sync-sys` [`Event`], so this crate creates none of
-    /// its own. To be able to set the event once the wait owns it, create the
-    /// [`Event`] directly, keep a [`try_clone`](Event::try_clone), and convert
-    /// the other with `From<Event>`.
+    /// its own. To be able to set the event once the wait holds it, create the
+    /// [`Event`] directly, keep a clone, and convert the other with
+    /// `From<Event>`: the two share one handle.
     ///
     /// # Errors
     ///
@@ -328,10 +328,14 @@ impl WaitableHandle {
 /// An [`Event`] is guaranteed to be an event rather than a mutex -- adopting a
 /// handle as one is `unsafe` in `win-sync-sys` for exactly this reason -- and
 /// to carry the access a wait needs.
+///
+/// The target is shared: the wait holds the event's handle with every clone of
+/// the [`Event`] the caller keeps, and the handle closes when the last of them
+/// drops.
 impl From<Event> for WaitableHandle {
     fn from(event: Event) -> Self {
         Self {
-            target: WaitTarget::Owned(event.into()),
+            target: WaitTarget::Shared(event.into()),
         }
     }
 }
@@ -678,9 +682,9 @@ unsafe extern "system" fn wait_trampoline(
 ///
 /// # Examples
 ///
-/// Watch an event once. The wait takes ownership of the handle it is given, so
-/// keep a clone of the [`Event`] -- a second handle to the same event -- to
-/// signal it through:
+/// Watch an event once. The wait holds the handle it is given, so keep a clone
+/// of the [`Event`] -- a second holder of the same handle -- to signal it
+/// through:
 ///
 /// ```
 /// use std::sync::mpsc;
@@ -688,7 +692,7 @@ unsafe extern "system" fn wait_trampoline(
 /// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult};
 ///
 /// let event = Event::new(ResetMode::Manual, false)?;
-/// let signal = event.try_clone()?;
+/// let signal = event.clone();
 ///
 /// let (tx, rx) = mpsc::channel();
 /// let sender = std::sync::Mutex::new(tx);
@@ -713,7 +717,7 @@ unsafe extern "system" fn wait_trampoline(
 /// use windows_threadpool_sys::wait::ThreadpoolWait;
 ///
 /// let event = Event::new(ResetMode::Auto, false)?;
-/// let signal = event.try_clone()?;
+/// let signal = event.clone();
 ///
 /// let seen = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&seen);

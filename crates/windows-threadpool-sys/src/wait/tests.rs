@@ -151,7 +151,7 @@ fn same_object(a: std::os::windows::io::BorrowedHandle<'_>, b: &Event) -> bool {
 #[test]
 fn the_conversion_keeps_the_event_it_was_given() {
     let event = Event::new(ResetMode::Manual, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let other = Event::new(ResetMode::Manual, false).expect("create another");
     let waitable = WaitableHandle::from(event);
     assert!(
@@ -165,9 +165,29 @@ fn the_conversion_keeps_the_event_it_was_given() {
 }
 
 #[test]
+fn a_converted_event_shares_the_handle_a_kept_clone_holds() {
+    let event = Event::new(ResetMode::Manual, false).expect("create an event");
+    let kept = event.clone();
+    let waitable = WaitableHandle::from(event);
+    assert_eq!(
+        waitable.handle().as_raw_handle(),
+        kept.as_raw_handle(),
+        "one handle, held by the wait and by the kept clone"
+    );
+    let waitable = waitable
+        .into_handle()
+        .expect_err("the kept clone still holds the handle");
+    drop(kept);
+    assert!(
+        waitable.into_handle().is_ok(),
+        "the wait is the last holder"
+    );
+}
+
+#[test]
 fn a_converted_auto_reset_event_stays_auto_reset() {
     let event = Event::new(ResetMode::Auto, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let waitable = WaitableHandle::from(event);
     kept.set().expect("set through the kept clone");
     assert!(take(waitable.handle()), "the target saw the set");
@@ -177,7 +197,7 @@ fn a_converted_auto_reset_event_stays_auto_reset() {
 #[test]
 fn a_converted_manual_reset_event_stays_manual_reset() {
     let event = Event::new(ResetMode::Manual, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let waitable = WaitableHandle::from(event);
     kept.set().expect("set through the kept clone");
     assert!(take(waitable.handle()), "the target saw the set");
@@ -211,7 +231,7 @@ fn the_event_constructor_makes_each_reset_mode_and_initial_state() {
 #[test]
 fn a_wait_built_from_an_event_fires_when_a_kept_clone_is_set() {
     let event = Event::new(ResetMode::Auto, false).expect("create an event");
-    let kept = event.try_clone().expect("clone");
+    let kept = event.clone();
     let seen = Activations::new();
     let recorder = Arc::clone(&seen);
     let wait = ThreadpoolWait::new(
@@ -1405,7 +1425,7 @@ fn drop_runs_a_queued_callback_rather_than_discarding_it() {
 /// An auto-reset event as a shared handle, and a second holder of it.
 fn shared_event() -> (SharedHandle, SharedHandle) {
     let event = Event::new(ResetMode::Auto, false).expect("create an event");
-    let shared = SharedHandle::from(std::os::windows::io::OwnedHandle::from(event));
+    let shared = SharedHandle::from(event);
     let other = shared.clone();
     (shared, other)
 }
