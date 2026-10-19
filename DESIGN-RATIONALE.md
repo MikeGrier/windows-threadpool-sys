@@ -882,3 +882,55 @@ The test it leaves is a judgement, not a rule a tool could apply: *is this crate
 safe, or something new built on such crates?* The decision says that judgement is recorded in the
 crate's own naming decision, so each answer can be argued with. The design session that raised it
 is [DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).
+
+## <a id="a-link-that-could-not-open-its-output"></a>A link that could not open its output: why the harness builds a second time
+
+A full sabotage sweep of `win-multi-file-tail-watcher` reported, once per sweep, an entry as
+`MANIFEST DOES NOT COMPILE (tests never ran)`. The build transcript held a linker error, `LNK1104`,
+on the test executable the entry was about to write, and the same entry linked when it was run alone.
+The label was wrong for it: the patch was never judged.
+
+**What was observed.** A throwaway sampler listed the processes holding the executable's path, using
+the Restart Manager, around every build of an instrumented sweep. It caught one occurrence. At that
+moment the only holder was the Windows Inventory and Compatibility Appraisal service. Across the
+sweep that service opened the executable several times, each shortly after a test run had exited,
+and the next entry's link rewrites the same path at a comparable interval after the previous run.
+Defender's service and its endpoint sensor also opened it, but their holds fell right after the
+link or during a run, not in the window before the next one.
+
+**What was ruled out.** The executable staying locked after its test run exits: run-then-rewrite
+cycles repeated at length produced no refusal. A ReFS-specific cause: the same sweep behaves the
+same on both volumes tried. A crashed run or an error-reporting dialog, and a stall of the machine at
+that moment: neither was present.
+
+**What is not established.** One occurrence was caught, so the appraisal service is the observed
+holder, not a proven cause. It could not be stopped to test the claim, which needs administrator
+rights this session did not have. Process start also stalls for a few seconds now and then on both
+volumes, which was not tied to the occurrence. The sampler is not committed; it was an investigation,
+and the evidence it produced is recorded here in words.
+
+**The decision: one more build, for this signature only.** Whatever holds the file lets go on the
+timescale of seconds, and the retry's own cost is a rebuild a second or two later; a second collision
+needs the holder to arrive twice. The harness already treats a retry as acceptable for exactly one
+other signature, a process Windows could not start
+([invoke-retrying-on-start-failure.ps1](tools/invoke-retrying-on-start-failure.ps1)), on the same
+terms: the signature is named once, the retry is announced and counted, and it covers an event that
+says nothing about the code under test.
+
+What keeps it from becoming "retry until green":
+
+- **The build only.** A test that ran and failed is a result and is never run again.
+- **`.exe` and `.dll` outputs only.** `LNK1104` is also the linker's message for a missing input such
+  as `kernel32.lib` or an `.rlib`, which is deterministic and is the build's own failure. Every
+  `LNK1104` in the output must name an output, so one input among them makes the whole failure the
+  build's.
+- **One retry.** A second failure of the same kind is reported as `INFRASTRUCTURE`, never as a
+  judgement of the patch.
+- **A patch that is not valid Rust fails on the first attempt**, so the retry does not delay that.
+
+**Alternatives not taken.** Reporting the occurrence honestly without a retry: the label would have
+been right, but a sweep that costs a long time would end with one entry needing a re-run by hand,
+for an event unrelated to the code. Using a different output path for each entry: it would avoid the
+collision, at the cost of the warm incremental builds the harness keeps by reusing the target
+directory. Disabling the service: it is not the harness's to switch off on a developer's machine,
+and it was not reachable here.

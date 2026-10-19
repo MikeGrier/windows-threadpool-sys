@@ -2803,6 +2803,16 @@ sweep can tell you the tests are sensitive but not that they are sensitive to th
 control reported as caught means a test has begun asserting the implementation rather than the
 contract, and that test is the thing to fix.
 
+**The harness runs a build a second time in exactly one circumstance.** When a build fails with
+`LNK1104` naming a `.exe` or `.dll`, and no `LNK1104` in it names anything else, the build is run once
+more and the second result decides. The signature is defined once, in `Get-LinkOutputOpenFailure` in
+[tools/common.ps1](tools/common.ps1). A retry is visible (the first attempt's log is kept, the
+summary counts it), is applied to the build and never to a test result, and ends in an
+`INFRASTRUCTURE` outcome rather than a verdict on the patch if the second build fails the same way.
+Why this one signature earns a retry when a test result never does is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#a-link-that-could-not-open-its-output). The work is
+[M34.8](COMPLETED-CHECKLIST.md#m348).
+
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI

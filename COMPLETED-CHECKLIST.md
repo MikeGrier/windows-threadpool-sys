@@ -3914,3 +3914,14 @@ kill. How the kill works now is in
 ## Moved 2026-10-09 02:01:55 +00:00 -- Dependabot's vulnerable npm dependency
 
 ### <a id="m381"></a>M38.1 -- Update the vulnerable transitive Handlebars lockfile entry to the fixed release and verify release automation. *(completed 2026-10-09 02:01:55 UTC+00:00)*
+
+## Moved 2026-10-18 19:55:00 -04:00 -- the sabotage harness builds a second time when the linker could not open its output
+
+### <a id="m348"></a>M34.8 -- Build a second time when the linker could not open its own output. *(completed 2026-10-18 19:55:00 -04:00)*
+
+`Get-LinkOutputOpenFailure` in [tools/common.ps1](tools/common.ps1) names the one signature
+(`LNK1104` on a `.exe` or `.dll`, with no `LNK1104` naming anything else); the harness builds once
+more on it, keeps the first attempt as `.build.attempt1.err`, counts the retry in the summary, and
+reports a second failure as `INFRASTRUCTURE` instead of `MANIFEST DOES NOT COMPILE`. Reasoning and
+the evidence it rests on, with its limits, are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#a-link-that-could-not-open-its-output).
