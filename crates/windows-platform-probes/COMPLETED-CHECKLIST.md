@@ -1811,3 +1811,20 @@ item's own ordering note, because building the settings moves no figure; the not
 Preceded by a pure-relocation split of `src/queue_contention.rs` (75 KiB, XL) into the facade plus
 `measure.rs` and `render.rs`, in its own commit. The sabotage harness's inert check was found to
 ignore case while writing this item's entries, and was fixed in its own commit.
+
+## Moved 2026-10-19 14:32:11 -04:00 -- M2.15: the probe suite runs on Windows ARM64 in CI
+
+### <a id="m215"></a>M2.15 -- Run the probe suite on a second architecture in CI. *(completed 2026-10-19 14:32:11 -04:00)*
+
+The `platform-probes` job in [ci.yml](../../.github/workflows/ci.yml) is a two-entry matrix:
+`windows-latest` (x64) and `windows-11-arm`, the GitHub-hosted Windows 11 ARM64 runner, which is
+free for public repositories. The x64 entry keeps its job name, and `fail-fast` is off so one
+architecture's result does not cancel the other's. Commit `11f595c2`.
+
+Run once before completion, from a throwaway branch carrying a temporary push trigger (deleted
+afterwards): the ARM64 entry ran on host `aarch64-pc-windows-msvc`, every probe's NDJSON row
+reported `"arch":"aarch64"`, and the whole job passed -- the suite with `--include-ignored`, the
+`oracle-in-renderer` target, and every probe binary.
+
+The engineer, 2026-10-19: "arm64 completes m2.15." The `i686-pc-windows-msvc` target the item
+also named, where the original five failures were measured, was therefore not added.

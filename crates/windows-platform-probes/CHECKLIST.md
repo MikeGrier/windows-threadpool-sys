@@ -90,24 +90,7 @@ correctness in the archive.
 
 - [x] **M4.7** -- Make the queue-contention report renderer testable, by taking the observation as an argument instead of measuring inside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m47)
 
-- [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
-
-  **Keeps its conclusion but loses its evidence.** The five failures cited below were all
-  `prose: "x86_64"` against `ndjson: "x86"` -- instances of exactly the correspondence M3.4
-  retired, so they can no longer occur and a re-run now looks clean. The point stands without them:
-  CI builds `aarch64` and never tests it, and architecture is the one shape dimension a corpus
-  cannot vary because it is fixed at compile time. Restate it on that basis when picked up.
-
-  A reviewer asked whether the suite was portable and it was not: three renderer fixtures and the
-  shape corpus' banner builder each hard-coded `x86_64` while the row they are compared against
-  publishes `std::env::consts::ARCH`. Measured on `i686-pc-windows-msvc`: five failures, every one
-  `prose: "x86_64"` against `ndjson: "x86"`. CI BUILDS `aarch64` and never TESTS it, so a
-  build-and-clippy matrix cannot see this class at all.
-
-  Architecture is the one shape dimension the M2.12 corpus cannot vary, because it is fixed at
-  compile time rather than chosen per report -- so the corpus that exists precisely to defeat shape
-  blindness is blind here by construction, and only a second test target can close it. Add one
-  (`i686-pc-windows-msvc` runs natively on the existing runners; `aarch64` would need its own).
+- [x] **M2.15** -- Run the probe suite on a second architecture in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m215)
 
 - [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
 
