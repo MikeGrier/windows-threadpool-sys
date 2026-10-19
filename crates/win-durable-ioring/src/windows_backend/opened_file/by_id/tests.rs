@@ -316,8 +316,8 @@ fn a_directory_was_observed_to_open_by_identity_where_by_path_it_is_refused() {
     // `FILE_FLAG_BACKUP_SEMANTICS`, which the `OpenFileById` page says "You must set ... to obtain a
     // handle to a directory", is not in v1, and an open by path of a directory without it is refused
     // by the kernel. An open by identity was observed to open the directory anyway, for every data
-    // access and in either buffering mode. Nothing here refuses it: whether an `OpenedFile` may be a
-    // directory is `DI-15.5`'s question.
+    // access and in either buffering mode. The engineer ruled it allowed (`DI-D-72`): a target made
+    // from one faults every read and write and completes every commit, which the backend's tests show.
     let directory = Directory::new("bi-directory");
     let id = FileId::of(&directory_handle(&directory.0)).expect("the directory's identity");
 

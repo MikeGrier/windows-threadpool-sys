@@ -157,7 +157,8 @@ it. `OpenedFile::open_by_id` opens it again by that, or by a 64-bit file ID or a
 hint, which is any handle on that volume ([DI-D-70](../durable-ioring/DESIGN-NOTES.md#di-d-70)). Its options are
 `ByIdOptions`, since `OpenFileById` takes no disposition and no attributes. The call never sees a `FileId`'s
 volume, so the file it opens is asked its identity, and one from another volume is refused as an
-`IdentityMismatch`.
+`IdentityMismatch`. An identifier can name a directory, which opens, and a target made from it faults every read
+and write ([DI-D-72](../durable-ioring/DESIGN-NOTES.md#di-d-72)).
 
 ```rust
 use win_durable_ioring::windows_backend::{ByIdOptions, Cached, FileOptions, OpenedFile};

@@ -279,6 +279,14 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
+    /// **An identifier can name a directory, and it is opened.** `FILE_FLAG_BACKUP_SEMANTICS`, which
+    /// the page says a directory needs, is not in v1, and an open by identifier was observed to reach a
+    /// directory without it. It is not refused: a target made from it faults every read and write with
+    /// the kernel's error, and a write that faulted is covered by no durability report, so the commits
+    /// it completes vouch for nothing. On a directory the data rights are `FILE_LIST_DIRECTORY` and
+    /// `FILE_ADD_FILE`, the same bits, and that is what the lent handle carries. What a flush of a
+    /// directory makes durable no page says. The design notes' `DI-D-72` has the measurement.
+    ///
     /// # Errors
     ///
     /// Those of [`perform`](ByIdRequest::perform).
