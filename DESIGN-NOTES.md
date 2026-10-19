@@ -3350,8 +3350,10 @@ by construction, so the binding would be absent exactly where completion occurs.
 
 ## <a id="path-contracts-follow-path-construction"></a>A layer's path contract is decided by whether it constructs paths
 
-Two crates here treat a caller's path in opposite ways, and side by side they look
-like an inconsistency somebody should tidy up. They are not. Each follows from one
+**Amended 2026-10-18 by [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22): `windows-file-enumeration-sys` builds no path and no longer has the path-building contract; that contract is for a traversal layer, which its `REVIEW-1` reviews.**
+
+Two crates here treated a caller's path in opposite ways, and side by side they looked
+like an inconsistency somebody should tidy up. They were not. Each follows from one
 question -- **does this layer ever build a path the caller did not give it?** --
 and the answer differs, so the contracts differ. This is recorded once, here,
 because the failure mode is a well-meant "harmonisation" that breaks whichever
@@ -3384,13 +3386,15 @@ mid-traversal is the worst possible time, so the contract front-loads it: resolv
 ordinary inputs once, cap them where behaviour is unambiguous, and tell the caller
 to supply a fully qualified `\\?\` path for anything longer -- an actionable
 synchronous error rather than a `NotFound` that names nothing.
-`windows-file-enumeration-sys` is this shape. See
-[D-7](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-7) and its
-[Request path contract](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#request-path-contract).
+No crate here is this shape now. `windows-file-enumeration-sys` was, under
+[D-7](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-7), until
+[D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22) recognised that it enumerates
+one directory and builds nothing, and took the request crate's verbatim contract instead. The
+question is open again for a layer that traverses, and is that crate's `REVIEW-1`.
 
 The two also differ on the manifest, and deliberately in opposite directions.
 The watcher lets behaviour follow the host, because it only ever hands the caller's
-own path back to Win32. The enumerator refuses to: it requires both the input and
+own path back to Win32. The enumerator, under D-7, refused to: it required both the input and
 the resolved form to fit the ordinary limit specifically **so that acceptance does
 not depend on the host executable's manifest**, which keeps one input meaning one
 thing in every host that links it. A layer whose results feed further path
@@ -3402,7 +3406,7 @@ into `\\?\` form, it must convert from a form Win32 has *already* normalised und
 the caller's own parsing mode -- `GetFullPathNameW`'s output, or
 `GetFinalPathNameByHandleW`'s -- never by prefixing the caller's raw string. Doing
 it after normalisation preserves what the path meant; doing it before silently
-reinterprets it. Both crates arrived at this independently, which is why it is
+reinterprets it. Both crates arrived at this independently, the enumerator under D-7, which is why it is
 written down once.
 
 ## <a id="tools-shared-support"></a>Shared support in `tools/` is dot-sourced, never a module

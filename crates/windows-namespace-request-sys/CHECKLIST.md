@@ -98,26 +98,7 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
   **Next:** the release of this crate (a release-please pull request, a new minor), after which
   `NR-3.8` and [DI-13.5 and DI-13.6](../durable-ioring/CHECKLIST.md).
 
-- [ ] **NR-3.8** -- **The enumeration crate's duplicate of the path preparation is resolved.** The
-  engineer, 2026-10-15: schedule resolving it. This is the merge-or-delete decision of the workspace
-  checklist's `M26+.3` ([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)), which was
-  gated on this crate's branch merging with `main`, and that has happened. It is made as the first
-  option `M26+.3` names: `windows-file-enumeration-sys` consumes the path contract of `NR-3.3` to
-  `NR-3.6` and deletes its older copy, [D-9](DESIGN-NOTES.md#d-9)'s reason for duplicating ("that
-  crate is released; this one is not") no longer holds, and the layering D-9 recorded puts the
-  enumeration crate above this one, so it is the right direction for the dependency. The work is
-  `PATH-1` in that crate's checklist; this item is done when that one is, and the workspace item
-  `M26+.3` is done with it. Until then, a fix to either copy is applied to both. It waits on the
-  release of this crate with `NR-3.3` to `NR-3.6`.
-  **Next:** after `PATH-1`, nothing in this crate; see the order at the top of
-  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-enumeration-sys` ->
-  > `PATH` -> `PATH-1`. See [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).
-
-  > **-> CROSS-COMPONENT HANDOFF:** when `NR-3.1` to `NR-3.6` are released, the next work is in
-  > component `crates/durable-ioring` -> `DI-M13` -> `DI-13.5`, `DI-13.6` and the rework of `DI-13.2`
-  > (take the version that carries them). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+- [x] **NR-3.8** -- The enumeration crate consumes this crate's `AnchoredPath` and its older copy of the path preparation is deleted; done with that crate's `PATH-1`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#nr-38-dedupe)
 
 - [x] **NR-3.9** -- `GetFileType` is a `QueryFileType` entry on a captured handle, with the value carried as it came. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#nr-39-filetype)
 

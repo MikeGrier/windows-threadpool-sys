@@ -709,12 +709,10 @@ The drafts themselves, and why each failed, are Tier 2:
   token can name a different device. The workspace has this as an open decision;
   until it is settled, this crate documents the hazard rather than implying its
   resolution is complete.
-- **Reusing the shipped path preparation.** The enumeration crate's
-  [path.rs](../windows-file-enumeration-sys/src/path.rs) already does
-  submission-time resolution with a typed error, but `prepare` is `pub(crate)`.
-  Binding to it rather than writing a second one therefore needs it published or
-  extracted; duplicating it is the option this repository's mono-repo policy
-  rejects.
+- **Reusing the shipped path preparation.** **Resolved 2026-10-18, in the other
+  direction:** the enumeration crate consumes this crate's `AnchoredPath`
+  ([D-30](#d-30)) and its own preparation is deleted
+  ([its D-22](../windows-file-enumeration-sys/DESIGN-NOTES.md#d-22)).
 
 ## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
 

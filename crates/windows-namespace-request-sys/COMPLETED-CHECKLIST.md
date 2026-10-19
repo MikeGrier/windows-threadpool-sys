@@ -395,3 +395,14 @@ The engineer, 2026-10-18 ("build both of these now"), so that a caller can ask w
 file is without the opener returning it. The decision and what was observed are
 [D-29](DESIGN-NOTES.md#d-29). Four sabotages, one declared as surviving because no handle tried returns an unknown
 type from a call that worked.
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The enumeration crate's duplicate of the path preparation
+
+### <a id="nr-38-dedupe"></a>NR-3.8 -- The enumeration crate consumes this crate's `AnchoredPath` and its older copy of the path preparation is deleted; done with that crate's `PATH-1`. *(completed 2026-10-18 20:52:23 -04:00)*
+
+The engineer, 2026-10-15: schedule resolving it, as the first option the workspace's `M26+.3`
+([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)) names. What this crate gave to make it
+possible is [D-30](DESIGN-NOTES.md#d-30): `AnchoredPath` is public, with `new`, `given` and `win32`. What the
+enumeration crate gave up in taking it is that crate's
+[D-22](../windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), and the work is its `PATH-1`
+([COMPLETED-CHECKLIST.md](../windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#path-1)).

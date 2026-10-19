@@ -3914,3 +3914,14 @@ kill. How the kill works now is in
 ## Moved 2026-10-09 02:01:55 +00:00 -- Dependabot's vulnerable npm dependency
 
 ### <a id="m381"></a>M38.1 -- Update the vulnerable transitive Handlebars lockfile entry to the fixed release and verify release automation. *(completed 2026-10-09 02:01:55 UTC+00:00)*
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The duplicated path preparation is merged
+
+### <a id="m263"></a>M26+.3 -- The duplicated path preparation is merged: `windows-file-enumeration-sys` consumes the request crate's `AnchoredPath` and its older copy is deleted. *(completed 2026-10-18 20:52:23 -04:00)*
+
+Decided 2026-10-15 at the engineer's request, as the first of the two options the item named. The request
+crate's side is its `NR-3.8` and
+[D-30](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-30); the enumeration crate's is its `PATH-1`
+and [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), which also records what that crate
+gave up. The workspace principle the enumerator used to exemplify is amended at
+[A layer's path contract is decided by whether it constructs paths](DESIGN-NOTES.md#path-contracts-follow-path-construction).
