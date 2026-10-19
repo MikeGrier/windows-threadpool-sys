@@ -536,13 +536,13 @@ jobs:
       - name: probe magnitudes (topology)
         if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
-      # `--release` on the next two, and ONLY on those two, because they are the
-      # only probes here that report nanoseconds. Everything above measures
+      # `--release` on the next four, and ONLY on those four, because they are
+      # the only probes here that report nanoseconds. Everything above measures
       # BEHAVIOUR -- what an API refuses, what a handle reports, which errors
       # appear -- and that does not change with the optimisation level, so those
       # keep the dev profile and the build time it saves.
       #
-      # These two do not have that luxury. They compare operations a few tens of
+      # These do not have that luxury. The two cost probes compare operations a few tens of
       # nanoseconds apart, and in an unoptimized build the loop, the closure
       # indirection, and the request construction around each measured call
       # carry overhead that does not shrink uniformly across them. The RATIOS
@@ -575,6 +575,22 @@ jobs:
       - name: probe magnitudes (request cost)
         if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
+      # The two coherence probes, run here so that every build's log carries a
+      # run of each on BOTH architectures -- this job's arm64 entry is the only
+      # ARM64 hardware this workspace reaches, and the peer-index probe's finding
+      # is one that inverts between the two (windows-platform-probes M4.11).
+      #
+      # The queue probe is limited to 1, 2 and 4 producers because a hosted
+      # runner has four processors: rows above that would measure the scheduler
+      # and report it as contention. Its report says the run was not the
+      # defaults, and prints the processors it had. The full curve is still run
+      # by hand on a known machine.
+      - name: probe magnitudes (queue contention, 1 to 4 producers)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: cargo run -p windows-platform-probes --bin probe-queue-contention --locked --release -- --producers 1,2,4
+      - name: probe magnitudes (peer index cache)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: cargo run -p windows-platform-probes --bin probe-peer-index-cache --locked --release
       # Both halves of the long-path pair, deliberately. Either alone says
       # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,
