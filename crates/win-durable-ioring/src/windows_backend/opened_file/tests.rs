@@ -422,7 +422,7 @@ fn an_open_is_judged_where_the_handle_is_so_a_link_is_followed_unless_the_link_i
 /// The administrative share of this volume, `\\localhost\X$\...`, naming `local`. Reachable on an
 /// account that is an administrator, as the CI runner's is; the test that uses it is ignored by
 /// default for that reason, as `windows-namespace-request-sys`'s UNC test is.
-fn admin_share(local: &Path) -> PathBuf {
+pub(super) fn admin_share(local: &Path) -> PathBuf {
     let text = local.to_str().expect("a UTF-8 temp path");
     // A temp directory named with the verbatim prefix still has its drive after it.
     let plain = text.strip_prefix(r"\\?\").unwrap_or(text);

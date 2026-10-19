@@ -17,16 +17,16 @@ use durable_ioring::Access;
 /// What an open can ask for that a share mode is judged against: one of the three things the share
 /// mode names. An open that asks for none of them is not judged at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Wants {
+pub(super) enum Wants {
     Read,
     Write,
     Delete,
 }
 
-const WANTS: [Wants; 3] = [Wants::Read, Wants::Write, Wants::Delete];
+pub(super) const WANTS: [Wants; 3] = [Wants::Read, Wants::Write, Wants::Delete];
 
 /// Every subset of the three members, the empty one first.
-fn every_share_mode() -> Vec<ShareMode> {
+pub(super) fn every_share_mode() -> Vec<ShareMode> {
     (0..8)
         .map(|mask| {
             [ShareMode::READ, ShareMode::WRITE, ShareMode::DELETE]
@@ -39,7 +39,7 @@ fn every_share_mode() -> Vec<ShareMode> {
 }
 
 /// The member of the share mode that allows another open to ask for `wants`.
-fn shares(wants: Wants) -> ShareMode {
+pub(super) fn shares(wants: Wants) -> ShareMode {
     match wants {
         Wants::Read => ShareMode::READ,
         Wants::Write => ShareMode::WRITE,
@@ -69,11 +69,14 @@ fn open(path: &Path, wants: Wants, share: ShareMode) -> io::Result<Box<dyn Any>>
 /// The `CreateFileW` documentation's rule for two opens of one file, one from each side: the later
 /// open fails when it asks for something the earlier open does not share, and when the earlier open
 /// asked for something the later one does not share.
-fn documented_to_conflict(first: (Wants, ShareMode), second: (Wants, ShareMode)) -> bool {
+pub(super) fn documented_to_conflict(
+    first: (Wants, ShareMode),
+    second: (Wants, ShareMode),
+) -> bool {
     !first.1.contains(shares(second.0)) || !second.1.contains(shares(first.0))
 }
 
-fn sharing_violation(error: &io::Error) -> &SharingViolation {
+pub(super) fn sharing_violation(error: &io::Error) -> &SharingViolation {
     error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<SharingViolation>())
@@ -81,7 +84,7 @@ fn sharing_violation(error: &io::Error) -> &SharingViolation {
 }
 
 /// The Win32 code of the kernel's error, which a violation keeps as its source.
-fn kernel_code(violation: &SharingViolation) -> Option<i32> {
+pub(super) fn kernel_code(violation: &SharingViolation) -> Option<i32> {
     std::error::Error::source(violation)
         .and_then(|source| source.downcast_ref::<io::Error>())
         .and_then(io::Error::raw_os_error)

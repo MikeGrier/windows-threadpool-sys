@@ -183,6 +183,38 @@ assert_eq!(again.file_id()?, id);
 # Ok::<(), std::io::Error>(())
 ```
 
+### Reopening
+
+`OpenedFile::reopen` makes a new handle to what a handle already names, through `ReOpenFile`, in the buffering
+mode and with the access its type asks for ([DI-D-71](../durable-ioring/DESIGN-NOTES.md#di-d-71)): cached to
+unbuffered and back, or a read-only handle for a scrubber beside the writer. The original is any handle, this
+crate's or one opened elsewhere, and the result is judged by the same checks as an open by path. Its options are
+`ReopenOptions`. The reopen's sharing is judged against every handle still open to the file, the original among
+them, so a reopen of a file its original opened without sharing is refused as a `SharingViolation`.
+
+```rust
+use win_durable_ioring::windows_backend::{
+    Cached, FileOptions, OpenedFile, ReadOnly, ReopenOptions, Unbuffered,
+};
+use win_durable_ioring::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("durable-ioring-reopen-{}", std::process::id()));
+std::fs::write(&path, [0u8; 4096])?;
+let writer = OpenedFile::<Cached, _>::open(
+    Wtf16String::from_os_str(path.as_os_str()),
+    FileOptions::new().read().write(),
+)?;
+
+let scrubber = OpenedFile::<Unbuffered, ReadOnly>::reopen(
+    writer.handle().clone(),
+    ReopenOptions::new().read(),
+)?;
+assert_eq!(scrubber.file_id()?, writer.file_id()?);
+# drop((writer, scrubber));
+# std::fs::remove_file(&path)?;
+# Ok::<(), std::io::Error>(())
+```
+
 ### A raw volume
 
 A raw volume is a target too ([DI-D-61](../durable-ioring/DESIGN-NOTES.md#di-d-61)): one handle, one

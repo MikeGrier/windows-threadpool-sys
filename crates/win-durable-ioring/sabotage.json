@@ -1996,6 +1996,78 @@
       "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
       "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
       "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
+    },
+    {
+      "name": "DI-15.4: a reopen skips the checks on the reopened handle",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "A reopen from any handle can reach a device or a share, so an unbuffered reopen of NUL or of a file on a share would claim SharedDevice for a handle whose location is unknown or remote (DI-14.5, DI-14.6.2).",
+      "find": ["        OpenedFile::admit(SharedHandle::from(handle))\n"],
+      "replace": ["        Ok(OpenedFile {\n            handle: SharedHandle::from(handle),\n            geometry: B::geometry(),\n            mode: PhantomData,\n        })\n"]
+    },
+    {
+      "name": "DI-15.4: a reopen's buffering flags are not passed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "Cached to unbuffered is the reason to reopen; an OpenedFile<Unbuffered> reopened cached would claim SharedDevice for data the system cache holds.",
+      "find": ["            .with_flags_and_attributes(options.flags(B::FLAGS));"],
+      "replace": ["            .with_flags_and_attributes(options.flags(0));"]
+    },
+    {
+      "name": "DI-15.4: a reopen's share mode is not passed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "The documented rule judges the reopen's sharing against the original; a reopen that shared everything regardless would accept what the caller asked to refuse.",
+      "find": ["            .with_share_mode(options.share.bits())"],
+      "replace": ["            .with_share_mode(ShareMode::ALL.bits())"]
+    },
+    {
+      "name": "DI-15.4: a reopen does not ask for its data access",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "A read-only scrubber that cannot read, or a widened handle that cannot write, would fail every operation a target made of it is given.",
+      "find": ["        data_rights::<A>() | self.rights.bits()"],
+      "replace": ["        self.rights.bits()"]
+    },
+    {
+      "name": "DI-15.4: delete-on-close sets another flag",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "Each option must set its own flag and no other; a reopen meant to delete on close would leave the file behind.",
+      "find": ["            flags |= FILE_FLAG_DELETE_ON_CLOSE;"],
+      "replace": ["            flags |= FILE_FLAG_POSIX_SEMANTICS;"]
+    },
+    {
+      "name": "DI-15.4: POSIX semantics sets nothing",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "An option the caller set that reaches no call is a silent no.",
+      "find": ["            flags |= FILE_FLAG_POSIX_SEMANTICS;"],
+      "replace": ["            flags |= 0;"]
+    },
+    {
+      "name": "DI-15.4: changing the data access forgets delete-on-close",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "read() and write() move the options to another type; a flag set before them must survive the move.",
+      "find": ["            delete_on_close: self.delete_on_close,"],
+      "replace": ["            delete_on_close: false,"]
+    },
+    {
+      "name": "DI-15.4: a reopen's sharing violation names an open by path",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "caught",
+      "why": "OpenedBy is the caller's only way to say which open conflicted, and a reopen has no path.",
+      "find": ["                || OpenedBy::Reopen,"],
+      "replace": ["                || OpenedBy::Path(std::path::PathBuf::new()),"]
+    },
+    {
+      "name": "DI-15.4 control: the reopen's error binding is renamed",
+      "file": "src/windows_backend/opened_file/reopen.rs",
+      "expect": "survives",
+      "why": "A control: the same refinement through a differently named binding, which no test can tell apart.",
+      "find": ["        let handle = self.request.perform().map_err(|error| {\n            refine_sharing_by(\n                error.to_io_error(),"],
+      "replace": ["        let handle = self.request.perform().map_err(|failure| {\n            refine_sharing_by(\n                failure.to_io_error(),"]
     }
   ]
 }

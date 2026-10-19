@@ -49,8 +49,10 @@ use super::share_mode::ShareMode;
 
 mod by_id;
 mod open_request;
+mod reopen;
 
 pub use by_id::{ByIdOptions, ByIdRequest, IdentityMismatch};
+pub use reopen::{ReopenOptions, ReopenRequest};
 
 #[cfg(test)]
 mod creation_tests;
@@ -520,14 +522,17 @@ impl std::error::Error for SharingViolation {
     }
 }
 
-/// What an open named the file by: the path it was given, or the identifier it opened on the hint's
-/// volume.
+/// What an open named the file by: the path it was given, the identifier it opened on the hint's
+/// volume, or, for a reopen, the handle it was given.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenedBy {
     /// A path, as it was given.
     Path(PathBuf),
     /// An identifier, by [`OpenedFile::open_by_id`].
     Identifier(FileIdentifier),
+    /// What the original handle of a reopen names, by [`OpenedFile::reopen`]. The handle is the
+    /// caller's own, so it is not carried.
+    Reopen,
 }
 
 impl fmt::Display for OpenedBy {
@@ -535,6 +540,7 @@ impl fmt::Display for OpenedBy {
         match self {
             Self::Path(path) => write!(f, "{}", path.display()),
             Self::Identifier(identifier) => write!(f, "the file identified by {identifier:?}"),
+            Self::Reopen => write!(f, "the file the reopened handle names"),
         }
     }
 }

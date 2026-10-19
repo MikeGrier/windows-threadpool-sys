@@ -77,7 +77,8 @@ pub use handle_kind::{HandleKind, HandleKindQuery};
 pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
 pub use opened_file::{
     Buffering, ByIdOptions, ByIdRequest, Cached, FileOptions, IdentityMismatch, OpenRequest,
-    OpenedBy, OpenedFile, RemoteDevice, SharingViolation, Unbuffered, UnknownLocation,
+    OpenedBy, OpenedFile, RemoteDevice, ReopenOptions, ReopenRequest, SharingViolation, Unbuffered,
+    UnknownLocation,
 };
 pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
