@@ -1,9 +1,98 @@
 // Copyright (c) 2026 Mike Grier
 // Split from build.rs at 3cb70b1f.
 // Included textually by build.rs, so its items sit in the build script's root module.
+// Also included by ../windows-platform-probes/build.rs, by path: a change here changes that
+// crate's build script too, and both crates' build-identity tests run against it.
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+
+/// Stamp the identity of the build into the crate being built, under `prefix`.
+///
+/// Reads `{prefix}_COMMIT` -- what CI sets so the build does not have to shell
+/// out to `git` -- and `{prefix}_SOURCE`, what CI sets to declare the build
+/// official. Emits `{prefix}_COMMIT_OUT`, `{prefix}_DIRTY_OUT`,
+/// `{prefix}_SOURCE_OUT` and `{prefix}_REPOSITORY_OUT` for the crate to read
+/// with `env!`. Watching the crate's own files is the caller's, because only it
+/// knows what they are.
+///
+/// One definition shared by every crate that stamps itself, because the
+/// staleness rules below were each found by measurement, and a second copy of
+/// them is a copy the next fix would miss.
+fn stamp_build_identity(prefix: &str) {
+    let commit_env = format!("{prefix}_COMMIT");
+    let source_env = format!("{prefix}_SOURCE");
+
+    // Without these, a rebuild after a commit would keep the stale stamp --
+    // which is the failure this file exists to prevent, arriving by a different
+    // route.
+    println!("cargo::rerun-if-env-changed={commit_env}");
+    println!("cargo::rerun-if-env-changed={source_env}");
+    watch_git_head(Path::new("../../.git"));
+
+    // CI knows the commit it checked out, and a CI checkout is clean by
+    // construction, so no `git` call is needed or wanted there.
+    let stamped_commit = std::env::var(&commit_env)
+        .ok()
+        .map(|sha| sha.trim().to_owned())
+        .filter(|sha| !sha.is_empty());
+
+    let (commit, dirty) = match &stamped_commit {
+        Some(sha) => (Some(shorten(sha)), Some(false)),
+        None => (git_commit(), git_dirty()),
+    };
+
+    // **The two stamps are honoured as a unit, never singly.** `ci` is a claim
+    // about provenance, and the commit stamp is the evidence for it; accepting
+    // the claim alone lets a local build inherit the rest of its identity from
+    // the working tree and still pass `BuildIdentity::is_official`, because a
+    // clean checkout supplies a commit and `dirty = false` on its own.
+    //
+    // Measured before fixing: with only `PLACEMENT_PROBE_SOURCE=ci` set, a
+    // local build reported `v0.1.0 79b9c4666a1b [ci]` -- no `!!UNOFFICIAL!!`
+    // marker, so a record from it would have pooled with real CI results.
+    // That inverts this file's stated default, which is that being unable to
+    // tell must resolve to unofficial.
+    let source = match std::env::var(&source_env) {
+        Ok(value) if value.trim().eq_ignore_ascii_case("ci") && stamped_commit.is_some() => "ci",
+        _ if commit.is_some() => "local",
+        _ => "unknown",
+    };
+
+    println!(
+        "cargo::rustc-env={prefix}_COMMIT_OUT={}",
+        commit.as_deref().unwrap_or("")
+    );
+    println!(
+        "cargo::rustc-env={prefix}_DIRTY_OUT={}",
+        match dirty {
+            Some(true) => "1",
+            Some(false) => "0",
+            None => "",
+        }
+    );
+    println!("cargo::rustc-env={prefix}_SOURCE_OUT={source}");
+
+    // **Whether a repository was there to ask, which is not the same as whether
+    // a commit was found.** The two differ exactly when the build script is
+    // broken: a repository present but no commit produced is the silent-failure
+    // case the tests exist to catch, and without this flag a test cannot tell
+    // that apart from the honest "there was no repository".
+    //
+    // It exists because the honest case is reachable in ordinary use. A
+    // `cargo install` from a crates.io tarball has no repository, a downloaded
+    // source zip has none, and `cargo mutants` builds from a scratch copy of
+    // the tree with `.git` left behind -- which is what surfaced this: a suite
+    // asserting "a commit must have been found" failed in an unmutated tree and
+    // stopped the run before a single mutant was tested.
+    //
+    // Not a `cfg`: this is data about the build, and a test that reads it can
+    // assert the *right* thing in each case rather than being skipped.
+    println!(
+        "cargo::rustc-env={prefix}_REPOSITORY_OUT={}",
+        if repository_present() { "1" } else { "" }
+    );
+}
 
 /// Whether this build can see a git repository at all.
 ///
@@ -38,7 +127,7 @@ fn repository_present() -> bool {
 /// Measured on this repository rather than reasoned about: `.git/HEAD` had not
 /// been touched in 21 hours while fourteen commits landed, and a freshly built
 /// binary reported a commit six behind `HEAD`. CI hides this entirely, because
-/// there the commit arrives through `PLACEMENT_PROBE_COMMIT` -- so the stamp
+/// there the commit arrives through the `{prefix}_COMMIT` variable -- so the stamp
 /// was wrong only on local builds, which are exactly the ones whose commit is
 /// their only traceability.
 ///
