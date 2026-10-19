@@ -1450,7 +1450,9 @@ foreach ($sabotage in $selected) {
     }
 
     $patched = $original.Replace($find, $replace)
-    if ($patched -eq $original) {
+    # `-ceq`, not `-eq`: PowerShell's `-eq` ignores case, so a patch changing
+    # only case (a variable to the constant of the same name) read as inert.
+    if ($patched -ceq $original) {
         $results += [pscustomobject]@{
             Sabotage = $sabotage.name; Expected = $sabotage.expect
             Actual   = 'MANIFEST INERT: the patch does not change the file'
