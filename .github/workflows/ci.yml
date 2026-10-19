@@ -44,6 +44,34 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # Every COMPLETED-CHECKLIST.md: a blank line above each heading, no heading
+  # glued onto a line, no open box, and no heading or anchor changed against the
+  # merge base (root CHECKLIST.md, M34.8). The last needs the base commit, so the
+  # checkout is full. On a pull request the base is the target branch; on a push
+  # it is the previous tip, and a push with none (a new branch) skips that rule
+  # rather than failing on a missing commit.
+  archives:
+    name: completed-checklist archives
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run test-check-archives.ps1
+        shell: pwsh
+        run: ./tools/test-check-archives.ps1
+      - name: Run check-archives.ps1
+        shell: pwsh
+        env:
+          ARCHIVE_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: |
+          if (-not $env:ARCHIVE_BASE -or $env:ARCHIVE_BASE -match '^0+$') {
+            ./tools/check-archives.ps1 -NoHistory
+          } else {
+            ./tools/check-archives.ps1 -Base $env:ARCHIVE_BASE
+          }
+          exit $LASTEXITCODE
+
   # release-please decides which crates are versioned and tagged;
   # publish-crate.yml decides which tags publish. Nothing connected the two, so
   # a crate could be release-managed and unpublishable at once -- and the

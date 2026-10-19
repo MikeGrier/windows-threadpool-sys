@@ -1995,9 +1995,12 @@ When a large item completes:
    so neither the summary nor the link target can drift.
 
 **Never** use a line-number fragment (`#L123`) as the link target — list items shift, headings
-do not; anchor only to the heading's `<a id>`. When a milestone finally completes, its remaining
-stubs migrate (are deleted) with the group as usual: a stub carries no information not already in
-the archive, so nothing is lost.
+do not; anchor only to the heading's `<a id>`. When a milestone finally completes, **delete its
+remaining checked stubs; do not copy them into `COMPLETED-CHECKLIST.md`.** A stub carries no
+information not already in the archive, so nothing is lost (the engineer, 2026-10-19: a checked
+placeholder left after its item was archived "does not have to move, it may simply be deleted").
+Anything in the group that is *not* a stub -- an item body never archived, a preamble worth keeping
+-- still moves to the archive.
 
 ### Sub-step notation
 
@@ -2012,7 +2015,12 @@ When a group of related items is fully complete:
    `## Moved YYYY-MM-DD HH:MM:SS ±hh:mm — <brief description of what was done>`, taken from
    `Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"`. Carry the offset, per "Timestamps carry their
    offset" below; existing headings without one are fine and are not worth going back to change.
-3. `COMPLETED-CHECKLIST.md` is **append-only**; always add new groups at the bottom.
+3. `COMPLETED-CHECKLIST.md` is **append-only**; always add new groups at the bottom. Its headings
+   and `<a id>` anchors are **immutable**, every heading has a blank line above it, and no `- [ ]`
+   remains in it (tick a verbatim copy of an item rather than leaving its box open). Body lines may
+   be corrected -- a link repointed when its target moves, a fact fixed -- but a heading or anchor
+   never changes. `tools/check-archives.ps1` enforces all of this against the merge base, and CI runs
+   it; run it before committing an archive change.
 4. Leave only the remaining pending or in-progress items in the source `CHECKLIST.md`.
 
 Named feature files (`CHECKLIST-<feature>.md`) should be **deleted entirely** once all items are

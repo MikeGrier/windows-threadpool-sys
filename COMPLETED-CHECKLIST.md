@@ -3929,3 +3929,28 @@ crate's side is its `NR-3.8` and
 and [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), which also records what that crate
 gave up. The workspace principle the enumerator used to exemplify is amended at
 [A layer's path contract is decided by whether it constructs paths](DESIGN-NOTES.md#path-contracts-follow-path-construction).
+
+## Moved 2026-10-19 17:42:21 -04:00 -- M34.8: the archives are linted
+
+### <a id="m348"></a>M34.8 -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. *(completed 2026-10-19 17:42:21 -04:00)*
+
+Moved here from `windows-platform-probes`, where it was `M2.13`. An investigation of the 23 archives
+before building found that two of the three checks as first written would have failed on records kept
+on purpose, and the engineer settled four rules on 2026-10-19:
+
+1. A heading is preceded by a blank line, as style; the breaches were fixed. Applied to every heading
+   level, since the reason is the same at each: 49 blank lines across seven archives, inserted in a
+   `chore` commit of their own so released crates' archives earned no release.
+2. No `- [ ]` remains. The 18 open boxes were all verbatim copies of items "as they stood at
+   completion", in `durable-ioring` and `io-buffers`; they were ticked.
+3. Headings and `<a id>` anchors are immutable against the merge base, in place of the proposed "zero
+   deleted lines": since August, 62 of the 417 commits touching an archive deleted lines from one,
+   including link repointing this repository's own rules require. A heading glued onto a line is
+   checked too.
+4. A checked stub left after its item was archived may simply be deleted; recorded in the copilot
+   instructions beside the archive rules, which now also state rules 1 to 3 and name the tool.
+
+`tools/check-archives.ps1` checks all four, untracked archives included, and exits 0, 1 or 2 like its
+siblings; `tools/test-check-archives.ps1` covers each rule in both directions against throwaway git
+repositories, and a manual sabotage of the heading rule turned its case red. The `archives` CI job runs
+both, against the target branch on a pull request and the previous tip on a push.
