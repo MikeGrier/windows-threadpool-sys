@@ -136,7 +136,8 @@
 
 .PARAMETER OutputDirectory
     Where to write per-sabotage transcripts, and where the working copy and its
-    cargo target directory live. Defaults to .scratch/sabotage. Stale
+    cargo target directory live. Defaults to .scratch/sabotage. A relative path
+    is taken from the caller's current location. Stale
     transcripts are cleared at startup; the `tree/` and `target/` subdirectories
     persist between runs so builds stay warm.
 
@@ -1267,6 +1268,15 @@ foreach ($sabotage in $selected) {
 # inert: it patches nothing, so it has no business creating directories or
 # copying a tree. Raised in the PR #64 review.
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
+# Made absolute here, once, and relative to where the caller IS (the shell's location, which is
+# not always the process's current directory). Every transcript path is built from this and
+# handed to the launcher, which runs from the working copy: left relative, each of those paths
+# means a directory that does not exist there, and the first phase fails with "cannot find the
+# path" before any suite runs.
+if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    $OutputDirectory = Join-Path (Get-Location).Path $OutputDirectory
+}
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 # The working copy must be somewhere git ignores, and this is not a tidiness
