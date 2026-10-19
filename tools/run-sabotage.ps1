@@ -220,7 +220,8 @@
     have affected are swept: every entry when the change reached a crate this
     manifest's crate builds on, another package whose tests the manifest runs
     (its `testArgs`), or an input every sweep shares, and none when it reached
-    nothing the manifest builds or tests. When it is in the crate itself, the
+    nothing the manifest builds or tests, except an entry with no usable
+    record, which is always swept. When it is in the crate itself, the
     entries that are new or changed, whose patched file changed, whose
     recorded catching tests changed or are gone, and those with no better
     answer -- caught by nothing recorded, or by a doctest. The rule is
@@ -231,8 +232,12 @@
     what the base changed since the merge base counts too. A recorded catching
     test is used only if it was recorded at HEAD or an ancestor of it, and an
     entry recorded before the base is judged against everything since its
-    record as well. A sweep of a tree with uncommitted changes records what it
-    learned with no commit, so a later run does not use it. Needs cargo on
+    record as well. A sweep whose copy is not exactly HEAD -- uncommitted or
+    untracked changes, or a file git is told to ignore changes to -- records
+    what it learned with no commit, so a later run does not use it; such a
+    hidden file also makes the change unmeasurable, so every entry is swept.
+    A manifest whose `testArgs` already filter tests after `--` is never
+    narrowed to its recorded tests. Needs cargo on
     PATH, for `cargo metadata`. `-List` shows each entry's reason.
 
 .PARAMETER CatcherRecord
@@ -1484,7 +1489,30 @@ New-Item -ItemType Directory -Force -Path $treeRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
 Write-Report 'Refreshing the working copy.' -Level note
+$headAtCopy = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
+if ($headAtCopy) { $headAtCopy = $headAtCopy.Trim() }
 Sync-Tree -From $repoRoot -To $treeRoot
+
+# The commit the swept copy is, recorded with what each entry was caught by, so a
+# later run uses that only in a checkout that contains it (common.ps1,
+# Get-SabotageCatcherTests). Only for a copy that IS that commit, and the copy is
+# what is compared, now, before anything is swept (Test-SabotageTreeIsCommit): a
+# sweep builds what the copy holds, and the checkout can be edited, or have its
+# edits discarded, while it runs. What a sweep learns from uncommitted edits is
+# about a tree no commit names; recorded at HEAD, it would be taken for HEAD's,
+# and once those edits were gone a later run would judge an entry by tests that
+# caught it only in a tree that no longer exists. Such a sweep records no commit,
+# which no later run uses, and says so, so that it is no surprise that a local
+# sweep with edits in hand narrows nothing afterwards.
+$sweptCommit = $null
+if (Test-SabotageTreeIsCommit -RepositoryRoot $repoRoot -Tree $treeRoot -Commit $headAtCopy) {
+    $sweptCommit = $headAtCopy
+}
+else {
+    Write-Report ('The copy being swept is not a commit -- the tree has uncommitted changes -- so what this ' +
+        'sweep learns is recorded without a commit, and will not narrow a later scoped sweep.') -Level note
+}
+
 
 # Every cargo invocation from here on builds the COPY, into the copy's own
 # target directory, passed as --target-dir on each command line.
@@ -1657,31 +1685,10 @@ $catchers = Read-SabotageCatcherRecord -Path $catcherPath
 function Get-FirstTests {
     param([string] $EntryName)
     if (-not $scopeNote) { return }
+    if (-not (Test-SabotageNarrowable -CargoArgs $testArgs)) { return }
     $tests = @((Get-SabotageCatcherTests -RepositoryRoot $repoRoot -Record $catchers -Manifest $catcherKey -Entry $EntryName).Tests)
     if ($tests.Count -eq 0 -or @($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { return }
     , $tests
-}
-# The commit the swept tree is at, recorded with what each entry was caught by,
-# so a later run uses that only in a checkout that contains it (common.ps1,
-# Get-SabotageCatcherTests). Only for a tree that IS that commit: a sweep reads
-# the working tree, uncommitted edits included, and what it learns there is
-# about a tree no commit names. Recorded at HEAD, it would be taken for HEAD's;
-# once those edits were discarded, a later run would judge an entry by tests
-# that caught it only in a tree that no longer exists. So a tree with any change
-# git sees -- staged, unstaged, or an untracked file it does not ignore -- is
-# recorded with no commit, which no later run uses. Said, so it is not a surprise
-# that a local sweep with edits in hand narrows nothing afterwards.
-$sweptCommit = $null
-# Whether git reports any line at all is the question, not which paths, so the
-# output is counted, not parsed.
-$dirty = @(Invoke-NativeStdout { git -C $repoRoot status --porcelain --untracked-files=normal } | Where-Object { $_ })
-if ($LASTEXITCODE -eq 0 -and $dirty.Count -eq 0) {
-    $sweptCommit = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
-    if ($sweptCommit) { $sweptCommit = $sweptCommit.Trim() }
-}
-elseif ($dirty.Count -gt 0) {
-    Write-Report ("The tree has uncommitted changes, so what this sweep learns is recorded without a commit, " +
-        'and will not narrow a later scoped sweep.') -Level note
 }
 # The outcomes in which the patch was judged. Every other one -- the
 # infrastructure outcomes, and a hung build -- says nothing about the tests, and

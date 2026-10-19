@@ -68,8 +68,9 @@ changed, edits not yet committed included. A branch behind its base is also
 charged with what the base changed since they parted, which may be in crates the
 branch never touched, so rebase first to keep the scope to the branch's own work.
 It reads the record from the output
-directory, which a clone has only once it has swept the manifest; until then every
-entry of a crate the branch touched is taken. Sweep the whole manifest, without
+directory, which a clone has only once it has swept the manifest from a clean
+checkout; an entry with no usable record is taken whatever changed, so the first
+scoped run in a clone is a full one. Sweep the whole manifest, without
 `-Since`, when a change is one scoping cannot see: a test helper shared by a crate's
 tests, or code elsewhere in a crate that decides whether a sabotaged line is
 reached.

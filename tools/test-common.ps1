@@ -736,6 +736,8 @@ function Get-ScopeRecord {
     $at = '2026-01-01T00:00:00.0000000Z'
     Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1' -Tests @('tests::t_one') -At $at -Commit $Commit
     Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E2' -Tests @('it_two') -At $at -Commit $Commit
+    # Swept, and caught by no test it could name: what the selection knows least of.
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E3' -Tests @() -At $at -Commit $Commit
     Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E4' -Tests @('crates\a\src\lib.rs - api (line 1)') -At $at -Commit $Commit
     Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E5' -Tests @('tests::gone_test') -At $at -Commit $Commit
     Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E6' -Tests @() -At $at -Commit $Commit
@@ -885,8 +887,8 @@ Test-Case 'a record learned at a commit this checkout does not contain is not us
         Invoke-Native { git -C $fixture.Root reset --quiet --hard $fixture.Base } | Out-Null
         $edit = { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/spare.rs') -Value '// x' }
         $sel = Get-ScopedEntries $fixture $edit -RecordCommit $later
-        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E1'] 'E1''s record is from a commit not here'
-        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E2'] 'nor E2''s'
+        Assert-Equal 'no usable record of when it was last swept' $sel.Reasons['E1'] 'E1''s record is from a commit not here'
+        Assert-Equal 'no usable record of when it was last swept' $sel.Reasons['E2'] 'nor E2''s'
         $sel = Get-ScopedEntries $fixture { param($r) } -RecordCommit $fixture.Base
         if ($sel.Reasons.ContainsKey('E1')) { throw "a record from the base is used: $($sel.Reasons['E1'])" }
 
@@ -978,7 +980,10 @@ Test-Case 'a manifest that tests the whole workspace is reached by a change to a
             -Change $change -Dependencies $deps -Record @{} -Spec ([pscustomobject]@{ package = 'a'; testArgs = $testArgs }) -Packages @{ a = 'crates/a' }
     }
     Assert-Equal $true (& $select @('--workspace')).All 'b is tested'
-    Assert-Equal 0 @((& $select @('-p', 'a')).Entries).Count 'b is not'
+    # No repository here, so no record is usable, and E is taken for that alone.
+    $notB = & $select @('-p', 'a')
+    Assert-Equal $false $notB.All 'b is not'
+    Assert-Equal 'no usable record of when it was last swept' $notB.Reasons['E'] 'and nothing about b'
     Assert-Equal $true (Select-SabotageEntry -RepositoryRoot 'C:\r' -Manifest 'crates/a/sabotage.json' -Entries $entries -SourceRoot 'C:\r\crates\a' `
             -Change $change -Dependencies $deps -Record @{} -Spec $null -Packages @{}).All 'no manifest settings given, every entry'
 }
@@ -1027,6 +1032,88 @@ Test-Case 'a path with a character git would quote is reported as it is, committ
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
+Test-Case 'an entry with no usable record is selected whatever the change, and one with a record is not' {
+    $fixture = New-EntryScopeFixture
+    try {
+        # The reviewer's case: a change that reaches nothing in the crate.
+        $edit = { param($r) Add-Content -LiteralPath (Join-Path $r 'README.md') -Value 'x' }
+        $sel = Get-ScopedEntries $fixture $edit -Dependencies @{ 'crates/a' = @() }
+        Assert-Equal 0 @($sel.Entries).Count 'every entry recorded at the base, and nothing reached'
+        $spec = [System.IO.File]::ReadAllText((Join-Path $fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
+        $change = Get-SabotageChange -RepositoryRoot $fixture.Root -Since $fixture.Base
+        $lost = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
+            -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change $change -Dependencies @{ 'crates/a' = @() } `
+            -Record (New-SabotageCatcherRecord) -Spec $spec -Packages @{ a = 'crates/a' }
+        Assert-Equal 6 @($lost.Entries).Count 'the record lost: every entry'
+        Assert-Equal 'no usable record of when it was last swept' $lost.Reasons['E1'] 'why'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'git''s view is not trusted when a tracked file is marked assume-unchanged or skip-worktree' {
+    foreach ($flag in '--assume-unchanged', '--skip-worktree') {
+        $root = New-GitFixture
+        try {
+            [System.IO.File]::WriteAllText((Join-Path $root 'tracked.rs'), "x`n")
+            $base = Save-GitFixture $root 'base'
+            Assert-Equal $null (Get-SabotageHiddenIndexState -RepositoryRoot $root) 'none yet'
+            Invoke-Native { git -C $root update-index $flag tracked.rs } | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root 'tracked.rs'), "edited, and git does not say`n")
+            if (-not (Get-SabotageHiddenIndexState -RepositoryRoot $root)) { throw "$flag is seen" }
+            $change = Get-SabotageChange -RepositoryRoot $root -Since $base
+            Assert-Equal $false $change.Known "$flag makes the change unmeasurable"
+        }
+        finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Test-Case 'a copy is a commit only when every file it tracks is there, the same, with nothing else' {
+    $root = New-GitFixture
+    $copy = Join-Path ([System.IO.Path]::GetTempPath()) ('copy-' + [guid]::NewGuid().ToString('N'))
+    try {
+        foreach ($f in 'a.rs', 'dir/b.rs', '.gitignore') {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $root $f)) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root $f), $(if ($f -eq '.gitignore') { "ignored/`n" } else { "x`n" }))
+        }
+        $commit = Save-GitFixture $root 'base'
+        $fill = {
+            Remove-Item -LiteralPath $copy -Recurse -Force -ErrorAction SilentlyContinue
+            foreach ($f in 'a.rs', 'dir/b.rs', '.gitignore') {
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $copy $f)) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $root $f) -Destination (Join-Path $copy $f)
+            }
+        }
+        & $fill
+        Assert-Equal $true (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'the same'
+        New-Item -ItemType Directory -Force -Path (Join-Path $copy 'ignored') | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $copy 'ignored/x'), 'x')
+        Assert-Equal $true (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'an ignored file is no difference'
+        [System.IO.File]::WriteAllText((Join-Path $copy 'a.rs'), "edited`n")
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'an edited file'
+        & $fill; Remove-Item -LiteralPath (Join-Path $copy 'dir/b.rs')
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'a missing file'
+        & $fill; [System.IO.File]::WriteAllText((Join-Path $copy 'extra.rs'), 'x')
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'a file the commit lacks'
+        # What the repository's own index says is not what is checked.
+        & $fill; Invoke-Native { git -C $root update-index --assume-unchanged a.rs } | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $copy 'a.rs'), "edited`n")
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit $commit) 'assume-unchanged hides nothing here'
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit '') 'no commit'
+        Assert-Equal $false (Test-SabotageTreeIsCommit -RepositoryRoot $root -Tree $copy -Commit 'no-such') 'an unknown commit'
+        Assert-Equal $true ($null -eq $env:GIT_INDEX_FILE) 'the index it used is not left behind'
+    }
+    finally {
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $copy -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'a run is narrowed only when nothing after -- names tests already' {
+    Assert-Equal $true (Test-SabotageNarrowable @('test', '-p', 'x')) 'no --'
+    Assert-Equal $true (Test-SabotageNarrowable @('test', '-p', 'x', '--', '--exact', '--test-threads=1')) 'flags only'
+    Assert-Equal $false (Test-SabotageNarrowable @('test', '-p', 'x', '--', 'only_this')) 'a filter'
+    Assert-Equal $false (Test-SabotageNarrowable @('test', '--', '--test-threads', '1')) 'a value as its own word counts too'
+}
 Test-Case 'a change to a crate''s own build settings selects every entry' {
     foreach ($path in 'crates/a/Cargo.toml', 'crates/a/build.rs', 'crates/a/.cargo/config.toml') {
         $fixture = New-EntryScopeFixture
@@ -1058,7 +1145,8 @@ Test-Case 'a record older than the base is judged against everything since it, s
         $short = $a.Substring(0, 8)
         Assert-Equal "since it was last swept, at ${short}: its catching test's file changed: crates/a/src/tests.rs" $sel.Reasons['E1'] 'E1'
         if ($sel.Reasons.ContainsKey('E2')) { throw "E2's test and file are untouched since A: $($sel.Reasons['E2'])" }
-        if ($sel.Reasons.ContainsKey('E3')) { throw "E3 has no record and the push touched nothing: $($sel.Reasons['E3'])" }
+        # E3 was caught by no test it could name, so any change in its crate since A counts.
+        Assert-Equal "since it was last swept, at ${short}: no test is recorded as catching it" $sel.Reasons['E3'] 'E3'
         # A record from B itself has nothing to answer for since.
         $current = Get-ScopedEntries $fixture { param($r) } -RecordCommit $b
         Assert-Equal 0 @($current.Entries).Count 'nothing since B'
@@ -1070,7 +1158,7 @@ Test-Case 'a record older than the base is judged against everything since it, s
             $fixture2.Base = Save-GitFixture $fixture2.Root 'change z'
             $sel = Get-ScopedEntries $fixture2 { param($r) } -RecordCommit $a2
             Assert-Equal "since it was last swept, at $($a2.Substring(0, 8)): a crate it builds on or tests changed: crates/z" $sel.Reasons['E2'] 'E2'
-            if ($sel.Reasons.ContainsKey('E3')) { throw 'E3 has no record, so nothing since it applies' }
+            Assert-Equal "since it was last swept, at $($a2.Substring(0, 8)): a crate it builds on or tests changed: crates/z" $sel.Reasons['E3'] 'E3 too'
         }
         finally { Remove-Item -LiteralPath $fixture2.Root -Recurse -Force -ErrorAction SilentlyContinue }
     }

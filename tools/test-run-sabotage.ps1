@@ -2098,9 +2098,17 @@ Test-Case '-Since with shards splits only the selected entries among them' {
 # The marker entry, selected by a change to src/lib.rs, recorded as caught by the
 # named tests; returns the runs its sabotaged entry was given.
 function Invoke-NarrowCase {
-    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full, [string[]] $Extra = @())
+    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full, [string[]] $Extra = @(), [string[]] $TestArgs = @())
     $root = New-ScopeFixture
     try {
+        if ($TestArgs.Count -gt 0) {
+            $path = Join-Path $root 'sabotage.json'
+            $spec = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+            $spec | Add-Member -NotePropertyName testArgs -NotePropertyValue $TestArgs
+            [System.IO.File]::WriteAllText($path, ($spec | ConvertTo-Json -Depth 8))
+            Invoke-Native { git -C $root add -A } | Out-Null
+            Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m 'testArgs' } | Out-Null
+        }
         $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
         $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
         Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests $Recorded -At '2026-01-01T00:00:00.0000000Z' -Commit $head
@@ -2149,6 +2157,13 @@ Test-Case 'a narrowed run that hangs is no catch, and the whole suite decides' {
     Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
     Assert-Match 'caught \(suite failed' $case.Result.Output
     Assert-Equal 2 $case.Runs.Count 'the hung narrow run, then the whole suite'
+}
+
+Test-Case 'a manifest whose testArgs name tests for libtest is not narrowed, since a name would widen its run' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded @('marker::is_present') -TestArgs @('test', '-p', 'fixture', '--', 'marker')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Equal 1 $case.Runs.Count 'the whole suite alone'
+    Assert-False ($case.Runs[0] -match 'is_present') 'with no recorded test added'
 }
 
 Test-Case 'a manifest that already passes --exact to libtest is narrowed without a second one' {

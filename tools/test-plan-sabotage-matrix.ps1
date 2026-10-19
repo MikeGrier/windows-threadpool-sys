@@ -110,9 +110,32 @@ function New-FixtureRoot {
 # Run the planner and return the parsed matrix. Errors propagate, which is what
 # the refusal cases catch.
 function Invoke-Planner {
-    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '', [string] $Since = '')
-    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput -Since $Since 6>$null
+    param([string] $Root, [string] $Manifest = '', [int] $EntriesPerShard = 10, [string] $GitHubOutput = '', [string] $Since = '',
+        [string] $CatcherRecord = '')
+    # A fixture's own record, when it has one, unless the case names another.
+    if (-not $CatcherRecord -and (Test-Path -LiteralPath (Join-Path $Root 'catchers.json'))) { $CatcherRecord = Join-Path $Root 'catchers.json' }
+    $json = & $planner -RepositoryRoot $Root -Manifest $Manifest -EntriesPerShard $EntriesPerShard -GitHubOutput $GitHubOutput -Since $Since -CatcherRecord $CatcherRecord 6>$null
     return ($json | ConvertFrom-Json)
+}
+
+<#
+Record every entry of every manifest under `Root` as swept at its HEAD and caught
+by no test it named, at `Root`\catchers.json: what a sweep of that commit leaves,
+which a scoped plan from it needs. An entry with no usable record is planned
+whatever the change.
+#>
+function Write-FixtureRecord {
+    param([string] $Root)
+    $head = ((Invoke-NativeStdout { git -C $Root rev-parse HEAD }) | Select-Object -First 1).Trim()
+    $record = New-SabotageCatcherRecord
+    foreach ($path in @(Get-SabotageManifest -RepositoryRoot $Root)) {
+        $key = $path.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+        foreach ($entry in @((Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).sabotages)) {
+            Set-SabotageCatcher -Record $record -Manifest $key -Entry $entry.name -Tests @() -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+        }
+    }
+    Write-SabotageCatcherRecord -Path (Join-Path $Root 'catchers.json') -Record $record
+    return $record
 }
 
 <#
@@ -141,11 +164,13 @@ function New-ScopedFixture {
         [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), ($spec | ConvertTo-Json -Depth 5))
     }
     # Cargo.lock would be written by the first metadata call and then show as a
-    # change to a shared input, so it is ignored, as a build's output would be.
-    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), "Cargo.lock`ntarget/`n")
+    # change to a shared input, so it is ignored, as a build's output would be;
+    # and so is the record, which is no part of the tree.
+    [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), "Cargo.lock`ntarget/`ncatchers.json`n")
     Invoke-Native { git -C $root init --quiet } | Out-Null
     Invoke-Native { git -C $root add -A } | Out-Null
     Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    Write-FixtureRecord $root | Out-Null
     return $root
 }
 
@@ -385,7 +410,7 @@ $cases = @(
             [System.IO.File]::WriteAllText((Join-Path $dir 'sabotage.json'), (@{ package = 'd'; sabotages = $entries } | ConvertTo-Json -Depth 5))
             Invoke-Native { git -C $root add -A } | Out-Null
             Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m more } | Out-Null
-            $record = New-SabotageCatcherRecord
+            $record = Write-FixtureRecord $root
             $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
             foreach ($n in 1..25) { Set-SabotageCatcher -Record $record -Manifest 'crates/d/sabotage.json' -Entry "s$n" -Tests @('t_one') -At '2026-01-01T00:00:00.0000000Z' -Commit $head }
             $recordPath = Join-Path $root 'catchers.json'
@@ -397,7 +422,7 @@ $cases = @(
             Assert-Equal 1 @($m.include).Count 'one entry reached, one shard'
             $json = & $planner -RepositoryRoot $root -Since 'HEAD' 6>$null
             $m = $json | ConvertFrom-Json
-            Assert-Equal 3 @($m.include).Count 'with no record, every entry of the crate counts: 25 at 10 a shard'
+            Assert-Equal 6 @($m.include).Count 'with no record, every entry of every manifest: a, b and c one shard each, d''s 25 at 10 a shard'
         }
     },    @{
         Name = 'since-and-a-named-manifest-plan-what-both-allow'

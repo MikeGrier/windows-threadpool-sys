@@ -557,6 +557,61 @@ function Get-SabotageFileAt {
 $script:SabotageWorkingPaths = @{}
 $script:SabotageFileAt = @{}
 
+# Why git's view of the working tree cannot be trusted to show every edit, or
+# $null when it can. A tracked file marked assume-unchanged or skip-worktree --
+# set by hand, or by a sparse checkout -- is left out of `git diff` and `git
+# status` whatever its contents, while a sweep copies and builds what is on disk,
+# so an edit there would be swept and never measured. `git ls-files -v` tags such
+# a file with a lowercase letter (assume-unchanged) or `S` (skip-worktree). Git
+# failing to answer is a reason too.
+function Get-SabotageHiddenIndexState {
+    param([string] $RepositoryRoot)
+    $lines = @(Invoke-NativeStdout { git -c core.quotePath=true -C $RepositoryRoot ls-files -v })
+    if ($LASTEXITCODE -ne 0) { return 'git could not list the files it tracks' }
+    foreach ($line in $lines) {
+        if (-not $line) { continue }
+        $tag = [string]$line[0]
+        if ($tag -ceq 'S' -or ($tag -cmatch '^[a-z]$')) {
+            return "git is told to ignore the working copy of a tracked file: $line"
+        }
+    }
+    return $null
+}
+
+# Whether the directory `Tree` holds exactly what commit `Commit` does: every file
+# the commit tracks, with the same content as git would store it, and no other
+# file git would not ignore. Asked of git itself, through an index of its own
+# built from the commit, so that nothing the repository's own index says --
+# stat information, assume-unchanged, skip-worktree -- can stand in for reading
+# the files. $false when any of it cannot be established.
+#
+# This is what lets a sweep say which commit it swept: it compares the copy it
+# built and is about to sweep, not the checkout at some other moment, so an edit
+# made and discarded while it runs cannot make a dirty snapshot look clean.
+function Test-SabotageTreeIsCommit {
+    param([string] $RepositoryRoot, [string] $Tree, [string] $Commit)
+    if (-not $Commit -or -not (Test-Path -LiteralPath $Tree -PathType Container)) { return $false }
+    $index = Join-Path ([System.IO.Path]::GetTempPath()) ('sabotage-index-' + [guid]::NewGuid().ToString('N'))
+    $saved = $env:GIT_INDEX_FILE
+    try {
+        $env:GIT_INDEX_FILE = $index
+        Invoke-NativeStdout { git -C $RepositoryRoot read-tree $Commit } | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        # Exits non-zero when it finds a file that differs; diff-index decides.
+        Invoke-NativeStdout { git -C $RepositoryRoot --work-tree $Tree update-index -q --refresh } | Out-Null
+        Invoke-NativeStdout { git -C $RepositoryRoot --work-tree $Tree diff-index --quiet $Commit -- } | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $extra = @(Invoke-NativeStdout { git -C $RepositoryRoot --work-tree $Tree ls-files --others --exclude-standard } | Where-Object { $_ })
+        if ($LASTEXITCODE -ne 0 -or $extra.Count -gt 0) { return $false }
+        return $true
+    }
+    finally {
+        if ($null -eq $saved) { Remove-Item -Path Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+        else { $env:GIT_INDEX_FILE = $saved }
+        Remove-Item -LiteralPath $index -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # What differs between `Since` and the working tree, measured from the merge base
 # of `Since` and HEAD (Get-SabotageWorkingPaths).
 #
@@ -584,6 +639,8 @@ function Get-SabotageChange {
         return & $unknown "this clone has no merge base with '$Since'"
     }
     $mergeBase = $base[0].Trim()
+    $hidden = Get-SabotageHiddenIndexState -RepositoryRoot $RepositoryRoot
+    if ($hidden) { return & $unknown $hidden }
     $working = Get-SabotageWorkingPaths -RepositoryRoot $RepositoryRoot -From $mergeBase
     if ($null -eq $working) { return & $unknown "git could not say what differs from $mergeBase" }
     # 0 is an ancestor, 1 is not, and anything else is git unable to say.
@@ -918,11 +975,13 @@ function Write-SabotageCatcherRecord {
 #   - no entry, when it touched nothing in the crate or under the manifest's
 #     `root`;
 #   - otherwise the entry, when it is new or differs from the manifest at X; the
-#     file it patches changed; no usable record names a test catching it
-#     (Get-SabotageCatcherTests), or a doctest caught it, whose source may be a
-#     file spliced into the crate's documentation rather than the one it names;
-#     or a file defining a function named as one of its catching tests changed,
-#     or defined one at X, or no file of the crate defines one any more.
+#     file it patches changed; its record names no test catching it, or a
+#     doctest caught it, whose source may be a file spliced into the crate's
+#     documentation rather than the one it names; or a file defining a function
+#     named as one of its catching tests changed, or defined one at X, or no file
+#     of the crate defines one any more.
+# An entry with no usable record (Get-SabotageCatcherTests) is affected whatever
+# the change: there is no commit it was last swept at to measure from.
 # A change elsewhere in the crate selects nothing on its own. That, and a test
 # helper changing under the tests that call it, are what the nightly sweep is for
 # (DESIGN-NOTES.md, "sabotage-scope").
@@ -1144,7 +1203,15 @@ function Select-SabotageEntry {
     $affected = @(foreach ($entry in $Entries) {
             $known = Get-SabotageCatcherTests -RepositoryRoot $RepositoryRoot -Record $Record -Manifest $Manifest -Entry $entry.name
             $why = $null
+            # With no usable record there is no commit to measure "since it was last
+            # swept" from, and a change made between that sweep and this base --
+            # its run cancelled, failed, or its record lost from the cache -- would
+            # be invisible. So the entry runs. A lost record costs one wider run,
+            # which saves a record; it never costs a smaller one.
             if ($now.Reached) { $why = & $judgeEntry $Change.Base $changedNow $entry $known.Tests }
+            if (-not $known.Usable -and (-not $why -or $why -eq 'no test is recorded as catching it')) {
+                $why = 'no usable record of when it was last swept'
+            }
             if (-not $why -and $known.Usable -and -not [string]::Equals($known.Commit, $Change.Base, [System.StringComparison]::OrdinalIgnoreCase)) {
                 $short = $known.Commit.Substring(0, [Math]::Min(8, $known.Commit.Length))
                 $then = & $sinceRecord $known.Commit
@@ -1171,6 +1238,23 @@ function Select-SabotageEntry {
 # run of an entry's recorded catching tests (run-sabotage.ps1, Invoke-Sabotaged). `--exact` is added only
 # if the arguments after `--` do not carry it already: libtest refuses it twice,
 # before running anything.
+# Whether a run of `CargoArgs` can be narrowed by naming tests: not when the
+# arguments for libtest, after cargo's `--`, already carry anything but flags.
+# libtest runs a test that matches ANY name it is given, so a name added to a
+# filter the manifest set would widen the run past the suite it stands for, to a
+# test that suite does not run, and a failure there would be credited as a catch.
+# Conservative: an option's value written as a separate word (`--test-threads 1`)
+# counts too, and only costs narrowing.
+function Test-SabotageNarrowable {
+    param([string[]] $CargoArgs)
+    $separator = [array]::IndexOf(@($CargoArgs), '--')
+    if ($separator -lt 0) { return $true }
+    foreach ($argument in @($CargoArgs | Select-Object -Skip ($separator + 1))) {
+        if (-not ([string]$argument).StartsWith('-')) { return $false }
+    }
+    return $true
+}
+
 function Add-TestFilter {
     param([string[]] $CargoArgs, [string[]] $Tests)
     $separator = [array]::IndexOf($CargoArgs, '--')

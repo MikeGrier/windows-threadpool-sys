@@ -2842,13 +2842,23 @@ backstop. The layers, cheapest first, are the items from
   commit as well. A record is refreshed only when a run sweeps the entry and saves, and a run
   cancelled, failed or overlapping another may not; judged from the base alone, an entry could
   then miss a change made while its record was stale. A record is used only if it was learned at a
-  commit the checkout contains, and only from a tree that was that commit: a sweep with
-  uncommitted edits records what it learned with no commit, and no later run uses it.
+  commit the checkout contains, and only from a tree that was that commit: the harness checks the
+  copy it sweeps against the commit, file by file, and a copy that differs -- uncommitted edits, an
+  untracked file, a file git was told to stop looking at -- records what it learned with no commit,
+  which no later run uses.
+- An entry with no record a run can use is selected whatever the change, in any manifest: nothing
+  is known about when it was last swept, so nothing says the change could not matter to it. A lost
+  or empty record therefore makes the next post-merge run a full sweep, and a clone that has never
+  swept a manifest sweeps all of it.
+- A change git cannot report is not measured: a tracked file marked assume-unchanged or
+  skip-worktree may differ from what git says, so a run with one takes every entry.
 - When the base is not an ancestor of the checkout -- a force-push, or a branch behind it -- what
   the base changed since the merge base counts too, so a reverted change is still a change.
 - In a scoped run, an entry is first run against the tests that caught it last time, and against
   the whole suite only if they do not report a test failure. A hang there does not count: a test
-  run alone is scheduled differently from one in the whole suite, so the whole suite decides. A full sweep always runs the whole
+  run alone is scheduled differently from one in the whole suite, so the whole suite decides. A
+  manifest whose `testArgs` already name tests after `--` is never narrowed: libtest runs a test that
+  matches any filter given, so adding a recorded name would widen its run, not narrow it. A full sweep always runs the whole
   suite, so the nightly backstop is exactly the sweep from before scoping, and it re-learns every
   entry's catching tests. The narrow run can differ in one way: a patch that also stops a doctest
   compiling is reported caught when a recorded unit test fails, where the whole suite reports the

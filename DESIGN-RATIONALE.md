@@ -963,5 +963,13 @@ the repository: it is derived from a sweep, it would be a copy that drifts, and 
 into the developer's tree; it is kept where sweeps run instead, and its absence only makes a scoped run
 larger.
 
+**What review rounds added.** Each review round of the branch found a way the selection could take
+fewer entries than the change warranted, and each fix resolved the doubt toward running more. Two of
+them reversed an earlier choice. An entry with no usable record was first left to its crate's reach,
+so a lost record made a scoped run smaller where nothing was known; it is now always taken, so a lost
+record makes a run a full one. Whether a record carries its commit was first decided by asking git
+after the baseline whether the tree was clean; that misses a file git was told to stop looking at, so
+the harness now checks the copy it actually swept against the commit, file by file.
+
 **Not decided.** Whether a scoped sweep should also run on pull requests, and whether it should gate
 anything, were not raised; the post-merge sweep remains a report and not a gate.

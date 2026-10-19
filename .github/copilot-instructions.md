@@ -1365,8 +1365,9 @@ and runs the crate's suite once per entry, so locally prefer
 `.\tools\run-sabotage.ps1 -Manifest <manifest> -Since origin/main` (or the branch's base). It sweeps
 the entries the branch could have affected, and runs each first against the tests recorded as
 catching it. `-List -Since origin/main` shows which entries, and why each. The record of what caught
-each entry is `catchers.json` in the output directory, written by every sweep; until a clone has
-swept a manifest once, a scoped run takes every entry of a crate the branch touched. Sweep the whole
+each entry is `catchers.json` in the output directory, written by every sweep; an entry with no
+usable record is always taken, so until a clone has swept a manifest from a clean checkout, a scoped
+run of it sweeps every entry. Sweep the whole
 manifest when the change is one scoping cannot see: a test helper shared by a crate's tests, or code
 elsewhere in a crate that decides whether a sabotaged line is reached. The nightly CI sweep is the
 backstop for both; the rule and its limits are in
