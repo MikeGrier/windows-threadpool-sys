@@ -1169,3 +1169,38 @@ process state, and `win32_terminated`, which returns a raw pointer for this crat
 
 **The contract is unchanged.** The rules, the one refusal (an interior NUL) and the two failures of reading the
 current directory are [D-19](#d-19)'s and [D-27](#d-27)'s.
+
+## <a id="d-31"></a>D-31: `FileIdInfo` has a typed entry, `QueryFileIdInfo`, which makes the one call and carries the two fields as the call wrote them
+
+**Queued 2026-10-18 as `NR-3.10`** from the review of durable-ioring's `DI-M15`, which the engineer asked to have
+made: [DI-15.1](../durable-ioring/CHECKLIST.md) reads a file's identity, durable-ioring forbids `unsafe`, and the
+untyped [`QueryFileInformation`](src/query.rs) gives this class only as bytes. Learn files the call under File
+Management, so the typed form is this crate's. Sources read that day: the `FILE_ID_INFO` page (`ms.date`
+12/05/2018) and the `FILE_ID_DESCRIPTOR` page.
+
+**It is still one entry per call.** [D-3](#d-3) forbids an entry that makes two calls; this one makes one,
+`GetFileInformationByHandleEx` with `FileIdInfo`, into a `FILE_ID_INFO` on the stack, and reads the structure
+that class writes. The untyped entry remains the catalogue's form of the call for every class. The class value
+is taken from `FileInformationClass::ID`, so it has one definition.
+
+**The values are carried as the call wrote them.** `FileIdInfo` holds `VolumeSerialNumber` as a `u64` and
+`FileId` as its 16 bytes, not folded into an integer, since the page states no byte order. The page says the two
+together "uniquely identify a file on a single computer", and that two handles are compared by combining them;
+the entry says nothing more about what either means. `FILE_ID_INFO` is not part of the surface ([D-13](#d-13)).
+A refusal is the call's code, unaltered.
+
+**Observed on 2026-10-18, Windows 11 build 26300, local NTFS, unelevated.** Two opens of one file read the same
+value; two files, a file and its copy, and a directory and its file read different identifiers with the same
+serial; a hard link reads the value of the file it names; the identifier equals the one the
+`FileIdExtdDirectoryInfo` listing gives for the file, and the one `windows-file-enumeration-sys` reports with a
+required identity. A file opened with no access reads the same value as one opened to read. The 16 bytes opened
+the file through `OpenFileById` with `ExtendedFileIdType`, where the `FILE_ID_DESCRIPTOR` page says of that
+member "This is used on ReFS file systems". Refused: an event with `ERROR_INVALID_HANDLE`, `NUL` and an
+anonymous pipe with `ERROR_INVALID_PARAMETER`, and a volume opened with no access with `ERROR_INVALID_FUNCTION`.
+None of those codes is on the page, so the tests compare each with what the untyped entry reports for the same
+handle, except the event's, which is named as [D-29](#d-29) names it. The `FILE_ID_INFO` page's requirements
+table gives no supported client; the call worked on this one.
+
+**Scheduled work:** none in this crate. [DI-15.1](../durable-ioring/CHECKLIST.md) is the consumer.
+`windows-file-enumeration-sys` keeps its private read of the serial, on the handle it owns; this entry would
+duplicate that handle per enumeration ([D-4](#d-4)). Its agreement with this entry is a test in that crate.

@@ -105,17 +105,7 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
   **Next:** [WV-3.1](../win-volume-sys/CHECKLIST.md), which is independent; then
   [DI-14.12](../durable-ioring/CHECKLIST.md), which needs both.
 
-- [ ] **NR-3.10** -- **A typed read of `FileIdInfo`: the volume serial number and the 128-bit file ID.**
-  `GetFileInformationByHandleEx` with `FileIdInfo` is reachable today only as raw bytes, through
-  `QueryFileInformation` with `FileInformationClass::ID`, and its decode is written twice outside this
-  crate's public surface: this crate's own test casts the buffer to `FILE_ID_INFO` with `unsafe`, and
-  `windows-file-enumeration-sys` has a private decode of its own. The call is File Management's, so the
-  typed form is this crate's (the workspace's Learn-placement rule), and a consumer that forbids
-  `unsafe` cannot write it. Carried as the call wrote them: the serial number as a `u64` and the ID as
-  16 bytes, with no claim about what either means beyond the call's page. Tests: the ID of a file is
-  stable across two opens and differs between two files; it agrees with what the enumeration crate
-  reports for the same file; a handle the call refuses is its own error.
-  **Next:** [DI-15.1](../durable-ioring/CHECKLIST.md), which needs it.
+- [x] **NR-3.10** -- `QueryFileIdInfo` reads `FileIdInfo` as a `FileIdInfo` value: the volume serial number as a `u64` and the 128-bit file ID as 16 bytes. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#nr-310-fileid)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M15` ->
   > `DI-15.1` (a file's identity). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).

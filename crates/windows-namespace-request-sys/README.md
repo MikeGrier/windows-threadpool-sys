@@ -117,7 +117,7 @@ rather than chosen by taste:
 | `OpenFileById` | `OpenFileByIdentifier` |
 | `FindFirstChangeNotificationW` | `WatchDirectory` |
 | `CloseHandle` and variant close routines | `CloseRequest` |
-| `GetFileInformationByHandleEx` | `QueryFileInformation` |
+| `GetFileInformationByHandleEx` | `QueryFileInformation`; `QueryFileIdInfo` reads its `FileIdInfo` class as values |
 | `GetFileInformationByHandle` | `QueryFileInformationByHandle` |
 | `GetFileType` | `QueryFileType` |
 | `GetFinalPathNameByHandleW` | `QueryFinalPath` |

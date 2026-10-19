@@ -406,3 +406,12 @@ possible is [D-30](DESIGN-NOTES.md#d-30): `AnchoredPath` is public, with `new`, 
 enumeration crate gave up in taking it is that crate's
 [D-22](../windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), and the work is its `PATH-1`
 ([COMPLETED-CHECKLIST.md](../windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#path-1)).
+
+## Moved 2026-10-18 21:05:37 -04:00 -- A typed `FileIdInfo` read
+
+### <a id="nr-310-fileid"></a>NR-3.10 -- `QueryFileIdInfo` reads `FileIdInfo` as a `FileIdInfo` value: the volume serial number as a `u64` and the 128-bit file ID as 16 bytes. *(completed 2026-10-18 21:05:37 -04:00)*
+
+Queued from the review of durable-ioring's `DI-M15`, for `DI-15.1`. The decision and what was observed are
+[D-31](DESIGN-NOTES.md#d-31). The untyped entry's own test now checks that its bytes and the typed entry agree,
+and the agreement with what `windows-file-enumeration-sys` reports is a test in that crate. Four sabotages caught
+and one control survived.

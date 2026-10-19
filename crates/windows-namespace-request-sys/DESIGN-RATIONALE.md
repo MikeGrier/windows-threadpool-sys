@@ -636,3 +636,24 @@ and one row (`\??\`) whose behaviour this repository found rather than read, whi
 platform-integrity rule says not to bind to. The graft rules it would also have derived from stayed
 as they are. It would be reopened by a consumer that needs to know a path is remote before it makes any
 call.
+
+## D-31: the typed `FileIdInfo` entry
+
+**Delegating to the untyped entry.** The typed entry could have held a `QueryFileInformation` for the class and
+read the structure out of the buffer it returns, so that `GetFileInformationByHandleEx` is called from one place
+in the crate. That allocates a buffer for a structure of 24 bytes and reads it back through a cast; calling into
+a `FILE_ID_INFO` on the stack allocates nothing and needs no cast. The shared part, the faithful report of the
+code, is [D-10](DESIGN-NOTES.md#d-10)'s primitive either way, and the class value is shared through
+`FileInformationClass::ID`, so the direct call was taken.
+
+**A `From<FILE_ID_INFO>` impl.** It would let a caller holding the structure convert it, and it would make the
+dependency's type part of the surface, which [D-13](DESIGN-NOTES.md#d-13) refuses. The conversion is private.
+
+**Where the agreement with the enumeration crate is tested.** That crate depends on this one, so a test here that
+used it would be a dependency cycle through a dev-dependency, built against a second copy of this crate. The test
+is in the enumeration crate's integration tests, where both are already in reach, and this crate tests the same
+agreement against the `FileIdExtdDirectoryInfo` record the enumeration crate reads.
+
+**Refusal codes.** The codes observed for a pipe, `NUL` and a volume are not on the page. Naming them in the tests
+would assert the machine; comparing each with the untyped entry's code for the same handle asserts what this
+entry promises, that the code passes through unaltered.

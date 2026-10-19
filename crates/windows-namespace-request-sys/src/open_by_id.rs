@@ -80,6 +80,7 @@ pub enum FileIdentifier {
     ObjectId(u128),
     /// A 128-bit file reference number, as reported by `FileIdInfo` on ReFS,
     /// where 64 bits is not enough to name a file.
+    /// [`FileIdInfo::file_id`](crate::file_id::FileIdInfo::file_id) is that value.
     ExtendedFileId([u8; 16]),
 }
 
