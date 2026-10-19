@@ -474,6 +474,120 @@
       ]
     },
     {
+      "name": "M8.3: the peer-index probe stops emitting its row",
+      "file": "src/bin/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a measured run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observation, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.3: the row publishes the per-item figure as the elapsed time",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The elapsed field is recovered by multiplying back by the items; publishing the per-item cost under an elapsed name is the plausible slip.",
+      "find": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64).round() as usize)"
+      ],
+      "replace": [
+        "    Value::from(run.nanos_per_item.round() as usize)"
+      ]
+    },
+    {
+      "name": "M8.3: the recovered elapsed time is truncated instead of rounded",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "Dividing by the items and multiplying back can land a hair below the whole nanosecond it started from; truncation then publishes one nanosecond less than the pass took.",
+      "find": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64).round() as usize)"
+      ],
+      "replace": [
+        "    Value::from((run.nanos_per_item * ITEMS as f64) as usize)"
+      ]
+    },
+    {
+      "name": "M8.3: the consumer and producer read counts trade places",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The two counts carry the finding -- which side's reads the technique removed -- and nothing about their types tells them apart.",
+      "find": [
+        "                    (\"consumer_refreshes\", count(run.consumer_refreshes)),",
+        "                    (\"producer_refreshes\", count(run.producer_refreshes)),"
+      ],
+      "replace": [
+        "                    (\"consumer_refreshes\", count(run.producer_refreshes)),",
+        "                    (\"producer_refreshes\", count(run.consumer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.3: the shipping queue publishes its floor as counted reads",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The shipping queue has no counter; its read fields hold ITEMS as a floor, and publishing that puts a constant under a name that says it was counted.",
+      "find": [
+        "                (\"consumer_refreshes\", Value::Null),",
+        "                (\"producer_refreshes\", Value::Null),"
+      ],
+      "replace": [
+        "                (\"consumer_refreshes\", count(observation.calibration.consumer_refreshes)),",
+        "                (\"producer_refreshes\", count(observation.calibration.producer_refreshes)),"
+      ]
+    },
+    {
+      "name": "M8.3: the strategies follow a different fixed order",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "The order is part of what the row states; a reader comparing two runs by position must find the same strategy in the same place.",
+      "find": [
+        "const STRATEGIES: [Strategy; 3] = [Strategy::Baseline, Strategy::Cached, Strategy::Warmed];"
+      ],
+      "replace": [
+        "const STRATEGIES: [Strategy; 3] = [Strategy::Cached, Strategy::Baseline, Strategy::Warmed];"
+      ]
+    },
+    {
+      "name": "M8.3: a measured row omits the declined field",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "Without it a reader can tell a measured row from a declined one only by which other fields happen to exist.",
+      "find": [
+        "        .with(\"declined\", Value::Null)"
+      ],
+      "replace": [
+        "        .with(\"declined_ignored\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.3: a declined row loses the reason",
+      "file": "src/peer_index_cache.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", error.to_string())"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.3 control: the row names its build before its architecture",
+      "file": "src/peer_index_cache.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",

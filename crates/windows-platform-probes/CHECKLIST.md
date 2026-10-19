@@ -21,7 +21,7 @@ which fails until it does.
 - [x] **M8.1** -- Run `probe-queue-contention` in the row census with a short sampling, replacing the exclusion whose reason `M4.2` made false. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m81)
 
 - [x] **M8.2** -- `probe-queue-contention` emits a row.
-- [ ] **M8.3** -- `probe-peer-index-cache` emits a row.
+- [x] **M8.3** -- `probe-peer-index-cache` emits a row.
 - [ ] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
 - [ ] **M8.5** -- `probe-pool-growth` emits a row.
 

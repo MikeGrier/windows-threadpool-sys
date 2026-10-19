@@ -154,6 +154,7 @@ pub mod handle_state;
 pub mod ioring;
 pub mod long_path;
 pub mod long_path_report;
+pub mod peer_index_cache;
 pub mod pool_growth;
 pub mod probe_args;
 pub mod queue_contention;
