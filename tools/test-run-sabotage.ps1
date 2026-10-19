@@ -1745,6 +1745,22 @@ Test-Case 'paths with spaces reach the launcher whole' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'a relative -OutputDirectory reaches the launcher as the directory it names' {
+    # The launcher runs from the working copy, so a transcript path left relative resolves there,
+    # where it does not exist, and the baseline fails before any suite runs.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-OutputDirectory', '.scratch\relative-out')
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'caught \(suite failed' $result.Output
+        Assert-True (Test-Path -LiteralPath (Join-Path $root '.scratch\relative-out\baseline.txt')) `
+            'the baseline transcript is under the caller''s directory'
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'a command the launcher cannot start is reported as not started, with the reason' {
     $root = New-Fixture -Manifest (New-Spec)
     try {

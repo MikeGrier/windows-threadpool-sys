@@ -249,6 +249,10 @@ M34.6 owns that.
 
 - [x] **M34.8** -- Build a second time when the linker could not open its own output. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m348)
 
+- [x] **M34.9** -- Return the post-merge sabotage sweep to green: six shards were reporting entries that did not behave as declared, across four crates. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m349)
+
+- [x] **M34.10** -- A relative `-OutputDirectory` is resolved before the launcher is handed paths built from it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m3410)
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing
