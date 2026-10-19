@@ -214,7 +214,9 @@ function New-Spec {
 function New-Stub {
     param(
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
-            'build-echo', 'not-executed', 'not-started')] [string] $Behaviour,
+            'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
+            'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
+            'link-echoed')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -233,6 +235,26 @@ function New-Stub {
     $intact = "findstr /C:`"// marker line`" src\lib.rs >nul && exit /b 0"
     # The inverse of $skipBuild: the RUN phase passes, so only the build decides.
     $runPhasePasses = "echo %* | findstr /C:`"--no-run`" >nul || exit /b 0"
+
+    # The link stubs. The BUILD phase fails the way a sweep's build did when the
+    # linker could not open its output, in the words cargo used, and each build
+    # it is asked to make is counted in `builds.log` beside the stub, so a case
+    # can say how many builds the harness ran and not only how it judged them. A
+    # stub that fails the BASELINE's build counts that one too; the others exit at
+    # `$intact` first, while the marker is there. State lives in `locked.once`,
+    # also beside the stub and not in the fixture's tree, which is synced and compared.
+    $isBuild = "echo %* | findstr /C:`"--no-run`" >nul || goto :run"
+    $countBuild = "echo build>>`"%~dp0builds.log`""
+    $lockOnce = "if exist `"%~dp0locked.once`" exit /b 0`r`necho locked>`"%~dp0locked.once`""
+    $lnkOutput = "echo error: linking with ``link.exe`` failed: exit code: 1104 1>&2`r`n" +
+    "echo   = note: LINK : fatal error LNK1104: cannot open file 'C:\sweep\target\debug\deps\fixture-0123abcd.exe' 1>&2`r`n" +
+    "exit /b 101`r`n"
+    $lnkInput = "echo error: linking with ``link.exe`` failed: exit code: 1104 1>&2`r`n" +
+    "echo   = note: LINK : fatal error LNK1104: cannot open file 'kernel32.lib' 1>&2`r`n" +
+    "exit /b 101`r`n"
+    # The run phase of each: red once the marker is gone, so a sabotaged build
+    # that links is `caught`, and only the build decides anything else.
+    $linkRunPhase = ":run`r`n$intact`r`necho test failed`r`nexit /b 101`r`n"
     $body = switch ($Behaviour) {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
@@ -292,6 +314,44 @@ function New-Stub {
         'not-executed' {
             "@echo off`r`n$skipBuild`r`n$intact`r`n" +
             "echo could not execute process ``x.exe`` (never executed) 1>&2`r`nexit /b 101`r`n"
+        }
+        # The first build of the SABOTAGED source cannot open its output, and the
+        # second links: a held file that was let go. The case expects the entry
+        # to be judged on the second.
+        'link-locked-once' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n$lockOnce`r`n$lnkOutput$linkRunPhase"
+        }
+        # The first build of ALL, which is the baseline's, cannot open its output.
+        'link-locked-baseline' {
+            "@echo off`r`n$isBuild`r`n$countBuild`r`n$lockOnce`r`n$lnkOutput$linkRunPhase"
+        }
+        # Every build of the sabotaged source cannot open its output: not a file
+        # that is let go, and not one to try a third time.
+        'link-locked-always' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n$lnkOutput$linkRunPhase"
+        }
+        # Every build cannot open its output, the baseline's included.
+        'link-locked-baseline-always' {
+            "@echo off`r`n$isBuild`r`n$countBuild`r`n$lnkOutput$linkRunPhase"
+        }
+        # The first build cannot open its output; the second fails for a reason
+        # of its own, which is what the entry is judged on.
+        'link-locked-then-broken' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n" +
+            "if exist `"%~dp0locked.once`" goto :broken`r`necho locked>`"%~dp0locked.once`"`r`n$lnkOutput" +
+            ":broken`r`necho error[E0425]: cannot find value in this scope 1>&2`r`nexit /b 101`r`n$linkRunPhase"
+        }
+        # An unrelated compile error whose ECHOED SOURCE LINE spells the linker's
+        # message, behind rustc's gutter. It is not a linker diagnostic: one build.
+        'link-echoed' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n" +
+            "echo error[E0308]: mismatched types 1>&2`r`n" +
+            "echo 3 ^|     let x: u32 = `"LINK : fatal error LNK1104: cannot open file 'fixture.exe'`"; 1>&2`r`n" +
+            "exit /b 101`r`n$linkRunPhase"
+        }
+        # The linker cannot find an INPUT: the build's own failure, never retried.
+        'link-missing-lib' {
+            "@echo off`r`n$isBuild`r`n$intact`r`n$countBuild`r`n$lnkInput$linkRunPhase"
         }
     }
     $path = Join-Path $Root "stubs\$Behaviour.cmd"
@@ -736,6 +796,122 @@ Test-Case 'still reports a build failure under caught as a manifest problem' {
             -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
         Assert-Equal 1 $result.ExitCode $result.Output
         Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'runs a build again once when the linker could not open its output, and judges the second' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-once' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'LNK1104' $result.Output
+        Assert-Match '1 build\(s\) were run a second time' $result.Output
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 2 $builds.Count 'the sabotaged build ran twice, not once and not three times'
+        $kept = @(Get-ChildItem -LiteralPath (Join-Path $root '.scratch\sabotage') -Filter '*.build.attempt1.err')
+        Assert-Equal 1 $kept.Count 'the first attempt is kept'
+        Assert-Match 'LNK1104' (Read-SharedText -Path $kept[0].FullName)
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not retry a build that linked, so a clean sweep says nothing about retries' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-False ($result.Output -match 'were run a second time') 'no retry was made'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'reports an entry whose output could not be opened on two builds as infrastructure, not as a manifest problem' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-always' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'INFRASTRUCTURE: the linker could not open' $result.Output
+        Assert-False ($result.Output -match 'MANIFEST DOES NOT COMPILE') 'the patch was never judged'
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 2 $builds.Count 'two builds, never a third'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'judges an entry on its second build when that build fails for a reason of its own' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-then-broken' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+        Assert-False ($result.Output -match 'INFRASTRUCTURE: the linker') 'the second build was judged'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not retry a linker that could not find an input' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-missing-lib' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 1 $builds.Count 'a missing input is deterministic: one build'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not take a compiler-quoted linker message for a linker failure' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-echoed' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+        Assert-False ($result.Output -match 'INFRASTRUCTURE: the linker') 'the compile error was not the linker'
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 1 $builds.Count 'one build: nothing to retry'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'reports a baseline whose output could not be opened on two builds as infrastructure, not as a red suite' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-baseline-always' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'The baseline could not be built: the linker could not open' $result.Output
+        Assert-Match 'baseline\.txt\.build\.err' $result.Output
+        Assert-Match 'baseline\.txt\.build\.attempt1\.err' $result.Output
+        Assert-False ($result.Output -match 'Fix the suite first') 'no test ran, so the suite is not what to fix'
+        $builds = @(Get-Content -LiteralPath (Join-Path $root 'stubs\builds.log'))
+        Assert-Equal 2 $builds.Count 'two builds, never a third'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'recovers a baseline whose first build could not open its output' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'link-locked-baseline' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match '1 build\(s\) were run a second time' $result.Output
     }
     finally { Remove-Fixture $root }
 }
