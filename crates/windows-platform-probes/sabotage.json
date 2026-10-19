@@ -394,20 +394,83 @@
       ]
     },
     {
-      "name": "M8.1: the queue probe emits a row the census used to miss",
+      "name": "M8.1: the queue probe stops emitting its row",
       "file": "src/bin/queue_contention/main.rs",
       "expect": "caught",
-      "why": "Before M8.1 the census did not run this probe and checked its sources for the literal \"reason\":\"x-probe instead, which a row built with Row::new never contains -- so this survived. Running the probe sees the row and the census reports a changed set.",
+      "why": "The census runs this probe rather than reading its sources, so whether its row exists is decided by its output. Before M8.1 the census grepped for the literal \"reason\":\"x-probe, which a row built with Row::new never contains; since M8.2 the probe emits exactly such a row, and deleting it must change the census's set.",
       "find": [
-        "    render_observation(out, &measure(sampling));"
+        "        raw_row(",
+        "            &observation,",
+        "            &windows_platform_probes::build_identity::this_build().to_string()",
+        "        )",
+        "        .render()"
       ],
       "replace": [
-        "    let _ = writeln!(",
-        "        out,",
-        "        \"{}\",",
-        "        windows_platform_probes::row::Row::new(\"x-probe-queue-contention\").render()",
-        "    );",
-        "    render_observation(out, &measure(sampling));"
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.2: the row publishes per-operation figures as elapsed times",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "The elapsed fields are recovered by multiplying back by the run's total pushes; publishing the per-operation figure under an elapsed name is the plausible slip.",
+      "find": [
+        "                        Value::from((per_op * total as f64).round() as usize)"
+      ],
+      "replace": [
+        "                        Value::from(per_op.round() as usize)"
+      ]
+    },
+    {
+      "name": "M8.2: the recovered elapsed time is truncated instead of rounded",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Dividing by the pushes and multiplying back can land a hair below the whole nanosecond it started from; truncation then publishes one nanosecond less than the pass took.",
+      "find": [
+        "                        Value::from((per_op * total as f64).round() as usize)"
+      ],
+      "replace": [
+        "                        Value::from((per_op * total as f64) as usize)"
+      ]
+    },
+    {
+      "name": "M8.2: the fastest and slowest passes trade places",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Every test with one repetition has the three passes equal, so only distinct passes can tell the fields apart.",
+      "find": [
+        "                    (\"fastest_elapsed_ns\", elapsed(run.fastest_nanos_per_op)),",
+        "                    (\"slowest_elapsed_ns\", elapsed(run.slowest_nanos_per_op)),"
+      ],
+      "replace": [
+        "                    (\"fastest_elapsed_ns\", elapsed(run.slowest_nanos_per_op)),",
+        "                    (\"slowest_elapsed_ns\", elapsed(run.fastest_nanos_per_op)),"
+      ]
+    },
+    {
+      "name": "M8.2: a configuration that did not measure publishes zero",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "caught",
+      "why": "Zero reads as an immeasurably fast pass; null says there was none.",
+      "find": [
+        "                        Value::Null"
+      ],
+      "replace": [
+        "                        Value::from(0usize)"
+      ]
+    },
+    {
+      "name": "M8.2 control: the row names its build before its architecture",
+      "file": "src/queue_contention/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
       ]
     },
     {

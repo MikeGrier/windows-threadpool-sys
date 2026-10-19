@@ -2045,4 +2045,5 @@ the census was corrected from two exclusions to one.
 Evidence, in [sabotage.json](sabotage.json): the queue probe emitting a row built with `Row::new` --
 whose source carries no `"reason":"x-probe` literal for the old source check to find -- **survived**
 the census as it stood, checked by running the entry against the previous test file, and is caught by
-the census that runs the probe. A control changing the short run's push count survives.
+the census that runs the probe. A control changing the short run's push count survives. Once `M8.2`
+gave the probe its real row, the entry was re-targeted to delete that row, which the census catches.

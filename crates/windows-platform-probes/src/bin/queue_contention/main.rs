@@ -16,7 +16,7 @@
 use windows_platform_probes::probe_args::usage;
 use windows_platform_probes::queue_contention::{
     DRAINED_CAPACITY, Observation, Sampling, column_width, format_nanos, format_ratio_bounded,
-    format_scaling_bounded, measure, ratio_column_width, render_table, shapes,
+    format_scaling_bounded, measure, ratio_column_width, raw_row, render_table, shapes,
 };
 use windows_platform_probes::report::{emit_report, refuse_arguments};
 
@@ -70,7 +70,20 @@ fn render(out: &mut dyn std::fmt::Write, sampling: &Sampling) {
         "build: {}",
         windows_platform_probes::build_identity::this_build()
     );
-    render_observation(out, &measure(sampling));
+    let observation = measure(sampling);
+    render_observation(out, &observation);
+    // The raw data, last, as every probe's normal run emits it (`M8.2`). The
+    // build comes from the same `this_build()` as the report's `build:` line,
+    // so the two cannot disagree.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(
+            &observation,
+            &windows_platform_probes::build_identity::this_build().to_string()
+        )
+        .render()
+    );
 }
 
 /// Everything the report says about an observation.

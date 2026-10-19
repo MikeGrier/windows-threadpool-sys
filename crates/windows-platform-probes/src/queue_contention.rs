@@ -110,9 +110,11 @@ mod sampling_tests;
 mod tests;
 
 mod measure;
+mod raw_row;
 mod render;
 
 pub use self::measure::*;
+pub use self::raw_row::*;
 pub use self::render::*;
 
 /// How many pushes each producer thread performs in one timed run, unless
