@@ -140,6 +140,7 @@ dependencies = [
  "win-sync-sys",
  "win-time-sys",
  "win-volume-sys",
+ "windows-file-enumeration-sys",
  "windows-ioring-sys",
  "windows-namespace-request-sys",
  "windows-sys",
