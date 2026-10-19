@@ -276,21 +276,12 @@ option recorded by construction. The rule throughout is documented APIs only
 
 ## DI-M15 -- Opening by identity, and reopening
 
-- [ ] **DI-15.1** -- **A file's identity, read from an opened file.** A `FileId` type over the
-  documented identity query (the 128-bit form that also covers 64-bit file systems), and the volume it
-  belongs to. Which of the identifier kinds `FILE_ID_DESCRIPTOR` accepts are offered (the file ID,
-  the extended 128-bit ID, the legacy object ID) is a row in `DI-13.1`'s table, whose list is the
-  request crate's and not the page's: the `FILE_ID_DESCRIPTOR` page is read here and the row corrected
-  if it differs. Tests: the ID of an opened file is stable across two opens and differs between two
-  files.
+- [x] **DI-15.1** -- A file's identity, `FileId`, is read from an opened file or any shared handle, and the `lpFileId` row cites the `FILE_ID_DESCRIPTOR` page. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#di-151)
 
-  > **-> CROSS-COMPONENT PREREQUISITE (met 2026-10-18):** [NR-3.10](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-310-fileid)
-  > (a typed `FileIdInfo` read, in `crates/windows-namespace-request-sys`), now `QueryFileIdInfo`
-  > ([D-31](../windows-namespace-request-sys/DESIGN-NOTES.md#d-31)). The 128-bit ID is
-  > `GetFileInformationByHandleEx`'s `FileIdInfo`, which that crate gave only as raw bytes; this crate
-  > forbids `unsafe`, and the typed decode belongs with the call.
-
-- [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
+- [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open through `OpenFileById` by an identifier of
+  any of the three kinds [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `lpFileId` row exposes: a `FileId`
+  ([DI-D-69](DESIGN-NOTES.md#di-d-69)) as `ExtendedFileIdType`, the 64-bit `FileIdType`, and the
+  `ObjectIdType`; how the latter two are named is decided here. With a
   volume hint that is **any handle** on the volume (the engineer, 2026-10-18,
   [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `hVolumeHint` row): the hint is never the file opened, so its mode
   reaches nothing the result claims. **Its options are a type of its own**

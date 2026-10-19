@@ -3332,3 +3332,13 @@ the observer. `HandleKindQuery::of(handle)` and `perform` compose `QueryFileType
 each variant claims and the measurement are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "What DI-14.12 built". Eighteen
 tests, the classification over every answer and then real handles (a file, a directory, `NUL`, a named pipe, the system
 volume and its disk), and seven sabotages, one of them a declared survivor.
+
+### <a id="di-151"></a>DI-15.1 -- A file's identity, `FileId`, is read from an opened file or any shared handle, and the `lpFileId` row cites the `FILE_ID_DESCRIPTOR` page. *(completed 2026-10-18 23:38:29 -04:00)*
+
+`FileId` in `win-durable-ioring`'s `windows_backend` carries the volume serial and the 128-bit identifier that
+`QueryFileIdInfo` ([NR-3.10](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-310-fileid)) reports, read
+through the handle shared; `FileId::of(&SharedHandle)` and `OpenedFile::file_id` are the two ways in. The decision is
+[DI-D-69](DESIGN-NOTES.md#di-d-69). The page was read and lists the request crate's three kinds, so
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s `lpFileId` row now cites it and the ruling stands; [DI-15.2](CHECKLIST.md) was
+amended to open by all three. The tests include the item's two (stable across two opens, different between two files),
+and the sabotages include a control.

@@ -80,6 +80,7 @@ appear here.
 | <a id="di-d-66-index"></a>DI-D-66 | **A target states its data access to the core, and a key can carry it.** The engineer, 2026-10-16: "it seems like IoTarget should have the same sort of type-based encoding of the access to the target that we just litigated in di-13.8", then "do both, schedule both". `IoTarget` gains a required `access()` read once into its description, the core refuses what the access does not cover, and a typed `Key<A>` lets a wrong submission fail to compile. [Section below](#di-d-66). |
 | <a id="di-d-67-index"></a>DI-D-67 | **What a name reaches is the caller's responsibility: an open is not checked, refused, bounded or cancelled on account of where its name leads.** The engineer, 2026-10-18: "The responsibility is only on the caller." No check of a name can be complete, since object-manager links and intermediate reparse points redirect regardless of `FILE_FLAG_OPEN_REPARSE_POINT`; a check of the handle cannot reach an open that has not returned; and `CancelSynchronousIo` targets a thread rather than a call and is not guaranteed by its documentation. See [DI-D-67](#di-d-67). |
 | <a id="di-d-68-index"></a>DI-D-68 | **A handle opened elsewhere is not accepted by a file target in this version, and a consumer who knows a device is theirs alone can attest it, which is the only way a Win32 target is `Complete`.** The engineer, 2026-10-18, closing `DI-10.3`: "do the attestation approach", on the assistant's recommendation. Foreign handles stay out, with the residue a `ReOpenFile` cannot convert named; the attestation is a constructor for each of the three kinds of target that takes an unbuffered handle this crate opened. [Section below](#di-d-68). |
+| <a id="di-d-69-index"></a>DI-D-69 | **A file's identity is this crate's `FileId`: the volume serial and the 128-bit identifier `FileIdInfo` reports, read through the handle shared.** The assistant, implementing `DI-15.1`. The type is owned here and not the request crate's; it is read from any `SharedHandle` and from an `OpenedFile` of any access, and nothing is duplicated to read it. [Section below](#di-d-69). |
 
 ## <a id="di-d-29-a-file-is-a-sharedhandle"></a>DI-D-29: a file is a `SharedHandle`
 
@@ -178,7 +179,7 @@ for this table.
 | `ReOpenFile` as a call | Exposed | `OpenedFile::reopen` ([DI-15.4](CHECKLIST.md)) | Takes access, share mode and flags only; its page says the flags cannot include attributes, and that the original must have been created by `CreateFile`. Reopening with a different buffering mode is a new `OpenedFile` of the other type. | engineer 2026-10-15 |
 | `lpFileName` (CF) | Exposed | `Wtf16String`, opaque | Passed through for Win32 to interpret: `\\?\`, long paths where the process opts in, `/` against `\`, a stream name, a device name. An open of a device is not stopped here, and where a name leads is the caller's responsibility ([DI-D-67](#di-d-67)); what such an `OpenedFile` claims is not decided: it gets a file's default geometry and no flush domains until [DI-14.6.2](CHECKLIST.md) decides it, from the measurements under "Measured for DI-14.6" below. Nothing about the path is checked before the open. An unbuffered file on a remote device is refused on the opened handle ([DI-14.5](CHECKLIST.md)), so a create refused there has already created the file, and the open has touched the network before it is refused; both are documented and not prevented. | engineer 2026-10-15, 2026-10-16 |
 | `hVolumeHint` (ID) | Exposed | Any handle | The hint only tells the call which volume the ID is on and is never the file opened, so its mode reaches nothing the result claims: the opened handle's buffering and access are this crate's choice, and the checks run on it ([DI-14.5](COMPLETED-CHECKLIST.md#di-145)). The page accepts any file on the volume or share. The same reasoning as `hOriginalFile`'s ([DI-D-68](#di-d-68)). | engineer 2026-10-18 ("It should be any handle"), replacing the plan that took only what this crate opened |
-| `lpFileId` (ID) | Exposed | The identifier kinds the request crate's `OpenFileByIdentifier` carries: the 64-bit file ID, the 128-bit extended ID, the object ID | The `FILE_ID_DESCRIPTOR` page was not read for this table, so the list of kinds is the request crate's and the ruling's, not the page's. | engineer 2026-10-15 |
+| `lpFileId` (ID) | Exposed | The three kinds the `FILE_ID_DESCRIPTOR` page lists: `FileIdType` (a 64-bit `LARGE_INTEGER`), `ObjectIdType` (a `GUID`), and `ExtendedFileIdType` (a `FILE_ID_128`, "not supported before Windows 8 and Windows Server 2012") | The page was read for [DI-15.1](COMPLETED-CHECKLIST.md#di-151) and its list is the request crate's `OpenFileByIdentifier`'s, so the ruling stands as made. The page says the extended ID "is used on ReFS file systems"; an NTFS file's 16 bytes from `FileIdInfo` were observed to open as it (`D-31` in [the request crate's notes](../windows-namespace-request-sys/DESIGN-NOTES.md#d-31)). The identity this crate reads from a handle is the extended form, [DI-D-69](#di-d-69). | engineer 2026-10-15; the page read 2026-10-18 |
 | `hOriginalFile` (RO) | Exposed | Any handle ([DI-D-68](#di-d-68)) | The reopened handle's mode is this crate's choice, recorded by its type, so the original's provenance is not what the claim rests on. The page says the original must have been created by `CreateFile`; what it cannot convert is [DI-10.6](CHECKLIST.md). Whether a handle that came from `OpenFileById` is accepted was not measured. | engineer 2026-10-18, [DI-D-68](#di-d-68) |
 | `dwDesiredAccess` (CF, ID, RO): zero | **Superseded by [DI-D-65](#di-d-65):** the type `NoData`, excluded only from a file target | `NoData` | A zero-access open is valid Win32 (it queries attributes without access). A handle opened so cannot become a file target, which the `HasData` bound refuses at compile time and not when the first operation fails. | engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
 | `FILE_READ_DATA`, `FILE_WRITE_DATA` | **Superseded by [DI-D-65](#di-d-65):** the data access type, not members of the rights set | `ReadOnly`, `WriteOnly`, `ReadWrite` | Read and write operations. A target needs one of them, which is the `HasData` bound. | engineer 2026-10-15; engineer 2026-10-16 ([DI-D-65](#di-d-65)) |
@@ -946,3 +947,36 @@ is released.
 
 **Scheduled work.** [DI-10.5](CHECKLIST.md) (the attestation), [DI-10.6](CHECKLIST.md) (the parked residue, with its
 blocker), and [DI-15.4](CHECKLIST.md) amended to reopen from any handle.
+
+## <a id="di-d-69"></a>DI-D-69: a file's identity is the volume serial and the 128-bit identifier, read through the handle shared
+
+**What is decided.** The assistant, implementing [DI-15.1](COMPLETED-CHECKLIST.md#di-151):
+
+1. **`FileId` is this crate's type**, in `win-durable-ioring`'s `windows_backend`: a `u64` volume serial number and
+   a 16-byte identifier, with `Eq` and `Hash` over both. It is converted field by field from the request crate's
+   `FileIdInfo` and does not expose it, so what an identity is here is stated here and does not move when that crate
+   does ([Design Autonomy](../../.github/copilot-instructions.md)). The identifier is carried as its bytes and is not
+   read as an integer, which would impose a byte order the call does not state.
+2. **The form is the 128-bit one, because it is what `GetFileInformationByHandleEx`'s `FileIdInfo` class reports.**
+   The `FILE_ID_INFO` page: "The file identifier and the volume serial number uniquely identify a file on a single
+   computer." As an identifier for `OpenFileById` it is `ExtendedFileIdType`, which the `FILE_ID_DESCRIPTOR` page
+   ties to ReFS and which an NTFS file's bytes were observed to open as; that the open succeeds is
+   [DI-15.2](CHECKLIST.md)'s to test, not this decision's to assume. The 64-bit `FileIdType` and `ObjectIdType` are
+   the other two kinds [DI-D-64](#di-d-64)'s `lpFileId` row exposes; they are not forms of `FileId`.
+3. **It is read through the handle shared.** `FileId::of(&SharedHandle)` hands the request crate's `QueryFileIdInfo`
+   a clone of the `SharedHandle`, and `OpenedFile::file_id` calls it with the file's own, so no handle is duplicated
+   ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32) in the request crate's notes). It runs on the
+   calling thread; a caller who wants it elsewhere performs the request crate's entry where it chooses.
+4. **Any handle is asked, and any data access reads it.** `of` takes any `SharedHandle`, as the volume hint of
+   [DI-15.2](CHECKLIST.md) takes any handle, and `file_id` is on `OpenedFile<B, A>` for every `A`, `NoData` included:
+   the call needs no data right. A handle that is not on a file system is refused with the kernel's code, unaltered;
+   the page lists no codes, so none is promised.
+
+**Observed, on Windows 11 build 26300 on NTFS, by the tests.** The identity is the same through two opens, a cached
+and an unbuffered open, an open with no data access, a clone, a `SharedHandle` kept after its `OpenedFile` was
+dropped, a rename made while the file was open and a change of its contents, and a hard link; two files on one
+volume have one serial and different identifiers; a directory has an identity of its own; an event is refused with
+an OS code. These are anecdote, and the page is the authority.
+
+**Scheduled work.** [DI-15.2](CHECKLIST.md), amended in the same change to open by all three kinds of identifier,
+`FileId` among them.
