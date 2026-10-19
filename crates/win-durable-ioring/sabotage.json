@@ -1884,6 +1884,38 @@
       "why": "A control: the same target returned through a local, which no test can tell apart.",
       "find": ["        self.warranty = WarrantyClass::Complete;\n        self\n"],
       "replace": ["        self.warranty = WarrantyClass::Complete;\n        let this = self;\n        this\n"]
+    },
+    {
+      "name": "DI-15.1: the identifier is dropped from the identity",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "With the identifier zeroed, every file on a volume would report one identity, and an open by it would open the wrong file or none.",
+      "find": ["        Self::new(info.volume_serial_number(), info.file_id())"],
+      "replace": ["        Self::new(info.volume_serial_number(), [0; 16])"]
+    },
+    {
+      "name": "DI-15.1: the volume serial is dropped from the identity",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The FILE_ID_INFO page says the identifier and the serial together identify a file on one computer; without the serial two volumes' files could compare equal. No two-volume test exists, so this is caught by the agreement with the request crate's read of the same handle.",
+      "find": ["        Self::new(info.volume_serial_number(), info.file_id())"],
+      "replace": ["        Self::new(0, info.file_id())"]
+    },
+    {
+      "name": "DI-15.1: a refusal loses the kernel's code",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "caught",
+      "why": "The error is documented as the code the call failed with, unaltered; a caller distinguishing a stale or foreign handle needs it.",
+      "find": ["            .map_err(|error| error.to_io_error())"],
+      "replace": ["            .map_err(|_| io::Error::from(io::ErrorKind::Other))"]
+    },
+    {
+      "name": "DI-15.1 control: the refusal's closure is renamed",
+      "file": "src/windows_backend/file_id.rs",
+      "expect": "survives",
+      "why": "A control: the same conversion through a differently named binding, which no test can tell apart.",
+      "find": ["            .map_err(|error| error.to_io_error())"],
+      "replace": ["            .map_err(|failure| failure.to_io_error())"]
     }
   ]
 }

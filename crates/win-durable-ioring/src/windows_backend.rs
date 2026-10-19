@@ -49,6 +49,7 @@ use durable_ioring::{IoFault, IoTargetKey, WriteCaching};
 
 mod disposition;
 mod file_attributes;
+mod file_id;
 mod file_rights;
 mod file_target;
 mod handle_kind;
@@ -69,6 +70,7 @@ pub use durable_ioring::{
     CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
 };
 pub use file_attributes::FileAttributes;
+pub use file_id::FileId;
 pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
 pub use handle_kind::{HandleKind, HandleKindQuery};
