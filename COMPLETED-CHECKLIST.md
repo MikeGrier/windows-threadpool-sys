@@ -3925,3 +3925,32 @@ more on it, keeps the first attempt as `.build.attempt1.err`, counts the retry i
 reports a second failure as `INFRASTRUCTURE` instead of `MANIFEST DOES NOT COMPILE`. Reasoning and
 the evidence it rests on, with its limits, are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#a-link-that-could-not-open-its-output).
+
+## Moved 2026-10-18 23:31:27 -04:00 -- the post-merge sabotage sweep returned to green
+
+### <a id="m349"></a>M34.9 -- Return the post-merge sabotage sweep to green: six shards were reporting entries that did not behave as declared, across four crates. *(completed 2026-10-18 23:31:27 -04:00)*
+
+Each entry reproduced when run alone through [tools/run-sabotage.ps1](tools/run-sabotage.ps1), and each is fixed where it lives, in
+its own commit.
+
+- **A patch the source had moved away from (`MANIFEST STALE`), twice.** `windows-ioring-sys`' PR #113 entry looked for the end of
+  the quiescent branch of `Drop`, which now goes on to take the registered files for release; it is attached to the new end.
+  `durable-ioring`'s DI-7.1 entry looked for a `let _ = self.backend.submit();` that the engine had replaced with a call to
+  `ring()` at the top of each drain pass. Both are caught by the tests their reasons name, and the second's reason named a test and
+  a thread that no longer exist.
+- **A path no test reached, three times.** `win-sync-sys`: `queue_user_apc` asks which process a thread belongs to before it calls
+  `QueueUserAPC`, so a handle that is not a thread, or cannot be queried, is refused first, and no test had a handle that passes
+  that check and is refused by the call; one with `THREAD_QUERY_LIMITED_INFORMATION` and no `THREAD_SET_CONTEXT` is that handle,
+  and it guards two entries. `windows-ioring-sys`: a test armed a failed-completion plan, popped an empty ring and said the failure
+  waited for a real completion, then cleared the plan; a test of its own keeps it armed. `durable-ioring`: each act now rings the
+  doorbell itself, so a second drain pass matters only when that doorbell fails, and the scripted backend could fail every doorbell or
+  none; it can now fail the next one that has work queued. Each new test is the only one that fails under its entry's patch.
+- **A declaration weaker than the guard.** `win-durable-ioring`'s DI-10.1 entry flips `Unbuffered::LOCAL_DEVICE_ONLY`, which the
+  crate's unit tests assert in a `const` block, so the test build fails before a test runs. It was declared `caught`; it is declared
+  `refused-by-build` with the guard's message.
+
+### <a id="m3410"></a>M34.10 -- A relative `-OutputDirectory` is resolved before the launcher is handed paths built from it. *(completed 2026-10-18 23:31:27 -04:00)*
+
+The harness computed the full path for its ignore check and kept the relative one for every transcript path, which the launcher
+resolves from the working copy, where the directory does not exist. The path is made absolute once, from the caller's location. A
+test passes a relative directory and fails without the change.
