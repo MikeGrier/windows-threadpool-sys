@@ -247,6 +247,31 @@ M34.6 owns that.
   is chosen, the file becomes deletable once the three are done, since none of its own milestones
   are outstanding.
 
+- [ ] **M34.8** -- **Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI.** Moved
+  here from `windows-platform-probes`, where it was `M2.13`, because the check spans the repository.
+
+  Three bookkeeping defects reached review on one branch, all decidable by a script: a `###` heading
+  concatenated onto the previous line so it did not parse as a heading at all, headings with no blank
+  line above them, an archived item body left `- [ ]` after being checked off, and a pre-existing
+  entry's heading rewritten.
+
+  **Settled by the engineer, 2026-10-19, after an investigation of the current archives:**
+
+  1. **A `###` heading is preceded by a blank line**, enforced as style -- CommonMark renders the
+     heading either way -- and the headings that break it today are fixed. A heading glued onto the
+     end of a line, which does not render, is checked too.
+  2. **No `- [ ]` remains.** The unchecked boxes in archives today are verbatim copies of items "as
+     they stood at completion"; they are ticked rather than exempted.
+  3. **Headings and anchors are immutable**: against the merge base, no `##`/`###` heading line and
+     no `<a id>` anchor of an archive is deleted or changed. Other lines may change -- this
+     repository's own rules require repointing a link when its target moves, and archives carry
+     factual corrections -- so "zero deleted lines", as first proposed, was not adopted.
+  4. **A checked stub left in a checklist after its item was archived does not move to the archive;
+     it may simply be deleted.** (The engineer's note, recorded where the archive rules are stated.)
+
+  Build `tools/check-archives.ps1` (runnable before a commit, like `check-encoding.ps1`), its
+  bidirectional self-test `tools/test-check-archives.ps1`, and a CI job running both.
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

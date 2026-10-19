@@ -1953,3 +1953,78 @@ their meaning changes. The decision is
 the three options put to the engineer and his words in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
 "Make the answer uniform" is spawned as milestone `M8` in [CHECKLIST.md](CHECKLIST.md), one item per
 probe without a row; the census of which probes emit one still read 3 of 16 when this was decided.
+
+## Moved 2026-10-19 17:37:29 -04:00 -- M4 and M5 complete; M2.13 moved to the root checklist
+
+Every item of `M4` and `M5` was complete except `M2.13`, which moved to the root
+[CHECKLIST.md](../../CHECKLIST.md) as `M34.8` because the check it asks for spans the repository. The
+checked stubs that stood in the checklist for items already archived above were deleted rather than
+copied here, on the engineer's ruling of 2026-10-19 that such a placeholder "does not have to move, it
+may simply be deleted". The milestone's preamble, as it stood:
+
+> These were written under M2 and were blocked on M3, which is **now complete and archived** in
+> [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). They are unblocked, and each was RE-SCOPED rather
+> than merely delayed -- so each item below carries its own re-scoping note, in the item, where
+> somebody executing the list will actually meet it.
+>
+> **The IDs keep their M2 numbers deliberately.** [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) is
+> append-only and its entries are immutable, and two archived entries already cite M2.4 and M2.14 --
+> so renumbering would leave dangling references in a file that may not be edited to repair them.
+> Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
+> correctness in the archive.
+
+### <a id="m49"></a>M4.9 -- Route a placement probe's refusal-to-measure through the report sink instead of a panic, so a host that cannot be pinned is a reported observation rather than a crash.
+
+Its completion was recorded in the item itself rather than here; the item as it stood:
+
+- [x] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
+  panic, so a host that cannot be pinned is a reported observation rather than a crash.
+
+  **Gap:** `windows-placement-probe`'s pinning helper asserted on `SetThreadGroupAffinity`, and
+  `core_affinity::measure()` reaches it through `time_model_on` / `time_model_placed`. **The
+  decision to stop was correct and did not change** -- the assert's own message makes the argument,
+  that an unpinned thread "would produce a plausible number that answers a different question, and
+  nothing in the output would say so." What was wrong is the *mechanism*: a panic bypasses
+  `emit_report`, so the refusal landed on stderr while stdout carried a truncated report with no
+  row saying why it stopped.
+
+  **Measured, before and after.** With every pin forced to fail, the old binary wrote three lines
+  to stdout -- banner, heading, blank -- and exited 101, with the explanation only on stderr. It
+  now writes the refusal itself to stdout and exits 0, matching how the same binary already reports
+  a topology-discovery failure.
+
+  **Done:** `pin_current_thread` returns `io::Result`; `time_model`, `time_model_on`,
+  `time_model_placed`, `median` and `peer_index_cache::measure` propagate it; both probe binaries
+  handle it. The assert's message text is kept -- it was the right message, in the wrong channel.
+  `PinSignal` still publishes `PIN_FAILED`, now on the early-return path as well as on an unwind,
+  so the consumer never waits on a producer that has left.
+
+  **Two things a later review corrected in the first attempt at this item, both the same mistake --
+  a claim made about the code rather than from it.**
+
+  `check_group_support` (then `assert_group_support`) tests the *same* predicate as the
+  `usize::BITS` branch, over every discovered processor, and runs before any pin. So converting
+  only the branch left this one deciding the outcome: the probe still died with banner, heading and
+  nothing else. Fixing one site of a rule and leaving its twin is the blast-radius miss this
+  repository has a rule against, and the before/after measurement recorded here did not catch it
+  because it forced the pin argument rather than the discovered set. Both sites now refuse.
+
+  `peer_index_cache::measure` **cannot** refuse -- it starts only unpinned runs -- so its `# Errors`
+  section documented a failure mode no host can produce, and the entry here said "both probe
+  binaries render it" as though both could decline. Only `probe-core-affinity` pins. The signature
+  stays `Result` because its helpers are fallible in general; the docs now say that instead of the
+  opposite.
+
+  **Also corrected:** the refusal text was shared by both causes while being written for one. For
+  the mask-width cause it claimed the processor "was reported by this machine's own topology, so
+  this is unexpected rather than a limit of the tool" and invited a bug report -- the exact reverse
+  of that cause, which *is* a limit of the tool. The explanation is now a parameter, verified in
+  both directions.
+
+  **One correction to this item as written.** The blocker recorded when queuing was **wrong** --
+  `windows-placement-probe` was absent from release-please configuration at the
+  time. It is now a managed binary release under the root
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#d-probe-releases) -> `D-PB`; `publish = false`
+  prohibits crates.io publication, not binary releases. The `x-probe-*` row
+  it called for is deferred to `M4.10`, which turned out to be a larger question than these two
+  probes.
