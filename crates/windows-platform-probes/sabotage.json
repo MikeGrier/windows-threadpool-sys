@@ -1310,6 +1310,56 @@
       ]
     },
     {
+      "name": "M8.13: an attempt the watchdog abandoned is published as a cancel",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "The wedge is the finding, and the item asks for exactly this case to reach the row.",
+      "find": [
+        "        CancelOutcome::Wedged => (\"wedged\", None),"
+      ],
+      "replace": [
+        "        CancelOutcome::Wedged => (\"cancelled\", None),"
+      ]
+    },
+    {
+      "name": "M8.13: a call that found nothing loses its code",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "The raw code is what keeps a different failure from being read as ERROR_NOT_FOUND.",
+      "find": [
+        "        CancelOutcome::NotFound { code } => (\"not_found\", Some(code)),"
+      ],
+      "replace": [
+        "        CancelOutcome::NotFound { code: _ } => (\"not_found\", None::<u32>),"
+      ]
+    },
+    {
+      "name": "M8.13: the busy attempts are published in reverse",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "caught",
+      "why": "Which attempt wedged, and what followed it, is read by position.",
+      "find": [
+        "        .with(\"busy\", busy.iter().copied().map(outcome).collect::<Value>())"
+      ],
+      "replace": [
+        "        .with(\"busy\", busy.iter().rev().copied().map(outcome).collect::<Value>())"
+      ]
+    },
+    {
+      "name": "M8.13 control: the row names its build before its architecture",
+      "file": "src/cancel_io/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",
