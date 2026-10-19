@@ -38,21 +38,31 @@ milestones when the next of these is taken up.
 
 ## WS-M2 -- An event's clones share one handle
 
-- [ ] **WS-2.1** -- **`Event` holds a `SharedHandle`, and a clone shares it rather than duplicating.**
-  **Proposed by the assistant on 2026-10-18 as the engineer's ruling of that day applied here; the engineer
-  confirms before it is started.** The ruling, recorded in the request crate's
-  [D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32): a handle duplicated for no reason but that the
-  code began that way is legacy ("I want us to move forward as much as possible towards better interfaces and
-  this counts"). `Event::try_clone` duplicates with the same access, which sharing gives without a new handle;
-  `try_clone_wait_only` duplicates to narrow the access, which sharing cannot give, so it stays. The change:
-  `Event` is `Clone` and `try_clone` is deleted; `WaitOnlyEvent` the same, since its clone keeps its access;
-  `From<Event> for OwnedHandle` and `From<WaitOnlyEvent> for OwnedHandle` give way to a form that succeeds only
-  for the last holder, as `SharedHandle::try_into_owned` does. The decision is recorded in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) when it is made. Consumers that move with it: `windows-threadpool-sys`
-  (`From<Event> for WaitableHandle`, [M-T15.1](../windows-threadpool-sys/CHECKLIST.md)), `win-durable-ioring`'s
-  event clones, and the enumeration crate's `SAFE-3`. Tests: a clone shares the handle; setting through one is seen
-  through the other; the event lives until the last clone drops; recovering an `OwnedHandle` fails while a clone
-  is held.
+- [ ] **WS-2.1** -- **`Event` holds a `SharedHandle`; its clones share it, and the one operation on it that
+  makes a new handle is the one that narrows access.** **Proposed by the assistant on 2026-10-18 as the engineer's
+  ruling of that day applied here; the engineer gives the go-ahead before it is started.** The ruling, recorded in
+  the request crate's [D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32): a handle duplicated for no
+  reason but that the code began that way is legacy.
+  - **No new duplicating operations.** Asked whether duplication needs operations of its own names (2026-10-18):
+    it already has them, and they take any handle, an event's included -- std's `try_clone_to_owned` and
+    `OwnedHandle::try_clone` at the same access, and `duplicate_handle_with_access` (this crate's re-export of
+    `win-handles-sys`'s) at a chosen one.
+  - **`Event` derives `Clone`, which shares, and `try_clone` is deleted without a replacement.** A same-access
+    duplicate gives nothing sharing does not, and a caller wanting a separate handle regardless uses the general
+    operations on the event's handle.
+  - **The narrowing operation stays, renamed.** A narrower access needs a new handle, and its result is the typed
+    `WaitOnlyEvent`, which the general operations cannot produce: they return an untyped `OwnedHandle`, and
+    adopting one as an event takes `unsafe`. It loses `clone` from its name because `clone` now means share;
+    `duplicate_wait_only` is the recommendation, settled in this item.
+  - **`WaitOnlyEvent` the same:** it holds a `SharedHandle`, derives `Clone`, and its `try_clone` is deleted.
+  - **The conversions out.** `From<Event> for OwnedHandle` and `From<WaitOnlyEvent> for OwnedHandle` give way to a
+    form that succeeds only for the last holder, as `SharedHandle::try_into_owned` does.
+
+  The decision is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) when it is made. Consumers that move with it:
+  `windows-threadpool-sys` (`From<Event> for WaitableHandle`, [M-T15.1](../windows-threadpool-sys/CHECKLIST.md)),
+  `win-durable-ioring`'s event clones, and the enumeration crate's `SAFE-3`. Tests: a clone shares the handle;
+  setting through one is seen through the other; the event lives until the last clone drops; recovering an
+  `OwnedHandle` fails while a clone is held; the narrowed handle cannot set the event, as now.
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-threadpool-sys` -> `M-T15` ->
   > `M-T15.1`. See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).

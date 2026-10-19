@@ -524,7 +524,8 @@ crates' checklists; this is only the order and the links, and each item's own ch
 
 - [ ] **M43.1** -- **Create `win-text-sys`, with `CompareStringOrdinal`.** The name is the engineer's, 2026-10-18:
   "I lean towards win-text-sys for the crate name. locale implies that text handling that was not specific to a
-  locale would not belong." By [the placement rule](DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under),
+  locale would not belong", then "win-text-sys is the name of the crate unless you have a solid argument against
+  it". None was found; the name was unclaimed on crates.io when checked that day. By [the placement rule](DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under),
   the snapshot files `CompareStringOrdinal` under Internationalization's National Language Support functions; the
   name is the subject, text handling whether or not it is particular to a locale, so the crate's notes record that
   National Language Support is its section and that Unicode and Character Sets, which the snapshot files

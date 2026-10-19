@@ -1319,20 +1319,15 @@ finding is of a different and worse kind: a rule nothing tests.
 ## M-T15 -- A wait that shares its handle
 
 - [ ] **M-T15.1** -- **A `ThreadpoolWait` can hold its handle shared, so a caller keeps a clone to signal it.**
-  Asked on 2026-10-18 whether this was part of moving `windows-file-enumeration-sys` off handle duplication (its
-  `SAFE-3`), the engineer answered "let's assume yes"; this item settles whether the assumption holds before
-  anything binds to it. Today a wait owns its handle exclusively, which is how `assume_waitable`'s contract keeps
-  the handle open while a wait is pending, and a caller that must also signal the object keeps a duplicate
-  (`WaitableHandle::event`'s documentation tells it to). A shared target meets the same requirement: the wait
-  holds a clone, and the handle closes only when the last holder drops. The waitability guarantee comes from the
-  type it is built from, so a shared `Event` ([WS-2.1](../win-sync-sys/CHECKLIST.md)) converts safely, as an owned
-  one does now, and `M-T14+.1`'s `WaitOnlyEvent` conversion is decided alongside. To settle here: what
-  `into_handle` returns for a shared target; whether an `unsafe` vouching seam is offered for a shared handle as
-  `assume_waitable` is for an owned one; and the teardown order, so that a wait drained by its own drop or a
-  cleanup group's release still never outlives the pool's use of the handle. The decision is recorded in the
-  workspace [DESIGN-NOTES.md](../../DESIGN-NOTES.md). Tests: a wait on a shared event fires when a clone sets it;
-  the handle stays open after every other holder drops while the wait is armed; drop and cleanup-group release
-  both drain before the wait's clone is released.
+  Decided by the engineer on 2026-10-18 ("take the decision as yes now"), recorded in the workspace
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle). `WaitTarget` gains a shared arm holding a
+  `SharedHandle` clone; `From<Event>` builds one from a shared `win-sync-sys` `Event`
+  ([WS-2.1](../win-sync-sys/CHECKLIST.md)), and `M-T14+.1`'s `WaitOnlyEvent` conversion is decided alongside.
+  `WaitableHandle::event`'s documentation stops telling a caller to keep a duplicate. Settled here and recorded in
+  the same section: what `into_handle` returns for a shared target, and the form of the `unsafe` seam for a shared
+  handle of unknown kind. Tests: a wait on a shared event fires when a clone sets it; the handle stays open after
+  every other holder drops while the wait is armed; drop and cleanup-group release both drain before the wait's
+  clone is released.
 
   > **CROSS-COMPONENT PREREQUISITE:** [WS-2.1](../win-sync-sys/CHECKLIST.md).
 

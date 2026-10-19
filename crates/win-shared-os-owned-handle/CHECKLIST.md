@@ -19,8 +19,8 @@ A shared owner of a Windows handle. See [README.md](README.md) for what the crat
   engineer on 2026-10-07, each in its own checklist and outside this item:
   `windows-namespace-request-sys`' `NR-inf.1` ([its CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)),
   which is not a drop-in replacement and which graduated on 2026-10-18 to that crate's `NR-6`
-  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and `windows-impersonation-token-sys`' `IT-inf.1`
-  ([its CHECKLIST.md](../windows-impersonation-token-sys/CHECKLIST.md)).
+  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and `windows-impersonation-token-sys`' `IT-inf.1`, done 2026-10-18
+  ([its COMPLETED-CHECKLIST.md](../windows-impersonation-token-sys/COMPLETED-CHECKLIST.md#it-inf1)).
 
 - [x] **SH-1+.2** -- **Publish to crates.io.** Done: 0.1.0, by the publish workflow on the
   `win-shared-os-owned-handle-v0.1.0` tag, 2026-10-07.

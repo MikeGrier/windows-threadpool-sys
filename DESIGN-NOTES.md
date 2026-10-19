@@ -893,6 +893,28 @@ is a callback finding *its own* handle already closed, so each callback captures
 and looks for that. Each ordering test additionally asserts that teardown actually blocked, which is
 what stops it passing vacuously when a callback happens to finish before teardown begins.
 
+## <a id="a-wait-may-share-its-handle"></a>A wait may hold its handle shared
+
+**Decided by the engineer, 2026-10-18: "take the decision as yes now"**, to the question whether a `ThreadpoolWait`
+takes a `SharedHandle` as part of removing handle duplication from `windows-file-enumeration-sys` (its `SAFE-3`)
+and from the request crate ([D-32](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-32)). The work is
+[M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md).
+
+**What is decided.** A `WaitTarget` may be shared: the wait holds a clone of a `SharedHandle`, and a caller that
+must also signal or inspect the object keeps another, instead of keeping a duplicate made for the purpose. The
+requirement exclusive ownership met, that nothing closes the handle while a wait on it is pending, is met by the
+count: the handle closes only when the last holder drops, and the wait's clone is one of them.
+
+**What does not change.** The waitability guarantee still comes from the type a target is built from, as
+[the provenance decision](#a-safe-wait-constructor-takes-proven-wait-provenance-not-any-handle) requires: a shared
+`win-sync-sys` `Event` converts safely because it is known to be an event, and a shared handle of unknown kind
+needs the caller's `unsafe` assertion. The teardown order needs nothing new: releasing the wait's clone is the
+target's destructor, which [the close-routine decision](#a-wait-target-owns-its-close-routine-because-not-every-waitable-handle-closes-with-closehandle)
+already orders after the drain on both teardown paths.
+
+**Settled in `M-T15.1` and recorded here when it is:** what `into_handle` returns for a shared target, and the
+form of the `unsafe` seam for a shared handle of unknown kind.
+
 ## Re-arming is gated against teardown, under the same lock that arms
 
 Both the timer and the wait let a callback re-arm the object from inside itself, which is what the SDK requires
