@@ -570,6 +570,36 @@ the assistant's, taken on that instruction, and stand until amended.
 - **Not decided here:** a serial port, which was not measured and which nothing rests on (above), and the open's
   documentation of [DI-D-67](#di-d-67), which is [DI-14.6.4](COMPLETED-CHECKLIST.md#di-1464).
 
+**What DI-14.12 built: what a handle answers as, asked of an observer** ([DI-14.12](COMPLETED-CHECKLIST.md#di-1412)).
+The engineer, 2026-10-18, on the assistant's sketch ("I like it, build it. We can tweak it if we don't like it"); the
+two points the sketch raised and the engineer did not rule, the variants' names and whether the result also carries a
+path, stand as built until amended.
+
+- **The shape is a type, not a function, and the opener returns nothing.** `HandleKindQuery`, built from any handle
+  by `HandleKindQuery::of` and made with `perform`, holds a duplicate of the handle in the request crate's pattern
+  (`QueryFileType` over a `CapturedHandle`), so it can be performed on any thread, more than once, and after the
+  handle it was built from is closed. For an opened file, volume or disk, pass its `handle()`.
+- **Three queries, each asked only if the one before leaves the question open.** `GetFileType`; then, for `DISK` only,
+  `IOCTL_STORAGE_GET_DEVICE_NUMBER`; then, if that answered, `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`. The result,
+  `HandleKind`, is `DiskFile`, `Volume { number, extents }`, `PhysicalDisk(number)`, `CharacterDevice`, `Pipe` or
+  `Other(FileType)`, which carries any other value as it came.
+- **The variants name what answered, and the documentation says so.** `DiskFile` is `DISK` with the storage-device
+  control refused; `PhysicalDisk` is that control answered and the extents control refused. The pages do not list the
+  errors a handle of another kind gets, so a refusal is taken as one whatever its code, and a device that refused for
+  another reason is classified as the variant its answer matches. The one error passed on and not read as a refusal is
+  out of memory, which is `win-volume-sys`'s own report that the extents reply was too large to hold.
+- **It reports and refuses nothing, and changes nothing an `OpenedFile` claims.** [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)
+  settled that. It is the classification after the open that [DI-D-67](#di-d-67) says is how a caller learns what a
+  name reached, so a caller who is responsible for it has an instrument.
+- **Observed 2026-10-18, one machine with one physical disk.** The system volume answered the device-number control with
+  type 7 and partition 4 and the extents control with one extent; `\\.\PhysicalDrive0` answered the device-number
+  control with type 7 and partition 0 and the extents control with `ERROR_INVALID_FUNCTION`. The two controls' answers are
+  what the classification rests on; the partition number is carried and is not used to tell the two apart, since
+  nothing documents what a disk's is.
+- **Not reached.** The error of `GetFileType` is not reached: the query holds its own duplicate of an open handle, so
+  there is no input that makes the call fail. The sabotage that reads that failure as an unknown type is a declared
+  survivor.
+
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
 [disposition_measurements.rs](../win-durable-ioring/examples/disposition_measurements.rs); every disposition

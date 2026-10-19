@@ -3322,3 +3322,13 @@ for deferred work does not allow. The investigation found the ports are Remote D
 and that `CancelSynchronousIo` returned success on a blocked open there without shortening it; both are in
 [DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". The unmeasured remainder is listed there with the
 reason it is not queued.
+
+### <a id="di-1412"></a>DI-14.12 -- A caller asks what kind of handle an opened file is, of an observer, `HandleKindQuery`, and the opener does not return it. *(completed 2026-10-18 20:13:46 -04:00)*
+
+The engineer, 2026-10-18: "There is no need to return the type to the caller", and the `win-*-sys` crates first, then
+the observer. `HandleKindQuery::of(handle)` and `perform` compose `QueryFileType`
+([NR-3.9](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-39-filetype)), `storage_device_number`
+([WV-3.1](../win-volume-sys/COMPLETED-CHECKLIST.md#wv-31)) and `volume_disk_extents` into a `HandleKind`. The shape, what
+each variant claims and the measurement are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "What DI-14.12 built". Eighteen
+tests, the classification over every answer and then real handles (a file, a directory, `NUL`, a named pipe, the system
+volume and its disk), and seven sabotages, one of them a declared survivor.
