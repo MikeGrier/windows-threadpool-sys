@@ -78,6 +78,12 @@ pub enum FileIdentifier {
     /// public surface should not be shaped by whichever binding crate this
     /// happens to build against. The conversion to `GUID` happens at the FFI
     /// boundary, where it belongs.
+    ///
+    /// The value is the `GUID` read as one big-endian number in the order of
+    /// its canonical text form: `7383249c-cb6e-11f1-857d-7ced8d529076` is
+    /// `0x7383_249c_cb6e_11f1_857d_7ced_8d52_9076`. That is `GUID::from_u128`'s
+    /// reading, and is not the order of the 16 bytes Windows stores, whose first
+    /// three fields are little-endian.
     ObjectId(u128),
     /// A 128-bit file reference number, as reported by `FileIdInfo` on ReFS,
     /// where 64 bits is not enough to name a file.
