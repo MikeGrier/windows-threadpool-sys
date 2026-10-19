@@ -16,5 +16,5 @@ it, one row per plan.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | not started | Parked on the horizon: `NR-inf.1`, sharing the caller's handle as a `SharedHandle` instead of duplicating it. | [DESIGN-NOTES.md](DESIGN-NOTES.md#d-4) |
+| [CHECKLIST.md](CHECKLIST.md) | not started | `NR-6`: a request shares the caller's handle as a `SharedHandle` and capture is deleted (graduated from `NR-inf.1`); `OpenFile` and `WatchDirectory` from an `AnchoredPath`; a typed `FileBasicInfo` read; `QueryFileInformation` into a caller's buffer. | [DESIGN-NOTES.md](DESIGN-NOTES.md#d-32) |
 | [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | **This crate's part (M24-M26) is complete**: the foundations (owned handle duplication, security attributes, path preparation, the faithful-execution contract), the four handle-producing entries, the five query entries, a test seam, and an acceptance pass over both operation and scenario coverage. The checklist itself stays open for M27 (`windows-platform-probes`) and the `M26+` items gated on this branch merging with `main`. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

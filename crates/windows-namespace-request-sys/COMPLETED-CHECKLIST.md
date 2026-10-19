@@ -449,3 +449,29 @@ whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and
 `ResolveFullPath`. Every other entry takes a handle, an identifier or a class. All three take a
 `Wtf16String`, and none has a length limit, a validation of its own beyond an interior NUL, or a
 `\\?\` rewrite.
+
+## Moved 2026-10-18 22:21:18 -04:00 -- `NR-inf.1` graduated to `NR-6`
+
+### <a id="nr-inf1-graduated"></a>NR-inf.1 -- A request shares the caller's handle as a `SharedHandle` instead of duplicating it. *(graduated 2026-10-18 22:21:18 -04:00)*
+
+Not completed: graduated to `NR-6` in [CHECKLIST.md](CHECKLIST.md) by the engineer's ruling of 2026-10-18, which
+[D-32](DESIGN-NOTES.md#d-32) records and which answers each question below. The item as it was parked:
+
+> **A request shares the caller's handle as a `SharedHandle` instead of duplicating it.** The engineer's
+> direction, 2026-10-07, and a working position rather than a decision: this crate should use
+> win-shared-os-owned-handle's `SharedHandle` (its `SH-1+.1`), and the `DuplicateHandle` capture of D-4 and D-7
+> was non-trivial work that is probably not worth it over an `Arc<OwnedHandle>`. **Deferred by the engineer
+> because it is not a drop-in replacement**; nothing else gates it. What it changes, each to be settled when
+> this is picked up:
+>
+> - **Construction.** Capture takes a `BorrowedHandle` from a caller who keeps ownership. A shared form needs a
+>   `SharedHandle` the caller already holds, and a caller with only a borrow cannot make one without giving up
+>   its handle. Whether duplication survives as a second capture path is open.
+> - **D-7's refusals.** Re-check which of the null, `INVALID_HANDLE_VALUE` and pseudo-handle refusals still
+>   apply to a value that arrives already owned.
+> - **Inheritance.** A duplicate is made non-inheritable (D-7); a shared handle keeps whatever the opener chose.
+> - **Getting the handle back.** `into_owned_handle` and `From<CapturedHandle> for OwnedHandle` are infallible
+>   today; `SharedHandle::try_into_owned` fails while another clone exists. `try_clone` would become infallible.
+> - **Unchanged:** D-4's measured state-sharing. Shared or duplicated, the request names the caller's kernel
+>   object.
+> - A breaking change to the published crate.

@@ -307,3 +307,16 @@ IDs keep their M2 numbers, for the reason given under M4.
 
   **Next:** nothing further in this crate. The order across the crates is at the top of
   [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+
+## M7 -- Follow the request crate's shared handles
+
+- [ ] **M7.1** -- **The `request_cost` probe stops capturing.** The request crate's `NR-6`
+  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) deletes `CapturedHandle`: a request holds a
+  `SharedHandle`, and sharing one is a reference-count increment, not a `DuplicateHandle`. The probe's handle
+  timings and its module section "Handle duplication is the part that is easy to under-count" measure a
+  mechanism the request crate no longer has. Rewrite them to time what a request now costs to build with a handle
+  (a `SharedHandle` clone), keep a `DuplicateHandle` timing only if it is labelled as what a caller holding a
+  borrow pays outside the request crate, and update the probe's design notes. Lands after `NR-6.1` and before
+  `NR-6.2`, which needs every consumer moved.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md).

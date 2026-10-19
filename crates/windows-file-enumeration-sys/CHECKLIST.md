@@ -16,6 +16,48 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
 
 - [x] **ERR-1** -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#err-1)
 
+## SAFE -- Every Win32 call through a safe wrapper, then `forbid(unsafe_code)`
+
+The target is [D-23](DESIGN-NOTES.md#d-23): this crate reaches Windows only through safe wrappers in other crates,
+holds its directory as a `SharedHandle`, and duplicates no handle. The order across the crates is `M43` in the
+workspace [CHECKLIST.md](../../CHECKLIST.md).
+
+- [ ] **SAFE-1** -- **The metadata test takes a `SharedHandle`.** `a_required_identity_is_what_the_request_crate_reads_from_the_file_itself`
+  in [metadata.rs](tests/integration/metadata.rs) builds its `QueryFileIdInfo` from a `SharedHandle` rather than
+  a `CapturedHandle`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md). This is one of the
+  > moves `NR-6.2` waits on, so it lands between the two.
+
+- [ ] **SAFE-2** -- **The directory's calls through the request crate.** The engine holds the directory as a
+  `SharedHandle`. [native.rs](src/native.rs)'s four calls become entries: the open is `OpenFile` built from the
+  request's `AnchoredPath` and performed under the captured token; the directory check is `QueryFileBasicInfo`;
+  the volume serial is `QueryFileIdInfo`, on a clone of the directory's handle; a refill is `QueryFileInformation`
+  into the crate's buffer, which becomes an `io_buffers::AlignedBuf` in place of `NativeBuffer`. The typed
+  outcomes `native.rs` derives (the end of a directory, `UnsupportedExtendedDirectoryInfo`, and the rest) are kept
+  and read from the entries' codes. Tests: the existing suite unchanged; an enumeration makes no handle beyond its
+  open.
+
+  > **CROSS-COMPONENT PREREQUISITE:** the request crate's release carrying `NR-6.1` to `NR-6.5`
+  > ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)).
+
+- [ ] **SAFE-3** -- **The doorbell is a shared event.** The completion ring holds the doorbell as a `win-sync-sys`
+  `Event`, set and reset through it, and hands a `ThreadpoolWait` a waitable handle that shares the event rather
+  than a duplicate; `completion_ring.rs`'s `DuplicateHandle`, `SetEvent` and `ResetEvent` are gone. The unit tests'
+  raw waits move to `win-sync-sys`'s `wait_for_single_object`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.1](../win-sync-sys/CHECKLIST.md) and
+  > [M-T15.1](../windows-threadpool-sys/CHECKLIST.md).
+
+- [ ] **SAFE-4** -- **Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s
+  `CompareStringOrdinal` call is that crate's wrapper.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../CHECKLIST.md) (the crate is created).
+
+- [ ] **SAFE-5** -- **`#![forbid(unsafe_code)]`.** On the crate root, so the build refuses any `unsafe` in the
+  crate or its unit tests. Whatever `unsafe` remains after `SAFE-2` to `SAFE-4` is found by the build, and each
+  is moved behind a wrapper or brought to the engineer. D-23 is then current rather than a target.
+
 ## M-inf -- Horizon (ungated)
 
 - [ ] **REVIEW-1** -- Review the request path contract against a traversal layer, before one is built.

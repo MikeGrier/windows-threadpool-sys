@@ -1316,6 +1316,29 @@ finding is of a different and worse kind: a rule nothing tests.
   the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
   handle it was given without giving the pool the power to signal it.
 
+## M-T15 -- A wait that shares its handle
+
+- [ ] **M-T15.1** -- **A `ThreadpoolWait` can hold its handle shared, so a caller keeps a clone to signal it.**
+  Asked on 2026-10-18 whether this was part of moving `windows-file-enumeration-sys` off handle duplication (its
+  `SAFE-3`), the engineer answered "let's assume yes"; this item settles whether the assumption holds before
+  anything binds to it. Today a wait owns its handle exclusively, which is how `assume_waitable`'s contract keeps
+  the handle open while a wait is pending, and a caller that must also signal the object keeps a duplicate
+  (`WaitableHandle::event`'s documentation tells it to). A shared target meets the same requirement: the wait
+  holds a clone, and the handle closes only when the last holder drops. The waitability guarantee comes from the
+  type it is built from, so a shared `Event` ([WS-2.1](../win-sync-sys/CHECKLIST.md)) converts safely, as an owned
+  one does now, and `M-T14+.1`'s `WaitOnlyEvent` conversion is decided alongside. To settle here: what
+  `into_handle` returns for a shared target; whether an `unsafe` vouching seam is offered for a shared handle as
+  `assume_waitable` is for an owned one; and the teardown order, so that a wait drained by its own drop or a
+  cleanup group's release still never outlives the pool's use of the handle. The decision is recorded in the
+  workspace [DESIGN-NOTES.md](../../DESIGN-NOTES.md). Tests: a wait on a shared event fires when a clone sets it;
+  the handle stays open after every other holder drops while the wait is armed; drop and cleanup-group release
+  both drain before the wait's clone is released.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.1](../win-sync-sys/CHECKLIST.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-enumeration-sys` -> `SAFE` ->
+  > `SAFE-3`. See [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

@@ -657,3 +657,24 @@ agreement against the `FileIdExtdDirectoryInfo` record the enumeration crate rea
 **Refusal codes.** The codes observed for a pipe, `NUL` and a volume are not on the page. Naming them in the tests
 would assert the machine; comparing each with the untyped entry's code for the same handle asserts what this
 entry promises, that the code passes through unaltered.
+
+## D-32: sharing rather than duplicating
+
+**How the question was put.** The assistant first proposed keeping `CapturedHandle` as the type entries take,
+holding a `SharedHandle`, with a second route that still duplicated for a caller holding only a borrow. The
+engineer asked whether the wrapper was wanted or merely there, and whether the duplicating route would be added
+if the crate were started now. Taken item by item (the list in D-32), every job the wrapper did came from
+duplicating, and the borrow-only caller already has two routes outside this crate, std's `try_clone_to_owned` and
+`win-handles-sys`'s `duplicate_handle_with_access`. Keeping either would have been compatibility with the crate's
+own first design and nothing more.
+
+**The values std allows in an `OwnedHandle`.** Its documentation says one "may have the value `-1`, which in
+`OwnedHandle` always represents a valid handle value, such as the current process handle", and "may have the
+value `NULL`", which a detached console produces. D-7 refused both before duplicating; D-32 does not refuse them,
+because an entry's call answers for them, and an answer from the call is what [D-10](DESIGN-NOTES.md#d-10)
+reports.
+
+**The consumers.** `win-durable-ioring` duplicated handles its `OpenedFile` already held as a `SharedHandle` to
+ask their final path and kind; `windows-file-enumeration-sys` read its volume serial privately rather than
+duplicate its directory handle for [D-31](DESIGN-NOTES.md#d-31)'s entry. Both are the cost the duplication
+imposed, and both go with it.

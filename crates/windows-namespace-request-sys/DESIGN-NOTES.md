@@ -77,7 +77,7 @@ concurrency and thread-freedom rather than latency.
 
 ## <a id="d-4"></a>D-4: A request owns duplicates of any handle it names
 
-**Current, with a replacement parked: [NR-inf.1](CHECKLIST.md) would share a `SharedHandle` instead of duplicating (not decided).**
+**To be superseded by [D-32](#d-32) when `NR-6.2` lands (a request shares a `SharedHandle`); current until then.**
 
 Five of the round-one entries take a handle rather than a path. A request
 **duplicates** such a handle at capture and owns the duplicate for its life.
@@ -168,6 +168,8 @@ A catalogue selected by implementation difficulty would be a catalogue shaped by
 our convenience rather than by consumer need.
 
 ## <a id="d-7"></a>D-7: A handle that cannot be captured fails at construction
+
+**To be withdrawn by [D-32](#d-32) when `NR-6.2` lands: with nothing duplicated, there is no capture to fail; current until then.**
 
 Handle capture validates the source and duplicates it on the **calling** thread,
 and every way that can go wrong is a construction error. The alternative --
@@ -1202,5 +1204,46 @@ handle, except the event's, which is named as [D-29](#d-29) names it. The `FILE_
 table gives no supported client; the call worked on this one.
 
 **Scheduled work:** none in this crate. [DI-15.1](../durable-ioring/CHECKLIST.md) is the consumer.
-`windows-file-enumeration-sys` keeps its private read of the serial, on the handle it owns; this entry would
-duplicate that handle per enumeration ([D-4](#d-4)). Its agreement with this entry is a test in that crate.
+`windows-file-enumeration-sys` kept its private read of the serial, on the handle it owns, because this entry
+would have duplicated that handle per enumeration ([D-4](#d-4)). [D-32](#d-32) removes the duplication, and the
+enumeration crate's `SAFE-2` ([its CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)) moves it onto
+this entry. Its agreement with this entry is a test in that crate.
+
+## <a id="d-32"></a>D-32: A request shares the caller's handle as a `SharedHandle`, and nothing in this crate duplicates one
+
+**Decided by the engineer, 2026-10-18; lands with `NR-6`, which graduates `NR-inf.1`.** Asked whether
+`CapturedHandle` was something wanted or something the crate happened to have, and whether a duplicating route
+would be added if the crate were started now: "I suspected that this was just legacy. While we in theory have a
+duty to possible clients, in practice, I want us to move forward as much as possible towards better interfaces
+and this counts. We just didn't know we needed to do this ahead of time."
+
+**What is decided.** Every entry that takes a handle holds a
+[`SharedHandle`](../win-shared-os-owned-handle/README.md), and a clone of a request shares it. `CapturedHandle`,
+its capture functions and its error types are deleted, and so is any route in this crate that duplicates a
+handle. A caller holding only a borrow makes an owned handle itself, visibly: std's
+`BorrowedHandle::try_clone_to_owned` (same access, not inheritable) or `win-handles-sys`'s
+`duplicate_handle_with_access` (narrower access), then `SharedHandle::from`.
+
+**Why nothing of `CapturedHandle` is kept.** Each thing it did came from duplicating:
+
+- *A lifetime of the request's own*, so a request is never left naming a handle its originator closed.
+  `SharedHandle`'s count gives that with no new handle.
+- *[D-7](#d-7)'s refusals*, made before `DuplicateHandle`. `INVALID_HANDLE_VALUE` was refused because
+  duplicating it yields a process handle; with no duplication there is nothing to yield, and std's types catch a
+  failed open before an `OwnedHandle` exists. Null and `-1` are values std documents an `OwnedHandle` may hold;
+  given one, an entry makes its call and reports the call's code ([D-10](#d-10)), and a refusal ahead of it would
+  rest on nothing the call's page says. A pseudo-handle reaches an `OwnedHandle` only through an `unsafe`
+  constructor whose contract it breaks, and no entry here takes a thread or token handle, so none could succeed
+  wrongly with one.
+- *A fallible `try_clone`*, because duplicating can fail. Sharing cannot.
+- *A non-inheritable handle*, so capturing never widened what a child process reaches. Sharing makes no handle,
+  so it widens nothing.
+
+**What is unchanged.** [D-4](#d-4)'s measured state-sharing: shared or duplicated, a request names the caller's
+kernel object, and a request is not an independent enumeration.
+
+**What a caller sees differently.** The handle stays open until the last holder drops, and an `OwnedHandle` can
+be taken back (`SharedHandle::try_into_owned`) only when no request still holds a clone.
+
+**Scheduled work:** `NR-6.1` and `NR-6.2` in [CHECKLIST.md](CHECKLIST.md), with the consumers' moves named in
+`NR-6.1`'s handoff.

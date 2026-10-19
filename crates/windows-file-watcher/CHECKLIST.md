@@ -15,8 +15,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M16 are done. Only the parked, ungated M-inf horizon items
-> remain, and none is a current obligation.
+> **NEXT ACTIONABLE ITEM: M17.1**, once `win-text-sys` exists (the workspace's `M43.1`). M1 through M16 are
+> done; the M-inf horizon items are parked and ungated.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -69,6 +69,16 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 ## M15 -- Findings from the mutation-testing sweep
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m15).
+
+## M17 -- The ordinal comparison through `win-text-sys`
+
+- [ ] **M17.1** -- **`route.rs`'s case-insensitive comparison calls `win-text-sys`.** The crate's private
+  `CompareStringOrdinal` call in [route.rs](src/route.rs), the one `unsafe` block there, becomes the wrapper in the
+  new `win-text-sys` (the workspace's `M43.1`), which `windows-file-enumeration-sys` adopts in the same way. The
+  comparison's meaning, ordinal with case folded only when asked, is unchanged; the existing route tests are the
+  check.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../CHECKLIST.md) (`win-text-sys` is created).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

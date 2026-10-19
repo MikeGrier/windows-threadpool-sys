@@ -396,3 +396,16 @@ workspace rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) 
 The request crate's type had to be public for this (its D-30). Holding that crate's `OpenFile` in the request
 instead was not taken: it is not `Clone` or `Eq`, which `EnumerationRequest` is, and the worker's open, under
 the captured token, is this crate's.
+
+## Why the crate's target is `forbid(unsafe_code)` (D-23)
+
+**Asked on 2026-10-18**, after `NR-3.10` left this crate reading a volume serial with its own `unsafe` call
+because the request crate's typed entry would have duplicated the directory handle. The engineer ruled that
+duplication legacy and asked what moving this crate onto shared handles and the safe `win-*` wrappers would take.
+The census then was ten `unsafe` blocks outside tests: five in the native calls, one in the buffer, three in the
+completion ring's doorbell, one in the case-insensitive comparison. Each has a wrapper that exists or is planned
+(D-23), so the attribute can be the end state rather than an aspiration, and the build is what checks it.
+
+**What was not chosen.** Keeping the native calls private and only removing the duplication would have left this
+crate a second implementation of calls the request crate already makes faithfully, with its own reading of their
+codes; the typed outcomes this crate derives from those codes are kept, and only the calls move.

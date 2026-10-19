@@ -498,6 +498,48 @@ code written before it was stated. `win-durable-ioring`'s open is not here; it i
   commit, and give each contract refusal its citation and each narrowing its own error kind where it lacks
   them.
 
+## M43 -- Shared handles, and safe wrappers under the enumeration crate
+
+Opened 2026-10-18. The engineer ruled a request crate's handle duplication legacy, to be removed rather than
+kept for compatibility ([D-32](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and set
+`windows-file-enumeration-sys`' target as reaching Windows only through safe wrappers, under
+`forbid(unsafe_code)` ([D-23](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-23)). The work is in six
+crates' checklists; this is only the order and the links, and each item's own checkbox is its status.
+
+1. [NR-6.1](crates/windows-namespace-request-sys/CHECKLIST.md) -- request entries hold a `SharedHandle`;
+   additive for callers that build entries.
+2. The consumers move off `CapturedHandle`, in any order:
+   [DI-16.1](crates/durable-ioring/CHECKLIST.md), [M7.1](crates/windows-platform-probes/CHECKLIST.md),
+   [SAFE-1](crates/windows-file-enumeration-sys/CHECKLIST.md).
+3. [NR-6.2](crates/windows-namespace-request-sys/CHECKLIST.md) -- capture deleted. `NR-6.3` to `NR-6.5` may land
+   at any point before the release.
+4. The request crate's release, a new minor. A release action, not an item.
+5. [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) -- the directory's calls through the request crate.
+6. Independently of 1 to 5: [WS-2.1](crates/win-sync-sys/CHECKLIST.md) (confirm first) then
+   [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md), then
+   [SAFE-3](crates/windows-file-enumeration-sys/CHECKLIST.md); and `M43.1` below, then
+   [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) and the file watcher's
+   [M17.1](crates/windows-file-watcher/CHECKLIST.md).
+7. [SAFE-5](crates/windows-file-enumeration-sys/CHECKLIST.md) -- `forbid(unsafe_code)`, last.
+
+- [ ] **M43.1** -- **Create `win-text-sys`, with `CompareStringOrdinal`.** The name is the engineer's, 2026-10-18:
+  "I lean towards win-text-sys for the crate name. locale implies that text handling that was not specific to a
+  locale would not belong." By [the placement rule](DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under),
+  the snapshot files `CompareStringOrdinal` under Internationalization's National Language Support functions; the
+  name is the subject, text handling whether or not it is particular to a locale, so the crate's notes record that
+  National Language Support is its section and that Unicode and Character Sets, which the snapshot files
+  separately, is judged by the same subject when a wrapper from it is wanted. Recorded at creation, in the new
+  crate's DESIGN-NOTES as its naming decision and placement: the name with the quotation above; the section; that
+  a `-sys` crate here is memory-safe over the call and adds no policy. The first wrapper takes two `&[u16]` and a
+  case choice and returns the comparison as an `Ordering`, with the call's failure as its error; nothing else is
+  added until a consumer's item asks. Tests: equal and unequal strings both ways, case folded and not, embedded
+  NULs compared as units, lengths the call's `int` cannot represent refused with the citation (the
+  documented-contract rule), and the failure path.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is
+  > [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) in `crates/windows-file-enumeration-sys` and
+  > [M17.1](crates/windows-file-watcher/CHECKLIST.md) in `crates/windows-file-watcher`.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

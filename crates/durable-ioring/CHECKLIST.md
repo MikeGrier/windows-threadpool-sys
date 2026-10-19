@@ -332,6 +332,20 @@ option recorded by construction. The rule throughout is documented APIs only
 
 - [ ] **DI-10.6** -- **A handle opened elsewhere that `ReOpenFile` cannot convert: restrictive sharing, an access the caller was never itself granted, and an object that was not created by `CreateFile`.** Parked, with the blocker named: an open handle's mode is reported only by an undocumented call, which this repository does not make, so such a handle's class is a consumer's declaration, and the engineer has not ruled on an `unsafe` attestation for one ([DI-D-68](DESIGN-NOTES.md#di-d-68)). Everything else a handle from elsewhere is wanted for is [DI-15.4](#di-154), taking any handle. When picked up: decide whether a declaration is accepted at all, in what form, and that the class is at most `BestEffort` unless the consumer attests more through the mechanism of `DI-10.5`.
 
+## DI-M16 -- Hand the request crate the handles already held
+
+- [ ] **DI-16.1** -- **`win-durable-ioring` stops duplicating handles it holds.** The request crate's `NR-6`
+  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) has its entries hold a `SharedHandle`. An
+  `OpenedFile` already holds one, yet `final_location` in
+  [opened_file.rs](../win-durable-ioring/src/windows_backend/opened_file.rs) and `HandleKindQuery::of` in
+  [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) duplicate it to ask its final path and
+  kind. Both take the `SharedHandle` instead and give the entry a clone; `HandleKindQuery::of` changes signature,
+  so this is breaking for `win-durable-ioring`, in a commit of its own. `OpenedVolume` and `OpenedDisk` are
+  checked for the same pattern. Tests: the existing ones, and that asking an opened file's kind makes no handle.
+  Lands after `NR-6.1` and before `NR-6.2`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md).
+
 ## DI-M11 -- The core driven by script
 
 - [ ] **DI-11.1** -- **An in-memory backend whose targets and backend fault on a script**
