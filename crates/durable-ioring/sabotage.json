@@ -1591,8 +1591,8 @@
       "name": "DI-7.1: a pool drain does not submit first",
       "file": "src/engine.rs",
       "expect": "caught",
-      "why": "Each pass of a drain begins by submitting what a failed submit left queued, so a consumer that has stopped popping still gets its work issued. Without it a drain runs and never asks the ring. Caught by the drain test, which requires a failed submit on a thread other than its own.",
-      "find": ["            let _ = self.backend.submit();"],
+      "why": "Each pass of a drain begins by ringing the backend's doorbell, which issues what a failed doorbell left queued, so a consumer that has stopped popping still gets its work issued. Without it a drain runs and never asks the backend. Caught by the doorbell tests, which fail a doorbell and expect the next drain to issue what it left queued.",
+      "find": ["            deliver |= self.ring();"],
       "replace": [""]
     },
     {
