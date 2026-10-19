@@ -253,6 +253,61 @@ M34.6 owns that.
 
 - [x] **M34.10** -- A relative `-OutputDirectory` is resolved before the launcher is handed paths built from it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m3410)
 
+The items below scope sabotage sweeps to what a change could have affected, with a nightly sweep of
+everything behind them. The decision and what scoping cannot see are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope); the alternatives are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-sabotage-scope-was-reached). Each item lands with its
+own harness or planner tests, run on both PowerShell hosts, and with the documentation of what it
+changes.
+
+- [ ] **M34.11** -- **Check every entry's patch without building, on every push and pull request.**
+  The exactly-once and changes-the-file rule that reports `MANIFEST STALE` and `MANIFEST INERT` lives
+  inline in the sweep loop of [tools/run-sabotage.ps1](tools/run-sabotage.ps1). Move it to one
+  function in [tools/common.ps1](tools/common.ps1) that the sweep loop calls, and move the discovery
+  of `crates/*/sabotage*.json` that [tools/plan-sabotage-matrix.ps1](tools/plan-sabotage-matrix.ps1)
+  does to a function beside it. Add a mode of the harness that applies the patch rule to every entry
+  of a manifest and builds nothing, and a job in [.github/workflows/ci.yml](.github/workflows/ci.yml)
+  that runs it over every manifest. Two of the six entries M34.9 repaired were only this.
+
+- [ ] **M34.12** -- **Plan only the manifests a change could have affected.** The planner takes a base
+  revision and selects a manifest when a file under its crate changed, or a file under a workspace
+  crate it depends on, directly or not. A change to an input every sweep shares selects every
+  manifest: the root `Cargo.toml` and `Cargo.lock`, `rust-toolchain.toml`, the sabotage tools and
+  `tools/common.ps1`, and the sweep workflow. The post-merge sweep passes the push's previous head;
+  a push with no previous head, and a dispatch, select every manifest.
+
+- [ ] **M34.13** -- **Record which tests caught each entry.** A sweep writes, beside its transcripts,
+  the tests that failed under each entry it reports caught: library and integration tests by name,
+  doctests by file. An entry caught by a hang, a crash, or a refused build has no names and is
+  recorded as having none. The record is derived data and is not committed: locally it stays in the
+  output directory, and the sweep workflow saves and restores it through the Actions cache. A sweep
+  merges what it learns into what it found, so a scoped sweep does not forget the entries it did
+  not run.
+
+- [ ] **M34.14** -- **Within a manifest, run only the entries a change could have affected.** One
+  selection function, used by the harness and by the planner so that both count the same entries
+  for sharding, picks an entry when the entry itself is new or changed, when its `file` changed, when
+  a file holding one of its recorded catching tests changed or the test can no longer be found, or
+  when it has no recorded catchers and any test file of its crate changed. A change that selected
+  the whole manifest under M34.12 for a shared input or a dependency selects every entry. The
+  harness takes the same base revision, so a local run can be scoped to a branch.
+
+- [ ] **M34.15** -- **Run an entry's recorded catchers before its whole suite.** An entry with
+  recorded catching tests is first run against those tests alone. Caught there, it is caught; not
+  caught, it is run against the whole suite as now, so the narrower run can make a result faster
+  but never different. Entries with no recorded names, and doctest catchers, take the whole suite.
+
+- [ ] **M34.16** -- **Sweep everything nightly, and scope the post-merge sweep.** A scheduled run of
+  [.github/workflows/sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) sweeps every entry of
+  every manifest, which is the backstop for what scoping cannot see. The post-merge run becomes the
+  scoped one. A dispatch keeps its full sweep, still narrowed by its manifest and name inputs.
+
+- [ ] **M34.17** -- **Teach the scoped run as the default local check.** The repository instructions'
+  sabotage guidance in [.github/copilot-instructions.md](.github/copilot-instructions.md) and
+  [tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with a run scoped to
+  the branch, and say when the whole manifest is still the right run: a change to a shared test
+  helper, or to a crate others build on.
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing

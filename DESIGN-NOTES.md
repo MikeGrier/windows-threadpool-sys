@@ -2813,6 +2813,31 @@ Why this one signature earns a retry when a test result never does is in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#a-link-that-could-not-open-its-output). The work is
 [M34.8](COMPLETED-CHECKLIST.md#m348).
 
+<a id="sabotage-scope"></a>**A sweep runs what a change could have affected; everything runs nightly.**
+Every entry costs a build and a run of its crate's suite, so sweeping every manifest on every merge
+put the cost of all of them on a change to one. The decision, the engineer's of 2026-10-19: a
+change is checked by the entries it could have affected, and a nightly sweep of every entry is the
+backstop. The layers, cheapest first, are the items from
+[M34.11](CHECKLIST.md) on:
+
+- Every entry's patch is checked against the source on every push, with no build, since a patch
+  the code has moved away from needs nothing else to find.
+- The post-merge sweep plans only the manifests of crates the change touched, or that build on one
+  it touched; an input every sweep shares selects all of them.
+- Within a manifest, an entry runs when it is new or changed, when the file it patches changed, or
+  when a test that caught it last time changed or is gone. An entry with no record of what caught
+  it runs when any test of its crate changed.
+- An entry is first run against the tests that caught it last time, and against the whole suite
+  only if they do not catch it, so the result is never different, only sooner.
+
+**What scoping does not see, which is what the nightly sweep is for.** A change elsewhere in a crate
+than the file an entry patches can make that entry's defect unreachable or harmless; a change to a
+crate below can change what a test above it observes; a test helper shared across a crate's tests
+can weaken many tests at once. None of these selects the entry, and none is caught until the
+nightly run. The record of which tests caught an entry narrows which test changes select it: a
+change to any test it names, or that test's removal, still selects the entry, and an entry with no
+record is selected by any test change in its crate.
+
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI
