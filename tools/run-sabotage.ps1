@@ -602,6 +602,16 @@ function Invoke-Bounded {
 # instead of merely building them, and then fail for a reason unrelated to the
 # sabotage. The manifest format allows that vector (`testArgs`), so this is the
 # manifest author's mistake to be immune to rather than to warn about.
+# `CargoArgs` narrowed to the tests named, each matched exactly: the names go
+# after cargo's `--`, where libtest reads them, and every test binary is given
+# them, so a binary holding none runs nothing and passes.
+function Add-TestFilter {
+    param([string[]] $CargoArgs, [string[]] $Tests)
+    $tail = @($Tests) + @('--exact')
+    if ([array]::IndexOf($CargoArgs, '--') -lt 0) { return @($CargoArgs) + @('--') + $tail }
+    return @($CargoArgs) + $tail
+}
+
 function Add-CargoFlag {
     param([string[]] $CargoArgs, [string[]] $Flag)
 
@@ -647,7 +657,8 @@ function Invoke-Sabotaged {
         [string] $WorkingDirectory,
         [string] $TranscriptPath,
         [int] $BuildSeconds,
-        [int] $TestSeconds
+        [int] $TestSeconds,
+        [string[]] $FirstTests
     )
 
     $buildArgs = Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run'
@@ -695,8 +706,34 @@ function Invoke-Sabotaged {
         return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null; Seconds = 0 }
     }
 
-    $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+    # The entry's recorded catching tests first, when the caller has them: caught
+    # there, it is caught, and the whole suite is not run. Not caught there, or not
+    # judged at all, the whole suite runs as it always did, and its transcript
+    # replaces the narrow one.
+    if ($FirstTests -and @($FirstTests).Count -gt 0) {
+        $narrow = Invoke-RunPhase -CargoArgs (Add-TestFilter -CargoArgs $CargoArgs -Tests $FirstTests) `
+            -WorkingDirectory $WorkingDirectory -TranscriptPath $TranscriptPath -Seconds $TestSeconds
+        if (@('failed', 'hung') -contains $narrow.Outcome) {
+            $narrow | Add-Member -NotePropertyName Narrowed -NotePropertyValue $true
+            return $narrow
+        }
+    }
+    return Invoke-RunPhase -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
         -TranscriptPath $TranscriptPath -Seconds $TestSeconds
+}
+
+# The run phase of one entry, classified: the suite's own outcome, unless what it
+# wrote says the tests never ran or a doctest would not build.
+function Invoke-RunPhase {
+    param(
+        [string[]] $CargoArgs,
+        [string] $WorkingDirectory,
+        [string] $TranscriptPath,
+        [int] $Seconds
+    )
+
+    $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+        -TranscriptPath $TranscriptPath -Seconds $Seconds
 
     # The one hole the phase split above cannot close by itself: `--no-run` does
     # not build DOCTESTS (see the note at the top of this file -- `cargo test
@@ -1598,6 +1635,19 @@ $entryIndex = 0
 # path from the repository root, $catcherKey.
 $catcherPath = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
 $catchers = Read-SabotageCatcherRecord -Path $catcherPath
+# The tests to run an entry against before its whole suite (M34.15): in a scoped
+# run only, the tests recorded as catching it last time, unless one is a doctest,
+# which a filtered run would not build. A full sweep -- the nightly backstop, and
+# any run without -Since -- always runs the whole suite, so it is exactly what a
+# sweep was before scoping, and it re-learns every entry's catching tests.
+function Get-FirstTests {
+    param([string] $EntryName)
+    if (-not $scopeNote) { return }
+    if (-not $catchers.ContainsKey($catcherKey) -or -not $catchers[$catcherKey].ContainsKey($EntryName)) { return }
+    $tests = @($catchers[$catcherKey][$EntryName].Tests)
+    if ($tests.Count -eq 0 -or @($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { return }
+    , $tests
+}
 # The outcomes in which the patch was judged. Every other one -- the
 # infrastructure outcomes, and a hung build -- says nothing about the tests, and
 # would overwrite what an earlier run learned with nothing.
@@ -1671,7 +1721,8 @@ foreach ($sabotage in $selected) {
         # starts from unmodified source.
         [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
         $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
-            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $entryTimeout
+            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $entryTimeout `
+            -FirstTests (Get-FirstTests $sabotage.name)
     }
     finally {
         # Reset the copy from the REAL file, which is the authority, rather than
@@ -1704,10 +1755,17 @@ foreach ($sabotage in $selected) {
         }
     }
 
+    $narrowed = ($run.PSObject.Properties.Name -contains 'Narrowed') -and $run.Narrowed
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
-        'failed' { "caught (suite failed, exit $($run.Code))" }
-        'hung' { "caught (tests HUNG past ${entryTimeout}s)" }
+        'failed' {
+            if ($narrowed) { "caught (its recorded tests failed, exit $($run.Code))" }
+            else { "caught (suite failed, exit $($run.Code))" }
+        }
+        'hung' {
+            if ($narrowed) { "caught (its recorded tests HUNG past ${entryTimeout}s)" }
+            else { "caught (tests HUNG past ${entryTimeout}s)" }
+        }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
         # not a result to record -- unless the entry declared exactly this, and

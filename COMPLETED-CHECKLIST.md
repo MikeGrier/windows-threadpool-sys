@@ -4006,3 +4006,16 @@ test file from source by its path is guesswork here and a doctest can come from 
 fixtures, is its own crate. The sweep workflow restores the record before planning and gives every shard the plan's base and full
 history. A real sweep of `win-sync-sys` found that the harness's new `-CatcherRecord` parameter and its `$catcherRecord`
 variable were one variable, since PowerShell names ignore case, which the record tests then caught when it was put back.
+
+## Moved 2026-10-19 02:07:39 -04:00 -- sabotage scope, M34.15: recorded catching tests run first
+
+### <a id="m3415"></a>M34.15 -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. *(completed 2026-10-19 02:07:39 -04:00)*
+
+[tools/run-sabotage.ps1](tools/run-sabotage.ps1) splits its run phase into `Invoke-RunPhase`, so a run narrowed with
+`Add-TestFilter` to an entry's recorded tests (`-- <names> --exact`) is classified as the whole suite is. Caught there, the
+entry is reported `caught (its recorded tests failed ...)`; otherwise the whole suite runs. Narrowing applies only with `-Since`,
+and never for an entry a doctest caught, which a filtered run does not build. That differs from the plan in one respect, recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope): the plan said the narrow run could not change a result, and it can, for a patch
+that also stops a doctest compiling, so a full sweep, the nightly backstop, always runs whole suites. On `win-sync-sys`, with every
+entry selected, the 45 entries with recorded catching tests were each caught by them alone, and the sweep took 149 s against 193 s
+for the full one; that crate's per-entry cost is mostly its rebuild.

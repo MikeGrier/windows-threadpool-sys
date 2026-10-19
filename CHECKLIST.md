@@ -268,10 +268,7 @@ changes.
 
 - [x] **M34.14** -- Within a sabotage manifest, run only the entries a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3414)
 
-- [ ] **M34.15** -- **Run an entry's recorded catchers before its whole suite.** An entry with
-  recorded catching tests is first run against those tests alone. Caught there, it is caught; not
-  caught, it is run against the whole suite as now, so the narrower run can make a result faster
-  but never different. Entries with no recorded names, and doctest catchers, take the whole suite.
+- [x] **M34.15** -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3415)
 
 - [ ] **M34.16** -- **Sweep everything nightly, and scope the post-merge sweep.** A scheduled run of
   [.github/workflows/sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) sweeps every entry of

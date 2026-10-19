@@ -231,7 +231,11 @@ accept that a sabotage caught only by a doctest would then read as survived.
 
 ## Reading a result, which is where the judgement is
 
-**`caught`** -- the suite went red, or hung. The guard is real.
+**`caught`** -- the suite went red, or hung. The guard is real. In a scoped run
+(`-Since`) an entry with recorded catching tests is run against those first, and
+is reported `caught (its recorded tests failed ...)` when they catch it; the
+whole suite runs only when they do not. A run without `-Since` always runs the
+whole suite.
 
 **`survived (NOT caught)`** -- the suite stayed green with the defect in place.
 This is the finding worth having, and it means one of two things. Either the

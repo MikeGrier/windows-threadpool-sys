@@ -216,7 +216,7 @@ function New-Stub {
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
             'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
-            'link-echoed', 'fail-named')] [string] $Behaviour,
+            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -259,6 +259,19 @@ function New-Stub {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
         'fail' { "@echo off`r`n$skipBuild`r`n$intact`r`necho test failed`r`nexit /b 101`r`n" }
+        # The run phase logs its arguments to `runs.log` beside the stub, once the
+        # marker is gone, so a case can see which runs a sabotaged entry was given:
+        # a run narrowed to its recorded tests carries `--exact`. The first fails
+        # such a run; the second passes it, and only the whole suite fails.
+        'narrow-catches' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        'narrow-misses' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul && exit /b 0`r`n" +
+            "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
         # Fails as libtest reports it, naming the test that caught it and one that
         # did not, so a case can see which tests a sweep records.
         'fail-named' {
@@ -2055,6 +2068,58 @@ Test-Case '-Since with shards splits only the selected entries among them' {
         Assert-False ($first.Output + $second.Output -match 'the marker is removed') 'on neither shard'
     }
     finally { Remove-Fixture $root }
+}
+
+# The marker entry, selected by a change to src/lib.rs, recorded as caught by the
+# named tests; returns the runs its sabotaged entry was given.
+function Invoke-NarrowCase {
+    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full)
+    $root = New-ScopeFixture
+    try {
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests $Recorded -At '2026-01-01T00:00:00.0000000Z'
+        Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
+        Add-Content -LiteralPath (Join-Path $root 'src\lib.rs') -Value '// changed'
+        $stub = New-Stub -Behaviour $Behaviour -Root $root
+        $arguments = @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Name', 'the marker*')
+        if (-not $Full) { $arguments += @('-Since', 'HEAD') }
+        $result = Invoke-Harness -Root $root -Arguments $arguments
+        $log = Join-Path $root 'stubs\runs.log'
+        $runs = @()
+        if (Test-Path -LiteralPath $log) { $runs = @(Get-Content -LiteralPath $log) }
+        return [pscustomobject]@{ Result = $result; Runs = $runs }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-Since runs an entry''s recorded tests first, and is done when they catch it' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(its recorded tests failed' $case.Result.Output
+    Assert-Equal 1 $case.Runs.Count 'one run, narrowed'
+    # Each argument reaches the stub quoted by the launcher.
+    Assert-Match '"--" "marker::is_present" "--exact"' $case.Runs[0]
+}
+
+Test-Case '-Since runs the whole suite when the recorded tests do not catch it' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-misses' -Recorded @('marker::is_present')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the narrow run, then the whole suite'
+    Assert-Match '--exact' $case.Runs[0]
+    Assert-False ($case.Runs[1] -match '--exact') 'the second is the whole suite'
+}
+
+Test-Case 'the whole suite alone runs without -Since, for an entry with no recorded test, and for one a doctest caught' {
+    foreach ($variant in @(
+            @{ Recorded = @('marker::is_present'); Full = $true; Why = 'a full sweep' },
+            @{ Recorded = @(); Full = $false; Why = 'no recorded test' },
+            @{ Recorded = @('marker::is_present', 'src\lib.rs - api (line 1)'); Full = $false; Why = 'a doctest' })) {
+        $case = Invoke-NarrowCase -Behaviour 'narrow-catches' -Recorded $variant.Recorded -Full:$variant.Full
+        Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+        Assert-Equal 1 $case.Runs.Count "one run: $($variant.Why)"
+        Assert-False ($case.Runs[0] -match '--exact') "and not narrowed: $($variant.Why)"
+    }
 }
 
 Test-Case '-Since with nothing affected sweeps nothing and builds nothing' {

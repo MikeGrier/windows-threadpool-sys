@@ -2828,8 +2828,12 @@ backstop. The layers, cheapest first, are the items from
   when a test that caught it last time changed or is gone. An entry with no record of what caught
   it, or caught by a doctest, runs whenever its crate changed: telling a test file from source by
   its path is guesswork here, and a doctest can come from a file spliced into the documentation.
-- An entry is first run against the tests that caught it last time, and against the whole suite
-  only if they do not catch it, so the result is never different, only sooner.
+- In a scoped run, an entry is first run against the tests that caught it last time, and against
+  the whole suite only if they do not catch it. A full sweep always runs the whole suite, so the
+  nightly backstop is exactly the sweep from before scoping, and it re-learns every entry's catching
+  tests. The narrow run can differ in one way: a patch that also stops a doctest compiling is
+  reported caught when a recorded unit test fails, where the whole suite reports the manifest as not
+  compiling. The nightly sweep still reports that.
 
 **What scoping does not see, which is what the nightly sweep is for.** A change elsewhere in a crate
 than the file an entry patches can make that entry's defect unreachable or harmless; a change to a
