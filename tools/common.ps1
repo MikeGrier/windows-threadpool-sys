@@ -345,6 +345,65 @@ function Get-LinkOutputOpenFailure {
     return $first
 }
 
+# --- Sabotage manifests and their patches -------------------------------------
+#
+# Where the manifests are. The planner builds the sweep matrix from this list and
+# the patch check walks it, so a manifest one of them sees the other sees too: a
+# second glob, in either, is how a manifest ends up checked and never swept, or the
+# other way round. Sorted ordinally, so a matrix built from it is stable run to run and host to host.
+#
+# Returns full paths. A repository with no `crates` directory has none, and saying
+# so is the caller's business.
+function Get-SabotageManifest {
+    param([string] $RepositoryRoot)
+    $cratesDir = Join-Path $RepositoryRoot 'crates'
+    if (-not (Test-Path -LiteralPath $cratesDir)) { return }
+    [string[]] $found = @(Get-ChildItem -Path $cratesDir -Directory |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
+            ForEach-Object { $_.FullName })
+    # Ordinal, not Sort-Object: that one is culture-sensitive, and the two hosts
+    # order 'sabotage-x.json' and 'sabotage.json' differently under it.
+    [Array]::Sort($found, [System.StringComparer]::Ordinal)
+    $found
+}
+
+# Whether a sabotage's patch applies to `Original`, the text of the file it names.
+#
+# The find text must occur EXACTLY once, not at least once: a pattern matching two
+# sites patches whichever the string replace happens to reach, and the sabotage is
+# then not the one described. And the patch must change the file, or it sabotages
+# nothing. Those are the two ways a manifest goes wrong without anything being
+# built, so the sweep asks this before it builds, and the no-build check asks the
+# same question of every entry -- this is the one place the rule is written.
+#
+# `Outcome` is `ok`, `stale` (the count is not one; `Occurrences` says what it is)
+# or `inert`. `Patched` is the patched text for `ok` and `$null` otherwise. The
+# lines of `Find` and `Replace` are joined with LF, as the manifests are written.
+function Test-SabotagePatch {
+    param([string] $Original, [string[]] $Find, [string[]] $Replace)
+    $findText = ($Find -join "`n")
+    $replaceText = ($Replace -join "`n")
+    $occurrences = ([regex]::Matches($Original, [regex]::Escape($findText))).Count
+    $outcome = 'stale'
+    $patched = $null
+    if ($occurrences -eq 1) {
+        $patched = $Original.Replace($findText, $replaceText)
+        # Ordinal: PowerShell's -eq ignores case, so a patch that changed only case
+        # would read as one that changed nothing.
+        if ([string]::Equals($patched, $Original, [System.StringComparison]::Ordinal)) {
+            $outcome = 'inert'
+            $patched = $null
+        }
+        else { $outcome = 'ok' }
+    }
+    return [pscustomobject]@{
+        Outcome     = $outcome
+        Occurrences = $occurrences
+        FindText    = $findText
+        ReplaceText = $replaceText
+        Patched     = $patched
+    }
+}
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than
 # failing the report, because this runs on a path that is already failing.

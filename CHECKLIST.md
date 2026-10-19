@@ -260,14 +260,7 @@ everything behind them. The decision and what scoping cannot see are in
 own harness or planner tests, run on both PowerShell hosts, and with the documentation of what it
 changes.
 
-- [ ] **M34.11** -- **Check every entry's patch without building, on every push and pull request.**
-  The exactly-once and changes-the-file rule that reports `MANIFEST STALE` and `MANIFEST INERT` lives
-  inline in the sweep loop of [tools/run-sabotage.ps1](tools/run-sabotage.ps1). Move it to one
-  function in [tools/common.ps1](tools/common.ps1) that the sweep loop calls, and move the discovery
-  of `crates/*/sabotage*.json` that [tools/plan-sabotage-matrix.ps1](tools/plan-sabotage-matrix.ps1)
-  does to a function beside it. Add a mode of the harness that applies the patch rule to every entry
-  of a manifest and builds nothing, and a job in [.github/workflows/ci.yml](.github/workflows/ci.yml)
-  that runs it over every manifest. Two of the six entries M34.9 repaired were only this.
+- [x] **M34.11** -- Check every sabotage patch without building, on every push and pull request. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3411)
 
 - [ ] **M34.12** -- **Plan only the manifests a change could have affected.** The planner takes a base
   revision and selects a manifest when a file under its crate changed, or a file under a workspace

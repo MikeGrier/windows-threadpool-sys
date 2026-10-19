@@ -426,6 +426,60 @@ Test-Case 'other linker errors, and text without the error, are not this failure
     if (Get-LinkOutputOpenFailure '"/OUT:C:\\t\\deps\\x.exe" "/DEBUG"') { throw 'the link line was taken for the error' }
 }
 
+# --- Sabotage patches and manifests -------------------------------------------
+#
+# The rule a sweep applies before it builds, and the no-build check applies to
+# every entry. Both directions: a patch that applies is accepted, and each way one
+# does not is told apart.
+
+Test-Case 'a patch whose find text occurs once and changes the file applies' {
+    $check = Test-SabotagePatch -Original "a`nb`nc`n" -Find @('b') -Replace @('B')
+    Assert-Equal 'ok' $check.Outcome 'once, and a change'
+    Assert-Equal "a`nB`nc`n" $check.Patched 'the patched text'
+    Assert-Equal 1 $check.Occurrences 'counted'
+}
+
+Test-Case 'a patch whose find text is gone, or occurs twice, is stale' {
+    $gone = Test-SabotagePatch -Original "a`nc`n" -Find @('b') -Replace @('B')
+    Assert-Equal 'stale' $gone.Outcome 'not found'
+    Assert-Equal 0 $gone.Occurrences 'none'
+    if ($null -ne $gone.Patched) { throw 'a stale patch has no patched text' }
+    $twice = Test-SabotagePatch -Original "b`nb`n" -Find @('b') -Replace @('B')
+    Assert-Equal 'stale' $twice.Outcome 'found twice'
+    Assert-Equal 2 $twice.Occurrences 'two'
+}
+
+Test-Case 'a patch that changes nothing is inert, not applied' {
+    $check = Test-SabotagePatch -Original "a`nb`n" -Find @('b') -Replace @('b')
+    Assert-Equal 'inert' $check.Outcome 'no change'
+    if ($null -ne $check.Patched) { throw 'an inert patch has no patched text' }
+}
+
+Test-Case 'the lines of a patch are joined with LF, and a deletion is an empty replace' {
+    $check = Test-SabotagePatch -Original "x`n    a;`n    b;`ny" -Find @('    a;', '    b;') -Replace @('')
+    Assert-Equal 'ok' $check.Outcome 'two lines found as one block'
+    Assert-Equal "x`n`ny" $check.Patched 'deleted'
+    Assert-Equal "    a;`n    b;" $check.FindText 'joined with LF'
+    # Lines that occur in the file but not as one block are not the block.
+    Assert-Equal 'stale' (Test-SabotagePatch -Original "    a;`nz`n    b;" -Find @('    a;', '    b;') -Replace @('')).Outcome 'apart'
+}
+
+Test-Case 'manifests are found under crates, in order, and nowhere else' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('manifests-' + [guid]::NewGuid().ToString('N'))
+    try {
+        foreach ($rel in 'crates\b\sabotage.json', 'crates\a\sabotage-doctests.json', 'crates\a\sabotage.json',
+            'crates\a\not-sabotage.json', 'crates\a\src\sabotage.json', 'sabotage.json') {
+            $path = Join-Path $root $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+            [System.IO.File]::WriteAllText($path, '{}')
+        }
+        $found = @(Get-SabotageManifest -RepositoryRoot $root | ForEach-Object { $_.Substring($root.Length + 1) })
+        Assert-Equal 'crates\a\sabotage-doctests.json|crates\a\sabotage.json|crates\b\sabotage.json' ($found -join '|') 'a crate''s own manifests only'
+        Assert-Equal 0 @(Get-SabotageManifest -RepositoryRoot (Join-Path $root 'nowhere')).Count 'no crates directory, none'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # --- ConvertTo-NativeArgument: one argument, quoted for a command line --------
 
 Test-Case 'a plain argument is left unquoted' {

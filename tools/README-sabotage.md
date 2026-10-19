@@ -22,9 +22,20 @@ below for what that buys and why it is the premise rather than a nicety.
 
 # Re-run one, after changing a test
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Name '*doorbell*'
+
+# Check that every patch still applies, building nothing (one manifest, then all)
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -CheckPatches
+.\tools\check-sabotage-patches.ps1
 ```
 
 It exits 0 only when every sabotage behaved as the manifest declared.
+
+`-CheckPatches` stops before anything is built: it applies each entry's patch
+in memory to the file it names and reports `MANIFEST STALE` or `MANIFEST INERT`,
+the verdicts a sweep reaches first, for the whole manifest in seconds. Its exit
+codes are the ones below, with 1 meaning a patch does not apply.
+[check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs it over every
+manifest, and CI's `every sabotage patch applies` job runs that on every push.
 
 | Exit | Meaning |
 |---|---|

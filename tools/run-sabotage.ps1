@@ -204,6 +204,17 @@
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
+.PARAMETER CheckPatches
+    Apply every selected entry's patch to the file it names, in memory, and
+    report each one that does not apply -- `MANIFEST STALE` or `MANIFEST INERT`,
+    the same verdicts a sweep reaches before it builds -- then exit: 0 when every
+    patch applies, 1 when one does not. Nothing is built, copied or written, and
+    shards are ignored, so it is a check of the whole manifest that takes
+    seconds. Reads the files as they sit in the working tree; a sweep reads the
+    copy git lists, so a file git does not list passes here and is reported by a
+    sweep. [check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs this
+    over every manifest, and CI runs that on every push.
+
 .PARAMETER CargoCommand
     The executable each phase runs, defaulting to `cargo`. Exists so this
     script's own tests can substitute a stub that exits, fails, or hangs on
@@ -251,6 +262,8 @@ param(
     [string] $OutputDirectory,
 
     [switch] $List,
+
+    [switch] $CheckPatches,
 
     [string] $CargoCommand = 'cargo',
 
@@ -723,6 +736,14 @@ function Format-Patch {
     return $lines -join "`n"
 }
 
+# The result label for a patch Test-SabotagePatch (common.ps1) did not accept, so
+# the sweep and the no-build check report one problem in one wording.
+function Format-PatchProblem {
+    param($Check)
+    if ($Check.Outcome -eq 'inert') { return 'MANIFEST INERT: the patch does not change the file' }
+    return "MANIFEST STALE: pattern found $($Check.Occurrences) times, expected 1"
+}
+
 # Refreshes the working copy from the real tree, and returns nothing.
 #
 # WHICH FILES. Enumerated by git -- tracked files plus untracked ones that are
@@ -1166,6 +1187,36 @@ $selected = @(
     else { $manifestSelected }
 )
 
+if ($CheckPatches) {
+    if ($List) { Exit-WithMessage '-CheckPatches and -List are separate modes; give one.' 2 }
+    # The whole selection, not this shard's: whether a patch applies is a property
+    # of the manifest, and a shard that checked only its own slice would pass the
+    # rest unexamined.
+    $problems = 0
+    foreach ($entry in $manifestSelected) {
+        $realTarget = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $entry.file))
+        if (-not (Test-Path -LiteralPath $realTarget -PathType Leaf)) {
+            $problems++
+            Write-Report "NO SUCH FILE: '$($entry.file)' -- $($entry.name)" -Level bad
+            continue
+        }
+        $check = Test-SabotagePatch -Original ([System.IO.File]::ReadAllText($realTarget)) `
+            -Find $entry.find -Replace $entry.replace
+        if ($check.Outcome -ne 'ok') {
+            $problems++
+            Write-Report "$(Format-PatchProblem $check) -- $($entry.name)" -Level bad
+            Write-Report (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
+        }
+    }
+    $checked = $manifestSelected.Count
+    if ($problems -gt 0) {
+        Write-Report "$problems of $checked patches in $manifestPath do not apply." -Level bad
+        exit 1
+    }
+    Write-Report "All $checked patches in $manifestPath apply." -Level good
+    exit 0
+}
+
 if ($List) {
     Write-Report "Manifest : $manifestPath"
     Write-Report "Package  : $package"
@@ -1500,32 +1551,19 @@ foreach ($sabotage in $selected) {
         continue
     }
 
-    $find = ($sabotage.find -join "`n")
-    $replace = ($sabotage.replace -join "`n")
     $original = [System.IO.File]::ReadAllText($target)
-
-    # Exactly once, not at least once: a pattern matching two sites patches
-    # whichever the string replace happens to reach, and the sabotage is then
-    # not the one described.
-    $occurrences = ([regex]::Matches($original, [regex]::Escape($find))).Count
-    if ($occurrences -ne 1) {
+    $check = Test-SabotagePatch -Original $original -Find $sabotage.find -Replace $sabotage.replace
+    if ($check.Outcome -ne 'ok') {
         $results += [pscustomobject]@{
             Sabotage = $sabotage.name; Expected = $sabotage.expect
-            Actual   = "MANIFEST STALE: pattern found $occurrences times, expected 1"
-            Ok       = $false; Patch = (Format-Patch -Find $find -Replace $replace)
+            Actual   = (Format-PatchProblem $check)
+            Ok       = $false; Patch = (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
         }
         continue
     }
-
-    $patched = $original.Replace($find, $replace)
-    if ($patched -eq $original) {
-        $results += [pscustomobject]@{
-            Sabotage = $sabotage.name; Expected = $sabotage.expect
-            Actual   = 'MANIFEST INERT: the patch does not change the file'
-            Ok       = $false; Patch = (Format-Patch -Find $find -Replace $replace)
-        }
-        continue
-    }
+    $find = $check.FindText
+    $replace = $check.ReplaceText
+    $patched = $check.Patched
 
     # The stem is the one computed and collision-checked up front, not a second
     # spelling of the sanitiser: two copies could disagree, and the check would

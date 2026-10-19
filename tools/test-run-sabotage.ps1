@@ -675,6 +675,126 @@ Test-Case 'lists without creating its output directory' {
     finally { Remove-Fixture $root }
 }
 
+# --- -CheckPatches builds nothing ---------------------------------------------
+
+Write-Line ''
+Write-Line '-CheckPatches builds nothing'
+
+Test-Case 'a manifest whose patches all apply is accepted without building or writing anything' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        # A cargo that leaves a mark if it is ever started.
+        $mark = Join-Path $root 'stubs\cargo-ran'
+        $stub = Join-Path $root 'stubs\marking.cmd'
+        [System.IO.File]::WriteAllText($stub, "@echo off`r`necho ran>`"$mark`"`r`nexit /b 0`r`n")
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'All 1 patches in .* apply' $result.Output
+        Assert-False (Test-Path -LiteralPath $mark) 'nothing was built'
+        Assert-False (Test-Path (Join-Path $root '.scratch\sabotage')) 'nothing was written'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a patch whose text is gone, or occurs twice, is reported stale and fails the check' {
+    foreach ($case in @(
+            @{ Find = 'no such line'; Count = 0 },
+            @{ Find = 'fn'; Count = 2 })) {
+        $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ find = @($case.Find) }) `
+            -Source "// marker line`nfn main() {}`nfn other() {}`n"
+        try {
+            $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+            Assert-Equal 1 $result.ExitCode $result.Output
+            Assert-Match "MANIFEST STALE: pattern found $($case.Count) times, expected 1 -- the marker is removed" $result.Output
+            Assert-Match '--- injected patch ---' $result.Output
+        }
+        finally { Remove-Fixture $root }
+    }
+}
+
+Test-Case 'a patch that changes nothing is reported inert, and one that changes only case is not' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ replace = @('// marker line') })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST INERT' $result.Output
+    }
+    finally { Remove-Fixture $root }
+    # PowerShell's -eq ignores case, which once made this read as inert.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ replace = @('// MARKER LINE') })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 0 $result.ExitCode $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'an entry naming a file that is not there fails the check and is named' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ file = 'src/gone.rs' })
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "NO SUCH FILE: 'src/gone.rs'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'the check covers the whole manifest whatever the shard, and honours the name filter' {
+    $spec = New-Spec
+    $spec.sabotages += [ordered]@{
+        name = 'a stale second entry'; file = 'src/lib.rs'; expect = 'caught'; why = 'x'
+        find = @('not in the file'); replace = @('')
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        # Shard 0 of 2 holds one entry; the stale one may be on the other.
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-Shard', '0', '-ShardCount', '2')
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match '1 of 2 patches' $result.Output
+        $named = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-Name', 'the marker*')
+        Assert-Equal 0 $named.ExitCode $named.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case '-CheckPatches with -List is refused' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'sabotage.json', '-CheckPatches', '-List')
+        Assert-Equal 2 $result.ExitCode $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'check-sabotage-patches checks every crate manifest and names the one that fails' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('sab-' + [guid]::NewGuid().ToString('N'))
+    try {
+        foreach ($crate in 'good', 'bad') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root "crates\$crate\src") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$crate\src\lib.rs"), "// marker line`n")
+            $spec = New-Spec
+            if ($crate -eq 'bad') { $spec.sabotages[0].find = @('gone') }
+            [System.IO.File]::WriteAllText((Join-Path $root "crates\$crate\sabotage.json"), ($spec | ConvertTo-Json -Depth 8))
+        }
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $checker = Join-Path $PSScriptRoot 'check-sabotage-patches.ps1'
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 1 $LASTEXITCODE $text
+        Assert-Match 'crates\\bad\\sabotage.json do not apply' $text
+        Assert-Match 'All 1 patches in .*crates\\good\\sabotage.json apply' $text
+
+        Remove-Item -LiteralPath (Join-Path $root 'crates\bad') -Recurse -Force
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 0 $LASTEXITCODE $text
+        Assert-Match 'Every patch in 1 manifests applies' $text
+
+        Remove-Item -LiteralPath (Join-Path $root 'crates') -Recurse -Force
+        $text = Invoke-Native { & $shell -NoProfile -File $checker -RepositoryRoot $root } | Out-String
+        Assert-Equal 2 $LASTEXITCODE $text
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # --- classification ---------------------------------------------------------
 #
 # The outcomes this tool exists to keep apart. Getting any of these wrong is

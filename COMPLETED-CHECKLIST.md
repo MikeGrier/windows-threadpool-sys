@@ -3954,3 +3954,15 @@ its own commit.
 The harness computed the full path for its ignore check and kept the relative one for every transcript path, which the launcher
 resolves from the working copy, where the directory does not exist. The path is made absolute once, from the caller's location. A
 test passes a relative directory and fails without the change.
+
+## Moved 2026-10-19 00:56:45 -04:00 -- sabotage scope, M34.11: the patch check needs no build
+
+### <a id="m3411"></a>M34.11 -- Check every sabotage patch without building, on every push and pull request. *(completed 2026-10-19 00:56:45 -04:00)*
+
+The exactly-once and changes-the-file rule is `Test-SabotagePatch` in [tools/common.ps1](tools/common.ps1), called by the sweep
+loop and by the new `-CheckPatches` mode of [tools/run-sabotage.ps1](tools/run-sabotage.ps1); manifest discovery is
+`Get-SabotageManifest` beside it, used by the planner and by [tools/check-sabotage-patches.ps1](tools/check-sabotage-patches.ps1),
+which CI's `every sabotage patch applies` job runs. Run against `main` before PR #152 it reports exactly the two stale entries
+M34.9 repaired. Its tests found that a patch changing only case was reported `INERT`, because PowerShell's `-eq` ignores case,
+and that the manifest order differed between the two PowerShell hosts; both are fixed. The planner's matrix for this repository is
+unchanged.

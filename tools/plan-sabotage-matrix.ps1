@@ -53,6 +53,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 if ($EntriesPerShard -lt 1) {
     throw "-EntriesPerShard must be at least 1; got $EntriesPerShard."
 }
@@ -63,13 +65,9 @@ if (-not (Test-Path -LiteralPath $cratesDir)) {
 }
 
 # Sorted so the matrix is stable run to run: a job name that moves between runs
-# makes two runs impossible to compare, and GitHub orders jobs as given.
-$manifests = @(
-    Get-ChildItem -Path $cratesDir -Directory |
-        ForEach-Object { Get-ChildItem -Path $_.FullName -Filter 'sabotage*.json' -File } |
-        ForEach-Object { $_.FullName } |
-        Sort-Object
-)
+# makes two runs impossible to compare, and GitHub orders jobs as given. The list
+# is common.ps1's, which the patch check walks too.
+$manifests = @(Get-SabotageManifest -RepositoryRoot $RepositoryRoot)
 
 if ($manifests.Count -eq 0) {
     throw "No crates/*/sabotage*.json found under '$RepositoryRoot'."
