@@ -892,6 +892,84 @@
       ]
     },
     {
+      "name": "M8.7: the error-mode probe stops emitting its row",
+      "file": "src/bin/error_mode.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observed, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.7: a bit that was set publishes the error it never read",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe leaves the error at zero on success without calling GetLastError; publishing it reads as a code that was observed.",
+      "find": [
+        "                    Value::from((!outcome.set_ok).then_some(outcome.last_error)),"
+      ],
+      "replace": [
+        "                    Value::from(Some(outcome.last_error)),"
+      ]
+    },
+    {
+      "name": "M8.7: the combined call publishes only its valid bits as the attempt",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is what one invalid bit does to the valid ones beside it; an attempt without the invalid bit is a different experiment.",
+      "find": [
+        "                (\"attempted\", Value::from(COMBINED_ATTEMPT)),"
+      ],
+      "replace": [
+        "                (\"attempted\", Value::from(COMBINED_VALID)),"
+      ]
+    },
+    {
+      "name": "M8.7: the process and thread modes trade places",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "Whether the thread mode is a view of the process mode is read from exactly these two numbers.",
+      "find": [
+        "                (\"process_mode\", Value::from(versus.process_mode)),",
+        "                (\"thread_mode\", Value::from(versus.thread_mode)),"
+      ],
+      "replace": [
+        "                (\"process_mode\", Value::from(versus.thread_mode)),",
+        "                (\"thread_mode\", Value::from(versus.process_mode)),"
+      ]
+    },
+    {
+      "name": "M8.7: the alignment readings trade places",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "caught",
+      "why": "Stickiness is the bit present after the restore; swapping the two readings reports a sticky bit as cleared.",
+      "find": [
+        "                (\"before\", Value::from(before)),",
+        "                (\"after_restore\", Value::from(after)),"
+      ],
+      "replace": [
+        "                (\"before\", Value::from(after)),",
+        "                (\"after_restore\", Value::from(before)),"
+      ]
+    },
+    {
+      "name": "M8.7 control: the row names its build before its architecture",
+      "file": "src/error_mode/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",
