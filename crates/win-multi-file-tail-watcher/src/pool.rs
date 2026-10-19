@@ -3,7 +3,10 @@
 //! given back when the bytes read into them are no longer wanted (TW-D-15).
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the reading engine (TW-5.5) takes and lends them")
+    expect(
+        dead_code,
+        reason = "`count` and `available` are used by tests, and by nothing else"
+    )
 )]
 
 use std::collections::TryReserveError;
@@ -107,7 +110,7 @@ impl Shared {
 }
 
 /// Check a pool's dimensions before anything is allocated.
-fn check(buffer_len: usize, count: usize) -> Result<(), PoolError> {
+pub(crate) fn check(buffer_len: usize, count: usize) -> Result<(), PoolError> {
     if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {
         return Err(PoolError::BufferLen(buffer_len));
     }
@@ -275,9 +278,18 @@ unsafe impl IoBufMut for PoolBuffer {
     }
 }
 
-/// The bytes one read delivered, in a buffer lent from the reading layer's pool. Dropping it gives
-/// the buffer back.
-pub(crate) struct Chunk {
+/// The bytes one read delivered, as a view of exactly those bytes: it dereferences to `[u8]`, and its
+/// length is the number of bytes read, which can be less than the size of the buffer they were read
+/// into.
+///
+/// A chunk holds one of the reading layer's buffers and gives it back to the pool when it drops.
+/// That is the only way a buffer comes back, so a client that keeps a chunk keeps its buffer out of
+/// the pool. The pool never allocates past its count: when every buffer is held in a chunk, the
+/// layer stops reading, with nothing in flight, until one is dropped, and a poll-done waits for the
+/// reads of its poll. Copy what is needed out of a chunk and drop it to let the layer go on.
+///
+/// A chunk may outlive the pool it came from; dropping it then frees its buffer.
+pub struct Chunk {
     buffer: PoolBuffer,
     len: usize,
 }

@@ -63,13 +63,18 @@ pub struct Attention<T> {
 
 /// A report that a registration can never be probed again: the handle it holds answered with a
 /// code that means it never will. The registration stays until it is dropped, and is reported once.
+///
+/// The watcher reports it for a failed probe. The reading layer reports it too, for a failed read,
+/// and two of the fields then mean something a little different, as each says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Terminal<T> {
     /// A clone of the value the registration was made with.
     pub value: T,
-    /// The Win32 code the failed probe carried.
+    /// The Win32 code the failed probe carried, or for a failed read, the one the read did.
     pub win32_code: u32,
-    /// The length last reported for the registration.
+    /// For a failed probe, the length last reported for the registration. For a failed read, the
+    /// offset the read began at, which can be past the length last reported, and the bytes from there
+    /// are not read again.
     pub last_known: u64,
 }
 
@@ -104,6 +109,37 @@ impl From<CapacityError> for SqCapacityError {
             requested: error.requested(),
             min_valid: error.min_valid(),
             max_valid: error.max_valid(),
+        }
+    }
+}
+
+/// Why an SQ could not be made: a capacity that breaks the rule, or one that is within it and
+/// whose memory could not be had. They are kept apart because they are different answers: the
+/// first is wrong on every machine, the second is this machine's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueueError {
+    /// The capacity is not a power of two within the bounds.
+    Capacity(SqCapacityError),
+    /// The capacity is valid and the memory for the SQ's slots could not be allocated.
+    Allocation(SqCapacityError),
+}
+
+impl QueueError {
+    /// The capacity asked for and the bounds the SQ accepts, whichever the refusal was.
+    pub(crate) fn capacity(self) -> SqCapacityError {
+        match self {
+            Self::Capacity(error) | Self::Allocation(error) => error,
+        }
+    }
+}
+
+impl From<CapacityError> for QueueError {
+    fn from(error: CapacityError) -> Self {
+        let capacity = SqCapacityError::from(error);
+        if error.is_allocation_failure() {
+            Self::Allocation(capacity)
+        } else {
+            Self::Capacity(capacity)
         }
     }
 }
@@ -164,15 +200,13 @@ pub(crate) type SqReader<T> = QueueReader<SqEntry<T>>;
 
 /// A new SQ holding `capacity` entries of `E`. Every SQ in the crate is made here, so they share
 /// one capacity rule.
-pub(crate) fn queue_of<E>(
-    capacity: usize,
-) -> Result<(QueueWriter<E>, QueueReader<E>), SqCapacityError> {
+pub(crate) fn queue_of<E>(capacity: usize) -> Result<(QueueWriter<E>, QueueReader<E>), QueueError> {
     let (writer, reader) = slotwise_mpsc::bounded(capacity)?;
     Ok((QueueWriter(writer), QueueReader(reader)))
 }
 
 /// A new watcher's SQ holding `capacity` entries.
-pub(crate) fn queue<T>(capacity: usize) -> Result<(SqWriter<T>, SqReader<T>), SqCapacityError> {
+pub(crate) fn queue<T>(capacity: usize) -> Result<(SqWriter<T>, SqReader<T>), QueueError> {
     queue_of(capacity)
 }
 

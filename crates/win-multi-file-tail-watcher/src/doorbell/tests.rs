@@ -164,8 +164,64 @@ fn a_bad_capacity_is_the_capacity_variant_and_a_good_one_creates_the_doorbells()
     match Watcher::<u32>::new(3).expect_err("not a power of two") {
         CreateError::Capacity(error) => assert_eq!(error.requested, 3),
         CreateError::Io(error) => panic!("a capacity error, not {error}"),
+        other => panic!("a rule refusal, not {other}"),
     }
     assert!(Watcher::<u32>::new(2).is_ok());
+}
+
+#[test]
+fn a_capacity_the_queue_accepts_but_memory_cannot_hold_is_the_allocation_variant() {
+    // The queue's own largest capacity is refused before the allocator is asked, and a smaller
+    // one past any machine's memory is asked of it and declined: both are this machine's answer.
+    let max = crate::sq::queue::<u32>(0)
+        .expect_err("zero is refused")
+        .capacity()
+        .max_valid;
+    for requested in [1usize << 50, max] {
+        let error = Watcher::<u32>::new(requested).expect_err("no machine holds it");
+        let CreateError::Allocation(capacity) = &error else {
+            panic!("capacity {requested}: {error:?}");
+        };
+        assert_eq!(capacity.requested, requested);
+        assert_eq!(capacity.min_valid, 2);
+        assert_eq!(capacity.max_valid, max);
+
+        // It says what happened and does not call a valid capacity a mistake of the rule.
+        let message = error.to_string();
+        assert!(message.contains("memory"), "{message}");
+        assert!(message.contains(&requested.to_string()), "{message}");
+        assert!(!message.contains("not a power of two"), "{message}");
+        assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
+#[test]
+fn a_rule_refusal_is_never_the_allocation_variant() {
+    // The other direction: a request that breaks the rule is wrong on every machine.
+    for requested in [0usize, 1, 3, 100, usize::MAX, 1 << (usize::BITS - 1)] {
+        let error = Watcher::<u32>::new(requested).expect_err("breaks the rule");
+        assert!(
+            matches!(error, CreateError::Capacity(_)),
+            "capacity {requested}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_create_error_does_not_say_which_queue_it_was_because_it_is_the_error_of_two() {
+    // The watcher's and the reading layer's client queue both fail with it, and the second reaches a
+    // caller as "the reader's client queue could not be made: <this>", which a message that said
+    // "the watcher" would contradict.
+    let capacity = CreateError::from(crate::sq::queue::<u32>(3).expect_err("not a power of two"));
+    let allocation = CreateError::from(crate::sq::queue::<u32>(1 << 50).expect_err("no machine"));
+    let io = CreateError::from(std::io::Error::from_raw_os_error(5));
+    assert!(matches!(capacity, CreateError::Capacity(_)));
+    assert!(matches!(allocation, CreateError::Allocation(_)));
+    for error in [capacity, allocation, io] {
+        let message = error.to_string();
+        assert!(!message.contains("watcher"), "{message}");
+        assert!(message.contains("submission queue"), "{message}");
+    }
 }
 
 #[test]
@@ -176,7 +232,7 @@ fn a_create_error_names_its_cause() {
     let io = CreateError::from(std::io::Error::from_raw_os_error(5));
     match &io {
         CreateError::Io(error) => assert_eq!(error.raw_os_error(), Some(5)),
-        CreateError::Capacity(_) => panic!("an I/O error"),
+        other => panic!("an I/O error, not {other}"),
     }
     assert!(std::error::Error::source(&io).is_some());
 }

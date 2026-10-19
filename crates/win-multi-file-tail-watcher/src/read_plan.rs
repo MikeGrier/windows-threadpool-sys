@@ -3,7 +3,10 @@
 //! attention announced, as reads of one buffer each, or an entry delivered with no read.
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the reading engine (TW-5.5) plans its reads here")
+    expect(
+        dead_code,
+        reason = "`remaining` is used by tests, and by nothing else"
+    )
 )]
 
 use std::iter::FusedIterator;

@@ -24,7 +24,7 @@ fn a_valid_capacity_is_reported() {
 #[test]
 fn an_invalid_capacity_names_the_request_and_the_bounds() {
     for requested in [0usize, 1, 3, 5, 100, 1000] {
-        let error = queue::<u32>(requested).expect_err("invalid");
+        let error = queue::<u32>(requested).expect_err("invalid").capacity();
         assert_eq!(error.requested, requested);
         assert_eq!(error.min_valid, 2);
         assert!(error.max_valid.is_power_of_two());
@@ -35,7 +35,7 @@ fn an_invalid_capacity_names_the_request_and_the_bounds() {
 #[test]
 fn the_capacity_error_is_a_std_error() {
     fn is_error<E: std::error::Error>(_: &E) {}
-    let error: SqCapacityError = queue::<u32>(3).expect_err("invalid");
+    let error: SqCapacityError = queue::<u32>(3).expect_err("invalid").capacity();
     is_error(&error);
 }
 

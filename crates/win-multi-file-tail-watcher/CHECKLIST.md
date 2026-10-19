@@ -146,3 +146,58 @@ A review of the branch against origin/main, 2026-10-16, found three defects in M
 - [x] **TW-8.9** -- Error edges that had no test or no answer: a push the ring refuses is a failed read and abandons the rest of its plan, a poll whose poller cannot be made releases the gate, the layer keeps the first error a run returns, and a failed construction drains the waits it made. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-89)
 
 - [x] **TW-8.10** -- Documentation and housekeeping from the third review: `PollError::Io` and the poll docs, the callback hazards (a panic aborts, a `Drop` must not release the last owner of the watcher), `FAN` stated as derived, a control's `why`, stale lint reasons and comments, and the plans and README claims. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#tw-810)
+
+## M9 -- The reading layer is public, and the client chooses its sizes
+
+Deliverable: a client outside the crate, using only public items, creates the reading layer with a
+buffer size, a buffer count, a client SQ capacity and the ring's two queue sizes of its own choosing,
+registers files that child processes write, polls, and receives every announced byte exactly once as
+chunks; and a size that cannot work is refused at construction, naming the field and its bound
+([TW-D-16](DESIGN-NOTES.md#tw-d-16)). The layer is a module of this crate, not a new one.
+
+The module is `reader`, and its types are `TailReader<T>` (the layer), `TailReaderOptions` (the five
+sizes), `ReadEntry<T>` (the SQ entry) and `Chunk` (the bytes): the engineer, 2026-10-16, "the names are
+fine".
+
+- [x] **TW-9.1** -- The ring's two queue sizes are measured and asserted: how it rounds and pairs them, its largest sizes and the conditions it refuses with, and how its completion queue bounds the reads in flight against the buffer count. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-91)
+
+- [x] **TW-9.2** -- An options type holds the five sizes, checks them before anything is allocated, and refuses each size that cannot work with an error that names the option, the value and the cause, including every ring size the ring would round, replace or raise. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-92)
+
+- [x] **TW-9.3** -- The reading layer's entries are public in the `reader` module: the entry type and its data, shrink, terminal and poll-done kinds, the chunk, the drain and the SQ with its two doorbells, each with rustdoc stating what it promises and what holding it too long does. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-93)
+
+- [x] **TW-9.4** -- The reading layer itself is public as `reader::TailReader`: made from the options and the watcher's own arguments, it registers a file with an offset and a `T`, polls, exposes its SQ and doorbells, shuts down without blocking and reports the first error a run returned, with nothing it needs from the watcher made public. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-94)
+
+- [x] **TW-9.5** -- The layer is exercised from `tests/` through the public API only, over files that child processes write, under the default options, a set well above them and two small sets, with the near-term and worst-case loads, every invalid size refused, and a held chunk and an undrained client SQ each stopping the reads; the README names what each size limits and the three stops. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-95)
+
+- [x] **TW-9.6** -- A queue capacity that is valid but more than memory can hold is an error and not an abort: the queue crate's allocation refusal is mapped to a new `CreateError::Allocation` for the client queue and the watcher's own queue, and tested through the public constructor. -> [completed 2026-10-17](COMPLETED-CHECKLIST.md#tw-96)
+
+## M10 -- Findings of the review of M9
+
+A review of the branch against origin/main, 2026-10-17, found four defects in M9. The engineer: "polls
+initiated before the previous one completes should fail. fix all".
+
+- [x] **TW-10.1** -- A sabotage entry made stale by TW-9.6 is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-101)
+
+- [x] **TW-10.2** -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-102)
+
+- [x] **TW-10.3** -- `TailReader::poll` is refused while the previous poll is not complete, and a poll is complete when its poll-done has been queued for the client, after every read of it is delivered, and not when the watcher has finished announcing; a client that has read poll-done may poll again at once. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-103)
+
+- [x] **TW-10.4** -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe, that the poll cannot complete and nothing is lost, and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-104)
+
+- [x] **TW-10.5** -- A poll refused as in flight wakes the reading engine, so that a poll held up by an error a run returned, which leaves nothing in flight and rings no doorbell, is not refused for ever now that the reader's gate is in front of the watcher's. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-105)
+
+- [x] **TW-10.6** -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-106)
+
+- [x] **TW-10.7** -- Two public documentation claims are corrected to what the code does: `Terminal` says its `last_known` and `win32_code` mean something different for a failed read than for a failed probe, and `TailReader` no longer promises that no wake follows a poll-done. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-107)
+
+- [x] **TW-10.8** -- `ReadSq::capacity` no longer takes the lock a `ReadDrain` holds, so asking for the capacity while draining does not wait for the drain, on the thread that holds it or on another. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-108)
+
+- [x] **TW-10.9** -- A design-notes bullet that an earlier commit joined onto the end of the one before it is on its own line again. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-109)
+
+- [x] **TW-10.10** -- The public `TailReader` example rings `ring_resume` after it drains, as a reader stopped on a full queue needs, instead of teaching a loop that stalls on a poll longer than the queue. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1010)
+
+- [x] **TW-10.11** -- `CreateError`, which is now the error of the watcher's queue and of the reading layer's client queue, words its messages for a submission queue and not for the watcher. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1011)
+
+- [x] **TW-10.12** -- The README says a data entry carries the value, range and bytes, and what the other entries carry, instead of saying every entry does. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1012)
+
+- [x] **TW-10.13** -- The tiny option set is no longer documented as reaching the ring-full stop, which it cannot, and the README says which small set reaches which stop. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#tw-1013)

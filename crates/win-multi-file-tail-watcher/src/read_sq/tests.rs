@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 use super::{Data, ReadEntry, ReadSq, Shrink};
 use crate::pool::{BufferPool, Chunk};
-use crate::sq::{PushFailure, Terminal, queue};
+use crate::sq::{PushFailure, QueueError, Terminal, queue};
 use crate::test_support::is_signalled;
 use crate::{CreateError, SqCapacityError};
 
@@ -36,10 +36,55 @@ fn capacity_error(capacity: usize) -> SqCapacityError {
 }
 
 #[test]
+fn the_capacity_can_be_asked_for_while_a_drain_is_held() {
+    use std::sync::Arc;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    // Every ask is made on a thread of its own and waited for with a bound, so that a lock that came
+    // back fails by these assertions and not by hanging the suite: on the thread that holds the
+    // drain it would wait for itself, and on another it would wait for the drain.
+    let sq = Arc::new(sq(8));
+    let (same_thread, same_thread_answer) = channel();
+    let (release, released) = channel::<()>();
+    let holder = Arc::clone(&sq);
+    std::thread::spawn(move || {
+        let held = holder.drain();
+        let _ = same_thread.send(holder.capacity());
+        let _ = released.recv();
+        drop(held);
+    });
+    assert_eq!(
+        same_thread_answer.recv_timeout(Duration::from_secs(10)),
+        Ok(8),
+        "on the thread that holds the drain"
+    );
+
+    let (other_thread, other_thread_answer) = channel();
+    let asking = Arc::clone(&sq);
+    std::thread::spawn(move || {
+        let _ = other_thread.send(asking.capacity());
+    });
+    assert_eq!(
+        other_thread_answer.recv_timeout(Duration::from_secs(10)),
+        Ok(8),
+        "on another thread, while the drain is held"
+    );
+    let _ = release.send(());
+}
+#[test]
 fn capacities_are_refused_and_accepted_by_the_watchers_rule() {
     for capacity in [0, 1, 3, 5, 6, 100] {
         let expected = queue::<u32>(capacity).expect_err("refused for the watcher");
-        assert_eq!(capacity_error(capacity), expected, "capacity {capacity}");
+        assert!(
+            matches!(expected, QueueError::Capacity(_)),
+            "a rule refusal, not an allocation failure"
+        );
+        assert_eq!(
+            capacity_error(capacity),
+            expected.capacity(),
+            "capacity {capacity}"
+        );
     }
     for capacity in [2, 4, 64, 1024] {
         assert!(queue::<u32>(capacity).is_ok());

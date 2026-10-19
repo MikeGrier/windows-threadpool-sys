@@ -29,6 +29,7 @@ Repository-level decision this crate sits under: the `win-` prefix, in the works
 | <a id="tw-d-13"></a>TW-D-13 | **A failed probe is classified by its Win32 code as transient or terminal, by one predicate.** Transient: no corrective action, a diagnostic, probed again next beat. Terminal: reported to the caller as its own SQ entry carrying the code, and the entry is no longer probed. Diagnostics go to a sink the caller supplies, in the shape of durable-ioring's. |
 | <a id="tw-d-14"></a>TW-D-14 | **The passes work in batches of 256 under the roster lock, the buffers in chunks of at most 64 KiB, and the roster stays a `BTreeMap`; sharding the probe across threads is a known remedy that is not built.** |
 | <a id="tw-d-15"></a>TW-D-15 | **A layer above the watcher reads the bytes each poll announces through an I/O ring, into owned buffers from a pool it keeps, and delivers them as chunks on an SQ of its own, as the reads complete.** No CQ: a chunk's `Drop` returns its buffer. |
+| <a id="tw-d-16"></a>TW-D-16 | **The reading layer is made public in a module of this crate, with the client choosing the buffer size, the buffer count, the client SQ capacity and the ring's two queue sizes; the defaults are a working position.** |
 
 Working positions, which carry no decision ID and which nothing should bind to as settled, are at
 the end under [Working positions](#working-positions-not-decisions).
@@ -116,7 +117,9 @@ Reporting the attention makes the current length the new last known length.
   on a full SQ still is. A caller who has read poll-done may poll again at once, which is why the
   gate is not a flag: poll-done has to be visible only once the gate is open, yet a poll-done the SQ
   refuses is not the end of the poll. The gate has a state between running and idle for the write,
-  and a `poll` that finds it waits for the write's outcome.
+  and a `poll` that finds it waits for the write's outcome. **This is the watcher's poll.** The
+  reading layer's poll has a gate of its own that opens later, when the layer's poll-done is queued
+  for the client ([TW-D-16](#tw-d-16)).
 - **`poll` needs `T: Send + 'static`**, because the poll runs on the thread pool, and the
   thread-pool work object is made by the first `poll`, so a watcher that is never polled makes none.
   Dropping the watcher drains it, which waits for a running poll to return; a poll parked on a full
@@ -401,7 +404,9 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   kept, and while it is held nothing else is taken, so a full SQ also leaves completions in the ring,
   where the buffers they hold are accounted for, and the layer holds at most one entry the client has
   not taken. Poll-done is delivered after every read of its own poll is settled, and after the
-  poll-dones before it; the reads of a later poll may be delivered before it.
+  poll-dones before it; the reads of a later poll may be delivered before it. **That holds of the
+  engine over a watcher polled directly; the reading layer does not let it happen**, because it
+  refuses a poll until the previous poll-done is queued ([TW-D-16](#tw-d-16), [TW-10.3](CHECKLIST.md)).
 - **"The ring is full" is its completion queue.** A submit empties the ring's SQ, so a refused push
   is answered by submitting and going on; what stops the reads is the ring holding as many reads --
   queued, in flight, or completed and not popped -- as its completion queue does, at the size the
@@ -455,6 +460,205 @@ The engineer, 2026-10-16, in place of the reads through `ThreadpoolIo` first pla
   does not (it borrows the whole registration mutably). This decision schedules no work for them, so
   their absence from the checklist is intentional.
 
+## TW-D-16: the reading layer becomes public, in a module of this crate
+
+The engineer, 2026-10-16, asked whether a client can choose the ring sizes, the buffer size and the
+buffer count, and said the public layer is not a new crate: "I would put this in a distinct new
+module within the crate".
+
+- **The layer is made public from this crate**, in a module of its own, and no crate is added. It
+  has been crate-internal since [TW-D-15](#tw-d-15) because its names were not chosen
+  ([TW-D-11](#tw-d-11)); this decision chooses to publish it and leaves the names to
+  [TW-9.3](CHECKLIST.md) and [TW-9.4](CHECKLIST.md).
+- **The client chooses five sizes**, all of which the internal constructors already take: the
+  buffer size, the buffer count, the client SQ's capacity, and the ring's submission and completion
+  queue sizes. The watcher's SQ capacity is the sixth, and is already a public argument.
+- **Defaults are a working position, not a decision**
+  ([below](#working-positions-not-decisions)): the engineer picked numbers with a hedge, and
+  expects measurement to say little, since the best sizes depend on the workload.
+- **A size that cannot work is refused at construction**, naming the field and the bound, before
+  anything is allocated. The ring's rules for its two queue sizes were measured first
+  ([TW-9.1](CHECKLIST.md)) and are in the next bullet.
+- **What the ring does with the two queue sizes** (measured 2026-10-17 on an Intel Xeon Platinum
+  8573C, Windows 11 build 10.0.26300.9711; asserted by the tests in
+  [ring_size_tests.rs](src/read_engine/ring_size_tests.rs), which would fail on a host or build that
+  behaves differently):
+  - The submission queue is rounded up to a power of two of at least eight. A request of zero is
+    accepted and replaced by a default of 32. Nothing is refused for being small.
+  - The completion queue is the larger of twice the submission queue it settled on and the request
+    rounded up to a power of two. A request for a smaller completion queue than that is accepted and
+    raised.
+  - The largest sizes are what `capabilities()` reports. One more is refused with
+    `IORING_E_SUBMISSION_QUEUE_TOO_BIG` or `IORING_E_COMPLETION_QUEUE_TOO_BIG`, and a request just
+    over half the largest completion queue is rounded up to it. When both are too big the submission
+    queue is the one named.
+  - **Reads in flight at once are the least of the pieces announced, the buffers in the pool and the
+    completion queue the ring reports.** The ring's own limit is checked first, so a tie is reported
+    as a full ring. The submission queue is not a limit: a submit empties it and the engine goes on.
+  - What a completion queue smaller than the pool costs in throughput, and what the memory of a ring
+    at the largest sizes is, were not measured.
+- **A ring queue size that is not a power of two is refused.** The engineer, 2026-10-17: "refuse
+  non-power of two. ensure documented." The ring would accept it and round it up, so the caller would
+  hold a ring of a size they did not ask for; the options refuse it instead, naming the field, as they
+  refuse zero. This is the same rule the client SQ's capacity already follows
+  ([TW-D-6](#tw-d-6)). It is stated in the rustdoc of each of the two ring-size fields and of the
+  error that refuses them ([TW-9.2](CHECKLIST.md)), and in the README.
+- **A ring queue size the ring would raise is refused too.** The engineer, 2026-10-17: "yes also
+  refuse." The ring raises a submission queue under eight to eight, and a completion queue under
+  twice the submission queue to that, so a caller who passed either would hold a ring of a size they
+  did not ask for. The options therefore accept a submission queue that is a power of two of at least
+  eight, and a completion queue that is a power of two of at least twice the submission queue, each
+  at most what `capabilities()` reports. These are the measured rules above, and the tests that
+  assert them fail on a ring that behaves differently. Because of it the default ring is 64 and 128,
+  not 64 and 64: a completion queue of 64 beside a submission queue of 64 is refused.
+- **The error that refuses a size carries its cause.** The engineer, 2026-10-17: "ensure the err enum
+  has cause." Read here as: each refusal is a distinct variant that names the field, the value given
+  and the cause, which is the rule it broke (zero, not a power of two, below the ring's floor, below
+  twice the submission queue, above the largest the ring reports), so a caller can read why without
+  parsing text. The enum implements `std::error::Error` and `Display`
+  ([TW-9.2](CHECKLIST.md)).
+  - **As built:** the cause is a field of each variant, a `Cause` enum, not the error's `source`, and
+    the message includes it, so printing the error shows why without walking a chain. The pool's and
+    the queue's refusals are the options' own checks, written to give the same verdict as theirs
+    and translated to a `Cause`, so no lower layer's error exists to carry. The one lower-layer
+    error that can arise is the operating system's, when the ring's limits cannot be read, and
+    that is the `source` of `OptionsError::RingCapabilities`. The reading made earlier in this
+    bullet, that a lower layer's error is carried as the `source`, was wider than what there is to
+    carry.
+  - **The queue's rule is written twice.** The client queue's capacity rule (a power of two within
+    bounds) lives in `windows-waitable-queues`, which does not expose it without allocating a queue.
+    The options read the queue's bounds from its refusal of a capacity of zero, which is made before
+    any allocation, and apply the rule themselves; a test compares the two over a range of
+    capacities. Exposing the rule from that crate would remove the copy but changes a published
+    crate, whose release would have to precede this crate's use of it. No work is scheduled for
+    that: the copy is three comparisons guarded by a test, and it is the engineer's to say if it is
+    worth the release.
+  - **The ring's floor and ratio are public constants** (`MIN_RING_SQ_SIZE`,
+    `MIN_RING_CQ_PER_SQ`) so the options and the tests that tie them to the real ring share one
+    definition. That a pair of ring sizes is accepted exactly when the ring gives those sizes is
+    tested in both directions over a grid.
+- **The names are chosen** (the engineer, 2026-10-16: "the names are fine"): a module `reader`,
+  `TailReader<T>`, `TailReaderOptions`, `ReadEntry<T>` and `Chunk`.
+  - **The parts of an entry keep the names they had**, chosen by the assistant and not asked of the
+    engineer: `Data` and `Shrink` (the entry's payloads), `ReadSq` (the SQ and its two doorbells) and
+    `ReadDrain` (what the client reads it through), beside the watcher's `SqEntry`, `Attention` and
+    `SqDrain`.
+  - **What a client may do with each**, as the rustdoc states it: drain the SQ, reset and wait on the
+    layer's doorbell, ring the resume doorbell, read an entry's value, range and chunk. It may not
+    make a `ReadSq`, a `Data` or a `Chunk`: the layer makes them. Holding a `Chunk` keeps its buffer
+    out of the pool, which stops the reads once every buffer is held; holding a `ReadDrain` makes a
+    second drain wait; a `Chunk` may outlive the pool.
+  - **`Shrink` mirrors `Attention`**: public fields and not `#[non_exhaustive]`, so a field added
+    later is a breaking change for both. `ReadEntry` is `#[non_exhaustive]` as `SqEntry` is.
+- **`TailReader<T>` is a public wrapper over the layer, not the layer renamed** ([TW-9.4](CHECKLIST.md)).
+  It holds the crate-internal layer and delegates, so the layer's own tests and its crate-only
+  methods stay as they are, and nothing the layer needs from the watcher becomes public.
+  - **It is made from the options and the watcher's own arguments**: `TailReader::new(&options,
+    watcher_sq_capacity)` and `with_diagnostics(&options, watcher_sq_capacity, sink)`, which mirror
+    `Watcher::new` and `Watcher::with_diagnostics`. The options are checked first, then the watcher
+    (small) is made, then the buffers (not).
+  - **Its public methods** are `register` (a path, an offset and a `T`), `poll`, `read_sq`,
+    `shutdown` and `take_failure`. `register` returns a `TailRegistration<T>` with `id`, `value` and
+    `start_offset`, and not the watcher's `Registration`, whose type argument would expose the
+    crate-internal `Tracked<T>` that carries what a read needs.
+  - **`TailReaderError` is its own enum**, one variant per cause, each carrying the error behind it as
+    its `source`: `Options` (a refused size), `Watcher` and `ClientSq` (a queue that could not be
+    made), `Allocation` (the buffers), `Ring` (the I/O ring could not be made or cannot read, which
+    is what a Windows without I/O ring support reports, or its limits could not be read) and `Io`
+    (anything else the operating system refused). It is `#[non_exhaustive]`.
+  - **A failure to read the ring's limits is `Ring`, not `Options`** ([TW-10.2](CHECKLIST.md)). The
+    options check the ring's two sizes against what `capabilities()` reports, and that call can
+    fail, which `OptionsError::RingCapabilities` carries. No size was refused then, so reporting it
+    as `Options` ("a size was refused") sent a caller looking for a mistake in their options that
+    was not there. `TailReaderOptions::validate` still returns `OptionsError::RingCapabilities`
+    unchanged; it is the conversion into `TailReaderError` that routes it. Found by the review of
+    M9; the first of two fixes the review offered, the other being to word `Options` more broadly.
+  - **The names `TailRegistration` and `TailReaderError` were chosen by the assistant**, as `Data`,
+    `Shrink`, `ReadSq` and `ReadDrain` were, and not asked of the engineer.
+  - **What the watcher's public surface keeps out**: `register_with`, `stop_handle`,
+    `mark_terminal` and `diagnose` stay `pub(crate)`, each shown by a `compile_fail,E0624`
+    documentation example that is written to compile if the method were public.
+  - **Callback hazards are stated on the type**, as the watcher states them: `T::clone`, `T`'s `Drop`
+    and the sink run on thread-pool callbacks, a panic out of one aborts the process, and a `Drop`
+    must not release the last owner of the reader.
+- **A reader's poll is in flight until its poll-done is queued for the client, and a poll before then
+  fails** ([TW-10.3](CHECKLIST.md)). The engineer, 2026-10-18: "polls initiated before the previous one
+  completes should fail." Found by the review of M9: `TailReader::poll` delegated to the watcher's
+  `poll`, whose gate opens when the watcher's own poll-done is written, which is before the reading
+  engine has delivered the reads of that poll. A second poll was therefore accepted while the first
+  was still being delivered, and a client treating poll-done as the end of a poll could not tell
+  which poll an entry belonged to, because entries carry no poll id.
+  - **The reader has a gate of its own**, the same state machine as the watcher's (`PollGate`, now
+    `pub(crate)`), taken by the layer's `poll` and opened by the engine as it queues each
+    `ReadEntry::PollDone` for the client. A poll the watcher then refuses gives it back. The engine
+    marks the gate finishing before the push and opens it after, so a client that has read poll-done
+    may poll again at once, as for the watcher; one the client's SQ refuses leaves the poll in
+    flight.
+  - **The error is `PollError::InFlight`**, as for the watcher, with its documentation saying what
+    in flight means for each. After a shutdown the answer is `Shutdown` whether or not a poll is in
+    flight, as the watcher's is: the layer checks its stop request first.
+  - **A refused poll wakes the engine** ([TW-10.5](CHECKLIST.md)). Found by the second review of the
+    branch, which traced it and did not reproduce it: a run that returns an error (a failed submit
+    leaves its reads queued, `unsubmitted` set) leaves nothing in flight and rings no doorbell, so the
+    engine runs again only when something wakes it. Before the gate was the reader's own, the client's
+    next `poll` went to the watcher, whose poll-done rings the watcher's doorbell and so ran the
+    engine; with the gate in front, a stalled poll never opens it and every `poll` was refused with
+    nothing to wake the engine. `ReadLayer::poll` now rings the resume doorbell when it refuses, which
+    is idempotent and wakes the engine whatever it waited for. The alternative, ringing it from
+    `Core::record` after an error, was not taken: a persistent failure would run, fail and ring itself
+    in a loop. A refused poll costs one extra run of the engine, and when the client's SQ is full that
+    run rings the client's doorbell, which is a hint and not a proof. The failure cannot be made on
+    demand, so the test holds the gate by hand.
+  - **`CreateError` is the error of two queues and its messages name neither** ([TW-10.11](CHECKLIST.md)).
+    It was the watcher's, and became the reading layer's client queue's too when `TailReaderError::ClientSq`
+    was made public, so "creating the watcher failed" read as "the reader's client queue could not be
+    made: creating the watcher failed". The messages say "submission queue"; which one it was is the
+    variant of `TailReaderError` that holds it. A reader-specific error type was the other option and was
+    not taken: it would be a breaking change to a type this branch has already changed.
+  - **`ReadSq::capacity` never takes the reader's lock** ([TW-10.8](CHECKLIST.md)). A `ReadDrain`
+    holds that lock for as long as it lives, and `capacity` took it too, so asking for the capacity
+    inside `for entry in sq.drain()` waited for itself for ever. The capacity never changes, so it is
+    read once when the SQ is made. `Watcher::sq_capacity` has the same pattern and is not changed
+    here: it is a published method of the watcher, outside what this branch alters.
+  - **One empty ring can follow a poll-done** ([TW-10.7](CHECKLIST.md)). The engine rings the client's
+    doorbell when a run ends, and the run that queued the poll-done ends after the gate has opened,
+    so a client that has read the poll-done, and may have polled again, can still see one ring with
+    nothing new behind it. `TailReader`'s statement that nothing runs between polls says so, and the
+    integration tests' quiet check lets exactly one such ring go by ([TW-10.4](CHECKLIST.md)).
+  - **A poll is therefore in flight through everything the client controls**: a full client SQ, and
+    chunks held until the pool is empty. A client that never drains never polls again. That is
+    stated on `TailReader::poll` and `PollError::InFlight`.
+  - **Not changed: the engine's own handling of overlapping polls.** The engine still keeps a
+    group per poll and delivers poll-dones in order, because it is driven over a watcher that may be
+    polled directly in the crate's own tests; only the reading layer, which is what a caller holds,
+    refuses the overlap.
+- **A queue the allocator will not give is `CreateError::Allocation`, and it is not a refused
+  capacity** ([TW-9.6](CHECKLIST.md)). Found by [TW-9.5](CHECKLIST.md): a client queue of `1 << 40`
+  entries is a capacity the queue accepts, and the process aborted allocating it. The fix was made
+  in `windows-waitable-queues` ([D-42](../windows-waitable-queues/DESIGN-NOTES.md#d-42)), which now
+  returns an error for it; this crate maps that error and does not probe.
+  - **The two answers are kept apart.** A capacity that is not a power of two within the queue's
+    bounds is wrong on every machine and stays `CreateError::Capacity`. One within them whose memory
+    is not there is this machine's answer, and a smaller capacity may succeed, so it is the new
+    `CreateError::Allocation`. Both carry the capacity asked for and the bounds, which are what the
+    queue accepts and not what the machine can hold. It reaches a caller as
+    `TailReaderError::ClientSq` or `TailReaderError::Watcher`, whichever queue it was, as the other
+    causes of `CreateError` do.
+  - **The engineer chose a variant over a cause field or an `Io` mapping**, 2026-10-17: "option 1".
+    A cause field on `SqCapacityError` would have broken its public fields, and `Io` would have lost
+    the capacity and stretched its meaning, which is the operating system refusing a doorbell.
+  - **It has no `source`.** `SqCapacityError` says "not a power of two", which is false here, and the
+    allocator's refusal carries no error value to chain. The variant's own message says the memory
+    was the problem.
+  - **`CreateError` is `#[non_exhaustive]` from this change.** The new variant is a breaking change
+    for any caller that matched it exhaustively, so the commit is `feat!` and the next release of
+    this crate is 0.2.0. The attribute is the assistant's addition, not asked of the engineer: it
+    makes the next added cause additive, as `TailReaderError` and `OptionsError` already are.
+  - **The options still accept any capacity the queue does.** Whether a machine can hold it is the
+    allocator's answer at construction, as for the buffers, and is documented as such in the README.
+    No probe in `validate`: a probe that succeeds says nothing about whether the allocation a moment
+    later will.
+
 ## Working positions (not decisions)
 
 Stated so they can be built on, and expected to be refined during implementation. Nothing should
@@ -472,8 +676,55 @@ bind to them as settled.
   Nothing here should bind to it.
 - **The expected population tops out around 20,000 files** (some 10,000 jobs, each with stdout and
   stderr), a guesstimate the engineer regards as an extreme.
-- **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15)): the buffer size and
-  count when the layer is created, with any defaults left to measurement.
+- **The reading layer's pool is sized by the caller** ([TW-D-15](#tw-d-15), [TW-D-16](#tw-d-16)): the
+  buffer size and count when the layer is created.
+- **The defaults would be 64 buffers of 64 bytes and a client SQ of 64 entries**, which
+  `TailReaderOptions::default()` holds as public constants and the options accept as valid. The engineer,
+  2026-10-16: "my defaults if I were to pick would be 64 buffers of 64 bytes each", a queue of 64
+  as a bet over 32, a larger count of slightly smaller buffers and a mid-sized queue as the
+  expected shape, and doubt that measurement will say much because it is workload dependent. The
+  64-entry queue is the client SQ, the one back to the layer's client.
+- **The ring's two queues would default to 64 and 128**, chosen by the assistant because the
+  engineer left those two to it (2026-10-16). The reasoning: each read in flight holds a buffer, so
+  with 64 buffers no more than 64 can be in flight, and a ring that holds more than that adds
+  nothing. TW-9.1 measured the ring: a submission queue of 64 gives a completion queue of at least
+  128, so the pool, not the ring, is what stops the reads at 64 buffers
+  ([TW-D-16](#tw-d-16)). The first pick was 64 and 64; the engineer's rule that a size the ring would
+  raise is refused (2026-10-17) makes the completion queue 128, which is the size the ring would
+  have used.
+- **The worst-case load to plan for is the output of a CI runner's job log.** The engineer,
+  2026-10-16: "take it literally"; the real jobs are virtual machine deployments, the log is a good
+  benchmark of them, and "this is our worst case load", so the typical load is lighter than this. The [capture](bench-captures/2026-10-16-runner-log-shape.txt) states what three runner
+  logs of this repository showed and where that stops: short lines, a large share of them longer than
+  the default buffer, arriving in bursts with idle stretches between. A line therefore often spans
+  more than one chunk, and chunks of one file complete in any order ([TW-D-15](#tw-d-15)), so joining
+  chunks back into lines is the client's work and the layer promises only the ranges. Because this is
+  the worst case, the layer has to be correct under it; whether the default sizes also have to be
+  efficient under it is not decided, and the 64-byte default was picked for the lighter load.
+- **The near-term load is commands that take a command line and produce between nothing and about
+  100 KB of output over zero seconds to about ten minutes.** The engineer, 2026-10-17: the layer will
+  first serve a system that runs commands akin to Azure deployment commands; most long-running
+  operations hand the caller a token that is later polled for status, so a file is not watched for
+  the length of a long operation. Those figures are the engineer's estimate, not a measurement.
+  Microsoft Learn's documented samples of that output are in a
+  [capture](bench-captures/2026-10-17-azure-cli-output-shape.txt) (documentation, not a run, every
+  size a lower bound); the engineer asked not to fixate on them. Arithmetic from the stated figures,
+  not a measurement: 100 KB through 64-byte buffers is about 1,600 reads, some 25 passes through a
+  pool of 64.
+- **A build service is the design center, and it sets a floor.** The engineer, 2026-10-17: a broader
+  use like a GitOps build service is imagined, "a design center I use to ensure I don't go below it".
+  It is not a requirement to build for now. It means the layer must not be sized or shaped so that
+  the near-term load fits and a build service's output cannot: the runner-log worst case above is
+  the stand-in for it, and a design that is correct but starves under it is below the floor.
+- **The floor is met by what the options accept, not by the defaults.** The engineer, 2026-10-17:
+  "clearly for the gitops deployment the parameters for the reading watcher would be well above the
+  defaults." So the defaults serve the near-term load, and a build service would choose much larger
+  buffer sizes, buffer counts, client SQ and ring sizes. The options must therefore not refuse a size
+  merely for being large: a bound is stated only where something real sets it (the pool's buffer
+  size is at most `u32::MAX`, the SQ's capacity is a power of two, the ring's queue sizes are
+  whatever the ring accepts), and an arbitrary ceiling chosen to protect the defaults is below the
+  floor. The pool allocates and zeroes every buffer when it is made, so a large count is a large
+  allocation at construction; that cost is the caller's to choose and the docs say so.
 - **A short read is delivered as the bytes it read**, labelled with that range. The rest of the
   announced range is not retried: a file that shrank under the read is the next poll's shrink.
 - **The submit a failed submit left queued is not tested.** `SubmitIoRing` cannot be made to fail on

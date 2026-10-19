@@ -1,14 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The reading layer on the thread pool (TW-D-15, TW-D-5): the engine run, with no thread of the
-//! caller's, whenever something it waits for happens. Its names are working names until the layer's
-//! own is chosen.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the layer is not public until its names are chosen"
-    )
-)]
+//! caller's, whenever something it waits for happens. [`crate::reader::TailReader`] is what a caller
+//! outside the crate holds; it wraps this.
 
 use std::io;
 use std::os::windows::io::OwnedHandle;
@@ -21,7 +14,7 @@ use wtf_string::Wtf16Str;
 
 use crate::read_engine::{ReadEngine, Stop, Tracked};
 use crate::read_sq::ReadSq;
-use crate::watcher::StopHandle;
+use crate::watcher::{PollGate, StopHandle};
 use crate::{OpenError, PollError, Registration};
 
 // Here and not in `tests/` because the layer is not public.
@@ -86,6 +79,8 @@ pub(crate) struct ReadLayer<T: Clone + Send + 'static> {
     _wake: CompletionWake,
     waits: [ThreadpoolWait; 3],
     sq: Arc<ReadSq<T>>,
+    // Closed by `poll` and opened by the engine as each poll-done is queued for the client.
+    poll_gate: Arc<PollGate>,
     core: Arc<Core<T>>,
 }
 
@@ -98,6 +93,7 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
     /// completion event.
     pub(crate) fn new(engine: ReadEngine<T>) -> io::Result<Self> {
         let sq = engine.shared_sq();
+        let poll_gate = engine.poll_gate();
         let stop = engine.stop_flag();
         let watcher_stop = engine.watcher().stop_handle();
         let events = [
@@ -147,6 +143,7 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
             _wake: wake,
             waits,
             sq,
+            poll_gate,
             core,
         })
     }
@@ -168,11 +165,41 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
     /// Start a poll of the watcher, as [`Watcher::poll`](crate::Watcher::poll) does. What it finds
     /// is read, and arrives on [`read_sq`](Self::read_sq), with no further call.
     ///
+    /// One poll is in flight at a time, and a poll is in flight from this call until its poll-done
+    /// is queued for the client, which is after every read of it is delivered. That is later than
+    /// the watcher's own poll is over, so the watcher's check alone would accept a poll while the
+    /// reads of the last one were still being delivered, and a poll-done would no longer end the
+    /// poll it follows. A client that has read poll-done may poll again at once.
+    ///
+    /// A refused poll also runs the engine once more, so that a poll stalled by an error a run
+    /// returned is not stalled for want of a wake: such an error leaves nothing in flight, rings
+    /// no doorbell, and until the engine runs again the gate stays closed, so a caller who only
+    /// polls would otherwise be told `InFlight` for ever. Before the gate was the reader's own,
+    /// the next poll was that wake.
+    ///
     /// # Errors
     ///
-    /// As [`Watcher::poll`](crate::Watcher::poll).
+    /// [`PollError::Shutdown`] after [`shutdown`](Self::shutdown), whether or not a poll is in
+    /// flight. [`PollError::InFlight`] while the previous poll is not complete. [`PollError::Io`]
+    /// as [`Watcher::poll`](crate::Watcher::poll), in which case a later call tries again.
     pub(crate) fn poll(&self) -> Result<(), PollError> {
-        self.core.engine().watcher().poll()
+        if self.core.stop.load(Ordering::Acquire) {
+            return Err(PollError::Shutdown);
+        }
+        if !self.poll_gate.begin() {
+            // Rung without draining, which is idempotent and wakes the engine whatever it was
+            // waiting for: a run resets the doorbell before it looks, and finds nothing to do when
+            // nothing is stalled.
+            self.sq.ring_resume();
+            return Err(PollError::InFlight);
+        }
+        // Whatever the watcher refuses leaves no poll in flight, so the gate goes back as it was. A
+        // shutdown that landed since the first look is the watcher's to report.
+        let started = self.core.engine().watcher().poll();
+        if started.is_err() {
+            self.poll_gate.abandon();
+        }
+        started
     }
 
     /// The SQ the client drains, with the doorbells it waits and rings on.
@@ -199,6 +226,18 @@ impl<T: Clone + Send + 'static> ReadLayer<T> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
+    }
+
+    /// The engine, locked, for a test of a layer above this one to reach what is private to it.
+    #[cfg(test)]
+    pub(crate) fn engine_for_test(&self) -> std::sync::MutexGuard<'_, ReadEngine<T>> {
+        self.core.engine()
+    }
+
+    /// Record `result` as a run would, for a test of a layer above this one.
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, result: io::Result<Stop>) {
+        self.core.record(result);
     }
 }
 

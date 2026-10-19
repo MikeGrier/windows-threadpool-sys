@@ -342,3 +342,72 @@ choice open to the engineer's correction; the decision text they sit under is
 - **Poll-done survives shutdown.** Abandoning only reads, and letting every other entry through, is
   what keeps the group accounting (a poll's poll-done waits for its reads) true after a stop with no
   special case.
+
+## TW-D-16
+
+The engineer asked whether a client could choose the ring sizes, the buffer size and the buffer
+count. The assistant found that the internal constructors take all of them, and that none of the
+layer is public, so no client outside the crate could. The engineer then said the public layer is not
+a new crate: "I would put this in a distinct new module within the crate".
+
+- **A new crate was not considered further.** The layer owns a `Watcher` and uses crate-internal
+  parts of it (`register_with`, `mark_terminal`, the stop flag). A second crate would need each of
+  those made public for one consumer, which is a larger public surface than the layer itself.
+- **Defaults.** The assistant first planned none, because a number nothing had chosen is why
+  `Watcher::new` takes its capacity, and parked them behind a measurement. The engineer replied that
+  measurement would not be very useful since the best sizes are workload dependent, and gave a
+  hedged pick: 64 buffers of 64 bytes and a queue of 64. That is recorded as a working position and
+  scheduled as part of TW-9.2, with no measurement gating it.
+- **Refusal before allocation.** The pool allocates and zeroes every buffer when it is made, so an
+  invalid size found late would have paid for the allocation. The ring's own rules for its queue
+  sizes are not known from reading the code, which is why the first item measures them.
+- **Names left open.** The assistant proposed `TailReader` and `TailReaderOptions` for the types and
+  `reader` for the module, and asked whether "the layer's name" meant the types. It does: the module
+  and type names, since no crate name is in question.
+- **The worst-case load.** The assistant measured three raw runner logs of this repository when
+  the engineer said to plan for output with the cadence of a GitHub runner's job log, and the engineer
+  confirmed the literal reading: the real work is virtual machine deployment, the log is a good
+  benchmark of it, and it is the worst case load. The figures are in the capture, not here. What they change in the plan is TW-9.5's
+  workload, and they bear on the buffer-size default without settling it: the 64-byte default was the
+  engineer's hedged pick for a lighter typical load, so a worst case that stresses it is a test of
+  correctness, not a ruling against it.
+- **The near-term load and the design center.** The assistant read three Microsoft Learn pages and
+  measured the sample blocks they show, as the engineer had suggested. The engineer then said not to
+  fixate: the real figure is 0 to about 100 KB over 0 seconds to about ten minutes, with long
+  operations returning a token that is polled, and a build service is a design center that sets a
+  floor. The capture was kept, marked as documentation and not a run. The Azure CLI is installed on
+  the development machine, but a deployment would create cloud resources, so none was run.
+- **The ring's queue sizes were measured, not reasoned.** The assistant had inferred from two
+  observations that the kernel doubles the completion queue it is asked for, and wrote that down as a
+  working position with a note that TW-9.1 would confirm or replace it. A probe over a grid of sizes
+  replaced it: the completion queue is the larger of twice the submission queue and the request
+  rounded up. A request of zero is the finding that matters to the options type, because the ring
+  accepts it and picks a default, so a caller who passes zero gets a size they did not choose.
+- **Sizes the ring would raise are refused too.** The assistant put the choice after TW-9.1 showed
+  the ring rounds a request up: accept it and let the ring round, or refuse it. It noted that
+  accepting is harmless, since the caller gets at least what they asked for, but hides the real
+  size. The engineer chose to refuse non-powers of two and asked that it be documented. The same
+  measurement showed the rule alone does not make the caller's number the ring's: a power of two
+  below the ring's floor, or a completion queue below twice the submission queue, is still raised,
+  and the assistant's own first default of 64 and 64 was one such case. The engineer said to refuse
+  those too, so the default became 64 and 128.
+- **A poll before the previous one is complete.** The review of M9 found that `TailReader::poll` accepted
+  a poll while the reads of the last one were still being delivered, since it asked only the watcher,
+  whose poll is over earlier. The assistant offered two fixes: a gate of the reader's own, or a
+  sentence in the documentation saying a caller that needs poll boundaries must wait for poll-done,
+  and leaned to the sentence, because it read the overlap as known and a gate as costing throughput.
+  The engineer decided otherwise in one line: "polls initiated before the previous one completes
+  should fail." The notes had recorded the overlap as a property ("the reads of a later poll may be
+  delivered before it"), and that sentence is amended to say it holds of the engine over a watcher
+  polled directly and not of the reading layer. The lean toward the documentation was the assistant's
+  and was wrong about the cost: a client that waits for each poll-done before polling again, which
+  is what a poll boundary needs, loses nothing to the gate.
+- **A queue the allocator refuses.** TW-9.5 found that the options accept a client queue capacity the
+  queue crate also accepts and the process aborts allocating it. The engineer asked whether the fix
+  belonged in `windows-waitable-queues` and, once it was released, chose a new `CreateError` variant
+  from three offered: a variant, a cause field on `SqCapacityError`, or an `Io` mapping with
+  `OutOfMemory`. The assistant had recommended the variant. The attribute `#[non_exhaustive]` on
+  `CreateError` was added by the assistant with the change and flagged in the same message.
+- **The error carries its cause.** The engineer asked that the error enum have a cause. The assistant
+  read that as each variant naming the rule it broke and a lower layer's error being its `source`,
+  and said so in the notes in case another reading was meant.

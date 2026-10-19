@@ -5,7 +5,10 @@
 //! waiting and says why it stopped, and the next run continues from there.
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "the reading layer (M6) drives it")
+    expect(
+        dead_code,
+        reason = "`read_sq`, `stop`, `in_flight` and `wait_for_completion` are used by tests, and by nothing else: the layer reaches the SQ and the stop flag by their shared handles"
+    )
 )]
 
 use std::collections::VecDeque;
@@ -26,11 +29,14 @@ use crate::probe_failure::classify_code;
 use crate::read_plan::{Plan, Reads, plan};
 use crate::read_sq::{Data, ReadEntry, ReadSq};
 use crate::sq::{Attention, PushFailure, SqEntry, Terminal};
+use crate::watcher::PollGate;
 use crate::{CreateError, Diagnostic, DiagnosticKind, HeldFile, OpenError, Registration, Watcher};
 
 // Here and not in `tests/` because the engine is not public.
 #[cfg(test)]
 mod child_tests;
+#[cfg(test)]
+mod ring_size_tests;
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +60,11 @@ pub(crate) struct Tracked<T> {
 }
 
 impl<T> Tracked<T> {
+    /// The caller's value, without what a read of the file needs.
+    pub(crate) fn into_value(self) -> T {
+        self.value
+    }
+
     fn new(value: T, file: &HeldFile, registration: u64) -> Self {
         let endpoint = file.endpoint_handle();
         Self {
@@ -305,6 +316,10 @@ pub(crate) struct ReadEngine<T: Clone> {
     // reach the client in the order they were made.
     undelivered: Option<ReadEntry<T>>,
     groups: Groups,
+    // Whether a poll the reading layer started is complete: closed by the layer's `poll` and opened
+    // here, as each poll-done is queued for the client. The watcher's own gate opens earlier, when
+    // it has written its poll-done, which is before the reads of the poll are done.
+    poll_gate: Arc<PollGate>,
     // A push is queued in the ring that no submit has run for.
     unsubmitted: bool,
 }
@@ -315,7 +330,8 @@ impl<T: Clone> ReadEngine<T> {
     ///
     /// # Errors
     ///
-    /// [`EngineError::Sq`] for a capacity the SQ cannot have or a doorbell that cannot be made;
+    /// [`EngineError::Sq`] for a capacity the SQ cannot have, one whose memory cannot be allocated, or
+    /// a doorbell that cannot be made;
     /// [`EngineError::Ring`] when the ring cannot be made or cannot read.
     pub(crate) fn new(
         watcher: Watcher<Tracked<T>>,
@@ -359,6 +375,7 @@ impl<T: Clone> ReadEngine<T> {
             current: None,
             undelivered: None,
             groups: Groups::default(),
+            poll_gate: Arc::new(PollGate::new()),
             unsubmitted: false,
         })
     }
@@ -383,6 +400,12 @@ impl<T: Clone> ReadEngine<T> {
     /// The watcher the engine drains, for polling it and for what it reports about itself.
     pub(crate) fn watcher(&self) -> &Watcher<Tracked<T>> {
         &self.watcher
+    }
+
+    /// The gate of the polls the reading layer starts: taken by the layer's `poll`, and given back
+    /// here as each poll-done is queued for the client.
+    pub(crate) fn poll_gate(&self) -> Arc<PollGate> {
+        Arc::clone(&self.poll_gate)
     }
 
     /// The reading layer's SQ: what the client drains, and the doorbells it waits and rings on.
@@ -422,6 +445,13 @@ impl<T: Clone> ReadEngine<T> {
     /// The pool the reads' buffers come from.
     pub(crate) fn pool(&self) -> &BufferPool {
         &self.pool
+    }
+
+    /// The completion queue size the engine bounds the reads in flight by, for a test of a layer
+    /// above this one.
+    #[cfg(test)]
+    pub(crate) fn cq_size_for_test(&self) -> usize {
+        self.cq_size
     }
 
     /// How many reads the ring holds: queued, in flight, or completed and not yet popped.
@@ -506,12 +536,19 @@ impl<T: Clone> ReadEngine<T> {
             }
         }
         while self.groups.ready() {
+            // The gate is open before the client can see the entry, so a client that has read it may
+            // poll again at once; an entry the SQ refuses is not the end of the poll.
+            self.poll_gate.finishing();
             match self.sq.push(ReadEntry::PollDone) {
                 Ok(()) => {
+                    self.poll_gate.finished();
                     self.groups.pop_ready();
                     *wrote = true;
                 }
-                Err(PushFailure::Full(_)) => return false,
+                Err(PushFailure::Full(_)) => {
+                    self.poll_gate.unfinished();
+                    return false;
+                }
                 Err(PushFailure::Closed(_)) => unreachable!("the engine holds the SQ's reader"),
             }
         }

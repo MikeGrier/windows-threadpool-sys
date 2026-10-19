@@ -23,7 +23,8 @@ mod engine;
 mod poll;
 mod probe;
 
-use poll::{PollGate, Poller};
+pub(crate) use poll::PollGate;
+use poll::Poller;
 
 #[cfg(test)]
 mod snapshot_tests;
@@ -150,6 +151,7 @@ impl<T: Clone> Watcher<T> {
     /// # Errors
     ///
     /// [`CreateError::Capacity`] unless `sq_capacity` is a power of two of at least two.
+    /// [`CreateError::Allocation`] when the memory for the queue's slots cannot be allocated.
     /// [`CreateError::Io`] when a doorbell cannot be created.
     pub fn new(sq_capacity: usize) -> Result<Self, CreateError> {
         Self::with_diagnostics(sq_capacity, Arc::new(NoDiagnostics))

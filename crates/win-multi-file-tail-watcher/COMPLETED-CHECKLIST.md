@@ -1245,3 +1245,400 @@ lists are in alphabetical order again.
 
 Noted, not changed: `2645d66a fix(overlapped-io)` touches this crate's docs, so the crate's first
 changelog will carry that line.
+
+## Moved 2026-10-17 00:24:10 -04:00 -- TW-9.1: the ring's queue sizes
+
+### <a id="tw-91"></a>TW-9.1 -- The ring's two queue sizes are measured and asserted: how it rounds and pairs them, its largest sizes and the conditions it refuses with, and how its completion queue bounds the reads in flight against the buffer count. *(completed 2026-10-17 00:24:10 -04:00)*
+
+`src/read_engine/ring_size_tests.rs`, six tests. A throwaway probe over a grid of requests was run
+first and replaced by tests that assert what it showed: the submission queue's rounding and its zero
+default, the completion queue's rule over a grid of 20 by 13 requests, the largest sizes taken from
+`capabilities()` with the refusals checked by the ring's own condition and not by text, an engine made
+at the largest ring and refused one over, and the in-flight count against pieces, buffers and ring
+sizes across seven cases including the tie and a submission queue smaller than the completion queue.
+The in-flight cases read the engine after two steps, planning and submitting, before any completion is
+popped, so the count is deterministic; the engine's private steps are reachable because the test
+module is a child of the engine's.
+
+Four sabotage entries: no ring limit, a limit one read late, the engine trusting the requested size
+over the reported one, all caught, and the outstanding count read through a second local, a control
+that survives. The first two were also applied by hand with only these tests run, and the in-flight
+test alone caught both.
+
+Limits: the formulas are what one host and build showed, asserted as such; throughput under a small
+completion queue and the memory of a ring at the largest sizes were not measured.
+
+## Moved 2026-10-17 13:03:05 -04:00 -- TW-9.2: the reading layer's options
+
+### <a id="tw-92"></a>TW-9.2 -- An options type holds the five sizes, checks them before anything is allocated, and refuses each size that cannot work with an error that names the option, the value and the cause, including every ring size the ring would round, replace or raise. *(completed 2026-10-17 13:03:05 -04:00)*
+
+`src/reader.rs` is the new public module `reader`, holding `TailReaderOptions`, `OptionsError` and
+`Cause`. The options are five public fields (`buffer_len`, `buffer_count`, `client_sq_capacity`,
+`ring_sq_size`, `ring_cq_size`) on a `#[non_exhaustive]` struct, so a sixth can be added; a caller
+outside the crate starts from `Default` and assigns. `validate` allocates nothing: the pool's own
+dimension check, now crate-visible, decides the buffer size and count; the client queue's bounds are
+read from its refusal of a capacity of zero; and the ring's two sizes are checked against
+`capabilities()`.
+
+`OptionsError` has a variant per option carrying the value given and a `Cause` (zero, not a power of
+two, below a least, above a most), and `RingCapabilities` carrying the operating system's error as its
+source. The first option to fail is the one reported. The ring's floor and ratio are the public
+constants `MIN_RING_SQ_SIZE` and `MIN_RING_CQ_PER_SQ`, and the defaults are public constants, the
+ring's completion queue derived from them so it cannot drift out of the rule.
+
+Fifteen tests, among them: the client queue's rule against the queue's own verdict over 29 capacities
+and past each bound; the ring's rule against a real ring in both directions over a 23 by 19 grid, a pair
+being accepted exactly when the ring gives exactly those sizes; the largest sizes the machine reports;
+the order of refusal; the messages and the source; and five valid sets, from the defaults to a
+build-service-sized one, the least of everything, a wide completion queue and the largest ring, each
+reading a file whole through an engine. `ring_size_tests.rs` now takes the floor and ratio from the
+constants, so the measured rule has one site. Seventeen sabotage entries: sixteen caught and one control
+that survives. Four were also applied by hand with only the new tests run, and each was caught.
+
+Not tested: `validate`'s arm for a failure to read the ring's capabilities, which cannot be made to
+fail on demand, and a buffer count whose memory is not there, which is the allocator's answer when the
+layer is made and not a refusal.
+
+## Moved 2026-10-17 14:20:33 -04:00 -- TW-9.3: the reading layer's entries
+
+### <a id="tw-93"></a>TW-9.3 -- The reading layer's entries are public in the `reader` module: the entry type and its data, shrink, terminal and poll-done kinds, the chunk, the drain and the SQ with its two doorbells, each with rustdoc stating what it promises and what holding it too long does. *(completed 2026-10-17 14:20:33 -04:00)*
+
+`Chunk`, `ReadEntry`, `Data`, `Shrink`, `ReadSq` and `ReadDrain` are `pub` and re-exported from
+`reader`; `read_sq.rs` lost its `expect(dead_code)`, which the public items no longer need. A client
+reads an entry's value, range and chunk, drains the SQ, resets and waits on the layer's doorbell and rings
+the resume doorbell. `Data::new`, `ReadSq::new`, the writer, `push`, the crate's own ring of the
+doorbell and its reset of the resume doorbell stay crate-only, so a client cannot make an entry or an SQ.
+
+Each public item says what it promises and what holding it too long does: a `Chunk` keeps its buffer out of the pool, so
+once every buffer is held the layer stops reading with nothing in flight and a poll-done waits for the
+reads of its poll; a `ReadDrain` makes a second drain wait; a full SQ stops the layer reading until the client drains
+and rings the resume doorbell. `ReadEntry` carries a doctest that matches it with a wildcard arm and a
+`compile_fail,E0004` one that shows the arm is needed, as `SqEntry` does.
+
+A client cannot make the SQ or a chunk, so nothing here can be run from outside the crate until the layer
+is public (TW-9.4); `tests/reader_public_items.rs` shows what can be shown: every item is named by its
+public path, each documented signature is pinned by a function pointer of that type, the entries are
+`Send` and the SQ `Send` and `Sync`, a shrink is built and compared by its public fields, and an entry
+is matched with a wildcard arm. The `Send` and `Sync` assertions are compile-time checks that were not
+themselves sabotaged: no one-site change makes the chunk or the SQ not `Send`.
+
+A new manifest, `sabotage-public-surface.json`, declares ten visibility and export changes, each
+`refused-by-build` with the error that names it (E0624 for a method made private, E0451 for a field,
+E0432 for an export removed), and a control that reorders an export list and survives. All eleven behave as
+declared. A further entry in `sabotage-doctests.json` removes `#[non_exhaustive]` from `ReadEntry` and is
+caught by the doctest.
+
+`Shrink` mirrors `Attention`: public fields, not `#[non_exhaustive]`, so adding a field later would be
+breaking for both. The parts of an entry keep the names they had, which the engineer was not asked about;
+they are recorded in TW-D-16.
+
+## Moved 2026-10-17 16:21:22 -04:00 -- TW-9.4: the reading layer is public
+
+### <a id="tw-94"></a>TW-9.4 -- The reading layer itself is public as `reader::TailReader`: made from the options and the watcher's own arguments, it registers a file with an offset and a `T`, polls, exposes its SQ and doorbells, shuts down without blocking and reports the first error a run returned, with nothing it needs from the watcher made public. *(completed 2026-10-17 16:21:22 -04:00)*
+
+`src/reader/tail_reader.rs` holds `TailReader<T>` and `TailRegistration<T>`, and `tail_reader_error.rs` holds
+`TailReaderError`. `TailReader` wraps the crate-internal `ReadLayer` and delegates, so the layer's own tests
+and its crate-only methods are unchanged. `new` and `with_diagnostics` check the options first, then make the
+watcher, then the buffers, then the engine and the layer; the watcher's own arguments are its SQ capacity and,
+for `with_diagnostics`, its sink. A runnable doctest registers a file, polls, waits on the doorbell and reads
+the bytes through public items only.
+
+`TailReaderError` is `#[non_exhaustive]` with six variants, each carrying its cause as a source. The two
+translations from the crate's own pool and engine errors are pure functions and are tested by building those
+errors, since neither a ring that cannot be made nor a doorbell the system refuses can be had on demand. The pool's
+two dimension refusals are an `unreachable!`: the options refused them with the pool's own check, and a test
+shows the panic. A count of `usize::MAX` is the case that does reach the allocator, and it is an `Allocation`
+error and not an abort.
+
+Making the layer reachable fulfilled the `dead_code` allowances that were waiting for it. Two were removed
+(`probe_failure.rs` and `held_file::endpoint_handle`). Three stated reasons that were no longer true, and now
+name what is still dead, all of it used only by tests: `count` and `available` in the pool, four engine methods
+the layer does not use, and `remaining` in the planner.
+
+Thirty tests in the module, among them: the pool's length and count against how many reads a file takes, the ring
+sizes against the completion queue the engine bounds its reads by, every refused size and its option's name, the
+order of checks, the first failure kept and taken once, the sink given being the one reported to, and a poll after
+a poll-done being accepted. `small()` has no two sizes equal, because a transposed pair passed unnoticed until it
+had. Two test-only seams were added, `ReadLayer::engine_for_test` and `record_for_test`, and
+`ReadEngine::cq_size_for_test`.
+
+Four documentation examples in `src/surface_doctests.rs` (compiled only for doctests) show that
+`register_with`, `stop_handle`, `mark_terminal` and `diagnose` are not public. Each is written to compile if
+the method were public. They pass with error codes enforced as CI runs them, and both guard scripts accept them.
+One of the four sabotages first survived: making `stop_handle` public alone leaves a method returning a crate-private
+type, which no example can use, so the example kept failing for an unrelated reason. The entry now makes the type
+public with it, as a real widening would.
+
+Fifteen new sabotage entries in `sabotage.json` (fourteen caught, one control), four in
+`sabotage-doctests.json` and twelve in `sabotage-public-surface.json`, which now pins `TailReader`'s seven
+methods, `TailRegistration`'s three, and the two exports. All behave as declared, and three of the fifteen were also
+applied by hand with only the module's tests run, each caught.
+
+Not tested: `ReadLayer::new`'s failure, which maps to `Io`, since a thread-pool wait cannot be made to fail on
+demand. The module's tests wait at most six seconds for a doorbell, so a reader that stops delivering fails by
+assertion inside a sabotage run's bound.
+
+## Moved 2026-10-17 19:35:00 -04:00 -- TW-9.5: integration tests of the public reader layer
+
+### <a id="tw-95"></a>TW-9.5 -- The layer is exercised from `tests/` through the public API only, over files that child processes write, under the default options, a set well above them and two small sets, with the near-term and worst-case loads, every invalid size refused, and a held chunk and an undrained client SQ each stopping the reads; the README names what each size limits and the three stops. *(completed 2026-10-17 19:35:00 -04:00)*
+
+`tests/reader_real_writers/` is one test target of a shared `harness.rs` and five modules, all through
+public items. The children are `cmd.exe` writing to files the parent opened and handed over as their
+stdout and stderr; a gated child waits on stdin between phases. The client side of a poll (drain, reset
+the doorbell first, `ring_resume` after, the poll-done, then a quiet check) is one `Client` in the harness,
+which also checks that every chunk is no longer than the buffer and that the pieces of a file meet with no
+gap and no repeat.
+
+- `option_sets`: every byte of several files delivered once, from children writing while the reader polls,
+  under the defaults, a build-service-sized set, a tiny set, and a set whose ring is smaller than its pool.
+- `azure_shape`: one gated child, silent and then a burst of JSON on stdout and errors on stderr. Polls
+  during the silence deliver nothing and the doorbell stays quiet; after the burst the first poll delivers
+  both files whole, in as many reads as the buffer needs.
+- `runner_log`: three gated bursts of lines of four lengths, up to about 200 bytes, with the silences
+  between them checked quiet. The log is reassembled and compared to the bytes generated in Rust, and every
+  line longer than a buffer is shown to have been cut across chunks. Under the defaults and under 8-byte
+  buffers.
+- `held_chunks`: four held chunks stop reads with nothing in flight and no poll-done, and the rest follows
+  when they drop; a client queue of two and nobody draining holds exactly two entries, and nothing is lost
+  once it is drained.
+- `refusals`: each field with a zero, a non-power-of-two where one is required, a size below the least and a
+  size above the most, the first refused option being the one reported, and buffers the allocator will not
+  give being an error. Constructing the reader opens no file, so "refused before any file is opened" is the
+  construction failing.
+
+A new manifest, `sabotage-reader-integration.json`, declares six sabotages these tests catch on their own and
+a control that survives; all seven behave as declared. Two are caught by the suite's hang bound and not by an
+assertion (an entry the full client queue refused is dropped, and the completion queue's size is not
+respected), since the missing delivery is waited for up to the tests' own sixty-second bound.
+
+Found by writing the refusals, not by a test that could keep it: a `client_sq_capacity` of `1 << 40` is
+accepted by the options and aborts the process in the queue's infallible allocation. Recorded as TW-9.6.
+The README states what each size limits and the three stops, citing no figure.
+
+## Moved 2026-10-17 21:11:18 -04:00 -- TW-9.6: a queue the allocator will not give is an error
+
+### <a id="tw-96"></a>TW-9.6 -- A queue capacity that is valid but more than memory can hold is an error and not an abort: the queue crate's allocation refusal is mapped to a new `CreateError::Allocation` for the client queue and the watcher's own queue, and tested through the public constructor. *(completed 2026-10-17 21:11:18 -04:00)*
+
+The cause was found by TW-9.5 and fixed in `windows-waitable-queues` first (0.1.2). This crate then
+passed that crate's error through `SqCapacityError::from`, which copies three numbers and dropped the new
+cause: a client queue of `1 << 40` was reported as "not a power of two from 2 to 2^62", which is false.
+That was observed before changing anything.
+
+`sq.rs` has a crate-private `QueueError` that records whether a refusal was the rule or the allocator,
+chosen by the queue crate's `is_allocation_failure`; `queue` and `queue_of` return it, and it converts to
+`CreateError`. `CreateError` gains `Allocation(SqCapacityError)` and is now `#[non_exhaustive]`. The variant
+has no `source` (see [TW-D-16](DESIGN-NOTES.md#tw-d-16)). The docs of `TailReaderError::Watcher` and `::ClientSq`,
+`TailReader::new`, `Watcher::new` and the README state it. The engineer chose the variant ("option 1") from
+three offered; `non_exhaustive` was the assistant's addition and was flagged.
+
+Tests: the watcher's constructor, `ReadEngine::new`, the reader's two queues and the public constructor
+(at `1 << 40`, the capacity that used to abort, and at the queue's own largest, which is refused before the
+allocator is asked), each asserting the variant, the capacity carried, and that the message names the memory and
+does not call the capacity a mistake of the rule; and the reverse, that every refusal of the rule is still
+`Capacity`. Six entries in `sabotage.json` (five caught, one control that survives) and one in
+`sabotage-reader-integration.json`; all behave as declared.
+
+Breaking: `CreateError` gains a variant, so a caller that matched it exhaustively no longer compiles. The commit
+is `feat!` and the next release is 0.2.0.
+
+## Moved 2026-10-18 00:53:22 -04:00 -- TW-10.1: the stale sabotage entry
+
+### <a id="tw-101"></a>TW-10.1 -- A sabotage entry made stale by TW-9.6 is repaired, and every sabotage manifest of the crate is swept in full, so that no other entry is stale. *(completed 2026-10-18 00:53:22 -04:00)*
+
+The entry "the queue's bounds are read the wrong way round" searched for `Err(refusal) => (wide(refusal.min_valid), ...`,
+which TW-9.6 rewrote to read the bounds through `refusal.capacity()`, so the harness reported `MANIFEST STALE` and the
+entry never ran. TW-9.6 ran only the entries it had added, by name, and not the manifest, which is how it was missed. The
+entry now swaps the two fields of the current expression and is caught.
+
+All five manifests of the crate were then swept in full against the tree as it stood: 7, 6, 23, 8 and 206 entries, all
+behaving as declared. That sweep is repeated at the end of M10, since the items after this one change the sources the
+entries patch.
+
+## Moved 2026-10-18 00:54:47 -04:00 -- TW-10.2: a failure to read the ring's limits is a ring failure
+
+### <a id="tw-102"></a>TW-10.2 -- A failure to read the ring's limits is an I/O ring failure and not a refused size: `TailReaderError::Ring`, not `Options`, with the documentation of both variants saying so. *(completed 2026-10-18 00:54:47 -04:00)*
+
+`From<OptionsError> for TailReaderError` turned every options error into `Options`, whose message is "a size was
+refused", including `OptionsError::RingCapabilities`, which is the operating system failing to report the ring's limits.
+It now routes that one to `Ring`, and the documentation of `TailReaderError`, `Options` and `Ring` says so.
+`TailReaderOptions::validate` is unchanged and still returns `RingCapabilities`.
+
+The failure cannot be made on demand, so the test builds the options error and converts it; it asserts the code
+survives, the message names the ring and does not say a size was refused, and that a refused size is still `Options`.
+Two sabotage entries, one for each direction; both caught. Recorded in
+[TW-D-16](DESIGN-NOTES.md#tw-d-16). The review offered a second fix, wording `Options` more broadly; the first was taken
+because `Ring` already carries an operating-system error, and a client matching on the variant gets the right branch.
+
+## Moved 2026-10-18 01:02:23 -04:00 -- TW-10.3: a poll before the previous one is complete fails
+
+### <a id="tw-103"></a>TW-10.3 -- `TailReader::poll` is refused while the previous poll is not complete, and a poll is complete when its poll-done has been queued for the client, after every read of it is delivered, and not when the watcher has finished announcing; a client that has read poll-done may poll again at once. *(completed 2026-10-18 01:02:23 -04:00)*
+
+`TailReader::poll` delegated to `Watcher::poll`, whose gate opens when the watcher's own poll-done is written, before
+the engine has delivered the reads. The engineer's rule, "polls initiated before the previous one completes should
+fail", needed a gate that opens later. Decision and reasoning: [TW-D-16](DESIGN-NOTES.md#tw-d-16).
+
+`PollGate` is widened to `pub(crate)` and reused. The engine owns one, `ReadLayer::poll` checks the stop request, takes
+it and gives it back if the watcher refuses, and `deliver` marks it finishing before it pushes each `ReadEntry::PollDone`
+and opens it after, or leaves the poll in flight when the client's SQ refuses the entry. The error is
+`PollError::InFlight`; the documentation of `TailReader::poll`, `PollError`, `ReadEntry::PollDone` and the README says
+what in flight now means, including that a caller that never drains or keeps every chunk never polls again.
+
+Tests: the engine, synchronously, over a client SQ of two (in flight at every stop until its poll-done is queued, and
+a refused poll-done leaves it in flight); the layer, threaded (refused for 300 ms while every buffer is held and the
+watcher is long done, accepted after the poll-done is read, accepted at once over a thousand rounds that spin on the SQ
+so the poll is asked for in the instant poll-done is visible, the gate given back when the watcher refuses, and
+`Shutdown` ahead of `InFlight`); and the public reader over a child's file with every buffer held. Six sabotage entries
+in `sabotage.json`, all caught; the finishing-state one is a race and was caught five times in five.
+
+A first sabotage entry, "a shut down reader reports a poll in flight ahead of the shutdown", survived: the existing test
+asserted `Shutdown` after a shutdown while stalled, but a shutdown lets the engine deliver the poll-done before the test
+asks, so the poll was only sometimes in flight. The new test holds the gate by hand and is deterministic.
+
+All existing tests passed unchanged, so none relied on overlapped polls.
+
+The full sweep at the end of M10 then found that "shutdown does not shut the watcher down" survived. The layer's new stop check
+answers a poll after a shutdown before the watcher is asked, so the earlier test, which saw `Shutdown` from the watcher, no longer
+observed the watcher being stopped; the entry had been caught only by that accident. `shutdown_reaches_the_watcher_itself` asks the
+watcher directly.
+
+## Moved 2026-10-18 01:39:34 -04:00 -- TW-10.4: the integration tests do not sleep as proof
+
+### <a id="tw-104"></a>TW-10.4 -- The integration tests do not use a fixed sleep as proof that asynchronous work has finished: the undrained-client-queue test asserts what the public API can observe, that the poll cannot complete and nothing is lost, and leaves the exact stop at capacity to the synchronous engine test that already asserts it, and the quiet check after a poll tolerates the one empty ring that may land late instead of sleeping past it. *(completed 2026-10-18 01:39:34 -04:00)*
+
+The review named two sleeps. The quiet check slept 100 ms to let one late ring land. That ring is the end of the run that
+wrote the poll-done, made after the entries, so it can land after the client has drained them, at the scheduler's pleasure.
+`assert_quiet` now lets go of one empty ring wherever it lands and then requires a full quiet window; a second ring, or an
+entry, fails. It cannot tell a reader that rang exactly once, spuriously, right after a poll-done from that ring; the
+documentation says so.
+
+The undrained-queue test slept 500 ms and then required a drain of exactly two. A first rewrite, a wait for the first ring and
+then a drain of at most two, failed two runs in five under CPU load, and the reason is the one this crate's own notes record:
+a drain is not a count of the queue. Taking an entry lets the reader, woken by a completion, write the entry it was holding,
+and the drain goes on to take that too, so one drain can legitimately yield more than the capacity. Neither bound is valid.
+What an undrained queue of two does deterministically to a poll of about a hundred reads is that it cannot be complete, so
+the test asserts that a second poll is refused with `InFlight` (which needs no sleep), then drains, resumes and checks nothing
+is lost. That the stop is at exactly the capacity is asserted by `a_full_client_sq_stops_the_engine_and_ringing_back_continues_it`,
+which drives the engine synchronously. The test is renamed to say what it now asserts. The TW-9.5 entry above still describes the
+earlier test, and is left as history.
+
+The held-buffers test keeps its sleep, now commented: it asserts that nothing arrives, which no event can wait for, and it can
+only fail if the reader delivers, so a slow host weakens it and never makes it flaky.
+
+Verified under load as well as idle: the target was run idle, and in batches under twice as many spinning processes as cores, which
+slows the whole target to about a minute. The first rewrite failed in that way; the final form passed twelve of twelve. One earlier
+loaded run in about thirty did hit the 60 s bound in `runner_log`, in both of its tests at once, before the final form existed; it did not
+recur, and its cause is not established. The timeout message now says how many bytes were delivered, what the file holds and whether the
+child has exited, so a recurrence tells a starved child from a reader that stopped delivering. The bound is within a factor of two of what
+this load makes the target take, which is the likely reading and not a finding.
+
+## Moved 2026-10-18 13:27:24 -04:00 -- TW-10.5: a refused poll wakes the engine
+
+### <a id="tw-105"></a>TW-10.5 -- A poll refused as in flight wakes the reading engine, so that a poll held up by an error a run returned, which leaves nothing in flight and rings no doorbell, is not refused for ever now that the reader's gate is in front of the watcher's. *(completed 2026-10-18 13:27:24 -04:00)*
+
+The second review of the branch (M10) found it by tracing, with no reproduction: a failed `batch.submit()` returns an error with
+its reads still queued and `unsubmitted` set, and the engine runs again only when a doorbell wakes it. Before TW-10.3 the next
+`poll` supplied that wake through the watcher; the reader's gate now refuses it first. The reviewer's suggested fix, ringing the
+resume doorbell from the refusal, was taken; ringing it from `Core::record` was not, because a persistent failure would loop.
+Reasoning and costs are in [TW-D-16](DESIGN-NOTES.md#tw-d-16). `TailReader::poll` and `take_failure` document it.
+
+The failure cannot be made on demand, so the test holds the gate by hand: with nothing stalled the engine does not run on its own,
+a refused poll runs it. One sabotage entry removes the ring. Its first run was caught as a hang, because the test's 30 s deadline
+was longer than the harness's 15 s bound; the deadline is now 10 s so it fails by assertion.
+
+The `try_pop` error path the reviewer also named was not examined and is not covered by this change beyond the same wake.
+
+## Moved 2026-10-18 15:01:34 -04:00 -- TW-10.6: the run-counting tests wait for the setup drives
+
+### <a id="tw-106"></a>TW-10.6 -- The tests of the reading layer that count how many times the engine ran no longer take their baseline while the ring's setup signal is still driving it, and wait for those drives instead of sleeping past them. *(completed 2026-10-18 15:01:34 -04:00)*
+
+The third review of the branch found that the TW-10.5 test took its baseline after a 100 ms sleep, but the setup signal's two drives
+are made on a pool thread whenever the scheduler reaches it. Late, they fail the "runs on its own" assertion on correct code, or
+arrive after it and satisfy the post-poll check with the kick removed. The reviewer reproduced it with the process and twelve CPU
+workers pinned to one logical processor.
+
+That reproduction was repeated here against the old and new test binaries side by side: the old tests failed eight rounds of
+eight, and the new passed eight of eight. The old failures were two tests, not one: the TW-10.5 test, and
+`a_new_layer_with_nothing_to_do_runs_the_engine_once_for_its_setup_and_then_not`, an older test with the same sleep and the same
+baseline that the review did not name. Setup was measured to make exactly two drives, arriving together, about 1.6 ms after
+construction on an idle host.
+
+`await_setup` waits, bounded, until `runs` reaches `SETUP_DRIVES` (2), and is called right after the layer is made in the five
+tests that take a baseline, including the one in `child_tests.rs`. The older test now also asserts that the count is exactly the
+setup drives and nothing else, and is renamed to match. The negative assertions ("a stalled layer runs nothing") keep their
+sleeps: nothing can be waited for there, and they can only fail if the layer runs, so a slow host weakens them and never makes
+them flaky. The constant ties the tests to the setup protocol of `CompletionWake` (drain, re-arm, drain); if that changed, the
+wait would time out with a message naming the count.
+
+The kick's sabotage entry is caught again by assertion. The same pinned-processor run was not applied to the integration tests,
+whose sleeps TW-10.4 already reviewed under CPU load, nor to the rest of the library tests.
+
+## Moved 2026-10-18 15:14:50 -04:00 -- TW-10.7: two public documentation claims corrected
+
+### <a id="tw-107"></a>TW-10.7 -- Two public documentation claims are corrected to what the code does: `Terminal` says its `last_known` and `win32_code` mean something different for a failed read than for a failed probe, and `TailReader` no longer promises that no wake follows a poll-done. *(completed 2026-10-18 15:14:50 -04:00)*
+
+The fourth review of the branch found two public claims that the code contradicts. Neither is a code defect, and both were checked
+against the code before changing anything.
+
+`Terminal` documented `last_known` as "the length last reported" and `win32_code` as the failed probe's code, and the reading layer
+also reports `Terminal` for a failed read, with `last_known` the offset the read began at, which can be past the length last
+reported. `ReadEntry::Terminal` and the design notes already said so, so the three disagreed. The type and both fields now describe
+both producers. A reader-specific payload type was the review's other suggestion and was not taken: it would be a breaking change to
+a public type that the watcher also uses, for a distinction the docs can carry.
+
+`TailReader` promised "no thread, no timer, no wake" between polls. The run that queues a poll-done rings the client's doorbell as
+it ends, after the gate has opened, so one empty ring can follow it. The integration tests' quiet check already lets exactly one go
+by (TW-10.4); the type's documentation now states the exception, and [TW-D-16](DESIGN-NOTES.md#tw-d-16) records it.
+
+Documentation only: no code changed, so no test or sabotage entry applies. The documentation builds with the link lints denied.
+
+## Moved 2026-10-18 15:58:23 -04:00 -- TW-10.8 and TW-10.9: the fifth review's two code-adjacent findings
+
+### <a id="tw-108"></a>TW-10.8 -- `ReadSq::capacity` no longer takes the lock a `ReadDrain` holds, so asking for the capacity while draining does not wait for the drain, on the thread that holds it or on another. *(completed 2026-10-18 15:58:23 -04:00)*
+
+`ReadDrain` is a `MutexGuard` over the reader and `capacity` locked the same mutex, so `for entry in sq.drain() { sq.capacity() }`
+waited for itself for ever, in safe code, on a type that this branch made public. Confirmed by reading the code. The capacity is read
+once when the SQ is made and returned from a field. `drain`'s documentation now says a second drain on the thread that holds the first
+never returns, and that `capacity` does not wait for a drain.
+
+The test asks from threads of its own with a bound, because asked on the test's own thread a regression would deadlock the suite
+instead of failing it: my first version did exactly that, and was rewritten before it was run against the sabotage. The sabotage entry
+puts the lock back and is caught by assertion (14 s, exit 101) rather than by the hang bound.
+
+`Watcher::sq_capacity` has the identical pattern and was not changed: it is a published method of the watcher and outside what this
+branch alters. It is the same one-line fix if wanted.
+
+### <a id="tw-109"></a>TW-10.9 -- A design-notes bullet that an earlier commit joined onto the end of the one before it is on its own line again. *(completed 2026-10-18 15:58:23 -04:00)*
+
+The "short read" decision had been glued to the end of the preceding bullet's last sentence, so it rendered as text inside it. The
+file was searched for any other list marker glued to a sentence, as were the other planning documents of the crate: none.
+
+## Moved 2026-10-18 17:15:07 -04:00 -- TW-10.10 to TW-10.12: three findings of the sixth review
+
+### <a id="tw-1010"></a>TW-10.10 -- The public `TailReader` example rings `ring_resume` after it drains, as a reader stopped on a full queue needs, instead of teaching a loop that stalls on a poll longer than the queue. *(completed 2026-10-18 17:15:07 -04:00)*
+
+The example drained the client queue and never rang the resume doorbell, which `ReadSq`'s own contract requires after making room. It
+completes only because its one file fits the queue; a poll with more entries than the queue holds would stall. It now rings after the
+loop, with a comment saying this poll does not depend on it. It is the only example in the crate that drains. A doctest cannot be
+sabotaged to show the ring matters, and the longer-poll behaviour is covered by `Client::finish_poll` in the integration tests, which
+rings after every drain.
+
+### <a id="tw-1011"></a>TW-10.11 -- `CreateError`, which is now the error of the watcher's queue and of the reading layer's client queue, words its messages for a submission queue and not for the watcher. *(completed 2026-10-18 17:15:07 -04:00)*
+
+`TailReaderError::ClientSq` holds a `CreateError`, whose messages said "creating the watcher failed", so a client queue's failure read
+"the reader's client queue could not be made: creating the watcher failed: ...". It was a pre-existing wording that the public
+`ClientSq` exposed. The messages and the type's documentation now say submission queue. Which queue it was is the variant that holds
+it. The test builds all three causes and asserts none says "watcher", and the client-queue allocation test asserts "client queue" and
+not "watcher"; one sabotage entry puts the old wording back and is caught. Decision and the option not taken: [TW-D-16](DESIGN-NOTES.md#tw-d-16).
+
+### <a id="tw-1012"></a>TW-10.12 -- The README says a data entry carries the value, range and bytes, and what the other entries carry, instead of saying every entry does. *(completed 2026-10-18 17:15:07 -04:00)*
+
+Only `ReadEntry::Data` carries the value, range and chunk; a shrink and a terminal entry carry the value and what they report, and a
+poll-done carries nothing. The `TailReader` rustdoc already said "data entry".
+
+### <a id="tw-1013"></a>TW-10.13 -- The tiny option set is no longer documented as reaching the ring-full stop, which it cannot, and the README says which small set reaches which stop. *(completed 2026-10-18 21:24:00 -04:00)*
+
+The tiny set has four buffers and a completion queue of sixteen, so the pool runs out before the ring holds as many reads as its
+completion queue, and a batch never pushes more reads than the ring's submission queue takes. It reaches the pool-empty and
+client-full stops, and the ring-full stop is reached by the test whose pool is larger than the ring. The comment in `option_sets.rs`
+and the README said otherwise, the README as "every stop is reached all the time", which no test observes. Both now say which set
+reaches which stop. No test asserts which stop was reached, and the engine's own tests are where that is asserted.

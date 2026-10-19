@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::ReadLayer;
-use super::tests::{Taken, layer_with, runs, take_until};
+use super::tests::{Taken, await_setup, layer_with, runs, take_until};
 use crate::read_sq::ReadEntry;
 use crate::test_support::{Children, TempDir, signalled_within, start_writer, wtf};
 use crate::{Registration, read_engine::Tracked};
@@ -110,6 +110,7 @@ fn chunks_the_client_keeps_stall_the_layer_and_dropping_them_continues_it() {
     const PASSES: u64 = 20;
     let dir = TempDir::new("rl-child-held");
     let layer = layer_with(64, 4, 8);
+    await_setup(&layer);
     let mut writers = Writers::start(&dir, &layer, COUNT, PASSES);
     writers.finish();
     layer.poll().expect("poll");

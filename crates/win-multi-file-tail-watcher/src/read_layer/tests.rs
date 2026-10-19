@@ -101,6 +101,26 @@ pub(super) fn runs(layer: &ReadLayer<u32>) -> usize {
     layer.core.runs.load(Ordering::Relaxed)
 }
 
+/// How many times the ring's setup signal drives the engine: its callback drains, re-arms and
+/// drains again ([`CompletionWake`](windows_ioring_sys::CompletionWake)).
+const SETUP_DRIVES: usize = 2;
+
+/// Wait until the setup signal's drives have happened, so that a count of runs taken afterwards
+/// is the layer's own and not the tail of its construction. They are made on a pool thread when
+/// the scheduler reaches it, about a millisecond after the layer is made on an idle host and
+/// without a bound on a loaded one, so no fixed sleep can stand in for waiting for them.
+pub(super) fn await_setup(layer: &ReadLayer<u32>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while runs(layer) < SETUP_DRIVES {
+        assert!(
+            Instant::now() < deadline,
+            "the ring's setup signal never drove the engine: {} of {SETUP_DRIVES}",
+            runs(layer)
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn append(path: &PathBuf, bytes: &[u8]) {
     OpenOptions::new()
         .append(true)
@@ -159,6 +179,7 @@ fn several_files_are_each_read_in_full() {
 fn a_client_that_stops_draining_stalls_the_layer_until_it_rings_back() {
     let dir = TempDir::new("rl-client");
     let layer = layer_with(64, 16, 2);
+    await_setup(&layer);
     let content = pattern(100);
     let path = dir.file("a.log", &content);
     let _registration = layer.register(&wtf(&path), 0, 7).expect("register");
@@ -239,6 +260,7 @@ fn a_poll_parked_on_a_full_watcher_sq_goes_on_as_the_layer_drains_it() {
 fn nothing_runs_between_polls() {
     let dir = TempDir::new("rl-idle");
     let layer = layer();
+    await_setup(&layer);
     let path = dir.file("a.log", &pattern(40));
     let _registration = layer.register(&wtf(&path), 0, 7).expect("register");
     layer.poll().expect("poll");
@@ -299,11 +321,16 @@ fn dropping_an_idle_layer_returns() {
 }
 
 #[test]
-fn a_new_layer_with_nothing_to_do_runs_the_engine_once_for_its_setup_and_then_not() {
+fn a_new_layer_with_nothing_to_do_runs_the_engine_for_its_setup_and_then_not() {
     let layer = layer();
-    std::thread::sleep(Duration::from_millis(100));
+    await_setup(&layer);
     let settled = runs(&layer);
-    assert!(settled >= 1, "the ring's setup signal drives it once");
+    assert_eq!(
+        settled, SETUP_DRIVES,
+        "the ring's setup signal drives it, and nothing else"
+    );
+    // Nothing happening is not something to wait for, so this gives the layer time to run when it
+    // should not. It can only fail if the layer runs; a slow host weakens it and never flakes it.
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(runs(&layer), settled);
 }
@@ -380,6 +407,147 @@ fn shutdown_while_stalled_on_kept_chunks_delivers_poll_done_once_they_return() {
     assert!(total >= 32, "what was in flight was delivered: {total}");
     assert!(total < 12 * 40, "reads stopped: {total}");
     assert!(layer.take_failure().is_none());
+}
+
+#[test]
+fn a_poll_before_the_previous_one_is_complete_is_refused_until_its_poll_done_is_queued() {
+    let dir = TempDir::new("rl-gate");
+    // Four buffers and twelve files: the watcher announces everything at once and its own poll is
+    // soon over, but the reads stall on the chunks the client keeps, so this poll is not.
+    let layer = layer_with(64, 4, 8);
+    let mut registrations = Vec::new();
+    for n in 0..12_u32 {
+        let path = dir.file(format!("f{n}.log"), &pattern(40));
+        registrations.push(layer.register(&wtf(&path), 0, n).expect("register"));
+    }
+    layer.poll().expect("poll");
+    let mut held = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held.len() < 4 {
+        assert!(Instant::now() < deadline, "the layer never delivered");
+        signalled_within(layer.read_sq().doorbell(), 100);
+        layer.read_sq().reset_doorbell();
+        held.extend(layer.read_sq().drain());
+    }
+    // Refused every time, for long enough that the watcher has finished announcing.
+    let until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < until {
+        assert!(
+            matches!(layer.poll(), Err(crate::PollError::InFlight)),
+            "a poll was accepted before the previous one was complete"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let mut taken = Taken::default();
+    for entry in held {
+        let ReadEntry::Data(data) = entry else {
+            panic!("only data was kept");
+        };
+        let (value, range, chunk) = data.into_parts();
+        taken.pieces.entry(value).or_default().push(Piece {
+            range,
+            bytes: chunk.to_vec(),
+        });
+    }
+    take_until(&layer, &mut taken, 1);
+    for n in 0..12 {
+        assert_eq!(taken.bytes_from(n, 0), pattern(40), "file {n}");
+    }
+    // Its poll-done is queued, so the next poll is accepted, and finds nothing new.
+    layer.poll().expect("the previous poll is complete");
+    take_until(&layer, &mut taken, 2);
+    assert!(layer.take_failure().is_none());
+}
+
+#[test]
+fn a_client_that_has_read_poll_done_may_poll_again_at_once() {
+    let dir = TempDir::new("rl-again");
+    let layer = layer();
+    let path = dir.file("a.log", &pattern(8));
+    let _registration = layer.register(&wtf(&path), 8, 7).expect("register");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    for round in 0..1_000 {
+        layer.poll().unwrap_or_else(|error| {
+            panic!("round {round}: refused right after poll-done: {error}")
+        });
+        // Spun on, not waited for, so that the poll is asked for in the instant poll-done is
+        // visible, which is the instant the gate has to be open.
+        while !layer
+            .read_sq()
+            .drain()
+            .any(|entry| matches!(entry, ReadEntry::PollDone))
+        {
+            assert!(Instant::now() < deadline, "poll-done never came");
+        }
+    }
+}
+
+#[test]
+fn shutdown_reaches_the_watcher_itself() {
+    let layer = layer();
+    layer.shutdown();
+    // Asked of the watcher directly: the layer refuses a poll on its own stop request first, so
+    // `layer.poll()` no longer shows whether the watcher was stopped, and a poll of the watcher that
+    // is running when the layer shuts down stops at its next step only if it was.
+    let watcher_poll = layer.engine_for_test().watcher().poll();
+    assert!(matches!(watcher_poll, Err(crate::PollError::Shutdown)));
+}
+
+#[test]
+fn a_shut_down_reader_refuses_a_poll_as_shut_down_even_while_one_is_in_flight() {
+    let layer = layer();
+    // A poll in flight, held by hand: after a shutdown the engine may deliver its poll-done before
+    // a test can ask, so a real one would only sometimes be in flight at the moment of asking.
+    assert!(layer.poll_gate.begin());
+    layer.shutdown();
+    assert!(
+        matches!(layer.poll(), Err(crate::PollError::Shutdown)),
+        "shut down, not in flight: no poll starts again, and the caller is told so"
+    );
+}
+
+#[test]
+fn a_poll_refused_as_in_flight_runs_the_engine_again() {
+    let layer = layer();
+    // The setup signal's drives are waited for, not slept past: arriving late they would otherwise
+    // fail the assertion below on correct code, or satisfy the one after it with the kick removed.
+    await_setup(&layer);
+    // A poll in flight, held by hand, as one stalled by an error a run returned is: nothing in the
+    // ring and no doorbell rung, so nothing else would run the engine.
+    assert!(layer.poll_gate.begin());
+    let settled = runs(&layer);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        runs(&layer),
+        settled,
+        "the engine runs on its own while nothing is stalled or rung"
+    );
+
+    assert!(matches!(layer.poll(), Err(crate::PollError::InFlight)));
+    // Ten seconds for a thread-pool callback to start, which is far longer than one takes and
+    // shorter than a sabotage sweep's hang bound, so a missing kick fails by this assertion.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while runs(&layer) == settled {
+        assert!(
+            Instant::now() < deadline,
+            "a refused poll did not run the engine"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_poll_the_watcher_refuses_leaves_the_gate_as_it_was() {
+    let layer = layer();
+    // The watcher is stopped on its own, as `shutdown` would, and the layer is not: the layer takes
+    // its gate and the watcher refuses.
+    layer.core.watcher_stop.request();
+    assert!(matches!(layer.poll(), Err(crate::PollError::Shutdown)));
+    assert!(
+        !layer.poll_gate.in_flight(),
+        "a poll that never started is not in flight"
+    );
 }
 
 #[test]

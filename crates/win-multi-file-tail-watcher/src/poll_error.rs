@@ -3,12 +3,17 @@
 
 use std::{fmt, io};
 
-/// Why [`Watcher::poll`](crate::Watcher::poll) did not start a poll.
+/// Why [`Watcher::poll`](crate::Watcher::poll) or [`TailReader::poll`](crate::reader::TailReader::poll)
+/// did not start a poll.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PollError {
-    /// A poll is in flight. One is from the call that started it until its poll-done entry has been
-    /// written, which includes one that is waiting for room in a full submission queue.
+    /// A poll is in flight. For a [`Watcher`](crate::Watcher), one is from the call that started it
+    /// until its poll-done entry has been written, which includes one that is waiting for room in a
+    /// full submission queue. For a [`TailReader`](crate::reader::TailReader), one is until its
+    /// poll-done has been queued for the caller, which is after every read of the poll is delivered:
+    /// the watcher having finished announcing is not enough, and a poll waiting for the caller to
+    /// drain, or for chunks to be dropped, is still in flight.
     InFlight,
     /// The watcher has been shut down, and no poll starts again.
     Shutdown,
