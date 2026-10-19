@@ -1234,6 +1234,82 @@
       ]
     },
     {
+      "name": "M8.12: the completion-port probe stops emitting its row",
+      "file": "src/bin/completion_port.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&support, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.12: the control publishes the associated read",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "The unassociated read is the negative control every other case is judged against; filling it from the test case erases the comparison.",
+      "find": [
+        "                (\"control_unassociated\", read(finding.control_unassociated)),"
+      ],
+      "replace": [
+        "                (\"control_unassociated\", read(finding.after_iocp_association)),"
+      ]
+    },
+    {
+      "name": "M8.12: the byte count and the first byte trade places",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "The probe's first version read a clean failure as a success by trusting one of these three fields alone; each must be published as itself.",
+      "find": [
+        "        (\"bytes\", Value::from(attempt.bytes)),",
+        "        (\"first_byte\", Value::from(attempt.first_byte)),"
+      ],
+      "replace": [
+        "        (\"bytes\", Value::from(attempt.first_byte)),",
+        "        (\"first_byte\", Value::from(attempt.bytes)),"
+      ]
+    },
+    {
+      "name": "M8.12: the port control is not taken from the run",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "It separates 'the IoRing path is refused' from 'the handle is broken'.",
+      "find": [
+        "        .with(\"port_still_works\", finding.port_still_works)"
+      ],
+      "replace": [
+        "        .with(\"port_still_works\", true)"
+      ]
+    },
+    {
+      "name": "M8.12: a host without a ring loses the reason",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "        return row.with(\"declined\", NO_USABLE_IORING);"
+      ],
+      "replace": [
+        "        return row.with(\"declined\", Value::Null);"
+      ]
+    },
+    {
+      "name": "M8.12 control: the row names its build before its architecture",
+      "file": "src/completion_port/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",

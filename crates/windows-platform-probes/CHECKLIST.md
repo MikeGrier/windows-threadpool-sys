@@ -32,7 +32,7 @@ which fails until it does.
 - [x] **M8.9** -- `probe-worker-context` emits a row.
 - [x] **M8.10** -- `probe-device-map` emits a row.
 - [x] **M8.11** -- `probe-ioring` emits a row.
-- [ ] **M8.12** -- `probe-completion-port` emits a row.
+- [x] **M8.12** -- `probe-completion-port` emits a row.
 - [ ] **M8.13** -- `probe-cancel-io` emits a row, including for a case its watchdog abandons.
 
 - [ ] **M8.14** -- Make the row census assert that every registered probe emits a row, so a probe
