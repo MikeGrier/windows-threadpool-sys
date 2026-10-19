@@ -93,8 +93,6 @@ correctness in the archive.
   probes.
 
 - [x] **M4.10** -- Decide whether a probe's report owes a machine-readable row, and make the answer uniform. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m410)
-  change, so it wants the engineer's call on scope rather than a unilateral sweep.
-
 
 ## M5 -- Carried over from M2: unblocked hygiene
 
