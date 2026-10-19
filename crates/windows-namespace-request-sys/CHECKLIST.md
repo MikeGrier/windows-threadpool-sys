@@ -22,7 +22,7 @@ of each other. Then this crate is released, a new minor.
 
   > **-> CROSS-COMPONENT HANDOFF:** the consumers move off `CapturedHandle` before `NR-6.2`:
   > [DI-16.1](../durable-ioring/CHECKLIST.md) (`win-durable-ioring`),
-  > [M7.1](../windows-platform-probes/CHECKLIST.md) (`windows-platform-probes`), and
+  > [M7.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m71) (`windows-platform-probes`), and
   > [SAFE-1](../windows-file-enumeration-sys/CHECKLIST.md) (`windows-file-enumeration-sys`' metadata test).
 
 - [ ] **NR-6.2** -- **Capture is deleted.** `CapturedHandle`, `capture`, `capture_raw`, `into_owned_handle`,
