@@ -290,9 +290,9 @@ option recorded by construction. The rule throughout is documented APIs only
   > forbids `unsafe`, and the typed decode belongs with the call.
 
 - [ ] **DI-15.2** -- **`OpenedFile::open_by_id`.** An open by `FileId` through `OpenFileById`, with a
-  volume hint that must be a file this crate opened or a volume it opened, so the hint is
-  provenance-checked like everything else (a plan, not a ruling: [DI-D-64](DESIGN-NOTES.md#di-d-64)'s
-  `hVolumeHint` row; to be settled when this is picked up). **Its options are a type of its own**
+  volume hint that is **any handle** on the volume (the engineer, 2026-10-18,
+  [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `hVolumeHint` row): the hint is never the file opened, so its mode
+  reaches nothing the result claims. **Its options are a type of its own**
   (the engineer, 2026-10-18), carrying the typed access, share mode and flags `OpenFileById` takes, with
   the data access `A` ([DI-13.8](#di-138)); its page has no disposition and no attributes, and its
   security parameter is reserved. The checks are the open's, made on the opened handle and nowhere else
