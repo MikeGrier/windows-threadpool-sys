@@ -256,8 +256,8 @@ accept that a sabotage caught only by a doctest would then read as survived.
 
 **`caught`** -- the suite went red, or hung. The guard is real. In a scoped run
 (`-Since`) an entry with recorded catching tests is run against those first, and
-is reported `caught (its recorded tests failed ...)` when they catch it; the
-whole suite runs only when they do not. A run without `-Since` always runs the
+is reported `caught (its recorded tests failed ...)` when libtest reports one of
+them failed; anything else, a hang included, runs the whole suite. A run without `-Since` always runs the
 whole suite.
 
 **`survived (NOT caught)`** -- the suite stayed green with the defect in place.

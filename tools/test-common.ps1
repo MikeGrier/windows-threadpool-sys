@@ -982,6 +982,30 @@ Test-Case 'a manifest that tests the whole workspace is reached by a change to a
     Assert-Equal $true (Select-SabotageEntry -RepositoryRoot 'C:\r' -Manifest 'crates/a/sabotage.json' -Entries $entries -SourceRoot 'C:\r\crates\a' `
             -Change $change -Dependencies $deps -Record @{} -Spec $null -Packages @{}).All 'no manifest settings given, every entry'
 }
+Test-Case 'git''s quoted paths are unquoted to the bytes they name, whatever the host decodes' {
+    $e = [string][char]0xE9
+    Assert-Equal "crates/x/caf$e.rs" (ConvertFrom-GitQuotedPath '"crates/x/caf\303\251.rs"') 'octal UTF-8'
+    Assert-Equal "a`"b\c`td" (ConvertFrom-GitQuotedPath '"a\"b\\c\td"') 'C escapes'
+    Assert-Equal "line`nbreak" (ConvertFrom-GitQuotedPath '"line\nbreak"') 'a newline in a name'
+    foreach ($bad in '"\777"', '"unterminated', '"a\q"', '"\30"', '"\377"', 'plain', '"a"b"') {
+        if ($null -ne (ConvertFrom-GitQuotedPath $bad)) { throw "not a quoting git writes: $bad" }
+    }
+    $split = Split-SabotageGitPaths @('plain/a.rs', '"crates/x/caf\303\251.rs"', '', 'b.rs')
+    Assert-Equal $true $split.Ok 'ok'
+    Assert-Equal "plain/a.rs|crates/x/caf$e.rs|b.rs" ($split.Paths -join '|') 'plain lines kept, quoted ones unquoted, blanks skipped'
+    Assert-Equal 1 @((Split-SabotageGitPaths @('one.rs')).Paths).Count 'one path is still a list of one'
+    $none = Split-SabotageGitPaths @()
+    Assert-Equal $true $none.Ok 'nothing is a good answer'
+    Assert-Equal 0 @($none.Paths).Count 'none'
+}
+
+Test-Case 'a git path this host decoded wrongly is not taken for a path' {
+    # What a non-UTF-8 code page makes of an e-acute in a raw path: two other
+    # characters, neither of them a replacement character.
+    $mojibake = 'crates/x/caf' + [char]0x251C + [char]0x00AE + '.rs'
+    Assert-Equal $false (Split-SabotageGitPaths @('crates/ok.rs', $mojibake)).Ok 'a path outside ASCII from git is not one git quoted'
+    Assert-Equal $false (Split-SabotageGitPaths @('"\377"')).Ok 'a quoting that is not UTF-8'
+}
 Test-Case 'a path with a character git would quote is reported as it is, committed or untracked' {
     $root = New-GitFixture
     $name = 'caf' + [char]0xE9 + '.rs'

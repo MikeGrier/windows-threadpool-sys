@@ -2847,7 +2847,8 @@ backstop. The layers, cheapest first, are the items from
 - When the base is not an ancestor of the checkout -- a force-push, or a branch behind it -- what
   the base changed since the merge base counts too, so a reverted change is still a change.
 - In a scoped run, an entry is first run against the tests that caught it last time, and against
-  the whole suite only if they do not report a test failure. A full sweep always runs the whole
+  the whole suite only if they do not report a test failure. A hang there does not count: a test
+  run alone is scheduled differently from one in the whole suite, so the whole suite decides. A full sweep always runs the whole
   suite, so the nightly backstop is exactly the sweep from before scoping, and it re-learns every
   entry's catching tests. The narrow run can differ in one way: a patch that also stops a doctest
   compiling is reported caught when a recorded unit test fails, where the whole suite reports the

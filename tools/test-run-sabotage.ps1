@@ -216,7 +216,7 @@ function New-Stub {
         [ValidateSet('pass', 'fail', 'hang', 'orphan-hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
             'build-echo', 'not-executed', 'not-started', 'link-locked-once', 'link-locked-baseline',
             'link-locked-always', 'link-locked-baseline-always', 'link-locked-then-broken', 'link-missing-lib',
-            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses', 'narrow-refused')] [string] $Behaviour,
+            'link-echoed', 'fail-named', 'narrow-catches', 'narrow-misses', 'narrow-refused', 'narrow-hangs')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -266,6 +266,13 @@ function New-Stub {
         'narrow-catches' {
             "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
             "echo test marker::is_present ... FAILED`r`nexit /b 101`r`n"
+        }
+        # A narrowed run that hangs; the whole suite fails as a catch does.
+        'narrow-hangs' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`necho %*>>`"%~dp0runs.log`"`r`n" +
+            "echo %* | findstr /C:`"--exact`" >nul || goto :whole`r`n" +
+            "ping -n 900 127.0.0.1 >nul`r`n" +
+            ":whole`r`necho test marker::is_present ... FAILED`r`nexit /b 101`r`n"
         }
         # A narrowed run that fails before any test runs, as libtest does on an
         # argument it refuses; the whole suite fails as a catch does.
@@ -2091,7 +2098,7 @@ Test-Case '-Since with shards splits only the selected entries among them' {
 # The marker entry, selected by a change to src/lib.rs, recorded as caught by the
 # named tests; returns the runs its sabotaged entry was given.
 function Invoke-NarrowCase {
-    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full)
+    param([string] $Behaviour, [string[]] $Recorded, [switch] $Full, [string[]] $Extra = @())
     $root = New-ScopeFixture
     try {
         $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
@@ -2102,6 +2109,7 @@ function Invoke-NarrowCase {
         $stub = New-Stub -Behaviour $Behaviour -Root $root
         $arguments = @('-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Name', 'the marker*')
         if (-not $Full) { $arguments += @('-Since', 'HEAD') }
+        $arguments += $Extra
         $result = Invoke-Harness -Root $root -Arguments $arguments
         $log = Join-Path $root 'stubs\runs.log'
         $runs = @()
@@ -2134,6 +2142,13 @@ Test-Case 'a narrowed run that fails without a failed test is no catch, and the 
     Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
     Assert-Match 'caught \(suite failed' $case.Result.Output
     Assert-Equal 2 $case.Runs.Count 'the refused narrow run, then the whole suite'
+}
+
+Test-Case 'a narrowed run that hangs is no catch, and the whole suite decides' {
+    $case = Invoke-NarrowCase -Behaviour 'narrow-hangs' -Recorded @('marker::is_present') -Extra @('-TimeoutSeconds', '3')
+    Assert-Equal 0 $case.Result.ExitCode $case.Result.Output
+    Assert-Match 'caught \(suite failed' $case.Result.Output
+    Assert-Equal 2 $case.Runs.Count 'the hung narrow run, then the whole suite'
 }
 
 Test-Case 'a manifest that already passes --exact to libtest is narrowed without a second one' {

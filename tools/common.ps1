@@ -439,20 +439,69 @@ function Test-SabotageSharedInput {
     return $false
 }
 
-# Splits git's -z output into paths. -z, so each path arrives exactly as git holds
-# it: by default git quotes a path with a non-ASCII byte in it --
-# `"crates/x/caf\303\251.rs"` -- and a quoted path matches no crate and no shared
-# input, so a change would be read as unrelated. Separated by NUL, joined back
-# across the newlines the capture split on.
+# The paths in git's output, one per line, as git holds them: a path with a byte
+# outside printable ASCII in it, or a quote or backslash, is quoted and escaped in
+# C style -- `"crates/x/caf\303\251.rs"` -- and is unquoted here, its octal escapes
+# taken as the bytes of UTF-8 they are.
+#
+# Quoted, deliberately, and not -z. With -z git writes each path's raw bytes, and
+# PowerShell decodes a native command's output with the console's code page, which
+# on a Windows PowerShell host need not be UTF-8: an e-acute then arrives as two other
+# characters, not as a replacement character, and the path silently matches
+# nothing. Quoted output is ASCII, which every code page decodes alike, so it
+# arrives intact on any host. Callers ask for it with `-c core.quotePath=true`, so
+# a user's setting cannot turn it off. A line that still carries a character
+# outside ASCII was decoded by a host this cannot vouch for, and so does a quoting
+# that does not unquote: `Ok` is then false, and the caller cannot say what
+# changed, which sweeps more. Returned as an object rather than a list, so that no
+# paths and an answer that cannot be trusted never look alike.
 function Split-SabotageGitPaths {
     param($Lines)
-    foreach ($path in ((@($Lines) -join "`n") -split "`0")) { if ($path) { $path } }
+    $failed = [pscustomobject]@{ Ok = $false; Paths = [string[]]@() }
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in @($Lines)) {
+        if (-not $line) { continue }
+        $line = [string]$line
+        foreach ($c in $line.ToCharArray()) { if ([int]$c -gt 0x7E -or [int]$c -lt 0x20) { return $failed } }
+        if ($line.Length -ge 2 -and $line.StartsWith('"') -and $line.EndsWith('"')) {
+            $line = ConvertFrom-GitQuotedPath $line
+            if ($null -eq $line) { return $failed }
+        }
+        $paths.Add($line)
+    }
+    return [pscustomobject]@{ Ok = $true; Paths = [string[]]$paths.ToArray() }
+}
+
+# A path git quoted, as C does, unquoted: `\a \b \t \n \v \f \r \" \\` and three
+# octal digits for any other byte, the bytes then read as UTF-8. $null for text
+# that is not such a quoting, or bytes that are not UTF-8.
+function ConvertFrom-GitQuotedPath {
+    param([string] $Quoted)
+    if ($Quoted.Length -lt 2 -or $Quoted[0] -ne '"' -or $Quoted[$Quoted.Length - 1] -ne '"') { return $null }
+    $body = $Quoted.Substring(1, $Quoted.Length - 2)
+    $bytes = New-Object 'System.Collections.Generic.List[byte]'
+    $simple = @{ [char]'a' = 7; [char]'b' = 8; [char]'t' = 9; [char]'n' = 10; [char]'v' = 11; [char]'f' = 12; [char]'r' = 13; [char]'"' = 34; [char]'\' = 92 }
+    $i = 0
+    while ($i -lt $body.Length) {
+        $c = $body[$i]
+        if ($c -eq '"') { return $null }
+        if ($c -ne '\') { $bytes.Add([byte][char]$c); $i++; continue }
+        if ($i + 1 -ge $body.Length) { return $null }
+        $next = $body[$i + 1]
+        if ($simple.ContainsKey($next)) { $bytes.Add([byte]$simple[$next]); $i += 2; continue }
+        if ($i + 3 -lt $body.Length + 1 -and $body.Substring($i + 1, [Math]::Min(3, $body.Length - $i - 1)) -match '^[0-3][0-7][0-7]$') {
+            $bytes.Add([Convert]::ToByte($body.Substring($i + 1, 3), 8)); $i += 4; continue
+        }
+        return $null
+    }
+    $strict = New-Object System.Text.UTF8Encoding($false, $true)
+    try { return $strict.GetString($bytes.ToArray()) } catch { return $null }
 }
 
 # What differs between commit `From` and the working tree -- committed, staged,
 # unstaged, and untracked files git does not ignore -- as paths relative to the
 # root, forward slashes, sorted ordinally, each once. $null when git cannot say,
-# or reports a path this host could not decode. Cached per repository and commit,
+# or reports a path this host could not decode (Split-SabotageGitPaths). Cached per repository and commit,
 # since a sweep or a plan asks the same question of many entries recorded at the
 # same commit; the working tree can change between measurements, so
 # Get-SabotageChange, which begins every one, empties the cache first.
@@ -461,23 +510,22 @@ function Get-SabotageWorkingPaths {
     $key = "$RepositoryRoot|$From"
     if ($script:SabotageWorkingPaths.ContainsKey($key)) { return , $script:SabotageWorkingPaths[$key] }
     $result = $null
-    $diff = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $From }))
+    $diffLines = @(Invoke-NativeStdout { git -c core.quotePath=true -C $RepositoryRoot diff --name-only --no-renames $From })
     if ($LASTEXITCODE -eq 0) {
-        $untracked = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot ls-files -z --others --exclude-standard }))
+        $untrackedLines = @(Invoke-NativeStdout { git -c core.quotePath=true -C $RepositoryRoot ls-files --others --exclude-standard })
         if ($LASTEXITCODE -eq 0) {
-            $result = Join-SabotagePaths @(@($diff) + @($untracked))
+            $diff = Split-SabotageGitPaths $diffLines
+            $untracked = Split-SabotageGitPaths $untrackedLines
+            if ($diff.Ok -and $untracked.Ok) {
+                $result = Join-SabotagePaths @(@($diff.Paths) + @($untracked.Paths))
+            }
         }
     }
     $script:SabotageWorkingPaths[$key] = $result
     return , $result
 }
 
-# `Paths`, each once, slashes forward, sorted ordinally -- or $null if one is a path
-# this host decoded with a replacement character, which is not the path git meant
-# and could match nothing it should. No test reaches that: both PowerShell hosts
-# here decode git's UTF-8 paths, as the test of a non-ASCII path shows. It is for a
-# host whose output encoding is set otherwise, where a wrong path would pass
-# silently.
+# `Paths`, each once, slashes forward, sorted ordinally.
 function Join-SabotagePaths {
     param([string[]] $Paths)
     # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object
@@ -485,7 +533,6 @@ function Join-SabotagePaths {
     $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($path in @($Paths)) {
         if (-not $path) { continue }
-        if ($path.Contains([string][char]0xFFFD)) { return $null }
         [void]$set.Add($path.Replace('\', '/'))
     }
     [string[]] $sorted = @($set)
@@ -546,12 +593,14 @@ function Get-SabotageChange {
     $dropped = @()
     if ($ancestry -eq 1) {
         $divergent = $true
-        $dropped = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $mergeBase $Since }))
+        $droppedLines = @(Invoke-NativeStdout { git -c core.quotePath=true -C $RepositoryRoot diff --name-only --no-renames $mergeBase $Since })
         if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff $mergeBase against '$Since'" }
+        $split = Split-SabotageGitPaths $droppedLines
+        if (-not $split.Ok) { return & $unknown 'git reported a path this host could not decode' }
+        $dropped = $split.Paths
     }
     elseif ($ancestry -ne 0) { return & $unknown "git could not say whether '$Since' is an ancestor of HEAD" }
     $paths = Join-SabotagePaths @(@($working) + @($dropped))
-    if ($null -eq $paths) { return & $unknown 'git reported a path this host could not decode' }
     $reason = "$($paths.Count) path(s) differ from $mergeBase"
     if ($divergent) { $reason += ", counting what '$Since' changed since then, as it is not an ancestor of HEAD" }
     return [pscustomobject]@{ Known = $true; Base = $mergeBase; Divergent = $divergent; Paths = $paths; Reason = $reason }

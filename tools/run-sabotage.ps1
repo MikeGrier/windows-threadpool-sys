@@ -708,15 +708,18 @@ function Invoke-Sabotaged {
     # judged at all, the whole suite runs as it always did, and its transcript
     # replaces the narrow one.
     #
-    # A failure counts only when libtest reported a test FAILED. A narrowed run can
+    # Only a failure libtest reported as a test FAILED counts. A narrowed run can
     # also fail before running any test -- arguments it refuses, a filter it cannot
-    # parse -- and crediting that as a catch would report a defect caught that no
-    # test noticed. Such a run, and any other that is not a reported test failure
-    # or a hang, falls through to the whole suite.
+    # parse -- and crediting that would report a defect caught that no test
+    # noticed. A hang does not count either: a test run alone is scheduled
+    # differently from one among the whole suite, and one that hangs alone need
+    # not hang there, which is the run the result must stand for. Anything but a
+    # reported test failure falls through to the whole suite, at the cost, for a
+    # hang, of a second wait.
     if ($FirstTests -and @($FirstTests).Count -gt 0) {
         $narrow = Invoke-RunPhase -CargoArgs (Add-TestFilter -CargoArgs $CargoArgs -Tests $FirstTests) `
             -WorkingDirectory $WorkingDirectory -TranscriptPath $TranscriptPath -Seconds $TestSeconds
-        $credited = $narrow.Outcome -eq 'hung'
+        $credited = $false
         if ($narrow.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
             $credited = @(Get-FailedTestName (Read-SharedText -Path $TranscriptPath)).Count -gt 0
         }
@@ -1669,7 +1672,9 @@ function Get-FirstTests {
 # recorded with no commit, which no later run uses. Said, so it is not a surprise
 # that a local sweep with edits in hand narrows nothing afterwards.
 $sweptCommit = $null
-$dirty = @(Split-SabotageGitPaths (Invoke-NativeStdout { git -C $repoRoot status --porcelain -z --untracked-files=normal }))
+# Whether git reports any line at all is the question, not which paths, so the
+# output is counted, not parsed.
+$dirty = @(Invoke-NativeStdout { git -C $repoRoot status --porcelain --untracked-files=normal } | Where-Object { $_ })
 if ($LASTEXITCODE -eq 0 -and $dirty.Count -eq 0) {
     $sweptCommit = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
     if ($sweptCommit) { $sweptCommit = $sweptCommit.Trim() }
@@ -1793,8 +1798,7 @@ foreach ($sabotage in $selected) {
             else { "caught (suite failed, exit $($run.Code))" }
         }
         'hung' {
-            if ($narrowed) { "caught (its recorded tests HUNG past ${entryTimeout}s)" }
-            else { "caught (tests HUNG past ${entryTimeout}s)" }
+            "caught (tests HUNG past ${entryTimeout}s)"
         }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
