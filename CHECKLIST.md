@@ -272,11 +272,7 @@ changes.
 
 - [x] **M34.16** -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3416)
 
-- [ ] **M34.17** -- **Teach the scoped run as the default local check.** The repository instructions'
-  sabotage guidance in [.github/copilot-instructions.md](.github/copilot-instructions.md) and
-  [tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with a run scoped to
-  the branch, and say when the whole manifest is still the right run: a change to a shared test
-  helper, or to a crate others build on.
+- [x] **M34.17** -- Teach the scoped sabotage run as the default local check. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3417)
 
 ## M37 -- Discharge the failable-call standard across the workspace
 

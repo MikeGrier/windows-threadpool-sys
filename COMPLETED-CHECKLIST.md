@@ -4030,3 +4030,12 @@ runs shared one concurrency group with `cancel-in-progress`, which was harmless 
 swept only its merge's change, would have left a cancelled merge's crates unswept until the nightly run. Every run now has a group of
 its own. Two runs side by side can each save a record of which tests caught each entry without the other's, which only makes a later
 scoped run larger.
+
+## Moved 2026-10-19 02:09:51 -04:00 -- sabotage scope, M34.17: the scoped run is the default local check
+
+### <a id="m3417"></a>M34.17 -- Teach the scoped sabotage run as the default local check. *(completed 2026-10-19 02:09:51 -04:00)*
+
+The repository instructions' sabotage guidance in [.github/copilot-instructions.md](.github/copilot-instructions.md) and
+[tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with `-Since origin/main`, that `-List` shows which
+entries and why, that a clone takes every entry of a touched crate until it has swept the manifest once, and to sweep the whole
+manifest for a change scoping cannot see.

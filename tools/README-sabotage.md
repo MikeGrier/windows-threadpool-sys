@@ -23,6 +23,10 @@ below for what that buys and why it is the premise rather than a nicety.
 # Re-run one, after changing a test
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Name '*doorbell*'
 
+# Sweep only the entries this branch could have affected; -List shows which, and why
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main -List
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main
+
 # Check that every patch still applies, building nothing (one manifest, then all)
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -CheckPatches
 .\tools\check-sabotage-patches.ps1
@@ -56,6 +60,15 @@ entry's whole suite, as a sweep did before any of this scoping. That is the
 backstop for what scoping cannot see, and the run that re-learns which tests catch
 each entry. A run started by hand from the workflow's dispatch is a full sweep
 too, narrowed only by the manifest and name it is given.
+
+Locally, `-Since <base>` scopes a sweep the same way, measured from the merge base
+with `<base>` against the working tree, so `-Since origin/main` sweeps what a branch
+changed, edits not yet committed included. It reads the record from the output
+directory, which a clone has only once it has swept the manifest; until then every
+entry of a crate the branch touched is taken. Sweep the whole manifest, without
+`-Since`, when a change is one scoping cannot see: a test helper shared by a crate's
+tests, or code elsewhere in a crate that decides whether a sabotaged line is
+reached.
 
 | Exit | Meaning |
 |---|---|
