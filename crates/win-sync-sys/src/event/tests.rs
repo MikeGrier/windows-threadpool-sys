@@ -479,3 +479,105 @@ fn a_wait_only_event_is_send_and_sync() {
     fn assert_send_and_sync<T: Send + Sync>() {}
     assert_send_and_sync::<WaitOnlyEvent>();
 }
+
+// --- clones share one handle (WS-2.1, WS-D-10) ---
+
+#[test]
+fn a_clone_shares_the_handle_rather_than_making_one() {
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    assert_eq!(
+        clone.as_raw_handle(),
+        event.as_raw_handle(),
+        "one handle, held twice"
+    );
+}
+
+#[test]
+fn a_set_through_a_clone_is_seen_through_the_original_and_a_reset_back() {
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    clone.set().expect("set through the clone");
+    assert!(take(&event), "the original sees the clone's set");
+    event.reset().expect("reset through the original");
+    assert!(!take(&clone), "the clone sees the original's reset");
+}
+
+#[test]
+fn a_clone_keeps_the_handle_open_after_the_original_drops() {
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    let raw = event.as_raw_handle();
+    drop(event);
+    clone.set().expect("set after the original dropped");
+    assert!(take(&clone));
+    assert_eq!(clone.as_raw_handle(), raw, "the same handle is still open");
+}
+
+#[test]
+fn an_event_gives_its_handle_back_only_to_its_last_holder() {
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    let raw = event.as_raw_handle();
+    let event = event.try_into_owned().expect_err("a clone is still held");
+    drop(clone);
+    let owned = event.try_into_owned().expect("the last holder");
+    assert_eq!(
+        owned.as_raw_handle(),
+        raw,
+        "the handle itself, not a duplicate"
+    );
+}
+
+#[test]
+fn an_event_converted_into_a_shared_handle_is_its_handle() {
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    let shared = win_shared_os_owned_handle::SharedHandle::from(event);
+    assert_eq!(shared.as_raw_handle(), clone.as_raw_handle());
+    clone.set().expect("set through the clone");
+    assert!(take(&shared), "the shared handle sees the set");
+}
+
+#[test]
+fn the_conversion_to_an_owned_handle_duplicates_while_a_clone_is_held() {
+    // Transitional (WS-D-10): the conversion predates sharing, and is deleted with `try_clone`.
+    let event = event(ResetMode::Manual, false);
+    let clone = event.clone();
+    let owned: OwnedHandle = event.into();
+    assert_ne!(
+        owned.as_raw_handle(),
+        clone.as_raw_handle(),
+        "a second handle"
+    );
+    assert!(same_object(&owned, &clone), "to the same event");
+}
+
+#[test]
+fn duplicate_wait_only_makes_a_new_handle_that_cannot_signal() {
+    let event = event(ResetMode::Manual, false);
+    let waiter = event.duplicate_wait_only().expect("a wait-only duplicate");
+    assert_ne!(
+        waiter.as_raw_handle(),
+        event.as_raw_handle(),
+        "a new handle"
+    );
+    assert!(same_object(&waiter, &event), "to the same event");
+    assert_eq!(raw_set_error(&waiter), Some(ERROR_ACCESS_DENIED as i32));
+}
+
+#[test]
+fn a_clone_of_a_wait_only_event_shares_its_handle_and_its_access() {
+    let event = event(ResetMode::Manual, false);
+    let waiter = event.duplicate_wait_only().expect("a wait-only duplicate");
+    let clone = waiter.clone();
+    assert_eq!(
+        clone.as_raw_handle(),
+        waiter.as_raw_handle(),
+        "one handle, held twice"
+    );
+    assert_eq!(raw_set_error(&clone), Some(ERROR_ACCESS_DENIED as i32));
+    let waiter = waiter.try_into_owned().expect_err("a clone is still held");
+    drop(clone);
+    assert!(waiter.try_into_owned().is_ok(), "the last holder");
+}

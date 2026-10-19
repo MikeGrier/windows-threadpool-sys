@@ -7,24 +7,26 @@ suffix is that promise, as the workspace's naming decision defines it.
 ## What is here
 
 - **`Event`** -- an owned event object, created with `CreateEventW`, that can be set and reset
-  without `unsafe`. A clone (`try_clone`) is a second handle to the same object, so one part of a
-  program can keep an event to signal while another hands it to something that waits on it.
+  without `unsafe`. A clone shares the one handle, so one part of a program can keep an event to
+  signal while another hands it to something that waits on it, and the handle closes when the last
+  clone drops.
 
 ```rust
-use std::os::windows::io::OwnedHandle;
+use win_shared_os_owned_handle::SharedHandle;
 use win_sync_sys::{Event, ResetMode};
 
 let ready = Event::new(ResetMode::Auto, false)?;
 
-// A second handle to the same event, for another thread to signal through.
-let signaller = ready.try_clone()?;
+// A second holder of the same handle, for another thread to signal through.
+let signaller = ready.clone();
 std::thread::spawn(move || signaller.set())
     .join()
     .expect("the signalling thread")?;
 
 // `ready` is now signalled. Anything that waits on a handle can take it from
-// here; an `Event` converts into an `OwnedHandle` and lends one as well.
-let handle: OwnedHandle = ready.into();
+// here: an `Event` lends its handle, converts into a `SharedHandle`, and gives
+// an `OwnedHandle` to its last holder through `try_into_owned`.
+let handle: SharedHandle = ready.into();
 # drop(handle);
 # Ok::<(), std::io::Error>(())
 ```
@@ -99,7 +101,7 @@ signal_object_and_wait(&ping, &pong, poll, Alertable::No)?;
 ```
 
 - **`WaitOnlyEvent`** and **`duplicate_handle_with_access`** -- a handle to the same object that can
-  do less. `Event::try_clone_wait_only` gives a handle to the event that can be waited on and can
+  do less. `Event::duplicate_wait_only` makes a new handle to the event that can be waited on and can
   neither set nor reset it: the kernel refuses a `SetEvent` or `ResetEvent` on it.
   `duplicate_handle_with_access` is `DuplicateHandle` with the access mask chosen, over any handle
   and returning an `OwnedHandle`. **Windows does not confine a duplicate to the source's access**,
@@ -114,7 +116,7 @@ use win_sync_sys::{Access, Event, ResetMode, WaitOutcome, duplicate_handle_with_
 let event = Event::new(ResetMode::Manual, false)?;
 
 // Hand this to something that should wait for the event and never signal it.
-let waiter = event.try_clone_wait_only()?;
+let waiter = event.duplicate_wait_only()?;
 assert_eq!(wait_for_single_object(&waiter, Some(Duration::ZERO))?, WaitOutcome::TimedOut);
 event.set()?;
 assert_eq!(wait_for_single_object(&waiter, None)?, WaitOutcome::Signalled);

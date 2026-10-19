@@ -21,7 +21,7 @@ use crate::wait::{Alertable, WaitOutcome, milliseconds, outcome};
 /// use win_sync_sys::{Alertable, Event, ResetMode, signal_object_and_wait};
 ///
 /// let ping = Event::new(ResetMode::Auto, false)?;
-/// let waiter = ping.try_clone_wait_only()?;
+/// let waiter = ping.duplicate_wait_only()?;
 /// let pong = Event::new(ResetMode::Auto, true)?;
 /// // A wait-only handle cannot be signalled.
 /// signal_object_and_wait(&waiter, &pong, None, Alertable::No)?;
