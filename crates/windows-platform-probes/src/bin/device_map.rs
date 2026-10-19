@@ -13,7 +13,10 @@
 //! path resolved on a submitting thread and opened on a worker under a captured
 //! token can name a different device.
 
-use windows_platform_probes::device_map::{SubstDrive, measure_with_subst};
+use windows_platform_probes::build_identity::this_build;
+use windows_platform_probes::device_map::{
+    NO_FREE_DRIVE_LETTER, SubstDrive, declined_row, measure_with_subst, raw_row,
+};
 use windows_platform_probes::report::emit_report;
 
 fn main() {
@@ -37,10 +40,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(out, "== does impersonation change the DOS device map? ==\n");
 
     let Some(drive) = SubstDrive::claim("binary") else {
-        let _ = writeln!(
-            out,
-            "no free drive letter on this host, so the probe cannot run."
-        );
+        let _ = writeln!(out, "{NO_FREE_DRIVE_LETTER}, so the probe cannot run.");
         let _ = writeln!(
             out,
             "(Reported rather than measured: a probe that cannot set up its"
@@ -48,6 +48,11 @@ fn render(out: &mut dyn std::fmt::Write) {
         let _ = writeln!(
             out,
             "fixture must say so instead of producing a misleading negative.)"
+        );
+        let _ = writeln!(
+            out,
+            "{}",
+            declined_row(NO_FREE_DRIVE_LETTER, &this_build().to_string()).render()
         );
         return;
     };
@@ -136,4 +141,11 @@ fn render(out: &mut dyn std::fmt::Write) {
             "  check the control above before believing the former."
         );
     }
+
+    // The raw data, last, as every probe's normal run emits it (`M8.10`).
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&finding, &this_build().to_string()).render()
+    );
 }

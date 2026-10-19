@@ -1084,6 +1084,86 @@
       ]
     },
     {
+      "name": "M8.10: the device-map probe stops emitting its row",
+      "file": "src/bin/device_map.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&finding, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.10: a letter that resolved to nothing is published as an empty list",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "The finding is the letter vanishing under impersonation; an empty list reads as a definition with no targets rather than none at all.",
+      "find": [
+        "            } else {",
+        "                Value::Null",
+        "            },"
+      ],
+      "replace": [
+        "            } else {",
+        "                Value::List(Vec::new())",
+        "            },"
+      ]
+    },
+    {
+      "name": "M8.10: the logon session's halves trade places",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "The session is an identifier a reader compares across rows; the prose prints it high:low, and the row must too.",
+      "find": [
+        "                    .map(|(low, high)| format!(\"{high:08x}:{low:08x}\")),"
+      ],
+      "replace": [
+        "                    .map(|(low, high)| format!(\"{low:08x}:{high:08x}\")),"
+      ]
+    },
+    {
+      "name": "M8.10: the two sessions trade places",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "Which context the letter vanished in is the finding.",
+      "find": [
+        "        .with(\"own_session\", session(&finding.own_session))",
+        "        .with(\"anonymous_session\", session(&finding.anonymous_session))"
+      ],
+      "replace": [
+        "        .with(\"own_session\", session(&finding.anonymous_session))",
+        "        .with(\"anonymous_session\", session(&finding.own_session))"
+      ]
+    },
+    {
+      "name": "M8.10: a declined run loses the reason",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "caught",
+      "why": "A declined row that says null for why is indistinguishable from a measured one in that field.",
+      "find": [
+        "    preamble(build).with(\"declined\", reason)"
+      ],
+      "replace": [
+        "    preamble(build).with(\"declined\", Value::Null)"
+      ]
+    },
+    {
+      "name": "M8.10 control: the row names its build before its architecture",
+      "file": "src/device_map/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",
