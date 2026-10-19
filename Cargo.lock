@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "win-multi-file-tail-watcher"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "io-buffers",
  "windows-ioring-sys",
