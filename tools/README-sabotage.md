@@ -51,7 +51,8 @@ all sweeps share or its base cannot be measured from. Within a crate the push
 touched, it counts only the entries the push could have affected, and each shard
 finds the same ones with `run-sabotage.ps1 -Since`: an entry that is new or
 changed, whose patched file changed, whose catching tests (from `catchers.json`,
-below) changed or are gone, or of which nothing better is known. The rule is
+below) changed or are gone -- including a file declaring a module they are in --
+or of which nothing better is known. The rule is
 `Select-SabotageEntry` in [common.ps1](common.ps1), and what it cannot see is in
 [DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope). `-List -Since` shows the
 reason each entry was chosen.

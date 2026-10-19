@@ -692,11 +692,13 @@ function Get-SabotageCrateDependency {
 }
 
 # Whether `Path` lies in the crate at `Crate`, both relative to the root with
-# forward slashes. A crate at the root, '', holds every path.
+# forward slashes. A crate at the root, '', holds every path. Case is ignored: a
+# path written in another case names the same file here, and taking it for another
+# file would make a change to the crate look like none.
 function Test-SabotagePathInCrate {
     param([string] $Path, [string] $Crate)
     if (-not $Crate) { return $true }
-    return $Path.StartsWith($Crate + '/', [System.StringComparison]::Ordinal)
+    return $Path.StartsWith($Crate + '/', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 # A manifest's crate: the directory it is in, relative to the root, forward
@@ -706,6 +708,25 @@ function Get-SabotageManifestCrate {
     $at = $Manifest.LastIndexOf('/')
     if ($at -lt 0) { return '' }
     return $Manifest.Substring(0, $at)
+}
+
+# `Path`, full, in the case each of its directories and its file have on disk, so
+# a path typed in another case is named as git names it. A part that is not there
+# is kept as given.
+function Get-SabotageOnDiskPath {
+    param([string] $Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($full)
+    $at = $root
+    foreach ($part in $full.Substring($root.Length).Split([char[]]@('\', '/'), [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        $found = $null
+        if ([System.IO.Directory]::Exists($at)) {
+            $found = @((New-Object System.IO.DirectoryInfo $at).GetFileSystemInfos($part)) | Select-Object -First 1
+        }
+        $name = if ($null -ne $found) { $found.Name } else { $part }
+        $at = [System.IO.Path]::Combine($at, $name)
+    }
+    return $at
 }
 # Which workspace crate each package is, by name: the package's directory relative
 # to the root, forward slashes, '' for one at the root. From `cargo metadata
@@ -1039,7 +1060,7 @@ function Select-SabotageEntry {
     # What is worked out once and read by the blocks below. A hashtable, because a
     # block run with & has a scope of its own, and a variable assigned there would
     # be gone when it returned; a table it was given is the same table.
-    $memo = @{ Settings = $null; Definitions = $null }
+    $memo = @{ Settings = $null; Definitions = $null; Roots = $null; RootDirs = @(); Redirected = $false }
 
     # The manifest's own settings, which decide how every entry is patched and
     # judged: everything but `sabotages`.
@@ -1081,7 +1102,7 @@ function Select-SabotageEntry {
         }
         if ($crate) {
             foreach ($path in $changed) {
-                if ($path -eq "$crate/Cargo.toml" -or $path -eq "$crate/build.rs" -or $path.StartsWith("$crate/.cargo/", [System.StringComparison]::Ordinal)) {
+                if ($path -eq "$crate/Cargo.toml" -or $path -eq "$crate/build.rs" -or $path.StartsWith("$crate/.cargo/", [System.StringComparison]::OrdinalIgnoreCase)) {
                     return [pscustomobject]@{ Every = "the crate's build settings changed: $path"; Reached = $true }
                 }
             }
@@ -1103,20 +1124,36 @@ function Select-SabotageEntry {
     # Every function the crate defines, by name, to the files defining it: test
     # names are function names, and the same name is often defined in several
     # files, so a test is looked for in all of them. Built once, on first need, into
-    # $memo.Definitions.
+    # $memo.Definitions. Alongside it, into $memo, the crate's target roots -- the
+    # files cargo finds by convention, and any `path` naming a .rs file in its
+    # Cargo.toml, which can only be a target's -- the directories they are in, and
+    # whether any file names its module's file with `#[path]`.
     $define = {
         $map = @{}
+        $roots = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         $crateDir = if ($crate) { Join-Path $RepositoryRoot $crate } else { $RepositoryRoot }
         foreach ($file in Get-ChildItem -LiteralPath $crateDir -Recurse -Filter '*.rs' -File) {
             $rel = & $relative $file.FullName
-            foreach ($match in [regex]::Matches([System.IO.File]::ReadAllText($file.FullName), '\bfn\s+(\w+)')) {
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($match in [regex]::Matches($text, '\bfn\s+(\w+)')) {
                 $name = $match.Groups[1].Value
                 if (-not $map.ContainsKey($name)) {
-                    $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                    $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
                 }
                 [void]$map[$name].Add($rel)
             }
+            if ($text -match '#\s*\[\s*path\s*=') { $memo.Redirected = $true }
+            $inCrate = if ($crate) { $rel.Substring($crate.Length + 1) } else { $rel }
+            if ($inCrate -match '^(src/(lib|main)|src/bin/[^/]+(/main)?|(tests|examples|benches)/[^/]+(/main)?)\.rs$') { [void]$roots.Add($rel) }
         }
+        $cargo = Join-Path $crateDir 'Cargo.toml'
+        if (Test-Path -LiteralPath $cargo -PathType Leaf) {
+            foreach ($match in [regex]::Matches([System.IO.File]::ReadAllText($cargo), '\bpath\s*=\s*"([^"]+\.rs)"')) {
+                [void]$roots.Add((& $relative (Join-Path $crateDir $match.Groups[1].Value)))
+            }
+        }
+        $memo.Roots = $roots
+        $memo.RootDirs = @($roots | ForEach-Object { $at = $_.LastIndexOf('/'); if ($at -lt 0) { '' } else { $_.Substring(0, $at) } } | Select-Object -Unique)
         $map
     }
     # The functions the crate's changed files defined at commit X: a recorded test
@@ -1134,7 +1171,7 @@ function Select-SabotageEntry {
                 foreach ($match in [regex]::Matches($text, '\bfn\s+(\w+)')) {
                     $name = $match.Groups[1].Value
                     if (-not $map.ContainsKey($name)) {
-                        $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                        $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
                     }
                     [void]$map[$name].Add($path)
                 }
@@ -1142,6 +1179,58 @@ function Select-SabotageEntry {
             $definedAt[$commit] = $map
         }
         $definedAt[$commit]
+    }
+
+    # The modules the file at `Path` declares, `mod name;` or `mod name {`: in the
+    # working tree when `Commit` is empty, or at that commit. Cached.
+    $declared = @{}
+    $declares = {
+        param([string] $commit, [string] $path)
+        $key = "$commit|$path"
+        if (-not $declared.ContainsKey($key)) {
+            $text = $null
+            if ($commit) { $text = Get-SabotageFileAt -RepositoryRoot $RepositoryRoot -Commit $commit -Path $path }
+            else {
+                $full = Join-Path $RepositoryRoot $path
+                if (Test-Path -LiteralPath $full -PathType Leaf) { $text = [System.IO.File]::ReadAllText($full) }
+            }
+            $names = @()
+            if ($null -ne $text) { $names = @([regex]::Matches($text, '\bmod\s+(\w+)\s*[;{]') | ForEach-Object { $_.Groups[1].Value }) }
+            $declared[$key] = [string[]]$names
+        }
+        $declared[$key]
+    }
+    # The changed file on the module path of a recorded test `a::b::name`, or
+    # $null. A test leaves the build, its own file unchanged, when a file declaring
+    # a module it is in drops or gates that declaration: the target root declaring
+    # `a`, or the file of `a`, or of `a::b`, beside a root, as `a.rs` or `a/mod.rs`.
+    # In a crate where any file names its module's file with `#[path]`, a file's
+    # name says nothing of its module, so any changed file declaring a module of the
+    # path, now or at commit X, counts.
+    $onPath = {
+        param([string] $commit, $changed, [string] $test)
+        $parts = @($test -split '::')
+        $modules = @($parts | Select-Object -First ($parts.Count - 1))
+        if ($modules.Count -eq 0) { return $null }
+        foreach ($path in $changed) {
+            if (-not $path.EndsWith('.rs', [System.StringComparison]::OrdinalIgnoreCase) -or -not (Test-SabotagePathInCrate $path $crate)) { continue }
+            $declaring = @()
+            if ($memo.Redirected) { $declaring = $modules }
+            elseif ($memo.Roots.Contains($path)) { $declaring = @($modules[0]) }
+            foreach ($module in $declaring) {
+                if ((@(& $declares '' $path) -contains $module) -or (@(& $declares $commit $path) -contains $module)) { return $path }
+            }
+            $stem = $path.Substring(0, $path.Length - 3)
+            if ($stem.EndsWith('/mod', [System.StringComparison]::OrdinalIgnoreCase)) { $stem = $stem.Substring(0, $stem.Length - 4) }
+            foreach ($dir in $memo.RootDirs) {
+                $prefix = if ($dir) { "$dir/" } else { '' }
+                for ($depth = 1; $depth -le $modules.Count; $depth++) {
+                    $candidate = $prefix + (@($modules | Select-Object -First $depth) -join '/')
+                    if ([string]::Equals($stem, $candidate, [System.StringComparison]::OrdinalIgnoreCase)) { return $path }
+                }
+            }
+        }
+        $null
     }
 
     # Why a change from commit X over `Changed` reaches one entry, in a crate it
@@ -1172,11 +1261,16 @@ function Select-SabotageEntry {
             $moved = @($definitions[$function] | Where-Object { $changed.Contains($_) })
             if ($before.ContainsKey($function)) { $moved += @($before[$function]) }
             if ($moved.Count -gt 0) { return "its catching test's file changed: $($moved[0])" }
+            $declaring = & $onPath $commit $changed $test
+            if ($declaring) { return "a module its catching test is in changed: $declaring" }
         }
         return $null
     }
 
-    $changedNow = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    # Paths are matched ignoring case throughout: a manifest, `root` or `file`
+    # written in another case than git's names the same file here, and a match it
+    # missed would make a change look like none.
+    $changedNow = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($path in @($Change.Paths)) { if ($path) { [void]$changedNow.Add($path) } }
     $now = & $judgeManifest $Change.Base $changedNow
     if ($now.Every) { return & $every $now.Every }
@@ -1190,7 +1284,7 @@ function Select-SabotageEntry {
             $paths = Get-SabotageWorkingPaths -RepositoryRoot $RepositoryRoot -From $commit
             $value = $null
             if ($null -ne $paths) {
-                $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
                 foreach ($path in $paths) { [void]$set.Add($path) }
                 $value = [pscustomobject]@{ Changed = $set; Manifest = (& $judgeManifest $commit $set) }
             }
@@ -1232,29 +1326,42 @@ function Select-SabotageEntry {
     if ($affected.Count -eq 0 -and -not $now.Reached) { $reason = 'nothing it builds on changed' }
     return [pscustomobject]@{ All = $false; Entries = $affected; Reasons = $reasons; Reason = $reason }
 }
+# Whether a run of `CargoArgs` can be narrowed by naming tests: not when they
+# already name some. libtest runs a test that matches ANY name it is given, so a
+# name added to a filter the manifest set would widen the run past the suite it
+# stands for, to a test that suite does not run, and a failure there would be
+# credited as a catch. A filter is anything but a flag after cargo's `--`, or,
+# before it, a word that is neither the `test` subcommand nor the value of an
+# option below: the TESTNAME `cargo test` passes on to libtest. Conservative: an
+# option's value written as a separate word after `--` (`--test-threads 1`), or
+# after an option not listed, counts too, and only costs narrowing.
+function Test-SabotageNarrowable {
+    param([string[]] $CargoArgs)
+    $arguments = @($CargoArgs)
+    $separator = [array]::IndexOf($arguments, '--')
+    $end = if ($separator -lt 0) { $arguments.Count } else { $separator }
+    $valued = @('-p', '--package', '--exclude', '-F', '--features', '--target', '--target-dir', '--manifest-path',
+        '--lockfile-path', '--test', '--bin', '--example', '--bench', '-j', '--jobs', '--profile', '--config', '-Z',
+        '--color', '--message-format')
+    $start = if ($end -gt 0 -and [string]::Equals([string]$arguments[0], 'test', [System.StringComparison]::Ordinal)) { 1 } else { 0 }
+    for ($i = $start; $i -lt $end; $i++) {
+        $argument = [string]$arguments[$i]
+        if (-not $argument.StartsWith('-')) { return $false }
+        if ($valued -ccontains $argument) { $i++ }
+    }
+    if ($separator -lt 0) { return $true }
+    foreach ($argument in @($arguments | Select-Object -Skip ($separator + 1))) {
+        if (-not ([string]$argument).StartsWith('-')) { return $false }
+    }
+    return $true
+}
+
 # `CargoArgs` narrowed to the tests named, each matched exactly: the names go
 # after cargo's `--`, where libtest reads them, and every test binary is given
 # them, so a binary holding none runs nothing and passes. The sweep harness's
 # run of an entry's recorded catching tests (run-sabotage.ps1, Invoke-Sabotaged). `--exact` is added only
 # if the arguments after `--` do not carry it already: libtest refuses it twice,
 # before running anything.
-# Whether a run of `CargoArgs` can be narrowed by naming tests: not when the
-# arguments for libtest, after cargo's `--`, already carry anything but flags.
-# libtest runs a test that matches ANY name it is given, so a name added to a
-# filter the manifest set would widen the run past the suite it stands for, to a
-# test that suite does not run, and a failure there would be credited as a catch.
-# Conservative: an option's value written as a separate word (`--test-threads 1`)
-# counts too, and only costs narrowing.
-function Test-SabotageNarrowable {
-    param([string[]] $CargoArgs)
-    $separator = [array]::IndexOf(@($CargoArgs), '--')
-    if ($separator -lt 0) { return $true }
-    foreach ($argument in @($CargoArgs | Select-Object -Skip ($separator + 1))) {
-        if (-not ([string]$argument).StartsWith('-')) { return $false }
-    }
-    return $true
-}
-
 function Add-TestFilter {
     param([string[]] $CargoArgs, [string[]] $Tests)
     $separator = [array]::IndexOf($CargoArgs, '--')

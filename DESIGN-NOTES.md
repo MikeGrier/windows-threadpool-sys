@@ -2834,7 +2834,13 @@ backstop. The layers, cheapest first, are the items from
   manifest names no package at all.
 - Within a manifest reached only through its own crate, an entry runs when it is new or changed,
   when the file it patches changed, or when a test that caught it last time changed or is gone --
-  a file that defines it now, or did before the change. An entry with no record of what caught it,
+  a file that defines it now, or did before the change, or a file declaring a module it is in: the
+  target root that declares its first module, or the file of any module on its path beside a root
+  (`a.rs` or `a/mod.rs`), since dropping or gating a `mod tests;` takes its tests out of the build
+  without touching them. In a crate where any file places a module with `#[path]`, a file's name says
+  nothing, so any changed file declaring a module on the path counts. Paths are matched ignoring
+  case, and a manifest given in another case is named as git names it, since on Windows both name
+  the same file. An entry with no record of what caught it,
   or caught by a doctest, runs whenever its crate changed: telling a test file from source by its
   path is guesswork here, and a doctest can come from a file spliced into the documentation. A
   manifest whose `root` is another directory is reached by a change there too.
@@ -2857,7 +2863,8 @@ backstop. The layers, cheapest first, are the items from
 - In a scoped run, an entry is first run against the tests that caught it last time, and against
   the whole suite only if they do not report a test failure. A hang there does not count: a test
   run alone is scheduled differently from one in the whole suite, so the whole suite decides. A
-  manifest whose `testArgs` already name tests after `--` is never narrowed: libtest runs a test that
+  manifest whose `testArgs` already name tests -- after `--`, or before it as the TESTNAME `cargo test`
+  passes on -- is never narrowed: libtest runs a test that
   matches any filter given, so adding a recorded name would widen its run, not narrow it. A full sweep always runs the whole
   suite, so the nightly backstop is exactly the sweep from before scoping, and it re-learns every
   entry's catching tests. The narrow run can differ in one way: a patch that also stops a doctest
@@ -2867,7 +2874,8 @@ backstop. The layers, cheapest first, are the items from
 **What scoping does not see, which is what the nightly sweep is for.** A change elsewhere in a crate
 than the file an entry patches can make that entry's defect unreachable or harmless, and a test
 helper shared across a crate's tests can weaken many tests at once. Neither selects the entry, and
-neither is caught until the nightly run.
+neither is caught until the nightly run. Nor does a module a macro declares: the module path is
+traced through `mod` items as written.
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 
 **Every `compile_fail` doctest pins its expected error code -- ```` ```compile_fail,E0502 ```` -- and CI

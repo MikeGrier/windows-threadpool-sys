@@ -223,7 +223,8 @@
     nothing the manifest builds or tests, except an entry with no usable
     record, which is always swept. When it is in the crate itself, the
     entries that are new or changed, whose patched file changed, whose
-    recorded catching tests changed or are gone, and those with no better
+    recorded catching tests changed or are gone -- their file, or a file
+    declaring a module they are in -- and those with no better
     answer -- caught by nothing recorded, or by a doctest. The rule is
     `Select-SabotageEntry` in [common.ps1](common.ps1); what it cannot see is
     in DESIGN-NOTES.md, "sabotage-scope". Measured from the merge base, against
@@ -236,8 +237,8 @@
     untracked changes, or a file git is told to ignore changes to -- records
     what it learned with no commit, so a later run does not use it; such a
     hidden file also makes the change unmeasurable, so every entry is swept.
-    A manifest whose `testArgs` already filter tests after `--` is never
-    narrowed to its recorded tests. Needs cargo on
+    A manifest whose `testArgs` already filter tests, after `--` or as a
+    TESTNAME before it, is never narrowed to its recorded tests. Needs cargo on
     PATH, for `cargo metadata`. `-List` shows each entry's reason.
 
 .PARAMETER CatcherRecord
@@ -1008,7 +1009,9 @@ if (-not $repoRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
 if (-not (Test-Path -LiteralPath $Manifest)) {
     Exit-WithMessage "No manifest at: $Manifest" 2
 }
-$manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
+# In the case it has on disk, so the record and -Since name it as git does, however
+# it was typed.
+$manifestPath = Get-SabotageOnDiskPath (Resolve-Path -LiteralPath $Manifest).Path
 $manifestDir = Split-Path -Parent $manifestPath
 # The manifest's path from the repository root, forward slashes: how the record of
 # which tests caught each entry, and the scope of -Since, name it.

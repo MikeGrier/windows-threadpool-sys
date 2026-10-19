@@ -1953,6 +1953,19 @@ Test-Case 'a caught entry is recorded with the tests that failed, and a survived
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'a manifest given in another case is recorded under the name git has for it' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'fail-named' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @('-Manifest', 'SABOTAGE.JSON', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        $text = [System.IO.File]::ReadAllText((Join-Path $root '.scratch\sabotage\catchers.json'))
+        Assert-True ($text.Contains('"sabotage.json"')) "keyed as on disk: $text"
+        Assert-False ($text.Contains('"SABOTAGE.JSON"')) 'not as typed'
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'a sweep keeps what it did not run, and an infrastructure outcome or a stale patch overwrites nothing' {
     $spec = New-Spec
     $spec.sabotages += [ordered]@{

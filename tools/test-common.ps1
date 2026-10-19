@@ -529,6 +529,7 @@ Test-Case 'a manifest''s crate is its directory, and a path is in a crate only p
     if (Test-SabotagePathInCrate 'crates/ab/src/x.rs' 'crates/a') { throw 'a sibling sharing a prefix is not inside' }
     if (Test-SabotagePathInCrate 'crates/a' 'crates/a') { throw 'the directory itself is no file in it' }
     if (-not (Test-SabotagePathInCrate 'README.md' '')) { throw 'the root holds every path' }
+    if (-not (Test-SabotagePathInCrate 'crates/a/src/x.rs' 'CRATES/A')) { throw 'a crate named in another case is the same crate' }
 }
 
 Test-Case 'a manifest''s source root is its directory, or its root relative to that' {
@@ -748,15 +749,38 @@ function Get-ScopeRecord {
 function Get-ScopedEntries {
     param($Fixture, [scriptblock] $Edit, [hashtable] $Dependencies = @{ 'crates/a' = @('crates/z'); 'crates/z' = @() },
         [string] $RecordCommit, [string] $SourceRoot = 'crates/a',
-        [hashtable] $Packages = @{ a = 'crates/a'; b = 'crates/b'; z = 'crates/z' })
+        [hashtable] $Packages = @{ a = 'crates/a'; b = 'crates/b'; z = 'crates/z' },
+        [scriptblock] $Record = { param($commit) Get-ScopeRecord $commit }, [string] $Manifest = 'crates/a/sabotage.json')
     & $Edit $Fixture.Root
     if (-not $RecordCommit) { $RecordCommit = $Fixture.Base }
     $change = Get-SabotageChange -RepositoryRoot $Fixture.Root -Since $Fixture.Base
-    $spec = [System.IO.File]::ReadAllText((Join-Path $Fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
-    $selection = Select-SabotageEntry -RepositoryRoot $Fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
-        -SourceRoot (Join-Path $Fixture.Root $SourceRoot) -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord $RecordCommit) `
+    $spec = [System.IO.File]::ReadAllText((Join-Path $Fixture.Root $Manifest)) | ConvertFrom-Json
+    $selection = Select-SabotageEntry -RepositoryRoot $Fixture.Root -Manifest $Manifest -Entries $spec.sabotages `
+        -SourceRoot (Join-Path $Fixture.Root $SourceRoot) -Change $change -Dependencies $Dependencies -Record (& $Record $RecordCommit) `
         -Spec $spec -Packages $Packages
     return $selection
+}
+
+# The usual record, but with E2 (which patches other.rs) caught by
+# backend::tests::deep: a test in a module, not at a target's root.
+function Get-ModuleScopeRecord {
+    param([string] $Commit)
+    $record = Get-ScopeRecord $Commit
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E2' -Tests @('backend::tests::deep') `
+        -At '2026-01-01T00:00:00.0000000Z' -Commit $Commit
+    return $record
+}
+
+# Which file, if any, selected E2 for its catching test's module path after
+# `Edit`, in a fixture with `Files` added.
+function Get-ModulePathReason {
+    param([hashtable] $Files, [scriptblock] $Edit)
+    $fixture = New-EntryScopeFixture -Extra $Files
+    try {
+        $sel = Get-ScopedEntries $fixture $Edit -Record { param($commit) Get-ModuleScopeRecord $commit }
+        return [string]$sel.Reasons['E2']
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case 'a change to a test file selects the entries it caught and those with nothing better known, and no others' {
@@ -1113,6 +1137,97 @@ Test-Case 'a run is narrowed only when nothing after -- names tests already' {
     Assert-Equal $true (Test-SabotageNarrowable @('test', '-p', 'x', '--', '--exact', '--test-threads=1')) 'flags only'
     Assert-Equal $false (Test-SabotageNarrowable @('test', '-p', 'x', '--', 'only_this')) 'a filter'
     Assert-Equal $false (Test-SabotageNarrowable @('test', '--', '--test-threads', '1')) 'a value as its own word counts too'
+}
+
+Test-Case 'a run is narrowed only when nothing before -- is a TESTNAME for cargo test to pass on' {
+    Assert-Equal $false (Test-SabotageNarrowable @('test', '-p', 'x', 'some_filter', '--locked')) 'a TESTNAME'
+    Assert-Equal $false (Test-SabotageNarrowable @('test', 'some_filter', '--', '--exact')) 'a TESTNAME, with flags after --'
+    Assert-Equal $false (Test-SabotageNarrowable @('test', '--lib', 'some_filter')) 'after a flag that takes no value'
+    Assert-Equal $true (Test-SabotageNarrowable @('test', '-p', 'x', '--features', 'a b', '--test', 'it', '--target-dir', 'C:\t', '--locked')) `
+        'option values are not names'
+    Assert-Equal $true (Test-SabotageNarrowable @('test', '--package=x', '-Fa', '--lib')) 'values joined to their options'
+    Assert-Equal $true (Test-SabotageNarrowable @('-p', 'x', '--no-fail-fast')) 'with no subcommand'
+    Assert-Equal $false (Test-SabotageNarrowable @('test', 'test')) 'the subcommand once, then a filter that happens to say test'
+}
+
+Test-Case 'a manifest named in another case than git''s still sees the change to the file its entry patches' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/lib.rs') -Value '// x' } `
+            -Manifest 'CRATES/A/sabotage.json' -SourceRoot 'CRATES/A'
+        Assert-Equal 'the file it patches changed: src/lib.rs' $sel.Reasons['E1'] 'E1, by its file'
+        Assert-Equal $false $sel.All 'and only what the change reached'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a path typed in another case is named in the case it has on disk, and a missing part as given' {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('case-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'Crates\Mixed') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $root 'Crates\Mixed\Sabotage.json'), '{}')
+    try {
+        $got = Get-SabotageOnDiskPath (Join-Path $root 'CRATES\mixed\SABOTAGE.JSON')
+        if (-not $got.EndsWith('\Crates\Mixed\Sabotage.json', [System.StringComparison]::Ordinal)) { throw "on disk: got '$got'" }
+        if (-not (Test-Path -LiteralPath $got -PathType Leaf)) { throw "and it is that file: '$got'" }
+        $missing = Get-SabotageOnDiskPath (Join-Path $root 'crates\MIXED\Nope.TXT')
+        if (-not $missing.EndsWith('\Crates\Mixed\Nope.TXT', [System.StringComparison]::Ordinal)) { throw "missing: got '$missing'" }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# lib.rs declares backend; backend.rs declares its tests, in backend/tests.rs. Two
+# controls declare modules of the same names in other places.
+$script:ModuleFiles = @{
+    'crates/a/src/lib.rs'               = "mod backend;`nfn api() {}`n"
+    'crates/a/src/backend.rs'           = "#[cfg(test)]`nmod tests;`n"
+    'crates/a/src/backend/tests.rs'     = "#[test]`nfn deep() {}`n"
+    'crates/a/src/spare.rs'             = "#[cfg(test)]`nmod tests;`nfn spare() {}`n"
+    'crates/a/src/elsewhere/backend.rs' = "#[cfg(test)]`nmod tests;`n"
+}
+
+Test-Case 'a change to a file declaring a module a catching test is in selects the entry, and one of the same name elsewhere does not' {
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/src/backend.rs'), "`n") }
+    Assert-Equal 'a module its catching test is in changed: crates/a/src/backend.rs' $why 'its module''s file dropped `mod tests;`'
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/src/backend.rs'), "#[cfg(any())]`nmod tests;`n") }
+    Assert-Equal 'a module its catching test is in changed: crates/a/src/backend.rs' $why 'its module''s file gated it'
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/lib.rs') -Value '// x' }
+    Assert-Equal 'a module its catching test is in changed: crates/a/src/lib.rs' $why 'the root declaring its first module'
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/spare.rs') -Value '// x' }
+    Assert-Equal '' $why 'a file declaring a module of the same name, not on its path'
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/elsewhere/backend.rs') -Value '// x' }
+    Assert-Equal '' $why 'a file named for its module, not beside a root'
+    $why = Get-ModulePathReason $script:ModuleFiles { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/tests/it.rs') -Value '// x' }
+    Assert-Equal '' $why 'a root not declaring its first module'
+}
+
+Test-Case 'a module''s mod.rs, and a root Cargo.toml names, are on the path too' {
+    $files = @{
+        'crates/a/src/lib.rs'                = "mod backend;`n"
+        'crates/a/src/backend/mod.rs'        = "#[cfg(test)]`nmod tests;`n"
+        'crates/a/src/backend/tests.rs'      = "#[test]`nfn deep() {}`n"
+    }
+    $why = Get-ModulePathReason $files { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/src/backend/mod.rs'), "`n") }
+    Assert-Equal 'a module its catching test is in changed: crates/a/src/backend/mod.rs' $why 'mod.rs'
+    $files = @{
+        'crates/a/Cargo.toml'            = "[package]`nname = `"a`"`n[lib]`npath = `"lib/root.rs`"`n"
+        'crates/a/lib/root.rs'           = "mod backend;`n"
+        'crates/a/lib/backend.rs'        = "#[cfg(test)]`nmod tests;`n"
+        'crates/a/lib/backend/tests.rs'  = "#[test]`nfn deep() {}`n"
+    }
+    $why = Get-ModulePathReason $files { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/lib/root.rs') -Value '// x' }
+    Assert-Equal 'a module its catching test is in changed: crates/a/lib/root.rs' $why 'the root Cargo.toml names'
+    $why = Get-ModulePathReason $files { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/lib/backend.rs'), "`n") }
+    Assert-Equal 'a module its catching test is in changed: crates/a/lib/backend.rs' $why 'a module beside that root'
+}
+
+Test-Case 'in a crate that places a module''s file with #[path], any changed file declaring a module of the path counts' {
+    $files = @{
+        'crates/a/src/lib.rs'            = "#[path = `"impl/b.rs`"]`nmod backend;`n"
+        'crates/a/src/impl/b.rs'         = "#[cfg(test)]`nmod tests;`n"
+        'crates/a/src/impl/b/tests.rs'   = "#[test]`nfn deep() {}`n"
+    }
+    $why = Get-ModulePathReason $files { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/src/impl/b.rs'), "`n") }
+    Assert-Equal 'a module its catching test is in changed: crates/a/src/impl/b.rs' $why 'the file #[path] names, by what it declared'
 }
 Test-Case 'a change to a crate''s own build settings selects every entry' {
     foreach ($path in 'crates/a/Cargo.toml', 'crates/a/build.rs', 'crates/a/.cargo/config.toml') {

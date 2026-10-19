@@ -969,7 +969,10 @@ them reversed an earlier choice. An entry with no usable record was first left t
 so a lost record made a scoped run smaller where nothing was known; it is now always taken, so a lost
 record makes a run a full one. Whether a record carries its commit was first decided by asking git
 after the baseline whether the tree was clean; that misses a file git was told to stop looking at, so
-the harness now checks the copy it actually swept against the commit, file by file.
+the harness now checks the copy it actually swept against the commit, file by file. And a test's own
+file was first taken as the only file that decides whether it runs; the file declaring its module
+decides too, since removing `mod tests;` drops every test in it untouched, so the files along a
+catching test's module path now count as its file.
 
 **Not decided.** Whether a scoped sweep should also run on pull requests, and whether it should gate
 anything, were not raised; the post-merge sweep remains a report and not a gate.
