@@ -830,7 +830,7 @@ clean ASCII** (every byte in `0x00`-`0x7F`; no code point above `U+007F`). This
 governs:
 
 - checklist files: `CHECKLIST.md`, `CHECKLIST-<feature>.md`,
-  `COMPLETED-CHECKLIST.md`;
+  `COMPLETED-CHECKLIST.md`, and the parked-work file `PARKED.md`;
 - plan indexes: `PLANS.md`, `COMPLETED-PLANS.md`;
 - design docs: `DESIGN-NOTES.md`, `DESIGN-NOTES-*.md`, `DESIGN-RATIONALE.md`,
   `DESIGN-INSTRUCTIONS.md`, any other `DESIGN-*.md`, and every file under a
@@ -1238,6 +1238,7 @@ Examples:
 - Always form a plan in the form of a CHECKLIST.md, at the lowest common source-component for the change
 - Keep the plan up to date as you execute on the plan
 - Keep a file at the root of each component, called PLANS.md, which tracks all the CHECKLIST.md files in the repository and their status (not started, in progress, completed). If it does not exist, create it. If it does exist, update it with the new CHECKLIST.md file and its status.
+- PLANS.md also tracks every `PARKED.md` (see "Parked work lives in `PARKED.md`" under CHECKLIST file hygiene), as its own row with the status "parked". When you create a `PARKED.md`, add its row in the same commit; when you delete an empty one, remove its row in the same commit. A `PARKED.md` never moves to COMPLETED-PLANS.md, because it is never completed: it is emptied and deleted.
 - When a CHECKLIST.md file is completed, move it to a table in a different file called COMPLETED-PLANS.md in the same directory, with a brief summary of the work completed, and remove it from PLANS.md.
 
 
@@ -1250,7 +1251,7 @@ COMPLETED-PLANS.md format (markdown table):
 | Path to CHECKLIST.md | Completion Date | Brief description | Design Notes |
 |---|---|---|---|
 
-Status values: "not started", "in progress", "completed"
+Status values: "not started", "in progress", "completed", and "parked" (for a `PARKED.md` row only)
 
 Design Notes column: Path(s) to DESIGN-NOTES.md file(s) that document the work, or "N/A" if none exist
 
@@ -1323,22 +1324,25 @@ gradient has nothing to say about it.
 
 Design notes (DESIGN-NOTES.md, DESIGN-RATIONALE.md, and related files) record *decisions*
 — what was chosen and why. They steer future work, but they do **not** schedule it. The
-only mechanism that queues work on existing code is a CHECKLIST.md item. A decision that is
-recorded only in a design note, with the work it implies never transcribed into a checklist
-item, is effectively orphaned: nothing will ever cause that work to be picked up.
+only mechanism that queues work on existing code is an item in a CHECKLIST.md, or, for work that
+is parked, an item in the component's `PARKED.md` (see "Parked work lives in `PARKED.md`" under
+CHECKLIST file hygiene). A decision that is recorded only in a design note, with the work it
+implies never transcribed into a checklist or parked item, is effectively orphaned: nothing will
+ever cause that work to be picked up.
 
 This matters because the repository is worked by multiple people and multiple automated
 agent sessions, often in parallel and on different machines. None of them share local or
 session-private memory. The only directive any contributor — human or agent — can rely on
 seeing is what is committed to the repository. Therefore work must be queued in committed
-CHECKLIST.md files, never parked in an agent's memory, a chat thread, or a design note that
-no one is obligated to act on.
+CHECKLIST.md files, or in a committed `PARKED.md` when it is not actionable now, never held in an
+agent's memory, a chat thread, or a design note that no one is obligated to act on.
 
 When recording a decision that implies a change to existing code:
 
 - In the same change that records the decision, ensure the implied work exists as a
-  CHECKLIST.md item (creating or updating the checklist as needed), and reference the
-  decision from that item so the two can be traced to each other.
+  CHECKLIST.md item (creating or updating the checklist as needed), or as a `PARKED.md` item
+  with its gate when the work is not actionable now, and reference the decision from that item
+  so the two can be traced to each other.
 - If a decision deliberately schedules **no** work — a reservation, a deferral, or a
   "leave as-is for now" choice — state that explicitly in the decision so the absence of a
   checklist item is visibly intentional rather than an oversight.
@@ -1773,6 +1777,10 @@ one-line **stub-with-link** (see "Completed-item stubs (move-with-link)" below).
 those single-sentence stubs, never leave historical records, prose summaries, rationale, or
 context in a CHECKLIST file.
 
+A CHECKLIST file also holds **only work that is in scope now**. Parked work -- anything gated
+(`M{n}+`), on the horizon (`M-inf`), or deferred by a ruling -- never appears in it; it lives in
+the component's `PARKED.md`, under the rules in "Parked work lives in `PARKED.md`" below.
+
 Checklists for work more than 2-3 items long should be organized into milestones.
 Milestones should generally be sized to about 5 work items (suggestion, not a rule) and
 should end with integration tests only when the milestone includes behavior that meets
@@ -1863,8 +1871,9 @@ you are about to check, skip, or defer an item, first decide which case you are 
 - **There is still an action to take in *this* milestone** → leave the item **unchecked**. It is
   pending work and stays open until that work is done.
 - **There is no action to take in this milestone** → the item does **not** belong here. Do one of:
-  1. **Move** the item to the milestone in which it will actually be acted upon (use the `M{n}+` /
-     `M∞` notation below when that milestone is not yet numbered), **or**
+  1. **Move** the item to the milestone in which it will actually be acted upon, if that milestone
+     is in `CHECKLIST.md`; when it is not yet numbered, or the item was deferred, move it to the
+     component's `PARKED.md` under the `M{n}+` / `M∞` notation below, **or**
   2. If a real action *was* completed here that merely **spawns** later follow-up — e.g. a design
      decision recorded in a design milestone that implies later implementation, or an ABI-freeze
      obligation met by reserving a field whose *behavioral* decision is deferred — check the item
@@ -1875,8 +1884,9 @@ you are about to check, skip, or defer an item, first decide which case you are 
 
 The post-condition is mechanical and must hold after you touch any item: **no checklist contains a
 checked item whose remaining work is unscheduled, and no milestone contains a no-action item that
-belongs to a different milestone.** A deferred item is therefore *always* either moved, or replaced
-by a checked-plus-spawned pair — never silently checked in place.
+belongs to a different milestone.** A deferred item is therefore *always* either moved (to a later
+milestone in `CHECKLIST.md`, or to `PARKED.md`), or replaced by a checked-plus-spawned pair — never
+silently checked in place.
 
 ### Milestone naming for future and horizon work
 
@@ -1894,13 +1904,59 @@ distinct from real milestones (`M1`, `M2.3`, …):
   files this token is written **`M-inf`** (see the 7-bit ASCII rule above).
 
 Items in `M{n}+` / `M∞` are **parked, not pending**: they are not open obligations of any current
-milestone, and the milestone that unblocks them **pulls them in (graduates them to a numbered ID)**
-when it is authored. Rejected alternatives, recorded so they are not re-proposed: `M.Next`
+milestone, they live in the component's `PARKED.md` and **never** in `CHECKLIST.md`, and the
+milestone that unblocks them **pulls them in (moves them into `CHECKLIST.md` and graduates them to
+a numbered ID)** when it is authored. Rejected alternatives, recorded so they are not re-proposed: `M.Next`
 (relative and ambiguous — "next" relative to which milestone? — and two files' `M.Next` mean
 different things); `M{n}.5` (implies a *defined* intermediate milestone and collides with the
 `RC-1.1` decimal sub-step notation); a bare `Backlog` / `TODO` (loses the gating deliverable and
 does not sort with the milestones). `M{n}+` keeps the gate visible and graduates cleanly; `M∞` is
 the catch-all when there is no gate.
+
+### Parked work lives in `PARKED.md`, never in `CHECKLIST.md`
+
+`CHECKLIST.md` is the file a contributor reads to choose the next piece of work, so it holds
+**only items that are in scope now**. Every item that is not -- gated on a deliverable (`M{n}+`),
+horizon work (`M∞`, written `M-inf`), or deferred by a ruling -- lives in a sibling file named
+**`PARKED.md`**, in the same directory as the component's `CHECKLIST.md`, one per component. These
+rules are mandatory, and apply to every component:
+
+1. **Never put a parked item in `CHECKLIST.md`.** When you create, defer or discover an item that
+   no milestone in `CHECKLIST.md` will act on, write it to `PARKED.md` (creating the file, and its
+   PLANS.md row, if absent). When you find an `M{n}+` or `M-inf` section, or any parked item, in a
+   `CHECKLIST.md` you are editing, move it to `PARKED.md` -- byte-for-byte, as a pure relocation --
+   in its own `docs:` commit before or after your change, never mixed into it.
+2. **Every parked item states its gate and its reason.** Group items under a heading that names the
+   gate (`## M7+ -- <topic> (parked behind M7)`, or `## M-inf -- The horizon`), and say in the item
+   either the deliverable it waits on or the ruling that deferred it, quoted with who and when. An
+   item with no stated gate or reason is a defect: fix it when you see it.
+3. **The gate points back to the parked work.** In `CHECKLIST.md`, the item whose completion
+   unblocks a `PARKED.md` section ends with this callout, in a blockquote so it stands out:
+
+   > **-> UNBLOCKS PARKED WORK:** completing this unblocks `<section>` in [PARKED.md](PARKED.md#<anchor>).
+
+   Add the callout in the same commit that parks the work. Horizon (`M-inf`) and ruling-deferred
+   items have no gate in `CHECKLIST.md`; the PLANS.md row is their pointer.
+4. **When you complete an item that carries an UNBLOCKS callout, act on it in the same session:**
+   graduate the named parked items into a milestone in `CHECKLIST.md` (giving placeholder IDs a
+   numbered one), or, if they still cannot be acted on, say in `PARKED.md` what they now wait for.
+   Never leave the callout's section unexamined.
+5. **Graduate by moving.** An item leaves `PARKED.md` only by being moved into a `CHECKLIST.md`
+   milestone that will act on it, in the commit that authors or edits that milestone, or by being
+   **withdrawn** by a ruling, in which case it is archived to `COMPLETED-CHECKLIST.md` with the
+   ruling quoted, as a completed decision. Never check an item off inside `PARKED.md`.
+6. **`PARKED.md` holds no checked items and no history.** When it is empty, delete it and remove
+   its PLANS.md row in the same commit.
+7. **Same format as a checklist:** item IDs, decimal sub-step notation, a blank line between
+   multi-line items, 7-bit ASCII, clickable relative links. A parked item keeps its ID when it moves
+   in either direction, so references to it stay true; a link that named the item's old file is
+   updated in the same commit that moves it.
+8. **Reading order.** To choose the next work, read `CHECKLIST.md` only. Read `PARKED.md` when you
+   complete an item with an UNBLOCKS callout, when you author a milestone, when you defer an item,
+   and when you are asked about deferred or future work.
+
+The file is `PARKED.md` and not `CHECKLIST-PARKED.md` on purpose: a `CHECKLIST-<feature>.md` is a
+feature checklist that is deleted once it completes, and a parked list never completes.
 
 ### Completed-item stubs (move-with-link)
 
