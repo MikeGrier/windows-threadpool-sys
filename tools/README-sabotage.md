@@ -63,7 +63,10 @@ too, narrowed only by the manifest and name it is given.
 
 Locally, `-Since <base>` scopes a sweep the same way, measured from the merge base
 with `<base>` against the working tree, so `-Since origin/main` sweeps what a branch
-changed, edits not yet committed included. It reads the record from the output
+changed, edits not yet committed included. A branch behind its base is also
+charged with what the base changed since they parted, which may be in crates the
+branch never touched, so rebase first to keep the scope to the branch's own work.
+It reads the record from the output
 directory, which a clone has only once it has swept the manifest; until then every
 entry of a crate the branch touched is taken. Sweep the whole manifest, without
 `-Since`, when a change is one scoping cannot see: a test helper shared by a crate's
@@ -601,11 +604,15 @@ transcript, and when. A sweep reads it first and writes it back with what it
 ran, so entries it did not run keep their last result; an outcome that says
 nothing about the tests, such as a binary that was never executed, leaves the
 entry as it was. It is what lets a later sweep tell which test changes could
-alter an entry's result. It is never committed, and deleting it only makes a
-scoped sweep run more. In CI each shard uploads its copy and the `record` job of
-the sweep workflow merges them with
-[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1) into the Actions
-cache, where the next run restores it.
+alter an entry's result. Each entry is recorded with the commit it was swept at,
+and a later run uses it only if that commit is in its own history, so a record
+from another branch, or from a run of a later commit, makes it run more, never
+less. It is never committed, and deleting it only makes a scoped sweep run more.
+In CI the plan job restores the latest record from the Actions cache once and
+passes that one snapshot to every shard, so the shards select the entries the
+plan counted; each shard uploads its copy, and the `record` job merges them with
+[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1) and saves the result
+to the cache for the next run.
 
 **`-List` is inert**: it creates no directories, copies no tree, and writes and
 deletes nothing. All of that setup happens after the listing path has exited.

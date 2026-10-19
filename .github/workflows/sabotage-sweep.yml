@@ -113,15 +113,34 @@ jobs:
       # For `cargo metadata`, which says which crates build on which. It reads
       # manifests and builds nothing.
       - uses: dtolnay/rust-toolchain@stable
-      # The record of which tests caught each entry, as the last run left it, so
-      # the plan counts the entries each shard will find. See the same step in
-      # `sweep` below for why it is restored by prefix.
+      # The record of which tests caught each entry (DESIGN-NOTES.md,
+      # "sabotage-scope"), as the latest run saved it. Restored by prefix, as
+      # each run saves its own; the exact key never exists yet, and is named only
+      # because the action requires one. This is the one restore in a run: the
+      # plan and every shard must work from the same record, or a shard would
+      # select different entries from the ones the plan counted for it and cut
+      # its slice from a different list. So it is passed on below as an artifact,
+      # not restored again. It may have been saved by a run of a later commit,
+      # since runs overlap; an entry learned at a commit this checkout does not
+      # contain is not used (tools/common.ps1, Get-SabotageCatcherTests).
       - name: Restore the record of which tests caught each entry
         uses: actions/cache/restore@v6
         with:
           path: .scratch/sabotage/catchers.json
           key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sabotage-catchers-
+      # Rewritten even when nothing was restored, so the snapshot always exists:
+      # a missing record merges as an empty one.
+      - name: Snapshot the record for this run
+        shell: pwsh
+        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/sabotage/catchers.json -Output .scratch/sabotage/catchers.json
+      - name: Upload the snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: catchers-snapshot
+          path: .scratch/sabotage/catchers.json
+          if-no-files-found: error
+          retention-days: 1
       # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
       # `${{ }}` interpolation into the script body. An expression substituted
       # into `run:` is spliced in as source before PowerShell parses it, so a
@@ -211,17 +230,13 @@ jobs:
           # Every shard is a separate job building a different slice, so they
           # must not share a key.
           key: sabotage-${{ matrix.label }}-${{ matrix.shard }}
-      # The record of which tests caught each entry (DESIGN-NOTES.md,
-      # "sabotage-scope"), as the last run left it. Restored by prefix, because
-      # each run saves its own; the exact key below never exists yet, and is
-      # named only because the action requires one. A miss is not an error: the
-      # sweep then records from nothing.
-      - name: Restore the record of which tests caught each entry
-        uses: actions/cache/restore@v6
+      # The record the plan counted entries from: the plan's snapshot, not a
+      # restore of its own, which could find a record another run saved since.
+      - name: Download the record the plan used
+        uses: actions/download-artifact@v8
         with:
-          path: .scratch/sabotage/catchers.json
-          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: sabotage-catchers-
+          name: catchers-snapshot
+          path: .scratch/sabotage
       # Unconditional. A dispatch that named one manifest has already been
       # resolved by `plan`, which emitted jobs for that manifest alone, so there
       # is nothing left for a step-level `if` to decide. The pair of conditional
@@ -275,10 +290,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  # One record for the next run: what this run's shards learned, over what the
-  # last run left. Each shard wrote only the entries it ran on top of the record
-  # it restored, and the merge keeps every entry's latest result, so neither a
-  # shard's slice nor an entry this run did not reach is lost.
+  # One record for the next run: what this run's shards learned, over the
+  # snapshot the run started from. Each shard wrote only the entries it ran on
+  # top of that snapshot, and the merge keeps every entry's latest result, so
+  # neither a shard's slice nor an entry this run did not reach is lost.
   record:
     name: keep the record of which tests caught each entry
     needs: [plan, sweep]
@@ -286,20 +301,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Restore the record the shards started from
-        uses: actions/cache/restore@v6
-        with:
-          path: .scratch/sabotage/catchers.json
-          key: sabotage-catchers-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: sabotage-catchers-
-      - name: Download the shards' records
+      # The snapshot, `catchers-snapshot`, and every shard's record,
+      # `catchers-<label>-<shard>`, each into a directory of its own.
+      - name: Download the snapshot and the shards' records
         uses: actions/download-artifact@v8
         with:
           pattern: catchers-*
           path: .scratch/catchers-shards
       - name: Merge them
         shell: pwsh
-        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/sabotage/catchers.json, .scratch/catchers-shards -Output .scratch/sabotage/catchers.json
+        run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/catchers-shards -Output .scratch/sabotage/catchers.json
       - name: Save the record for the next run
         uses: actions/cache/save@v6
         with:

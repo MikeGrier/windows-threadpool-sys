@@ -386,7 +386,8 @@ $cases = @(
             Invoke-Native { git -C $root add -A } | Out-Null
             Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m more } | Out-Null
             $record = New-SabotageCatcherRecord
-            foreach ($n in 1..25) { Set-SabotageCatcher -Record $record -Manifest 'crates/d/sabotage.json' -Entry "s$n" -Tests @('t_one') -At '2026-01-01T00:00:00.0000000Z' }
+            $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+            foreach ($n in 1..25) { Set-SabotageCatcher -Record $record -Manifest 'crates/d/sabotage.json' -Entry "s$n" -Tests @('t_one') -At '2026-01-01T00:00:00.0000000Z' -Commit $head }
             $recordPath = Join-Path $root 'catchers.json'
             Write-SabotageCatcherRecord -Path $recordPath -Record $record
 

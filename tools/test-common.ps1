@@ -700,6 +700,7 @@ Test-Case 'merging keeps every entry any record has, and the latest of each' {
 # caught by a doctest; E5 by a test no file defines any more; E6 is a survived
 # control patching lib.rs.
 function New-EntryScopeFixture {
+    param([hashtable] $Extra = @{})
     $root = New-GitFixture
     $files = [ordered]@{
         'crates/a/src/lib.rs'   = "fn api() {}`n"
@@ -710,6 +711,7 @@ function New-EntryScopeFixture {
         'crates/a/README.md'    = "docs`n"
         'crates/z/src/lib.rs'   = "fn below() {}`n"
     }
+    foreach ($rel in $Extra.Keys) { $files[$rel] = $Extra[$rel] }
     foreach ($rel in $files.Keys) {
         $path = Join-Path $root $rel
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
@@ -724,25 +726,29 @@ function New-EntryScopeFixture {
     return [pscustomobject]@{ Root = $root; Base = $base }
 }
 
+# The record as learned at `Commit`, the fixture's base unless a case says otherwise.
 function Get-ScopeRecord {
+    param([string] $Commit)
     $record = New-SabotageCatcherRecord
     $at = '2026-01-01T00:00:00.0000000Z'
-    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1' -Tests @('tests::t_one') -At $at
-    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E2' -Tests @('it_two') -At $at
-    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E4' -Tests @('crates\a\src\lib.rs - api (line 1)') -At $at
-    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E5' -Tests @('tests::gone_test') -At $at
-    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E6' -Tests @() -At $at
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1' -Tests @('tests::t_one') -At $at -Commit $Commit
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E2' -Tests @('it_two') -At $at -Commit $Commit
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E4' -Tests @('crates\a\src\lib.rs - api (line 1)') -At $at -Commit $Commit
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E5' -Tests @('tests::gone_test') -At $at -Commit $Commit
+    Set-SabotageCatcher -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E6' -Tests @() -At $at -Commit $Commit
     return $record
 }
 
 # Which entries are selected after `Edit` changes the fixture, joined.
 function Get-ScopedEntries {
-    param($Fixture, [scriptblock] $Edit, [hashtable] $Dependencies = @{ 'crates/a' = @('crates/z'); 'crates/z' = @() })
+    param($Fixture, [scriptblock] $Edit, [hashtable] $Dependencies = @{ 'crates/a' = @('crates/z'); 'crates/z' = @() },
+        [string] $RecordCommit, [string] $SourceRoot = 'crates/a')
     & $Edit $Fixture.Root
+    if (-not $RecordCommit) { $RecordCommit = $Fixture.Base }
     $change = Get-SabotageChange -RepositoryRoot $Fixture.Root -Since $Fixture.Base
     $spec = [System.IO.File]::ReadAllText((Join-Path $Fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
     $selection = Select-SabotageEntry -RepositoryRoot $Fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
-        -SourceRoot (Join-Path $Fixture.Root 'crates/a') -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord)
+        -SourceRoot (Join-Path $Fixture.Root $SourceRoot) -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord $RecordCommit)
     return $selection
 }
 
@@ -801,6 +807,106 @@ Test-Case 'an entry that is new or changed in the manifest is selected, and an u
     finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case 'a base that is not an ancestor of HEAD counts what it changed, so a force-push''s reverted paths are not lost' {
+    $root = New-GitFixture
+    try {
+        foreach ($f in 'crates/a/src/lib.rs', 'README.md') {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $root $f)) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root $f), "x`n")
+        }
+        $base = Save-GitFixture $root 'base'
+        [System.IO.File]::WriteAllText((Join-Path $root 'crates/a/src/lib.rs'), "pushed, then dropped`n")
+        $dropped = Save-GitFixture $root 'the commit a force-push drops'
+        Invoke-Native { git -C $root reset --quiet --hard $base } | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "the new head`n")
+        Save-GitFixture $root 'the new head' | Out-Null
+
+        $change = Get-SabotageChange -RepositoryRoot $root -Since $dropped
+        Assert-Equal $true $change.Known $change.Reason
+        Assert-Equal $true $change.Divergent 'divergent'
+        Assert-Equal 'README.md|crates/a/src/lib.rs' ($change.Paths -join '|') 'the reverted path counts'
+        if ($change.Reason -notlike '*not an ancestor*') { throw "the reason says why: $($change.Reason)" }
+
+        $ancestor = Get-SabotageChange -RepositoryRoot $root -Since $base
+        Assert-Equal $false $ancestor.Divergent 'an ancestor is not divergent'
+        Assert-Equal 'README.md' ($ancestor.Paths -join '|') 'and counts only what HEAD changed'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a change to a manifest''s own settings selects every entry, and a reworded entry does not' {
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture {
+            param($r)
+            $path = Join-Path $r 'crates/a/sabotage.json'
+            $spec = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+            $spec | Add-Member -NotePropertyName testArgs -NotePropertyValue @('test', '-p', 'a', '--release')
+            [System.IO.File]::WriteAllText($path, ($spec | ConvertTo-Json -Depth 8))
+        }
+        Assert-Equal $true $sel.All 'every entry'
+        Assert-Equal "every entry: the manifest's own settings changed" $sel.Reason 'why'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a manifest whose root is another crate sees a change to the files it patches there' {
+    $edit = {
+        param($r)
+        New-Item -ItemType Directory -Force -Path (Join-Path $r 'crates/b/src') | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $r 'crates/b/src/lib.rs'), "fn api() {}`n")
+    }
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture $edit -Dependencies @{ 'crates/a' = @() } -SourceRoot 'crates/b'
+        Assert-Equal 'the file it patches changed: src/lib.rs' $sel.Reasons['E1'] 'E1 patches crates/b/src/lib.rs'
+        Assert-Equal 'the file it patches changed: src/lib.rs' $sel.Reasons['E6'] 'and so does E6'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture $edit -Dependencies @{ 'crates/a' = @() }
+        Assert-Equal 0 @($sel.Entries).Count 'with its root its own crate, crates/b is nothing to it'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a record learned at a commit this checkout does not contain is not used' {
+    $fixture = New-EntryScopeFixture
+    try {
+        # A commit made and then left behind: in the clone, not an ancestor of HEAD.
+        [System.IO.File]::WriteAllText((Join-Path $fixture.Root 'crates/a/src/spare.rs'), "fn spare() { /* later */ }`n")
+        $later = Save-GitFixture $fixture.Root 'a later commit'
+        Invoke-Native { git -C $fixture.Root reset --quiet --hard $fixture.Base } | Out-Null
+        $edit = { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/a/src/spare.rs') -Value '// x' }
+        $sel = Get-ScopedEntries $fixture $edit -RecordCommit $later
+        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E1'] 'E1''s record is from a commit not here'
+        Assert-Equal 'no test is recorded as catching it' $sel.Reasons['E2'] 'nor E2''s'
+        $sel = Get-ScopedEntries $fixture { param($r) } -RecordCommit $fixture.Base
+        if ($sel.Reasons.ContainsKey('E1')) { throw "a record from the base is used: $($sel.Reasons['E1'])" }
+
+        $record = Get-ScopeRecord $fixture.Base
+        $usable = Get-SabotageCatcherTests -RepositoryRoot $fixture.Root -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1'
+        Assert-Equal $true $usable.Usable 'usable'
+        Assert-Equal 'tests::t_one' ($usable.Tests -join '|') 'with its tests'
+        foreach ($commit in '', $later, '0123456789abcdef0123456789abcdef01234567') {
+            $record = Get-ScopeRecord $commit
+            $none = Get-SabotageCatcherTests -RepositoryRoot $fixture.Root -Record $record -Manifest 'crates/a/sabotage.json' -Entry 'E1'
+            Assert-Equal $false $none.Usable "not usable at '$commit'"
+            Assert-Equal 0 @($none.Tests).Count 'and has no tests'
+        }
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a recorded test deleted from a changed file is not hidden by a function of the same name elsewhere' {
+    $fixture = New-EntryScopeFixture -Extra @{ 'crates/a/src/mask.rs' = "fn t_one() {}`n" }
+    try {
+        $sel = Get-ScopedEntries $fixture { param($r) [System.IO.File]::WriteAllText((Join-Path $r 'crates/a/src/tests.rs'), "// t_one is gone`n") }
+        Assert-Equal "its catching test's file changed: crates/a/src/tests.rs" $sel.Reasons['E1'] 'E1, whose test was in tests.rs at the base'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
 Test-Case 'every entry for a change below, a shared input, or a change that cannot be measured; none for nothing reached' {
     $fixture = New-EntryScopeFixture
     try {
@@ -819,11 +925,11 @@ Test-Case 'every entry for a change below, a shared input, or a change that cann
         $spec = [System.IO.File]::ReadAllText((Join-Path $fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
         $unknown = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
             -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since 'no-such') `
-            -Dependencies @{} -Record (Get-ScopeRecord)
+            -Dependencies @{} -Record (Get-ScopeRecord $fixture.Base)
         Assert-Equal $true $unknown.All 'unmeasurable'
         $nomap = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
             -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since $fixture.Base) `
-            -Dependencies $null -Record (Get-ScopeRecord)
+            -Dependencies $null -Record (Get-ScopeRecord $fixture.Base)
         Assert-Equal $true $nomap.All 'no crate map'
     }
     finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }

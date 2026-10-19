@@ -225,8 +225,11 @@
     answer -- caught by nothing recorded, or by a doctest. The rule is
     `Select-SabotageEntry` in [common.ps1](common.ps1); what it cannot see is
     in DESIGN-NOTES.md, "sabotage-scope". Measured from the merge base, against
-    the working tree, so `-Since origin/main` sweeps what a branch changed.
-    Needs cargo on PATH, for `cargo metadata`. `-List` shows each entry's reason.
+    the working tree, so `-Since origin/main` sweeps what a branch changed; when
+    the base is not an ancestor of HEAD -- a branch behind it, or a force-push --
+    what the base changed since the merge base counts too. A recorded catching
+    test is used only if it was recorded at HEAD or an ancestor of it. Needs
+    cargo on PATH, for `cargo metadata`. `-List` shows each entry's reason.
 
 .PARAMETER CatcherRecord
     The record of which tests caught each entry that `-Since` reads, and a
@@ -1643,11 +1646,16 @@ $catchers = Read-SabotageCatcherRecord -Path $catcherPath
 function Get-FirstTests {
     param([string] $EntryName)
     if (-not $scopeNote) { return }
-    if (-not $catchers.ContainsKey($catcherKey) -or -not $catchers[$catcherKey].ContainsKey($EntryName)) { return }
-    $tests = @($catchers[$catcherKey][$EntryName].Tests)
+    $tests = @((Get-SabotageCatcherTests -RepositoryRoot $repoRoot -Record $catchers -Manifest $catcherKey -Entry $EntryName).Tests)
     if ($tests.Count -eq 0 -or @($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { return }
     , $tests
 }
+# The commit the swept tree is at, recorded with what each entry was caught by,
+# so a later run uses that only in a checkout that contains it (common.ps1,
+# Get-SabotageCatcherTests). Uncommitted edits are swept too and are not in it;
+# a later run measures its change from its own base, which covers them.
+$sweptCommit = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
+if ($sweptCommit) { $sweptCommit = $sweptCommit.Trim() }
 # The outcomes in which the patch was judged. Every other one -- the
 # infrastructure outcomes, and a hung build -- says nothing about the tests, and
 # would overwrite what an earlier run learned with nothing.
@@ -1818,7 +1826,7 @@ foreach ($sabotage in $selected) {
             $caughtBy = @(Get-FailedTestName (Read-SharedText -Path $transcript))
         }
         Set-SabotageCatcher -Record $catchers -Manifest $catcherKey -Entry $sabotage.name `
-            -Tests $caughtBy -At ([DateTime]::UtcNow.ToString('o'))
+            -Tests $caughtBy -At ([DateTime]::UtcNow.ToString('o')) -Commit $sweptCommit
     }
 
     $level = if ($ok) { 'good' } else { 'bad' }

@@ -2840,8 +2840,14 @@ backstop. The layers, cheapest first, are the items from
 than the file an entry patches can make that entry's defect unreachable or harmless, and a test
 helper shared across a crate's tests can weaken many tests at once. Neither selects the entry, and
 neither is caught until the nightly run. The record of which tests caught an entry narrows which test changes select it: a
-change to any test it names, or that test's removal, still selects the entry, and an entry with no
-record is selected by any change in its crate.
+change to any file that defines one of those tests now or did at the base, or that test's removal,
+still selects the entry, and an entry with no record is selected by any change in its crate. A
+record is used only if it was learned at a commit the checkout contains: runs overlap, and an older
+run cannot tell from its own change what a newer commit did to the tests a record names. A change
+to a manifest's own settings selects all of its entries, and a manifest whose `root` is another
+directory is reached by a change there. When the base is not an ancestor of the checkout -- a
+force-push, or a branch behind it -- what the base changed since the merge base counts too, so a
+reverted change is still a change.
 
 ## <a id="compile-fail-pins-its-code"></a>A `compile_fail` doctest names the error it exists to produce
 

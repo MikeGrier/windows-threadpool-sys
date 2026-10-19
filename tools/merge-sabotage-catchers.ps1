@@ -10,8 +10,10 @@
     latest result, so the shards of one run and the record before them become
     the record after them. A missing or unreadable input counts as empty.
 
-    The sweep workflow runs this once per run, after every shard, and keeps the
-    result in the Actions cache for the next run.
+    The sweep workflow runs this twice per run: in the plan job, on the record
+    it restored, to write the snapshot every shard starts from (an empty one if
+    nothing was restored); and after every shard, on that snapshot and the
+    shards' records, to keep the result in the Actions cache for the next run.
 
 .PARAMETER Path
     The records to merge, in any order; directories are searched for

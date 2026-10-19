@@ -2021,9 +2021,11 @@ function New-ScopeFixture {
     [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`nCargo.lock`ntarget/`n")
     Invoke-Native { git -C $root add -A } | Out-Null
     Invoke-Native { git -C $root -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit --quiet -m base } | Out-Null
+    # Learned at the commit just made, so a scoped run uses it.
+    $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
     $record = New-SabotageCatcherRecord
-    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('checks::t_marker') -At '2026-01-01T00:00:00.0000000Z'
-    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'other is broken' -Tests @('checks::t_other') -At '2026-01-01T00:00:00.0000000Z'
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests @('checks::t_marker') -At '2026-01-01T00:00:00.0000000Z' -Commit $head
+    Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'other is broken' -Tests @('checks::t_other') -At '2026-01-01T00:00:00.0000000Z' -Commit $head
     Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
     return $root
 }
@@ -2051,6 +2053,10 @@ Test-Case '-Since sweeps the entries it selected, and nothing else' {
         Assert-Match 'Sweeping 1 entry' $result.Output
         Assert-Match 'other is broken' $result.Output
         Assert-False ($result.Output -match 'the marker is removed') 'not swept'
+        # What it learned is recorded at the commit it swept, so a later run can use it.
+        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
+        Assert-Equal $head $record['sabotage.json']['other is broken'].Commit 'recorded at HEAD'
     }
     finally { Remove-Fixture $root }
 }
@@ -2077,7 +2083,8 @@ function Invoke-NarrowCase {
     $root = New-ScopeFixture
     try {
         $record = Read-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json')
-        Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests $Recorded -At '2026-01-01T00:00:00.0000000Z'
+        $head = ((Invoke-NativeStdout { git -C $root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        Set-SabotageCatcher -Record $record -Manifest 'sabotage.json' -Entry 'the marker is removed' -Tests $Recorded -At '2026-01-01T00:00:00.0000000Z' -Commit $head
         Write-SabotageCatcherRecord -Path (Join-Path $root '.scratch\sabotage\catchers.json') -Record $record
         Add-Content -LiteralPath (Join-Path $root 'src\lib.rs') -Value '// changed'
         $stub = New-Stub -Behaviour $Behaviour -Root $root

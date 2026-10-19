@@ -438,8 +438,14 @@ function Test-SabotageSharedInput {
 
 # What differs between `Since` and the working tree: committed, staged, unstaged,
 # and untracked files git does not ignore, which is what a sweep of the working
-# copy would sweep. Measured from the merge base of `Since` and HEAD, so a branch
-# behind its base is not charged with the base's own changes.
+# copy would sweep, measured from the merge base of `Since` and HEAD.
+#
+# When `Since` is not an ancestor of HEAD, the paths `Since` changed after the
+# merge base count too. That is a push that dropped commits -- a force-push --
+# whose dropped changes are reverted by it, and a branch behind its base, which
+# lacks the base's own changes; in both, the tree differs from `Since` in those
+# paths, and leaving them out would sweep less than the change could affect.
+# Rebasing a branch onto its base keeps a local scope to the branch's own work.
 #
 # Returns `Known` and `Paths` (relative to the root, forward slashes) rather than
 # a bare list, because "nothing changed" and "cannot tell" must never look alike:
@@ -449,7 +455,7 @@ function Test-SabotageSharedInput {
 # does not have; `Reason` says which.
 function Get-SabotageChange {
     param([string] $RepositoryRoot, [string] $Since)
-    $unknown = { param($why) [pscustomobject]@{ Known = $false; Base = $null; Paths = @(); Reason = $why } }
+    $unknown = { param($why) [pscustomobject]@{ Known = $false; Base = $null; Divergent = $false; Paths = @(); Reason = $why } }
     if ([string]::IsNullOrWhiteSpace($Since)) { return & $unknown 'no base revision was given' }
     if ($Since -match '^0+$') { return & $unknown "the base revision $Since is the all-zero one a new branch pushes" }
     $base = @(Invoke-NativeStdout { git -C $RepositoryRoot merge-base $Since HEAD })
@@ -458,6 +464,16 @@ function Get-SabotageChange {
     }
     $diff = @(Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only --no-renames $base[0] })
     if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff against $($base[0])" }
+    # 0 is an ancestor, 1 is not, and anything else is git unable to say.
+    Invoke-NativeStdout { git -C $RepositoryRoot merge-base --is-ancestor $Since HEAD } | Out-Null
+    $ancestry = $LASTEXITCODE
+    $divergent = $false
+    if ($ancestry -eq 1) {
+        $divergent = $true
+        $diff += @(Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only --no-renames $base[0] $Since })
+        if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff $($base[0]) against '$Since'" }
+    }
+    elseif ($ancestry -ne 0) { return & $unknown "git could not say whether '$Since' is an ancestor of HEAD" }
     $untracked = @(Invoke-NativeStdout { git -C $RepositoryRoot ls-files --others --exclude-standard })
     if ($LASTEXITCODE -ne 0) { return & $unknown 'git could not list untracked files' }
     # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object -Unique
@@ -466,7 +482,9 @@ function Get-SabotageChange {
     foreach ($path in @(@($diff) + @($untracked))) { if ($path) { [void]$set.Add($path.Replace('\', '/')) } }
     [string[]] $paths = @($set)
     [Array]::Sort($paths, [System.StringComparer]::Ordinal)
-    return [pscustomobject]@{ Known = $true; Base = $base[0].Trim(); Paths = $paths; Reason = "$($paths.Count) path(s) differ from $($base[0])" }
+    $reason = "$($paths.Count) path(s) differ from $($base[0])"
+    if ($divergent) { $reason += ", counting what '$Since' changed since then, as it is not an ancestor of HEAD" }
+    return [pscustomobject]@{ Known = $true; Base = $base[0].Trim(); Divergent = $divergent; Paths = $paths; Reason = $reason }
 }
 
 # Which workspace crates each crate depends on, through path dependencies of every
@@ -555,11 +573,17 @@ function Get-SabotageSourceRoot {
 # The shape, written by Write-SabotageCatcherRecord:
 #
 #   { "version": 1, "manifests": { "crates/x/sabotage.json": {
-#       "<entry name>": { "tests": ["module::test", ...], "at": "<UTC, round-trip format>" } } } }
+#       "<entry name>": { "tests": ["module::test", ...], "at": "<UTC, round-trip format>",
+#                         "commit": "<HEAD of the tree it was run in>" } } } }
 #
 # `at` is when the entry was run. Records from several shards are merged by
 # keeping each entry's latest, and the round-trip format orders as text in the
-# order it orders as time.
+# order it orders as time. `commit` is what makes an entry's record usable: it
+# says which tests caught the entry in that tree, and a checkout that does not
+# contain that commit -- an older run restoring a record a newer one saved, or a
+# history the record was not learned on -- cannot tell from its own change what
+# has happened to those tests since. Get-SabotageCatcherTests is the one place
+# that decides.
 
 # The names of the tests libtest reported FAILED in `Text`, in the order they
 # first appear, each once. A doctest's name is its file and item, `src\lib.rs -
@@ -605,7 +629,9 @@ function Read-SabotageCatcherRecord {
             # parsed date is turned back into the round-trip text the merge compares.
             $at = $value.at
             if ($at -is [datetime]) { $at = $at.ToUniversalTime().ToString('o') }
-            $entries[$entry.Name] = @{ Tests = [string[]]$tests; At = [string]$at }
+            $commit = $null
+            if ($value.PSObject.Properties.Name -contains 'commit') { $commit = [string]$value.commit }
+            $entries[$entry.Name] = @{ Tests = [string[]]$tests; At = [string]$at; Commit = $commit }
         }
         $record[$manifest.Name] = $entries
     }
@@ -613,11 +639,36 @@ function Read-SabotageCatcherRecord {
 }
 
 # Set what caught `Entry` of `Manifest` (a path relative to the root, forward
-# slashes), as of `At`.
+# slashes), as of `At`, in a tree at `Commit`.
 function Set-SabotageCatcher {
-    param([hashtable] $Record, [string] $Manifest, [string] $Entry, [string[]] $Tests, [string] $At)
+    param([hashtable] $Record, [string] $Manifest, [string] $Entry, [string[]] $Tests, [string] $At, [string] $Commit)
     if (-not $Record.ContainsKey($Manifest)) { $Record[$Manifest] = @{} }
-    $Record[$Manifest][$Entry] = @{ Tests = [string[]]@($Tests | Where-Object { $_ }); At = $At }
+    $Record[$Manifest][$Entry] = @{ Tests = [string[]]@($Tests | Where-Object { $_ }); At = $At; Commit = $Commit }
+}
+
+# Whether each recorded commit is an ancestor of HEAD, asked of git once per
+# repository and commit. Declared here, as common.ps1 is dot-sourced, because
+# strict mode refuses to read a variable that was never set.
+$script:SabotageAncestry = @{}
+
+# The tests recorded as catching `Entry` of `Manifest`, if the record of it can be
+# used in the checkout at `RepositoryRoot`: it names a commit, and that commit is
+# HEAD or an ancestor of it. Returns `Usable` and `Tests`; an entry with no usable
+# record has no tests, which every caller reads as "nothing is known", so a record
+# from a commit this checkout does not contain can only make a sweep run more.
+function Get-SabotageCatcherTests {
+    param([string] $RepositoryRoot, [hashtable] $Record, [string] $Manifest, [string] $Entry)
+    $none = [pscustomobject]@{ Usable = $false; Tests = [string[]]@() }
+    if ($null -eq $Record -or -not $Record.ContainsKey($Manifest) -or -not $Record[$Manifest].ContainsKey($Entry)) { return $none }
+    $value = $Record[$Manifest][$Entry]
+    if (-not $value.Commit) { return $none }
+    $key = "$RepositoryRoot|$($value.Commit)"
+    if (-not $script:SabotageAncestry.ContainsKey($key)) {
+        Invoke-NativeStdout { git -C $RepositoryRoot merge-base --is-ancestor $value.Commit HEAD } | Out-Null
+        $script:SabotageAncestry[$key] = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $script:SabotageAncestry[$key]) { return $none }
+    return [pscustomobject]@{ Usable = $true; Tests = [string[]]@($value.Tests) }
 }
 
 # One record holding, for every entry any of `Records` has, the latest of them.
@@ -632,7 +683,7 @@ function Merge-SabotageCatcherRecord {
                 $held = $null
                 if ($merged.ContainsKey($manifest) -and $merged[$manifest].ContainsKey($entry)) { $held = $merged[$manifest][$entry] }
                 if ($null -eq $held -or [string]::CompareOrdinal($value.At, $held.At) -gt 0) {
-                    Set-SabotageCatcher -Record $merged -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At
+                    Set-SabotageCatcher -Record $merged -Manifest $manifest -Entry $entry -Tests $value.Tests -At $value.At -Commit $value.Commit
                 }
             }
         }
@@ -655,7 +706,7 @@ function Write-SabotageCatcherRecord {
         $entries = [ordered]@{}
         foreach ($entry in (& $sortedKeys $Record[$manifest].Keys)) {
             $value = $Record[$manifest][$entry]
-            $entries[$entry] = [ordered]@{ tests = @($value.Tests); at = $value.At }
+            $entries[$entry] = [ordered]@{ tests = @($value.Tests); at = $value.At; commit = $value.Commit }
         }
         $manifests[$manifest] = $entries
     }
@@ -664,6 +715,7 @@ function Write-SabotageCatcherRecord {
     if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
     [System.IO.File]::WriteAllText($Path, $json + "`n", [System.Text.UTF8Encoding]::new($false))
 }
+
 # Which entries of one manifest a change could have affected, and why each.
 #
 # `Manifest` is the manifest's path from the root, forward slashes; `Entries` its
@@ -673,16 +725,17 @@ function Write-SabotageCatcherRecord {
 # its directory.
 #
 # Every entry is affected when the change cannot be measured, the crate map is
-# missing, a shared input changed, or a crate the manifest's crate builds on
-# changed: a change below can alter what any test above it observes. No entry is
-# when nothing the crate reaches changed. Otherwise the change is in the crate
-# itself, and an entry is affected when
+# missing, a shared input changed, a crate the manifest's crate builds on changed
+# (a change below can alter what any test above it observes), or the manifest's
+# own settings changed. No entry is when nothing the crate reaches changed, and
+# nothing under the manifest's `root` either. Otherwise, an entry is affected when
 #   - it is new, or differs from the manifest at the base revision;
 #   - the file it patches changed;
-#   - no test is recorded as catching it, or a doctest is, whose source may be a
-#     file spliced into the crate's documentation rather than the one it names;
+#   - no usable record names a test catching it (Get-SabotageCatcherTests), or a
+#     doctest caught it, whose source may be a file spliced into the crate's
+#     documentation rather than the one it names;
 #   - a file defining a function named as one of its catching tests changed, or
-#     no file of the crate defines one any more.
+#     defined one at the base, or no file of the crate defines one any more.
 # A change elsewhere in the crate selects nothing on its own. That, and a test
 # helper changing under the tests that call it, are what the nightly sweep is for
 # (DESIGN-NOTES.md, "sabotage-scope").
@@ -715,10 +768,6 @@ function Select-SabotageEntry {
     foreach ($below in $reach) {
         if ($below -ne $crate -and (& $reached $below)) { return & $every "a crate it builds on changed: $below" }
     }
-    if (-not (& $reached $crate)) {
-        return [pscustomobject]@{ All = $false; Entries = @(); Reasons = @{}; Reason = 'nothing it builds on changed' }
-    }
-
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
     $relative = {
         param($full)
@@ -728,19 +777,42 @@ function Select-SabotageEntry {
         }
         return $at.Replace('\', '/')
     }
+    # A manifest whose `root` points outside its crate patches files there, so a
+    # change under that root reaches it as a change in its own crate does.
+    $sourceDir = & $relative $SourceRoot
+    if ($sourceDir -eq $root.Replace('\', '/')) { $sourceDir = '' }
+    if (-not (& $reached $crate) -and -not (& $reached $sourceDir)) {
+        return [pscustomobject]@{ All = $false; Entries = @(); Reasons = @{}; Reason = 'nothing it builds on changed' }
+    }
 
-    # The manifest's entries at the base, to tell which are new or changed.
+    # The manifest's entries at the base, to tell which are new or changed, and
+    # its own settings -- `package`, `testArgs`, `root`, a sweep-wide timeout --
+    # which decide how every entry is patched and judged, so a change to them
+    # reaches every entry. A manifest the base does not have is new, and so is
+    # each of its entries.
     $before = @{}
     $manifestChanged = $changed.Contains($Manifest)
     if ($manifestChanged -and $Change.Base) {
         $text = Invoke-NativeStdout { git -C $RepositoryRoot show "$($Change.Base):$Manifest" } | Out-String
         if ($LASTEXITCODE -eq 0) {
-            try {
-                foreach ($old in @(($text | ConvertFrom-Json).sabotages)) {
-                    $before[$old.name] = ($old | ConvertTo-Json -Depth 8 -Compress)
+            $settings = {
+                param($spec)
+                $kept = [ordered]@{}
+                foreach ($name in @($spec.PSObject.Properties.Name | Where-Object { $_ -ne 'sabotages' } | Sort-Object)) {
+                    $kept[$name] = $spec.$name
                 }
+                $kept | ConvertTo-Json -Depth 8 -Compress
             }
-            catch { $before = @{} }
+            $oldSpec = $null
+            try { $oldSpec = $text | ConvertFrom-Json } catch { $oldSpec = $null }
+            if ($null -eq $oldSpec) { return & $every 'the manifest at the base could not be read' }
+            $nowSpec = [System.IO.File]::ReadAllText((Join-Path $RepositoryRoot $Manifest)) | ConvertFrom-Json
+            if (-not [string]::Equals((& $settings $oldSpec), (& $settings $nowSpec), [System.StringComparison]::Ordinal)) {
+                return & $every 'the manifest''s own settings changed'
+            }
+            foreach ($old in @($oldSpec.sabotages)) {
+                $before[$old.name] = ($old | ConvertTo-Json -Depth 8 -Compress)
+            }
         }
     }
 
@@ -763,9 +835,27 @@ function Select-SabotageEntry {
         }
         $map
     }
+    # The same, for the changed files of the crate as they were at the base: a
+    # recorded test deleted from one of them may share its name with a function
+    # elsewhere, which would make it look present still. Built once, on first need.
+    $baseDefinitions = $null
+    $defineAtBase = {
+        $map = @{}
+        foreach ($path in $changed) {
+            if (-not $path.EndsWith('.rs') -or -not (Test-SabotagePathInCrate $path $crate)) { continue }
+            $text = Invoke-NativeStdout { git -C $RepositoryRoot show "$($Change.Base):$path" } | Out-String
+            if ($LASTEXITCODE -ne 0) { continue }
+            foreach ($match in [regex]::Matches($text, '\bfn\s+(\w+)')) {
+                $name = $match.Groups[1].Value
+                if (-not $map.ContainsKey($name)) {
+                    $map[$name] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                }
+                [void]$map[$name].Add($path)
+            }
+        }
+        $map
+    }
 
-    $recorded = @{}
-    if ($Record -and $Record.ContainsKey($Manifest)) { $recorded = $Record[$Manifest] }
     $reasons = @{}
     $affected = @(foreach ($entry in $Entries) {
             $why = $null
@@ -778,16 +868,17 @@ function Select-SabotageEntry {
                 $why = "the file it patches changed: $($entry.file)"
             }
             if (-not $why) {
-                $tests = @()
-                if ($recorded.ContainsKey($entry.name)) { $tests = @($recorded[$entry.name].Tests) }
+                $tests = @((Get-SabotageCatcherTests -RepositoryRoot $RepositoryRoot -Record $Record -Manifest $Manifest -Entry $entry.name).Tests)
                 if ($tests.Count -eq 0) { $why = 'no test is recorded as catching it' }
                 elseif (@($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { $why = 'a doctest caught it' }
                 else {
                     if ($null -eq $definitions) { $definitions = & $define }
+                    if ($null -eq $baseDefinitions) { $baseDefinitions = & $defineAtBase }
                     foreach ($test in $tests) {
                         $function = ($test -split '::')[-1]
                         if (-not $definitions.ContainsKey($function)) { $why = "its catching test is gone: $test"; break }
                         $moved = @($definitions[$function] | Where-Object { $changed.Contains($_) })
+                        if ($baseDefinitions.ContainsKey($function)) { $moved += @($baseDefinitions[$function]) }
                         if ($moved.Count -gt 0) { $why = "its catching test's file changed: $($moved[0])"; break }
                     }
                 }
@@ -802,6 +893,7 @@ function Select-SabotageEntry {
         Reason = "$($affected.Count) of $($Entries.Count) entries; its crate changed"
     }
 }
+
 # What the host looked like at the moment of a failure, as plain lines. Best
 # effort: every figure that cannot be read is reported as unknown rather than
 # failing the report, because this runs on a path that is already failing.
