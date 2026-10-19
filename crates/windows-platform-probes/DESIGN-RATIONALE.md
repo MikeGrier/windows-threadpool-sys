@@ -799,3 +799,32 @@ this crate's directory costs no packaging.
 **Missing stays acceptable in the capture scripts** because every committed capture predates the
 line; refusing an unstamped run would have made all of them unregeneratable to gain nothing on runs
 nobody can retake.
+
+## Why every probe emits a row, and why a row is not a contract
+
+Decided in [Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row).
+
+`M4.10` found the crate with two conventions and no rule: three probes emitted a row and the rest
+printed prose only. Three rules were put to the engineer on 2026-10-19:
+
+- **A** -- every probe owes a row;
+- **B** -- a probe owes a row when something other than a person reads its output (a CI survey, a
+  committed script);
+- **C** -- a probe owes a row when it reports magnitudes that depend on the host, an asserted
+  behavioural finding being machine-readable already through its test result.
+
+The recommendation put forward was C. The engineer chose A for the normal run, keeping B and C as
+possible readings: "The answer is A for the normal simplified runs. We may have modes that give the
+other two interpretations/readings but in general they produce raw data." A sidesteps the question C
+and B each had to answer per probe -- which outputs count -- and makes a probe's default output the
+same kind of thing everywhere: what was observed, with interpretation as a separate, optional layer.
+
+The recommendation had assumed each new row would carry the obligations the topology row carries --
+asserted values, invariants and shape -- which is what made A look expensive. The engineer rejected
+that premise rather than the cost: "I don't necessarily see these as 'contractual'. Probes produce
+what they produce. If we retire a probe or if it measures something different over time, we need to
+be honest and give it a new name/identifier but I don't know if we need to think about this as
+formally as being a contract." And: "these probes are meant as somewhat informal means to validate
+platform behaviors. They are not a formal validation scheme." The "I don't know if" is recorded as
+said; what is settled is that a new row does not inherit the topology row's machinery, and that a
+change of meaning is a change of name.

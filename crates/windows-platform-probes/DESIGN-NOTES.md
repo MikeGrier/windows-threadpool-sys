@@ -1976,6 +1976,10 @@ which is the decision below.
 
 <a id="d-encoded-row-is-the-contract"></a>
 
+**Amended 2026-10-19: the engineer does not treat probe rows as formal contracts; see [Every probe's
+normal run emits a row of raw data](#d-every-probe-emits-a-row). What follows still governs the
+topology row it was written for.**
+
 A probe is a data pipeline that renders, at its tail, to two artifacts: an NDJSON
 row and prose. **They are not peers.** The row is a machine contract -- mined
 across a fleet, joined against other runs, and the thing this workspace's designs
@@ -2571,3 +2575,36 @@ built for those, and for every capture taken before this. And the build identity
 the scripts' refusal of byte-identical runs: it names the build, which every run in a capture shares.
 
 **Scheduled work:** none.
+
+## Every probe's normal run emits a row of raw data
+
+<a id="d-every-probe-emits-a-row"></a>
+
+**Status: decided** by `M4.10`; applied by milestone `M8` in [CHECKLIST.md](CHECKLIST.md).
+
+The engineer, 2026-10-19, choosing the first of three rules put to him (every probe; only probes
+something other than a person reads; only host-dependent magnitudes): "The answer is A for the
+normal simplified runs. We may have modes that give the other two interpretations/readings but in
+general they produce raw data."
+
+- **Every probe binary's normal run emits an `x-probe-*` row**, beside its prose. Before this, three
+  of the crate's probes did and the rest printed prose only, with no stated rule for which applied.
+- **The row carries raw data**: what the probe observed, not a verdict drawn from it. An
+  interpreting reading -- a summary, a judgement against a threshold, a filter to what some consumer
+  wants -- may exist as a separate mode, and is not what a normal run emits.
+- **A row is not a formal contract.** The engineer, same date: "I don't necessarily see these as
+  'contractual'. Probes produce what they produce." And: "these probes are meant as somewhat
+  informal means to validate platform behaviors. They are not a formal validation scheme." So adding
+  a row does not bring the obligations [The encoded row is the contract](#d-encoded-row-is-the-contract)
+  attached to the topology row; whether a given row's values are machine-checked is decided by the
+  probe, not required by this rule.
+- **What a row does owe is honesty about its identity.** The engineer: "If we retire a probe or if
+  it measures something different over time, we need to be honest and give it a new name/identifier."
+  So a row whose meaning changes is renamed rather than reused -- the rule `M6.1` already followed
+  when it dropped the request probe's old keys instead of carrying them under new meanings.
+
+**Not decided here, and left to each probe's item:** what a refusal looks like in a row. Topology's
+`report_unmeasured` is the existing example of a probe saying it declined to measure; each item
+follows it or says why not.
+
+**Scheduled work:** milestone `M8` in [CHECKLIST.md](CHECKLIST.md), one item per probe without a row.

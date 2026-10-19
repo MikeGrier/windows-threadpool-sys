@@ -92,28 +92,7 @@ correctness in the archive.
   it called for is deferred to `M4.10`, which turned out to be a larger question than these two
   probes.
 
-- [ ] **M4.10** -- Decide whether a probe's report owes a machine-readable row, and make the answer
-  uniform.
-
-  **Gap:** three of this crate's sixteen probe binaries emit an `x-probe-*` NDJSON line beside
-  their prose -- `doorbell_cost`, `request_cost`, and `topology` through `topology_report`. The
-  other thirteen emit prose only, `probe-core-affinity` and `probe-peer-index-cache` among them,
-  and so does `queue_contention` despite being the probe whose captures are analysed by committed
-  scripts. So a survey can mine three probes and must scrape or skip the rest.
-
-  **This item was first written the other way round**, asserting that the two placement probes were
-  the exception and that `queue_contention` emitted a row. Both halves were false: prose-only is
-  the majority, by four to one. The correction changes what is being proposed -- not "bring two
-  stragglers up to the norm" but "the crate has two conventions and no stated rule for which
-  applies."
-
-  **Target:** state the rule first, in [DESIGN-NOTES.md](DESIGN-NOTES.md), since it decides twelve
-  more binaries than it decides these two: which probes owe a row, and what a refusal looks like in
-  one. `report_unmeasured` already draws the "measured and declined" against "never ran"
-  distinction for the topology probe, and the cost probes' `EVERY_LABEL` arrangement is the worked
-  example for keeping a row and its prose from drifting. Then apply it.
-
-  **Blocker recorded when queued:** none, but note this is a design decision before it is a code
+- [x] **M4.10** -- Decide whether a probe's report owes a machine-readable row, and make the answer uniform. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m410)
   change, so it wants the engineer's call on scope rather than a unilateral sweep.
 
 
@@ -145,3 +124,39 @@ IDs keep their M2 numbers, for the reason given under M4.
 - [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
 - [x] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m216)
+
+## M8 -- Every probe's normal run emits a row of raw data
+
+Applies [Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row),
+decided by `M4.10`. Each row carries what the probe observed, not a verdict; it is not a formal
+contract, and a row whose meaning later changes is renamed rather than reused. Where a probe's prose
+and row render the same figures, derive both from one list as the cost probes do (`M2.9`). Where a
+probe can decline to measure, its item decides what the row says, with topology's
+`report_unmeasured` as the example to follow or to depart from on purpose.
+
+Each row item also moves its probe into `EMIT_A_ROW` in
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs),
+which fails until it does.
+
+- [ ] **M8.1** -- Run `probe-queue-contention` in the row census with a short sampling, replacing
+  the exclusion whose reason ("no short mode") `M4.2` made false, so its row is established by
+  running it like the rest.
+
+- [ ] **M8.2** -- `probe-queue-contention` emits a row.
+- [ ] **M8.3** -- `probe-peer-index-cache` emits a row.
+- [ ] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
+- [ ] **M8.5** -- `probe-pool-growth` emits a row.
+
+- [ ] **M8.6** -- `probe-long-path-aware` and `probe-long-path-unaware` emit rows, one item because
+  the finding is the difference between them.
+
+- [ ] **M8.7** -- `probe-error-mode` emits a row.
+- [ ] **M8.8** -- `probe-handle-state` emits a row.
+- [ ] **M8.9** -- `probe-worker-context` emits a row.
+- [ ] **M8.10** -- `probe-device-map` emits a row.
+- [ ] **M8.11** -- `probe-ioring` emits a row.
+- [ ] **M8.12** -- `probe-completion-port` emits a row.
+- [ ] **M8.13** -- `probe-cancel-io` emits a row, including for a case its watchdog abandons.
+
+- [ ] **M8.14** -- Make the row census assert that every registered probe emits a row, so a probe
+  added later without one fails rather than joining an exception list.

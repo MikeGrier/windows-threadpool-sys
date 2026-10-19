@@ -1941,3 +1941,15 @@ The sabotage the item asked for -- runs of two builds being combined -- is in
 [sabotage.json](sabotage.json) and caught by
 `tests/the_capture_scripts_refuse_runs_of_different_builds.rs`, alongside the report dropping its
 build line (caught), the build script stamping nothing (refused by the build) and a control.
+
+## Moved 2026-10-19 17:18:23 -04:00 -- M4.10: every probe's normal run emits a row of raw data
+
+### <a id="m410"></a>M4.10 -- Decide whether a probe's report owes a machine-readable row, and make the answer uniform. *(completed 2026-10-19 17:18:23 -04:00)*
+
+Decided by the engineer on 2026-10-19: every probe's normal run emits a row of raw data, with
+interpreting readings possible as other modes, and rows are not formal contracts but are renamed when
+their meaning changes. The decision is
+[Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row), with
+the three options put to the engineer and his words in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+"Make the answer uniform" is spawned as milestone `M8` in [CHECKLIST.md](CHECKLIST.md), one item per
+probe without a row; the census of which probes emit one still read 3 of 16 when this was decided.
