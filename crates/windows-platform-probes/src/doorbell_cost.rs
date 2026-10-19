@@ -77,6 +77,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::ioring;
+use crate::probe_args::IterationMultiplier;
 
 /// The machine-readable name for a timing's label.
 ///
@@ -209,6 +210,20 @@ impl Observation {
     }
 }
 
+/// Iterations of each user-mode and event loop, at the default multiplier.
+const ITERATIONS: u32 = 200_000;
+
+/// Iterations of the empty submit. Far fewer: it is a real kernel transition.
+const SUBMIT_ITERATIONS: u32 = 20_000;
+
+/// Round trips of the park-and-wake handshake the binary times, at the default
+/// multiplier.
+pub const PARK_ROUNDS: u32 = 20_000;
+
+/// The longest loop the binary runs at the default multiplier, which bounds the
+/// multiplier a command line may give (see [`IterationMultiplier::from_args`]).
+pub const LONGEST_LOOP: u32 = ITERATIONS;
+
 fn time_loop(label: &'static str, iterations: u32, mut body: impl FnMut()) -> Timing {
     // Warm the path first: the first call through a syscall stub pays for
     // resolution and page faults that a steady-state cost should not include.
@@ -261,9 +276,11 @@ fn describe_wait(waited: WAIT_EVENT) -> String {
 /// measurable transition when it fails, so a probe that swallowed the error
 /// would report a plausible nanosecond figure for an operation that did not
 /// happen, which is worse than reporting nothing.
+///
+/// Each loop runs `multiplier` times its usual count (`M4.2`).
 #[must_use]
-pub fn measure() -> Observation {
-    const ITERATIONS: u32 = 200_000;
+pub fn measure(multiplier: IterationMultiplier) -> Observation {
+    let iterations = multiplier.scale(ITERATIONS);
 
     // SAFETY: a manual-reset, initially-unsignalled, unnamed event.
     let event: HANDLE = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
@@ -276,7 +293,7 @@ pub fn measure() -> Observation {
     let counter = AtomicU64::new(0);
     let mut timings = Vec::new();
 
-    timings.push(time_loop("atomic_fetch_add", ITERATIONS, || {
+    timings.push(time_loop("atomic_fetch_add", iterations, || {
         counter.fetch_add(1, Ordering::Relaxed);
     }));
 
@@ -332,7 +349,7 @@ pub fn measure() -> Observation {
         "SetEvent failed: {}",
         std::io::Error::last_os_error()
     );
-    timings.push(time_loop("set_event_already_signalled", ITERATIONS, || {
+    timings.push(time_loop("set_event_already_signalled", iterations, || {
         assert!(
             unsafe { SetEvent(event) } != 0,
             "SetEvent on an already-signalled event failed: {}",
@@ -345,7 +362,7 @@ pub fn measure() -> Observation {
         "ResetEvent failed: {}",
         std::io::Error::last_os_error()
     );
-    timings.push(time_loop("set_reset_event", ITERATIONS, || unsafe {
+    timings.push(time_loop("set_reset_event", iterations, || unsafe {
         assert!(
             SetEvent(event) != 0,
             "SetEvent failed mid-cycle: {}",
@@ -363,7 +380,7 @@ pub fn measure() -> Observation {
         "SetEvent failed: {}",
         std::io::Error::last_os_error()
     );
-    timings.push(time_loop("wait_zero_signalled", ITERATIONS, || {
+    timings.push(time_loop("wait_zero_signalled", iterations, || {
         // Checked against `WAIT_OBJECT_0`, not merely "did not fail". The label
         // says *satisfied* wait, and `WAIT_TIMEOUT` is a successful return that
         // times a different path -- an unsatisfied poll, which is the cheaper
@@ -412,29 +429,32 @@ pub fn measure() -> Observation {
     // asks for no completions, so it returns without blocking and measures the
     // transition rather than any I/O.
     let submit_nanos = ioring::Ring::new().map(|ring| {
-        const SUBMIT_ITERATIONS: u32 = 20_000;
-        let timing = time_loop("submit_io_ring_empty", SUBMIT_ITERATIONS, || {
-            // Both halves of the answer are checked, inside the timed region.
-            // Discarding them let a host where `SubmitIoRing` fails produce a
-            // perfectly plausible timing -- a failing call still costs a
-            // measurable transition -- which the report then read as the cost of
-            // a successful empty submission. That is the failure mode this whole
-            // crate exists to avoid: a number that looks like evidence and is
-            // not. The `submitted` count is checked too, because a call that
-            // succeeded while submitting entries did not measure what the label
-            // says it measured.
-            //
-            // Inside the loop, not outside it: a check after the fact would let
-            // the timing be taken before anything established it was valid.
-            //
-            // Every loop above now does the same, under the flat rule stated
-            // there. This note came first and for a while was the only one,
-            // which is the whole reason the rule is now flat rather than
-            // argued per site.
-            let (hr, submitted) = ring.submit_and_wait(0);
-            assert!(hr >= 0, "SubmitIoRing(0) failed: {hr:#010x}");
-            assert_eq!(submitted, 0, "SubmitIoRing(0) submitted entries");
-        });
+        let timing = time_loop(
+            "submit_io_ring_empty",
+            multiplier.scale(SUBMIT_ITERATIONS),
+            || {
+                // Both halves of the answer are checked, inside the timed region.
+                // Discarding them let a host where `SubmitIoRing` fails produce a
+                // perfectly plausible timing -- a failing call still costs a
+                // measurable transition -- which the report then read as the cost of
+                // a successful empty submission. That is the failure mode this whole
+                // crate exists to avoid: a number that looks like evidence and is
+                // not. The `submitted` count is checked too, because a call that
+                // succeeded while submitting entries did not measure what the label
+                // says it measured.
+                //
+                // Inside the loop, not outside it: a check after the fact would let
+                // the timing be taken before anything established it was valid.
+                //
+                // Every loop above now does the same, under the flat rule stated
+                // there. This note came first and for a while was the only one,
+                // which is the whole reason the rule is now flat rather than
+                // argued per site.
+                let (hr, submitted) = ring.submit_and_wait(0);
+                assert!(hr >= 0, "SubmitIoRing(0) failed: {hr:#010x}");
+                assert_eq!(submitted, 0, "SubmitIoRing(0) submitted entries");
+            },
+        );
         timings.push(timing);
         timing.nanos_per_op
     });

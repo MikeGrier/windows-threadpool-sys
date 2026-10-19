@@ -1797,3 +1797,17 @@ entries were added, one a control.
 
 > **-> CROSS-COMPONENT HANDOFF:** the request crate's
 > [NR-6.2](../windows-namespace-request-sys/CHECKLIST.md) no longer waits on this crate.
+
+## Moved 2026-10-19 13:14:01 -04:00 -- M4.2: the probes' sampling is set on the command line
+
+### <a id="m42"></a>M4.2 -- Give the measurement probes the controls needed to act on a dispersion finding, so "gather more data along this axis" does not require editing a `const` and rebuilding. *(completed 2026-10-19 13:14:01 -04:00)*
+
+The decision, with what was built and why, is
+[The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling); the
+alternatives are in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Built ahead of `M4.4`, against the
+item's own ordering note, because building the settings moves no figure; the note on `M4.4` in
+[CHECKLIST.md](CHECKLIST.md) was re-planned to say that reading a lengthened run still waits on it.
+
+Preceded by a pure-relocation split of `src/queue_contention.rs` (75 KiB, XL) into the facade plus
+`measure.rs` and `render.rs`, in its own commit. The sabotage harness's inert check was found to
+ignore case while writing this item's entries, and was fixed in its own commit.

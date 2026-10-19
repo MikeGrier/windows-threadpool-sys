@@ -86,6 +86,8 @@ use std::time::Instant;
 
 use windows_waitable_queues::{permit_mpsc, reserving_mpsc, slotwise_mpsc};
 
+use crate::probe_args::{self, ArgError, Flag};
+
 use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, Perpetual};
 
 /// The 128-bit layout exists only where a 128-bit exchange is native.
@@ -103,6 +105,8 @@ use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, P
 use windows_waitable_queues::reserving_mpsc::Wide;
 
 #[cfg(test)]
+mod sampling_tests;
+#[cfg(test)]
 mod tests;
 
 mod measure;
@@ -111,22 +115,134 @@ mod render;
 pub use self::measure::*;
 pub use self::render::*;
 
-/// How many pushes each producer thread performs in one timed run.
+/// How many pushes each producer thread performs in one timed run, unless
+/// [`Sampling`] says otherwise.
 pub const PUSHES_PER_PRODUCER: usize = 50_000;
 
-/// How many times each configuration is repeated; the median is reported.
+/// How many times each configuration is repeated, unless [`Sampling`] says
+/// otherwise; the median is reported.
 ///
 /// Odd, so the median is an observed value rather than an average of two. Five
 /// because these probes run on a virtual machine, where a single run can be
 /// perturbed by something entirely outside the process.
 pub const REPETITIONS: usize = 5;
 
-/// The producer counts measured, in order.
+/// The producer counts measured, in order, unless [`Sampling`] says otherwise.
 ///
 /// Fixed rather than derived from the host's processor count, so two runs on
 /// different machines produce comparable rows. The host's own count is reported
 /// alongside, since the interesting region is around and beyond it.
 pub const PRODUCER_COUNTS: &[usize] = &[1, 2, 4, 8, 16, 32];
+
+/// How a run samples: how long each timed pass is, how many are taken, and at
+/// which producer counts (`M4.2`).
+///
+/// Settable so that the first step the design notes prescribe on a wide control
+/// -- lengthen the span and raise the repetitions on the unchanged configuration
+/// -- is a command-line argument and not a source edit. The
+/// [default](Sampling::default) is the three constants above, so a run given no
+/// settings is the run the published figures came from. What a run used travels
+/// with its [`Observation`] and is printed in its report.
+///
+/// **Until `M4.4` pairs each candidate with its control, a lengthened run cannot
+/// show whether the control narrowed**: the control is still measured several
+/// configurations away from what it is compared with, so drift across that
+/// interval lands in it either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sampling {
+    /// Pushes each producer performs in one timed pass: the length of the span.
+    pub pushes_per_producer: usize,
+    /// Timed passes per configuration, of which the median is reported. With an
+    /// even count the median taken is the upper of the two middle passes, so it
+    /// is still one that was observed.
+    pub repetitions: usize,
+    /// The producer counts measured, in the order given. Scaling is reported
+    /// against the one-producer row, so a list without 1 reports no scaling.
+    pub producer_counts: Vec<usize>,
+}
+
+impl Default for Sampling {
+    fn default() -> Self {
+        Self {
+            pushes_per_producer: PUSHES_PER_PRODUCER,
+            repetitions: REPETITIONS,
+            producer_counts: PRODUCER_COUNTS.to_vec(),
+        }
+    }
+}
+
+impl Sampling {
+    /// The settings `probe-queue-contention` takes, which are this type's
+    /// fields.
+    pub const FLAGS: [Flag; 3] = [
+        Flag {
+            name: "pushes-per-producer",
+            value: "N",
+            help: "pushes each producer performs in one timed pass; 50000 when not given",
+        },
+        Flag {
+            name: "repetitions",
+            value: "N",
+            help: "timed passes per configuration, the median reported; 5 when not given",
+        },
+        Flag {
+            name: "producers",
+            value: "N,N,...",
+            help: "producer counts to measure, in order; 1,2,4,8,16,32 when not given",
+        },
+    ];
+
+    /// The sampling a command line asks for: the defaults, with each setting it
+    /// gives in place of its default.
+    ///
+    /// # Errors
+    ///
+    /// What [`probe_args::parse`] refuses, a value that is not a whole number of
+    /// at least one or a producer list [`probe_args::positive_list`] refuses, and
+    /// a combination whose largest run would not fit the queue's capacity
+    /// arithmetic: the isolated regime sizes its queue to the next power of two
+    /// at or above producers times pushes, and a total with none is refused
+    /// rather than overflowing.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, ArgError> {
+        let given = probe_args::parse(args, &Self::FLAGS)?;
+        let mut sampling = Self::default();
+        if let Some(value) = given.get("pushes-per-producer") {
+            sampling.pushes_per_producer = probe_args::positive("pushes-per-producer", value)?;
+        }
+        if let Some(value) = given.get("repetitions") {
+            sampling.repetitions = probe_args::positive("repetitions", value)?;
+        }
+        if let Some(value) = given.get("producers") {
+            sampling.producer_counts = probe_args::positive_list("producers", value)?;
+        }
+        let largest = sampling
+            .producer_counts
+            .iter()
+            .max()
+            .copied()
+            .expect("a parsed producer list is never empty");
+        if largest
+            .checked_mul(sampling.pushes_per_producer)
+            .and_then(usize::checked_next_power_of_two)
+            .is_none()
+        {
+            return Err(ArgError::Invalid {
+                flag: "pushes-per-producer",
+                value: sampling.pushes_per_producer.to_string(),
+                reason: format!(
+                    "{largest} producers times this many pushes is too large to size a queue for"
+                ),
+            });
+        }
+        Ok(sampling)
+    }
+
+    /// Whether this is the sampling a run given no settings uses.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
 
 /// The names a run is filed under.
 ///
@@ -189,20 +305,20 @@ pub struct Run {
     /// rather than by the claim, which is a fact about the measurement and not
     /// about the queue.
     pub refusals: u64,
-    /// Fastest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
-    /// operation.
+    /// Fastest of the run's timed repetitions ([`Sampling::repetitions`]), in
+    /// nanoseconds per operation.
     ///
     /// Carried because [`d-observations-not-verdicts`] obliges every published
     /// figure to arrive with its run count *and its dispersion*: a median alone
     /// is an anecdote a reader cannot compare against their own hardware. The
-    /// four repetitions the median discards are the only evidence this probe has
+    /// repetitions the median discards are the only evidence this probe has
     /// about its own stability within a run, and discarding them silently was
     /// the crate publishing a figure its own contract forbids.
     ///
     /// [`d-observations-not-verdicts`]: ../DESIGN-NOTES.md#d-observations-not-verdicts
     pub fastest_nanos_per_op: f64,
-    /// Slowest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
-    /// operation. See [`Run::fastest_nanos_per_op`].
+    /// Slowest of the run's timed repetitions, in nanoseconds per operation. See
+    /// [`Run::fastest_nanos_per_op`].
     pub slowest_nanos_per_op: f64,
 }
 
@@ -306,6 +422,8 @@ pub struct Observation {
     /// which the report then printed as a zero-processor host -- a value no host
     /// has, presented with the same confidence as a measured one.
     pub available_parallelism: Option<usize>,
+    /// How the run sampled, so its report states what produced its figures.
+    pub sampling: Sampling,
 }
 
 impl Observation {
@@ -417,7 +535,12 @@ impl Observation {
 /// Raw result of one timed repetition: elapsed nanoseconds and refusals.
 type Repetition = (f64, u64);
 
-/// Run one configuration [`REPETITIONS`] times and keep the median.
+/// Run one configuration `sampling.repetitions` times and keep the median.
+///
+/// The timer is handed the producer count and `sampling.pushes_per_producer`,
+/// and the per-operation figures divide by that same value, so the pushes a
+/// pass performed and the pushes its time is divided by cannot come from two
+/// places.
 ///
 /// The median rather than the mean, because on a virtual machine the failure
 /// mode is one run being hugely slower rather than a spread around a centre,
@@ -425,8 +548,10 @@ type Repetition = (f64, u64);
 fn median_run(
     shape: &'static str,
     producers: usize,
-    mut timer: impl FnMut(usize) -> Repetition,
+    sampling: &Sampling,
+    mut timer: impl FnMut(usize, usize) -> Repetition,
 ) -> Run {
+    let pushes_per_producer = sampling.pushes_per_producer;
     // One untimed pass first. Be exact about what this does and does not warm:
     // for the queue timers, every call to `timer` builds and drops its OWN
     // queue, so this does not pre-touch the allocation any timed repetition will
@@ -439,18 +564,21 @@ fn median_run(
     // which is not true of an allocation made fresh each pass, and a later one
     // said every timer builds a queue, which is not true of the baseline.
     // Both found by review.
-    let _ = timer(producers);
+    let _ = timer(producers, pushes_per_producer);
 
-    let mut results: Vec<Repetition> = (0..REPETITIONS).map(|_| timer(producers)).collect();
+    let repetitions = sampling.repetitions;
+    let mut results: Vec<Repetition> = (0..repetitions)
+        .map(|_| timer(producers, pushes_per_producer))
+        .collect();
     results.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let (elapsed_nanos, refusals) = results[REPETITIONS / 2];
+    let (elapsed_nanos, refusals) = results[repetitions / 2];
     // The sort is ascending by elapsed time, so the extremes are the ends. They
     // are carried rather than discarded because a median without its dispersion
     // is what `d-observations-not-verdicts` forbids publishing.
     let (fastest_nanos, _) = results[0];
-    let (slowest_nanos, _) = results[REPETITIONS - 1];
+    let (slowest_nanos, _) = results[repetitions - 1];
 
-    let pushes = (producers * PUSHES_PER_PRODUCER) as f64;
+    let pushes = (producers * pushes_per_producer) as f64;
     Run {
         shape,
         producers,
@@ -463,8 +591,8 @@ fn median_run(
 }
 
 /// Capacity big enough that a whole run fits, so nothing is ever refused.
-fn capacity_for(producers: usize) -> usize {
-    (producers * PUSHES_PER_PRODUCER).next_power_of_two()
+fn capacity_for(producers: usize, pushes_per_producer: usize) -> usize {
+    (producers * pushes_per_producer).next_power_of_two()
 }
 
 /// A gate holding every participant until all of them exist, or until the

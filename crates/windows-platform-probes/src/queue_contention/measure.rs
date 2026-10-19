@@ -4,45 +4,77 @@
 //! The measurement: `measure` and the timer for each shape and regime it runs.
 
 use super::*;
-/// Time every configuration.
+/// Time every configuration, sampled as `sampling` says.
+///
+/// [`Sampling::default`] is the run the published figures came from.
 #[must_use]
-pub fn measure() -> Observation {
+pub fn measure(sampling: &Sampling) -> Observation {
     let mut isolated = Vec::new();
     let mut drained = Vec::new();
 
-    for &producers in PRODUCER_COUNTS {
-        isolated.push(median_run(shapes::BASELINE_FETCH_ADD, producers, |count| {
-            time_contended_atomic(count)
-        }));
-        isolated.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
-            time_isolated_mpsc(count)
-        }));
-        isolated.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
-            time_isolated_reserving(count)
-        }));
-        isolated.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
-            time_isolated_permit(count)
-        }));
+    for &producers in &sampling.producer_counts {
+        isolated.push(median_run(
+            shapes::BASELINE_FETCH_ADD,
+            producers,
+            sampling,
+            time_contended_atomic,
+        ));
+        isolated.push(median_run(
+            shapes::SLOTWISE_MPSC,
+            producers,
+            sampling,
+            time_isolated_mpsc,
+        ));
+        isolated.push(median_run(
+            shapes::RESERVING_MPSC,
+            producers,
+            sampling,
+            time_isolated_reserving,
+        ));
+        isolated.push(median_run(
+            shapes::PERMIT_MPSC,
+            producers,
+            sampling,
+            time_isolated_permit,
+        ));
 
-        drained.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
-            time_drained_mpsc(count)
-        }));
-        drained.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
-            time_drained_reserving(count)
-        }));
-        drained.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
-            time_drained_permit(count)
-        }));
+        drained.push(median_run(
+            shapes::SLOTWISE_MPSC,
+            producers,
+            sampling,
+            time_drained_mpsc,
+        ));
+        drained.push(median_run(
+            shapes::RESERVING_MPSC,
+            producers,
+            sampling,
+            time_drained_reserving,
+        ));
+        drained.push(median_run(
+            shapes::PERMIT_MPSC,
+            producers,
+            sampling,
+            time_drained_permit,
+        ));
 
-        isolated.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_isolated_layout::<Balanced>(count)
-        }));
-        isolated.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_isolated_layout::<Enduring>(count)
-        }));
-        isolated.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
-            time_isolated_layout::<Perpetual>(count)
-        }));
+        isolated.push(median_run(
+            shapes::CLAIM_NARROW,
+            producers,
+            sampling,
+            time_isolated_layout::<Balanced>,
+        ));
+        isolated.push(median_run(
+            shapes::CLAIM_DEEP,
+            producers,
+            sampling,
+            time_isolated_layout::<Enduring>,
+        ));
+        isolated.push(median_run(
+            shapes::CLAIM_PERPETUAL,
+            producers,
+            sampling,
+            time_isolated_layout::<Perpetual>,
+        ));
         // Gated on the architectures where a 128-bit exchange is native; see the
         // `Wide` import above. `#[cfg]` governs only the statement that follows
         // it, so each of the two pushes carries its own.
@@ -50,26 +82,41 @@ pub fn measure() -> Observation {
             all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
             target_arch = "aarch64"
         ))]
-        isolated.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_isolated_layout::<Wide>(count)
-        }));
+        isolated.push(median_run(
+            shapes::CLAIM_WIDE,
+            producers,
+            sampling,
+            time_isolated_layout::<Wide>,
+        ));
 
-        drained.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_drained_layout::<Balanced>(count)
-        }));
-        drained.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_drained_layout::<Enduring>(count)
-        }));
-        drained.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
-            time_drained_layout::<Perpetual>(count)
-        }));
+        drained.push(median_run(
+            shapes::CLAIM_NARROW,
+            producers,
+            sampling,
+            time_drained_layout::<Balanced>,
+        ));
+        drained.push(median_run(
+            shapes::CLAIM_DEEP,
+            producers,
+            sampling,
+            time_drained_layout::<Enduring>,
+        ));
+        drained.push(median_run(
+            shapes::CLAIM_PERPETUAL,
+            producers,
+            sampling,
+            time_drained_layout::<Perpetual>,
+        ));
         #[cfg(any(
             all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
             target_arch = "aarch64"
         ))]
-        drained.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_drained_layout::<Wide>(count)
-        }));
+        drained.push(median_run(
+            shapes::CLAIM_WIDE,
+            producers,
+            sampling,
+            time_drained_layout::<Wide>,
+        ));
     }
 
     Observation {
@@ -78,6 +125,7 @@ pub fn measure() -> Observation {
         available_parallelism: thread::available_parallelism()
             .ok()
             .map(std::num::NonZeroUsize::get),
+        sampling: sampling.clone(),
     }
 }
 
@@ -87,7 +135,7 @@ pub fn measure() -> Observation {
 /// a contended line, so it says how much of a queue's scaling curve is the
 /// queue and how much is simply what this processor does when N cores fight
 /// over one cache line.
-fn time_contended_atomic(producers: usize) -> Repetition {
+fn time_contended_atomic(producers: usize, pushes: usize) -> Repetition {
     let counter = Arc::new(AtomicU64::new(0));
     // One party per worker plus this thread. Every worker is created, then waits
     // here; the clock starts as the barrier releases, so neither thread creation
@@ -106,7 +154,7 @@ fn time_contended_atomic(producers: usize) -> Repetition {
                     return (Instant::now(), Instant::now());
                 }
                 let began = Instant::now();
-                for _ in 0..PUSHES_PER_PRODUCER {
+                for _ in 0..pushes {
                     counter.fetch_add(1, Ordering::Relaxed);
                 }
                 (began, Instant::now())
@@ -121,9 +169,9 @@ fn time_contended_atomic(producers: usize) -> Repetition {
     (measured_span(&spans), 0)
 }
 
-fn time_isolated_mpsc(producers: usize) -> Repetition {
+fn time_isolated_mpsc(producers: usize, pushes: usize) -> Repetition {
     let (tx, rx) =
-        slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
+        slotwise_mpsc::bounded::<u64>(capacity_for(producers, pushes)).expect("a valid capacity");
     let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
         let _release = ReleaseOnDrop(Arc::clone(&gate));
@@ -137,8 +185,8 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
                     return (Instant::now(), Instant::now());
                 }
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                for index in 0..pushes {
+                    tx.push((producer * pushes + index) as u64)
                         .expect("the run fits in the capacity");
                 }
                 (began, Instant::now())
@@ -158,9 +206,9 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-fn time_isolated_reserving(producers: usize) -> Repetition {
+fn time_isolated_reserving(producers: usize, pushes: usize) -> Repetition {
     let (tx, rx) =
-        reserving_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
+        reserving_mpsc::bounded::<u64>(capacity_for(producers, pushes)).expect("a valid capacity");
     let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
         let _release = ReleaseOnDrop(Arc::clone(&gate));
@@ -174,8 +222,8 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
                     return (Instant::now(), Instant::now());
                 }
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                for index in 0..pushes {
+                    tx.push((producer * pushes + index) as u64)
                         .expect("the run fits in the capacity");
                 }
                 (began, Instant::now())
@@ -204,8 +252,9 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
 /// would need a trait both implement and would put a dynamic or monomorphised
 /// indirection inside the timed region -- in a measurement whose whole output is
 /// a difference of a few nanoseconds per push.
-fn time_isolated_permit(producers: usize) -> Repetition {
-    let (tx, rx) = permit_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
+fn time_isolated_permit(producers: usize, pushes: usize) -> Repetition {
+    let (tx, rx) =
+        permit_mpsc::bounded::<u64>(capacity_for(producers, pushes)).expect("a valid capacity");
     let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
         let _release = ReleaseOnDrop(Arc::clone(&gate));
@@ -219,8 +268,8 @@ fn time_isolated_permit(producers: usize) -> Repetition {
                     return (Instant::now(), Instant::now());
                 }
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                for index in 0..pushes {
+                    tx.push((producer * pushes + index) as u64)
                         .expect("the run fits in the capacity");
                 }
                 (began, Instant::now())
@@ -238,7 +287,7 @@ fn time_isolated_permit(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-fn time_drained_mpsc(producers: usize) -> Repetition {
+fn time_drained_mpsc(producers: usize, pushes: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
@@ -305,8 +354,8 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
                 }
                 await_consumer(&ready);
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                for index in 0..pushes {
+                    let mut item = (producer * pushes + index) as u64;
                     // Retry a FULL queue, which is what a real producer does;
                     // the refusal count is what makes that visible. Anything
                     // else is not retryable -- a disconnected queue never
@@ -342,7 +391,7 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-fn time_drained_reserving(producers: usize) -> Repetition {
+fn time_drained_reserving(producers: usize, pushes: usize) -> Repetition {
     // **Defaults on both sides, and that is a correction.** This row previously
     // enabled high-water tracking here and nowhere else, to "also price the
     // switch M31.4 made opt-in". But the number it feeds is presented as the
@@ -415,8 +464,8 @@ fn time_drained_reserving(producers: usize) -> Repetition {
                 }
                 await_consumer(&ready);
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                for index in 0..pushes {
+                    let mut item = (producer * pushes + index) as u64;
                     while let Err(error) = tx.push(item) {
                         // Only a FULL queue is retryable; see the note on the
                         // first of these loops.
@@ -455,7 +504,7 @@ fn time_drained_reserving(producers: usize) -> Repetition {
 /// this shape has more riding on that answer than the others, because it trades
 /// `reserving_mpsc`'s *load* of the consumer's position for a read-modify-write
 /// on a count the consumer also writes.
-fn time_drained_permit(producers: usize) -> Repetition {
+fn time_drained_permit(producers: usize, pushes: usize) -> Repetition {
     let (tx, rx) = permit_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
@@ -506,8 +555,8 @@ fn time_drained_permit(producers: usize) -> Repetition {
                 }
                 await_consumer(&ready);
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                for index in 0..pushes {
+                    let mut item = (producer * pushes + index) as u64;
                     while let Err(error) = tx.push(item) {
                         // Only a FULL queue is retryable; see the note on the
                         // first of these loops.
@@ -557,9 +606,9 @@ fn time_drained_permit(producers: usize) -> Repetition {
 /// built so the layouts could be compared before the shipping crate had them;
 /// it drifted from the original twice while doing so. The shipping type takes
 /// the layout as a parameter now, so the duplicate is gone.
-fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
-    let (tx, rx) =
-        reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers)).expect("a valid capacity");
+fn time_isolated_layout<L: ClaimLayout>(producers: usize, pushes: usize) -> Repetition {
+    let (tx, rx) = reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers, pushes))
+        .expect("a valid capacity");
     let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
         let _release = ReleaseOnDrop(Arc::clone(&gate));
@@ -573,8 +622,8 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
                     return (Instant::now(), Instant::now());
                 }
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                for index in 0..pushes {
+                    tx.push((producer * pushes + index) as u64)
                         .expect("the run fits in the capacity");
                 }
                 (began, Instant::now())
@@ -595,7 +644,7 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
 /// One claim-word layout, against a consumer looping on `pop`.
 ///
 /// Generic for [`time_isolated_layout`]'s reason.
-fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition {
+fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize, pushes: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded_as::<u64, L>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
@@ -649,8 +698,8 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
                 }
                 await_consumer(&ready);
                 let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                for index in 0..pushes {
+                    let mut item = (producer * pushes + index) as u64;
                     while let Err(error) = tx.push(item) {
                         // Only a FULL queue is retryable; see the note on the
                         // first of these loops.

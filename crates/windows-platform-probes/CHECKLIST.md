@@ -72,55 +72,15 @@ correctness in the archive.
   mid-branch would invalidate figures that ten review rounds have been read against. Raised rather
   than silently deferred, per the PRIME DIRECTIVE.
 
-  **It is placed ahead of M4.2 deliberately**, since a control that is not paired cannot answer
-  whether lengthening the run narrows the spread -- that answer would be confounded by the same
-  drift this item removes. Taking M4.2 first would produce a diagnosis nobody could trust.
+  **Re-planned 2026-10-19: M4.2 was built first, and reading what it measures still waits on this
+  item.** A control that is not paired cannot answer whether lengthening the run narrows the spread
+  -- that answer is confounded by the same drift this item removes. But the order that matters is
+  between this item and *reading* a lengthened run, not building the means to take one: M4.2's
+  defaults are the old constants, so it moved no figure. See
+  [The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling), which
+  states the confound for anyone who runs the flags before this lands.
 
-- [ ] **M4.2** -- Give the measurement probes the controls needed to act on a dispersion finding,
-  so "gather more data along this axis" does not require editing a `const` and rebuilding.
-
-  **Ordered after M4.4, which is why it appears second despite the lower number.** The first
-  diagnostic step this item unblocks is "lengthen the run and see whether the control narrows", and
-  that cannot be read while the control is measured four runs away from its candidate -- drift would
-  confound it either way.
-
-  **This item is deliberately small in software and large in guidance.** The diagnostic method
-  belongs in [DESIGN-NOTES.md](DESIGN-NOTES.md) -- see
-  [What to try first, and how to tell when you have reached the
-  floor](DESIGN-NOTES.md#d-variance-is-a-finding) -- and this item exists only to make that method
-  executable. The judgement stays with the person; the probe stops being the obstacle.
-
-  **Gap:** [src/queue_contention.rs](src/queue_contention.rs) fixes every sampling parameter as a
-  compile-time constant -- `PUSHES_PER_PRODUCER` (50,000) and `REPETITIONS` (5) -- and `measure()`
-  takes no arguments. They were made `pub` and are now printed in the report, so a captured run at
-  least says what produced it; but reading a constant is not setting one. The first move the design
-  note prescribes on seeing a wide control is to lengthen the span and raise the repetition count on
-  the unchanged configuration, which is still a source edit and a rebuild. A control that cannot be
-  turned is not a control, and the cheapest diagnostic step is the one being blocked.
-
-  **Target:** `measure()` takes a settings value carrying at least the pushes-per-producer count,
-  the repetition count, and the producer counts to sweep (`PRODUCER_COUNTS` is already public and
-  is the model for the others). Existing defaults stay exactly as they are, so a default run remains
-  the run the notes describe and every published figure stays reproducible. The binary exposes the
-  same knobs so a human or an agent can act without a rebuild.
-
-  Apply the same treatment to the sibling cost probes where the sampling parameters are equally
-  fixed; the axes we anticipate varying are **duration, repetitions, and concurrency**, so those are
-  the ones that need to be reachable. Do not add knobs beyond what a stated diagnostic step needs --
-  an unused parameter is a configuration surface to maintain and a way for two runs to differ
-  without anyone noticing.
-
-  **Report what was used.** Whatever settings a run was given must appear in its output beside the
-  host banner, for the reason
-  [D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) already gives: a figure
-  is only interpretable with its capture parameters, and these are now among them. Making the
-  sampling adjustable without recording it would turn one reproducibility problem into a worse one.
-
-  **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
-  and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
-  floor is here" -- is a real answer that gets recorded beside the figures.
-
-  **Also not in scope, because it is done:** emitting the dispersion. See M4.5 below.
+- [x] **M4.2** -- Give the measurement probes the controls needed to act on a dispersion finding, so "gather more data along this axis" does not require editing a `const` and rebuilding. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m42)
 
 - [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15 UTC-07:00](COMPLETED-CHECKLIST.md#m45)
 

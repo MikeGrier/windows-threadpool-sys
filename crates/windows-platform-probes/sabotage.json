@@ -160,6 +160,102 @@
       "replace": [
         "    timings.push(time_loop(\"share_handle\", ITERATIONS, || Clone::clone(&shared)));"
       ]
+    },
+    {
+      "name": "M4.2 sampling: the median ignores the repetitions the run was given",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A run asked for more repetitions would report the default's median while its settings line said otherwise -- the settings would be decoration.",
+      "find": [
+        "    let repetitions = sampling.repetitions;"
+      ],
+      "replace": [
+        "    let repetitions = REPETITIONS;"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: each pass performs the default pushes whatever the run was given",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The timed passes would push the default count while the divisor used the given one, so every per-operation figure would be off by their ratio. The timer and the divisor read one value so that this cannot happen.",
+      "find": [
+        "        .map(|_| timer(producers, pushes_per_producer))"
+      ],
+      "replace": [
+        "        .map(|_| timer(producers, PUSHES_PER_PRODUCER))"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: --producers is accepted and dropped",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "The flag would parse and validate and then change nothing, so a run asked for other producer counts would silently measure the defaults.",
+      "find": [
+        "            sampling.producer_counts = probe_args::positive_list(\"producers\", value)?;"
+      ],
+      "replace": [
+        "            let _ = probe_args::positive_list(\"producers\", value)?;"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: every sampling claims to be the default",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "A report sampled other than the defaults would say it was the published configuration -- the one confusion the settings line exists to prevent.",
+      "find": [
+        "        *self == Self::default()"
+      ],
+      "replace": [
+        "        true"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: every iteration multiplier claims to be the default",
+      "file": "src/probe_args.rs",
+      "expect": "caught",
+      "why": "The cost probes' settings line would call a scaled run the default, so its figures would pass for the published ones.",
+      "find": [
+        "        self == Self::default()"
+      ],
+      "replace": [
+        "        true"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: a refused command line exits as a success",
+      "file": "src/report.rs",
+      "expect": "caught",
+      "why": "A script that mistyped a flag would read status 0 and an empty stdout as a run that measured nothing.",
+      "find": [
+        "    std::process::exit(2)"
+      ],
+      "replace": [
+        "    std::process::exit(0)"
+      ]
+    },
+    {
+      "name": "M4.2 sampling: the cost probe's NDJSON line drops the multiplier",
+      "file": "src/bin/request_cost.rs",
+      "expect": "caught",
+      "why": "A machine reader would see a scaled run's figures with nothing saying they were not the default's.",
+      "find": [
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"iteration_multiplier\":{},{fields}}}\"#,"
+      ],
+      "replace": [
+        "        r#\"{{\"reason\":\"x-probe-request-cost\",\"arch\":\"{}\",\"ignored\":{},{fields}}}\"#,"
+      ]
+    },
+    {
+      "name": "M4.2 sampling control: the warmup pass is discarded another way",
+      "file": "src/queue_contention.rs",
+      "expect": "survives",
+      "why": "A control: the untimed pass still runs with the same arguments and its result is still thrown away, which no test can tell apart.",
+      "find": [
+        "    let _ = timer(producers, pushes_per_producer);"
+      ],
+      "replace": [
+        "    let _warmup = timer(producers, pushes_per_producer);"
+      ]
     }
   ]
 }

@@ -643,6 +643,15 @@ result -- so interleaving the control with its candidate has to land first. The
 paragraph above is kept as the reasoning that was current when the diagnosis was
 first written down; where the two disagree, the checklist is the execution order.
 
+**`M4.2` was then built before `M4.4` anyway, and that does not reverse the
+revision.** The revision orders *reading* a lengthened run after pairing the
+control. Building the settings that take one moves no figure -- the defaults are
+the old constants -- so it has nothing to be confounded by. What it changes is
+that the confounded reading is now one command away rather than one source edit
+away, which is why the decision that records it,
+[The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling),
+states the confound in its own body rather than leaving it to this paragraph.
+
 The other half is knowing when to stop. Every setup has a floor, and past it more
 runs buy nothing; the failure mode is a week spent establishing that two numbers
 are the same. What makes the floor easy to misjudge is the assumption that it
@@ -687,3 +696,35 @@ to the quality of the measurement instead of to its portability.
 The rule exists to forbid the quiet version: reporting a wide control as though a
 wide control were ordinary. It is not ordinary, and the moment it stops being
 remarked upon is the moment nobody investigates it.
+
+## Why the sampling is set by flags, and why the cost probes get only one
+
+Decided in [The probes' sampling is set on the command line](DESIGN-NOTES.md#d-settable-sampling).
+
+**Flags rather than environment variables.** A variable set in a shell outlives the
+run it was meant for, and the next run inherits it silently -- two runs differing
+without anyone noticing, which `M4.2` named as the thing to avoid. A flag belongs to
+one invocation and is visible in whatever ran it.
+
+**Refusal rather than a warning and the default.** A probe that met an unknown flag
+and ran anyway would publish default figures from a run its author believed was
+configured. The report would say "the defaults", truthfully, and the author would
+be reading it as something else.
+
+**One multiplier for the cost probes, not a flag per loop.** Each loop's length was
+chosen when it was written, and scaling them together keeps those lengths in the
+proportions they were written with. A flag per loop would let one run lengthen the
+row it is about while the row it is compared against stays short, which is a second
+variable entering the comparison. The item also said not to add knobs beyond what a
+diagnostic step needs, and the step for these probes is "time more iterations".
+Repetitions and concurrency, the other two axes `M4.2` anticipated, do not exist in
+those probes: each times a fixed loop and divides, and none repeats a measurement or
+varies a thread count.
+
+**The sampling travels inside `Observation`.** The alternative, passing it to the
+renderer next to the observation, would let a caller hand over the defaults with a
+non-default measurement -- the renderer cannot tell, and the report would mislabel
+its own figures. Carried inside, the label and the figures come from the one
+`measure` call. The test corpus accordingly requires a `sampling` key on every case
+rather than defaulting a missing one, because a defaulted key is exactly how a case
+written before this change would keep passing while describing a run nobody took.

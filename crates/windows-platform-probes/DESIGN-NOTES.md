@@ -177,6 +177,13 @@ are the interesting ones. Do this before pinning threads, before quiescing the
 machine, and before suspecting the probe -- each of those changes what is being
 measured, and a change made before the cheap check cannot be evaluated.
 
+That move is a command line, not a source edit: `probe-queue-contention` takes
+`--pushes-per-producer`, `--repetitions` and `--producers`, and the cost probes take
+`--iteration-multiplier`. Read [The probes' sampling is set on the command
+line](#d-settable-sampling) before reading a run taken with them, because until `M4.4`
+pairs the control, lengthening the run also lengthens the interval the control's two
+halves are measured across.
+
 **A warmup pass separates transient cost from ongoing noise, and the two are
 different things.** This probe already discards one untimed pass -- though not for
 the reason an earlier version of this paragraph gave. Every timed repetition
@@ -1150,8 +1157,9 @@ rests on 35 timed passes per
 configuration, and "seven runs" alone would not let anyone reproduce it. These
 are fixed at
 [src/queue_contention.rs](src/queue_contention.rs)`::PUSHES_PER_PRODUCER` and
-`REPETITIONS`; M4.2 in [CHECKLIST.md](CHECKLIST.md) makes them adjustable, which
-is what the first diagnostic step above needs and cannot currently do.
+`REPETITIONS`, which are the defaults of `Sampling`; a run given other values on the
+command line says so beside its banner (see [The probes' sampling is set on the
+command line](#d-settable-sampling)).
 
 **The banner's `numa[16]` is load-bearing here: it means a single
 NUMA node holding all sixteen processors**, so every figure below was taken
@@ -1203,8 +1211,9 @@ measurements taken on a shared desktop that is doing other things. The dispersio
 alone cannot distinguish them, and this note does not guess. See
 [High variance in our own control is a finding about the
 instrument](#d-variance-is-a-finding) for what to try first and how to recognise
-the floor, and M4.2 in [CHECKLIST.md](CHECKLIST.md) for the probe controls that
-make those steps executable without a source edit.
+the floor, and [The probes' sampling is set on the command
+line](#d-settable-sampling) for the flags that make those steps executable without a
+source edit.
 
 What follows is therefore reported as *data with a known-unexplained spread*.
 
@@ -2358,3 +2367,62 @@ the table with the NDJSON line derives its keys from the probe and needed no cha
 
 **Scheduled work:** none. The request crate's `NR-6.2`, which deletes `CapturedHandle`, no longer
 waits on this crate.
+
+## The probes' sampling is set on the command line, and a run says when it was not the default
+
+<a id="d-settable-sampling"></a>
+
+**Status: decided and implemented** by `M4.2`.
+
+[High variance in our own control is a finding about the instrument](#d-variance-is-a-finding)
+makes "more of the same" the first move against a wide control: a longer span and more repetitions
+on the unchanged configuration. Before `M4.2` that was a source edit and a rebuild. Now:
+
+- **`probe-queue-contention` takes `--pushes-per-producer N`, `--repetitions N` and
+  `--producers a,b,...`.** The three axes the item named -- duration, repetitions, concurrency --
+  are these three.
+- **The cost probes, `probe-request-cost` and `probe-doorbell-cost`, take one setting,
+  `--iteration-multiplier N`.** Each times fixed loops and divides; neither repeats a measurement
+  nor varies a thread count, so lengthening the loops is the whole of
+  "more of the same" for them. One multiplier scales every loop the probe runs, the doorbell
+  probe's park-and-wake rounds included, so the loops keep the lengths relative to each other that
+  they were written with.
+- **A value is given as `--name value` or `--name=value`**, parsed by
+  [src/probe_args.rs](src/probe_args.rs), shared so that every probe that takes settings parses
+  and refuses the same way.
+- **The defaults are the constants, unchanged.** A run with no arguments measures exactly what the
+  published figures measured, so nothing recorded earlier is obsoleted by this decision.
+- **A refusal is exit status 2, written to stderr before anything is measured**, with stdout left
+  empty -- so a piped report is never a partial one, and a script can tell a mistyped flag (2)
+  from a probe that ran and failed (1). Refused: an unknown flag, a flag without a value, a
+  repeated flag, a value that is not a whole number of at least one, a producer list naming a
+  count twice, and a setting the probe's own arithmetic cannot carry -- the queue probe sizes its
+  queue to the next power of two above the largest producer count times the pushes, and a cost
+  probe counts its loop in `u32`. These are this crate's limits, not a platform's.
+- **A run reports what it used, beside the banner, and says when that was not the default.** The
+  queue probe's sampling line ends `(the defaults)` or `(NOT the defaults: ...)`; the cost probes
+  print `iteration multiplier: N` followed by the same distinction, and add
+  `"iteration_multiplier":N` to their NDJSON line. This is
+  [A probe reports observations parameterized by their capture](#d-observations-not-verdicts)
+  applied to settings that are now part of the capture.
+- **The sampling is carried in the observation, not beside it.** `Observation.sampling` is what
+  the renderer reads, its producer-count columns included, so a report cannot describe a sampling
+  other than the one its figures came from.
+- **The timer and the divisor read one value.** `median_run` hands each pass the push count the
+  per-operation figures are divided by, so the pushes a pass performed and the pushes its time is
+  divided by cannot come from two places.
+
+**A reading taken with these settings is confounded until `M4.4` lands.** The same-code control is
+not paired: its two rows are measured four measurements apart. Raising the pushes or the
+repetitions lengthens every measurement between them, and so lengthens the interval across which
+drift lands inside the control. The setting meant to narrow the control also widens the window
+that can widen it, so a control that does not narrow under more sampling does not yet distinguish
+a structural width from drift. `M4.4` in [CHECKLIST.md](CHECKLIST.md) pairs the control.
+
+**Built ahead of `M4.4`, against the checklist's stated order.** That order was about reading a
+lengthened run, not about building the means to take one: the defaults are unchanged, so building
+the settings changed no figure. The reordering was this implementation's call when the engineer
+asked, on 2026-10-19, for `M4.2` to be implemented if it could be; `M4.4`'s note was re-planned in
+the same commit.
+
+**Scheduled work:** none new. `M4.4` already carries the pairing.
