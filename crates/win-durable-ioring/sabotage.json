@@ -1822,6 +1822,62 @@
       "replace": ["    pub fn new_attested_exclusive<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {\n"]
     },
     {
+      "name": "DI-14.12: a character device is read from the pipe value",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "The two values are neighbouring constants of one type, so a swap compiles; NUL then reads as a pipe.",
+      "find": ["    if file_type == FileType::CHAR {\n"],
+      "replace": ["    if file_type == FileType::PIPE {\n"]
+    },
+    {
+      "name": "DI-14.12: a handle that is not a DISK is classified as one",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "The test of the type is inverted, so a pipe or a character device falls to the storage-device control, and a file would be passed over.",
+      "find": ["    if file_type != FileType::DISK {\n"],
+      "replace": ["    if file_type == FileType::DISK {\n"]
+    },
+    {
+      "name": "DI-14.12: a volume and a physical disk are given each other's kind",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "The extents control is the one thing that tells the two apart, so reading its answer the wrong way round swaps them.",
+      "find": ["        Some(extents) => HandleKind::Volume { number, extents },\n        None => HandleKind::PhysicalDisk(number),\n"],
+      "replace": ["        Some(_) => HandleKind::PhysicalDisk(number),\n        None => HandleKind::Volume { number, extents: Vec::new() },\n"]
+    },
+    {
+      "name": "DI-14.12: the storage-device control is always taken as refused",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "A volume and a disk would both be reported as a disk file.",
+      "find": ["    let Some(number) = device_number()? else {\n"],
+      "replace": ["    let Some(number) = device_number()?.filter(|_| false) else {\n"]
+    },
+    {
+      "name": "DI-14.12: a type that is none of the named ones is reported as unknown",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "A value a later system returns would be lost, which is why the type is carried as it came.",
+      "find": ["        return Ok(HandleKind::Other(file_type));\n"],
+      "replace": ["        return Ok(HandleKind::Other(FileType::UNKNOWN));\n"]
+    },
+    {
+      "name": "DI-14.12: an out-of-memory error from a control is taken as a refusal",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "It is the extents reply being too large to hold and not the device's answer, so reading it as a refusal reports a volume as a physical disk.",
+      "find": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => Err(error),\n"],
+      "replace": ["        Err(error) if false && error.kind() == io::ErrorKind::OutOfMemory => Err(error),\n"]
+    },
+    {
+      "name": "DI-14.12: the type query's failure is taken as an unknown type",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: the query holds its own duplicate of an open handle, so GetFileType cannot be made to fail on it, and the error path has no input. What would reach it is a handle the system revokes while the query is held, which a test does not make.",
+      "find": ["            .map_err(|error| error.to_io_error())?;\n"],
+      "replace": ["            .unwrap_or(FileType::UNKNOWN);\n"]
+    },
+    {
       "name": "DI-10.5 control: the attested claim is made through a binding",
       "file": "src/windows_backend/file_target.rs",
       "expect": "survives",

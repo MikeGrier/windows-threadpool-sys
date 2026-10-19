@@ -135,6 +135,7 @@ dependencies = [
  "win-durable-ioring",
  "win-error-codes",
  "win-handles-sys",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "win-sync-sys",
  "win-time-sys",
