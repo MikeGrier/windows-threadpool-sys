@@ -346,8 +346,8 @@
       "file": "src/anchored.rs",
       "expect": "caught",
       "why": "The graft is the whole point: a path that says nothing of the directory is resolved when the call is made.",
-      "find": ["    pub(crate) fn win32(&self) -> &Wtf16Str {\n        self.grafted.as_ref().unwrap_or(&self.given)\n"],
-      "replace": ["    pub(crate) fn win32(&self) -> &Wtf16Str {\n        &self.given\n"]
+      "find": ["    pub fn win32(&self) -> &Wtf16Str {\n        self.grafted.as_ref().unwrap_or(&self.given)\n"],
+      "replace": ["    pub fn win32(&self) -> &Wtf16Str {\n        &self.given\n"]
     },
     {
       "name": "NR-3.3: the terminated pointer is to the path as given",
@@ -362,8 +362,8 @@
       "file": "src/anchored.rs",
       "expect": "caught",
       "why": "`given` is what the caller said, and a caller or test reads it to see what the graft did.",
-      "find": ["    pub(crate) fn given(&self) -> &Wtf16Str {\n        &self.given\n"],
-      "replace": ["    pub(crate) fn given(&self) -> &Wtf16Str {\n        self.win32()\n"]
+      "find": ["    pub fn given(&self) -> &Wtf16Str {\n        &self.given\n"],
+      "replace": ["    pub fn given(&self) -> &Wtf16Str {\n        self.win32()\n"]
     },
     {
       "name": "NR-3.3: a path that was grafted says it was not",

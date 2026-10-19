@@ -1153,3 +1153,21 @@ surviving, with that reason, and the clearing rests on the page.
 
 **Scheduled work:** none in this crate. [DI-14.12](../durable-ioring/CHECKLIST.md) is the consumer, with
 `WV-3.1` in [win-volume-sys](../win-volume-sys/CHECKLIST.md).
+
+## <a id="d-30"></a>D-30: `AnchoredPath` is public, so a crate that builds a request of its own takes the path contract from here
+
+**What is decided.** [D-19](#d-19)'s graft lived in a crate-private type that `OpenFile` and `WatchDirectory` hold.
+`AnchoredPath` is now public, with `new`, `given` and `win32`, so a crate that builds a request of its own and performs
+it later on another thread fixes the meaning of a relative path by this contract and keeps no second copy of it. It is
+the merge-or-delete decision of [D-9](#d-9), taken by the engineer on 2026-10-15 as "the enumeration crate consumes
+the request crate's path contract and deletes its older copy" (`NR-3.8`, `PATH-1` in
+[windows-file-enumeration-sys](../windows-file-enumeration-sys/CHECKLIST.md)); the type had to be reachable for that to
+be done, and an `OpenFile` held in its place would not do, since it is not `Clone` or `Eq`, which the enumeration
+crate's request is.
+
+**What stays private:** `anchored_at`, which takes the directory as an argument so the rules can be tested without
+process state, and `win32_terminated`, which returns a raw pointer for this crate's own calls. A consumer copies
+`win32()` into a terminated string for its call.
+
+**The contract is unchanged.** The rules, the one refusal (an interior NUL) and the two failures of reading the
+current directory are [D-19](#d-19)'s and [D-27](#d-27)'s.

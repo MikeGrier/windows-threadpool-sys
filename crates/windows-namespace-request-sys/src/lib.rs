@@ -125,7 +125,7 @@ pub mod request;
 pub mod volume;
 pub mod watch;
 
-pub use anchored::PathCaptureError;
+pub use anchored::{AnchoredPath, PathCaptureError};
 pub use close::{CloseFn, CloseRequest};
 pub use file_info::QueryFileInformationByHandle;
 pub use file_type::{FileType, QueryFileType};
