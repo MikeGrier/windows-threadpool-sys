@@ -2824,7 +2824,10 @@ backstop. The layers, cheapest first, are the items from
   the code has moved away from needs nothing else to find.
 - The post-merge sweep plans only the manifests of crates the change touched, or that build on one
   it touched; an input every sweep shares selects all of them. A manifest whose crate builds on a
-  changed crate takes every entry, since a change below can alter what any test above observes.
+  changed crate takes every entry, since a change below can alter what any test above observes. So
+  does a manifest whose ``testArgs`` also runs another package's tests, when that package or one it
+  builds on changes: the durable-ioring core is swept with its Windows driver's tests, and some of
+  its defects only those catch.
 - Within a manifest, an entry runs when it is new or changed, when the file it patches changed, or
   when a test that caught it last time changed or is gone. An entry with no record of what caught
   it, or caught by a doctest, runs whenever its crate changed: telling a test file from source by

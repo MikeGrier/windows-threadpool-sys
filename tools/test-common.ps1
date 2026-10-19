@@ -613,6 +613,9 @@ Test-Case 'crate dependencies come from cargo, of every kind, keyed by directory
         Assert-Equal 'crates/b' (@($map['crates/c']) -join '|') 'dev'
         Assert-Equal 'crates/a' (@($map['crates/d']) -join '|') 'build'
         if ($null -ne (Get-SabotageCrateDependency -RepositoryRoot (Join-Path $root 'nowhere'))) { throw 'no workspace is no answer' }
+        $packages = Get-SabotageCratePackage -RepositoryRoot $root
+        Assert-Equal 'crates/a|crates/b|crates/c|crates/d' ((@('a', 'b', 'c', 'd') | ForEach-Object { $packages[$_] }) -join '|') 'each package''s directory'
+        if ($null -ne (Get-SabotageCratePackage -RepositoryRoot (Join-Path $root 'nowhere'))) { throw 'no workspace, no packages' }
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -742,13 +745,15 @@ function Get-ScopeRecord {
 # Which entries are selected after `Edit` changes the fixture, joined.
 function Get-ScopedEntries {
     param($Fixture, [scriptblock] $Edit, [hashtable] $Dependencies = @{ 'crates/a' = @('crates/z'); 'crates/z' = @() },
-        [string] $RecordCommit, [string] $SourceRoot = 'crates/a')
+        [string] $RecordCommit, [string] $SourceRoot = 'crates/a',
+        [hashtable] $Packages = @{ a = 'crates/a'; b = 'crates/b'; z = 'crates/z' })
     & $Edit $Fixture.Root
     if (-not $RecordCommit) { $RecordCommit = $Fixture.Base }
     $change = Get-SabotageChange -RepositoryRoot $Fixture.Root -Since $Fixture.Base
     $spec = [System.IO.File]::ReadAllText((Join-Path $Fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
     $selection = Select-SabotageEntry -RepositoryRoot $Fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
-        -SourceRoot (Join-Path $Fixture.Root $SourceRoot) -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord $RecordCommit)
+        -SourceRoot (Join-Path $Fixture.Root $SourceRoot) -Change $change -Dependencies $Dependencies -Record (Get-ScopeRecord $RecordCommit) `
+        -Spec $spec -Packages $Packages
     return $selection
 }
 
@@ -907,13 +912,99 @@ Test-Case 'a recorded test deleted from a changed file is not hidden by a functi
     }
     finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
 }
+Test-Case 'the packages a manifest tests are its package and every one its testArgs names before --' {
+    $names = { param($spec) $r = Get-SabotageTestedPackage -Spec ([pscustomobject]$spec); ($r.Names -join '|') }
+    Assert-Equal 'a' (& $names @{ package = 'a' }) 'the package alone'
+    Assert-Equal 'a|b|c|d|e' (& $names @{ package = 'a'; testArgs = @('-p', 'b', '--package', 'c', '--package=d', '-pe', '--no-fail-fast') }) 'every spelling'
+    Assert-Equal 'a|b' (& $names @{ package = 'a'; testArgs = @('test', '-p', 'a', '-p', 'b@1.2.3') }) 'once each, without a version'
+    Assert-Equal 'a' (& $names @{ package = 'a'; testArgs = @('-p', 'a', '--', '-p', 'b') }) 'not past --, which are the test binary''s'
+    Assert-Equal 'a' (& $names @{ package = 'a'; testArgs = @('--features', 'b/x', '--lib') }) 'a dependency''s feature is not a package tested'
+    $workspace = Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('--workspace') })
+    Assert-Equal $true $workspace.Workspace '--workspace'
+    Assert-Equal $true (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ testArgs = @('--all') })).Workspace '--all'
+    Assert-Equal $false (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a' })).Workspace 'neither'
+    $pattern = Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('-p', 'win-*') })
+    if (-not $pattern.Unknown) { throw 'a pattern cannot be resolved to crates here' }
+    if ($null -ne (Get-SabotageTestedPackage -Spec ([pscustomobject]@{ package = 'a'; testArgs = @('-p', 'b') })).Unknown) { throw 'a name is known' }
+}
+
+Test-Case 'a change to another package a manifest tests selects every entry, and an unknown one selects every entry' {
+    $setB = {
+        param($r)
+        $path = Join-Path $r 'crates/a/sabotage.json'
+        $spec = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+        $spec | Add-Member -NotePropertyName testArgs -NotePropertyValue @('-p', 'a', '-p', 'b')
+        [System.IO.File]::WriteAllText($path, ($spec | ConvertTo-Json -Depth 8))
+    }
+    $addB = {
+        param($r)
+        New-Item -ItemType Directory -Force -Path (Join-Path $r 'crates/b/tests') | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $r 'crates/b/tests/driver.rs'), "fn weakened() {}`n")
+    }
+    # Crate b builds on a, so a's own reach does not include it.
+    $deps = @{ 'crates/a' = @(); 'crates/b' = @('crates/a') }
+    $fixture = New-EntryScopeFixture
+    try {
+        & $setB $fixture.Root
+        Save-GitFixture $fixture.Root 'tests b too' | Out-Null
+        $fixture.Base = ((Invoke-NativeStdout { git -C $fixture.Root rev-parse HEAD }) | Select-Object -First 1).Trim()
+        $sel = Get-ScopedEntries $fixture $addB -Dependencies $deps
+        Assert-Equal $true $sel.All 'every entry'
+        Assert-Equal 'every entry: a crate it builds on or tests changed: crates/b' $sel.Reason 'why'
+        $unlisted = Get-ScopedEntries $fixture { param($r) } -Dependencies $deps -Packages @{ a = 'crates/a' }
+        Assert-Equal "every entry: it tests package 'b', which cargo does not list" $unlisted.Reason 'b unknown'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    $fixture = New-EntryScopeFixture
+    try {
+        $sel = Get-ScopedEntries $fixture $addB -Dependencies $deps
+        Assert-Equal 0 @($sel.Entries).Count 'a manifest that does not test b is not reached by it'
+    }
+    finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a manifest that tests the whole workspace is reached by a change to any crate' {
+    $change = [pscustomobject]@{ Known = $true; Base = $null; Divergent = $false; Paths = @('crates/b/src/x.rs'); Reason = 'r' }
+    $deps = @{ 'crates/a' = @(); 'crates/b' = @() }
+    $entries = @([pscustomobject]@{ name = 'E'; file = 'src/lib.rs' })
+    $select = {
+        param($testArgs)
+        Select-SabotageEntry -RepositoryRoot 'C:\r' -Manifest 'crates/a/sabotage.json' -Entries $entries -SourceRoot 'C:\r\crates\a' `
+            -Change $change -Dependencies $deps -Record @{} -Spec ([pscustomobject]@{ package = 'a'; testArgs = $testArgs }) -Packages @{ a = 'crates/a' }
+    }
+    Assert-Equal $true (& $select @('--workspace')).All 'b is tested'
+    Assert-Equal 0 @((& $select @('-p', 'a')).Entries).Count 'b is not'
+    Assert-Equal $true (Select-SabotageEntry -RepositoryRoot 'C:\r' -Manifest 'crates/a/sabotage.json' -Entries $entries -SourceRoot 'C:\r\crates\a' `
+            -Change $change -Dependencies $deps -Record @{} -Spec $null -Packages @{}).All 'no manifest settings given, every entry'
+}
+Test-Case 'a path with a character git would quote is reported as it is, committed or untracked' {
+    $root = New-GitFixture
+    $name = 'caf' + [char]0xE9 + '.rs'
+    try {
+        foreach ($f in 'crates/a/src/lib.rs', "crates/a/src/$name") {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $root $f)) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root $f), "x`n")
+        }
+        $base = Save-GitFixture $root 'base'
+        [System.IO.File]::WriteAllText((Join-Path $root "crates/a/src/$name"), "changed`n")
+        Save-GitFixture $root 'change it' | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root ('crates/a/src/new-' + $name)), "untracked`n")
+        $change = Get-SabotageChange -RepositoryRoot $root -Since $base
+        Assert-Equal $true $change.Known $change.Reason
+        Assert-Equal "crates/a/src/$name|crates/a/src/new-$name" ($change.Paths -join '|') 'unquoted, exact'
+        $sel = Select-SabotageEntry -RepositoryRoot $root -Manifest 'crates/b/sabotage.json' -Entries @() -SourceRoot (Join-Path $root 'crates/b') `
+            -Change $change -Dependencies @{ 'crates/b' = @('crates/a') } -Record @{} -Spec ([pscustomobject]@{ package = 'b' }) -Packages @{ b = 'crates/b' }
+        Assert-Equal $true $sel.All 'and it reaches what builds on its crate'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
 Test-Case 'every entry for a change below, a shared input, or a change that cannot be measured; none for nothing reached' {
     $fixture = New-EntryScopeFixture
     try {
         $sel = Get-ScopedEntries $fixture { param($r) Add-Content -LiteralPath (Join-Path $r 'crates/z/src/lib.rs') -Value '// x' }
         Assert-Equal $true $sel.All 'a crate it builds on'
         Assert-Equal 6 @($sel.Entries).Count 'all six'
-        Assert-Equal 'every entry: a crate it builds on changed: crates/z' $sel.Reason 'why'
+        Assert-Equal 'every entry: a crate it builds on or tests changed: crates/z' $sel.Reason 'why'
 
         $none = Get-ScopedEntries $fixture { param($r) } -Dependencies @{ 'crates/a' = @() }
         Assert-Equal 0 @($none.Entries).Count 'z changed, but a does not build on it here'
@@ -925,11 +1016,11 @@ Test-Case 'every entry for a change below, a shared input, or a change that cann
         $spec = [System.IO.File]::ReadAllText((Join-Path $fixture.Root 'crates/a/sabotage.json')) | ConvertFrom-Json
         $unknown = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
             -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since 'no-such') `
-            -Dependencies @{} -Record (Get-ScopeRecord $fixture.Base)
+            -Dependencies @{} -Record (Get-ScopeRecord $fixture.Base) -Spec $spec -Packages @{ a = 'crates/a' }
         Assert-Equal $true $unknown.All 'unmeasurable'
         $nomap = Select-SabotageEntry -RepositoryRoot $fixture.Root -Manifest 'crates/a/sabotage.json' -Entries $spec.sabotages `
             -SourceRoot (Join-Path $fixture.Root 'crates/a') -Change (Get-SabotageChange -RepositoryRoot $fixture.Root -Since $fixture.Base) `
-            -Dependencies $null -Record (Get-ScopeRecord $fixture.Base)
+            -Dependencies $null -Record (Get-ScopeRecord $fixture.Base) -Spec $spec -Packages @{ a = 'crates/a' }
         Assert-Equal $true $nomap.All 'no crate map'
     }
     finally { Remove-Item -LiteralPath $fixture.Root -Recurse -Force -ErrorAction SilentlyContinue }

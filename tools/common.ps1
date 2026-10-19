@@ -462,7 +462,16 @@ function Get-SabotageChange {
     if ($LASTEXITCODE -ne 0 -or $base.Count -eq 0) {
         return & $unknown "this clone has no merge base with '$Since'"
     }
-    $diff = @(Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only --no-renames $base[0] })
+    # -z, so each path arrives exactly as git holds it: by default git quotes a
+    # path with a non-ASCII byte in it -- `"crates/x/caf\303\251.rs"` -- and a
+    # quoted path matches no crate and no shared input, so the change would be
+    # read as unrelated. Separated by NUL, joined back across the newlines the
+    # capture split on.
+    $split = {
+        param($lines)
+        foreach ($path in ((@($lines) -join "`n") -split "`0")) { if ($path) { $path } }
+    }
+    $diff = @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $base[0] }))
     if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff against $($base[0])" }
     # 0 is an ancestor, 1 is not, and anything else is git unable to say.
     Invoke-NativeStdout { git -C $RepositoryRoot merge-base --is-ancestor $Since HEAD } | Out-Null
@@ -470,12 +479,20 @@ function Get-SabotageChange {
     $divergent = $false
     if ($ancestry -eq 1) {
         $divergent = $true
-        $diff += @(Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only --no-renames $base[0] $Since })
+        $diff += @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot diff --name-only -z --no-renames $base[0] $Since }))
         if ($LASTEXITCODE -ne 0) { return & $unknown "git could not diff $($base[0]) against '$Since'" }
     }
     elseif ($ancestry -ne 0) { return & $unknown "git could not say whether '$Since' is an ancestor of HEAD" }
-    $untracked = @(Invoke-NativeStdout { git -C $RepositoryRoot ls-files --others --exclude-standard })
+    $untracked = @(& $split (Invoke-NativeStdout { git -C $RepositoryRoot ls-files -z --others --exclude-standard }))
     if ($LASTEXITCODE -ne 0) { return & $unknown 'git could not list untracked files' }
+    # A path this host decoded with a replacement character is not the path git
+    # meant, and could match nothing it should, so the change cannot be measured.
+    # No test reaches this: both PowerShell hosts here decode git's UTF-8 paths, as
+    # the test of a non-ASCII path shows. It is for a host whose output encoding
+    # is set otherwise, where a wrong path would otherwise pass silently.
+    foreach ($path in @(@($diff) + @($untracked))) {
+        if ($path -and $path.Contains([string][char]0xFFFD)) { return & $unknown "git reported a path this host could not decode: $path" }
+    }
     # Ordinal and case-sensitive, like the sort in Get-SabotageManifest: Sort-Object -Unique
     # orders by culture and folds case, so its answer depends on the host.
     $set = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
@@ -532,6 +549,60 @@ function Get-SabotageManifestCrate {
     if ($at -lt 0) { return '' }
     return $Manifest.Substring(0, $at)
 }
+# Which workspace crate each package is, by name: the package's directory relative
+# to the root, forward slashes, '' for one at the root. From `cargo metadata
+# --no-deps`, which builds nothing. $null when cargo cannot answer.
+function Get-SabotageCratePackage {
+    param([string] $RepositoryRoot)
+    $manifest = Join-Path $RepositoryRoot 'Cargo.toml'
+    $json = Invoke-NativeStdout { cargo metadata --format-version 1 --no-deps --manifest-path $manifest } | Out-String
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $map = @{}
+    foreach ($package in ($json | ConvertFrom-Json).packages) {
+        $dir = [System.IO.Path]::GetFullPath((Split-Path -Parent $package.manifest_path))
+        if (-not $dir.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $map[$package.name] = $dir.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+    }
+    return $map
+}
+
+# The packages a manifest's sweep runs the tests of: its `package`, and every
+# package its `testArgs` names with `-p`/`--package` before the `--` that ends
+# cargo's own arguments. `Workspace` is set by `--workspace` or `--all`, which
+# test every crate. `Unknown` says why the answer cannot be trusted -- a package
+# given as a pattern, which cargo matches against names this does not know --
+# and is $null otherwise.
+function Get-SabotageTestedPackage {
+    param($Spec)
+    $names = New-Object 'System.Collections.Generic.List[string]'
+    $workspace = $false
+    $unknown = $null
+    if ($Spec.PSObject.Properties.Name -contains 'package' -and $Spec.package) { $names.Add([string]$Spec.package) }
+    $arguments = @()
+    if ($Spec.PSObject.Properties.Name -contains 'testArgs' -and $Spec.testArgs) { $arguments = @($Spec.testArgs) }
+    for ($i = 0; $i -lt $arguments.Count; $i++) {
+        $argument = [string]$arguments[$i]
+        if ($argument -eq '--') { break }
+        $value = $null
+        if ($argument -eq '-p' -or $argument -eq '--package') {
+            if ($i + 1 -lt $arguments.Count) { $value = [string]$arguments[$i + 1]; $i++ }
+        }
+        elseif ($argument.StartsWith('--package=', [System.StringComparison]::Ordinal)) { $value = $argument.Substring(10) }
+        elseif ($argument.StartsWith('-p', [System.StringComparison]::Ordinal) -and $argument.Length -gt 2 -and $argument[2] -ne '-') { $value = $argument.Substring(2) }
+        elseif ($argument -eq '--workspace' -or $argument -eq '--all') { $workspace = $true }
+        if ($null -eq $value) { continue }
+        # A package id may carry a version, `name@1.2.3`; the name is what is matched.
+        $name = ($value -split '@')[0]
+        if ($name -match '[*?\[\]/:]' -or -not $name) {
+            $unknown = "it tests packages given as '$value', which is not a package name"
+            continue
+        }
+        $names.Add($name)
+    }
+    return [pscustomobject]@{ Names = [string[]]@($names | Select-Object -Unique); Workspace = $workspace; Unknown = $unknown }
+}
+
 # `Crate` and every crate it builds on, directly or not, through
 # Get-SabotageCrateDependency's map. A crate the map does not know reaches only
 # itself, and a cycle is walked once.
@@ -726,8 +797,9 @@ function Write-SabotageCatcherRecord {
 #
 # Every entry is affected when the change cannot be measured, the crate map is
 # missing, a shared input changed, a crate the manifest's crate builds on changed
-# (a change below can alter what any test above it observes), or the manifest's
-# own settings changed. No entry is when nothing the crate reaches changed, and
+# (a change below can alter what any test above it observes), another package the
+# manifest tests changed (`Spec`'s `package` and `testArgs`, found in `Packages`,
+# Get-SabotageCratePackage's map), or the manifest's own settings changed. No entry is when nothing the crate reaches changed, and
 # nothing under the manifest's `root` either. Otherwise, an entry is affected when
 #   - it is new, or differs from the manifest at the base revision;
 #   - the file it patches changed;
@@ -744,7 +816,7 @@ function Write-SabotageCatcherRecord {
 # affected entry's name to why), and a `Reason` for the whole.
 function Select-SabotageEntry {
     param([string] $RepositoryRoot, [string] $Manifest, [object[]] $Entries, [string] $SourceRoot,
-        $Change, [hashtable] $Dependencies, [hashtable] $Record)
+        $Change, [hashtable] $Dependencies, [hashtable] $Record, $Spec, [hashtable] $Packages)
     $Entries = @($Entries)
     $every = {
         param($why)
@@ -762,11 +834,27 @@ function Select-SabotageEntry {
     foreach ($path in $changed) {
         if (Test-SabotageSharedInput $path) { return & $every "a shared input changed: $path" }
     }
+    # The crates whose tests the sweep runs: the manifest's own, and every package
+    # its settings name, which may be one that builds on it -- a driver whose
+    # tests are the ones that catch a sabotage of the core it is built on.
+    if ($null -eq $Spec) { return & $every 'the manifest''s settings were not given' }
+    $tested = Get-SabotageTestedPackage -Spec $Spec
+    if ($tested.Unknown) { return & $every $tested.Unknown }
     $crate = Get-SabotageManifestCrate $Manifest
+    $roots = New-Object 'System.Collections.Generic.List[string]'
+    $roots.Add($crate)
+    if ($tested.Workspace) { foreach ($dir in $Dependencies.Keys) { $roots.Add($dir) } }
+    foreach ($name in $tested.Names) {
+        if ($null -eq $Packages -or -not $Packages.ContainsKey($name)) {
+            return & $every "it tests package '$name', which cargo does not list"
+        }
+        $roots.Add($Packages[$name])
+    }
     $reached = { param($dir) foreach ($path in $changed) { if (Test-SabotagePathInCrate $path $dir) { return $true } }; $false }
-    $reach = @(Get-SabotageCrateReach -Crate $crate -Dependencies $Dependencies)
+    $reach = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($dir in $roots) { foreach ($at in @(Get-SabotageCrateReach -Crate $dir -Dependencies $Dependencies)) { [void]$reach.Add($at) } }
     foreach ($below in $reach) {
-        if ($below -ne $crate -and (& $reached $below)) { return & $every "a crate it builds on changed: $below" }
+        if ($below -ne $crate -and (& $reached $below)) { return & $every "a crate it builds on or tests changed: $below" }
     }
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
     $relative = {

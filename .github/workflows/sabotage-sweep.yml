@@ -134,6 +134,11 @@ jobs:
       - name: Snapshot the record for this run
         shell: pwsh
         run: ./tools/merge-sabotage-catchers.ps1 -Path .scratch/sabotage/catchers.json -Output .scratch/sabotage/catchers.json
+      # Overwritten, not refused, when the plan job runs again: an artifact
+      # belongs to the run, not to the attempt, so "re-run all jobs" uploads a
+      # name the first attempt already used. The shards a re-run starts download
+      # by this name, so they get the snapshot of the attempt that planned them;
+      # "re-run failed jobs" does not re-run the plan, and they get its first one.
       - name: Upload the snapshot
         uses: actions/upload-artifact@v7
         with:
@@ -141,6 +146,7 @@ jobs:
           path: .scratch/sabotage/catchers.json
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
       # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
       # `${{ }}` interpolation into the script body. An expression substituted
       # into `run:` is spliced in as source before PowerShell parses it, so a
@@ -278,9 +284,14 @@ jobs:
           path: .scratch/sabotage/*.txt*
           if-no-files-found: ignore
           retention-days: 14
+          # A re-run of a shard that fails again uploads under the same name.
+          overwrite: true
       # This shard's record, for the `record` job to merge. Whatever the sweep's
       # verdict: an entry that did not behave as declared was still run, and
       # what caught it, or did not, is still what the next run needs.
+      # Overwritten for the same reason as the snapshot: a re-run of a failed
+      # shard uploads under the name its first attempt used, and refusing that
+      # would fail the very re-run a failed sweep is most often given.
       - name: Upload the record of which tests caught each entry
         if: always()
         uses: actions/upload-artifact@v7
@@ -289,6 +300,7 @@ jobs:
           path: .scratch/sabotage/catchers.json
           if-no-files-found: ignore
           retention-days: 1
+          overwrite: true
 
   # One record for the next run: what this run's shards learned, over the
   # snapshot the run started from. Each shard wrote only the entries it ran on

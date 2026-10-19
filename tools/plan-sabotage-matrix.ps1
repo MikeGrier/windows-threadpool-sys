@@ -139,7 +139,11 @@ $scopedCounts = $null
 if (-not [string]::IsNullOrWhiteSpace($Since)) {
     $change = Get-SabotageChange -RepositoryRoot $RepositoryRoot -Since $Since
     $dependencies = $null
-    if ($change.Known) { $dependencies = Get-SabotageCrateDependency -RepositoryRoot $RepositoryRoot }
+    $packages = $null
+    if ($change.Known) {
+        $dependencies = Get-SabotageCrateDependency -RepositoryRoot $RepositoryRoot
+        $packages = Get-SabotageCratePackage -RepositoryRoot $RepositoryRoot
+    }
     $record = Read-SabotageCatcherRecord -Path $CatcherRecord
     $scopedCounts = @{}
     $planned = 0
@@ -147,7 +151,7 @@ if (-not [string]::IsNullOrWhiteSpace($Since)) {
         $spec = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         $scope = Select-SabotageEntry -RepositoryRoot $RepositoryRoot -Manifest (Get-RelativePath $path) `
             -Entries $spec.sabotages -SourceRoot (Get-SabotageSourceRoot -ManifestPath $path -Spec $spec) `
-            -Change $change -Dependencies $dependencies -Record $record
+            -Change $change -Dependencies $dependencies -Record $record -Spec $spec -Packages $packages
         $scopedCounts[$path] = @($scope.Entries).Count
         if ($scopedCounts[$path] -gt 0) {
             $planned++

@@ -45,7 +45,8 @@ In CI, [.github/workflows/sabotage-sweep.yml](../.github/workflows/sabotage-swee
 sweeps after every merge to `main`, and only the manifests the merge could have
 affected: [plan-sabotage-matrix.ps1](plan-sabotage-matrix.ps1) `-Since` takes the
 crates the push touched, adds every crate that builds on one through a path
-dependency of any kind, and plans every manifest when the push touched an input
+dependency of any kind, and every manifest whose `testArgs` runs the tests of a
+package so reached, and plans every manifest when the push touched an input
 all sweeps share or its base cannot be measured from. Within a crate the push
 touched, it counts only the entries the push could have affected, and each shard
 finds the same ones with `run-sabotage.ps1 -Since`: an entry that is new or

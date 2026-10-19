@@ -218,8 +218,9 @@
 .PARAMETER Since
     A base revision. When given, only the entries a change since then could
     have affected are swept: every entry when the change reached a crate this
-    manifest's crate builds on, or an input every sweep shares, and none when it
-    reached nothing the crate builds on. When it is in the crate itself, the
+    manifest's crate builds on, another package whose tests the manifest runs
+    (its `testArgs`), or an input every sweep shares, and none when it reached
+    nothing the manifest builds or tests. When it is in the crate itself, the
     entries that are new or changed, whose patched file changed, whose
     recorded catching tests changed or are gone, and those with no better
     answer -- caught by nothing recorded, or by a doctest. The rule is
@@ -1260,10 +1261,14 @@ if (-not [string]::IsNullOrWhiteSpace($Since)) {
     $recordForScope = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
     $change = Get-SabotageChange -RepositoryRoot $repoRoot -Since $Since
     $dependencies = $null
-    if ($change.Known) { $dependencies = Get-SabotageCrateDependency -RepositoryRoot $repoRoot }
+    $packages = $null
+    if ($change.Known) {
+        $dependencies = Get-SabotageCrateDependency -RepositoryRoot $repoRoot
+        $packages = Get-SabotageCratePackage -RepositoryRoot $repoRoot
+    }
     $scope = Select-SabotageEntry -RepositoryRoot $repoRoot -Manifest $catcherKey -Entries $manifestSelected `
         -SourceRoot $sourceRoot -Change $change -Dependencies $dependencies `
-        -Record (Read-SabotageCatcherRecord -Path $recordForScope)
+        -Record (Read-SabotageCatcherRecord -Path $recordForScope) -Spec $spec -Packages $packages
     $scoped = @($scope.Entries)
     $scopeReasons = $scope.Reasons
     $scopeNote = "Since ${Since}: $($scope.Reason)."
