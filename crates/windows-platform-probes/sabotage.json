@@ -970,6 +970,68 @@
       ]
     },
     {
+      "name": "M8.8: the handle-state probe stops emitting its row",
+      "file": "src/bin/handle_state.rs",
+      "expect": "caught",
+      "why": "The census runs the probe, so a run that prints no row changes the set it reports.",
+      "find": [
+        "        raw_row(&observed, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.8: the control publishes the duplicate's observation",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "The control is what makes the duplicate's continuation attributable to duplication; publishing one in place of the other erases the comparison.",
+      "find": [
+        "            Value::Object(cursor(&observation.separate_opens)),"
+      ],
+      "replace": [
+        "            Value::Object(cursor(&observation.duplicate)),"
+      ]
+    },
+    {
+      "name": "M8.8: a failed second call is published as an empty listing",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "Exhaustion is reported as an error code; an empty list would read as a call that succeeded and returned nothing.",
+      "find": [
+        "        Err(code) => (Value::Null, Value::from(*code)),"
+      ],
+      "replace": [
+        "        Err(code) => (Value::List(Vec::new()), Value::from(*code)),"
+      ]
+    },
+    {
+      "name": "M8.8: whether the source survived the close is not published",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "caught",
+      "why": "A design in which a request owns a duplicate and drops it depends on this one answer.",
+      "find": [
+        "        .with(\"source_survived_close\", observation.source_survived_close)"
+      ],
+      "replace": [
+        "        .with(\"source_survived_close\", true)"
+      ]
+    },
+    {
+      "name": "M8.8 control: the row names its build before its architecture",
+      "file": "src/handle_state/raw_row.rs",
+      "expect": "survives",
+      "why": "A control: a row is read by key, so the order its keys are written in is not something the tests claim.",
+      "find": [
+        "        .with(\"arch\", std::env::consts::ARCH)",
+        "        .with(\"build\", build)"
+      ],
+      "replace": [
+        "        .with(\"build\", build)",
+        "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
       "name": "M8.1 control: the short run takes two pushes fewer",
       "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
       "expect": "survives",
