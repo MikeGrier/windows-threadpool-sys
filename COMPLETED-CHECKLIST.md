@@ -4019,3 +4019,14 @@ and never for an entry a doctest caught, which a filtered run does not build. Th
 that also stops a doctest compiling, so a full sweep, the nightly backstop, always runs whole suites. On `win-sync-sys`, with every
 entry selected, the 45 entries with recorded catching tests were each caught by them alone, and the sweep took 149 s against 193 s
 for the full one; that crate's per-entry cost is mostly its rebuild.
+
+## Moved 2026-10-19 02:08:47 -04:00 -- sabotage scope, M34.16: the nightly backstop
+
+### <a id="m3416"></a>M34.16 -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. *(completed 2026-10-19 02:08:47 -04:00)*
+
+[.github/workflows/sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) runs on a schedule as well as after each merge; a
+scheduled run has no base, so it plans and sweeps every entry with whole suites. Writing it found a gap M34.12 had opened: post-merge
+runs shared one concurrency group with `cancel-in-progress`, which was harmless while every run swept everything and, once each
+swept only its merge's change, would have left a cancelled merge's crates unswept until the nightly run. Every run now has a group of
+its own. Two runs side by side can each save a record of which tests caught each entry without the other's, which only makes a later
+scoped run larger.

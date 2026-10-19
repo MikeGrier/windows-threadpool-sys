@@ -51,6 +51,12 @@ below) changed or are gone, or of which nothing better is known. The rule is
 [DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope). `-List -Since` shows the
 reason each entry was chosen.
 
+Every night the same workflow sweeps every entry of every manifest, running each
+entry's whole suite, as a sweep did before any of this scoping. That is the
+backstop for what scoping cannot see, and the run that re-learns which tests catch
+each entry. A run started by hand from the workflow's dispatch is a full sweep
+too, narrowed only by the manifest and name it is given.
+
 | Exit | Meaning |
 |---|---|
 | 0 | Every sabotage behaved as declared. |

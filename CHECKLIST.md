@@ -270,10 +270,7 @@ changes.
 
 - [x] **M34.15** -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3415)
 
-- [ ] **M34.16** -- **Sweep everything nightly, and scope the post-merge sweep.** A scheduled run of
-  [.github/workflows/sabotage-sweep.yml](.github/workflows/sabotage-sweep.yml) sweeps every entry of
-  every manifest, which is the backstop for what scoping cannot see. The post-merge run becomes the
-  scoped one. A dispatch keeps its full sweep, still narrowed by its manifest and name inputs.
+- [x] **M34.16** -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3416)
 
 - [ ] **M34.17** -- **Teach the scoped run as the default local check.** The repository instructions'
   sabotage guidance in [.github/copilot-instructions.md](.github/copilot-instructions.md) and
