@@ -27,11 +27,7 @@ of each other. Then this crate is released, a new minor.
 
 - [x] **NR-6.2** -- Capture is deleted: `CapturedHandle` and its errors go, and the two remaining `try_clone`s share the handle and fail only on the attributes' copy. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#nr-62-capture)
 
-- [ ] **NR-6.3** -- **`OpenFile` and `WatchDirectory` from an `AnchoredPath`.** An infallible constructor on each
-  taking an `AnchoredPath` the caller already holds, so a crate that anchored its path when its own request was
-  built (the enumeration crate's `SAFE-2`) does not anchor it a second time. Both path entries get it, so they
-  stay one shape. Tests: the Win32 path is the anchored path's; a relative path anchored before the current
-  directory changes opens what it named when it was anchored.
+- [x] **NR-6.3** -- `OpenFile::from_anchored` and `WatchDirectory::from_anchored` build a request from an `AnchoredPath` the caller holds, without anchoring it again. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#nr-63-anchored)
 
 - [ ] **NR-6.4** -- **A typed read of `FileBasicInfo`.** `QueryFileBasicInfo`, shaped as
   [D-31](DESIGN-NOTES.md#d-31)'s `QueryFileIdInfo` is: one `GetFileInformationByHandleEx` call into a

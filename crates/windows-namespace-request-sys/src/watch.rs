@@ -270,11 +270,34 @@ impl WatchDirectory {
     /// [`PathCaptureError::InteriorNul`] if the path contains a NUL, which Win32 would read as its
     /// end, and the failure of `GetCurrentDirectoryW` if it had to be read and could not be.
     pub fn new(path: Wtf16String) -> Result<Self, PathCaptureError> {
-        Ok(Self {
-            path: AnchoredPath::new(path)?,
+        Ok(Self::from_anchored(AnchoredPath::new(path)?))
+    }
+
+    /// Begins a request to watch a path the caller has already anchored.
+    ///
+    /// As [`OpenFile::from_anchored`](crate::open::OpenFile::from_anchored): the path is not anchored
+    /// again, and the request hands the call the anchored path's [`win32`](AnchoredPath::win32) form.
+    /// The watch starts as [`new`](Self::new) starts it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows_namespace_request_sys::{AnchoredPath, WatchDirectory};
+    /// use wtf_string::Wtf16String;
+    ///
+    /// let anchored = AnchoredPath::new(Wtf16String::from("a-child"))?;
+    ///
+    /// let request = WatchDirectory::from_anchored(anchored.clone());
+    /// assert_eq!(request.path(), anchored.given());
+    /// assert_eq!(request.win32_path(), anchored.win32());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_anchored(path: AnchoredPath) -> Self {
+        Self {
+            path,
             subtree: false,
             filter: NotifyFilter::NONE,
-        })
+        }
     }
 
     /// Sets `bWatchSubtree`.

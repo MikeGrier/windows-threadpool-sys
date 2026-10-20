@@ -684,3 +684,11 @@ caller kept building through the transition `From`; with that conversion deleted
 narrow it to `SharedHandle`. Narrowing excludes nothing a caller could pass, since `SharedHandle` converts to
 itself, and adds `SharedHandle::from` at every call site that holds a `File` or an `OwnedHandle`, which is most of
 them, in this crate's own tests and in its consumers. So it stays.
+
+## D-30 addendum: building a path entry from an `AnchoredPath` (`NR-6.3`)
+
+**Why a named constructor and not `From<AnchoredPath>`.** Both entries are built by chaining `with_*` calls onto a
+constructor, and `OpenFile::from_anchored(path).with_...` says which input it starts from where
+`OpenFile::from(path)` does not; a `From` would also invite `path.into()` at a call site, where the reader cannot
+see that the anchoring already happened. The constructor is the only addition, so nothing else is offered for
+choosing between.

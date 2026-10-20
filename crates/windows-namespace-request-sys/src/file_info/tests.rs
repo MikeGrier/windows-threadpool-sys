@@ -3,7 +3,7 @@
 //! Tests for the `GetFileInformationByHandle` entry.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle};
+use std::os::windows::io::AsHandle;
 
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 

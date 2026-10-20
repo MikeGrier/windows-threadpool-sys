@@ -112,15 +112,42 @@ impl OpenFile {
     /// [`PathCaptureError::InteriorNul`] if the path contains a NUL, which Win32 would read as its
     /// end, and the failure of `GetCurrentDirectoryW` if it had to be read and could not be.
     pub fn new(path: Wtf16String) -> Result<Self, PathCaptureError> {
-        Ok(Self {
-            path: AnchoredPath::new(path)?,
+        Ok(Self::from_anchored(AnchoredPath::new(path)?))
+    }
+
+    /// Begins a request against a path the caller has already anchored.
+    ///
+    /// The path is not anchored again: the request hands Win32 the anchored path's
+    /// [`win32`](AnchoredPath::win32) form, which was fixed when the caller built it, whatever the
+    /// current directory is now. This is for a caller that anchored its path when it built a request
+    /// of its own, so that the meaning is fixed once (`D-30` in the crate's `DESIGN-NOTES.md`). Every
+    /// other parameter starts as [`new`](Self::new) starts it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows_namespace_request_sys::{AnchoredPath, OpenFile};
+    /// use wtf_string::Wtf16String;
+    ///
+    /// // Anchored once, when the caller's own request was built...
+    /// let anchored = AnchoredPath::new(Wtf16String::from("a-child"))?;
+    ///
+    /// // ...and handed on as it is, with nothing read again.
+    /// let request = OpenFile::from_anchored(anchored.clone());
+    /// assert_eq!(request.path(), anchored.given());
+    /// assert_eq!(request.win32_path(), anchored.win32());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_anchored(path: AnchoredPath) -> Self {
+        Self {
+            path,
             desired_access: 0,
             share_mode: 0,
             security: None,
             creation_disposition: 0,
             flags_and_attributes: 0,
             template: None,
-        })
+        }
     }
 
     /// Sets `dwDesiredAccess`.

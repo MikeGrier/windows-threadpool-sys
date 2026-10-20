@@ -596,6 +596,30 @@
       "why": "Control. The same share, spelled through Option's Clone, so the test that the copy shares its template must not fire on it.",
       "find": ["        let template = self.template.clone();\n"],
       "replace": ["        let template = Option::clone(&self.template);\n"]
+    },
+    {
+      "name": "NR-6.3: an open from an anchored path anchors it again",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The anchored path was fixed when the caller built it; anchoring it again reads the current directory now, which is the second anchoring NR-6.3 exists to avoid and which names another place once the directory has changed.",
+      "find": ["            path,\n"],
+      "replace": ["            path: AnchoredPath::new(path.given().to_owned()).expect(\"anchor again\"),\n"]
+    },
+    {
+      "name": "NR-6.3: a watch from an anchored path anchors it again",
+      "file": "src/watch.rs",
+      "expect": "caught",
+      "why": "As for the open: the watch must name the directory the path was anchored to.",
+      "find": ["            path,\n"],
+      "replace": ["            path: AnchoredPath::new(path.given().to_owned()).expect(\"anchor again\"),\n"]
+    },
+    {
+      "name": "NR-6.3: control -- the anchored path is moved in by its field name",
+      "file": "src/open.rs",
+      "expect": "survives",
+      "why": "Control. The same value, written out, so the tests that the path is not anchored again must not fire on it.",
+      "find": ["            path,\n"],
+      "replace": ["            path: path,\n"]
     }
   ]
 }

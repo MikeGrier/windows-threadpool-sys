@@ -517,3 +517,21 @@ another concept. The item as it stood at completion follows verbatim.
   copied; a handle is duplicated" and the README are rewritten for sharing; sweep `duplicat` and `captur` across
   the crate's `src`, `tests`, `README.md` and design notes. Breaking. Needs every consumer moved (the handoff
   above).
+
+## Moved 2026-10-19 21:10:34 -04:00 -- The path entries are built from an anchored path
+
+### <a id="nr-63-anchored"></a>NR-6.3 -- `OpenFile::from_anchored` and `WatchDirectory::from_anchored` build a request from an `AnchoredPath` the caller holds, without anchoring it again. *(completed 2026-10-19 21:10:34 -04:00)*
+
+Recorded beside [D-30](DESIGN-NOTES.md#d-30), with the naming in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Both
+constructors are infallible, and each `new` is `from_anchored` over `AnchoredPath::new`, so the two cannot start
+a request differently. Tests in each entry's module: a path anchored onto a root that is not the current directory
+reaches Win32 as anchored; a request built from an anchored path starts as one built from text; and, in a child
+process, a path anchored before the current directory changes opens (or watches) what it named then, with the
+same name anchored after the change refused as a control. Two sabotages that anchor the path again, each caught
+by both its entry's tests, and a control that survives. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.3** -- **`OpenFile` and `WatchDirectory` from an `AnchoredPath`.** An infallible constructor on each
+  taking an `AnchoredPath` the caller already holds, so a crate that anchored its path when its own request was
+  built (the enumeration crate's `SAFE-2`) does not anchor it a second time. Both path entries get it, so they
+  stay one shape. Tests: the Win32 path is the anchored path's; a relative path anchored before the current
+  directory changes opens what it named when it was anchored.

@@ -1175,6 +1175,14 @@ process state, and `win32_terminated`, which returns a raw pointer for this crat
 **The contract is unchanged.** The rules, the one refusal (an interior NUL) and the two failures of reading the
 current directory are [D-19](#d-19)'s and [D-27](#d-27)'s.
 
+**The two path entries are built from one too** (`NR-6.3`). `OpenFile::from_anchored` and
+`WatchDirectory::from_anchored` take an `AnchoredPath` the caller holds and are infallible, because the path's one
+refusal and its one read of the current directory already happened when it was anchored. Neither anchors it again: a
+caller that anchored its path when its own request was built (the enumeration crate's `SAFE-2`) has fixed what the
+path names, and a second anchoring would read the current directory as it is when the open is built, which may be
+later and elsewhere. `new` is `from_anchored` over `AnchoredPath::new`, so the two cannot start a request
+differently. Both entries get it, so they stay one shape.
+
 ## <a id="d-31"></a>D-31: `FileIdInfo` has a typed entry, `QueryFileIdInfo`, which makes the one call and carries the two fields as the call wrote them
 
 **Queued 2026-10-18 as `NR-3.10`** from the review of durable-ioring's `DI-M15`, which the engineer asked to have

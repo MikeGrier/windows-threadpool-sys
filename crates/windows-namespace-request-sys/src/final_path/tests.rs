@@ -8,7 +8,7 @@
 //! always fitted.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle};
+use std::os::windows::io::AsHandle;
 
 use super::{FinalPathFlags, QueryFinalPath};
 use crate::handle::tests::{Fixture, handle_allocation};

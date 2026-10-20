@@ -3,7 +3,7 @@
 //! Tests for the `GetVolumeInformationByHandleW` entry.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle};
+use std::os::windows::io::AsHandle;
 
 use super::{QueryVolumeInformation, VolumeInformation};
 use crate::handle::tests::{Fixture, handle_allocation};
