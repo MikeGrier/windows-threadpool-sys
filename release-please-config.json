@@ -41,6 +41,10 @@
             "package-name": "io-buffers",
             "component": "io-buffers"
         },
+        "crates/win-authorization-sys": {
+            "package-name": "win-authorization-sys",
+            "component": "win-authorization-sys"
+        },
         "crates/win-durable-ioring": {
             "package-name": "win-durable-ioring",
             "component": "win-durable-ioring"

@@ -8,6 +8,7 @@ members = [
 	"crates/win-job-launcher",
 	"crates/win-multi-file-tail-watcher",
 	"crates/win-numa-sys",
+	"crates/win-authorization-sys",
 	"crates/win-durable-ioring",
 	"crates/win-shared-os-owned-handle",
 	"crates/win-sync-sys",

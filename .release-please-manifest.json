@@ -10,6 +10,7 @@
   "crates/win-error-codes": "0.0.2",
   "crates/win-shared-os-owned-handle": "0.1.0",
   "crates/io-buffers": "0.1.0",
+  "crates/win-authorization-sys": "0.0.1",
   "crates/win-durable-ioring": "0.3.0",
   "crates/win-sync-sys": "0.0.2",
   "crates/win-time-sys": "0.1.0",
