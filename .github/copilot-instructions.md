@@ -815,7 +815,7 @@ When executing checklist items (CHECKLIST.md files):
   Completed item: SF-3: Add FunctionCall parser support
   ```
 - **Check the item off** in CHECKLIST.md (change `- [ ]` to `- [x]`) and include that change in the same commit.
-- After the commit, pull / rebase from origin then push back to origin
+- After the commit, do not push. Pushing is at the milestone boundary (the implicit "Sync with origin" step under "CHECKLIST file hygiene"); anywhere else it waits for the user's say-so.
 - **Tests must pass** before committing. Run the appropriate test command (per the language-specific instructions) after each item and fix failures before committing. Pre-existing failures unrelated to the current item do not block the commit, but must be recorded in an `UNRESOLVED-TEST-FAILURES.md` before committing. When such a failure is later **resolved**, do not delete its entry — move it out of `UNRESOLVED-TEST-FAILURES.md` into a sibling `RESOLVED-TEST-FAILURES.md` (append-only) under a `## Resolved <YYYY-MM-DD HH:MM:SS ±hh:mm> — <description>` heading recording the date and time the resolution was finalized, in the same commit that removes it from the unresolved file.
   - **These files are per-component, not repository-root**, and are located by the same nearest-ancestor rule as `DESIGN-NOTES.md`: use the pair in the source-component root of the failing test, or the nearest one in an ancestor directory between that test and the component root, creating it beside that component's `CHECKLIST.md` if it does not yet exist. There is deliberately no root-level pair — a failure belongs next to the component that owns it, where the person working there will see it. The only pair that currently exists is [crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md](../crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md) and its sibling [RESOLVED-TEST-FAILURES.md](../crates/windows-file-watcher/RESOLVED-TEST-FAILURES.md), which are the worked example of the format.
 - **When the last item in a CHECKLIST file is completed**, update its PLANS.md entry to "completed" in the same commit.
@@ -1396,6 +1396,20 @@ unique; do not re-implement that check beside it. This is not a preference: the 
 CI job exists because eleven review rounds on that harness produced thirteen later defects
 *introduced by earlier fixes*, "because every verification was a one-off command that was then
 discarded and nothing re-checked an earlier guarantee."
+
+**Sweep what a change could have affected, not the whole manifest, by default.** A sweep builds
+and runs the crate's suite once per entry, so locally prefer
+`.\tools\run-sabotage.ps1 -Manifest <manifest> -Since origin/main` (or the branch's base). It sweeps
+the entries the branch could have affected, and runs each first against the tests recorded as
+catching it. `-List -Since origin/main` shows which entries, and why each. The record of what caught
+each entry is `catchers.json` in the output directory, written by every sweep; an entry with no
+usable record is always taken, so until a clone has swept a manifest from a clean checkout, a scoped
+run of it sweeps every entry. Sweep the whole
+manifest when the change is one scoping cannot see: a test helper shared by a crate's tests, or code
+elsewhere in a crate that decides whether a sabotaged line is reached. The nightly CI sweep is the
+backstop for both; the rule and its limits are in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope). To check only that every patch still applies,
+`tools/check-sabotage-patches.ps1` does it for every manifest in seconds, without building.
 
 Know the limit — but know that it is narrower than it first appears. **Sequencing rules
 (ordering, bracket entry states, what may follow what) are not value-level, and are still

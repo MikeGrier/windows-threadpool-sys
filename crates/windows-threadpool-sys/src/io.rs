@@ -24,13 +24,13 @@
 use std::cell::Cell;
 use std::fmt;
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use std::ptr;
 use std::sync::Arc;
 
 use windows_overlapped_io_sys::{
-    Issued, Operation, OperationId, OperationRegistry, OperationState, Submitted,
-    UnassociatedEndpoint, reclaim_overlapped,
+    EndpointHandle, EndpointObserver, Issued, Operation, OperationId, OperationRegistry,
+    OperationState, Submitted, UnassociatedEndpoint, reclaim_overlapped,
 };
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, NO_ERROR};
 use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
@@ -187,13 +187,14 @@ unsafe extern "system" fn io_trampoline(
 /// ```
 pub struct ThreadpoolIo {
     tp_io: PTP_IO,
-    handle: OwnedHandle,
+    // Shared with any observers of the endpoint, which may keep the handle open after this drops.
+    handle: EndpointHandle,
     // Kept alive as a raw pointer until Drop has drained and waited.
     context: *mut IoContext,
     live: Arc<OperationRegistry>,
 }
 
-// SAFETY: PTP_IO is a cross-thread pool object and OwnedHandle is Send + Sync.
+// SAFETY: PTP_IO is a cross-thread pool object and EndpointHandle is Send + Sync.
 // `context` points to an IoContext whose callback is Fn + Send + Sync and whose
 // registry is an Arc<OperationRegistry>; it is only read (never reassigned)
 // until Drop frees it after all callbacks have finished.
@@ -233,7 +234,7 @@ impl ThreadpoolIo {
     where
         F: Fn(&IoCompletion) + Send + Sync + 'static,
     {
-        let handle = endpoint.into_handle();
+        let handle = endpoint.into_endpoint_handle();
         let live = Arc::new(OperationRegistry::new());
         // Read before `env` is consumed below, and registered before the object
         // exists: the entry must be able to repair this pool from the moment
@@ -281,6 +282,33 @@ impl ThreadpoolIo {
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+
+    /// A new observer of this object's handle, which keeps the handle open
+    /// after this object drops.
+    ///
+    /// An observer is not an endpoint, so it cannot be bound to a second
+    /// `TP_IO` object:
+    ///
+    /// ```compile_fail,E0308
+    /// # use windows_threadpool_sys::io::ThreadpoolIo;
+    /// fn rebind(tp: &ThreadpoolIo) -> std::io::Result<ThreadpoolIo> {
+    ///     ThreadpoolIo::new(tp.observer(), |_| {}, None)
+    /// }
+    /// ```
+    ///
+    /// What that rejects is the observer, not the call: an endpoint compiles.
+    ///
+    /// ```
+    /// # use windows_threadpool_sys::io::ThreadpoolIo;
+    /// # use windows_overlapped_io_sys::UnassociatedEndpoint;
+    /// fn bind(endpoint: UnassociatedEndpoint) -> std::io::Result<ThreadpoolIo> {
+    ///     ThreadpoolIo::new(endpoint, |_| {}, None)
+    /// }
+    /// ```
+    #[must_use]
+    pub fn observer(&self) -> EndpointObserver {
+        self.handle.observer()
     }
 
     /// The number of submitted operations whose completion callback has not yet
@@ -535,9 +563,10 @@ impl Drop for ThreadpoolIo {
         crate::trace_record!("io", "drop-begin", self.tp_io, count);
         if count > 0 {
             // A blocking Drop signals that rundown was skipped. Report it from
-            // this single site, then make the block terminate: because this
-            // object owns the handle, cancelling guarantees every outstanding
-            // operation delivers its callback.
+            // this single site, then make the block terminate: because only
+            // this object submits through the handle (its observers cannot),
+            // cancelling guarantees every outstanding operation delivers its
+            // callback.
             //
             // The report is a trace event rather than the `eprintln!` this
             // shipped with, per [A developer-facing report is a trace
@@ -559,8 +588,8 @@ impl Drop for ThreadpoolIo {
 
         // The count reaches zero when the last callback is *entered*, not when
         // it returns, so a callback frame may still be running here. Both calls
-        // below must happen before the context is freed and before the handle
-        // closes.
+        // below must happen before the context is freed and before this object
+        // releases its hold on the handle.
         //
         // SAFETY: tp_io is valid and no operation is outstanding, so waiting
         // without cancelling cannot orphan any storage, and closing the object
@@ -577,16 +606,18 @@ impl Drop for ThreadpoolIo {
         crate::trace_record!("io", "drop-drained", self.tp_io);
 
         // SAFETY: the TP_IO object is closed and every callback has finished, so
-        // nothing can reach the context again; free it exactly once. `handle`
-        // closes after this, when its field is dropped.
+        // nothing can reach the context again; free it exactly once. This
+        // object's hold on `handle` is released after this, when its field is
+        // dropped; the handle closes then unless an observer still holds it.
         unsafe { drop(Box::from_raw(self.context)) };
         // The last record this object emits, and it carries the handle because
-        // nothing after it can: the handle's close is the field drop that runs
+        // nothing after it can: releasing the handle is the field drop that runs
         // the instant this body returns, with no code of ours in between.
         crate::trace_record!("io", "drop-closed", self.tp_io, self.raw_handle() as usize);
         // Last, after the rundown, the close and the context free: a panic
         // unwinds, so anything after it would be skipped; the endpoint handle
-        // still closes, because field drops run even when `Drop::drop` unwinds.
+        // is still released, because field drops run even when `Drop::drop`
+        // unwinds.
         //
         // `count` was read at the top, before the cancel and the wait emptied
         // the registry -- reading it here would find zero on exactly the objects

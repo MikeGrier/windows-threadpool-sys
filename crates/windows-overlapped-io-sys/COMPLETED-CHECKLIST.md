@@ -444,3 +444,269 @@ count the machine cannot allocate. The two panics it already had, for zero pages
 same kind of error, as the rest of this crate's argument checks are. A breaking change to the published crate.
 Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) beside the `M11` note about where a degenerate count is
 rejected; four sabotages in [sabotage.json](sabotage.json), one of them refused by the build.
+
+
+*Milestones M16 and M17 below were numbered M15 and M16 on the branch that built them, and renumbered when
+that branch merged with `main`, whose M15 above was archived first. Their commit messages keep the branch
+numbers.*
+
+## Moved 2026-10-14 19:25:01 -04:00 -- M16.1: owned versus shared endpoint handles
+
+### <a id="m161"></a>M16.1 -- Investigated owned versus shared endpoint handles; the engineer chose observers. *(completed 2026-10-14 19:25:01 -04:00)*
+
+The findings and the decision are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Decision -- observers
+share the handle; only the endpoint does I/O (M16.1)". Requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10).
+
+## Moved 2026-10-14 19:45:28 -04:00 -- M16.2 and M16.4: endpoints share their handle with observers
+
+M16.4 could not land separately: `ThreadpoolIo::new` called the infallible `into_handle` that M16.2 made
+fallible, so neither compiled without the other.
+
+### <a id="m162"></a>M16.2 -- Endpoints keep their handle in shared storage and hand out observers. *(completed 2026-10-14 19:45:28 -04:00)*
+
+`UnassociatedEndpoint` stores its handle in a private `SharedHandle`; `AssociatedEndpoint` and
+`BlockingEndpoint` hold the new `EndpointHandle` (the storage as it leaves an endpoint, not `Clone`, never
+yields an `OwnedHandle`). `EndpointObserver` is `Clone`, `Send` and `Sync`, keeps the handle open, and
+implements neither `AsHandle` nor `AsRawHandle`; every endpoint type has `observer()`. `into_handle` now
+returns `Result<OwnedHandle, Self>`, refusing while an observer lives. Breaking change. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> "observers share the handle; only the endpoint does I/O".
+
+### <a id="m164"></a>M16.4 -- `ThreadpoolIo` keeps the endpoint's shared storage; landed with M16.2. *(completed 2026-10-14 19:45:28 -04:00)*
+
+`windows-threadpool-sys`' `ThreadpoolIo` holds an `EndpointHandle` taken with `into_endpoint_handle`, so an
+observer taken before binding outlives it; its `Drop` comments now say the guarantee rests on only this object
+submitting through the handle, and that dropping releases its hold rather than closing the handle.
+
+## Moved 2026-10-14 20:07:01 -04:00 -- M16.3: the observer's queries
+
+### <a id="m163"></a>M16.3 -- The observer reads the file's length, and offers an `unsafe` borrow for other queries. *(completed 2026-10-14 20:07:01 -04:00)*
+
+`EndpointObserver::file_len` (behind `fs`) reads `EndOfFile` with
+`GetFileInformationByHandleEx(FileStandardInfo)`; tests cover lengths set and appended through another
+handle, past 4 GiB on a sparse file, and with write-only access. Sabotage confirmed them: returning
+`AllocationSize`, or truncating to 32 bits, each fails. Its error arm is reached by no test -- files, the
+NUL device and an unconnected named-pipe server all answer -- and says so at the definition.
+`EndpointObserver::handle` is the `unsafe` borrow; its `# Safety` section is the contract.
+
+## Moved 2026-10-14 20:29:52 -04:00 -- M16.5: tests for observers across every backend
+
+### <a id="m165"></a>M16.5 -- Tests: compile-fail doctests, observers across every backend, and cancellation and rundown with observers alive. *(completed 2026-10-14 20:29:52 -04:00)*
+
+Compile-fail doctests on `EndpointObserver` (no `as_handle`, no `as_raw_handle`, not accepted by
+`CompletionPort::associate` or `BlockingEndpoint::new`) and on windows-threadpool-sys'
+`ThreadpoolIo::observer` (not accepted by `ThreadpoolIo::new`), each with a compiling positive control;
+giving the observer both traits turned the two trait doctests red. `ThreadpoolIo` lacked `observer()`,
+which M16.4 had missed, so it was added. Runtime tests: every backend's observer reads the length after
+its backend drops; on `AssociatedEndpoint` and `ThreadpoolIo`, cancelling, running down and dropping with
+an operation pending and an observer alive all drain, and the handle stays open until the last observer
+drops. Removing `AssociatedEndpoint::drop`'s explicit cancel made the drop test hang. `BlockingEndpoint`
+has no cancellation or rundown; what testing it surfaced is M16.6.
+
+## Moved 2026-10-14 20:46:21 -04:00 -- M16.6, completing M16: owned versus shared handles on endpoints
+
+Every M16 item is now archived in this file under its own heading, and the milestone has left
+[CHECKLIST.md](CHECKLIST.md). Requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10); its TW-1.2
+prerequisite is met.
+
+### <a id="m166"></a>M16.6 -- `BlockingEndpoint` waits on an event of its own, so an observer's query cannot strand it. *(completed 2026-10-14 20:46:21 -04:00)*
+
+The engineer chose option 1 of three. `BlockingEndpoint` creates one manual-reset event and lends it to
+each operation's `OVERLAPPED.hEvent` for one `run`, taking it back on every exit; `skip_set_event_on_handle`
+is no longer refused. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "`BlockingEndpoint` waits on an
+event of its own (M16.6)". Tests pin the measured reset, complete a genuinely pending read with the
+handle's event suppressed and with observer queries running, and check the event is lent only for the
+call. Sabotage: leaving `hEvent` null made the suppressed-event read hang; dropping the take-back failed
+the lend test.
+
+## Moved 2026-10-14 21:19:36 -04:00 -- M17.1: the observer's standard information
+
+### <a id="m171"></a>M17.1 -- `standard_info()` reads the whole `FileStandardInfo`; `file_len()` is its shortcut. *(completed 2026-10-14 21:19:36 -04:00)*
+
+`EndpointObserver::standard_info` returns a `StandardInfo` (length, allocation size, link count, delete
+pending, directory). The queries live in a new `src/endpoint/query.rs`, child of the endpoint module so they
+reach the observer's private handle; `file_len` now calls `standard_info`, so the query exists once. The
+kernel writes the two flags as `BOOLEAN` bytes, so the call fills a private `#[repr(C)]` mirror with `u8`
+fields, tied to `FILE_STANDARD_INFO`'s layout by compile-time assertions, rather than reading them as Rust
+`bool`. Tests cover an ordinary file, lengths across sizes, a sparse file's smaller allocation, hard links
+made and removed, a delete requested through another handle (pending until the observer lets go, then
+completed), a directory, and every observer agreeing. Sabotage: swapping the two flags failed the delete and
+directory tests; swapping length and allocation failed three others.
+
+## Moved 2026-10-14 21:27:57 -04:00 -- M17.2: the observer's file identity
+
+### <a id="m172"></a>M17.2 -- `file_id()` reads the volume serial and 128-bit file ID. *(completed 2026-10-14 21:27:57 -04:00)*
+
+`EndpointObserver::file_id` returns a `FileId` (volume serial number, and the 128-bit ID as the 16 bytes the
+file system reports, not reinterpreted as an integer). The `GetFileInformationByHandleEx` call is now one
+private `unsafe fn query_info<T>` that every query uses, `standard_info` included. Tests cover observers of
+one handle and a second open agreeing, files in one directory differing on one volume, a rename while held
+and a hard link both keeping the ID, a file recreated under the same name getting a new one, and a
+directory. Measured: the NUL device and a named pipe both refuse `FileIdInfo` with
+`ERROR_INVALID_PARAMETER`, so the shared error path is now tested, on the NUL device. Sabotage: returning
+success on failure failed that test; zeroing the ID failed the three that compare IDs.
+
+## Moved 2026-10-14 21:33:14 -04:00 -- M17.3: the observer's handle type
+
+### <a id="m173"></a>M17.3 -- `file_type()` classifies any handle, in the core rather than behind `fs`. *(completed 2026-10-14 21:33:14 -04:00)*
+
+The engineer placed it in the core: what counts as a file system is broad. `EndpointObserver::file_type`
+returns a `FileType` (`Disk`, `Character`, `Pipe`, `Remote`, `Unknown`, or `Other(u32)` for an undocumented
+value) from `GetFileType`, clearing the last error first so a stale one cannot pass for the call's. It lives
+in its own always-compiled `src/endpoint/file_type.rs`, since `query.rs` is `fs`-gated as a whole. The mapping
+from return value and last error is a pure function, so every branch is tested, the error and undocumented
+values included; real handles cover a disk file, a directory, the NUL device, both ends of a named pipe, and
+an observer outliving its endpoint. Sabotage: swapping disk and character, and dropping the error branch,
+failed five tests. Testing the crate alone also surfaced unused imports left by M16.6, fixed separately in
+`a054f8b8`.
+
+## Moved 2026-10-14 21:43:21 -04:00 -- M17.4: the observer's sector geometry and buffer alignment
+
+### <a id="m174"></a>M17.4 -- `storage_info()` and `alignment_info()` read the sector geometry and buffer alignment. *(completed 2026-10-14 21:43:21 -04:00)*
+
+`StorageInfo` carries every `FILE_STORAGE_INFO` field: the four sector sizes, the flags kept as reported
+(with `aligned_device()` and `partition_aligned_on_device()` reading the two documented bits), and the two
+offsets as `Option`, `None` for `STORAGE_INFO_OFFSET_UNKNOWN`. `AlignmentInfo` keeps the reported mask,
+with `is_aligned(address)` (meaningful for any mask) and `byte_alignment()` (`None` unless the mask is one
+less than a power of two). `windows-sys` exports the `STORAGE_INFO_*` values only behind
+`Win32_System_WindowsProgramming`, so they are named in a local const module. Measured on this machine: the
+temp volume reports logical 512 and physical 4096, flags `0xB` (bit `0x8` is named by neither), and an
+alignment mask of 1 -- word alignment, far below a page; the NUL device refuses the storage query
+(`ERROR_INVALID_FUNCTION`) and answers the alignment query with mask 0. The conversions are pure functions,
+tested across every flag, the unknown sentinel on each offset, and masks of and not of the documented form.
+Sabotage: inverting the unknown check, swapping the flag bits, and dropping the power-of-two check each
+failed its own test.
+
+## Moved 2026-10-14 22:10:23 -04:00 -- M17.5: unbuffered I/O asks for its alignment
+
+### <a id="m175"></a>M17.5 -- The page size is asked of the OS, and `PageBuffers` aligns to what the device reports. *(completed 2026-10-14 22:10:23 -04:00)*
+
+`page_size()` (asked of `GetSystemInfo` once and kept) replaces the public `PAGE_SIZE` constant -- breaking.
+`PageBuffers::with_alignment(pages, AlignmentInfo)` aligns the allocation's base to the larger of the page
+size and the least power of two clearing every bit of the reported mask; `new` page-aligns as before, and
+`alignment()` reports which. Later pages follow at page intervals, so the buffer stays one contiguous
+allocation. The open question -- ask once per endpoint or per operation -- dissolved in the building: the
+caller asks once, through an observer, when it allocates, and the adapters ask nothing, following M11's "no
+adapter allocates on the caller's behalf". The sector size is not enforced; a non-multiple fails the native
+call. `fs` now enables `Win32_System_SystemInformation`. The seam for alignments above a page is
+`AlignmentInfo` itself, whose mask is a public field: tests build one asking for 16 KiB and round-trip
+through blocking scatter/gather, and another round-trip uses what the real endpoint reports. Sabotage:
+ignoring the alignment failed two tests; dropping the page floor failed four. Replacing `page_size()` with a
+constant 4096 would pass on this machine, whose page is 4 KiB -- the test compares against `GetSystemInfo`
+and catches it only where the two differ.
+
+## Moved 2026-10-14 22:18:54 -04:00 -- M17.6: the remote protocol query
+
+### <a id="m176"></a>M17.6 -- `remote_protocol_info()` reads the remote protocol, version, flags and SMB2 capabilities. *(completed 2026-10-14 22:18:54 -04:00)*
+
+`RemoteProtocolInfo` carries the structure version, protocol, major/minor version, revision and flags as
+reported, with `loopback()`, `offline()` and `persistent_handle()` reading the three documented bits; `smb2`
+is `Some(Smb2Info)` only when the protocol is `WNNC_NET_SMB` (`0x20000`), since the union member is defined
+only for SMB. Measured on this machine: a local file refuses the query with `ERROR_INVALID_PARAMETER` (it
+does not report an empty protocol), and that is tested. Through `\\localhost\<drive>$` it answers structure
+version 4, SMB 3.1.1, flags `0x39` (loopback plus `0x8`, `0x10` and `0x20`, which are named nowhere and kept
+as reported), server capabilities `0x6F`, share capabilities `0x80`. The share test is `#[ignore]` because it
+needs the administrative share -- administrator rights and the Server service -- and passes here with
+`--include-ignored`. The same probe found the kernel refusing a buffer aligned to 4 but not 8 with
+`ERROR_NOACCESS`, so every query's buffer is now a private `QueryBuffer<T>` aligned to 8, pinned by a const
+assertion; a second ignored share test drives the raw call through a 4-mod-8 buffer and expects the
+refusal. Sabotage: dropping the alignment to 1 was not caught by any test (the stack buffer happened to land
+8-aligned), which is why the const assertion exists -- dropping it to 4 then failed the build; the SMB check
+weakened to "any protocol" and the loopback bit swapped for offline each failed their tests.
+
+## Moved 2026-10-14 22:31:47 -04:00 -- M17.7: the basic-information query
+
+### <a id="m177"></a>M17.7 -- `basic_info()` reads the four times and the attributes, measured current through the handle. *(completed 2026-10-14 22:31:47 -04:00)*
+
+Measured first, on Windows build 26300, on NTFS (the temp directory on `C:`) and ReFS (`Q:`), with the same
+results on both. An observer held the file open while a second handle wrote to it; the directory entry was
+read by enumerating the directory (`FileFullDirectoryRestartInfo`). Through the observer's handle the
+last-write, change and last-access times advanced at the first query after each write. The directory entry
+kept the times from before the first write, and the old length, for over four seconds, until the writer
+closed, then matched the handle. A later read by path advanced the last-access time through the handle on
+NTFS but not in its directory entry; on ReFS it advanced neither. Immediately after a create, the entry's
+change time was seen trailing the handle's by under a millisecond (6 of 15 parallel runs), so the kept test
+compares the entry with its own earlier state rather than with the handle. The NUL device refuses the query
+with `ERROR_INVALID_PARAMETER`, tested.
+
+`BasicInfo` holds the times as `FileTime { ticks }` -- 100-ns intervals since 1601, exactly as reported --
+with `to_system_time()`, which is `None` only for a negative count; attributes are the raw
+`FILE_ATTRIBUTE_*` word. The conversion is tested against literal dates, not its own constants. The
+measurement is kept as a test (`a_write_elsewhere_shows_here_at_once_and_in_the_directory_entry_at_close`),
+stable over 30 parallel runs. The sabotages are now recorded in the crate's first
+[sabotage.json](sabotage.json), with M17.6's: field swaps, dropped attributes, a wrong epoch and tick unit
+are caught; two controls survive, one of them the measured finding that refusing a negative count is an
+equivalent mutant on Windows (a cast count overflows `SystemTime` anyway), now said at the site.
+
+## Moved 2026-10-14 22:43:09 -04:00 -- M17.8: the final-path query
+
+### <a id="m178"></a>M17.8 -- `final_path()` and `final_path_as()` read the current path as `Wtf16String`, in every volume and name form. *(completed 2026-10-14 22:43:09 -04:00)*
+
+`final_path_as(VolumeName, PathForm)` exposes every combination `GetFinalPathNameByHandleW` offers --
+`Dos`, `Guid`, `Nt` and `Omitted` volumes, `Normalized` and `Opened` names -- and `final_path()` is the
+drive-letter, normalized default. The result is `Wtf16String`, filled in place through wtf-string's
+`with_capacity` / `as_mut_ptr` / `set_len_from_ffi`; wtf-string is an optional dependency enabled by `fs`,
+and is not re-exported, following the repository's other crates. The fill loop (`fill_wide`) is a private
+function over a closure, tested against a stand-in for fits, exact fits, one-short, long, growing between
+calls, a callee reporting the size it was given, empty initial buffers, failures before and after a retry,
+and unpaired surrogates and NULs kept verbatim.
+
+Measured on the temp volume (NTFS): each volume form puts its own volume name before the same path from the
+root, tested. Opened and Normalized agreed for a plain open, an open by another case and an open through a
+hard link (which reports the link's own path), and differed only for an open by 8.3 short name, which
+Opened keeps -- tested where the volume gives short names, and as agreement where it does not. The NUL
+device refuses every form with `ERROR_INVALID_PARAMETER`. A named pipe refuses Normalized
+(`ERROR_INVALID_FUNCTION`, or `ERROR_PATH_NOT_FOUND` with the GUID form), and answers Opened only with the
+NT form (`\Device\NamedPipe\<name>`) or without a volume (`\<name>`). A path of 376 units, past
+`MAX_PATH`, was read whole; renames, a move to another directory, and directories are tested. Seven
+sabotages added to [sabotage.json](sabotage.json), all caught. `tools/check-publishable.ps1` could not run
+here (the Node module `yaml` is missing) and fails the same way without this change.
+
+## Moved 2026-10-14 23:01:11 -04:00 -- M17.9: the volume query
+
+### <a id="m179"></a>M17.9 -- `volume_info()` reads the label, serial, component limit, file-system flags and name. *(completed 2026-10-14 23:01:11 -04:00)*
+
+`VolumeInfo` carries everything `GetVolumeInformationByHandleW` returns: the label and file-system name as
+`Wtf16String`, the 32-bit serial, the maximum component length, and `FileSystemFlags` -- the raw bits, with
+all 30 documented `FILE_*` flags as associated constants, `contains` and `|`, and unnamed bits kept as
+reported. The call reports no name lengths, so names are read from zeroed `MAX_PATH + 1` buffers up to the
+first NUL. The flag values are named locally (they are behind `Win32_System_SystemServices`) and tested
+against `windows-sys`' own through a dev-dependency feature; `Win32_System_Ioctl` was added beside it, so
+the query tests' local `FSCTL_SET_SPARSE` copy is now `windows-sys`' constant.
+
+As the item asked, the tests assert only what the call reports: the handle's answer equals
+`GetVolumeInformationW` on the volume's root path, a directory and its files agree, and marking a file
+sparse succeeds exactly when the volume reports `FILE_SUPPORTS_SPARSE_FILES`. Measured on NTFS (temp) and
+ReFS (`Q:`): the 32-bit serial is the low half of `file_id()`'s 64-bit serial (tested on the temp volume),
+and every reported flag bit is a named one. The NUL device is refused with `ERROR_INVALID_FUNCTION`,
+tested. Eight sabotages added to [sabotage.json](sabotage.json), one a control; the sweep behaves as declared.
+
+## Moved 2026-10-15 12:40:14 -04:00 -- M17.10, completing M17: more observer queries
+
+Every M17 item is now archived in this file under its own heading, and the milestone has left
+[CHECKLIST.md](CHECKLIST.md).
+
+### <a id="m1710"></a>M17.10 -- Every observer query, issued while an operation pends on each backend, leaves it to complete or cancel. *(completed 2026-10-15 12:40:14 -04:00)*
+
+`test_util::OBSERVER_QUERIES` is the one table: every query `EndpointObserver` offers, `final_path_as` in
+each of its eight forms, with `run_every_query` to issue them. It lives in this crate behind a new
+off-by-default `test-util` feature (implying `fs`), so windows-threadpool-sys' `ThreadpoolIo` tests bind to
+it rather than to a copy; this crate's own tests see it without the feature. Its own tests check the names
+are distinct, that on a local file every query answers but the remote one, and that on a named pipe only
+the two opened-form path rows answer -- the place the `final_path_as` rows differ, so each is shown to pass
+its own arguments. It is a hand census (an impl's methods cannot be enumerated), and a comment on
+`EndpointObserver` asks that a new query be added to it -- recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+On each backend the table runs repeatedly while an operation pends: on `AssociatedEndpoint` a
+`ConnectNamedPipe` then completes when a client connects, or is cancelled and reports
+`ERROR_OPERATION_ABORTED`, with exactly one completion and nothing dequeued before; on `BlockingEndpoint`
+(which has no cancellation) a read completes with the data written after the queries; on `ThreadpoolIo` a
+read completes with its data or is cancelled, each recorded once. Sabotage aimed at the claim rather than a
+symptom: a `CancelIoEx` injected into `volume_info`, and separately into `final_path_as` -- queries only
+the table issues while an operation pends, unlike the M16.5 `file_len` path -- is caught by the new tests on
+every backend. The threadpool-sys manifest's entry for it is caught by the sweep before reaching the
+`ThreadpoolIo` tests, because that manifest's `testArgs` run the whole workspace and cargo stops at the first
+failing binary; the `ThreadpoolIo` half was confirmed by applying the patch and running those tests alone,
+and the entry says so. The end-of-milestone workspace build, debug and release, is clean.

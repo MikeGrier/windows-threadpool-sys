@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-threadpool-sys"
-version = "0.2.1" # x-release-please-version
+version = "0.3.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -31,7 +31,7 @@ targets = ["x86_64-pc-windows-msvc"]
 # workspace) and a version (for consumers building from crates.io) are required. No
 # features are enabled (`default-features = false`): the `TP_IO` backend needs only
 # the core completion machinery, not any operation-family adapter (fs, socket, device).
-windows-overlapped-io-sys = { version = "0.2.0", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-io-sys", default-features = false }
 # Events: `WaitableHandle::event` creates through it, and `From<Event>` converts one into a
 # wait target. The crate makes no event of its own (WS-D-5 in win-sync-sys' DESIGN-NOTES.md).
 # Published independently, so both a path and a version.
@@ -111,6 +111,13 @@ win-pipes-sys = { path = "../win-pipes-sys" }
 
 # The TP_IO tests issue real overlapped I/O against a named pipe, which needs
 # binding surface the published crate itself does not use.
+[dev-dependencies.windows-overlapped-io-sys]
+version = "0.3.0"
+path = "../windows-overlapped-io-sys"
+# For the observer's queries, which the TP_IO tests issue through an observer:
+# `fs` holds them, and `test-util` lists every one (M17.10).
+features = ["fs", "test-util"]
+
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

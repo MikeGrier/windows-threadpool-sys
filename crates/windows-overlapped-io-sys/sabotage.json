@@ -1,15 +1,250 @@
 {
   "package": "windows-overlapped-io-sys",
-  "description": "Sabotages for windows-overlapped-io-sys's PageBuffers, which holds its pages in an io_buffers::AlignedBuf (IB-2+.2). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "Only PageBuffers (the fs feature) has entries: this manifest was added with that type's move onto AlignedBuf. The completion-port and operation machinery is not covered.",
+  "description": "Sabotages for the observer's information queries (M17) and for PageBuffers, which holds its pages in an io_buffers::AlignedBuf (IB-2+.2) aligned to the OS page size or a device's (M17.5). Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "notCoveredHere": "Sabotages of M17.1-M17.5 were run by hand when those items landed and were not recorded; they are not reconstructed here. The two administrative-share tests are #[ignore]d, so the sweep does not run them: the SMB2 and loopback entries below are caught by the pure conversion tests alone. The completion-port and operation machinery is not covered. The entry that refused a PAGE_SIZE not a power of two at build time went with PAGE_SIZE itself: the page size is asked of the OS (M17.5), so that fact is a test (the_page_size_is_the_operating_systems), not a constant.",
   "testArgs": ["-p", "windows-overlapped-io-sys", "--all-features", "--lib", "--locked"],
   "sabotages": [
+    {
+      "name": "basic info swaps the access and write times",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "Both fields are FileTimes from the same structure, so the swap type-checks; only a test with distinct values per field can tell them apart.",
+      "find": [
+        "        last_access_time: FileTime {",
+        "            ticks: raw.LastAccessTime,",
+        "        },",
+        "        last_write_time: FileTime {",
+        "            ticks: raw.LastWriteTime,",
+        "        },"
+      ],
+      "replace": [
+        "        last_access_time: FileTime {",
+        "            ticks: raw.LastWriteTime,",
+        "        },",
+        "        last_write_time: FileTime {",
+        "            ticks: raw.LastAccessTime,",
+        "        },"
+      ]
+    },
+    {
+      "name": "basic info drops the attributes",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "A zero attribute word is a plausible answer for an ordinary file, so a test of a new file alone would pass; the directory and read-only tests need the bits.",
+      "find": ["        attributes: raw.FileAttributes,"],
+      "replace": ["        attributes: 0,"]
+    },
+    {
+      "name": "the 1601 epoch is off by a day",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "The conversion tests check against literal dates rather than the constant, so a wrong constant cannot agree with itself.",
+      "find": ["    pub(super) const SECONDS_FROM_1601_TO_1970: u64 = 11_644_473_600;"],
+      "replace": ["    pub(super) const SECONDS_FROM_1601_TO_1970: u64 = 11_644_560_000;"]
+    },
+    {
+      "name": "a tick is read as a microsecond",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "Only the sub-second part uses the unit, so this survives every whole-second test and is caught by the 1-tick and 1.5-second cases.",
+      "find": ["    pub(super) const NANOS_PER_TICK: i64 = 100;"],
+      "replace": ["    pub(super) const NANOS_PER_TICK: i64 = 1000;"]
+    },
+    {
+      "name": "control: a negative count is cast rather than refused",
+      "file": "src/endpoint/query.rs",
+      "expect": "survives",
+      "why": "An equivalent mutant on Windows, measured: a negative count cast to unsigned is 2^63 ticks or more, which overflows SystemTime in the checked_add, so the answer is still None. The explicit refusal is kept so the contract does not rest on SystemTime's range; the comment at the site says so.",
+      "find": ["        let ticks = u64::try_from(self.ticks).ok()?;"],
+      "replace": ["        let ticks = self.ticks.cast_unsigned();"]
+    },
+    {
+      "name": "control: the sub-second nanoseconds are cast rather than checked",
+      "file": "src/endpoint/query.rs",
+      "expect": "survives",
+      "why": "The remainder is below a second's ticks, so times 100 it is below 1e9 and always fits a u32; the checked conversion can never fail. A test that catches this is asserting the implementation.",
+      "find": ["            u32::try_from(ticks % per_second * NANOS_PER_TICK.cast_unsigned()).ok()?,"],
+      "replace": ["            (ticks % per_second * NANOS_PER_TICK.cast_unsigned()) as u32,"]
+    },
+    {
+      "name": "any protocol carries an SMB2 block",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "The union member is defined only for SMB; reading it for another protocol reports capabilities that mean nothing.",
+      "find": ["    let smb2 = (raw.Protocol == remote_protocol_values::PROTOCOL_SMB).then(|| {"],
+      "replace": ["    let smb2 = (raw.Protocol != 0).then(|| {"]
+    },
+    {
+      "name": "loopback reads the offline bit",
+      "file": "src/endpoint/query.rs",
+      "expect": "caught",
+      "why": "Each documented flag must be read from its own bit; the flag test sets each alone.",
+      "find": [
+        "    pub fn loopback(&self) -> bool {",
+        "        self.flags & remote_protocol_values::FLAG_LOOPBACK != 0"
+      ],
+      "replace": [
+        "    pub fn loopback(&self) -> bool {",
+        "        self.flags & remote_protocol_values::FLAG_OFFLINE != 0"
+      ]
+    },
+    {
+      "name": "the query buffer loses its 8-byte alignment",
+      "file": "src/endpoint/query.rs",
+      "expect": "refused-by-build",
+      "buildError": "align_of::<QueryBuffer<u8>>() >= 8",
+      "why": "Measured: FileRemoteProtocolInfo refuses a buffer aligned to 4 but not 8. No test catches the loss at run time, because a stack buffer usually lands 8-aligned anyway, so the const assertion is the guard.",
+      "find": ["#[repr(C, align(8))]", "struct QueryBuffer<T>(MaybeUninit<T>);"],
+      "replace": ["#[repr(C, align(4))]", "struct QueryBuffer<T>(MaybeUninit<T>);"]
+    },
+    {
+      "name": "the buffer fill can be held in place by a callee",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "A callee answering 'too small' with the size it was given would make the loop retry at the same size forever. Caught by assertion, not a hang: the stand-in answers once that way, and the test checks the retry was given a larger buffer.",
+      "find": ["        content = (written as usize - 1).max(content + 1);"],
+      "replace": ["        content = written as usize - 1;"]
+    },
+    {
+      "name": "the buffer fill grows by less than the size reported",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Still converges, one unit at a time, so every result is right; only the recorded capacities show the extra calls.",
+      "find": ["        content = (written as usize - 1).max(content + 1);"],
+      "replace": ["        content += 1;"]
+    },
+    {
+      "name": "a full buffer is taken as a fit",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "A return equal to the capacity is a size request, not a length: taking it as a length publishes a unit the callee never wrote and leaves no room for the terminator.",
+      "find": ["        if written < capacity {"],
+      "replace": ["        if written <= capacity {"]
+    },
+    {
+      "name": "a failure loses its error code",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "The caller's only way to tell a device without a path from any other failure is the Win32 code.",
+      "find": ["            return Err(io::Error::last_os_error());"],
+      "replace": ["            return Err(io::Error::other(\"GetFinalPathNameByHandleW failed\"));"]
+    },
+    {
+      "name": "opened names are normalized",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Opened and Normalized were measured to differ only for an open by 8.3 short name and for a named pipe; the pipe test catches this wherever named pipes exist, the short-name test only where the volume has short names.",
+      "find": ["            Self::Opened => FILE_NAME_OPENED,"],
+      "replace": ["            Self::Opened => FILE_NAME_NORMALIZED,"]
+    },
+    {
+      "name": "the GUID form asks for the NT name",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "Each volume form is checked against its own prefix, so a crossed flag shows as the wrong prefix.",
+      "find": ["            Self::Guid => VOLUME_NAME_GUID,"],
+      "replace": ["            Self::Guid => VOLUME_NAME_NT,"]
+    },
+    {
+      "name": "final_path names the volume by its NT device",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "The default is the drive-letter form a caller can open again; the rename and move tests compare it with the canonical path.",
+      "find": ["        self.final_path_as(VolumeName::Dos, PathForm::Normalized)"],
+      "replace": ["        self.final_path_as(VolumeName::Nt, PathForm::Normalized)"]
+    },
+    {
+      "name": "a volume name keeps its NUL padding",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "The call reports no lengths, only terminated names in zeroed buffers; without the cut each name is MAX_PATH + 1 units, mostly NULs.",
+      "find": ["        .position(|&unit| unit == 0)", "        .unwrap_or(buffer.len());"],
+      "replace": ["        .position(|_| false)", "        .unwrap_or(buffer.len());"]
+    },
+    {
+      "name": "a name with no NUL is read as empty",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "A name filling the whole buffer has no terminator; it is the whole buffer, not nothing.",
+      "find": ["        .unwrap_or(buffer.len());"],
+      "replace": ["        .unwrap_or(0);"]
+    },
+    {
+      "name": "the serial number and component length are crossed",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Both are u32 out-parameters next to each other, so the swap type-checks; the comparison with the root-path query sees it.",
+      "find": ["                &raw mut serial_number,", "                &raw mut maximum_component_length,"],
+      "replace": ["                &raw mut maximum_component_length,", "                &raw mut serial_number,"]
+    },
+    {
+      "name": "the flags are dropped",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "No flags is a legal answer, so only a comparison with what the volume reports by another route can tell.",
+      "find": ["            file_system_flags: FileSystemFlags { bits: flags },"],
+      "replace": ["            file_system_flags: FileSystemFlags { bits: 0 },"]
+    },
+    {
+      "name": "the sparse-files flag has the wrong bit",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Every named value is checked against windows-sys' constant of the same name, and separately against the volume's own answer to FSCTL_SET_SPARSE.",
+      "find": ["    pub const SUPPORTS_SPARSE_FILES: Self = Self { bits: 0x0000_0040 };"],
+      "replace": ["    pub const SUPPORTS_SPARSE_FILES: Self = Self { bits: 0x0000_0080 };"]
+    },
+    {
+      "name": "contains accepts any shared bit",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "'Has every one of these' and 'has one of these' agree for a single flag, so only a multi-bit query separates them.",
+      "find": ["        self.bits & other.bits == other.bits"],
+      "replace": ["        self.bits & other.bits != 0"]
+    },
+    {
+      "name": "or intersects",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "Combining two distinct flags with & gives no flags at all.",
+      "find": ["            bits: self.bits | other.bits,"],
+      "replace": ["            bits: self.bits & other.bits,"]
+    },
+    {
+      "name": "control: the name buffers are twice the documented size",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "survives",
+      "why": "MAX_PATH + 1 is the documented maximum; a larger buffer only leaves more unused space. A test that catches this is asserting the buffer size, not the answer.",
+      "find": ["        const NAME_UNITS: usize = MAX_PATH as usize + 1;"],
+      "replace": ["        const NAME_UNITS: usize = 2 * (MAX_PATH as usize + 1);"]
+    },
+    {
+      "name": "the volume query cancels the handle's I/O",
+      "file": "src/endpoint/volume_info.rs",
+      "expect": "caught",
+      "why": "M17.10's claim is that EVERY query leaves a pending operation alone, and the M16.5 tests already cover file_len's path. This patch breaks a query only the shared table issues while an operation pends, so the pending connect and read are aborted rather than completed.",
+      "find": ["        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");"],
+      "replace": [
+        "        let size = u32::try_from(NAME_UNITS).expect(\"MAX_PATH + 1 fits a u32\");",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(self.handle.as_raw_handle(), std::ptr::null()) };"
+      ]
+    },
+    {
+      "name": "the final-path query cancels the handle's I/O",
+      "file": "src/endpoint/final_path.rs",
+      "expect": "caught",
+      "why": "As the volume entry, for a query on a different call path: GetFinalPathNameByHandleW rather than GetVolumeInformationByHandleW or GetFileInformationByHandleEx.",
+      "find": ["        let flags = volume.flag() | form.flag();"],
+      "replace": [
+        "        let flags = volume.flag() | form.flag();",
+        "        unsafe { windows_sys::Win32::System::IO::CancelIoEx(handle, std::ptr::null()) };"
+      ]
+    },
     {
       "name": "IB-2+.2: the pages are allocated at byte alignment",
       "file": "src/fs.rs",
       "expect": "caught",
       "why": "Page alignment is what the scatter and gather calls require of every segment. The alignment tests read it back from the buffer's own address for several page counts.",
-      "find": ["AlignedBuf::zeroed(size, PAGE_SIZE)"],
+      "find": ["AlignedBuf::zeroed(size, align)"],
       "replace": ["AlignedBuf::zeroed(size, 1)"]
     },
     {
@@ -17,7 +252,7 @@
       "file": "src/fs.rs",
       "expect": "caught",
       "why": "Every segment must name its own page; overlapping segments would read or write the same bytes twice.",
-      "find": ["self.buffer.as_ptr().cast_mut().add(i * PAGE_SIZE)"],
+      "find": ["self.buffer.as_ptr().cast_mut().add(i * page_size)"],
       "replace": ["self.buffer.as_ptr().cast_mut().add(i * 8)"]
     },
     {
@@ -33,8 +268,8 @@
       "file": "src/fs.rs",
       "expect": "caught",
       "why": "A short length transfers fewer bytes than the buffer holds.",
-      "find": ["        self.pages * PAGE_SIZE\n    }\n\n    /// Always"],
-      "replace": ["        self.pages * PAGE_SIZE - PAGE_SIZE / 2\n    }\n\n    /// Always"]
+      "find": ["        self.pages * page_size()\n    }\n\n    /// Always"],
+      "replace": ["        self.pages * page_size() - page_size() / 2\n    }\n\n    /// Always"]
     },
     {
       "name": "NR-3: zero pages is not refused",
@@ -49,25 +284,16 @@
       "file": "src/fs.rs",
       "expect": "caught",
       "why": "A wrapped length is a small, valid allocation for a count that asked for far more: the buffer would be short of its own page count.",
-      "find": ["        let size = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {\n            io::Error::new(io::ErrorKind::InvalidInput, \"page buffer size overflow\")\n        })?;\n"],
-      "replace": ["        let size = pages.wrapping_mul(PAGE_SIZE);\n"]
+      "find": ["        let size = pages.checked_mul(page_size()).ok_or_else(|| {\n            io::Error::new(io::ErrorKind::InvalidInput, \"page buffer size overflow\")\n        })?;\n"],
+      "replace": ["        let size = pages.wrapping_mul(page_size());\n"]
     },
     {
       "name": "NR-3: an allocation the machine cannot supply is reported as invalid input",
       "file": "src/fs.rs",
       "expect": "caught",
       "why": "The count is the caller's and a failed allocation is out of memory, which a caller answers by asking for fewer pages; invalid input would read as a bug in the count's shape.",
-      "find": ["            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;\n"],
-      "replace": ["            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;\n"]
-    },
-    {
-      "name": "NR-3: a page size that is not a power of two is refused by the build",
-      "file": "src/fs.rs",
-      "expect": "refused-by-build",
-      "buildError": "PAGE_SIZE.is_power_of_two()",
-      "why": "AlignedBuf refuses such an alignment and `PageBuffers::new` reports every refusal of the allocation as out of memory, so a bad constant would read as out of memory on every call. It is asserted where it is defined.",
-      "find": ["pub const PAGE_SIZE: usize = 4096;\n"],
-      "replace": ["pub const PAGE_SIZE: usize = 4095;\n"]
+      "find": ["                io::Error::new(io::ErrorKind::OutOfMemory, error)\n"],
+      "replace": ["                io::Error::new(io::ErrorKind::InvalidInput, error)\n"]
     },
     {
       "name": "IB-2+.2: CONTROL: the page count is read through an identity addition",

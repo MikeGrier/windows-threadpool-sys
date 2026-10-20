@@ -7,7 +7,7 @@
 .DESCRIPTION
     The archives are append-only history, read by people and linked to by
     anchor, and the defects that reached review in them were each decidable by
-    a script (root CHECKLIST.md, M34.8). Four rules, settled by the engineer on
+    a script (root CHECKLIST.md, M34.18). Four rules, settled by the engineer on
     2026-10-19:
 
     1. A heading is preceded by a blank line. CommonMark renders it either way,
@@ -178,5 +178,5 @@ if ($problems.Count -eq 0) {
 
 foreach ($problem in $problems) { Write-Host $problem -ForegroundColor Red }
 Write-Host ""
-Write-Host "$($problems.Count) problem(s) in the archives. See CHECKLIST.md M34.8 for the rules." -ForegroundColor Red
+Write-Host "$($problems.Count) problem(s) in the archives. See CHECKLIST.md M34.18 for the rules." -ForegroundColor Red
 exit 1

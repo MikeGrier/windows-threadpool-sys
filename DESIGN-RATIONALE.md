@@ -893,3 +893,97 @@ callers to do the same with `Event::try_clone`. Exclusive ownership was the mean
 pool needs is that the handle stays open while a wait is pending, and a reference count gives that. The engineer
 first answered "let's assume yes" and the assistant wrote the item to test the assumption; the engineer then took
 the decision outright.
+
+## <a id="a-link-that-could-not-open-its-output"></a>A link that could not open its output: why the harness builds a second time
+
+A full sabotage sweep of `win-multi-file-tail-watcher` reported, once per sweep, an entry as
+`MANIFEST DOES NOT COMPILE (tests never ran)`. The build transcript held a linker error, `LNK1104`,
+on the test executable the entry was about to write, and the same entry linked when it was run alone.
+The label was wrong for it: the patch was never judged.
+
+**What was observed.** A throwaway sampler listed the processes holding the executable's path, using
+the Restart Manager, around every build of an instrumented sweep. It caught one occurrence. At that
+moment the only holder was the Windows Inventory and Compatibility Appraisal service. Across the
+sweep that service opened the executable several times, each shortly after a test run had exited,
+and the next entry's link rewrites the same path at a comparable interval after the previous run.
+Defender's service and its endpoint sensor also opened it, but their holds fell right after the
+link or during a run, not in the window before the next one.
+
+**What was ruled out.** The executable staying locked after its test run exits: run-then-rewrite
+cycles repeated at length produced no refusal. A ReFS-specific cause: the same sweep behaves the
+same on both volumes tried. A crashed run or an error-reporting dialog, and a stall of the machine at
+that moment: neither was present.
+
+**What is not established.** One occurrence was caught, so the appraisal service is the observed
+holder, not a proven cause. It could not be stopped to test the claim, which needs administrator
+rights this session did not have. Process start also stalls for a few seconds now and then on both
+volumes, which was not tied to the occurrence. The sampler is not committed; it was an investigation,
+and the evidence it produced is recorded here in words.
+
+**The decision: one more build, for this signature only.** Whatever holds the file lets go on the
+timescale of seconds, and the retry's own cost is a rebuild a second or two later; a second collision
+needs the holder to arrive twice. The harness already treats a retry as acceptable for exactly one
+other signature, a process Windows could not start
+([invoke-retrying-on-start-failure.ps1](tools/invoke-retrying-on-start-failure.ps1)), on the same
+terms: the signature is named once, the retry is announced and counted, and it covers an event that
+says nothing about the code under test.
+
+What keeps it from becoming "retry until green":
+
+- **The build only.** A test that ran and failed is a result and is never run again.
+- **`.exe` and `.dll` outputs only.** `LNK1104` is also the linker's message for a missing input such
+  as `kernel32.lib` or an `.rlib`, which is deterministic and is the build's own failure. Every
+  `LNK1104` in the output must name an output, so one input among them makes the whole failure the
+  build's.
+- **One retry.** A second failure of the same kind is reported as `INFRASTRUCTURE`, never as a
+  judgement of the patch.
+- **A patch that is not valid Rust fails on the first attempt**, so the retry does not delay that.
+
+**Alternatives not taken.** Reporting the occurrence honestly without a retry: the label would have
+been right, but a sweep that costs a long time would end with one entry needing a re-run by hand,
+for an event unrelated to the code. Using a different output path for each entry: it would avoid the
+collision, at the cost of the warm incremental builds the harness keeps by reusing the target
+directory. Disabling the service: it is not the harness's to switch off on a developer's machine,
+and it was not reachable here.
+
+## <a id="how-sabotage-scope-was-reached"></a>How sabotage scope was reached
+
+The engineer, 2026-10-19: the sabotage discipline "has introduced a great deal of latency to almost all
+workloads", and "we do not need to mutate everything all the time, perhaps only over the deltas that
+are being introduced in any given commit". Mutation testing tools take the same position; cargo-mutants'
+`--in-diff` mutates only what a diff touched.
+
+**Why the delta is not simply "the entries whose file changed".** A generated mutant lives where the
+code changed. A sabotage entry is placed by hand, and the file it patches is not what decides whether it
+is caught. Of the six entries the post-merge sweep was failing on when this was raised
+([M34.9](COMPLETED-CHECKLIST.md#m349)), two were patches whose text the source had moved away from, three
+were defects no test reached, and one was declared weaker than the guard that refused it. A test that
+is weakened or deleted, or a change to a crate below, alters a result without touching the patched file.
+So the selection takes in the tests that caught an entry as well as the file it patches, and keeps a
+nightly sweep of everything for what neither sees.
+
+**The layers, and why in that order.** The patch check needs no build, so it can run on every push and
+is the cheapest finding there is. Narrowing to the manifests of affected crates is mechanical and removes
+most of the cost of a typical one-crate change. Narrowing within a manifest needs the record of which
+tests caught each entry, and running those tests first needs the same record, so both come after it.
+
+**Alternatives not taken.** Keeping the full post-merge sweep and only adding the nightly one: the cost
+that prompted this is the full sweep itself. Scoping by the patched file alone: it misses the test
+changes above, which are the case sabotage exists to check. Committing the record of catching tests to
+the repository: it is derived from a sweep, it would be a copy that drifts, and a sweep must not write
+into the developer's tree; it is kept where sweeps run instead, and its absence only makes a scoped run
+larger.
+
+**What review rounds added.** Each review round of the branch found a way the selection could take
+fewer entries than the change warranted, and each fix resolved the doubt toward running more. Two of
+them reversed an earlier choice. An entry with no usable record was first left to its crate's reach,
+so a lost record made a scoped run smaller where nothing was known; it is now always taken, so a lost
+record makes a run a full one. Whether a record carries its commit was first decided by asking git
+after the baseline whether the tree was clean; that misses a file git was told to stop looking at, so
+the harness now checks the copy it actually swept against the commit, file by file. And a test's own
+file was first taken as the only file that decides whether it runs; the file declaring its module
+decides too, since removing `mod tests;` drops every test in it untouched, so the files along a
+catching test's module path now count as its file.
+
+**Not decided.** Whether a scoped sweep should also run on pull requests, and whether it should gate
+anything, were not raised; the post-merge sweep remains a report and not a gate.

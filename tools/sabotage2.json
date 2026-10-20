@@ -30,11 +30,11 @@
     },
     {
       "name": "the inert check ignores case",
-      "file": "tools/run-sabotage.ps1",
+      "file": "tools/common.ps1",
       "expect": "caught",
-      "why": "This shipped: the check compared with PowerShell's case-insensitive -eq, so a patch changing a variable to the constant of the same name was refused as inert and never swept, while the patch itself is applied with an ordinal replace. Found by an M4.2 entry in windows-platform-probes that did exactly that.",
-      "find": ["    if ($patched -ceq $original) {"],
-      "replace": ["    if ($patched -eq $original) {"]
+      "why": "This shipped: the check compared with PowerShell's case-insensitive -eq, so a patch changing a variable to the constant of the same name was refused as inert and never swept, while the patch itself is applied with an ordinal replace. Found by an M4.2 entry in windows-platform-probes that did exactly that. The check now lives in Test-SabotagePatch, shared with the no-build patch check.",
+      "find": ["        if ([string]::Equals($patched, $Original, [System.StringComparison]::Ordinal)) {"],
+      "replace": ["        if ($patched -eq $Original) {"]
     },
     {
       "name": "the reserved baseline stem is no longer refused",

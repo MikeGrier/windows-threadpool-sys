@@ -573,6 +573,12 @@ Three numbers, through the `Observable` trait on either handle:
 Depth is not on that list because `len()` already reports it, from positions the
 queue keeps anyway.
 
+## Release notes
+
+What each release contains is in [CHANGELOG.md](CHANGELOG.md). Changes to this
+README and to the crate's rustdoc ship with the crate, so a release can consist of
+documentation corrections alone.
+
 ## Licence
 
 Copyright (c) Mike Grier.

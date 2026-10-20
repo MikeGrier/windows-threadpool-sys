@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.1.1...windows-waitable-queues-v0.1.2) (2026-10-18)
+
+
+### Features
+
+* **waitable-queues:** a capacity a shape accepts but memory cannot hold is an error, not an abort ([d35b758](https://github.com/MikeGrier/windows-threadpool-sys/commit/d35b758544e2b24d76a278bd6ad87fa9b0b93be7))
+* **waitable-queues:** a capacity a shape accepts but memory cannot hold is an error, not an abort ([16b9534](https://github.com/MikeGrier/windows-threadpool-sys/commit/16b9534c09f41b788a972b304bb26d4b83031d6b))
+
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.1.0...windows-waitable-queues-v0.1.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **waitable-queues:** publish the documentation corrections made since 0.1.0 as 0.1.1 ([c675dee](https://github.com/MikeGrier/windows-threadpool-sys/commit/c675dee9c92b69b2402a95c2bb401c83c906adac))
+* **waitable-queues:** publish the documentation corrections made since 0.1.0 as 0.1.1 ([103b522](https://github.com/MikeGrier/windows-threadpool-sys/commit/103b522be2b35623fdcdbb78f408c90d68d321f3))
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-waitable-queues-v0.0.1...windows-waitable-queues-v0.1.0) (2026-09-05)
 
 

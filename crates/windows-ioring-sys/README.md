@@ -216,6 +216,11 @@ process-wide facility instantiated lazily on first use. A ring wrapper simply
 does not intrinsically depend on a thread pool. Default-on keeps the change
 additive, so no existing consumer has to do anything.
 
+With the `threadpool` feature, `EventDelivery::new` and `CompletionWake::new` take
+`windows-threadpool-sys`'s `CallbackEnviron`, so that crate's types are part of this crate's public
+API. A minor release of `windows-threadpool-sys` that changes those types is a minor release of this
+crate too, in the 0.x series: 0.8 of this crate pairs with 0.3 of `windows-threadpool-sys`.
+
 ### The examples are demonstrations, not API
 
 `examples/` is where this crate shows compositions it deliberately does not

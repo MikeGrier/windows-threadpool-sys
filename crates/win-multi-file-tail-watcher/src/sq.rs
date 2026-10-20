@@ -1,0 +1,230 @@
+// Copyright (c) 2026 Mike Grier
+//! The submission queue (SQ): what the watcher writes and the caller drains.
+
+use std::fmt;
+use std::sync::MutexGuard;
+
+use windows_waitable_queues::{CapacityError, PushError, slotwise_mpsc};
+
+#[cfg(test)]
+mod tests;
+
+/// One entry of the SQ. Open to further kinds, so match it with a wildcard arm:
+///
+/// ```
+/// # use win_multi_file_tail_watcher::SqEntry;
+/// fn kind<T>(entry: &SqEntry<T>) -> &'static str {
+///     match entry {
+///         SqEntry::Attention(_) => "attention",
+///         SqEntry::Terminal(_) => "terminal",
+///         SqEntry::PollDone => "poll done",
+///         _ => "a kind this version does not know",
+///     }
+/// }
+/// # assert_eq!(kind(&SqEntry::<u8>::PollDone), "poll done");
+/// ```
+///
+/// Without the wildcard arm it does not compile:
+///
+/// ```compile_fail,E0004
+/// # use win_multi_file_tail_watcher::SqEntry;
+/// fn kind<T>(entry: &SqEntry<T>) -> &'static str {
+///     match entry {
+///         SqEntry::Attention(_) => "attention",
+///         SqEntry::Terminal(_) => "terminal",
+///         SqEntry::PollDone => "poll done",
+///     }
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SqEntry<T> {
+    /// A registration's length changed.
+    Attention(Attention<T>),
+    /// A registration can no longer be probed, and no longer will be (TW-D-13).
+    Terminal(Terminal<T>),
+    /// A poll has written everything it had for this beat.
+    PollDone,
+}
+
+/// A report that a registration's length differs from the one last reported for it.
+///
+/// The crate attaches no meaning to the change: it is either direction, and the receiver
+/// interprets the pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attention<T> {
+    /// A clone of the value the registration was made with.
+    pub value: T,
+    /// The length last reported for the registration.
+    pub last_known: u64,
+    /// The length now.
+    pub current: u64,
+}
+
+/// A report that a registration can never be probed again: the handle it holds answered with a
+/// code that means it never will. The registration stays until it is dropped, and is reported once.
+///
+/// The watcher reports it for a failed probe. The reading layer reports it too, for a failed read,
+/// and two of the fields then mean something a little different, as each says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Terminal<T> {
+    /// A clone of the value the registration was made with.
+    pub value: T,
+    /// The Win32 code the failed probe carried, or for a failed read, the one the read did.
+    pub win32_code: u32,
+    /// For a failed probe, the length last reported for the registration. For a failed read, the
+    /// offset the read began at, which can be past the length last reported, and the bytes from there
+    /// are not read again.
+    pub last_known: u64,
+}
+
+/// A capacity the SQ cannot have.
+///
+/// The capacity is the number of entries the SQ holds, and must be a power of two of at least two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SqCapacityError {
+    /// The capacity asked for.
+    pub requested: usize,
+    /// The smallest capacity the SQ accepts.
+    pub min_valid: usize,
+    /// The largest capacity the SQ accepts.
+    pub max_valid: usize,
+}
+
+impl fmt::Display for SqCapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SQ capacity {} is not a power of two from {} to {}",
+            self.requested, self.min_valid, self.max_valid
+        )
+    }
+}
+
+impl std::error::Error for SqCapacityError {}
+
+impl From<CapacityError> for SqCapacityError {
+    fn from(error: CapacityError) -> Self {
+        Self {
+            requested: error.requested(),
+            min_valid: error.min_valid(),
+            max_valid: error.max_valid(),
+        }
+    }
+}
+
+/// Why an SQ could not be made: a capacity that breaks the rule, or one that is within it and
+/// whose memory could not be had. They are kept apart because they are different answers: the
+/// first is wrong on every machine, the second is this machine's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueueError {
+    /// The capacity is not a power of two within the bounds.
+    Capacity(SqCapacityError),
+    /// The capacity is valid and the memory for the SQ's slots could not be allocated.
+    Allocation(SqCapacityError),
+}
+
+impl QueueError {
+    /// The capacity asked for and the bounds the SQ accepts, whichever the refusal was.
+    pub(crate) fn capacity(self) -> SqCapacityError {
+        match self {
+            Self::Capacity(error) | Self::Allocation(error) => error,
+        }
+    }
+}
+
+impl From<CapacityError> for QueueError {
+    fn from(error: CapacityError) -> Self {
+        let capacity = SqCapacityError::from(error);
+        if error.is_allocation_failure() {
+            Self::Allocation(capacity)
+        } else {
+            Self::Capacity(capacity)
+        }
+    }
+}
+
+/// Why an entry was not written. The entry comes back with it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PushFailure<E> {
+    /// Every slot holds an entry the caller has not drained.
+    Full(E),
+    /// The reading side is gone.
+    Closed(E),
+}
+
+/// Why a watcher's entry was not written.
+pub(crate) type SqPushError<T> = PushFailure<SqEntry<T>>;
+
+/// The writing side of an SQ of `E`. One handle per writing thread: a handle is cloned, not shared.
+#[derive(Debug)]
+pub(crate) struct QueueWriter<E>(slotwise_mpsc::Producer<E>);
+
+impl<E> Clone for QueueWriter<E> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<E> QueueWriter<E> {
+    /// Write `entry` without waiting.
+    pub(crate) fn push(&self, entry: E) -> Result<(), PushFailure<E>> {
+        self.0.push(entry).map_err(|error| match error {
+            PushError::Full(entry) => PushFailure::Full(entry),
+            // `Disconnected`, and any refusal the queue's crate adds: none of them is retryable.
+            other => PushFailure::Closed(other.into_inner()),
+        })
+    }
+}
+
+/// The writing side of the watcher's SQ.
+pub(crate) type SqWriter<T> = QueueWriter<SqEntry<T>>;
+
+/// The reading side of an SQ of `E`.
+#[derive(Debug)]
+pub(crate) struct QueueReader<E>(slotwise_mpsc::Consumer<E>);
+
+impl<E> QueueReader<E> {
+    /// The next entry, or `None` when there is none now, or when no writer is left to add one.
+    pub(crate) fn pop(&self) -> Option<E> {
+        self.0.pop().ok()
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
+/// The reading side of the watcher's SQ.
+pub(crate) type SqReader<T> = QueueReader<SqEntry<T>>;
+
+/// A new SQ holding `capacity` entries of `E`. Every SQ in the crate is made here, so they share
+/// one capacity rule.
+pub(crate) fn queue_of<E>(capacity: usize) -> Result<(QueueWriter<E>, QueueReader<E>), QueueError> {
+    let (writer, reader) = slotwise_mpsc::bounded(capacity)?;
+    Ok((QueueWriter(writer), QueueReader(reader)))
+}
+
+/// A new watcher's SQ holding `capacity` entries.
+pub(crate) fn queue<T>(capacity: usize) -> Result<(SqWriter<T>, SqReader<T>), QueueError> {
+    queue_of(capacity)
+}
+
+/// The entries the SQ holds, taken in the order they were written, until there are none.
+///
+/// Holding it keeps any other drain out; it does not hold up the writers.
+pub struct SqDrain<'a, T>(pub(crate) MutexGuard<'a, SqReader<T>>);
+
+impl<T> Iterator for SqDrain<'_, T> {
+    type Item = SqEntry<T>;
+
+    fn next(&mut self) -> Option<SqEntry<T>> {
+        self.0.pop()
+    }
+}
+
+impl<T> fmt::Debug for SqDrain<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqDrain").finish_non_exhaustive()
+    }
+}

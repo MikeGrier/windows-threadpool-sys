@@ -46,7 +46,7 @@ jobs:
 
   # Every COMPLETED-CHECKLIST.md: a blank line above each heading, no heading
   # glued onto a line, no open box, and no heading or anchor changed against the
-  # merge base (root CHECKLIST.md, M34.8). The last needs the base commit, so the
+  # merge base (root CHECKLIST.md, M34.18). The last needs the base commit, so the
   # checkout is full. On a pull request the base is the target branch; on a push
   # it is the previous tip, and a push with none (a new branch) skips that rule
   # rather than failing on a missing commit.
@@ -112,6 +112,21 @@ jobs:
       - name: Run check-workflow-refs.ps1
         shell: pwsh
         run: ./tools/check-workflow-refs.ps1
+
+  # Every sabotage entry's patch, applied in memory to the file it names. No
+  # build, so it runs on every push in seconds, ahead of any sweep: a patch the
+  # code has moved away from (`MANIFEST STALE`) or one that changes nothing
+  # (`MANIFEST INERT`) is found by reading two files, and the post-merge sweep
+  # otherwise found them after the merge, a crate build per entry later. Two of
+  # the six entries M34.9 repaired were only this.
+  sabotage-patches:
+    name: every sabotage patch applies
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-sabotage-patches.ps1
+        shell: pwsh
+        run: ./tools/check-sabotage-patches.ps1
 
   # The sabotage harness's own tests. NOT a sabotage sweep -- a sweep rebuilds a
   # crate per entry and is deliberately an occasional instrument. These are the

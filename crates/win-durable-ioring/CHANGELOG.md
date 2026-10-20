@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.2.1...win-durable-ioring-v0.3.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **win-durable-ioring:** the CallbackEnviron accepted by DeliveryMode::Pool, DeliveryMode::Signalled and EntryDelivery::new now comes from windows-threadpool-sys 0.3.
+
+### Features
+
+* **win-durable-ioring:** release as 0.3.0, paired with windows-threadpool-sys 0.3 ([1bbea90](https://github.com/MikeGrier/windows-threadpool-sys/commit/1bbea905b3ded93d7e18a1595ceb2fb2d6d9e24b))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-ioring-sys bumped from 0.7.2 to 0.8.0
+    * windows-threadpool-sys bumped from 0.2.2 to 0.3.0
+    * windows-namespace-request-sys bumped from 0.4.1 to 0.4.2
+
+## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.2.0...win-durable-ioring-v0.2.1) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-ioring-sys bumped from 0.7.1 to 0.7.2
+    * windows-threadpool-sys bumped from 0.2.1 to 0.2.2
+    * windows-namespace-request-sys bumped from 0.4.0 to 0.4.1
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.1.0...win-durable-ioring-v0.2.0) (2026-10-16)
 
 

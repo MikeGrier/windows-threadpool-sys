@@ -30,6 +30,11 @@ A blocking push is not an API of either crate: a refused push names its cause, a
 waits it out is a maintained example, [examples/blocking_push/](examples/blocking_push/main.rs), to
 use as it stands or adapt ([DI-D-56](../durable-ioring/DESIGN-NOTES.md#di-d-56)).
 
+`DeliveryMode::Pool`, `DeliveryMode::Signalled` and `EntryDelivery::new` take
+`windows-threadpool-sys`'s `CallbackEnviron`, so that crate's types are part of this crate's public
+API. A minor release of `windows-threadpool-sys` that changes those types is a minor release of this
+crate too, in the 0.x series: 0.3 of this crate pairs with 0.3 of `windows-threadpool-sys`.
+
 ## Opening a file
 
 A file target is made from a file **this crate opened**, and from nothing else

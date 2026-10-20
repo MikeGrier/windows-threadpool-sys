@@ -22,9 +22,59 @@ below for what that buys and why it is the premise rather than a nicety.
 
 # Re-run one, after changing a test
 .\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Name '*doorbell*'
+
+# Sweep only the entries this branch could have affected; -List shows which, and why
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main -List
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -Since origin/main
+
+# Check that every patch still applies, building nothing (one manifest, then all)
+.\tools\run-sabotage.ps1 -Manifest crates\windows-waitable-queues\sabotage.json -CheckPatches
+.\tools\check-sabotage-patches.ps1
 ```
 
 It exits 0 only when every sabotage behaved as the manifest declared.
+
+`-CheckPatches` stops before anything is built: it applies each entry's patch
+in memory to the file it names and reports `MANIFEST STALE` or `MANIFEST INERT`,
+the verdicts a sweep reaches first, for the whole manifest in seconds. Its exit
+codes are the ones below, with 1 meaning a patch does not apply.
+[check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs it over every
+manifest, the harness's own [sabotage2.json](sabotage2.json) included, and CI's `every sabotage patch applies` job runs that on every push.
+
+In CI, [.github/workflows/sabotage-sweep.yml](../.github/workflows/sabotage-sweep.yml)
+sweeps after every merge to `main`, and only the manifests the merge could have
+affected: [plan-sabotage-matrix.ps1](plan-sabotage-matrix.ps1) `-Since` takes the
+crates the push touched, adds every crate that builds on one through a path
+dependency of any kind, and every manifest whose `testArgs` runs the tests of a
+package so reached, and plans every manifest when the push touched an input
+all sweeps share or its base cannot be measured from. Within a crate the push
+touched, it counts only the entries the push could have affected, and each shard
+finds the same ones with `run-sabotage.ps1 -Since`: an entry that is new or
+changed, whose patched file changed, whose catching tests (from `catchers.json`,
+below) changed or are gone -- including a file declaring a module they are in --
+or of which nothing better is known. The rule is
+`Select-SabotageEntry` in [common.ps1](common.ps1), and what it cannot see is in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md#sabotage-scope). `-List -Since` shows the
+reason each entry was chosen.
+
+Every night the same workflow sweeps every entry of every manifest, running each
+entry's whole suite, as a sweep did before any of this scoping. That is the
+backstop for what scoping cannot see, and the run that re-learns which tests catch
+each entry. A run started by hand from the workflow's dispatch is a full sweep
+too, narrowed only by the manifest and name it is given.
+
+Locally, `-Since <base>` scopes a sweep the same way, measured from the merge base
+with `<base>` against the working tree, so `-Since origin/main` sweeps what a branch
+changed, edits not yet committed included. A branch behind its base is also
+charged with what the base changed since they parted, which may be in crates the
+branch never touched, so rebase first to keep the scope to the branch's own work.
+It reads the record from the output
+directory, which a clone has only once it has swept the manifest from a clean
+checkout; an entry with no usable record is taken whatever changed, so the first
+scoped run in a clone is a full one. Sweep the whole manifest, without
+`-Since`, when a change is one scoping cannot see: a test helper shared by a crate's
+tests, or code elsewhere in a crate that decides whether a sabotaged line is
+reached.
 
 | Exit | Meaning |
 |---|---|
@@ -206,7 +256,11 @@ accept that a sabotage caught only by a doctest would then read as survived.
 
 ## Reading a result, which is where the judgement is
 
-**`caught`** -- the suite went red, or hung. The guard is real.
+**`caught`** -- the suite went red, or hung. The guard is real. In a scoped run
+(`-Since`) an entry with recorded catching tests is run against those first, and
+is reported `caught (its recorded tests failed ...)` when libtest reports one of
+them failed; anything else, a hang included, runs the whole suite. A run without `-Since` always runs the
+whole suite.
 
 **`survived (NOT caught)`** -- the suite stayed green with the defect in place.
 This is the finding worth having, and it means one of two things. Either the
@@ -236,6 +290,23 @@ where it passed on re-run; in CI the harness's suite now runs through
 [invoke-retrying-on-start-failure.ps1](invoke-retrying-on-start-failure.ps1),
 which retries this signature and nothing else. If a baseline hits it, the
 sweep stops with the host's memory, commit, process and handle counts.
+
+**`INFRASTRUCTURE: the linker could not open '<file>.exe'`** -- the build's
+`link.exe` could not open its own output (`LNK1104`) on two builds in a row, so
+the patch was never judged. It was seen rarely, once in a long sweep, and the
+same entry linked when run alone. The harness therefore builds once
+more when, and only when, a build fails with `LNK1104` naming a `.exe` or `.dll`
+and no `LNK1104` naming anything else; the second build decides. The same
+message for a `.lib`, `.rlib` or `.obj` is a missing input, which is the
+build's own failure and is never retried. If the baseline's build cannot open its
+output on two builds, the sweep stops with exit 2 and says no test ran, rather
+than asking for the suite to be fixed. The signature is defined once, in
+`Get-LinkOutputOpenFailure` in [common.ps1](common.ps1). A retry is never
+silent: the first attempt's log is kept as `.build.attempt1.err` beside the
+build's transcript, and the summary says how many builds were run again. Only
+the build is retried; a test that ran is never run twice. The reasoning is in
+[DESIGN-RATIONALE.md](../DESIGN-RATIONALE.md), "A link that could not open its
+output".
 
 **`MANIFEST STALE`** -- the pattern no longer matches exactly one site.
 Refactoring moved the code out from under the manifest. Fix the manifest; the
@@ -516,7 +587,9 @@ from the current run.
 
 Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
 them to stderr, and error messages name whichever of the two actually holds the
-evidence. Each phase the launcher reports on also leaves its `.result`
+evidence. A build that is run again (see `INFRASTRUCTURE: the linker could not
+open`) also leaves its first attempt's diagnostics as `.build.attempt1.err`.
+Each phase the launcher reports on also leaves its `.result`
 (`.build.result` for the build), the one-line JSON outcome the harness judged it
 by. A launcher that failed leaves none, or a file that is not a result, and the
 run is `INFRASTRUCTURE`; a transcript is the evidence then.
@@ -527,6 +600,24 @@ is checked for that up front and rejected rather than allowed to overwrite one
 entry's evidence with another's. A stem of `baseline` is rejected for the same
 reason: that name is taken by the baseline's own transcript, which is the
 evidence that the suite was green before any patching.
+
+`catchers.json` beside them is the one file a sweep keeps across runs: for every
+entry it judged, the tests that failed under its patch, read from the
+transcript, and when. A sweep reads it first and writes it back with what it
+ran, so entries it did not run keep their last result; an outcome that says
+nothing about the tests, such as a binary that was never executed, leaves the
+entry as it was. It is what lets a later sweep tell which test changes could
+alter an entry's result. Each entry is recorded with the commit it was swept at,
+and a later run uses it only if that commit is in its own history, so a record
+from another branch, or from a run of a later commit, makes it run more, never
+less; one from an earlier commit is judged against everything since. A sweep of
+a tree with uncommitted changes records no commit, so what it learns there does
+not narrow a later run, and it says so. It is never committed, and deleting it only makes a scoped sweep run more.
+In CI the plan job restores the latest record from the Actions cache once and
+passes that one snapshot to every shard, so the shards select the entries the
+plan counted; each shard uploads its copy, and the `record` job merges them with
+[merge-sabotage-catchers.ps1](merge-sabotage-catchers.ps1) and saves the result
+to the cache for the next run.
 
 **`-List` is inert**: it creates no directories, copies no tree, and writes and
 deletes nothing. All of that setup happens after the listing path has exited.

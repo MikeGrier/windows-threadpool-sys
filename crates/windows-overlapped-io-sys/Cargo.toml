@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-overlapped-io-sys"
-version = "0.2.0" # x-release-please-version
+version = "0.3.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,9 +29,9 @@ targets = ["x86_64-pc-windows-msvc"]
 [features]
 # The default build carries only the core completion machinery: the raw IOCP
 # backend, the blocking backend, owned endpoints, and pinned operations. That
-# needs Win32_Foundation + Win32_System_IO + Win32_Storage_FileSystem (declared
-# as direct dependency features below), so the published default feature set
-# stays empty.
+# needs Win32_Foundation + Win32_System_IO + Win32_Storage_FileSystem +
+# Win32_System_Threading + Win32_Security (declared as direct dependency features
+# below), so the published default feature set stays empty.
 #
 # Win32_Storage_FileSystem is core, not an `fs`-family add-on, because
 # `UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`)
@@ -41,13 +41,20 @@ targets = ["x86_64-pc-windows-msvc"]
 default = []
 
 # Operation-family features gate this crate's own safe adapter modules
-# (`src/fs.rs`, `src/socket.rs`, `src/device.rs`). `fs` and `socket` add no
-# further windows-sys features of their own: `Win32_Storage_FileSystem` is
-# already unconditional (see above), and Win32_Networking_WinSock /
-# Win32_System_Ioctl are the only bindings those two families need beyond it.
-fs = []
+# (`src/fs.rs`, `src/socket.rs`, `src/device.rs`). `fs` adds
+# Win32_System_SystemInformation, for the page size scatter/gather segments must
+# be (`page_size`, M17.5), and wtf-string, for the paths observer queries return
+# (M17.8). `socket` adds only Win32_Networking_WinSock:
+# `Win32_Storage_FileSystem` is already unconditional (see above).
+fs = ["windows-sys/Win32_System_SystemInformation", "dep:wtf-string"]
 socket = ["windows-sys/Win32_Networking_WinSock"]
 device = ["windows-sys/Win32_System_Ioctl"]
+
+# Exposes `test_util`: one table of every observer query, so another crate's
+# backend tests (windows-threadpool-sys' `ThreadpoolIo`) issue the same set as
+# this crate's (M17.10). Implies `fs`, where the queries live; adds no
+# dependencies.
+test-util = ["fs"]
 
 # Capture a full backtrace at each operation submission so the drop-time
 # diagnostic can point at the source of any operation still outstanding. The
@@ -65,7 +72,26 @@ path = "../io-buffers"
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_System_IO", "Win32_Storage_FileSystem"]
+# Win32_System_Threading: the event BlockingEndpoint waits on (M16.6); its
+# CreateEventW takes a SECURITY_ATTRIBUTES, which is gated on Win32_Security.
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_IO",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Threading",
+]
+
+# An endpoint keeps its handle shared so observers can hold it too (M16).
+[dependencies.win-shared-os-owned-handle]
+version = "0.1.0"
+path = "../win-shared-os-owned-handle"
+
+# Observer queries return paths as Windows' own UTF-16, unconverted (M17.8).
+[dependencies.wtf-string]
+version = "0.1.0"
+path = "../wtf-string"
+optional = true
 
 # The tests make their overlapped named pipes with `win-pipes-sys`, in place of an `unsafe`
 # `CreateNamedPipeW` call each. Path-only, with no `version`: Cargo checks a pinned version against the
@@ -84,4 +110,9 @@ features = [
 	"Win32_System_IO",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
+	"Win32_System_Pipes",
+	# FSCTL_SET_SPARSE, for the sparse-file tests.
+	"Win32_System_Ioctl",
+	# The FILE_* file-system flags, which the crate names locally (M17.9) and tests against.
+	"Win32_System_SystemServices",
 ]

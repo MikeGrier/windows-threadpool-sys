@@ -87,9 +87,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "win-durable-ioring"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "durable-ioring",
  "io-buffers",
@@ -167,6 +167,19 @@ name = "win-job-launcher"
 version = "0.0.0"
 dependencies = [
  "windows-sys",
+]
+
+[[package]]
+name = "win-multi-file-tail-watcher"
+version = "0.2.0"
+dependencies = [
+ "io-buffers",
+ "windows-ioring-sys",
+ "windows-overlapped-io-sys",
+ "windows-sys",
+ "windows-threadpool-sys",
+ "windows-waitable-queues",
+ "wtf-string",
 ]
 
 [[package]]
@@ -230,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-enumeration-sys"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "win-error-codes",
  "windows-impersonation-token-sys",
@@ -242,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher"
-version = "0.2.3"
+version = "0.2.5"
 dependencies = [
  "log",
  "serde",
@@ -255,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher-example-test-harness"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -279,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "windows-ioring-sys"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "io-buffers",
  "serde_json",
@@ -307,7 +320,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 
 [[package]]
 name = "windows-namespace-request-sys"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "io-buffers",
  "win-authorization-sys",
@@ -322,16 +335,18 @@ dependencies = [
 
 [[package]]
 name = "windows-overlapped-io-sys"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "io-buffers",
  "win-pipes-sys",
+ "win-shared-os-owned-handle",
  "windows-sys",
+ "wtf-string",
 ]
 
 [[package]]
 name = "windows-placement-probe"
-version = "2026.919.0"
+version = "2026.1018.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -342,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "windows-platform-probes"
-version = "2026.1016.0"
+version = "2026.1018.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -386,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "windows-thread-ambient-sys"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "windows-impersonation-token-sys",
  "windows-sys",
@@ -395,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "windows-threadpool-sys"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "win-pipes-sys",
  "win-shared-os-owned-handle",
@@ -416,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "windows-waitable-queues"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "portable-atomic",
  "windows-sys",

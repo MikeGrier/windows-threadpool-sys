@@ -4,6 +4,31 @@ Both 0.1.0 and 1.0.0 were yanked from crates.io: the 1.0.0 bump was
 accidental, and this crate is intended to stay pre-1.0 for now. Releases
 resume at 0.1.1, which supersedes both.
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.2.0...windows-overlapped-io-sys-v0.3.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **overlapped-io:** the PAGE_SIZE constant is removed; call page_size().
+
+### Features
+
+* **overlapped-io:** observers read a file's identity ([e2ff5fe](https://github.com/MikeGrier/windows-threadpool-sys/commit/e2ff5fe263d637b48472da4b871642a4ac3806e6))
+* **overlapped-io:** observers read a file's standard information ([8ad7c76](https://github.com/MikeGrier/windows-threadpool-sys/commit/8ad7c76ca25e162e7e1597e961e5d9ca49e70247))
+* **overlapped-io:** observers read sector geometry and buffer alignment ([b9136db](https://github.com/MikeGrier/windows-threadpool-sys/commit/b9136db65ffd52ea39db74b5489580b7bcc61a95))
+* **overlapped-io:** observers report a file's current path ([929e4d0](https://github.com/MikeGrier/windows-threadpool-sys/commit/929e4d0c466a2c1b6c3dbe48f5ea669852037e95))
+* **overlapped-io:** observers report a file's times and attributes ([ad467e2](https://github.com/MikeGrier/windows-threadpool-sys/commit/ad467e2e990434080fdebb13db2f1f81c74c9d3a))
+* **overlapped-io:** observers report the remote protocol of a file ([937bbd1](https://github.com/MikeGrier/windows-threadpool-sys/commit/937bbd1b861f3c204e6c8c84f673759718f6cb31))
+* **overlapped-io:** observers report the volume a file is on ([487ffa8](https://github.com/MikeGrier/windows-threadpool-sys/commit/487ffa8dd67ca67a1b879f9454cc7f9a14ecb92c))
+* **overlapped-io:** observers report what kind of object their handle is ([c4e6ac2](https://github.com/MikeGrier/windows-threadpool-sys/commit/c4e6ac282e42737714a3a18ca5d123750139299f))
+* **overlapped-io:** one table of every observer query, for every backend's tests ([9df6455](https://github.com/MikeGrier/windows-threadpool-sys/commit/9df645555892e881eb1e6089fcdf7b5d5973fc27))
+* **overlapped-io:** unbuffered I/O asks for its page size and alignment ([cb1410f](https://github.com/MikeGrier/windows-threadpool-sys/commit/cb1410f5968931c4051cf600a3dc366acc1348e2))
+
+
+### Bug Fixes
+
+* **overlapped-io:** BlockingEndpoint waits on an event of its own ([2645d66](https://github.com/MikeGrier/windows-threadpool-sys/commit/2645d66a6069ab72a3de8d1311946775c487ba69))
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.3...windows-overlapped-io-sys-v0.2.0) (2026-10-15)
 
 

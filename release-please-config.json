@@ -65,6 +65,10 @@
             "package-name": "win-time-sys",
             "component": "win-time-sys"
         },
+        "crates/win-multi-file-tail-watcher": {
+            "package-name": "win-multi-file-tail-watcher",
+            "component": "win-multi-file-tail-watcher"
+        },
         "crates/win-volume-sys": {
             "package-name": "win-volume-sys",
             "component": "win-volume-sys"

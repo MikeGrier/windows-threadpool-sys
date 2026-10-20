@@ -90,8 +90,10 @@ const _: () = {
     );
 };
 
+// `pub(crate)` so each shape's tests can ask the one assertion of what a refused
+// allocation looks like, rather than each restating it.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// What one shape will accept as a capacity.
 ///
@@ -156,4 +158,28 @@ pub(crate) fn validate_capacity(capacity: usize, bounds: Bounds) -> Result<(), C
         return Err(CapacityError::too_large(capacity, bounds));
     }
     Ok(())
+}
+
+/// The slots of a ring of `capacity`, slot `i` being `make(i)`, or the refusal
+/// when the memory for them cannot be had.
+///
+/// Every shape allocates its whole ring here, which is what makes "no shape
+/// aborts the process on a capacity it accepts but the machine cannot hold"
+/// a property of one function rather than of four constructors that each have
+/// to remember it. `Vec::with_capacity` is not an alternative: it aborts on an
+/// allocation the allocator refuses and panics on a size past `isize::MAX`,
+/// and a capacity that large is one this module's own bounds accept.
+///
+/// `capacity` must already have passed [`validate_capacity`] for `bounds`.
+pub(crate) fn allocate_slots<S>(
+    capacity: usize,
+    bounds: Bounds,
+    make: impl FnMut(usize) -> S,
+) -> Result<Box<[S]>, CapacityError> {
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(capacity)
+        .map_err(|_| CapacityError::allocation(capacity, bounds))?;
+    slots.extend((0..capacity).map(make));
+    Ok(slots.into_boxed_slice())
 }

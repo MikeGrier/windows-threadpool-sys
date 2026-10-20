@@ -108,7 +108,7 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
+use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, allocate_slots, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError, TryRecvError};
@@ -164,7 +164,8 @@ const BOUNDS: Bounds = Bounds {
 /// # Errors
 ///
 /// Returns [`CapacityError`] if `capacity` is zero, is not a power of two, is
-/// less than two, or exceeds `2^(usize::BITS - 2)`.
+/// less than two, or exceeds `2^(usize::BITS - 2)`, or if the memory for the
+/// slots cannot be allocated ([`CapacityError::is_allocation_failure`]).
 ///
 /// # Examples
 ///
@@ -224,18 +225,15 @@ fn build<T>(
 ) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
-    let mut slots = Vec::with_capacity(capacity);
-    for index in 0..capacity {
-        slots.push(Slot {
-            sequence: AtomicU64::new(index as Position),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-        });
-    }
+    let slots = allocate_slots(capacity, BOUNDS, |index| Slot {
+        sequence: AtomicU64::new(index as Position),
+        value: UnsafeCell::new(MaybeUninit::uninit()),
+    })?;
 
     let shared = Arc::new(Shared {
         teardown: Teardown::new(options.disposal),
         metrics: Metrics::new(options.track_high_water),
-        slots: slots.into_boxed_slice(),
+        slots,
         mask: capacity - 1,
         capacity,
         head: CacheAligned(AtomicU64::new(0)),

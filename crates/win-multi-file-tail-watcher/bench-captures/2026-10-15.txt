@@ -1,0 +1,145 @@
+# TW-2.8 capture. Three consecutive runs of the ignored timing tests in src/watcher/engine/bench.rs.
+# command: cargo test --release -p win-multi-file-tail-watcher --lib bench -- --ignored --nocapture --test-threads=1
+# base commit: 677ca34e plus the bench module
+# date: 2026-10-15 21:07:53 -04:00
+# cpu: INTEL(R) XEON(R) PLATINUM 8573C, 8 cores, 16 logical
+# os: Microsoft Windows 11 Enterprise 10.0.26300
+# ram_gb: 64
+# run 1
+BENCH config snapshot_batch=256 report_batch=256 entry_bytes=48 snapshot_item_bytes=24 change_bytes=32 distinct_files=4096
+BENCH pass=register n=1000 total_us=32490 ns_per=32490
+BENCH pass=snapshot n=1000 total_us=54 ns_per=54 batches=3 hold_p50_us=11.0 hold_p99_us=11.0 hold_max_us=24.0
+BENCH pass=probe_all_changed n=1000 total_us=4672 ns_per=4672
+BENCH pass=report_all_changed n=1000 total_us=62 ns_per=62 batches=3 hold_p50_us=14.8 hold_p99_us=14.8 hold_max_us=16.0
+BENCH pass=poll_nothing_changed n=1000 total_us=3021 ns_per=3021
+BENCH pass=poll_all_changed_sq64 n=1000 total_us=3956 ns_per=3956 stops=15
+BENCH pass=churn_replace_random n=100 total_us=4301 ns_per=43011
+BENCH pass=drop_all_random n=1000 total_us=13977 ns_per=13977
+BENCH pass=register n=5000 total_us=157517 ns_per=31503
+BENCH pass=snapshot n=5000 total_us=197 ns_per=39 batches=19 hold_p50_us=9.1 hold_p99_us=11.4 hold_max_us=26.4
+BENCH pass=probe_all_changed n=5000 total_us=23197 ns_per=4639
+BENCH pass=report_all_changed n=5000 total_us=356 ns_per=71 batches=19 hold_p50_us=17.4 hold_p99_us=19.2 hold_max_us=19.3
+BENCH pass=poll_nothing_changed n=5000 total_us=21135 ns_per=4227
+BENCH pass=poll_all_changed_sq64 n=5000 total_us=23307 ns_per=4661 stops=78
+BENCH pass=churn_replace_random n=500 total_us=23466 ns_per=46932
+BENCH pass=drop_all_random n=5000 total_us=78362 ns_per=15672
+BENCH pass=register n=20000 total_us=616901 ns_per=30845
+BENCH pass=snapshot n=20000 total_us=772 ns_per=39 batches=78 hold_p50_us=9.0 hold_p99_us=15.9 hold_max_us=51.7
+BENCH pass=probe_all_changed n=20000 total_us=97506 ns_per=4875
+BENCH pass=report_all_changed n=20000 total_us=1450 ns_per=73 batches=78 hold_p50_us=18.2 hold_p99_us=20.9 hold_max_us=21.8
+BENCH pass=poll_nothing_changed n=20000 total_us=93047 ns_per=4652
+BENCH pass=poll_all_changed_sq64 n=20000 total_us=111008 ns_per=5550 stops=312
+BENCH pass=churn_replace_random n=2000 total_us=90934 ns_per=45467
+BENCH pass=drop_all_random n=20000 total_us=347318 ns_per=17366
+BENCH pass=register n=50000 total_us=1573809 ns_per=31476
+BENCH pass=snapshot n=50000 total_us=1824 ns_per=36 batches=195 hold_p50_us=8.6 hold_p99_us=19.6 hold_max_us=33.9
+BENCH pass=probe_all_changed n=50000 total_us=235087 ns_per=4702
+BENCH pass=report_all_changed n=50000 total_us=3925 ns_per=79 batches=195 hold_p50_us=19.0 hold_p99_us=41.4 hold_max_us=50.1
+BENCH pass=poll_nothing_changed n=50000 total_us=259748 ns_per=5195
+BENCH pass=poll_all_changed_sq64 n=50000 total_us=323806 ns_per=6476 stops=781
+BENCH pass=churn_replace_random n=5000 total_us=236075 ns_per=47215
+BENCH pass=drop_all_random n=50000 total_us=838148 ns_per=16763
+BENCH pass=map_append n=1000 total_us=113 ns_per=113
+BENCH pass=map_walk n=1000 total_us=4 ns_per=4 batches=3 hold_p50_us=0.7 hold_p99_us=0.7 hold_max_us=0.8
+BENCH pass=map_remove_random n=1000 total_us=137 ns_per=137
+BENCH pass=map_append n=5000 total_us=550 ns_per=110
+BENCH pass=map_walk n=5000 total_us=16 ns_per=3 batches=19 hold_p50_us=0.5 hold_p99_us=0.7 hold_max_us=0.9
+BENCH pass=map_remove_random n=5000 total_us=668 ns_per=134
+BENCH pass=map_append n=20000 total_us=2258 ns_per=113
+BENCH pass=map_walk n=20000 total_us=222 ns_per=11 batches=78 hold_p50_us=2.8 hold_p99_us=5.5 hold_max_us=5.9
+BENCH pass=map_remove_random n=20000 total_us=2942 ns_per=147
+BENCH pass=map_append n=50000 total_us=5162 ns_per=103
+BENCH pass=map_walk n=50000 total_us=689 ns_per=14 batches=195 hold_p50_us=3.7 hold_p99_us=4.9 hold_max_us=6.3
+BENCH pass=map_remove_random n=50000 total_us=9187 ns_per=184
+# run 2
+BENCH config snapshot_batch=256 report_batch=256 entry_bytes=48 snapshot_item_bytes=24 change_bytes=32 distinct_files=4096
+BENCH pass=register n=1000 total_us=27557 ns_per=27557
+BENCH pass=snapshot n=1000 total_us=51 ns_per=51 batches=3 hold_p50_us=10.2 hold_p99_us=10.2 hold_max_us=24.1
+BENCH pass=probe_all_changed n=1000 total_us=4298 ns_per=4298
+BENCH pass=report_all_changed n=1000 total_us=76 ns_per=76 batches=3 hold_p50_us=14.2 hold_p99_us=14.2 hold_max_us=14.9
+BENCH pass=poll_nothing_changed n=1000 total_us=2806 ns_per=2806
+BENCH pass=poll_all_changed_sq64 n=1000 total_us=3412 ns_per=3412 stops=15
+BENCH pass=churn_replace_random n=100 total_us=3846 ns_per=38463
+BENCH pass=drop_all_random n=1000 total_us=11378 ns_per=11378
+BENCH pass=register n=5000 total_us=144063 ns_per=28813
+BENCH pass=snapshot n=5000 total_us=223 ns_per=45 batches=19 hold_p50_us=9.7 hold_p99_us=20.7 hold_max_us=31.1
+BENCH pass=probe_all_changed n=5000 total_us=23398 ns_per=4680
+BENCH pass=report_all_changed n=5000 total_us=392 ns_per=78 batches=19 hold_p50_us=19.0 hold_p99_us=21.4 hold_max_us=23.6
+BENCH pass=poll_nothing_changed n=5000 total_us=23359 ns_per=4672
+BENCH pass=poll_all_changed_sq64 n=5000 total_us=25630 ns_per=5126 stops=78
+BENCH pass=churn_replace_random n=500 total_us=23925 ns_per=47849
+BENCH pass=drop_all_random n=5000 total_us=78381 ns_per=15676
+BENCH pass=register n=20000 total_us=619006 ns_per=30950
+BENCH pass=snapshot n=20000 total_us=681 ns_per=34 batches=78 hold_p50_us=8.2 hold_p99_us=11.7 hold_max_us=22.0
+BENCH pass=probe_all_changed n=20000 total_us=83117 ns_per=4156
+BENCH pass=report_all_changed n=20000 total_us=1458 ns_per=73 batches=78 hold_p50_us=18.3 hold_p99_us=21.6 hold_max_us=21.9
+BENCH pass=poll_nothing_changed n=20000 total_us=82010 ns_per=4100
+BENCH pass=poll_all_changed_sq64 n=20000 total_us=101307 ns_per=5065 stops=312
+BENCH pass=churn_replace_random n=2000 total_us=81653 ns_per=40826
+BENCH pass=drop_all_random n=20000 total_us=266409 ns_per=13320
+BENCH pass=register n=50000 total_us=1481404 ns_per=29628
+BENCH pass=snapshot n=50000 total_us=1928 ns_per=39 batches=195 hold_p50_us=9.0 hold_p99_us=26.8 hold_max_us=35.1
+BENCH pass=probe_all_changed n=50000 total_us=255125 ns_per=5103
+BENCH pass=report_all_changed n=50000 total_us=3831 ns_per=77 batches=195 hold_p50_us=18.7 hold_p99_us=30.3 hold_max_us=55.8
+BENCH pass=poll_nothing_changed n=50000 total_us=250164 ns_per=5003
+BENCH pass=poll_all_changed_sq64 n=50000 total_us=299965 ns_per=5999 stops=781
+BENCH pass=churn_replace_random n=5000 total_us=217073 ns_per=43415
+BENCH pass=drop_all_random n=50000 total_us=784716 ns_per=15694
+BENCH pass=map_append n=1000 total_us=101 ns_per=101
+BENCH pass=map_walk n=1000 total_us=4 ns_per=4 batches=3 hold_p50_us=0.7 hold_p99_us=0.7 hold_max_us=0.8
+BENCH pass=map_remove_random n=1000 total_us=134 ns_per=134
+BENCH pass=map_append n=5000 total_us=459 ns_per=92
+BENCH pass=map_walk n=5000 total_us=16 ns_per=3 batches=19 hold_p50_us=0.6 hold_p99_us=0.8 hold_max_us=0.8
+BENCH pass=map_remove_random n=5000 total_us=642 ns_per=128
+BENCH pass=map_append n=20000 total_us=2041 ns_per=102
+BENCH pass=map_walk n=20000 total_us=204 ns_per=10 batches=78 hold_p50_us=2.1 hold_p99_us=5.3 hold_max_us=5.4
+BENCH pass=map_remove_random n=20000 total_us=2982 ns_per=149
+BENCH pass=map_append n=50000 total_us=5252 ns_per=105
+BENCH pass=map_walk n=50000 total_us=742 ns_per=15 batches=195 hold_p50_us=3.9 hold_p99_us=5.9 hold_max_us=22.1
+BENCH pass=map_remove_random n=50000 total_us=9325 ns_per=187
+# run 3
+BENCH config snapshot_batch=256 report_batch=256 entry_bytes=48 snapshot_item_bytes=24 change_bytes=32 distinct_files=4096
+BENCH pass=register n=1000 total_us=32579 ns_per=32579
+BENCH pass=snapshot n=1000 total_us=52 ns_per=52 batches=3 hold_p50_us=10.5 hold_p99_us=10.5 hold_max_us=23.8
+BENCH pass=probe_all_changed n=1000 total_us=4906 ns_per=4906
+BENCH pass=report_all_changed n=1000 total_us=70 ns_per=70 batches=3 hold_p50_us=16.0 hold_p99_us=16.0 hold_max_us=16.7
+BENCH pass=poll_nothing_changed n=1000 total_us=3093 ns_per=3093
+BENCH pass=poll_all_changed_sq64 n=1000 total_us=4568 ns_per=4568 stops=15
+BENCH pass=churn_replace_random n=100 total_us=4131 ns_per=41313
+BENCH pass=drop_all_random n=1000 total_us=13181 ns_per=13181
+BENCH pass=register n=5000 total_us=142792 ns_per=28558
+BENCH pass=snapshot n=5000 total_us=201 ns_per=40 batches=19 hold_p50_us=9.0 hold_p99_us=13.8 hold_max_us=22.4
+BENCH pass=probe_all_changed n=5000 total_us=22944 ns_per=4589
+BENCH pass=report_all_changed n=5000 total_us=352 ns_per=70 batches=19 hold_p50_us=17.4 hold_p99_us=20.3 hold_max_us=21.6
+BENCH pass=poll_nothing_changed n=5000 total_us=22504 ns_per=4501
+BENCH pass=poll_all_changed_sq64 n=5000 total_us=24463 ns_per=4893 stops=78
+BENCH pass=churn_replace_random n=500 total_us=23731 ns_per=47463
+BENCH pass=drop_all_random n=5000 total_us=78566 ns_per=15713
+BENCH pass=register n=20000 total_us=598048 ns_per=29902
+BENCH pass=snapshot n=20000 total_us=713 ns_per=36 batches=78 hold_p50_us=8.4 hold_p99_us=16.0 hold_max_us=27.7
+BENCH pass=probe_all_changed n=20000 total_us=94897 ns_per=4745
+BENCH pass=report_all_changed n=20000 total_us=1493 ns_per=75 batches=78 hold_p50_us=18.2 hold_p99_us=36.1 hold_max_us=43.4
+BENCH pass=poll_nothing_changed n=20000 total_us=93409 ns_per=4670
+BENCH pass=poll_all_changed_sq64 n=20000 total_us=92778 ns_per=4639 stops=312
+BENCH pass=churn_replace_random n=2000 total_us=95088 ns_per=47544
+BENCH pass=drop_all_random n=20000 total_us=306153 ns_per=15308
+BENCH pass=register n=50000 total_us=1524942 ns_per=30499
+BENCH pass=snapshot n=50000 total_us=1924 ns_per=38 batches=195 hold_p50_us=9.0 hold_p99_us=24.7 hold_max_us=40.5
+BENCH pass=probe_all_changed n=50000 total_us=243501 ns_per=4870
+BENCH pass=report_all_changed n=50000 total_us=3985 ns_per=80 batches=195 hold_p50_us=19.2 hold_p99_us=41.9 hold_max_us=59.9
+BENCH pass=poll_nothing_changed n=50000 total_us=204362 ns_per=4087
+BENCH pass=poll_all_changed_sq64 n=50000 total_us=324347 ns_per=6487 stops=781
+BENCH pass=churn_replace_random n=5000 total_us=247644 ns_per=49529
+BENCH pass=drop_all_random n=50000 total_us=857668 ns_per=17153
+BENCH pass=map_append n=1000 total_us=132 ns_per=132
+BENCH pass=map_walk n=1000 total_us=4 ns_per=4 batches=3 hold_p50_us=0.8 hold_p99_us=0.8 hold_max_us=1.2
+BENCH pass=map_remove_random n=1000 total_us=176 ns_per=176
+BENCH pass=map_append n=5000 total_us=536 ns_per=107
+BENCH pass=map_walk n=5000 total_us=16 ns_per=3 batches=19 hold_p50_us=0.6 hold_p99_us=0.7 hold_max_us=0.8
+BENCH pass=map_remove_random n=5000 total_us=668 ns_per=134
+BENCH pass=map_append n=20000 total_us=1938 ns_per=97
+BENCH pass=map_walk n=20000 total_us=212 ns_per=11 batches=78 hold_p50_us=2.2 hold_p99_us=6.2 hold_max_us=6.7
+BENCH pass=map_remove_random n=20000 total_us=2998 ns_per=150
+BENCH pass=map_append n=50000 total_us=5150 ns_per=103
+BENCH pass=map_walk n=50000 total_us=774 ns_per=15 batches=195 hold_p50_us=4.0 hold_p99_us=6.5 hold_max_us=24.0
+BENCH pass=map_remove_random n=50000 total_us=9469 ns_per=189

@@ -16,13 +16,15 @@ use crate::io_target::IoTarget;
 use crate::memory::{MemoryBackend, MemoryNotification, MemoryTarget};
 use crate::oracle::ConformanceOracle;
 use crate::test_support::Ticks;
-use crate::types::{FlushDomain, IoFault, IoTargetKey};
+use crate::types::{DurabilityRequest, Entry, FlushDomain, IoFault, IoTargetKey};
 
 /// The memory backend, with its doorbell and its reading of completions failing on demand, and
 /// the doorbell rings counted.
 struct Scripted {
     inner: MemoryBackend,
     fail_submit: bool,
+    /// Fail the next doorbell that has something queued to issue, once; those after it work.
+    fail_next_queued_submit: bool,
     fail_pop: bool,
     rings: u32,
     pops_failed: u32,
@@ -62,6 +64,10 @@ impl IoBackend for Scripted {
         if self.fail_submit {
             return Err(RefusalCause::Busy);
         }
+        if self.fail_next_queued_submit && self.inner.queued() > 0 {
+            self.fail_next_queued_submit = false;
+            return Err(RefusalCause::Busy);
+        }
         self.inner.submit()
     }
 
@@ -89,6 +95,7 @@ fn scripted(submissions: u32, completions: u32) -> Eng {
     let backend = Scripted {
         inner: MemoryBackend::new(nz(submissions), nz(completions)),
         fail_submit: false,
+        fail_next_queued_submit: false,
         fail_pop: false,
         rings: 0,
         pops_failed: 0,
@@ -203,6 +210,38 @@ fn a_failed_doorbell_for_an_act_is_reported_as_something_to_deliver() {
     engine.backend.fail_submit = false;
     assert!(engine.drain());
     assert_eq!(engine.backend.inner.queued(), 0, "issued by the next one");
+}
+
+#[test]
+fn a_drain_goes_on_to_issue_what_a_doorbell_it_rang_itself_failed_to() {
+    // The write's completion makes the target's commit due, and the act that pushes the commit
+    // rings the doorbell, which fails once. The commit stays queued, and only another pass of the
+    // same drain issues it and pops what it completes: a drain that stopped after one pass would
+    // return with the commit still queued.
+    let mut engine = scripted(8, 16);
+    push(&mut engine, ONE, b"one");
+    let (answer, deliver) = engine
+        .make_durable_through(crate::types::Epoch::new(engine.core.default_lineage(), 1))
+        .expect("the default lineage");
+    assert_eq!(answer, DurabilityRequest::Submitted);
+    assert!(!deliver, "the write is still in flight");
+    engine.backend.fail_next_queued_submit = true;
+
+    assert!(engine.drain(), "entries became poppable");
+    assert!(
+        !engine.backend.fail_next_queued_submit,
+        "the commit's doorbell was the one that failed"
+    );
+    assert_eq!(
+        engine.backend.inner.queued(),
+        0,
+        "a later pass of the same drain issued it"
+    );
+    let entries: Vec<_> = std::iter::from_fn(|| engine.core.pop()).collect();
+    assert!(
+        matches!(entries.last(), Some(Entry::Durable { .. })),
+        "{entries:?}"
+    );
 }
 
 #[test]

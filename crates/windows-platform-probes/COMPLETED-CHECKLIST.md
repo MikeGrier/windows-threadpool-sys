@@ -1959,7 +1959,7 @@ probe without a row; the census of which probes emit one still read 3 of 16 when
 ## Moved 2026-10-19 17:37:29 -04:00 -- M4 and M5 complete; M2.13 moved to the root checklist
 
 Every item of `M4` and `M5` was complete except `M2.13`, which moved to the root
-[CHECKLIST.md](../../CHECKLIST.md) as `M34.8` because the check it asks for spans the repository. The
+[CHECKLIST.md](../../CHECKLIST.md) as `M34.18` because the check it asks for spans the repository. The
 checked stubs that stood in the checklist for items already archived above were deleted rather than
 copied here, on the engineer's ruling of 2026-10-19 that such a placeholder "does not have to move, it
 may simply be deleted". The milestone's preamble, as it stood:

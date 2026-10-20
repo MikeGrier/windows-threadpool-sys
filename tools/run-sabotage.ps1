@@ -136,7 +136,8 @@
 
 .PARAMETER OutputDirectory
     Where to write per-sabotage transcripts, and where the working copy and its
-    cargo target directory live. Defaults to .scratch/sabotage. Stale
+    cargo target directory live. Defaults to .scratch/sabotage. A relative path
+    is taken from the caller's current location. Stale
     transcripts are cleared at startup; the `tree/` and `target/` subdirectories
     persist between runs so builds stay warm.
 
@@ -203,6 +204,47 @@
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
+.PARAMETER CheckPatches
+    Apply every selected entry's patch to the file it names, in memory, and
+    report each one that does not apply -- `MANIFEST STALE` or `MANIFEST INERT`,
+    the same verdicts a sweep reaches before it builds -- then exit: 0 when every
+    patch applies, 1 when one does not. Nothing is built, copied or written, and
+    shards are ignored, so it is a check of the whole manifest that takes
+    seconds. Reads the files as they sit in the working tree; a sweep reads the
+    copy git lists, so a file git does not list passes here and is reported by a
+    sweep. [check-sabotage-patches.ps1](check-sabotage-patches.ps1) runs this
+    over every manifest, and CI runs that on every push.
+
+.PARAMETER Since
+    A base revision. When given, only the entries a change since then could
+    have affected are swept: every entry when the change reached a crate this
+    manifest's crate builds on, another package whose tests the manifest runs
+    (its `testArgs`), or an input every sweep shares, and none when it reached
+    nothing the manifest builds or tests, except an entry with no usable
+    record, which is always swept. When it is in the crate itself, the
+    entries that are new or changed, whose patched file changed, whose
+    recorded catching tests changed or are gone -- their file, or a file
+    declaring a module they are in -- and those with no better
+    answer -- caught by nothing recorded, or by a doctest. The rule is
+    `Select-SabotageEntry` in [common.ps1](common.ps1); what it cannot see is
+    in DESIGN-NOTES.md, "sabotage-scope". Measured from the merge base, against
+    the working tree, so `-Since origin/main` sweeps what a branch changed; when
+    the base is not an ancestor of HEAD -- a branch behind it, or a force-push --
+    what the base changed since the merge base counts too. A recorded catching
+    test is used only if it was recorded at HEAD or an ancestor of it, and an
+    entry recorded before the base is judged against everything since its
+    record as well. A sweep whose copy is not exactly HEAD -- uncommitted or
+    untracked changes, or a file git is told to ignore changes to -- records
+    what it learned with no commit, so a later run does not use it; such a
+    hidden file also makes the change unmeasurable, so every entry is swept.
+    A manifest whose `testArgs` already filter tests, after `--` or as a
+    TESTNAME before it, is never narrowed to its recorded tests. Needs cargo on
+    PATH, for `cargo metadata`. `-List` shows each entry's reason.
+
+.PARAMETER CatcherRecord
+    The record of which tests caught each entry that `-Since` reads, and a
+    sweep reads and writes. Defaults to `catchers.json` in the output directory.
+
 .PARAMETER CargoCommand
     The executable each phase runs, defaulting to `cargo`. Exists so this
     script's own tests can substitute a stub that exits, fails, or hangs on
@@ -251,6 +293,12 @@ param(
 
     [switch] $List,
 
+    [switch] $CheckPatches,
+
+    [string] $Since,
+
+    [string] $CatcherRecord,
+
     [string] $CargoCommand = 'cargo',
 
     [int] $Shard = 0,
@@ -281,6 +329,11 @@ $script:CargoExecutable = $CargoCommand
 # taken from -LauncherPath -- just before the baseline.
 $script:TraceLaunches = $TraceLaunches.IsPresent
 $script:LauncherExecutable = $null
+# How many builds were run a second time because the linker could not open its
+# output (see Invoke-Sabotaged), for the sweep's summary to report. A count kept
+# here and not returned from each call, because six returns would each carry it
+# and only the summary reads it; one sweep is one process, shards included.
+$script:LinkRetries = 0
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
@@ -585,18 +638,63 @@ function Add-CargoFlag {
 # detection that never happened. So the build gets a generous one, and its
 # failure is reported as its own outcome rather than folded into "caught":
 # the compiler rejecting a patch tells you nothing about your tests.
+#
+# ONE build failure is run a second time: the linker not being able to open its
+# output (see Get-LinkOutputOpenFailure in common.ps1, which says why that
+# signature and no wider one). Every entry links the same executable path a
+# second or two after the last entry's run of it, so something else holding that
+# file for a moment -- a scanner, an inventory service -- fails the link of an
+# entry whose patch and suite are both fine. It is reported as the manifest not
+# compiling if left alone, which is false, and it is not repeatable, so the
+# build is simply done again. Once: a second failure of the same kind is a
+# refusal that is not going away, and is reported as what it is
+# (`link-locked`), not as a patch that does not compile. Every retry is printed,
+# counted for the sweep's summary, and its first attempt's log is kept beside
+# the transcript, so a retried link is never absorbed silently.
+#
+# The run phase is not retried: it does not link, and a test that fails is a
+# result, never a flake to be tried again.
 function Invoke-Sabotaged {
     param(
         [string[]] $CargoArgs,
         [string] $WorkingDirectory,
         [string] $TranscriptPath,
         [int] $BuildSeconds,
-        [int] $TestSeconds
+        [int] $TestSeconds,
+        [string[]] $FirstTests
     )
 
-    $build = Invoke-Bounded -CargoArgs (Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run') `
-        -WorkingDirectory $WorkingDirectory `
+    $buildArgs = Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run'
+    $buildLog = "$TranscriptPath.build.err"
+    $build = Invoke-Bounded -CargoArgs $buildArgs -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+
+    if ($build.Outcome -eq 'failed') {
+        # Read-SharedText, like every file a just-exited process wrote (common.ps1).
+        $firstLog = ''
+        if (Test-Path -LiteralPath $buildLog) { $firstLog = Read-SharedText -Path $buildLog }
+        $locked = Get-LinkOutputOpenFailure $firstLog
+        if ($locked) {
+            $kept = "$TranscriptPath.build.attempt1.err"
+            [System.IO.File]::WriteAllText($kept, $firstLog, $utf8NoBom)
+            $script:LinkRetries++
+            Write-Report ("    The linker could not open its output, '$locked' (LNK1104). " +
+                "Building once more; this attempt's log is kept as $(Split-Path -Leaf $kept).") -Level note
+
+            $build = Invoke-Bounded -CargoArgs $buildArgs -WorkingDirectory $WorkingDirectory `
+                -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+            if ($build.Outcome -eq 'passed') {
+                Write-Report '    The second build linked.' -Level note
+            }
+            elseif ($build.Outcome -eq 'failed' -and (Test-Path -LiteralPath $buildLog)) {
+                $again = Get-LinkOutputOpenFailure (Read-SharedText -Path $buildLog)
+                if ($again) {
+                    Write-Report ("    The second build could not open '$again' either; the entry is not scored.") -Level bad
+                    return [pscustomobject]@{ Outcome = 'link-locked'; Code = $build.Code; Seconds = 0; Output = $again }
+                }
+            }
+        }
+    }
 
     if ($build.Outcome -eq 'not-started') {
         return [pscustomobject]@{ Outcome = 'not-started'; Code = $build.Code; Seconds = 0 }
@@ -611,8 +709,47 @@ function Invoke-Sabotaged {
         return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null; Seconds = 0 }
     }
 
-    $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+    # The entry's recorded catching tests first, when the caller has them: caught
+    # there, it is caught, and the whole suite is not run. Not caught there, or not
+    # judged at all, the whole suite runs as it always did, and its transcript
+    # replaces the narrow one.
+    #
+    # Only a failure libtest reported as a test FAILED counts. A narrowed run can
+    # also fail before running any test -- arguments it refuses, a filter it cannot
+    # parse -- and crediting that would report a defect caught that no test
+    # noticed. A hang does not count either: a test run alone is scheduled
+    # differently from one among the whole suite, and one that hangs alone need
+    # not hang there, which is the run the result must stand for. Anything but a
+    # reported test failure falls through to the whole suite, at the cost, for a
+    # hang, of a second wait.
+    if ($FirstTests -and @($FirstTests).Count -gt 0) {
+        $narrow = Invoke-RunPhase -CargoArgs (Add-TestFilter -CargoArgs $CargoArgs -Tests $FirstTests) `
+            -WorkingDirectory $WorkingDirectory -TranscriptPath $TranscriptPath -Seconds $TestSeconds
+        $credited = $false
+        if ($narrow.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
+            $credited = @(Get-FailedTestName (Read-SharedText -Path $TranscriptPath)).Count -gt 0
+        }
+        if ($credited) {
+            $narrow | Add-Member -NotePropertyName Narrowed -NotePropertyValue $true
+            return $narrow
+        }
+    }
+    return Invoke-RunPhase -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
         -TranscriptPath $TranscriptPath -Seconds $TestSeconds
+}
+
+# The run phase of one entry, classified: the suite's own outcome, unless what it
+# wrote says the tests never ran or a doctest would not build.
+function Invoke-RunPhase {
+    param(
+        [string[]] $CargoArgs,
+        [string] $WorkingDirectory,
+        [string] $TranscriptPath,
+        [int] $Seconds
+    )
+
+    $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+        -TranscriptPath $TranscriptPath -Seconds $Seconds
 
     # The one hole the phase split above cannot close by itself: `--no-run` does
     # not build DOCTESTS (see the note at the top of this file -- `cargo test
@@ -671,6 +808,14 @@ function Format-Patch {
         foreach ($line in $Replace -split "`n") { $lines += "    + $line" }
     }
     return $lines -join "`n"
+}
+
+# The result label for a patch Test-SabotagePatch (common.ps1) did not accept, so
+# the sweep and the no-build check report one problem in one wording.
+function Format-PatchProblem {
+    param($Check)
+    if ($Check.Outcome -eq 'inert') { return 'MANIFEST INERT: the patch does not change the file' }
+    return "MANIFEST STALE: pattern found $($Check.Occurrences) times, expected 1"
 }
 
 # Refreshes the working copy from the real tree, and returns nothing.
@@ -765,6 +910,7 @@ function Get-EvidencePath {
     switch ($Outcome) {
         'build-failed' { return "$TranscriptPath.build.err" }
         'build-hung' { return "$TranscriptPath.build.err" }
+        'link-locked' { return "$TranscriptPath.build.err" }
         'not-executed' { return "$TranscriptPath.err" }
         default { return $TranscriptPath }
     }
@@ -825,6 +971,20 @@ foreach ($bound in $bounds) {
 
 $repoRoot = Get-RepoRoot
 
+# The output directory's path, resolved here and CREATED only once the sweep is set
+# up, below -List and -CheckPatches, which must stay inert. Resolved this early because
+# the record -Since reads defaults to a file in it.
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
+# Made absolute here, once, and relative to where the caller IS (the shell's location, which is
+# not always the process's current directory). Every transcript path is built from this and
+# handed to the launcher, which runs from the working copy: left relative, each of those paths
+# means a directory that does not exist there, and the first phase fails with "cannot find the
+# path" before any suite runs.
+if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    $OutputDirectory = Join-Path (Get-Location).Path $OutputDirectory
+}
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+
 # The repository root as a prefix to test paths against: canonical, and ending
 # in a separator so that a sibling directory whose name merely starts with the
 # root's ("...\repo-notes" against "...\repo") cannot pass as being inside it.
@@ -849,8 +1009,16 @@ if (-not $repoRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
 if (-not (Test-Path -LiteralPath $Manifest)) {
     Exit-WithMessage "No manifest at: $Manifest" 2
 }
-$manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
+# In the case it has on disk, so the record and -Since name it as git does, however
+# it was typed.
+$manifestPath = Get-SabotageOnDiskPath (Resolve-Path -LiteralPath $Manifest).Path
 $manifestDir = Split-Path -Parent $manifestPath
+# The manifest's path from the repository root, forward slashes: how the record of
+# which tests caught each entry, and the scope of -Since, name it.
+$catcherKey = if ($manifestPath.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $manifestPath.Substring($repoRootPrefix.Length).Replace('\', '/')
+}
+else { $manifestPath.Replace('\', '/') }
 
 try {
     $spec = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -1003,7 +1171,7 @@ foreach ($entry in @($spec.sabotages)) {
 # redirects that, for a manifest kept somewhere other than the code it patches.
 $sourceRoot = $manifestDir
 if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
-    $rootCandidate = Join-Path $manifestDir $spec.root
+    $rootCandidate = Get-SabotageSourceRoot -ManifestPath $manifestPath -Spec $spec
     if (-not (Test-Path -LiteralPath $rootCandidate)) {
         Exit-WithMessage (@(
                 "This manifest's 'root' does not exist:"
@@ -1066,6 +1234,59 @@ if ($manifestSelected.Count -eq 0) {
     Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
 }
 
+if ($CheckPatches) {
+    if ($List) { Exit-WithMessage '-CheckPatches and -List are separate modes; give one.' 2 }
+    # The whole selection, not this shard's: whether a patch applies is a property
+    # of the manifest, and a shard that checked only its own slice would pass the
+    # rest unexamined.
+    $problems = 0
+    foreach ($entry in $manifestSelected) {
+        $realTarget = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $entry.file))
+        if (-not (Test-Path -LiteralPath $realTarget -PathType Leaf)) {
+            $problems++
+            Write-Report "NO SUCH FILE: '$($entry.file)' -- $($entry.name)" -Level bad
+            continue
+        }
+        $check = Test-SabotagePatch -Original ([System.IO.File]::ReadAllText($realTarget)) `
+            -Find $entry.find -Replace $entry.replace
+        if ($check.Outcome -ne 'ok') {
+            $problems++
+            Write-Report "$(Format-PatchProblem $check) -- $($entry.name)" -Level bad
+            Write-Report (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
+        }
+    }
+    $checked = $manifestSelected.Count
+    if ($problems -gt 0) {
+        Write-Report "$problems of $checked patches in $manifestPath do not apply." -Level bad
+        exit 1
+    }
+    Write-Report "All $checked patches in $manifestPath apply." -Level good
+    exit 0
+}
+
+# The entries a change since -Since could have affected (common.ps1,
+# Select-SabotageEntry), which is what gets sharded and swept. `$manifestSelected`
+# stays the whole name-filtered set, because the checks below of what the
+# manifest is -- stem collisions -- must see all of it.
+$scoped = $manifestSelected
+$scopeReasons = $null
+$scopeNote = $null
+if (-not [string]::IsNullOrWhiteSpace($Since)) {
+    $recordForScope = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
+    $change = Get-SabotageChange -RepositoryRoot $repoRoot -Since $Since
+    $dependencies = $null
+    $packages = $null
+    if ($change.Known) {
+        $dependencies = Get-SabotageCrateDependency -RepositoryRoot $repoRoot
+        $packages = Get-SabotageCratePackage -RepositoryRoot $repoRoot
+    }
+    $scope = Select-SabotageEntry -RepositoryRoot $repoRoot -Manifest $catcherKey -Entries $manifestSelected `
+        -SourceRoot $sourceRoot -Change $change -Dependencies $dependencies `
+        -Record (Read-SabotageCatcherRecord -Path $recordForScope) -Spec $spec -Packages $packages
+    $scoped = @($scope.Entries)
+    $scopeReasons = $scope.Reasons
+    $scopeNote = "Since ${Since}: $($scope.Reason)."
+}
 # Ordered by FILE, then cut into equal contiguous blocks. NOT whole groups
 # dealt to the lightest shard -- that is the earlier revision described further
 # down, and this comment went on describing it after the code had stopped. See
@@ -1099,7 +1320,7 @@ $selected = @(
         # Deterministic: group size descending, file name breaking ties. An
         # entry lands on the same shard every run, so a failing shard can be
         # re-run by number.
-        $ordered = @($manifestSelected |
+        $ordered = @($scoped |
                 Group-Object -Property file |
                 Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'Name'; Descending = $false } |
                 ForEach-Object { $_.Group })
@@ -1112,20 +1333,36 @@ $selected = @(
         $take = $block + $(if ($Shard -lt $remainder) { 1 } else { 0 })
         if ($take -gt 0) { $ordered[$start..($start + $take - 1)] }
     }
-    else { $manifestSelected }
+    else { $scoped }
 )
+
 
 if ($List) {
     Write-Report "Manifest : $manifestPath"
     Write-Report "Package  : $package"
     Write-Report "Command  : cargo $($testArgs -join ' ')"
+    if ($scopeNote) {
+        Write-Report "Scope    : $scopeNote"
+    }
     if ($ShardCount -gt 1) {
-        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($manifestSelected.Count) entries)"
+        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($scoped.Count) entries)"
     }
     Write-Report ''
     $selected | ForEach-Object {
-        Write-Report ("{0,-16} {1}" -f $_.expect, $_.name)
+        $line = "{0,-16} {1}" -f $_.expect, $_.name
+        if ($scopeReasons -and $scopeReasons.ContainsKey($_.name)) { $line += "  [$($scopeReasons[$_.name])]" }
+        Write-Report $line
     }
+    exit 0
+}
+
+if ($scopeNote) {
+    Write-Report $scopeNote -Level note
+}
+if ($scopeNote -and $scoped.Count -eq 0) {
+    # As for an empty shard below: a success, and before the baseline, which
+    # would otherwise build a crate this change could not have affected.
+    Write-Report "No entry of $manifestPath could have been affected; nothing to sweep." -Level good
     exit 0
 }
 
@@ -1216,7 +1453,6 @@ foreach ($sabotage in $selected) {
 # The output directory is CREATED here rather than earlier because -List must be
 # inert: it patches nothing, so it has no business creating directories or
 # copying a tree. Raised in the PR #64 review.
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 # The working copy must be somewhere git ignores, and this is not a tidiness
@@ -1256,7 +1492,30 @@ New-Item -ItemType Directory -Force -Path $treeRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
 Write-Report 'Refreshing the working copy.' -Level note
+$headAtCopy = ((Invoke-NativeStdout { git -C $repoRoot rev-parse HEAD }) | Select-Object -First 1)
+if ($headAtCopy) { $headAtCopy = $headAtCopy.Trim() }
 Sync-Tree -From $repoRoot -To $treeRoot
+
+# The commit the swept copy is, recorded with what each entry was caught by, so a
+# later run uses that only in a checkout that contains it (common.ps1,
+# Get-SabotageCatcherTests). Only for a copy that IS that commit, and the copy is
+# what is compared, now, before anything is swept (Test-SabotageTreeIsCommit): a
+# sweep builds what the copy holds, and the checkout can be edited, or have its
+# edits discarded, while it runs. What a sweep learns from uncommitted edits is
+# about a tree no commit names; recorded at HEAD, it would be taken for HEAD's,
+# and once those edits were gone a later run would judge an entry by tests that
+# caught it only in a tree that no longer exists. Such a sweep records no commit,
+# which no later run uses, and says so, so that it is no surprise that a local
+# sweep with edits in hand narrows nothing afterwards.
+$sweptCommit = $null
+if (Test-SabotageTreeIsCommit -RepositoryRoot $repoRoot -Tree $treeRoot -Commit $headAtCopy) {
+    $sweptCommit = $headAtCopy
+}
+else {
+    Write-Report ('The copy being swept is not a commit -- the tree has uncommitted changes -- so what this ' +
+        'sweep learns is recorded without a commit, and will not narrow a later scoped sweep.') -Level note
+}
+
 
 # Every cargo invocation from here on builds the COPY, into the copy's own
 # target directory, passed as --target-dir on each command line.
@@ -1300,7 +1559,7 @@ $testArgs = Add-CargoFlag -CargoArgs $testArgs -Flag @('--target-dir', $sweepTar
 # manifest nor being rejected by it deletes anything.
 $writableStems = @('baseline') + @($selected | ForEach-Object { $stems[$_.name] })
 foreach ($writableStem in $writableStems) {
-    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err', '.txt.result', '.txt.build.result')) {
+    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err', '.txt.build.attempt1.err', '.txt.result', '.txt.build.result')) {
         $stale = Join-Path $OutputDirectory ($writableStem + $suffix)
         if (Test-Path -LiteralPath $stale) {
             Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
@@ -1350,6 +1609,14 @@ if ($baseline.Outcome -eq 'launcher-failed') {
     Exit-WithMessage (@(
             "The baseline could not be supervised: win-job-launcher failed, exit $(Format-ExitCode $baseline.Code)."
             "That is this tool's machinery, not the suite. Its errors are above."
+        ) -join "`n") 2
+}
+if ($baseline.Outcome -eq 'link-locked') {
+    Exit-WithMessage (@(
+            "The baseline could not be built: the linker could not open '$($baseline.Output)' on either of two builds (LNK1104)."
+            "No test ran, so this says nothing about the suite."
+            "Transcript: $(Get-EvidencePath -Outcome $baseline.Outcome -TranscriptPath $baselinePath)"
+            "The first attempt's log is beside it as $(Split-Path -Leaf "$baselinePath.build.attempt1.err")."
         ) -join "`n") 2
 }
 if ($baseline.Outcome -ne 'passed') {
@@ -1406,6 +1673,31 @@ $results = @()
 $sweepClock = [System.Diagnostics.Stopwatch]::StartNew()
 $entryIndex = 0
 
+# Which tests caught each entry (common.ps1, "Which tests caught each entry"),
+# kept beside the transcripts and carried across runs, so a later sweep can tell
+# which test changes could alter an entry's result. Read before the sweep and
+# written after it, keeping what this run did not touch. Keyed by the manifest's
+# path from the repository root, $catcherKey.
+$catcherPath = if ($CatcherRecord) { $CatcherRecord } else { Join-Path $OutputDirectory 'catchers.json' }
+$catchers = Read-SabotageCatcherRecord -Path $catcherPath
+# The tests to run an entry against before its whole suite (M34.15): in a scoped
+# run only, the tests recorded as catching it last time, unless one is a doctest,
+# which a filtered run would not build. A full sweep -- the nightly backstop, and
+# any run without -Since -- always runs the whole suite, so it is exactly what a
+# sweep was before scoping, and it re-learns every entry's catching tests.
+function Get-FirstTests {
+    param([string] $EntryName)
+    if (-not $scopeNote) { return }
+    if (-not (Test-SabotageNarrowable -CargoArgs $testArgs)) { return }
+    $tests = @((Get-SabotageCatcherTests -RepositoryRoot $repoRoot -Record $catchers -Manifest $catcherKey -Entry $EntryName).Tests)
+    if ($tests.Count -eq 0 -or @($tests | Where-Object { $_ -match ' \(line \d+\)' }).Count -gt 0) { return }
+    , $tests
+}
+# The outcomes in which the patch was judged. Every other one -- the
+# infrastructure outcomes, and a hung build -- says nothing about the tests, and
+# would overwrite what an earlier run learned with nothing.
+$judgedOutcomes = @('passed', 'failed', 'hung', 'build-failed', 'doc-compile-failed')
+
 foreach ($sabotage in $selected) {
     $entryIndex++
     # Announced BEFORE the work, not only after it. A sweep is tens of minutes
@@ -1432,34 +1724,19 @@ foreach ($sabotage in $selected) {
         continue
     }
 
-    $find = ($sabotage.find -join "`n")
-    $replace = ($sabotage.replace -join "`n")
     $original = [System.IO.File]::ReadAllText($target)
-
-    # Exactly once, not at least once: a pattern matching two sites patches
-    # whichever the string replace happens to reach, and the sabotage is then
-    # not the one described.
-    $occurrences = ([regex]::Matches($original, [regex]::Escape($find))).Count
-    if ($occurrences -ne 1) {
+    $check = Test-SabotagePatch -Original $original -Find $sabotage.find -Replace $sabotage.replace
+    if ($check.Outcome -ne 'ok') {
         $results += [pscustomobject]@{
             Sabotage = $sabotage.name; Expected = $sabotage.expect
-            Actual   = "MANIFEST STALE: pattern found $occurrences times, expected 1"
-            Ok       = $false; Patch = (Format-Patch -Find $find -Replace $replace)
+            Actual   = (Format-PatchProblem $check)
+            Ok       = $false; Patch = (Format-Patch -Find $check.FindText -Replace $check.ReplaceText)
         }
         continue
     }
-
-    $patched = $original.Replace($find, $replace)
-    # `-ceq`, not `-eq`: PowerShell's `-eq` ignores case, so a patch changing
-    # only case (a variable to the constant of the same name) read as inert.
-    if ($patched -ceq $original) {
-        $results += [pscustomobject]@{
-            Sabotage = $sabotage.name; Expected = $sabotage.expect
-            Actual   = 'MANIFEST INERT: the patch does not change the file'
-            Ok       = $false; Patch = (Format-Patch -Find $find -Replace $replace)
-        }
-        continue
-    }
+    $find = $check.FindText
+    $replace = $check.ReplaceText
+    $patched = $check.Patched
 
     # The stem is the one computed and collision-checked up front, not a second
     # spelling of the sanitiser: two copies could disagree, and the check would
@@ -1489,7 +1766,8 @@ foreach ($sabotage in $selected) {
         # starts from unmodified source.
         [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
         $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
-            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $entryTimeout
+            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $entryTimeout `
+            -FirstTests (Get-FirstTests $sabotage.name)
     }
     finally {
         # Reset the copy from the REAL file, which is the authority, rather than
@@ -1522,10 +1800,16 @@ foreach ($sabotage in $selected) {
         }
     }
 
+    $narrowed = ($run.PSObject.Properties.Name -contains 'Narrowed') -and $run.Narrowed
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
-        'failed' { "caught (suite failed, exit $($run.Code))" }
-        'hung' { "caught (tests HUNG past ${entryTimeout}s)" }
+        'failed' {
+            if ($narrowed) { "caught (its recorded tests failed, exit $($run.Code))" }
+            else { "caught (suite failed, exit $($run.Code))" }
+        }
+        'hung' {
+            "caught (tests HUNG past ${entryTimeout}s)"
+        }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
         # not a result to record -- unless the entry declared exactly this, and
@@ -1543,6 +1827,10 @@ foreach ($sabotage in $selected) {
         # the one that "failed" failed to compile, so it detected nothing.
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
         'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
+        # Not "MANIFEST DOES NOT COMPILE": the patch was never judged. The linker
+        # could not open its output on two builds running, so something still
+        # holds that file, or the path is not one it can write.
+        'link-locked' { "INFRASTRUCTURE: the linker could not open '$($run.Output)' on either of two builds, LNK1104 (tests never ran)" }
         'not-started' { "INFRASTRUCTURE: cargo could not be started, exit $(Format-ExitCode $run.Code) (tests never ran)" }
         'launcher-failed' { "INFRASTRUCTURE: win-job-launcher failed, exit $(Format-ExitCode $run.Code) (no verdict)" }
     }
@@ -1565,6 +1853,18 @@ foreach ($sabotage in $selected) {
         Actual   = $actual; Ok = $ok; Patch = (Format-Patch -Find $find -Replace $replace)
     }
 
+    if ($judgedOutcomes -contains $run.Outcome) {
+        # The tests that failed are the ones that caught it. A run that passed, or
+        # never ran its tests, is recorded as caught by none, which a later sweep
+        # reads as "any test of the crate might matter".
+        $caughtBy = @()
+        if (@('failed', 'hung') -contains $run.Outcome -and (Test-Path -LiteralPath $transcript)) {
+            $caughtBy = @(Get-FailedTestName (Read-SharedText -Path $transcript))
+        }
+        Set-SabotageCatcher -Record $catchers -Manifest $catcherKey -Entry $sabotage.name `
+            -Tests $caughtBy -At ([DateTime]::UtcNow.ToString('o')) -Commit $sweptCommit
+    }
+
     $level = if ($ok) { 'good' } else { 'bad' }
     # The completion line carries what the start line could not: how long this
     # entry took, and -- from the mean so far -- roughly how much sweep is left.
@@ -1585,7 +1885,15 @@ Write-Report ''
 $results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize -Wrap |
     Out-String | ForEach-Object { $_.TrimEnd("`r", "`n") } | Write-Report
 
+Write-SabotageCatcherRecord -Path $catcherPath -Record $catchers
+
 $unexpected = @($results | Where-Object { -not $_.Ok })
+# Said before the verdict, on every path out, so a sweep that was helped past a
+# held file by one retry does not read the same as one that was not.
+if ($script:LinkRetries -gt 0) {
+    Write-Report ("$($script:LinkRetries) build(s) were run a second time because the linker could not open its " +
+        'output (LNK1104). The first attempt of each is kept as *.build.attempt1.err beside its transcript.') -Level note
+}
 if ($unexpected.Count -eq 0) {
     Write-Report "All $($results.Count) sabotages behaved as declared." -Level good
     exit 0

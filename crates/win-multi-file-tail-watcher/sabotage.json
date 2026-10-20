@@ -1,0 +1,1400 @@
+{
+  "package": "win-multi-file-tail-watcher",
+  "description": "Sabotages for how a file is opened and held. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "win-multi-file-tail-watcher", "--all-features", "--lib"],
+  "sabotages": [
+    {
+      "name": "the file is opened with write access",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "TW-D-3 says read-only. A hold with write access still opens, still shares, and still answers the observer's queries, so only a new open that denies write sharing -- which collides with a writer -- can tell.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, true, 0)?;"]
+    },
+    {
+      "name": "the path is converted lossily",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A name with an unpaired surrogate is a real NTFS name and not valid Unicode. Replacing the surrogate with U+FFFD names a different file, which does not exist.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_string_lossy(), true, false, 0)?;"]
+    },
+    {
+      "name": "an open failure loses its Win32 code",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The caller tells a missing file from a sharing violation by the code. Wrapping the error in a new one keeps the kind and drops the number.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)\n            .map_err(|error| io::Error::new(error.kind(), \"open failed\"))?;"]
+    },
+    {
+      "name": "the length is the bytes allocated rather than the end of file",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Allocation is rounded up to the allocation unit, and a small file reports its whole cluster. Only a length that is not a multiple of it can tell the two apart.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.allocation_size)"]
+    },
+    {
+      "name": "the length is cut to 32 bits",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Every file under 4 GiB reads the same either way, so only a file past that can show it.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().file_len()? as u32 as u64)"]
+    },
+    {
+      "name": "the length is read once and remembered",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A cache returns the right answer until the file changes, so only a read after a write or a shrink can tell.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        static FIRST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();\n        let now = self.observer().file_len()?;\n        Ok(*FIRST.get_or_init(|| now))"]
+    },
+    {
+      "name": "an offset equal to the length is refused",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "TW-D-3 says beyond the length. A parent that stopped at the end of the file must be able to restart there, so the boundary is where the comparison goes wrong.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if offset >= len {"]
+    },
+    {
+      "name": "an offset past the length is accepted",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "The check is the item. Without it every other test of an accepted offset still passes.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if false && offset > len {"]
+    },
+    {
+      "name": "the offset is not kept",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "A validated offset that is then forgotten leaves the restart with nowhere to resume.",
+      "find": ["        held.start_offset = offset;"],
+      "replace": ["        let _ = offset;"]
+    },
+    {
+      "name": "the offset is compared as 32 bits",
+      "file": "src/held_file.rs",
+      "expect": "caught",
+      "why": "Every file under 4 GiB compares the same either way.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if offset as u32 > len as u32 {"]
+    },
+    {
+      "name": "dropping a registration leaves it registered",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-3: the registration's Drop unregisters. A roster that only grows still registers, reads back and counts correctly until something is dropped.",
+      "find": ["        let removed = self.shared.roster().entries.remove(&self.id);"],
+      "replace": ["        let removed: Option<Entry<T>> = None;"]
+    },
+    {
+      "name": "registration ids repeat",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-3: one path registered twice is two registrations. With a repeated id the second silently replaces the first.",
+      "find": ["        roster.next_id += 1;"],
+      "replace": ["        roster.next_id = id;"]
+    },
+    {
+      "name": "the starting offset is not passed on",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "An offset that is validated and then replaced by zero accepts every registration and reports the wrong one.",
+      "find": ["        let file = HeldFile::open_at(path, offset)?;"],
+      "replace": ["        let file = HeldFile::open_at(path, 0)?;"]
+    },
+    {
+      "name": "the count is read from the id counter",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The two agree until the first unregistration.",
+      "find": ["        self.shared.roster().entries.len()"],
+      "replace": ["        self.shared.roster().next_id as usize"]
+    },
+    {
+      "name": "the queue is built with double the capacity asked for",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "TW-D-6: the caller sets the capacity. A queue that holds more than asked is one that never reports full when it should, which only a test that fills it to the stated number can see.",
+      "find": ["slotwise_mpsc::bounded(capacity)?;"],
+      "replace": ["slotwise_mpsc::bounded(capacity.saturating_mul(2))?;"]
+    },
+    {
+      "name": "a full queue is reported as closed",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "The two are told apart because only one is worth retrying, and the poll's stop-and-resume (TW-D-7) depends on which it got.",
+      "find": ["            PushError::Full(entry) => PushFailure::Full(entry),"],
+      "replace": ["            PushError::Full(entry) => PushFailure::Closed(entry),"]
+    },
+    {
+      "name": "the capacity error names the smallest valid capacity as the request",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "A caller correcting a refusal reads the request back to see what was refused.",
+      "find": ["            requested: error.requested(),"],
+      "replace": ["            requested: error.min_valid(),"]
+    },
+    {
+      "name": "a drain yields nothing",
+      "file": "src/sq.rs",
+      "expect": "caught",
+      "why": "The drain is the caller's only way to the queue's contents.",
+      "find": ["    fn next(&mut self) -> Option<SqEntry<T>> {\n        self.0.pop()"],
+      "replace": ["    fn next(&mut self) -> Option<SqEntry<T>> {\n        let _ = &self.0;\n        None"]
+    },
+    {
+      "name": "the doorbell is auto-reset",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "TW-D-6: manual-reset, because an auto-reset event can lose a signal. One wait consumes the ring, so a second wait, or a second waiter, sees nothing.",
+      "find": ["CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"],
+      "replace": ["CreateEventW(ptr::null(), FALSE, FALSE, ptr::null())"]
+    },
+    {
+      "name": "the doorbell starts rung",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A caller waiting on a new watcher would wake at once with nothing to read.",
+      "find": ["CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"],
+      "replace": ["CreateEventW(ptr::null(), TRUE, TRUE, ptr::null())"]
+    },
+    {
+      "name": "ringing does nothing",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The ring is the whole of the doorbell's job.",
+      "find": ["            SetEvent(self.event.as_raw_handle());"],
+      "replace": ["            let _ = SetEvent;"]
+    },
+    {
+      "name": "resetting does nothing",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A manual-reset doorbell that cannot be reset stays rung for good.",
+      "find": ["            ResetEvent(self.event.as_raw_handle());"],
+      "replace": ["            let _ = ResetEvent;"]
+    },
+    {
+      "name": "the resume doorbell is the other doorbell's handle",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Two events are two directions. Waiting on the wrong one wakes a caller for the crate's own ring.",
+      "find": ["        self.shared.resume.handle()"],
+      "replace": ["        self.shared.doorbell.handle()"]
+    },
+    {
+      "name": "a chunk may be a megabyte",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "TW-D-7: no allocation for the poll's copies is larger than 64 KiB. Every other property of the buffer holds with bigger chunks.",
+      "find": ["const CHUNK_BYTES: usize = 64 * 1024;"],
+      "replace": ["const CHUNK_BYTES: usize = 1024 * 1024;"]
+    },
+    {
+      "name": "chunks grow by doubling instead of being allocated whole",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Doubling past the item count overshoots the limit for sizes that do not divide it, and moves items already stored.",
+      "find": ["self.chunks.push(Vec::with_capacity(Self::PER_CHUNK));"],
+      "replace": ["self.chunks.push(Vec::new());"]
+    },
+    {
+      "name": "clear gives its chunks back",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The buffers are held between polls so that there is no allocation after warm-up.",
+      "find": ["    pub(crate) fn clear(&mut self) {\n        self.truncate(0);"],
+      "replace": ["    pub(crate) fn clear(&mut self) {\n        self.chunks = Directory::new(FAN);\n        self.len = 0;"]
+    },
+    {
+      "name": "truncate forgets to shorten the length",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The items go and the count stays, so the buffer reads from slots that hold nothing.",
+      "find": ["        self.len = new_len;"],
+      "replace": ["        let _ = new_len;"]
+    },
+    {
+      "name": "truncate cuts one item too late inside the boundary chunk",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "An off-by-one at the cut leaves one item that should have been dropped.",
+      "find": ["                new_len % Self::PER_CHUNK\n            } else {"],
+      "replace": ["                (new_len + 1) % Self::PER_CHUNK\n            } else {"]
+    },
+    {
+      "name": "retain never moves a kept item forward",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Compaction is the moving; without it the kept items stay where they were and the tail is cut off.",
+      "find": ["                    self.swap_items(write, read);"],
+      "replace": ["                    let _ = (write, read);"]
+    },
+    {
+      "name": "an index is mapped to its chunk with the wrong width",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Everything in the first chunk still reads back, so only a buffer of several chunks can tell.",
+      "find": ["        Some(&self.chunks[index / Self::PER_CHUNK][index % Self::PER_CHUNK])"],
+      "replace": ["        Some(&self.chunks[index / (Self::PER_CHUNK + 1)][index % (Self::PER_CHUNK + 1)])"]
+    },
+    {
+      "name": "a registration starts with a last known length of zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The starting offset is what lets a restarted parent resume. A registration made at offset zero cannot tell the two apart.",
+      "find": ["        let last_known = file.start_offset();"],
+      "replace": ["        let last_known = 0;"]
+    },
+    {
+      "name": "the snapshot copies a last known length of zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Every registration made at offset zero reads the same either way.",
+      "find": ["                        last_known: entry.last_known,"],
+      "replace": ["                        last_known: entry.last_known * 0,"]
+    },
+    {
+      "name": "the snapshot cursor skips the next registration",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A cursor one past where it should be loses an entry at every batch boundary and nowhere else.",
+      "find": ["                    after = Some(id);"],
+      "replace": ["                    after = Some(id + 1);"]
+    },
+    {
+      "name": "the snapshot batch is not honoured",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The roster lock is meant to be held for one batch of map work. Without the bound the copy is the same and the lock is held for all of it.",
+      "find": ["                for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(batch) {"],
+      "replace": ["                for (&id, entry) in roster.entries.range((from, Bound::Unbounded)).take(usize::MAX) {"]
+    },
+    {
+      "name": "the roster lock is held across the pause between batches",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "Everything is copied correctly and a registration made in the pause waits for the whole pass.",
+      "find": ["            let scanned = {\n                let roster = self.shared.roster();"],
+      "replace": ["            let roster = self.shared.roster();\n            let scanned = {"]
+    },
+    {
+      "name": "a terminal registration is snapshotted",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-13: a terminal entry is no longer probed. Every other property of the snapshot holds when it still is.",
+      "find": ["                    if entry.terminal.is_none() {"],
+      "replace": ["                    if true {"]
+    },
+    {
+      "name": "a pass counts only what it copied",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A batch that held terminal entries then looks short, and the pass ends there with live registrations unvisited.",
+      "find": ["                    scanned += 1;"],
+      "replace": ["                    if entry.terminal.is_none() {\n                        scanned += 1;\n                    }"]
+    },
+    {
+      "name": "an entry is marked terminal a second time",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once. Marking again would let a second report overwrite the code of the first.",
+      "find": ["        if self.terminal.is_some() {\n            return false;\n        }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "marking records no code",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The state is kept with its reason, so that the code is not lost after the entry has been written.",
+      "find": ["        self.terminal = Some(code);"],
+      "replace": ["        self.terminal = Some(0);"]
+    },
+    {
+      "name": "marking a registration that is not there reports success",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The report pass writes the terminal entry and then marks it; a dropped registration must not read as marked.",
+      "find": [".is_some_and(|entry| entry.mark_terminal(code))"],
+      "replace": [".is_none_or(|entry| entry.mark_terminal(code))"]
+    },
+    {
+      "name": "a refused write advances past the change",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A change the SQ refused is lost unless the pass resumes at it.",
+      "find": ["                        refused = Some(unwritten);\n                        break false;"],
+      "replace": ["                        refused = Some(unwritten);\n                        *next += 1;\n                        break false;"]
+    },
+    {
+      "name": "a written change does not update the last known length",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Without it the same growth is reported on every later poll.",
+      "find": ["                Outcome::Changed { current } => entry.last_known = current,"],
+      "replace": ["                Outcome::Changed { .. } => {}"]
+    },
+    {
+      "name": "a written terminal entry is not marked",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The entry would be probed and reported again on every poll.",
+      "find": ["                    entry.mark_terminal(win32_code);"],
+      "replace": ["                    let _ = win32_code;"]
+    },
+    {
+      "name": "a poll-done the SQ refuses completes the poll",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The consumer would never see the end of that poll.",
+      "find": ["                        self.shared.gate.unfinished();\n                        RunOutcome::Stopped"],
+      "replace": ["                        self.shared.gate.unfinished();\n                        RunOutcome::Complete"]
+    },
+    {
+      "name": "the report batch is not honoured",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The roster lock would be held for the whole pass.",
+      "find": ["                    if listed == batch {"],
+      "replace": ["                    if false {"]
+    },
+    {
+      "name": "the roster lock is held across the pause",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Everything is written correctly and a registration made in the pause waits for the whole pass.",
+      "find": ["        loop {\n            let mut refused = None;\n            let mut listed = 0;\n            let exhausted = {\n                let mut roster = self.shared.roster();"],
+      "replace": ["        let mut roster = self.shared.roster();\n        loop {\n            let mut refused = None;\n            let mut listed = 0;\n            let exhausted = {"]
+    },
+    {
+      "name": "the value cloned for a refused write is kept",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The caller's value would leak with every refusal.",
+      "find": ["                drop(refused);"],
+      "replace": ["                std::mem::forget(refused);"]
+    },
+    {
+      "name": "a registration already terminal is reported",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once; a change probed before it was marked must not be a second report.",
+      "find": ["                        && entry.terminal.is_none()\n"],
+      "replace": [""]
+    },
+    {
+      "name": "control: the refused entry is dropped explicitly",
+      "file": "src/watcher/engine.rs",
+      "expect": "survives",
+      "why": "`drop` and a binding that goes out of scope are the same.",
+      "find": ["                drop(refused);"],
+      "replace": ["                let _gone = refused;"]
+    },
+    {
+      "name": "an unchanged length is reported as a change",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "Every file would be reported on every poll, which is the per-file timer this crate exists to avoid.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {"],
+      "replace": ["                Ok(current) if true => changed.push(Change {"]
+    },
+    {
+      "name": "only growth is a change",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-4: a shrink is reported like growth, in either direction.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {"],
+      "replace": ["                Ok(current) if current > last_known => changed.push(Change {"]
+    },
+    {
+      "name": "a change reports the current length as the last known one",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The pair is the whole of an attention: one of the two numbers would be lost.",
+      "find": ["                Ok(current) if current != last_known => changed.push(Change {\n                    id,\n                    last_known,"],
+      "replace": ["                Ok(current) if current != last_known => changed.push(Change {\n                    id,\n                    last_known: current,"]
+    },
+    {
+      "name": "a terminal failure is not told apart from a transient one",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-13: a handle that can never answer must reach the caller, not be probed again every beat for good.",
+      "find": ["                    (FailureClass::Terminal, Some(code)) => changed.push(Change {"],
+      "replace": ["                    (FailureClass::Terminal, Some(code)) if false => changed.push(Change {"]
+    },
+    {
+      "name": "a terminal failure loses its code",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The code is why the caller is told, and the point of a dedicated entry.",
+      "find": ["                        outcome: Outcome::Terminal { win32_code: code },"],
+      "replace": ["                        outcome: Outcome::Terminal { win32_code: 0 },"]
+    },
+    {
+      "name": "a transient failure is not reported to the sink",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "TW-D-13: no corrective action, and a message. The registration is probed again either way, so only the sink can tell.",
+      "find": ["                    _ => self.diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ProbeFailed {\n                        registration: id,\n                        win32_code: win32_code(&error),\n                    }),"],
+      "replace": ["                    _ => {}"]
+    },
+    {
+      "name": "a probe leaves the snapshot full",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "The probe hands over every observer and drops it; a length left behind reads stale items.",
+      "find": ["        self.len = 0;\n    }\n\n    /// Drop the items from"],
+      "replace": ["    }\n\n    /// Drop the items from"]
+    },
+    {
+      "name": "control: the observer is dropped by name after it is read",
+      "file": "src/watcher/probe.rs",
+      "expect": "survives",
+      "why": "The closure ends at the same point, so dropping the observer explicitly is the same drop.",
+      "find": ["            match read(&observer) {"],
+      "replace": ["            let result = read(&observer);\n            drop(observer);\n            match result {"]
+    },
+    {
+      "name": "control: the scanned count is written out",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "`+= 1` and `= x + 1` are the same count.",
+      "find": ["                    scanned += 1;"],
+      "replace": ["                    scanned = scanned + 1;"]
+    },
+    {
+      "name": "control: the cursor bound is written as a match",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "`map_or(Unbounded, Excluded)` and the match are the same bound.",
+      "find": ["                let from = after.map_or(Bound::Unbounded, Bound::Excluded);"],
+      "replace": ["                let from = match after {\n                    Some(id) => Bound::Excluded(id),\n                    None => Bound::Unbounded,\n                };"]
+    },
+    {
+      "name": "an invalid handle is not on the terminal list",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "TW-D-13 names it. Without it a closed handle is probed again every beat for good.",
+      "find": ["    ERROR_INVALID_HANDLE,\n    // The volume"],
+      "replace": ["    // The volume"]
+    },
+    {
+      "name": "an invalidated file is not on the terminal list",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "The second code on the list, and the one a list of a single entry would hide.",
+      "find": ["    ERROR_FILE_INVALID,\n];"],
+      "replace": ["];"]
+    },
+    {
+      "name": "the classification is inverted",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "Every other property of the predicate holds for the wrong answer read the wrong way round.",
+      "find": ["        Some(code) if TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["        Some(code) if !TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"]
+    },
+    {
+      "name": "an error with no code is terminal",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "TW-D-13: the safe failure is to keep probing. An error that carries no code cannot be known to be terminal.",
+      "find": ["        _ => FailureClass::Transient,"],
+      "replace": ["        _ => FailureClass::Terminal,"]
+    },
+    {
+      "name": "a code next to a terminal one is terminal",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "A match by nearness is a different list: ERROR_ACCESS_DENIED is one below ERROR_INVALID_HANDLE.",
+      "find": ["TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["TERMINAL_CODES.iter().any(|t| t.abs_diff(code) <= 1) => FailureClass::Terminal,"]
+    },
+    {
+      "name": "a negative os error is read as its magnitude",
+      "file": "src/probe_failure.rs",
+      "expect": "caught",
+      "why": "The Win32 code is a u32 that std hands back as an i32, so a code above i32::MAX is negative; only the bit pattern is the code.",
+      "find": ["    error.raw_os_error().map(i32::cast_unsigned)"],
+      "replace": ["    error.raw_os_error().map(|code| code.unsigned_abs())"]
+    },
+    {
+      "name": "control: the list is searched with an explicit loop",
+      "file": "src/probe_failure.rs",
+      "expect": "survives",
+      "why": "`contains` and an equality search are the same test.",
+      "find": ["TERMINAL_CODES.contains(&code) => FailureClass::Terminal,"],
+      "replace": ["TERMINAL_CODES.iter().any(|&t| t == code) => FailureClass::Terminal,"]
+    },
+    {
+      "name": "the sink is not asked before an event is reported",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "A sink that wants nothing must cost a branch. Reporting to it anyway is correct for a sink that wants everything.",
+      "find": ["        if self.0.wants(kind) {"],
+      "replace": ["        if true {"]
+    },
+    {
+      "name": "the event is built before the sink is asked",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The event is built only for a sink that wants it, so the default costs nothing at a call site that formats something.",
+      "find": ["        if self.0.wants(kind) {\n            self.0.report(&make());\n        }"],
+      "replace": ["        let event = make();\n        if self.0.wants(kind) {\n            self.0.report(&event);\n        }"]
+    },
+    {
+      "name": "an event the sink wants is built and dropped",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "Everything about the question is right and nothing arrives.",
+      "find": ["            self.0.report(&make());"],
+      "replace": ["            let _ = make();"]
+    },
+    {
+      "name": "the sink given at construction is replaced by the default",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "`new` and `with_diagnostics` agree for the default sink, so only a sink that wants something can tell.",
+      "find": ["                diagnostics: SharedSink::new(diagnostics),"],
+      "replace": ["                diagnostics: SharedSink::new(Arc::new(NoDiagnostics)),"]
+    },
+    {
+      "name": "a registration's id is zero",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The diagnostic events name a registration by it, so a constant names them all as one.",
+      "find": ["    pub fn id(&self) -> u64 {\n        self.id"],
+      "replace": ["    pub fn id(&self) -> u64 {\n        0"]
+    },
+    {
+      "name": "the event's text drops the code",
+      "file": "src/diagnostics.rs",
+      "expect": "caught",
+      "why": "The code is why the event exists, and a text sink prints only what Display gives it.",
+      "find": ["failed with Win32 code {code}; it will be probed again\""],
+      "replace": ["failed with a code; it will be probed again\""]
+    },
+    {
+      "name": "control: the sink's question is an early return",
+      "file": "src/diagnostics.rs",
+      "expect": "survives",
+      "why": "Returning early on `!wants` is the same branch written the other way.",
+      "find": ["        if self.0.wants(kind) {\n            self.0.report(&make());\n        }"],
+      "replace": ["        if !self.0.wants(kind) {\n            return;\n        }\n        self.0.report(&make());"]
+    },
+    {
+      "name": "control: retain also swaps an item with itself",
+      "file": "src/chunked.rs",
+      "expect": "survives",
+      "why": "Swapping a slot with itself is a no-op, so the guard that skips it only saves work.",
+      "find": ["                if write != read {"],
+      "replace": ["                if true {"]
+    },
+    {
+      "name": "control: the null check is written as a comparison",
+      "file": "src/doorbell.rs",
+      "expect": "survives",
+      "why": "`is_null()` and `== null_mut()` are the same test.",
+      "find": ["        if raw.is_null() {"],
+      "replace": ["        if raw == ptr::null_mut() {"]
+    },
+    {
+      "name": "control: an empty read is spelled with map_or",
+      "file": "src/sq.rs",
+      "expect": "survives",
+      "why": "`ok()` and `map_or(None, Some)` are the same conversion.",
+      "find": ["        self.0.pop().ok()"],
+      "replace": ["        self.0.pop().map_or(None, Some)"]
+    },
+    {
+      "name": "the removed entry is dropped while the roster lock is held",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "The statement's temporaries drop in reverse order, so the removed entry, and the caller's `T` in it, is dropped before the guard: a `Drop` that asks the watcher a question then deadlocks.",
+      "find": ["        let removed = self.shared.roster().entries.remove(&self.id);\n        // Dropped here, after the lock is released: closing the file and dropping `T` are not\n        // done under it.\n        drop(removed);"],
+      "replace": ["        self.shared.roster().entries.remove(&self.id);"]
+    },
+    {
+      "name": "control: the removed entry is dropped at the end of the function",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "Bound by `let` the entry outlives the guard, whose temporary ends with the statement, and is dropped when the function returns: still after the lock is released, so one spelling of the same thing.",
+      "find": ["        drop(removed);"],
+      "replace": ["        let _ = &removed;"]
+    },
+    {
+      "name": "a directory group grows past a chunk's worth",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "TW-D-7: no allocation is larger than 64 KiB, and the directory that holds the chunks is one; doubling a Vec of chunks passes it.",
+      "find": ["        let want = (items.capacity() * 2).max(4).min(limit);"],
+      "replace": ["        let want = (items.capacity() * 2).max(4);"]
+    },
+    {
+      "name": "a swap between chunks of two groups reads the wrong chunk",
+      "file": "src/chunked.rs",
+      "expect": "caught",
+      "why": "Retain moves items between chunks, and across groups the high chunk is found by its own position.",
+      "find": ["            (&mut head[low_group][low_at], &mut tail[0][high_at])"],
+      "replace": ["            (&mut head[low_group][low_at], &mut tail[0][low_at])"]
+    },
+    {
+      "name": "control: the comparison is written the other way round",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "len < offset is offset > len, so the two are one check.",
+      "find": ["        if offset > len {"],
+      "replace": ["        if len < offset {"]
+    },
+    {
+      "name": "control: the length is read through standard_info",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "file_len is defined as standard_info's len, so the two are one read spelled twice.",
+      "find": ["        self.observer().file_len()"],
+      "replace": ["        Ok(self.observer().standard_info()?.len)"]
+    },
+    {
+      "name": "control: the path is converted through OsString::from",
+      "file": "src/held_file.rs",
+      "expect": "survives",
+      "why": "The same lossless conversion spelled another way. A test that catches it is asserting how the conversion is written, not what it does.",
+      "find": ["        let endpoint = UnassociatedEndpoint::open(path.to_os_string(), true, false, 0)?;"],
+      "replace": ["        let endpoint = UnassociatedEndpoint::open(std::ffi::OsString::from(path), true, false, 0)?;"]
+    },
+    {
+      "name": "a poll is accepted while one is in flight",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "TW-D-5: one poll at a time, a stopped one included.",
+      "find": ["                Err(_) => return false,"],
+      "replace": ["                Err(_) => return true,"]
+    },
+    {
+      "name": "the gate is not checked at all",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "The same refusal, removed at the other end.",
+      "find": ["        if !self.shared.gate.begin() {"],
+      "replace": ["        if false {"]
+    },
+    {
+      "name": "a poll that finds poll-done being written is refused instead of waiting",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A caller who has read poll-done may poll at once. Detection depends on the race: the 300-round test is what gives it a chance.",
+      "find": ["                Err(FINISHING) => std::thread::yield_now(),"],
+      "replace": ["                Err(FINISHING) => return false,"]
+    },
+    {
+      "name": "the gate is not marked finishing before poll-done is written",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Without the in-between state a caller who reads poll-done can find the gate still closed. A race, caught by the test that polls in the instant poll-done is visible; 8 of 8 runs failed with the step removed.",
+      "find": ["                self.shared.gate.finishing();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a written poll-done does not open the gate",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "No later poll would ever be accepted.",
+      "find": ["                        self.shared.gate.finished();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused poll-done opens the gate",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A poll waiting for room is still in flight.",
+      "find": ["                        self.shared.gate.unfinished();"],
+      "replace": ["                        self.shared.gate.finished();"]
+    },
+    {
+      "name": "the doorbell is not rung between batches",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "Entries are news to the caller as each batch is written, not only when the poll ends.",
+      "find": ["        let outcome = self.finish(watcher, REPORT_BATCH, &ring);"],
+      "replace": ["        let outcome = self.finish(watcher, REPORT_BATCH, || {});"]
+    },
+    {
+      "name": "the doorbell is not rung at the end",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "A full queue and poll-done both end a run, and both are news.",
+      "find": ["        ring();\n        outcome"],
+      "replace": ["        outcome"]
+    },
+    {
+      "name": "control: the work object is drained by its own drop and not by name",
+      "file": "src/watcher/poll.rs",
+      "expect": "survives",
+      "why": "`stop_and_drain` is the drain the work object's drop performs, and the wait's own drop drains again before the watcher's drop returns, so nothing is freed early. Not equivalent in every interleaving -- draining the work first is what stops it arming the wait after the wait's drain, which that drain does not exclude -- but no test can order a callback against a drop.",
+      "find": ["        self.work.stop_and_drain();"],
+      "replace": [""]
+    },
+    {
+      "name": "a poll that stops does not arm the wait",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "Nothing would resume it, which is where TW-3.1 left a stopped poll.",
+      "find": ["                    parking.arm(None);"],
+      "replace": ["                    let _ = &parking;"]
+    },
+    {
+      "name": "a resumed callback does not clear the resume doorbell",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A doorbell left rung wakes the wait again at once, so a poll that is still full retries as fast as it can.",
+      "find": ["                resumed.view.reset_resume();\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a resumed callback that stops again does not arm the wait",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "The second stop of a poll would never be resumed.",
+      "find": ["                    activation.rearm(None);"],
+      "replace": ["                    let _ = activation;"]
+    },
+    {
+      "name": "a resumed callback that completes arms the wait anyway",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A ring between polls would then run the engine and start a poll nobody asked for.",
+      "find": ["                if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm(None);\n                }"],
+      "replace": ["                resumed.run();\n                activation.rearm(None);"]
+    },
+    {
+      "name": "a shutdown request sets nothing",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: shutdown stops the watcher for good.",
+      "find": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(false, Ordering::Release);"]
+    },
+    {
+      "name": "a poll is checked for a shutdown only after the gate",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "A poll after shutdown is refused as shut down, not as in flight, even while one is parked.",
+      "find": ["        if self.shared.stop.load(Ordering::Acquire) {\n            return Err(PollError::Shutdown);\n        }\n        if !self.shared.gate.begin() {"],
+      "replace": ["        if !self.shared.gate.begin() {"]
+    },
+    {
+      "name": "control: the request is stored with sequential consistency",
+      "file": "src/watcher.rs",
+      "expect": "survives",
+      "why": "A stronger ordering than release is the same flag for this reader.",
+      "find": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::Release);"],
+      "replace": ["    pub fn shutdown(&self) {\n        self.shared.stop.store(true, Ordering::SeqCst);"]
+    },
+    {
+      "name": "the copy ignores a shutdown",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: a running poll stops at its next step, and the copy's step is a batch.",
+      "find": ["            // A shutdown ends the copy at its next batch.\n            if self.shared.stopping() {\n                return;\n            }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "the probe ignores a shutdown",
+      "file": "src/watcher/probe.rs",
+      "expect": "caught",
+      "why": "The probe's step is one file, so a shutdown must not wait for the rest of a large roster.",
+      "find": ["            // A shutdown ends the pass at its next probe; the rest are dropped unread.\n            if self.shared.stopping() {\n                return;\n            }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "the report ignores a shutdown",
+      "file": "src/watcher/engine.rs",
+      "expect": "caught",
+      "why": "The report's step is one change; the rest are abandoned and the poll goes on to poll-done.",
+      "find": ["                    // A shutdown abandons what is left, and the poll goes on to poll-done.\n                    if self.shared.stopping() {\n                        *next = changed.len();\n                    }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a resumed callback does not arm the wait again after a shutdown",
+      "file": "src/watcher/poll.rs",
+      "expect": "caught",
+      "why": "Poll-done is always delivered: a poll-done the queue refuses is tried again when the caller rings.",
+      "find": ["if resumed.run() == RunOutcome::Stopped {\n                    activation.rearm"],
+      "replace": ["if resumed.run() == RunOutcome::Stopped && !resumed.view.shared.stopping() {\n                    activation.rearm"]
+    },
+    {
+      "name": "dropping the watcher does not stop a poll that is running",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "TW-D-9: Drop sets the flag itself when no request was made, so the drain it waits on is bounded by one step.",
+      "find": ["        if !self.view {\n            self.shared.stop.store(true, Ordering::Release);\n        }"],
+      "replace": ["        if !self.view {}"]
+    },
+    {
+      "name": "a buffer of no bytes is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A read into an empty buffer reads nothing and never makes progress.",
+      "find": ["    if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {"],
+      "replace": ["    if buffer_len > MAX_BUFFER_LEN {"]
+    },
+    {
+      "name": "a buffer longer than a ring read is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The ring refuses a read longer than u32::MAX bytes, so such a buffer could never be used.",
+      "find": ["    if buffer_len == 0 || buffer_len > MAX_BUFFER_LEN {"],
+      "replace": ["    if buffer_len == 0 {"]
+    },
+    {
+      "name": "a pool of no buffers is accepted",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A pool with nothing to lend would leave every read waiting forever.",
+      "find": ["    if count == 0 {\n        return Err(PoolError::NoBuffers);\n    }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused take does not arm the doorbell",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A reader starved of buffers would never hear that one came back.",
+      "find": ["                free.starved = true;"],
+      "replace": ["                free.starved = false;"]
+    },
+    {
+      "name": "every buffer given back rings the doorbell",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The doorbell answers a starvation once; ringing on every return wakes a reader with nothing to do.",
+      "find": ["        if was_starved {\n            self.doorbell.ring();\n        }"],
+      "replace": ["        let _ = was_starved;\n        self.doorbell.ring();"]
+    },
+    {
+      "name": "a starvation is answered more than once",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "Without clearing it, every later return rings until the next refusal.",
+      "find": ["            mem::replace(&mut free.starved, false)"],
+      "replace": ["            free.starved"]
+    },
+    {
+      "name": "a dropped buffer is not given back",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "TW-D-15: dropping the chunk is how the client says it is done; a buffer not given back is lost to the pool.",
+      "find": ["        self.shared.give_back(mem::take(&mut self.bytes));"],
+      "replace": ["        drop(mem::take(&mut self.bytes));"]
+    },
+    {
+      "name": "a chunk shows the whole buffer",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A reused buffer holds stale bytes past what the read delivered.",
+      "find": ["        &self.buffer.bytes[..self.len]"],
+      "replace": ["        &self.buffer.bytes[..]"]
+    },
+    {
+      "name": "a chunk may claim more bytes than its buffer",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A length past the buffer is a bug in the caller, which must not be clipped silently.",
+      "find": ["            len <= self.window,"],
+      "replace": ["            true,"]
+    },
+    {
+      "name": "the layer does not watch the watcher's doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "The watcher's doorbell is how the layer learns a poll has written entries; unwatched, a poll's attentions sit in the watcher's SQ and nothing is read.",
+      "find": ["            engine.watcher().doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.pool().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "the layer does not watch the pool's doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "A chunk dropped is the only thing that frees a buffer for a layer stopped on an empty pool, and the client is not asked to ring for it.",
+      "find": ["            engine.pool().doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.watcher().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "the layer does not watch the client's resume doorbell",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "The resume doorbell is how a layer stopped on a full client SQ is told there is room.",
+      "find": ["            sq.resume_doorbell().try_clone_to_owned()?,"],
+      "replace": ["            engine.pool().doorbell().try_clone_to_owned()?,"]
+    },
+    {
+      "name": "a completed read does not wake the layer",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "Nothing else says a read finished, so its chunk would wait for some other wake to be delivered.",
+      "find": ["            .attach_completion_wake(move || on_wake.drive());"],
+      "replace": ["            .attach_completion_wake(move || drop(&on_wake));"]
+    },
+    {
+      "name": "a wait does not watch again after it runs the engine",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "An activation consumes the arming, so a wait that does not re-arm serves one ring and no other.",
+      "find": ["            activation.rearm(None);"],
+      "replace": ["            let _ = &activation;"]
+    },
+    {
+      "name": "control: the waits are drained by name before the layer is released",
+      "file": "src/read_layer.rs",
+      "expect": "survives",
+      "why": "Equivalent: each wait's own drop disarms and drains it before the engine is released, which the field order guarantees; the explicit loop only discharges the drain the thread-pool crate reports an undrained wait for.",
+      "find": ["            wait.stop_and_drain();"],
+      "replace": ["            let _ = wait;"]
+    },
+    {
+      "name": "a run does not reset the watcher's doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Reset before it looks, a manual-reset doorbell is level-triggered, so a wait that watches again would be activated again at once and spin.",
+      "find": ["        self.watcher.reset_doorbell();"],
+      "replace": ["        let _ = &self.watcher;"]
+    },
+    {
+      "name": "entries taken from the watcher's SQ do not ring its resume doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll parked on a full SQ is continued only by that ring, and the layer is the SQ's one consumer.",
+      "find": ["            self.watcher.ring_resume();"],
+      "replace": ["            let _ = &self.watcher;"]
+    },
+    {
+      "name": "taking an entry from the watcher's SQ is not noted as making room",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "As the ring itself: without the note the ring is never made.",
+      "find": ["        self.made_room = true;"],
+      "replace": ["        self.made_room = false;"]
+    },
+    {
+      "name": "a terminal read failure is not delivered to the client",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A handle that can never answer again is the client's to know of; the diagnostic sink alone leaves a client waiting for bytes that will not come.",
+      "find": ["            && classify_code(code).is_terminal()"],
+      "replace": ["            && !classify_code(code).is_terminal()"]
+    },
+    {
+      "name": "a terminal read failure names the wrong offset",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The offset the failed read began at is what tells a client where to register again.",
+      "find": ["                last_known: offset,"],
+      "replace": ["                last_known: 0,"]
+    },
+    {
+      "name": "dropping a callback's view stops the watcher",
+      "file": "src/watcher.rs",
+      "expect": "caught",
+      "why": "A poller that cannot be made drops its view; if that stopped the watcher, the failure the caller was told about would be followed by Shutdown on every retry.",
+      "find": ["        if !self.view {\n            self.shared.stop.store(true, Ordering::Release);\n        }"],
+      "replace": ["        self.shared.stop.store(true, Ordering::Release);"]
+    },
+    {
+      "name": "a terminal read failure does not make its registration terminal",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A terminal entry is reported once per registration; without the mark every terminal read failure of it is delivered again, and a probe's report is repeated by a read's.",
+      "find": ["            && self.watcher.mark_terminal(registration, win32_code)\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a refused read leaves the rest of its plan to be refused again",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A push the ring refuses is a failed read; kept at the front of its plan it would be refused by every run and block every attention and poll-done behind it.",
+      "find": ["                    // The rest of the plan addresses the same file and is abandoned with it.\n                    self.current = None;\n"],
+      "replace": [""]
+    },
+    {
+      "name": "a stop does not abandon what was planned",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "After a stop no read is submitted, so a plan that was part way through is dropped; kept, it goes on reading the file the layer is shutting down.",
+      "find": ["        if stopping {\n            self.current = None;\n        }"],
+      "replace": ["        if !stopping {\n            self.current = None;\n        }"]
+    },
+    {
+      "name": "a stop that lands while reads are pushed does not end the pushing",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A stop that arrives between two reads of one plan must not be followed by more submissions, which would spend the pool and the completion queue on a layer shutting down.",
+      "find": ["                if stopping.load(Ordering::Acquire) {\n                    break Ended::Abandoned;\n                }\n"],
+      "replace": [""]
+    },
+    {
+      "name": "shutdown does not stop the engine",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "Reads not yet submitted are what shutdown leaves unread, and what a drop then does not wait for.",
+      "find": ["        self.core.stop.store(true, Ordering::Release);"],
+      "replace": ["        let _ = &self.core.stop;"]
+    },
+    {
+      "name": "shutdown does not shut the watcher down",
+      "file": "src/read_layer.rs",
+      "expect": "caught",
+      "why": "A poll started after shutdown would find attentions nothing will read, and a running one would not stop at its next step.",
+      "find": ["        self.core.watcher_stop.request();"],
+      "replace": ["        let _ = &self.core.watcher_stop;"]
+    },
+    {
+      "name": "control: a drop requests shutdown before it drains",
+      "file": "src/read_layer.rs",
+      "expect": "survives",
+      "why": "Not equivalent in every interleaving -- it stops a poll and the reads a callback running during the drain would submit -- but no test can order that, since the waits' callbacks and the drop race; the watcher's own drop sets its flag as well.",
+      "find": ["        self.shutdown();\n        // Nothing arms"],
+      "replace": ["        // Nothing arms"]
+    },
+    {
+      "name": "control: the doorbell is rung while the lock is held",
+      "file": "src/pool.rs",
+      "expect": "survives",
+      "why": "Ringing outside the lock is for latency, not correctness: the starved flag is cleared under it either way.",
+      "find": ["            mem::replace(&mut free.starved, false)\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"],
+      "replace": ["            let was = mem::replace(&mut free.starved, false);\n            if was {\n                self.doorbell.ring();\n            }\n            false\n        };\n        if was_starved {\n            self.doorbell.ring();\n        }"]
+    },
+    {
+      "name": "a data entry's range is not the chunk's length",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "The range is what lets a client put chunks that arrive in any order back in place (TW-D-15).",
+      "find": ["            range: offset..end,"],
+      "replace": ["            range: offset..end.saturating_sub(1),"]
+    },
+    {
+      "name": "a data entry's range wraps instead of panicking",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "A range that wraps would claim bytes at the start of the file.",
+      "find": ["        let end = offset\n            .checked_add(len)\n            .expect(\"a file range ends before u64::MAX\");"],
+      "replace": ["        let end = offset.wrapping_add(len);"]
+    },
+    {
+      "name": "the reading layer's SQ has a capacity rule of its own",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "Every SQ in the crate is made by one function, so the two cannot disagree about which capacities are valid.",
+      "find": ["        let (writer, reader) = queue_of(capacity)?;"],
+      "replace": ["        let (writer, reader) = queue_of(capacity.max(2))?;"]
+    },
+    {
+      "name": "the resume doorbell is the reading layer's own doorbell",
+      "file": "src/read_sq.rs",
+      "expect": "caught",
+      "why": "Two directions, two events: a ring meant for the client would wake the layer.",
+      "find": ["        self.resume.ring();"],
+      "replace": ["        self.doorbell.ring();"]
+    },
+    {
+      "name": "an unchanged length is planned as a shrink",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "Only a shorter file is a shrink. An attention whose length did not change is not one the watcher writes, but if it arrives it plans no reads, not a shrink the client must interpret.",
+      "find": ["        }) if current < last_known => Plan::Deliver(ReadEntry::Shrink(Shrink {"],
+      "replace": ["        }) if current <= last_known => Plan::Deliver(ReadEntry::Shrink(Shrink {"]
+    },
+    {
+      "name": "a shrink's two lengths are swapped",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "Swapped, a shrink reads as growth over the same range, and a client reading it would ask for bytes the file no longer has.",
+      "find": ["            last_known,\n            current,\n        })),"],
+      "replace": ["            last_known: current,\n            current: last_known,\n        })),"]
+    },
+    {
+      "name": "the reads start at the current length",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "The bytes to read are the ones the attention announced, from the length last reported. Starting at the current length reads nothing.",
+      "find": ["            remaining: last_known..current,"],
+      "replace": ["            remaining: current..current,"]
+    },
+    {
+      "name": "a read is not clamped to the bytes left",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "The last read of a growth that is not a whole number of buffers must stop at the growth's end, or it reads past what was announced.",
+      "find": ["            .map_or(buffer_len, |left| left.min(buffer_len));"],
+      "replace": ["            .map_or(buffer_len, |_| buffer_len);"]
+    },
+    {
+      "name": "the bytes left are truncated to 32 bits",
+      "file": "src/read_plan.rs",
+      "expect": "caught",
+      "why": "A growth past u32::MAX truncated to 32 bits plans a short read where a full buffer belongs, and its remainder is lost from the plan's arithmetic.",
+      "find": ["        let len = u32::try_from(self.remaining.end - self.remaining.start)"],
+      "replace": ["        let len = Ok::<u32, ()>((self.remaining.end - self.remaining.start) as u32)"]
+    },
+    {
+      "name": "control: an empty plan tested by its bounds",
+      "file": "src/read_plan.rs",
+      "expect": "survives",
+      "why": "Equivalent: the plan's range never has its start past its end, so is_empty and start >= end agree. Surviving shows the tests bind to the plan's reads, not to how emptiness is spelled.",
+      "find": ["        if self.remaining.is_empty() {"],
+      "replace": ["        if self.remaining.start >= self.remaining.end {"]
+    },
+    {
+      "name": "a read is not limited to what was announced",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A ring read fills the whole buffer it is given. Without the window, a read of the last piece of an announced range reads past it, and the next poll announces those bytes again.",
+      "find": ["                buffer.limit_to(usize::try_from(read.len).expect(\"a u32 fits usize\"));"],
+      "replace": ["                let _ = usize::try_from(read.len).expect(\"a u32 fits usize\");"]
+    },
+    {
+      "name": "a short read is labelled with the bytes asked for",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A range that claims more bytes than the read returned delivers a zeroed tail as file content.",
+      "find": ["            buffer.into_chunk(read),"],
+      "replace": ["            buffer.into_chunk(usize::try_from(pending.len).expect(\"a u32 fits usize\")),"]
+    },
+    {
+      "name": "poll-done does not wait for the reads of its poll",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Poll-done follows every read of its poll (TW-D-15). Delivered when the poll closes, it overtakes reads still in flight.",
+      "find": ["            .is_some_and(|group| group.closed && group.outstanding == 0)"],
+      "replace": ["            .is_some_and(|group| group.closed)"]
+    },
+    {
+      "name": "every attention opens a group of its own",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll's reads share one group, which poll-done closes. A group per attention leaves all but the last open for good, so their poll-done is never delivered.",
+      "find": ["        if self.list.back().is_none_or(|group| group.closed) {"],
+      "replace": ["        if true {"]
+    },
+    {
+      "name": "a poll with no reads gets no group",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A poll that announced nothing still ends with its own poll-done, in order after the polls before it.",
+      "find": ["            _ => self.list.push_back(Group {\n                outstanding: 0,\n                closed: true,\n            }),"],
+      "replace": ["            _ => {}"]
+    },
+    {
+      "name": "the reads in flight are not held to the completion queue",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Everything the ring holds counts against its completion queue, which overflows if more are pushed than it holds.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if outstanding >= usize::MAX {"]
+    },
+    {
+      "name": "the reads pushed in a batch are not counted against the queue",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The ring's own count does not move while a batch holds it, so the batch counts what it has pushed or one batch overfills the queue.",
+      "find": ["                        outstanding += 1;"],
+      "replace": ["                        outstanding += 0;"]
+    },
+    {
+      "name": "a full ring SQ stops the reads even after a submit made room",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A submit drains the ring's SQ, so a refusal after queued pushes is answered by submitting and going on, not by stopping.",
+      "find": ["                Ended::RingSqFull if pushed > 0 => {}"],
+      "replace": ["                Ended::RingSqFull if pushed > 0 => return Ok(Submitted::Blocked(Stop::RingFull)),"]
+    },
+    {
+      "name": "an empty pool is reported as a full ring",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The stops say what is waited for: a buffer coming back is the client's, a completion is the ring's.",
+      "find": ["                    break Ended::Stopped(Stop::PoolEmpty);"],
+      "replace": ["                    break Ended::Stopped(Stop::RingFull);"]
+    },
+    {
+      "name": "the client's SQ refusing an entry drops it",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The entry a full SQ refused is a chunk the client was owed. Dropping it loses bytes the watcher already counted as reported.",
+      "find": ["                    self.undelivered = Some(entry);\n                    return false;"],
+      "replace": ["                    drop(entry);\n                    return false;"]
+    },
+    {
+      "name": "a read that returned nothing is delivered as an empty entry",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A read past the end of a file that shrank has nothing to deliver, and an empty chunk is noise for every client.",
+      "find": ["        if read == 0 {"],
+      "replace": ["        if read == usize::MAX {"]
+    },
+    {
+      "name": "end of file is reported as a failure",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Reading at the end of a file is how a tail finds there is nothing new, not a fault to report.",
+      "find": ["                Some(ERROR_HANDLE_EOF) => 0,"],
+      "replace": ["                Some(u32::MAX) => 0,"]
+    },
+    {
+      "name": "a failed read is reported under the probe's kind",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A sink says which kinds it wants before an event is built, so an event asked about under another kind is never built for a sink that wanted only this one.",
+      "find": ["            .diagnose(DiagnosticKind::ReadFailed, || Diagnostic::ReadFailed {"],
+      "replace": ["            .diagnose(DiagnosticKind::ProbeFailed, || Diagnostic::ReadFailed {"]
+    },
+    {
+      "name": "a settled read stays outstanding in its group",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "Poll-done waits for the group's reads to settle, so one that never does holds it back for good.",
+      "find": ["        self.groups.settled(pending.group);"],
+      "replace": ["        let _ = pending.group;"]
+    },
+    {
+      "name": "a run does not reset the resume doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The resume doorbell is reset before the run looks (TW-D-6), so a ring that lands during the run is seen by the next one and not erased after it.",
+      "find": ["        self.sq.reset_resume();"],
+      "replace": ["        let _ = &self.sq;"]
+    },
+    {
+      "name": "a run does not reset the pool's doorbell",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "As the resume doorbell: a buffer given back after the reset rings it again, which is how a waiter on it is woken once.",
+      "find": ["        self.pool.reset_doorbell();"],
+      "replace": ["        let _ = &self.pool;"]
+    },
+    {
+      "name": "the client's doorbell is not rung for entries written",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The doorbell is how a client waiting on the SQ learns there are entries to drain.",
+      "find": ["        if wrote || matches!(stop, Ok(Stop::ClientFull)) {"],
+      "replace": ["        if matches!(stop, Ok(Stop::ClientFull)) {"]
+    },
+    {
+      "name": "a registration's tracked value names registration zero",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A failed read is reported by the registration's id, which the diagnostic's reader looks up.",
+      "find": ["            .register_with(path, offset, |file, id| Tracked::new(value, file, id))"],
+      "replace": ["            .register_with(path, offset, |file, _| Tracked::new(value, file, 0))"]
+    },
+    {
+      "name": "a buffer's window is its whole length",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "The window is how much a ring read is asked to fill. Reporting the whole buffer asks for bytes past what was announced.",
+      "find": ["    fn bytes_len(&self) -> usize {\n        self.window\n    }"],
+      "replace": ["    fn bytes_len(&self) -> usize {\n        self.bytes.len()\n    }"]
+    },
+    {
+      "name": "a window of nothing is allowed",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "A read of no bytes is not a read; the planner never plans one, and a window of none would make the ring one.",
+      "find": ["            (1..=self.bytes.len()).contains(&len),"],
+      "replace": ["            (0..=self.bytes.len()).contains(&len),"]
+    },
+    {
+      "name": "a chunk may be longer than its window",
+      "file": "src/pool.rs",
+      "expect": "caught",
+      "why": "Bytes past the window were not read into the buffer by this read, so a chunk claiming them shows another read's.",
+      "find": ["            len <= self.window,"],
+      "replace": ["            len <= self.bytes.len(),"]
+    },
+    {
+      "name": "the ring is not a limit on the reads in flight",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The engine stops submitting when the ring holds as many reads as its completion queue, so the queue cannot overflow. The ring-size tests assert the in-flight count is the least of the pieces, the buffers and that size.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if false && outstanding >= *cq_size {"]
+    },
+    {
+      "name": "the ring's limit is one read late",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "A limit of the queue's size is reached at that many reads, not one more; the case where the pool and the ring are equal is the sharpest.",
+      "find": ["                if outstanding >= *cq_size {"],
+      "replace": ["                if outstanding > *cq_size {"]
+    },
+    {
+      "name": "the engine bounds the reads by the requested completion queue size, not the one the ring reports",
+      "file": "src/read_engine.rs",
+      "expect": "caught",
+      "why": "The ring rounds the request up and doubles the submission queue into it, so the request is not what bounds the reads.",
+      "find": ["                .completion_queue_size,\n        )\n        .expect(\"a u32 fits usize\");"],
+      "replace": ["                .completion_queue_size\n                .min(ring_cq_size),\n        )\n        .expect(\"a u32 fits usize\");"]
+    },
+    {
+      "name": "the outstanding count is read through a second local",
+      "file": "src/read_engine.rs",
+      "expect": "survives",
+      "why": "Equivalent: the count is the ring's outstanding, read into a local; naming it twice changes nothing.",
+      "find": ["            let mut outstanding = ring.outstanding();"],
+      "replace": ["            let outstanding_now = ring.outstanding();\n            let mut outstanding = outstanding_now;"]
+    },
+    {"name":"a ring size that is not a power of two is not refused","file":"src/reader/options.rs","expect":"caught","why":"The ring rounds it up, so accepting it hands the caller a ring of a size they did not ask for. The equivalence test against the real ring and the cause assertions both see it.","find":["if !given.is_power_of_two() {"],"replace":["if false && !given.is_power_of_two() {"]},
+    {"name":"a size below the least is not refused","file":"src/reader/options.rs","expect":"caught","why":"The ring raises a submission queue under its floor and a completion queue under twice the submission queue; both are refused instead.","find":["if given < least {"],"replace":["if false && given < least {"]},
+    {"name":"a size equal to the least is refused","file":"src/reader/options.rs","expect":"caught","why":"The least is itself accepted: a submission queue of 8 is exactly what the ring gives.","find":["if given < least {"],"replace":["if given <= least {"]},
+    {"name":"a size equal to the most is refused","file":"src/reader/options.rs","expect":"caught","why":"The most is itself accepted: the largest the ring reports is a ring it makes.","find":["if given > most {"],"replace":["if given >= most {"]},
+    {"name":"a size of zero is reported as not a power of two","file":"src/reader/options.rs","expect":"caught","why":"Zero is its own cause: for a ring the ring would accept it and choose a size of its own.","find":["if given == 0 {\n        return Err(Cause::Zero);\n    }"],"replace":[""]},
+    {"name":"the least submission queue is 4","file":"src/reader/options.rs","expect":"caught","why":"The ring floors a submission queue at 8, so a size of 4 is raised to 8 and would be accepted. The tests tie this constant to the ring.","find":["pub const MIN_RING_SQ_SIZE: u32 = 8;"],"replace":["pub const MIN_RING_SQ_SIZE: u32 = 4;"]},
+    {"name":"the completion queue is not required to be twice the submission queue","file":"src/reader/options.rs","expect":"caught","why":"The ring raises a completion queue below twice the submission queue to it. The tests tie this constant to the ring.","find":["pub const MIN_RING_CQ_PER_SQ: u32 = 2;"],"replace":["pub const MIN_RING_CQ_PER_SQ: u32 = 1;"]},
+    {"name":"the least completion queue ignores the submission queue","file":"src/reader/options.rs","expect":"caught","why":"The least depends on the submission queue it is paired with.","find":["u64::from(self.ring_sq_size) * u64::from(Self::MIN_RING_CQ_PER_SQ),"],"replace":["u64::from(Self::MIN_RING_CQ_PER_SQ),"]},
+    {"name":"the completion queue is checked against the largest submission queue","file":"src/reader/options.rs","expect":"caught","why":"The two largest sizes are different numbers the ring reports.","find":["u64::from(limits.max_cq),"],"replace":["u64::from(limits.max_sq),"]},
+    {"name":"the submission queue has no largest","file":"src/reader/options.rs","expect":"caught","why":"A size past what the ring reports is refused with the ring's own bound.","find":["max_sq: capabilities.max_submission_queue_size,"],"replace":["max_sq: u32::MAX,"]},
+    {"name":"validate does not check the pool or the client queue","file":"src/reader/options.rs","expect":"caught","why":"The sizes are checked in order and the first to fail is the one reported.","find":["self.check_pool_and_queue()?;"],"replace":[""]},
+    {"name":"a count of zero is reported as not a power of two","file":"src/reader/options.rs","expect":"caught","why":"The pool refuses no buffers, and the cause is zero.","find":["cause: Cause::Zero,"],"replace":["cause: Cause::NotAPowerOfTwo,"]},
+    {"name":"the largest buffer is reported as zero","file":"src/reader/options.rs","expect":"caught","why":"A buffer past what a ring read takes is refused with that bound.","find":["most: wide(MAX_BUFFER_LEN),"],"replace":["most: 0,"]},
+    {"name":"the default ring queue is the submission queue size","file":"src/reader/options.rs","expect":"caught","why":"A completion queue equal to the submission queue is below twice it, so the defaults would be refused.","find":["pub const DEFAULT_RING_CQ_SIZE: u32 = Self::DEFAULT_RING_SQ_SIZE * Self::MIN_RING_CQ_PER_SQ;"],"replace":["pub const DEFAULT_RING_CQ_SIZE: u32 = Self::DEFAULT_RING_SQ_SIZE;"]},
+    {"name":"the queue's bounds are read the wrong way round","file":"src/reader/options.rs","expect":"caught","why":"The least and the most the queue reports are different numbers.","find":["            (wide(bounds.min_valid), wide(bounds.max_valid))"],"replace":["            (wide(bounds.max_valid), wide(bounds.min_valid))"]},
+    {"name":"the ring-limits failure has no source","file":"src/reader/options_error.rs","expect":"caught","why":"The operating system's error is carried as the source.","find":["Self::RingCapabilities(error) => Some(error),"],"replace":["Self::RingCapabilities(_) => None,"]},
+    {"name":"a power of two is recognised by a single set bit","file":"src/reader/options.rs","expect":"survives","why":"Equivalent for a nonzero size, and zero has been refused before it.","find":["if !given.is_power_of_two() {"],"replace":["if given.count_ones() != 1 {"]},
+    {"name":"the reader does not check its options first","file":"src/reader/tail_reader.rs","expect":"caught","why":"A refused size is reported as the options error, before anything is allocated; without the check it surfaces later as some other error, or as the pool's own refusal.","find":["        options.validate()?;"],"replace":[""]},
+    {"name":"the reader reports to no sink, not the one given","file":"src/reader/tail_reader.rs","expect":"caught","why":"The sink the caller supplies is the one the watcher reports through.","find":["        let watcher = Watcher::with_diagnostics(watcher_sq_capacity, diagnostics)\n            .map_err(TailReaderError::Watcher)?;"],"replace":["        let _ = diagnostics;\n        let watcher = Watcher::with_diagnostics(watcher_sq_capacity, Arc::new(NoDiagnostics))\n            .map_err(TailReaderError::Watcher)?;"]},
+    {"name":"the watcher's capacity is fixed, not the one asked for","file":"src/reader/tail_reader.rs","expect":"caught","why":"The capacity given for the watcher's own queue is the one it is made with.","find":["        let watcher = Watcher::with_diagnostics(watcher_sq_capacity, diagnostics)"],"replace":["        let watcher = Watcher::with_diagnostics(64, diagnostics)"]},
+    {"name":"the buffer length and count are passed the wrong way round","file":"src/reader/tail_reader.rs","expect":"caught","why":"The sizes are not symmetric in the tests, so a transposed pair changes how many reads a file takes.","find":["        let pool = BufferPool::new(options.buffer_len, options.buffer_count)"],"replace":["        let pool = BufferPool::new(options.buffer_count, options.buffer_len)"]},
+    {"name":"the ring sizes are passed the wrong way round","file":"src/reader/tail_reader.rs","expect":"caught","why":"The completion queue the engine bounds its reads by is the one asked for, not the submission queue's.","find":["            options.ring_sq_size,\n            options.ring_cq_size,"],"replace":["            options.ring_cq_size,\n            options.ring_sq_size,"]},
+    {"name":"the client queue is not the capacity asked for","file":"src/reader/tail_reader.rs","expect":"caught","why":"The client queue is made at the capacity in the options.","find":["            options.client_sq_capacity,"],"replace":["            64,"]},
+    {"name":"poll starts nothing","file":"src/reader/tail_reader.rs","expect":"caught","why":"Everything the reader delivers begins with a poll.","find":["        self.layer.poll()"],"replace":["        Ok(())"]},
+    {"name":"shutdown does nothing","file":"src/reader/tail_reader.rs","expect":"caught","why":"A shut down reader refuses later polls.","find":["        self.layer.shutdown();"],"replace":["        let _ = &self.layer;"]},
+    {"name":"a failure a run returned is never reported","file":"src/reader/tail_reader.rs","expect":"caught","why":"The first failure a run returned is taken by its owner.","find":["        self.layer.take_failure()"],"replace":["        None"]},
+    {"name":"a registration reports an id of zero","file":"src/reader/tail_reader.rs","expect":"caught","why":"Each registration has an id of its own, handed out in order.","find":["        self.inner.id()"],"replace":["        0"]},
+    {"name":"a registration forgets its start offset","file":"src/reader/tail_reader.rs","expect":"caught","why":"The offset the file was registered at is read back.","find":["        self.inner.start_offset()"],"replace":["        0"]},
+    {"name":"a ring that could not be made is reported as a setup failure","file":"src/reader/tail_reader_error.rs","expect":"caught","why":"A machine with no I/O ring support is told apart from one that ran out of something else.","find":["            EngineError::Ring(error) => Self::Ring(error),"],"replace":["            EngineError::Ring(error) => Self::Io(error),"]},
+    {"name":"a client queue failure is reported as the watcher's","file":"src/reader/tail_reader_error.rs","expect":"caught","why":"The two queues are told apart.","find":["            EngineError::Sq(error) => Self::ClientSq(error),"],"replace":["            EngineError::Sq(error) => Self::Watcher(error),"]},
+    {"name":"an allocation failure carries no source","file":"src/reader/tail_reader_error.rs","expect":"caught","why":"Every cause carries the error behind it.","find":["            Self::Allocation(error) => Some(error),"],"replace":["            Self::Allocation(_) => None,"]},
+    {"name":"control: a registration is mapped through a closure written another way","file":"src/reader/tail_reader.rs","expect":"survives","why":"Equivalent: the same value is built either way.","find":["            .map(|inner| TailRegistration { inner })"],"replace":["            .map(|registration| TailRegistration { inner: registration })"]},
+    {"find":["        if error.is_allocation_failure() {"],"why":"A capacity within the rule and a capacity outside it are different answers: the first is this machine's, the second is wrong everywhere. Told apart by the queue crate's is_allocation_failure, and nothing else in this crate can.","name":"a refused allocation is classified as a rule refusal","replace":["        if false && error.is_allocation_failure() {"],"expect":"caught","file":"src/sq.rs"},
+    {"find":["        if error.is_allocation_failure() {"],"why":"The other direction of the same guard: a capacity that breaks the rule must not read as a machine's answer.","name":"a rule refusal is classified as an allocation failure","replace":["        if !error.is_allocation_failure() {"],"expect":"caught","file":"src/sq.rs"},
+    {"find":["            QueueError::Allocation(error) => Self::Allocation(error),"],"why":"The conversion into the public error is a separate site from the classification, and either alone can lose the cause.","name":"an allocation failure becomes the capacity variant of CreateError","replace":["            QueueError::Allocation(error) => Self::Capacity(error),"],"expect":"caught","file":"src/create_error.rs"},
+    {"find":["            Self::Allocation(_) => None,"],"why":"SqCapacityError says \"not a power of two\", which is false for an allocation failure, so a caller walking the source chain would read a wrong cause.","name":"an allocation failure carries the capacity error as its source","replace":["            Self::Allocation(error) => Some(error),"],"expect":"caught","file":"src/create_error.rs"},
+    {"find":["                 but the memory for its slots could not be allocated\","],"why":"The message is what a caller reads; it has to say the memory was the problem.","name":"an allocation failure is worded as a rule refusal","replace":["                 but it is not a power of two\","],"expect":"caught","file":"src/create_error.rs"},
+    {"find":["            Self::Capacity(error) | Self::Allocation(error) => error,"],"why":"Equivalent: an or-pattern binds the same field either way.","name":"control: the two arms of QueueError::capacity are bound in the other order","replace":["            Self::Allocation(error) | Self::Capacity(error) => error,"],"expect":"survives","file":"src/sq.rs"},
+    {"find":["            OptionsError::RingCapabilities(error) => Self::Ring(error),"],"replace":["            OptionsError::RingCapabilities(error) => Self::Options(OptionsError::RingCapabilities(error)),"],"name":"a failure to read the ring's limits is reported as a refused size","expect":"caught","why":"It is the operating system's failure and no size was refused, so a caller told \"a size was refused\" would go looking at its options for a mistake that is not there.","file":"src/reader/tail_reader_error.rs"},
+    {"find":["            other => Self::Options(other),"],"replace":["            other => Self::Ring(std::io::Error::other(other.to_string())),"],"name":"a refused size is reported as a ring failure","expect":"caught","why":"The other direction of the same guard: every size the options refuse is still the options' error.","file":"src/reader/tail_reader_error.rs"},
+    {"find":["        if !self.poll_gate.begin() {"],"file":"src/read_layer.rs","name":"a poll is accepted while the previous one is in flight","expect":"caught","replace":["        if false && !self.poll_gate.begin() {"],"why":"The reader's poll is over when its poll-done is queued for the client, not when the watcher has finished announcing; without the reader's own gate the watcher's check alone accepts a poll while the reads of the last one are still being delivered, and a poll-done no longer ends the poll it follows."},
+    {"find":["            self.poll_gate.abandon();"],"file":"src/read_layer.rs","name":"a poll the watcher refuses keeps the reader's gate closed","expect":"caught","replace":["            let _ = &self.poll_gate;"],"why":"A poll that never started is not in flight; a gate left closed would refuse every later poll for ever."},
+    {"find":["        if self.core.stop.load(Ordering::Acquire) {","            return Err(PollError::Shutdown);","        }","        if !self.poll_gate.begin() {"],"file":"src/read_layer.rs","name":"a shut down reader reports a poll in flight ahead of the shutdown","expect":"caught","replace":["        if !self.poll_gate.begin() {"],"why":"After a shutdown no poll starts again, whether or not one is in flight, and the caller is told which: a caller told InFlight would wait for a poll-done and poll again."},
+    {"find":["            self.poll_gate.finishing();"],"file":"src/read_engine.rs","name":"the reader's gate is not marked finishing before poll-done is queued","expect":"caught","replace":[""],"why":"Without the in-between state a client that reads poll-done can find the gate still closed. A race, caught by the test that polls in the instant poll-done is visible."},
+    {"find":["                    self.poll_gate.finished();"],"file":"src/read_engine.rs","name":"a queued poll-done does not open the reader's gate","expect":"caught","replace":[""],"why":"No later poll would ever be accepted."},
+    {"find":["                    self.poll_gate.unfinished();"],"file":"src/read_engine.rs","name":"a refused poll-done opens the reader's gate","expect":"caught","replace":["                    self.poll_gate.finished();"],"why":"A poll whose poll-done the client's SQ refused is still in flight: its poll-done is not yet delivered."},
+    {"replace":["            return Err(PollError::InFlight);"],"name":"a poll refused as in flight does not run the engine again","find":["            self.sq.ring_resume();","            return Err(PollError::InFlight);"],"file":"src/read_layer.rs","why":"A run that returned an error leaves nothing in flight and rings no doorbell, so the engine runs again only when something wakes it. Before the reader had a gate of its own the next poll was that wake; now the gate refuses it first, so the refusal has to be the wake or a caller who only polls is told InFlight for ever. The failure cannot be made on demand, so the test holds the gate by hand.","expect":"caught"},
+    {"replace":["    pub fn capacity(&self) -> usize {","        self.reader.lock().unwrap_or_else(PoisonError::into_inner).capacity()","    }"],"expect":"caught","name":"the reading SQ's capacity takes the reader's lock","find":["    pub fn capacity(&self) -> usize {","        self.capacity","    }"],"file":"src/read_sq.rs","why":"A ReadDrain holds that lock for as long as it lives, so asking for the capacity while one is held waits for the drain: for ever, on the thread that holds it. The capacity never changes and is read once, so the property is that asking never waits. The test asks from threads of its own with a bound, so this is caught by assertion and not by a hang."},
+    {"replace":["            Self::Capacity(error) => write!(f, \"creating the watcher failed: {error}\"),"],"file":"src/create_error.rs","name":"a queue failure is worded as the watcher's","why":"CreateError is the error of the watcher's queue and of the reading layer's client queue, and the second reaches a caller as \"the reader's client queue could not be made: <this>\", which a message that named the watcher would contradict.","expect":"caught","find":["            Self::Capacity(error) => write!(f, \"creating the submission queue failed: {error}\"),"]}
+  ]
+}

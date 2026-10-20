@@ -17,6 +17,19 @@ use crate::capacity::Bounds;
 /// reported rather than rounded away. Silently rounding 100 up to 128 would
 /// hand back a bound the caller cannot see they got, and a bound is exactly the
 /// number a caller chose deliberately.
+///
+/// # A capacity inside the bounds can still be refused
+///
+/// [`Self::min_valid`] and [`Self::max_valid`] are what a shape can
+/// *represent*, which is a fact about its positions and not about the machine:
+/// a capacity of `max_valid` asks for a ring larger than any address space.
+/// A queue allocates all of its slots when it is constructed, so a capacity
+/// that passes every other rule is still refused when that memory cannot be
+/// had, and [`Self::is_allocation_failure`] says so. The request was not wrong
+/// by any rule of the queue, so no other capacity is suggested for it:
+/// [`Self::previous_valid`] and [`Self::next_valid`] are both `None`, because
+/// how much memory a machine would give is not something the crate can know,
+/// and a suggestion that is itself refused is worse than none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapacityError {
     requested: usize,
@@ -46,6 +59,8 @@ enum CapacityErrorKind {
     NotPowerOfTwo,
     TooSmall,
     TooLarge,
+    /// A capacity the shape accepts, whose slots the allocator would not give.
+    Allocation,
 }
 
 impl CapacityError {
@@ -74,6 +89,21 @@ impl CapacityError {
         Self::new(requested, bounds, CapacityErrorKind::TooLarge)
     }
 
+    pub(crate) fn allocation(requested: usize, bounds: Bounds) -> Self {
+        Self::new(requested, bounds, CapacityErrorKind::Allocation)
+    }
+
+    /// Whether the capacity satisfied every rule of the queue and was refused
+    /// only because the memory for its slots could not be allocated.
+    ///
+    /// The other refusals are a mistake in the request, and the same request
+    /// is refused again on any machine. This one is not: it is the answer for
+    /// this machine at this moment, and a smaller capacity may succeed.
+    #[must_use]
+    pub fn is_allocation_failure(&self) -> bool {
+        matches!(self.kind, CapacityErrorKind::Allocation)
+    }
+
     /// The smallest capacity the shape that rejected this request will accept.
     #[must_use]
     pub fn min_valid(&self) -> usize {
@@ -81,6 +111,9 @@ impl CapacityError {
     }
 
     /// The largest capacity the shape that rejected this request will accept.
+    ///
+    /// What the shape can represent, not what a machine can hold: see
+    /// [`Self::is_allocation_failure`].
     #[must_use]
     pub fn max_valid(&self) -> usize {
         self.max_valid
@@ -111,7 +144,10 @@ impl CapacityError {
         match self.kind {
             // Nothing valid lies below either of these: a request that was
             // already too small has only larger answers, and zero has none.
-            CapacityErrorKind::Zero | CapacityErrorKind::TooSmall => None,
+            // An allocation failure has no answer the crate can vouch for.
+            CapacityErrorKind::Zero
+            | CapacityErrorKind::TooSmall
+            | CapacityErrorKind::Allocation => None,
             CapacityErrorKind::NotPowerOfTwo | CapacityErrorKind::TooLarge => {
                 let rounded = 1_usize << (usize::BITS - 1 - self.requested.leading_zeros());
                 let clamped = rounded.min(self.largest_power_of_two_within_bound());
@@ -151,7 +187,7 @@ impl CapacityError {
             // suggestion that is itself refused is worse than none.
             CapacityErrorKind::Zero | CapacityErrorKind::TooSmall => Some(self.min_valid),
             CapacityErrorKind::NotPowerOfTwo => self.requested.checked_next_power_of_two(),
-            CapacityErrorKind::TooLarge => None,
+            CapacityErrorKind::TooLarge | CapacityErrorKind::Allocation => None,
         }?;
         (rounded >= self.min_valid && rounded <= self.max_valid).then_some(rounded)
     }
@@ -204,6 +240,12 @@ impl fmt::Display for CapacityError {
                 f,
                 "capacity {} is above the largest this queue shape can represent, which is {}",
                 self.requested, self.max_valid
+            ),
+            CapacityErrorKind::Allocation => write!(
+                f,
+                "capacity {} is a capacity this queue shape accepts, but the memory for its \
+                 slots could not be allocated",
+                self.requested
             ),
         }
     }

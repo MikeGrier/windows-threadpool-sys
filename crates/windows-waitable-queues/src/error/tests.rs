@@ -117,6 +117,26 @@ fn every_error_renders_something_that_names_its_cause() {
 }
 
 #[test]
+fn an_allocation_failure_names_the_memory_and_offers_no_other_capacity() {
+    let bounds = Bounds {
+        min: 2,
+        max: 1 << 20,
+    };
+    let error = CapacityError::allocation(1 << 19, bounds);
+
+    assert!(error.is_allocation_failure());
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains(&(1_usize << 19).to_string()),
+        "{rendered}"
+    );
+    assert!(rendered.contains("memory"), "{rendered}");
+    // Not a rule the request broke, so it is not described as one.
+    assert!(!rendered.contains("power of two"), "{rendered}");
+    assert_eq!((error.previous_valid(), error.next_valid()), (None, None));
+}
+
+#[test]
 fn a_capacity_error_renders_the_numbers_a_caller_needs_to_correct_the_call() {
     // The whole value of this error is the three numbers, so a rendering that
     // omits them leaves the caller guessing at a legal capacity.

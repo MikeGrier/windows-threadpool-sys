@@ -247,7 +247,34 @@ M34.6 owns that.
   is chosen, the file becomes deletable once the three are done, since none of its own milestones
   are outstanding.
 
-- [x] **M34.8** -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m348)
+- [x] **M34.8** -- Build a second time when the linker could not open its own output. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m348)
+
+- [x] **M34.9** -- Return the post-merge sabotage sweep to green: six shards were reporting entries that did not behave as declared, across four crates. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m349)
+
+- [x] **M34.10** -- A relative `-OutputDirectory` is resolved before the launcher is handed paths built from it. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m3410)
+
+The items below scope sabotage sweeps to what a change could have affected, with a nightly sweep of
+everything behind them. The decision and what scoping cannot see are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#sabotage-scope); the alternatives are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#how-sabotage-scope-was-reached). Each item lands with its
+own harness or planner tests, run on both PowerShell hosts, and with the documentation of what it
+changes.
+
+- [x] **M34.11** -- Check every sabotage patch without building, on every push and pull request. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3411)
+
+- [x] **M34.12** -- Plan only the sabotage manifests a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3412)
+
+- [x] **M34.13** -- Record which tests caught each sabotage entry, and keep the record across runs. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3413)
+
+- [x] **M34.14** -- Within a sabotage manifest, run only the entries a change could have affected. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3414)
+
+- [x] **M34.15** -- In a scoped sweep, run an entry's recorded catching tests before its whole suite. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3415)
+
+- [x] **M34.16** -- Sweep everything nightly, and keep every post-merge sweep from cancelling another. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3416)
+
+- [x] **M34.17** -- Teach the scoped sabotage run as the default local check. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3417)
+
+- [x] **M34.18** -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3418)
 
 ## M37 -- Discharge the failable-call standard across the workspace
 

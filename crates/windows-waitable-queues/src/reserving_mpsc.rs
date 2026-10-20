@@ -188,7 +188,9 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::capacity::{
+    Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, allocate_slots, validate_capacity,
+};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{
@@ -800,7 +802,8 @@ fn claim_word<L: ClaimLayout>(reserved: u32, position: u64) -> L::Word {
 /// # Errors
 ///
 /// Returns [`CapacityError`] if `capacity` is zero, is not a power of two, is
-/// less than two, or exceeds [`BOUNDS_MAX`].
+/// less than two, or exceeds [`BOUNDS_MAX`], or if the memory for the slots
+/// cannot be allocated ([`CapacityError::is_allocation_failure`]).
 ///
 /// # Examples
 ///
@@ -901,17 +904,14 @@ fn build<T, L: ClaimLayout>(
 ) -> Result<Pair<T, L>, CapacityError> {
     validate_capacity(capacity, bounds::<L>())?;
 
-    let mut slots = Vec::with_capacity(capacity);
-    for index in 0..capacity {
-        slots.push(Slot {
-            // Anything that is not `position + 1` for the position this slot
-            // first serves, so the consumer sees it as unpublished. The
-            // position's own value is the natural choice and matches the state
-            // the slot returns to on every later lap.
-            sequence: AtomicU64::new(index as u64),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-        });
-    }
+    let slots = allocate_slots(capacity, bounds::<L>(), |index| Slot {
+        // Anything that is not `position + 1` for the position this slot
+        // first serves, so the consumer sees it as unpublished. The
+        // position's own value is the natural choice and matches the state
+        // the slot returns to on every later lap.
+        sequence: AtomicU64::new(index as u64),
+        value: UnsafeCell::new(MaybeUninit::uninit()),
+    })?;
 
     // Names `L::VALID` so the layout's own const assertions are evaluated.
     // An associated constant in a generic context is only checked where it is
@@ -923,7 +923,7 @@ fn build<T, L: ClaimLayout>(
         layout: PhantomData,
         teardown: Teardown::new(options.disposal),
         metrics: Metrics::new(options.track_high_water),
-        slots: slots.into_boxed_slice(),
+        slots,
         mask: capacity - 1,
         capacity,
         head: CacheAligned(AtomicU64::new(0)),

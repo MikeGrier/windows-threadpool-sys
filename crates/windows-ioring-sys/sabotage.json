@@ -1166,10 +1166,10 @@
       "expect": "caught",
       "why": "The kernel reads both registration arrays when the registration op runs (D-32), so Drop may free them only on the proof the inventory needs. Before PR #113's review the buffer array was an ordinary field and was freed on every path. This patch frees them unconditionally while leaving the inventory's rule alone, so only the registration-array test can notice. That test drops the ring during an unwind, because outside one the rundown assert panics before the release decision is reached in a debug build -- a test that did not would pass against this patch.",
       "find": [
-        "            drop(arrays);\n        }"
+        "            released_files = Some(unsafe { ManuallyDrop::take(&mut self.registered_files) });\n        }"
       ],
       "replace": [
-        "            drop(arrays);\n        } else {\n            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };\n            #[cfg(test)]\n            {\n                let non_empty = usize::from(!arrays.buffer_infos.is_empty())\n                    + usize::from(!arrays.file_handles.is_empty());\n                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));\n            }\n            drop(arrays);\n        }"
+        "            released_files = Some(unsafe { ManuallyDrop::take(&mut self.registered_files) });\n        } else {\n            let arrays = unsafe { ManuallyDrop::take(&mut self.late_read) };\n            #[cfg(test)]\n            {\n                let non_empty = usize::from(!arrays.buffer_infos.is_empty())\n                    + usize::from(!arrays.file_handles.is_empty());\n                LATE_READ_ARRAYS_RELEASED.with(|released| released.set(released.get() + non_empty));\n            }\n            drop(arrays);\n        }"
       ]
     },
     {

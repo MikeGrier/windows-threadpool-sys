@@ -84,7 +84,7 @@ Raw IOCP backend (implemented here):
 Event / `GetOverlappedResult` backend (implemented here):
 
 - For overlapped endpoints that are not associated with any port. Uses `OVERLAPPED.hEvent` plus
-	`WaitForSingleObject` and `GetOverlappedResult` / `GetOverlappedResultEx`.
+	`GetOverlappedResult`, with an event the endpoint creates and owns rather than the handle's own (M16.6).
 - Naturally serializes to the operations an event can distinguish; it is the fallback when port association is
 	unavailable or undesired.
 
@@ -115,6 +115,124 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	(M13.1): the endpoint owns this capability and does not know which family -- `fs`, `socket`, or `device` --
 	will end up using it, so no family gate can be the right one. `Win32_Storage_FileSystem` moved into the
 	always-on `windows-sys` dependency features accordingly.
+
+### Decision -- observers share the handle; only the endpoint does I/O (M16.1)
+
+*The engineer, 2026-10-14, on M16.1's investigation, requested by
+[win-multi-file-tail-watcher](../win-multi-file-tail-watcher/DESIGN-NOTES.md#tw-d-10).*
+
+**An endpoint's handle may be shared with *observers*: holders that keep the handle open and run a fixed
+set of safe queries on it, and that can never become a second endpoint.** The endpoint stays the only
+route to association, submission, and the blocking backend, and stays not `Clone`.
+
+- **What exclusivity protects is one endpoint per handle, not one holder per handle.** Association is
+  per handle for its whole life; `BlockingEndpoint`'s one event is signalled by whichever of its
+  operations completes; and each endpoint's submissions classify "will a packet arrive" from
+  the notification modes it alone recorded. Two endpoints over one handle can therefore return another
+  operation's result while the kernel still writes its buffers, or count a synchronous success as pending
+  forever. A holder that issues no overlapped I/O completes nothing and touches neither the association
+  nor the modes. It does reset the file object's event, which is why no backend waits on that event
+  (M16.6, below).
+- **The endpoint stores its handle behind shared ownership** (a private `SharedHandle` from
+  [win-shared-os-owned-handle](../win-shared-os-owned-handle/)), and the backends keep that storage, so an
+  observer stays valid after the endpoint, or its backend, is gone. The handle closes when its last holder
+  drops.
+- **Backends hold an `EndpointHandle`** (M16.2): the storage as it leaves an endpoint, obtained only by
+  consuming one (`UnassociatedEndpoint::into_endpoint_handle`). It is not `Clone`, lends the handle for
+  native calls and hands out observers, and never yields an `OwnedHandle`. It is public because a backend
+  outside this crate -- `windows-threadpool-sys`' `ThreadpoolIo` -- has to hold it too.
+- **An observer implements neither `AsHandle` nor `AsRawHandle`.** That is what makes "never a second
+  endpoint" structural: safe code holding an observer cannot borrow, duplicate, or wrap the handle, so it
+  cannot reach any constructor that associates or submits. What it offers instead is a curated list of
+  safe queries -- the file's length first (`file_len`, M16.3, behind the `fs` feature, since it is a file
+  query) -- plus an `unsafe` borrow (`EndpointObserver::handle`) whose `# Safety` section lists what must
+  not be done through it: anything that could make it a second endpoint.
+- **What qualifies as an observer query** (2026-10-14, queuing M17): a synchronous information query
+  through the handle that starts no I/O -- file and volume information (`GetFileInformationByHandleEx`
+  classes, `GetFileType`, `GetFinalPathNameByHandleW`, `GetVolumeInformationByHandleW`). File-system and
+  device control codes go through `DeviceIoControl`, which on an overlapped handle needs an `OVERLAPPED`
+  and may pend: that is I/O, so they stay with the endpoint and its device adapters. The list beyond
+  `file_len` is M17 in [CHECKLIST.md](CHECKLIST.md). Queries sit behind `fs` unless they classify any
+  handle: `file_type` (`GetFileType`) is core (the engineer, 2026-10-14: the name says "file", but what
+  counts as a file system is broad -- pipes and character devices answer it, measured, and Win32 documents
+  sockets as pipes).
+- **Observer queries return paths and names as `Wtf16String`** (the engineer, 2026-10-14, for M17):
+  `final_path` and `volume_info` hand back Windows' own UTF-16 unconverted, so this crate takes a
+  dependency on [wtf-string](../wtf-string/) for them. As built (M17.8): an optional dependency enabled by
+  `fs`, not re-exported, as in the repository's other crates. `final_path_as` exposes every volume and
+  name form `GetFinalPathNameByHandleW` takes, since they answer differently -- measured, a named pipe has
+  a path only in the opened form -- and `final_path` is the drive-letter, normalized default.
+- **Win32 constants this crate names itself are tested against `windows-sys`' own** (M17.9). The
+  `FILE_*` file-system flags live behind `Win32_System_SystemServices`, which the crate does not
+  enable, so `FileSystemFlags` names all 30 locally; the tests enable that feature as a dev-dependency
+  and compare each value with the constant of the same name, so the local copy cannot drift silently.
+  The earlier local constant modules (`storage_info_values`, `remote_protocol_values`) predate this and
+  are checked only by behaviour.
+- **One table of every observer query, shared across crates** (M17.10). `test_util::OBSERVER_QUERIES`
+  lists each query, `final_path_as` in every form, and is what every backend's tests issue while an
+  operation pends -- `AssociatedEndpoint` and `BlockingEndpoint` here, `ThreadpoolIo` in
+  [windows-threadpool-sys](../windows-threadpool-sys/src/io/tests.rs). It lives in this crate, which owns
+  the queries, behind an off-by-default `test-util` feature (implying `fs`) so another crate's tests can
+  bind to it instead of keeping a copy; this crate's own tests see it without the feature. The table is a
+  hand census -- Rust cannot enumerate an impl's methods -- so a comment on `EndpointObserver` asks that a
+  new query be added to it.
+- **Every query's output buffer is aligned to 8, not to the structure's own alignment** (M17.6, measured
+  2026-10-14): through an SMB loopback handle, `FileRemoteProtocolInfo` refused a buffer aligned to 4 but
+  not 8 with `ERROR_NOACCESS`, although the structure's Rust alignment is 4. The kernel's per-class
+  requirement is not published, so every query gets 8 rather than only the one measured. A const
+  assertion pins it, because no test caught a dropped alignment: a stack buffer lands 8-aligned more often
+  than not. The kernel-side refusal is tested on the administrative share, `#[ignore]`d for needing it.
+- **Times read through the handle are current; the directory entry's are not** (M17.7, measured
+  2026-10-14 on NTFS and ReFS): after a write through another handle, `basic_info`'s last-write and change
+  times had advanced at the first query, while the directory entry kept the earlier times and length until
+  that handle closed -- the same lag the tail watcher measured for the length. Times are kept as reported
+  (`FileTime`, 100-ns ticks since 1601); `SystemTime` is a conversion, not the storage. Last-access
+  behaviour differed between the two file systems and is documented as differing, nothing more. The
+  measurement is a kept test, re-checked on every run on the temp directory's volume.
+- **Teardown is unchanged in substance.** A backend's `Drop` still cancels and drains what it submitted
+  before releasing its hold. The handle may then stay open, and stay associated, for as long as observers
+  hold it; nothing reaches that association, because only the endpoint ever submitted through it.
+- **`assume_overlapped`'s safety contract does not change.** It still takes an exclusively owned
+  `OwnedHandle`; the endpoint introduces the sharing itself, so every holder of the handle is either the
+  endpoint or one of its observers, and none can come from outside.
+- **`into_handle` can no longer be infallible**, since observers may still hold the handle. That makes
+  the change breaking.
+
+**Alternatives considered.** A type parameter over the handle's storage (`UnassociatedEndpoint<H =
+OwnedHandle>` with owned and shared variants) was workable, but needed an `unsafe` constructor from an
+arbitrary `SharedHandle`, whose clones could become second endpoints, and a parallel generic surface on
+every backend including `windows-threadpool-sys`' `ThreadpoolIo`. Two separate type families would
+duplicate identical invariants and teardown paths. A second, non-overlapped handle per file for queries
+gives isolation by the kernel rather than by types, at the cost of a second open and a second kernel
+object per file; the engineer chose the observer, "a small user mode allocation beats a second kernel
+mode allocation".
+
+The work is M16.2 onward in [CHECKLIST.md](CHECKLIST.md).
+
+### Decision -- `BlockingEndpoint` waits on an event of its own (M16.6)
+
+*The engineer, 2026-10-14, choosing among the options M16.5's testing raised.*
+
+**`BlockingEndpoint` creates one manual-reset event and lends it to each operation's
+`OVERLAPPED.hEvent` for the length of `run`, so `GetOverlappedResult` waits on that event rather than
+the handle's.** Measured 2026-10-14: after an overlapped read completes, the handle is signalled, and one
+synchronous length query through an observer leaves it unsignalled -- a query resets the file object's
+event. A wait on that event could therefore be stranded by an observer's query landing between an
+operation completing and the wait beginning. The test `an_observer_query_resets_the_handles_own_event`
+pins the measurement.
+
+- **One event per endpoint, not per observer or per operation.** It is reset before each `run`, because
+  `run`'s `issue` closure is arbitrary and need not be a call that resets `hEvent` itself.
+- **`run` takes the event back on every exit**, so an `Operation` reused on another backend carries no
+  event with it: on IOCP, a stray `hEvent` would also be signalled by that backend's completions.
+- **`skip_set_event_on_handle` is no longer refused.** It suppresses only the handle's event, and an
+  event supplied in the `OVERLAPPED` is still signalled, so the incompatibility the refusal guarded is
+  gone. `BlockingEndpoint::new` now fails only if it cannot create its event; `TryFromEndpointError`
+  still carries the endpoint back.
+
+**Alternatives considered.** Making observers and the blocking backend exclusive (refuse `new` while an
+observer lives, drop `BlockingEndpoint::observer`) removes a capability and still leaves observers taken
+before `new`. Documenting "do not query while an operation is in flight" leaves a safe API able to hang.
 
 ## Operation storage and identity
 
@@ -217,9 +335,10 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	`fs::classify_issued` and `device::classify_issued` did in M10.5. This was not a separable follow-up: a
 	setter without it would ship the wedge, and the count it needs comes from `WSARecv`/`WSASend`'s
 	`lpNumberOfBytesTransferred`, which the adapters had previously been passing as null.
-- **`FILE_SKIP_SET_EVENT_ON_HANDLE` is unsafe to combine with the blocking backend**, which waits on precisely
-	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
-	because the two are independently useful and the endpoint does not know its future backend.
+- **Superseded by [`BlockingEndpoint` waits on an event of its own (M16.6)](#decision----blockingendpoint-waits-on-an-event-of-its-own-m166).**
+	**`FILE_SKIP_SET_EVENT_ON_HANDLE` was unsafe to combine with the blocking backend** while that backend
+	waited on precisely the handle event the flag suppresses. Recorded on the flag's own documentation rather
+	than prevented, because the two are independently useful and the endpoint does not know its future backend.
 
 ## Caller-supplied owned buffers (M11)
 
@@ -272,6 +391,35 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	of the split rather than a safety measure. It is the natural handoff for a leaked or statically-allocated
 	pool, and satisfies the stable-address promise trivially: the referent is `'static` and never moves, so
 	moving the reference does not move the bytes.
+
+### Decision -- unbuffered I/O asks for its alignment; it does not assume a bound (M17.5)
+
+*The engineer, 2026-10-14.* **A fixed `PAGE_SIZE` (4096) stood in for three numbers with three
+authorities; each is now asked of its authority, with no bound assumed.** The page size that
+scatter/gather segments must be is the operating system's answer. The buffer alignment and the sector size
+(which unbuffered offsets and lengths must be multiples of) are the file system's, asked through the handle
+(`FileAlignmentInfo`, `FileStorageInfo`). File systems are expected to answer between the sector size and
+the page size, and none is known to require more than page alignment, but that is not assumed.
+
+**An answer above a page gets a best effort, and the native call is the final judge** (the engineer,
+2026-10-14). The crate aligns what it controls -- the virtual address of the buffer it allocates -- to the
+larger of the page size and the reported alignment, and does not refuse in advance; if the device still
+cannot accept the buffer, the native call fails and that error is returned. User mode controls only virtual
+addresses: beyond a page, they say nothing about the physical pages behind them, which is presumably why
+such requirements are not seen in practice.
+
+As built (M17.5):
+
+- **`page_size()` replaces the `PAGE_SIZE` constant**, asking `GetSystemInfo` once and keeping the answer.
+- **The caller asks, once, when it allocates; the adapters ask nothing.** `PageBuffers::with_alignment`
+  takes the `AlignmentInfo` an observer reported and aligns the allocation's base to it; `PageBuffers::new`
+  page-aligns as before. This follows "No adapter allocates on the caller's behalf" (M11, below): the
+  buffer is the caller's, so its alignment is too, and the question of asking once per endpoint or per
+  operation does not arise.
+- **Only the base is aligned above a page.** Later pages follow at page intervals, so the buffer stays one
+  contiguous allocation viewable as a slice; each scatter/gather segment is page-aligned.
+- **The sector size is not enforced.** Unbuffered offsets and lengths are the caller's; one that is not a
+  multiple of `storage_info().logical_bytes_per_sector` fails the native call.
 
 ## Cancellation and rundown
 
@@ -472,12 +620,14 @@ not pay for):
 - Core (always on): `Win32_Foundation` and `Win32_System_IO`, which supply `OVERLAPPED`, `OVERLAPPED_ENTRY`,
 	`CreateIoCompletionPort`, `GetQueuedCompletionStatus`, `GetQueuedCompletionStatusEx`,
 	`PostQueuedCompletionStatus`, `CancelIoEx`, and `GetOverlappedResult` / `GetOverlappedResultEx`.
-- The event backend additionally needs `WaitForSingleObject`, which lives under `Win32_System_Threading`.
+- The event backend additionally needs `CreateEventW` and `ResetEvent`, which live under
+	`Win32_System_Threading`, and `CreateEventW`'s `SECURITY_ATTRIBUTES` parameter, under `Win32_Security`;
+	both features are core too, since the blocking backend is (M16.6).
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
 	(`custom_flags(FILE_FLAG_OVERLAPPED | ...)`), so the core completion machinery needs no operation-family
-	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
-	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
+	`windows-sys` bindings for that -- but the core dependency features also include
+	**`Win32_Storage_FileSystem`**, because
 	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
 	operation-family gated (M13.1; see "Endpoint ownership and provenance" above). A default build therefore
 	compiles one more `windows-sys` binding than the minimal completion machinery strictly reads, in exchange
@@ -485,12 +635,12 @@ not pay for):
 	all.
 - Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
 	minimal, one per the families the checklist enumerates:
-	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
-		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
-		own `src/fs.rs` module.)
+	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather, which is already core per
+		the point above, plus `Win32_System_SystemInformation` for `page_size` (M17.5): the page size
+		scatter/gather segments must be is asked of the operating system rather than assumed.
 	- `socket` -> `Win32_Networking_WinSock` -- overlapped socket operations, including
 		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
-		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
+		the core `Win32_Storage_FileSystem` either.
 	- `device` -> `Win32_System_Ioctl` -- device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.
@@ -520,7 +670,7 @@ operation is recovered with `Operation::from_overlapped` when the payload type i
 a typed completion) or with the free `reclaim_overlapped` when it is not (rundown, where a backend frees
 operations of mixed payload types). Endpoints reach a backend by consuming an `UnassociatedEndpoint`:
 `CompletionPort::associate` for IOCP, `BlockingEndpoint::new` for the blocking backend, and, in the thread-pool
-crate, `CreateThreadpoolIo` over the handle taken with `UnassociatedEndpoint::into_handle`.
+crate, `CreateThreadpoolIo` over the handle taken with `UnassociatedEndpoint::into_endpoint_handle`.
 
 The raw IOCP backend is implemented on top of these primitives, which validates that the seam is sufficient for
 a real backend. `TP_IO` reuses them unchanged and adds only its own concerns: `StartThreadpoolIo` before each

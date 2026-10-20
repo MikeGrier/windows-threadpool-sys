@@ -933,6 +933,15 @@
       "replace": ["    const WARRANTY: WarrantyClass = WarrantyClass::BestEffort;"]
     },
     {
+      "name": "DI-10.1: an unbuffered file is allowed on a remote device",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "refused-by-build",
+      "buildError": "assertion failed: Unbuffered::LOCAL_DEVICE_ONLY",
+      "why": "A remote file cannot keep the claim that makes a file unbuffered. The behavioural test that opens one over the administrative share is ignored by default, so the constant that gates the check is what a default run holds: the unit tests assert it in a const block, so the test build fails on the patch and no test runs.",
+      "find": ["    const LOCAL_DEVICE_ONLY: bool = true;"],
+      "replace": ["    const LOCAL_DEVICE_ONLY: bool = false;"]
+    },
+    {
       "name": "DI-10.1: the default sector size is the smaller one",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",

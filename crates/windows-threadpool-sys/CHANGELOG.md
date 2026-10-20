@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.2...windows-threadpool-sys-v0.3.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **threadpool:** ThreadpoolIo's endpoint and observer types now come from windows-overlapped-io-sys 0.3.
+
+### Features
+
+* **threadpool:** release as 0.3.0, paired with windows-overlapped-io-sys 0.3 ([df19b54](https://github.com/MikeGrier/windows-threadpool-sys/commit/df19b541c1ac6ca9f4bac069f8dce4607224b07c))
+
+## [0.2.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.1...windows-threadpool-sys-v0.2.2) (2026-10-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-overlapped-io-sys bumped from 0.2.0 to 0.3.0
+  * dev-dependencies
+    * windows-overlapped-io-sys bumped from 0.2.0 to 0.3.0
+
 ## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.2.0...windows-threadpool-sys-v0.2.1) (2026-10-15)
 
 

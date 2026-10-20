@@ -1,0 +1,40 @@
+{
+  "package": "windows-waitable-queues",
+  "description": "Sabotages for the experimental permit_mpsc shape, which sabotage.json cannot reach because that manifest runs without the experimental-permit-claim feature and permit_mpsc is not compiled then. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
+  "testArgs": ["-p", "windows-waitable-queues", "--features", "experimental-permit-claim", "--lib"],
+  "sabotages": [
+    {
+      "name": "permit_mpsc panics on an allocation failure",
+      "file": "src/permit_mpsc.rs",
+      "expect": "caught",
+      "why": "Each constructor has to propagate the allocation helper's refusal, and each is a separate site; this is the one the default manifest cannot reach.",
+      "find": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })?;",
+        "",
+        "    let shared = Arc::new(Shared {",
+        "        metrics: Metrics::new(false),"
+      ],
+      "replace": [
+        "        value: UnsafeCell::new(MaybeUninit::uninit()),",
+        "    })",
+        "    .expect(\"the ring is allocated\");",
+        "",
+        "    let shared = Arc::new(Shared {",
+        "        metrics: Metrics::new(false),"
+      ]
+    },
+    {
+      "name": "the ring is reserved with the amortised call instead of the exact one",
+      "file": "src/capacity.rs",
+      "expect": "survives",
+      "why": "Control: `try_reserve` refuses exactly what `try_reserve_exact` refuses and the boxed slice is trimmed to its length either way, so no test can tell them apart. If this were caught, the manifest would be measuring something other than what these tests do.",
+      "find": [
+        "        .try_reserve_exact(capacity)"
+      ],
+      "replace": [
+        "        .try_reserve(capacity)"
+      ]
+    }
+  ]
+}
