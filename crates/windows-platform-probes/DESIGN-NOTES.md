@@ -2418,7 +2418,7 @@ decision, and the request crate's `NR-3.7` is done with it.
 
 The request crate's requests hold a `SharedHandle`
 ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and `CapturedHandle`, whose
-`DuplicateHandle` the probe timed as "what a request costs to carry a handle", is going. So the
+`DuplicateHandle` the probe timed as "what a request costs to carry a handle", is deleted (`NR-6.2`). So the
 probe times what a request now does with a handle:
 
 - **`share_handle`**: a clone of a `SharedHandle` and its drop, with the original held throughout,
