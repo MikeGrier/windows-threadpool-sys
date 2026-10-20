@@ -144,3 +144,19 @@ The item as it stood at completion:
   implements too. The outcome as an enum: signalled or abandoned with an index, timed out, or ended
   by an APC in an alertable wait. `QueueUserAPC` belongs with it, as what ends an alertable wait.
   `WaitForSingleObject` itself was taken up first, as [WS-2.1](COMPLETED-CHECKLIST.md#ws-21).
+
+## Moved 2026-10-18 23:18:38 -04:00 -- WS-M2: an event's clones share one handle
+
+### <a id="ws-21"></a>WS-2.1 -- `Event` and `WaitOnlyEvent` hold a `SharedHandle` and their clones share it; `try_clone` is gone, and the one operation that makes a handle is `duplicate_wait_only`. *(completed 2026-10-18 23:18:38 -04:00)*
+
+Proposed by the assistant as the engineer's ruling of 2026-10-18 applied here, and started on "implement ws-2.1".
+The decision is [WS-D-10](DESIGN-NOTES.md#ws-d-10); [WS-D-5](DESIGN-NOTES.md#ws-d-5) and
+[WS-D-7](DESIGN-NOTES.md#ws-d-7) are marked amended. Implementing it found the plan backwards: the thread pool's
+`From<Event>` took the event as an `OwnedHandle`, so its shared wait target
+([M-T15.1](../windows-threadpool-sys/COMPLETED-CHECKLIST.md#m-t151)) had to land first, and the item was
+restructured. It landed in single-crate steps that each built: the additive change here with the `Release-As:
+0.1.0` footer `WS-1+.6` asks for; the thread pool's `From<Event>` moving to the shared target; `win-durable-ioring`
+cloning where it duplicated; the deletion here. The sweep found the `WS-1+.1` APC sabotages surviving, a
+pre-existing gap since `WS-D-9`'s same-process check came to precede `QueueUserAPC`'s own refusal; one test's
+handle was given the query right so that the refusal is the call's again, in a commit of its own. All 47 of the
+crate's sabotages behave as declared.
