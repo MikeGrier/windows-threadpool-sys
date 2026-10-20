@@ -12,20 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M16 -- Hand the request crate the handles already held
-
-- [ ] **DI-16.1** -- **`win-durable-ioring` stops duplicating handles it holds.** The request crate's `NR-6`
-  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) has its entries hold a `SharedHandle`. An
-  `OpenedFile` already holds one, yet `final_location` in
-  [opened_file.rs](../win-durable-ioring/src/windows_backend/opened_file.rs) and `HandleKindQuery::of` in
-  [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) duplicate it to ask its final path and
-  kind. Both take the `SharedHandle` instead and give the entry a clone; `HandleKindQuery::of` changes signature,
-  so this is breaking for `win-durable-ioring`, in a commit of its own. `OpenedVolume` and `OpenedDisk` are
-  checked for the same pattern. Tests: the existing ones, and that asking an opened file's kind makes no handle.
-  Lands after `NR-6.1` and before `NR-6.2`.
-
-  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md).
-
 ## DI-M11 -- The core driven by script
 
 - [ ] **DI-11.1** -- **An in-memory backend whose targets and backend fault on a script**

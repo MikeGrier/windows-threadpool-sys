@@ -538,7 +538,7 @@ crates' checklists; this is only the order and the links, and each item's own ch
 1. [NR-6.1](crates/windows-namespace-request-sys/CHECKLIST.md) -- request entries hold a `SharedHandle`;
    additive for callers that build entries.
 2. The consumers move off `CapturedHandle`, in any order:
-   [DI-16.1](crates/durable-ioring/CHECKLIST.md), [M7.1](crates/windows-platform-probes/COMPLETED-CHECKLIST.md#m71),
+   [DI-16.1](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-161), [M7.1](crates/windows-platform-probes/COMPLETED-CHECKLIST.md#m71),
    [SAFE-1](crates/windows-file-enumeration-sys/CHECKLIST.md).
 3. [NR-6.2](crates/windows-namespace-request-sys/CHECKLIST.md) -- capture deleted. `NR-6.3` to `NR-6.5` may land
    at any point before the release.

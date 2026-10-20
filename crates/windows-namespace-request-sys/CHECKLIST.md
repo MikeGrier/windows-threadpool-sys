@@ -21,7 +21,7 @@ of each other. Then this crate is released, a new minor.
 - [x] **NR-6.1** -- Every entry that takes a handle holds a `SharedHandle`, built from `impl Into<SharedHandle>`, and all but the two carrying security attributes derive `Clone`. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#nr-61-shared)
 
   > **-> CROSS-COMPONENT HANDOFF:** the consumers move off `CapturedHandle` before `NR-6.2`:
-  > [DI-16.1](../durable-ioring/CHECKLIST.md) (`win-durable-ioring`),
+  > [DI-16.1](../durable-ioring/COMPLETED-CHECKLIST.md#di-161) (`win-durable-ioring`),
   > [M7.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m71) (`windows-platform-probes`), and
   > [SAFE-1](../windows-file-enumeration-sys/CHECKLIST.md) (`windows-file-enumeration-sys`' metadata test).
 

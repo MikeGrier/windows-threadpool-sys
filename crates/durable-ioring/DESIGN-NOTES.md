@@ -584,9 +584,10 @@ two points the sketch raised and the engineer did not rule, the variants' names 
 path, stand as built until amended.
 
 - **The shape is a type, not a function, and the opener returns nothing.** `HandleKindQuery`, built from any handle
-  by `HandleKindQuery::of` and made with `perform`, holds a duplicate of the handle in the request crate's pattern
-  (`QueryFileType` over a `CapturedHandle`), so it can be performed on any thread, more than once, and after the
-  handle it was built from is closed. For an opened file, volume or disk, pass its `handle()`.
+  by `HandleKindQuery::of` and made with `perform`, holds a share of the `SharedHandle` it is given (`QueryFileType`
+  over a clone of it), so it can be performed on any thread, more than once, and after the caller drops its own
+  share. It makes no handle, so building one cannot fail. For an opened file, volume or disk, pass its `handle()`.
+  As first built it held a duplicate, in the request crate's pattern of the time; [DI-16.1](#di-16-1) changed that.
 - **Three queries, each asked only if the one before leaves the question open.** `GetFileType`; then, for `DISK` only,
   `IOCTL_STORAGE_GET_DEVICE_NUMBER`; then, if that answered, `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`. The result,
   `HandleKind`, is `DiskFile`, `Volume { number, extents }`, `PhysicalDisk(number)`, `CharacterDevice`, `Pipe` or
@@ -604,9 +605,25 @@ path, stand as built until amended.
   control with type 7 and partition 0 and the extents control with `ERROR_INVALID_FUNCTION`. The two controls' answers are
   what the classification rests on; the partition number is carried and is not used to tell the two apart, since
   nothing documents what a disk's is.
-- **Not reached.** The error of `GetFileType` is not reached: the query holds its own duplicate of an open handle, so
-  there is no input that makes the call fail. The sabotage that reads that failure as an unknown type is a declared
-  survivor.
+- **Not reached.** The error of `GetFileType` is not reached: the query holds a share of an open handle, which keeps it
+  open, so there is no input that makes the call fail. The sabotage that reads that failure as an unknown type is a
+  declared survivor.
+
+<a id="di-16-1"></a>
+**What DI-16.1 changed: the request crate is handed the handle already held** ([DI-16.1](COMPLETED-CHECKLIST.md#di-161)).
+The request crate's entries hold a `SharedHandle` ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), so
+nothing here duplicates a handle it holds to ask a question of it.
+
+- **`HandleKindQuery::of` takes `&SharedHandle` and is infallible.** It had taken any `AsHandle` and returned the
+  duplicate's error; the signature change is breaking for `win-durable-ioring`. A caller with a handle it does not
+  share wraps it in `SharedHandle::from` first.
+- **An opened file's final path is asked of the handle it holds.** `final_location` takes the `SharedHandle` and gives
+  the request a clone.
+- **`OpenedVolume` and `OpenedDisk` were checked and had nothing to change**: they hold a `SharedHandle` and never hand
+  one to the request crate.
+- **What is tested.** That asking an opened file's kind makes no handle: the query's handle is the same shared handle,
+  with the same raw value. A duplicate in `final_location` is not observable, since the request is made and dropped
+  inside it and only the path comes back; its sabotage is a declared survivor.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with

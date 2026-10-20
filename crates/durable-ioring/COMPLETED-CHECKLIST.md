@@ -3508,3 +3508,26 @@ items; this withdrawn item, checked in place in `DI-M6+`, comes here instead, ve
 - [x] **DI-6+.3** -- **Withdrawn: rebinding a file to a new handle is not this layer's**
   ([DI-D-11](DESIGN-NOTES.md#di-d-11)). Nothing remains to do here; the obligation it left is in
   DI-2.2.
+
+## Moved 2026-10-19 20:44:41 -04:00 -- DI-M16, the request crate handed the handles already held
+
+### <a id="di-161"></a>DI-16.1 -- `win-durable-ioring` stops duplicating handles it holds. *(completed 2026-10-19 20:44:41 -04:00)*
+
+`HandleKindQuery::of` takes `&SharedHandle` and is infallible; `final_location` asks the final path of the
+`SharedHandle` an `OpenedFile` holds. `OpenedVolume` and `OpenedDisk` had nothing to change. What was decided and
+what is tested: [DESIGN-NOTES.md](DESIGN-NOTES.md#di-16-1). The item as it stood at completion follows verbatim.
+
+- [x] **DI-16.1** -- **`win-durable-ioring` stops duplicating handles it holds.** The request crate's `NR-6`
+  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) has its entries hold a `SharedHandle`. An
+  `OpenedFile` already holds one, yet `final_location` in
+  [opened_file.rs](../win-durable-ioring/src/windows_backend/opened_file.rs) and `HandleKindQuery::of` in
+  [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) duplicate it to ask its final path and
+  kind. Both take the `SharedHandle` instead and give the entry a clone; `HandleKindQuery::of` changes signature,
+  so this is breaking for `win-durable-ioring`, in a commit of its own. `OpenedVolume` and `OpenedDisk` are
+  checked for the same pattern. Tests: the existing ones, and that asking an opened file's kind makes no handle.
+  Lands after `NR-6.1` and before `NR-6.2`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys` -> `NR-M6` ->
+  > `NR-6.2` (delete capture). See [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
