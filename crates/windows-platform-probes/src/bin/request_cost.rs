@@ -73,13 +73,14 @@ fn render(out: &mut dyn std::fmt::Write) {
     // construct-and-DESTROY cycle: `time_loop` drops the value it is handed at
     // the end of the timed statement, so the free is inside the figure, and for
     // the two `perform` rows the drop is the `CloseHandle` of the handle the
-    // open returned. `capture_handle` and `close_handle` are the exception and
-    // are timed apart, because dropping a `CapturedHandle` calls `CloseHandle`
-    // and that is a second kernel transition rather than a free.
+    // open returned. `duplicate_borrowed_handle` and `close_duplicate` are the
+    // exception and are timed apart, because dropping the `OwnedHandle` a
+    // duplication returns calls `CloseHandle` and that is a second kernel
+    // transition rather than a free.
     let _ = writeln!(
         out,
         "  (every row but the last two is a construct-and-drop cycle, and the perform\n   \
-         rows are an open-and-close cycle; capture and close are timed separately)"
+         rows are an open-and-close cycle; a duplicate and its close are timed separately)"
     );
     for timing in &observation.timings {
         let _ = writeln!(
@@ -110,7 +111,9 @@ fn render(out: &mut dyn std::fmt::Write) {
     let clone_grafted = observation.get("clone_request_grafted");
     let perform = observation.get("perform_open");
     let build_and_perform = observation.get("build_and_perform_open");
-    let capture = observation.get("capture_handle");
+    let share = observation.get("share_handle");
+    let with_handle = observation.get("build_request_with_handle");
+    let duplicate = observation.get("duplicate_borrowed_handle");
 
     if let Some(build) = build {
         // The ratio names its own reference, because the two numbers do not
@@ -148,7 +151,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  duplicate a handle -- and it ends in a CreateFileW costing"
+            "  carry a handle -- and it ends in a CreateFileW costing"
         );
         let _ = writeln!(
             out,
@@ -290,40 +293,53 @@ fn render(out: &mut dyn std::fmt::Write) {
         }
     }
 
-    if let Some(capture) = capture {
+    // A handle in a request, as figures and the mechanism. A request holds a
+    // `SharedHandle`, so giving it one is a clone of a handle the caller already
+    // shares; nothing is duplicated.
+    if let Some(share) = share {
         let _ = writeln!(
             out,
-            "\n  duplicating a handle costs {capture:.0} ns -- a kernel transition, not"
+            "\n  A request holds a handle it carries shared: giving it one is a clone of a"
         );
         let _ = writeln!(
             out,
-            "  a memory copy, and easy to under-count when thinking about what an"
+            "  handle the caller already shares, which counts one more holder. A clone and"
         );
-        let _ = writeln!(out, "  SQE holds.");
-        // Reported beside it because the duplication figure above excludes it by
-        // construction, and a reader sizing a request's real cost needs both:
-        // every captured handle is eventually closed, so the lifecycle is the
-        // pair. Keeping them separate is what stops either being quoted as the
-        // other.
-        if let Some(close) = observation.get("close_handle") {
+        let _ = writeln!(out, "  its drop cost {share:.0} ns.");
+        if let Some(build) = build
+            && let Some(with_handle) = with_handle
+        {
             let _ = writeln!(
                 out,
-                "  Closing one costs a further {close:.0} ns, measured separately, so a"
+                "  Building the absolute-path request with a template handle costs {with_handle:.0} ns,"
             );
-            let _ = writeln!(
-                out,
-                "  captured handle's whole lifecycle is {:.0} ns. The duplication figure",
-                capture + close
-            );
-            let _ = writeln!(out, "  above is the duplication alone.");
+            let _ = writeln!(out, "  against {build:.0} ns without one.");
         }
-        if let Some(build) = build {
+    }
+
+    // Outside the request crate: what a caller holding only a borrowed handle
+    // pays for one it can share. Labelled as that and not as a request's cost,
+    // because a request no longer duplicates anything.
+    if let Some(duplicate) = duplicate {
+        let _ = writeln!(
+            out,
+            "\n  A caller holding only a BORROWED handle pays, outside the request crate,"
+        );
+        let _ = writeln!(
+            out,
+            "  for one it can share: duplicating it costs {duplicate:.0} ns, a kernel transition."
+        );
+        // Reported beside it because the duplication figure excludes it by
+        // construction, and every duplicate is eventually closed, so the
+        // lifecycle is the pair. Keeping them separate is what stops either
+        // being quoted as the other.
+        if let Some(close) = observation.get("close_duplicate") {
             let _ = writeln!(
                 out,
-                "  It is {:.2}x the cost of building a request for an absolute path.",
-                capture / build
+                "  Closing the duplicate costs a further {close:.0} ns, measured separately."
             );
         }
+        let _ = writeln!(out, "  Neither is part of building a request.");
     }
 
     // Built by walking the SAME `timings` the prose table walked, with

@@ -300,10 +300,3 @@ IDs keep their M2 numbers, for the reason given under M4.
 - [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
 - [x] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m216)
-
-## M6 -- Follow the namespace request crate's path contract
-
-- [x] **M6.1** -- Rewrite the `request_cost` probe against the new request path design. -> [completed 2026-10-16](COMPLETED-CHECKLIST.md#m61)
-
-  **Next:** nothing further in this crate. The order across the crates is at the top of
-  [durable-ioring's CHECKLIST.md](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).

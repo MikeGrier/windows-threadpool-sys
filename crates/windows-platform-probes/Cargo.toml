@@ -163,6 +163,9 @@ windows-placement-probe = { path = "../windows-placement-probe" }
 # a queue, not a stand-in, for the same reason the topology probe reads the
 # shipping parse: a reimplementation would measure the reimplementation.
 windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
+# The handle a request holds (`D-32` in the request crate's design notes): the request-cost probe
+# times sharing one, which is what a request now does with a handle instead of duplicating it.
+win-shared-os-owned-handle = { path = "../win-shared-os-owned-handle" }
 # The contention probe measures the shipping queue shapes rather than a
 # reimplementation, for the same reason: a stand-in would only measure itself,
 # and the whole question is what the real tail claim costs.

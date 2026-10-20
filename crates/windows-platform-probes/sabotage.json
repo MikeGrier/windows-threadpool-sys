@@ -136,6 +136,30 @@
       "replace": [
         "    let kept_long = Wtf16String::from(\"directory\");"
       ]
+    },
+    {
+      "name": "request_cost: the share_handle row is measured and not recorded",
+      "file": "src/request_cost.rs",
+      "expect": "caught",
+      "why": "M7.1: the row that times what a request now does with a handle would silently leave the report and its NDJSON line, which the census of every label exists to refuse.",
+      "find": [
+        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+      ],
+      "replace": [
+        "    let _ = time_loop(\"share_handle\", ITERATIONS, || shared.clone());"
+      ]
+    },
+    {
+      "name": "request_cost control: the shared handle is cloned through the trait path",
+      "file": "src/request_cost.rs",
+      "expect": "survives",
+      "why": "A control: the same clone spelled another way, which no test can tell apart.",
+      "find": [
+        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || shared.clone()));"
+      ],
+      "replace": [
+        "    timings.push(time_loop(\"share_handle\", ITERATIONS, || Clone::clone(&shared)));"
+      ]
     }
   ]
 }
