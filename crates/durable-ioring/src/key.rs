@@ -6,7 +6,7 @@
 //! the target can do what the [`HasData`] marker `A` says. The ring's submit methods take a
 //! [`WriteKey`] or a [`ReadKey`], and a `Key<A>` is one only where `A` can write or can read, so a
 //! write through a `Key<ReadOnly>` does not compile. An untyped `IoTargetKey` is both, and is judged
-//! when it is pushed ([DI-13.9](crate::RefusalCause::AccessDenied)); so is any typed key that
+//! when it is pushed ([DI-13.9](crate::backend::RefusalCause::AccessDenied)); so is any typed key that
 //! declared more than its target has, unless registration refused it first.
 //!
 //! The declaration is the consumer's, and the ring cannot see it: the target is erased behind a
