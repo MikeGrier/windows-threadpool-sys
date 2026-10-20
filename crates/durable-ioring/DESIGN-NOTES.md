@@ -1206,4 +1206,28 @@ entries in the manifest were re-pointed at the lines the change moved, with the 
 means interior mutability in every backend for one rare fault; `attach` and `detach` have no failure type to
 script. Both are open to the engineer's ruling and nothing is scheduled by this note.
 
-**Scheduled work.** None. [DI-11.2](CHECKLIST.md) is the merge-or-delete decision this makes possible.
+**Scheduled work.** None. [DI-D-75](#di-d-75) is the merge-or-delete decision this made possible.
+
+## <a id="di-d-75"></a>DI-D-75: both paths for fault injection stay
+
+**What is decided.** The engineer, 2026-10-20, asked whether the Windows backend's fault seam should be kept now that
+the in-memory backend has a fault script ([DI-D-74](#di-d-74)): "I think it's a good idea to keep both paths for fault
+injection." So `fail_next_flush` on `Dioring` and `fail_next_commit` on `WindowsBackend`, behind `win-durable-ioring`'s
+`fault-injection` feature, stay beside the script, and neither is merged into the other or deleted. This closes
+[DI-11.2](COMPLETED-CHECKLIST.md#di-112), the merge-or-delete decision the repository's duplicate-then-decide rule
+required of them.
+
+**What the two are, as the assistant put them to the engineer.** They are two layers and not two copies. The script
+drives the portable core through `MemoryBackend`, so everything about how the core answers a failed flush is produced
+without a device. The Windows seam runs a failing flush through the Windows driver and the real ring on a real file: the
+commit still reaches the kernel and only the answer changes, so a Win32 code goes through `error_code_from_win32` and
+is read back by `win32_code_of`, which `MemoryBackend` never touches. `Dioring` is the only `DurableRing` this
+repository ships, and the in-memory backend cannot drive it, so the seam is also what lets `win-durable-ioring`'s
+README examples fail a flush. The seam is one mechanism: `fail_next_flush` forwards to `fail_next_commit`, which sits on
+`windows-ioring-sys`' own seam. Neither produces a failure of the kernel's own, which is `DI-4.1`'s open problem.
+
+**Not decided here.** Whether the tests of `win-durable-ioring` that only check how the core answers a failure, and not
+what the Windows driver adds, should move to the portable crate and use a script. The assistant proposed it; the
+engineer has not ruled on it, and it is not scheduled.
+
+**Scheduled work.** None.

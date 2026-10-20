@@ -1061,7 +1061,8 @@ fn region(span: RegisteredSpan) -> RegisteredRegion {
 /// The fault seam (`DI-3.2.4`): failures on demand, for tests and for the contract's worked
 /// examples. It transforms a commit's real completion through `windows-ioring-sys`' own seam, so
 /// the commit still reaches the kernel and only the answer dioring sees changes -- the backend's
-/// `fail_next_commit`, under the contract's older word for a commit (DI-11.2).
+/// `fail_next_commit`, under the contract's older word for a commit. It is kept beside the in-memory
+/// backend's fault script, as another layer and not a copy of it (DI-D-75).
 #[cfg(feature = "fault-injection")]
 impl<B: IoBuf, E: EpochId + 'static, C, R: IoBufMut, K: StampClock> Dioring<B, E, C, R, K> {
     /// Make the next flush of `file` to complete report the Win32 error `code` -- for example

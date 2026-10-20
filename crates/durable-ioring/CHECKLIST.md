@@ -12,15 +12,6 @@ new milestones are numbered after the parked DI-M5+ and DI-M6+, which are cited 
 renumber. The flush-failure spike (DI-M4) runs alongside and gates nothing. This file holds only work in
 scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARKED.md](PARKED.md).
 
-## DI-M11 -- The core driven by script
-
-- [x] **DI-11.1** -- The in-memory backend's targets and the backend itself fault on a script: failed, held, late, out of order, short, refused. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-111)
-
-- [ ] **DI-11.2** -- **The fault seam's merge-or-delete decision**, once `DI-11.1` is proven: the
-  `fault-injection` feature's `fail_next_flush`, and the Windows backend's `fail_next_commit` added
-  beside it in `DI-3.10.3.5.5`, duplicate what the in-memory backend scripts
-  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), and stay until then under the duplicate-then-decide rule.
-
 ## DI-M12 -- Beside the core: diagnostics, routing, and release
 
 - [ ] **DI-12.1** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to

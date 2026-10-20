@@ -3604,3 +3604,20 @@ doorbell and a failed pop. A held completion counts against the completion queue
 [DI-D-74](DESIGN-NOTES.md#di-d-74), which also names what is not scripted and why. Tests: those of
 `memory/script/tests.rs`, those driving the core in [scripted.rs](src/io_core/tests/scripted.rs), and sabotage
 entries, with a control, in [sabotage.json](sabotage.json). It does not replace `DI-4.1`.
+
+## Moved 2026-10-20 19:53:07 -04:00 -- DI-M11: the core driven by script
+
+### <a id="di-112"></a>DI-11.2 -- Both paths for fault injection stay: the in-memory script and the Windows backend's seam are kept. *(completed 2026-10-20 19:53:07 -04:00)*
+
+The item as written:
+
+**The fault seam's merge-or-delete decision**, once `DI-11.1` is proven: the
+  `fault-injection` feature's `fail_next_flush`, and the Windows backend's `fail_next_commit` added
+  beside it in `DI-3.10.3.5.5`, duplicate what the in-memory backend scripts
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50)), and stay until then under the duplicate-then-decide rule.
+
+The engineer, 2026-10-20: "I think it's a good idea to keep both paths for fault injection." So the seam is neither
+merged into the script nor deleted, and the duplicate-then-decide rule's decision is taken: the two are different layers,
+not a duplicate to be collapsed. The account of why, and the one question left unruled (whether tests that only check
+the core's answer to a failure move to the portable crate), are [DI-D-75](DESIGN-NOTES.md#di-d-75). Nothing in the code
+changed beyond the pointer in `Dioring::fail_next_flush`'s documentation.
