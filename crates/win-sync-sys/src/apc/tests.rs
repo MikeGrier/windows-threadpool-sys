@@ -223,9 +223,13 @@ fn a_thread_handle_without_set_context_access_is_refused_and_one_with_it_is_not(
     let ran = Arc::new(AtomicBool::new(false));
     let drops = Arc::new(AtomicUsize::new(0));
     let (flag, guard) = (Arc::clone(&ran), DropCount(Arc::clone(&drops)));
-    let without = duplicate_handle_with_access(&worker, Access::SYNCHRONIZE).expect("duplicate");
-    // SYNCHRONIZE alone lacks the query access as well, so this one is refused by the process
-    // check, before `QueueUserAPC` is called; the next test reaches the call's own refusal.
+    // The query right lets the same-process check (WS-D-9) pass, so the refusal is
+    // `QueueUserAPC`'s own, which is the path this test exists to reach.
+    let without = duplicate_handle_with_access(
+        &worker,
+        Access::from_bits(THREAD_QUERY_LIMITED_INFORMATION) | Access::SYNCHRONIZE,
+    )
+    .expect("duplicate");
     let error = queue_user_apc(&without, move || {
         let _guard = &guard;
         flag.store(true, Ordering::SeqCst);
@@ -249,37 +253,6 @@ fn a_thread_handle_without_set_context_access_is_refused_and_one_with_it_is_not(
     release.send(()).expect("release");
     assert_eq!(worker.join().expect("worker"), WaitOutcome::Alerted);
     assert!(ran.load(Ordering::SeqCst), "the permitted one ran");
-}
-
-#[test]
-fn a_thread_of_this_process_that_queueing_is_refused_for_is_refused_and_the_routine_is_dropped() {
-    // The handle can be asked which process it belongs to (THREAD_QUERY_LIMITED_INFORMATION), so it
-    // gets past that check, and lacks THREAD_SET_CONTEXT, so the refusal is `QueueUserAPC`'s own,
-    // after the routine was boxed and handed to it: the failure the other refusals come before.
-    let (release, hold) = mpsc::channel::<()>();
-    let worker = spawn_running(move || hold.recv().expect("released"));
-
-    let ran = Arc::new(AtomicBool::new(false));
-    let drops = Arc::new(AtomicUsize::new(0));
-    let (flag, guard) = (Arc::clone(&ran), DropCount(Arc::clone(&drops)));
-    let query_only =
-        duplicate_handle_with_access(&worker, Access::from_bits(THREAD_QUERY_LIMITED_INFORMATION))
-            .expect("duplicate");
-    let error = queue_user_apc(&query_only, move || {
-        let _guard = &guard;
-        flag.store(true, Ordering::SeqCst);
-    })
-    .expect_err("no THREAD_SET_CONTEXT");
-
-    assert_eq!(
-        error.raw_os_error(),
-        i32::try_from(ERROR_ACCESS_DENIED).ok()
-    );
-    assert_eq!(drops.load(Ordering::SeqCst), 1, "dropped, not leaked");
-    assert!(!ran.load(Ordering::SeqCst));
-
-    release.send(()).expect("release");
-    worker.join().expect("worker");
 }
 
 #[test]
