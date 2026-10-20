@@ -1269,3 +1269,34 @@ takes an `Option<SharedHandle>`, since `None` would leave a generic parameter wi
 **Scheduled work:** none left in this crate for the decision itself: `NR-6.1` and `NR-6.2` are complete
 ([COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md)). The release that carries it is `M43`'s step 4 in the workspace
 [CHECKLIST.md](../../CHECKLIST.md).
+
+## <a id="d-33"></a>D-33: `FileBasicInfo` has a typed entry, `QueryFileBasicInfo`, shaped as D-31's, which carries the five fields as the call wrote them
+
+**Queued as `NR-6.4`** for `windows-file-enumeration-sys`' `SAFE-2`, whose check that an opened root is a
+directory reads the attributes under `forbid(unsafe_code)`, and so cannot read them out of the untyped entry's bytes. Source read 2026-10-19: the
+`FILE_BASIC_INFO` page (`ms.date` 2024-08-02).
+
+**The shape is [D-31](#d-31)'s, and so is the reason it is still one entry per call.** `QueryFileBasicInfo` makes
+one `GetFileInformationByHandleEx` call with `FileBasicInfo`, the class taken from `FileInformationClass::BASIC`,
+into a `FILE_BASIC_INFO` on the stack. It holds a `SharedHandle` and is `Clone` ([D-32](#d-32)). The untyped entry
+remains the catalogue's form of the call for every class.
+
+**The values are carried as the call wrote them.** `FileBasicInfo` holds `CreationTime`, `LastAccessTime`,
+`LastWriteTime` and `ChangeTime` as `i64` and `FileAttributes` as its raw `u32`. The page gives the times "in FILETIME
+format", 100-nanosecond intervals since 1601-01-01 UTC, and the attributes as the file attribute constants; nothing
+here converts a time to another type or names an attribute bit, and `FILE_BASIC_INFO` is not part of the surface
+([D-13](#d-13)). A refusal is the call's code, unaltered.
+
+**Observed 2026-10-19, Windows 11 build 26300, local NTFS, unelevated.** Three times set through std's `set_times`
+read back exactly in their fields, with the change time after them. A directory reported the directory attribute and
+a file did not; a read-only file reported the read-only attribute. A file opened with no access answered (attributes
+`0x20`), and so did an anonymous pipe (`0x80`), which `FileIdInfo` refuses. Refused: an event with
+`ERROR_INVALID_HANDLE`, `NUL` with `ERROR_INVALID_PARAMETER`, and a volume opened with no access with
+`ERROR_INVALID_FUNCTION`. None of these outcomes is on the page, so the tests compare each handle's outcome with the
+untyped entry's for the same handle, except the event's code, which is named as [D-29](#d-29) names it. One
+observation about NTFS rather than this entry, recorded because a test depends on it: a time set explicitly through a
+handle did not move when the file was later written through that same handle, so the test of the write time writes
+through a handle of its own.
+
+**Scheduled work:** none in this crate. The consumer is the enumeration crate's `SAFE-2`
+([its CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)).

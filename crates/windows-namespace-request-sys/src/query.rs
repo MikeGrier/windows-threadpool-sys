@@ -122,6 +122,7 @@ pub struct FileInformationClass(FILE_INFO_BY_HANDLE_CLASS);
 
 impl FileInformationClass {
     /// `FileBasicInfo`: timestamps and attributes. A pure read.
+    /// [`QueryFileBasicInfo`](crate::file_basic::QueryFileBasicInfo) reads it as values.
     pub const BASIC: Self = Self(FileBasicInfo);
     /// `FileIdInfo`: the volume serial and 128-bit file id. A pure read.
     /// [`QueryFileIdInfo`](crate::file_id::QueryFileIdInfo) reads it as values.

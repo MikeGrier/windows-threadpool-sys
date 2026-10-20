@@ -14,8 +14,8 @@ use crate::handle::tests::{Fixture, handle_allocation};
 use crate::security::SecurityAttributes;
 use crate::{
     FileIdentifier, FileInformationClass, FileType, OpenFile, OpenFileByIdentifier,
-    QueryFileIdInfo, QueryFileInformation, QueryFileInformationByHandle, QueryFileType,
-    QueryFinalPath, QueryVolumeInformation, ReOpenFile,
+    QueryFileBasicInfo, QueryFileIdInfo, QueryFileInformation, QueryFileInformationByHandle,
+    QueryFileType, QueryFinalPath, QueryVolumeInformation, ReOpenFile,
 };
 
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
@@ -39,6 +39,11 @@ fn every_entry_holds_the_handle_it_is_given_and_makes_none_of_its_own() {
     );
     assert!(
         QueryFileIdInfo::new(handle.clone())
+            .handle()
+            .same_handle(&handle)
+    );
+    assert!(
+        QueryFileBasicInfo::new(handle.clone())
             .handle()
             .same_handle(&handle)
     );
@@ -98,6 +103,8 @@ fn a_clone_of_a_request_shares_the_handle_the_request_holds() {
     assert!(file_type.clone().handle().same_handle(file_type.handle()));
     let file_id = QueryFileIdInfo::new(handle.clone());
     assert!(file_id.clone().handle().same_handle(file_id.handle()));
+    let file_basic = QueryFileBasicInfo::new(handle.clone());
+    assert!(file_basic.clone().handle().same_handle(file_basic.handle()));
     let by_handle = QueryFileInformationByHandle::new(handle.clone());
     assert!(by_handle.clone().handle().same_handle(by_handle.handle()));
     let final_path = QueryFinalPath::new(handle.clone());
@@ -120,6 +127,7 @@ fn a_request_keeps_its_handle_open_after_every_other_holder_drops() {
 
     let file_type = QueryFileType::new(handle.clone());
     let file_id = QueryFileIdInfo::new(handle.clone());
+    let file_basic = QueryFileBasicInfo::new(handle.clone());
     let by_handle = QueryFileInformationByHandle::new(handle.clone());
     let final_path = QueryFinalPath::new(handle.clone());
     let volume = QueryVolumeInformation::new(handle.clone());
@@ -135,6 +143,7 @@ fn a_request_keeps_its_handle_open_after_every_other_holder_drops() {
         FileType::DISK
     );
     file_id.perform().expect("the file's identity");
+    file_basic.perform().expect("the file's basic information");
     by_handle.perform().expect("the file's information");
     final_path.perform().expect("the file's final path");
     volume.perform().expect("the file's volume");

@@ -29,12 +29,7 @@ of each other. Then this crate is released, a new minor.
 
 - [x] **NR-6.3** -- `OpenFile::from_anchored` and `WatchDirectory::from_anchored` build a request from an `AnchoredPath` the caller holds, without anchoring it again. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#nr-63-anchored)
 
-- [ ] **NR-6.4** -- **A typed read of `FileBasicInfo`.** `QueryFileBasicInfo`, shaped as
-  [D-31](DESIGN-NOTES.md#d-31)'s `QueryFileIdInfo` is: one `GetFileInformationByHandleEx` call into a
-  `FILE_BASIC_INFO`, the class from `FileInformationClass::BASIC`, and the five fields carried as the call wrote
-  them (the four times as `i64`, the attributes as their raw `u32`), with nothing said beyond the page. Its
-  decision is recorded beside D-31's. Tests: a directory reports the directory attribute and a file does not; the
-  fields agree with the untyped entry's bytes; a refused handle reports the untyped entry's code.
+- [x] **NR-6.4** -- `QueryFileBasicInfo` reads `FileBasicInfo` as five values, the four times as `i64` and the attributes as their raw `u32`. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#nr-64-basic)
 
 - [ ] **NR-6.5** -- **`QueryFileInformation` into a buffer the caller owns.** A form that performs the call into
   an `AlignedBuf` the caller passes and keeps, so a consumer reading a directory batch after batch (the

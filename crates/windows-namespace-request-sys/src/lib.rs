@@ -107,6 +107,7 @@
 
 mod anchored;
 pub mod close;
+pub mod file_basic;
 pub mod file_id;
 pub mod file_info;
 pub mod file_type;
@@ -124,6 +125,7 @@ pub mod watch;
 
 pub use anchored::{AnchoredPath, PathCaptureError};
 pub use close::{CloseFn, CloseRequest};
+pub use file_basic::{FileBasicInfo, QueryFileBasicInfo};
 pub use file_id::{FileIdInfo, QueryFileIdInfo};
 pub use file_info::QueryFileInformationByHandle;
 pub use file_type::{FileType, QueryFileType};

@@ -535,3 +535,23 @@ by both its entry's tests, and a control that survives. The item as it stood at 
   built (the enumeration crate's `SAFE-2`) does not anchor it a second time. Both path entries get it, so they
   stay one shape. Tests: the Win32 path is the anchored path's; a relative path anchored before the current
   directory changes opens what it named when it was anchored.
+
+## Moved 2026-10-19 21:30:06 -04:00 -- A typed read of `FileBasicInfo`
+
+### <a id="nr-64-basic"></a>NR-6.4 -- `QueryFileBasicInfo` reads `FileBasicInfo` as five values, the four times as `i64` and the attributes as their raw `u32`. *(completed 2026-10-19 21:30:06 -04:00)*
+
+The decision is [D-33](DESIGN-NOTES.md#d-33), with what was observed. Tests in
+[file_basic/tests.rs](src/file_basic/tests.rs): three times set through std read back in their own fields; the fields
+equal the untyped entry's bytes for a file with four distinct times and for a directory; a directory reports the
+directory attribute and a file does not; a read-only file reports read-only; a write moves the write time and not the
+creation time; a no-access file, `NUL`, an anonymous pipe and a no-access volume each give the untyped entry's
+outcome; an event is `ERROR_INVALID_HANDLE`; and the clone, seam and thread tests of its neighbours. The entry is in the
+crate-wide sharing tests. Sabotage: two field swaps, a dropped attribute field and the wrong class, all caught, and a
+control. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.4** -- **A typed read of `FileBasicInfo`.** `QueryFileBasicInfo`, shaped as
+  [D-31](DESIGN-NOTES.md#d-31)'s `QueryFileIdInfo` is: one `GetFileInformationByHandleEx` call into a
+  `FILE_BASIC_INFO`, the class from `FileInformationClass::BASIC`, and the five fields carried as the call wrote
+  them (the four times as `i64`, the attributes as their raw `u32`), with nothing said beyond the page. Its
+  decision is recorded beside D-31's. Tests: a directory reports the directory attribute and a file does not; the
+  fields agree with the untyped entry's bytes; a refused handle reports the untyped entry's code.

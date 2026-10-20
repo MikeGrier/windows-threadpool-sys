@@ -692,3 +692,11 @@ constructor, and `OpenFile::from_anchored(path).with_...` says which input it st
 `OpenFile::from(path)` does not; a `From` would also invite `path.into()` at a call site, where the reader cannot
 see that the anchoring already happened. The constructor is the only addition, so nothing else is offered for
 choosing between.
+
+## D-33: the typed `FileBasicInfo` entry
+
+**Why the times are not converted.** A `SystemTime` would read better at a call site, but a `FILETIME` before 1970 or
+past what `SystemTime` holds on a platform would need a refusal or a clamp of this crate's own, and the page offers
+neither; the value is the call's, and a consumer converts it where it knows what it wants. The attributes stay a raw
+`u32` for the same reason D-29 carries a `FileType` as it came: the constants list grows, and a typed set would drop
+a bit it did not know.

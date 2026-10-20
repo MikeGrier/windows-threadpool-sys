@@ -620,6 +620,46 @@
       "why": "Control. The same value, written out, so the tests that the path is not anchored again must not fire on it.",
       "find": ["            path,\n"],
       "replace": ["            path: path,\n"]
+    },
+    {
+      "name": "NR-6.4: the creation and last-access times are read from each other's fields",
+      "file": "src/file_basic.rs",
+      "expect": "caught",
+      "why": "Both are i64 and adjacent, so a swap compiles; only a file whose times differ shows it, which is why the tests set three distinct times.",
+      "find": ["        info.CreationTime,\n        info.LastAccessTime,\n"],
+      "replace": ["        info.LastAccessTime,\n        info.CreationTime,\n"]
+    },
+    {
+      "name": "NR-6.4: the last-write and change times are read from each other's fields",
+      "file": "src/file_basic.rs",
+      "expect": "caught",
+      "why": "The page distinguishes them (the data stream against the metadata); the change time is the system's own and differs from every time the tests set.",
+      "find": ["        info.LastWriteTime,\n        info.ChangeTime,\n"],
+      "replace": ["        info.ChangeTime,\n        info.LastWriteTime,\n"]
+    },
+    {
+      "name": "NR-6.4: the attributes are not carried",
+      "file": "src/file_basic.rs",
+      "expect": "caught",
+      "why": "A directory would read as a file; the attributes are what most callers of this class want.",
+      "find": ["        info.FileAttributes,\n"],
+      "replace": ["        0,\n"]
+    },
+    {
+      "name": "NR-6.4: the call is made with another class",
+      "file": "src/file_basic.rs",
+      "expect": "caught",
+      "why": "FileIdInfo's structure is smaller than the buffer, so the call succeeds and fills it with something else; only the comparison with the untyped entry's bytes for this class sees it.",
+      "find": ["                    FileInformationClass::BASIC.as_raw(),\n"],
+      "replace": ["                    FileInformationClass::ID.as_raw(),\n"]
+    },
+    {
+      "name": "NR-6.4: control -- a field is read through a block",
+      "file": "src/file_basic.rs",
+      "expect": "survives",
+      "why": "Control. The same value, so the tests of the fields must not fire on it.",
+      "find": ["        info.CreationTime,\n"],
+      "replace": ["        { info.CreationTime },\n"]
     }
   ]
 }
