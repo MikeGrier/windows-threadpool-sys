@@ -111,7 +111,9 @@
 
 mod anchored;
 pub mod close;
+pub mod file_id;
 pub mod file_info;
+pub mod file_type;
 pub mod final_path;
 pub mod full_path;
 pub mod handle;
@@ -121,13 +123,14 @@ pub mod outcome;
 pub mod query;
 pub mod reopen;
 pub mod request;
-pub mod security;
 pub mod volume;
 pub mod watch;
 
-pub use anchored::PathCaptureError;
+pub use anchored::{AnchoredPath, PathCaptureError};
 pub use close::{CloseFn, CloseRequest};
+pub use file_id::{FileIdInfo, QueryFileIdInfo};
 pub use file_info::QueryFileInformationByHandle;
+pub use file_type::{FileType, QueryFileType};
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
 pub use full_path::{FullPathError, ResolveFullPath};
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
@@ -138,12 +141,22 @@ pub use outcome::{Outcome, Win32Error};
 pub use query::{FileInformationClass, QueryFileInformation};
 pub use reopen::ReOpenFile;
 pub use request::{ConsumingRequest, Request};
+
+/// The owned security descriptor and attributes the requests take: `win-authorization-sys`, where
+/// they were moved to and which is where Microsoft Learn files them (*Security and Identity >
+/// Authorization*). They are re-exported here at the paths they always had.
+pub use win_authorization_sys as security;
+
 /// Compiles the README's examples, so a contract change breaks the build
 /// rather than silently teaching the old answer.
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
+#[cfg(test)]
+mod security_open_tests;
+#[cfg(test)]
+mod shared_handle_tests;
 #[cfg(test)]
 mod tests;
 

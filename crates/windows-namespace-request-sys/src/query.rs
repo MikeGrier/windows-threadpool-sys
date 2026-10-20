@@ -82,7 +82,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use io_buffers::AlignedBuf;
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, out_of_memory, perform_bool};
 
 /// The alignment a directory-information batch requires.
@@ -122,6 +124,7 @@ impl FileInformationClass {
     /// `FileBasicInfo`: timestamps and attributes. A pure read.
     pub const BASIC: Self = Self(FileBasicInfo);
     /// `FileIdInfo`: the volume serial and 128-bit file id. A pure read.
+    /// [`QueryFileIdInfo`](crate::file_id::QueryFileIdInfo) reads it as values.
     pub const ID: Self = Self(FileIdInfo);
     /// `FileCaseSensitiveInfo`: whether the directory is case-sensitive. A pure
     /// read.
@@ -207,10 +210,10 @@ impl FileInformationClass {
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request queries nothing"]
 pub struct QueryFileInformation {
-    handle: CapturedHandle,
+    handle: SharedHandle,
     class: FileInformationClass,
     capacity: usize,
 }
@@ -223,10 +226,10 @@ impl QueryFileInformation {
     /// and should say so; this is a starting point, not a recommendation.
     pub const DEFAULT_CAPACITY: usize = 64 * 1024;
 
-    /// Begins a request against `handle` for `class`.
-    pub fn new(handle: CapturedHandle, class: FileInformationClass) -> Self {
+    /// Begins a request against `handle` for `class`, holding `handle` as one more holder of it.
+    pub fn new(handle: impl Into<SharedHandle>, class: FileInformationClass) -> Self {
         Self {
-            handle,
+            handle: handle.into(),
             class,
             capacity: Self::DEFAULT_CAPACITY,
         }
@@ -244,8 +247,8 @@ impl QueryFileInformation {
         self
     }
 
-    /// The owned duplicate of the handle being queried.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being queried, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
     }
 
@@ -261,10 +264,10 @@ impl QueryFileInformation {
         self.capacity
     }
 
-    /// Copies the request, duplicating the handle.
+    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
+    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
     ///
-    /// Not `Clone`, because duplicating a handle is fallible. Note that the
-    /// copy shares the original's enumeration cursor, per this module's
+    /// Either way the copy shares the original's enumeration cursor, per this module's
     /// measurements -- it is a second reference, not a second enumeration.
     ///
     /// # Errors
@@ -272,7 +275,7 @@ impl QueryFileInformation {
     /// Returns the handle-capture failure when the handle cannot be duplicated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         Ok(Self {
-            handle: self.handle.try_clone()?,
+            handle: duplicate(&self.handle)?,
             class: self.class,
             capacity: self.capacity,
         })
@@ -300,7 +303,7 @@ impl QueryFileInformation {
         let size = u32::try_from(self.capacity).unwrap_or(u32::MAX);
 
         perform_bool(|| {
-            // SAFETY: the handle is a duplicate this request owns and keeps
+            // SAFETY: the handle is one this request holds and keeps
             // open across the call; the buffer is writable for `size` bytes and
             // 8-byte aligned, which is what the directory classes require.
             unsafe {

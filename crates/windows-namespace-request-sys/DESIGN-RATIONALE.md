@@ -596,3 +596,85 @@ constructor.
 refuse it adds a check this crate's other entries do not have, and `CreateFileW` already answers an
 empty path with a code. `win-durable-ioring`'s open keeps refusing it, as invalid input, because it
 did before and a caller of that crate must not see a difference.
+
+## D-28: the forms of a path
+
+**Why not `GetFullPathNameW`'s output.** It is the call this crate already makes to resolve a path, it
+is documented, and it does no I/O in the common case, so it was the first thing to try as the
+oracle: classify a string by what it returns. The run showed it cannot be one. It normalises an
+exactly-backslash `\\?\` path that `CreateFileW` leaves alone, it reads `\??\` as a rooted path on the
+current drive where `CreateFileW` takes it as an NT path, and it turns a `/` after `UNC` into a
+backslash where `CreateFileW` keeps it as a name character. A consumer that refused a path because
+`GetFullPathNameW` called it local would be wrong in each of those cases, and the cases are the
+ones that reach the network.
+
+**Why not `PathCch*`.** They are lexical, they do not read `\??\` at all, and they were already ruled
+out for the graft by [D-19](DESIGN-NOTES.md#d-19) for returning a drive-relative path unresolved.
+
+**Why not the function `CreateFileW` itself uses.** The conversion of a DOS path to an NT path is
+done below `CreateFileW` by a routine that is not a documented Win32 function, and this repository
+does not bind one (the rule on documented APIs only), so its answers are reached by behaviour, which
+is what the table is.
+
+**Why measure the open and not the documentation.** The documentation names `\\?\`, `\\.\` and UNC
+paths. What it leaves for a measurement is the spelling: whether `//?/` is a verbatim prefix, whether
+`UNC` is matched without regard to case, whether a slash after `UNC` is a separator, and whether a
+`.` under each prefix is removed. Those are exactly the questions a refusal that is made on a string
+has to get right, and a wrong answer to the first or fourth is a path that reaches the network with
+nothing to stop it.
+
+**Why the example asserts nothing.** What it prints is what one machine did. A test that asserted it
+would fail on another Windows build for a reason that is a finding, not a defect. The example is the
+means of redoing the measurement when a row is in doubt.
+
+**Why the classifier was withdrawn.** It was planned (`NR-5.2` to `NR-5.4`) so that durable-ioring
+could refuse a path that is evidently remote before the open, to avoid a file left behind by an
+unbuffered create and a network call made before a refusal. The engineer's answer, 2026-10-16, was
+that finding out late is acceptable, and that the check on the opened handle is the only one needed.
+That left the classifier with one consumer that had dropped it, a new public type in a published crate,
+and one row (`\??\`) whose behaviour this repository found rather than read, which the
+platform-integrity rule says not to bind to. The graft rules it would also have derived from stayed
+as they are. It would be reopened by a consumer that needs to know a path is remote before it makes any
+call.
+
+## D-31: the typed `FileIdInfo` entry
+
+**Delegating to the untyped entry.** The typed entry could have held a `QueryFileInformation` for the class and
+read the structure out of the buffer it returns, so that `GetFileInformationByHandleEx` is called from one place
+in the crate. That allocates a buffer for a structure of 24 bytes and reads it back through a cast; calling into
+a `FILE_ID_INFO` on the stack allocates nothing and needs no cast. The shared part, the faithful report of the
+code, is [D-10](DESIGN-NOTES.md#d-10)'s primitive either way, and the class value is shared through
+`FileInformationClass::ID`, so the direct call was taken.
+
+**A `From<FILE_ID_INFO>` impl.** It would let a caller holding the structure convert it, and it would make the
+dependency's type part of the surface, which [D-13](DESIGN-NOTES.md#d-13) refuses. The conversion is private.
+
+**Where the agreement with the enumeration crate is tested.** That crate depends on this one, so a test here that
+used it would be a dependency cycle through a dev-dependency, built against a second copy of this crate. The test
+is in the enumeration crate's integration tests, where both are already in reach, and this crate tests the same
+agreement against the `FileIdExtdDirectoryInfo` record the enumeration crate reads.
+
+**Refusal codes.** The codes observed for a pipe, `NUL` and a volume are not on the page. Naming them in the tests
+would assert the machine; comparing each with the untyped entry's code for the same handle asserts what this
+entry promises, that the code passes through unaltered.
+
+## D-32: sharing rather than duplicating
+
+**How the question was put.** The assistant first proposed keeping `CapturedHandle` as the type entries take,
+holding a `SharedHandle`, with a second route that still duplicated for a caller holding only a borrow. The
+engineer asked whether the wrapper was wanted or merely there, and whether the duplicating route would be added
+if the crate were started now. Taken item by item (the list in D-32), every job the wrapper did came from
+duplicating, and the borrow-only caller already has two routes outside this crate, std's `try_clone_to_owned` and
+`win-handles-sys`'s `duplicate_handle_with_access`. Keeping either would have been compatibility with the crate's
+own first design and nothing more.
+
+**The values std allows in an `OwnedHandle`.** Its documentation says one "may have the value `-1`, which in
+`OwnedHandle` always represents a valid handle value, such as the current process handle", and "may have the
+value `NULL`", which a detached console produces. D-7 refused both before duplicating; D-32 does not refuse them,
+because an entry's call answers for them, and an answer from the call is what [D-10](DESIGN-NOTES.md#d-10)
+reports.
+
+**The consumers.** `win-durable-ioring` duplicated handles its `OpenedFile` already held as a `SharedHandle` to
+ask their final path and kind; `windows-file-enumeration-sys` read its volume serial privately rather than
+duplicate its directory handle for [D-31](DESIGN-NOTES.md#d-31)'s entry. Both are the cost the duplication
+imposed, and both go with it.

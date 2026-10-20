@@ -355,3 +355,137 @@ and the item is archived there as
 [M6.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m61). The probe was first adapted just
 enough to build by the commit of `NR-3.4` to `NR-3.6`, as this item said it would be, and then
 rewritten.
+
+## Moved 2026-10-16 18:52:01 -04:00 -- NR-5.1: the forms of a path, measured
+
+### <a id="nr-51-forms"></a>NR-5.1 -- The decision for the path-form classifier, from measurements, before the type exists. *(completed 2026-10-16 18:52:01 -04:00)*
+
+The decision and the table of measurements are [D-28](DESIGN-NOTES.md#d-28), with its Tier 2 entry in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). They were made with
+[examples/path_form_measurements.rs](examples/path_form_measurements.rs), which reproduces them.
+The four questions this item named are answered there: the NT prefix `\??\` is read by `CreateFileW` as
+an NT path and not normalised, and by `GetFullPathNameW` as a rooted path; forward slashes in a
+verbatim prefix make it normalised, so only the exactly-backslash form suppresses normalisation (the
+claim of `D-19` rule 6, measured here for the first time); `UNC` is matched without regard to ASCII case;
+and `\\.\UNC\` is a UNC form. The run also showed that `\\.\` is normalised, which corrects the reason
+given for rule 6, and that `GetFullPathNameW` cannot be the oracle.
+
+### <a id="nr-52-withdrawn"></a>NR-5.2 to NR-5.4 -- withdrawn, not done. *(withdrawn 2026-10-16 19:59:00 -04:00)*
+
+Withdrawn by the engineer on 2026-10-16. They were a public `PathForm`, the graft rules derived from it,
+and `win32_path_form()` on the path-taking entries, planned so that durable-ioring could refuse a path
+that is evidently remote before the open. The engineer ruled that finding out late is acceptable and
+that the check on the opened handle is the only one needed ([DI-13.1
+(b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131), amended), so the one consumer dropped it, and a
+new public type in a published crate was not worth what was left. What would reopen them is a consumer
+that needs to know a path is remote before it makes any call. The graft rules stay as they are,
+including rule 6, whose reason [D-28](DESIGN-NOTES.md#d-28) corrects. The reasons are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+A working position recorded with them, not a decision: the entries keep taking the `windows-sys` types
+and raw access masks they take now, and the typed vocabulary for rights, share mode, disposition and
+attributes belongs to durable-ioring's `DI-13.3`, `DI-13.4` and `DI-13.7`, so this crate stays the
+policy-free catalogue.
+
+## Moved 2026-10-18 17:04:20 -04:00 -- `GetFileType`
+
+### <a id="nr-39-filetype"></a>NR-3.9 -- `GetFileType` is a `QueryFileType` entry on a captured handle, with the value carried as it came. *(completed 2026-10-18 17:04:20 -04:00)*
+
+The engineer, 2026-10-18 ("build both of these now"), so that a caller can ask what kind of handle an opened
+file is without the opener returning it. The decision and what was observed are
+[D-29](DESIGN-NOTES.md#d-29). Four sabotages, one declared as surviving because no handle tried returns an unknown
+type from a call that worked.
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The enumeration crate's duplicate of the path preparation
+
+### <a id="nr-38-dedupe"></a>NR-3.8 -- The enumeration crate consumes this crate's `AnchoredPath` and its older copy of the path preparation is deleted; done with that crate's `PATH-1`. *(completed 2026-10-18 20:52:23 -04:00)*
+
+The engineer, 2026-10-15: schedule resolving it, as the first option the workspace's `M26+.3`
+([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)) names. What this crate gave to make it
+possible is [D-30](DESIGN-NOTES.md#d-30): `AnchoredPath` is public, with `new`, `given` and `win32`. What the
+enumeration crate gave up in taking it is that crate's
+[D-22](../windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), and the work is its `PATH-1`
+([COMPLETED-CHECKLIST.md](../windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#path-1)).
+
+## Moved 2026-10-18 21:05:37 -04:00 -- A typed `FileIdInfo` read
+
+### <a id="nr-310-fileid"></a>NR-3.10 -- `QueryFileIdInfo` reads `FileIdInfo` as a `FileIdInfo` value: the volume serial number as a `u64` and the 128-bit file ID as 16 bytes. *(completed 2026-10-18 21:05:37 -04:00)*
+
+Queued from the review of durable-ioring's `DI-M15`, for `DI-15.1`. The decision and what was observed are
+[D-31](DESIGN-NOTES.md#d-31). The untyped entry's own test now checks that its bytes and the typed entry agree,
+and the agreement with what `windows-file-enumeration-sys` reports is a test in that crate. Four sabotages caught
+and one control survived.
+
+## Moved 2026-10-18 21:05:37 -04:00 -- `NR-2`, `NR-3` and `NR-4` are complete
+
+Every item of the three groups is archived above under its own heading; their stubs were deleted with this move.
+What follows is each group's opening text, which was in the checklist and is recorded nowhere else.
+
+### NR-2 -- Storage-locality queries, one entry per call
+
+Opened 2026-10-06 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
+durable-ioring lets a consumer declare each file's **flush domains** -- the disks, caches, virtual
+disks or shares its writes depend on
+([DI-D-21](../durable-ioring/DESIGN-NOTES.md#di-d-21)) -- and a locality helper (root `M39`) derives
+them from Windows' storage topology. Each call was a catalogue entry of its own, per [D-3](DESIGN-NOTES.md#d-3),
+and the entries moved to `win-volume-sys` with `NR-2.6` and `NR-2.8`.
+
+### NR-4 -- Adopt `win-error-codes`
+
+Opened 2026-10-15. This crate had its own `Win32Error`, which converted a code of 2^31 or more to
+`io::Error` without keeping the code. See [WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1).
+
+### NR-3 -- What durable-ioring's open surface needs of this crate
+
+Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
+`OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
+consumer are the ones this crate can carry, and some were missing or in the way. All are policy-free,
+like the rest of this crate: durable-ioring decides which of them a consumer may use.
+
+The path work was **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the
+whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and split into
+`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile`, `WatchDirectory` and
+`ResolveFullPath`. Every other entry takes a handle, an identifier or a class. All three take a
+`Wtf16String`, and none has a length limit, a validation of its own beyond an interior NUL, or a
+`\\?\` rewrite.
+
+## Moved 2026-10-18 22:21:18 -04:00 -- `NR-inf.1` graduated to `NR-6`
+
+### <a id="nr-inf1-graduated"></a>NR-inf.1 -- A request shares the caller's handle as a `SharedHandle` instead of duplicating it. *(graduated 2026-10-18 22:21:18 -04:00)*
+
+Not completed: graduated to `NR-6` in [CHECKLIST.md](CHECKLIST.md) by the engineer's ruling of 2026-10-18, which
+[D-32](DESIGN-NOTES.md#d-32) records and which answers each question below. The item as it was parked:
+
+> **A request shares the caller's handle as a `SharedHandle` instead of duplicating it.** The engineer's
+> direction, 2026-10-07, and a working position rather than a decision: this crate should use
+> win-shared-os-owned-handle's `SharedHandle` (its `SH-1+.1`), and the `DuplicateHandle` capture of D-4 and D-7
+> was non-trivial work that is probably not worth it over an `Arc<OwnedHandle>`. **Deferred by the engineer
+> because it is not a drop-in replacement**; nothing else gates it. What it changes, each to be settled when
+> this is picked up:
+>
+> - **Construction.** Capture takes a `BorrowedHandle` from a caller who keeps ownership. A shared form needs a
+>   `SharedHandle` the caller already holds, and a caller with only a borrow cannot make one without giving up
+>   its handle. Whether duplication survives as a second capture path is open.
+> - **D-7's refusals.** Re-check which of the null, `INVALID_HANDLE_VALUE` and pseudo-handle refusals still
+>   apply to a value that arrives already owned.
+> - **Inheritance.** A duplicate is made non-inheritable (D-7); a shared handle keeps whatever the opener chose.
+> - **Getting the handle back.** `into_owned_handle` and `From<CapturedHandle> for OwnedHandle` are infallible
+>   today; `SharedHandle::try_into_owned` fails while another clone exists. `try_clone` would become infallible.
+> - **Unchanged:** D-4's measured state-sharing. Shared or duplicated, the request names the caller's kernel
+>   object.
+> - A breaking change to the published crate.
+
+## Moved 2026-10-18 23:30:14 -04:00 -- A request holds a `SharedHandle`
+
+### <a id="nr-61-shared"></a>NR-6.1 -- Every entry that takes a handle holds a `SharedHandle`, built from `impl Into<SharedHandle>`, and all but the two carrying security attributes derive `Clone`. *(completed 2026-10-18 23:30:14 -04:00)*
+
+The first step of [D-32](DESIGN-NOTES.md#d-32). The entries: `QueryFileType`, `QueryFileIdInfo`,
+`QueryFileInformation`, `QueryFileInformationByHandle`, `QueryFinalPath`, `QueryVolumeInformation`,
+`ReOpenFile`'s original, `OpenFileByIdentifier`'s volume hint, and `OpenFile`'s template, which the item's list had
+missed. `From<CapturedHandle> for SharedHandle` keeps every caller that still captures building, so the workspace
+built with no change outside this crate; the crate's own callers of `with_template`, which takes an
+`Option<SharedHandle>`, add `.into()`. `try_clone` still duplicates until `NR-6.2`, so the tests that pin a copy's
+separate handle are unchanged. Two crate-private helpers carry the transition: `SharedRaw::raw` and `duplicate`.
+Tests in [shared_handle_tests.rs](src/shared_handle_tests.rs); three sabotages, two caught and a control that
+survives.

@@ -23,7 +23,9 @@ use std::fmt;
 use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
 use wtf_string::Wtf16String;
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, perform_bool};
 
 /// The longest volume label Windows supports, plus room for the terminator.
@@ -121,10 +123,10 @@ impl fmt::Display for VolumeInformation {
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request queries nothing"]
 pub struct QueryVolumeInformation {
-    handle: CapturedHandle,
+    handle: SharedHandle,
 }
 
 impl QueryVolumeInformation {
@@ -132,23 +134,26 @@ impl QueryVolumeInformation {
     ///
     /// The handle names any file or directory on the volume; the volume is what
     /// gets reported.
-    pub fn new(handle: CapturedHandle) -> Self {
-        Self { handle }
+    pub fn new(handle: impl Into<SharedHandle>) -> Self {
+        Self {
+            handle: handle.into(),
+        }
     }
 
-    /// The owned duplicate of the handle being queried.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being queried, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
     }
 
-    /// Copies the request, duplicating the handle.
+    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
+    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
     ///
     /// # Errors
     ///
     /// Returns the handle-capture failure when the handle cannot be duplicated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         Ok(Self {
-            handle: self.handle.try_clone()?,
+            handle: duplicate(&self.handle)?,
         })
     }
 
@@ -165,7 +170,7 @@ impl QueryVolumeInformation {
         let mut flags = 0_u32;
 
         perform_bool(|| {
-            // SAFETY: the handle is a duplicate this request owns and keeps
+            // SAFETY: the handle is one this request holds and keeps
             // open across the call; both buffers are writable for the
             // capacities passed; the three scalar out-parameters point at
             // writable storage. Each buffer's invariant is restored below

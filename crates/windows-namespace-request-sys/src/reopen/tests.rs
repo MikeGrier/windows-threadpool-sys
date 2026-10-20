@@ -22,6 +22,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::ReOpenFile;
+use crate::handle::SharedRaw;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
 use crate::request::Request;
 use crate::{CapturedHandle, Win32Error};

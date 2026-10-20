@@ -16,14 +16,13 @@
 //! path cannot tell a recreated directory from the one a consumer started on.
 //! That difference is the whole reason the entry exists.
 //!
-//! # The volume hint is an input handle, and is owned
+//! # The volume hint is an input handle, and is held
 //!
-//! This is the first entry to take a handle as an *input*, so it is the first
-//! consumer of [`CapturedHandle`]. The hint only needs to name some still-open
-//! handle on the same volume as the identifier -- it is never itself the object
-//! being reopened, so it stays valid even once that object is gone. The request
-//! owns a duplicate of it, so the request cannot be left naming a hint its
-//! originator has closed.
+//! This is the first entry to take a handle as an *input*. The hint only needs to
+//! name some still-open handle on the same volume as the identifier -- it is never
+//! itself the object being reopened, so it stays valid even once that object is
+//! gone. The request holds it as one more holder of a `SharedHandle`, so the
+//! request cannot be left naming a hint its originator has closed.
 
 use std::ffi::c_void;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
@@ -35,7 +34,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::core::GUID;
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
 use crate::outcome::{Outcome, perform_handle};
 use crate::security::SecurityAttributes;
 
@@ -77,9 +78,16 @@ pub enum FileIdentifier {
     /// public surface should not be shaped by whichever binding crate this
     /// happens to build against. The conversion to `GUID` happens at the FFI
     /// boundary, where it belongs.
+    ///
+    /// The value is the `GUID` read as one big-endian number in the order of
+    /// its canonical text form: `7383249c-cb6e-11f1-857d-7ced8d529076` is
+    /// `0x7383_249c_cb6e_11f1_857d_7ced_8d52_9076`. That is `GUID::from_u128`'s
+    /// reading, and is not the order of the 16 bytes Windows stores, whose first
+    /// three fields are little-endian.
     ObjectId(u128),
     /// A 128-bit file reference number, as reported by `FileIdInfo` on ReFS,
     /// where 64 bits is not enough to name a file.
+    /// [`FileIdInfo::file_id`](crate::file_id::FileIdInfo::file_id) is that value.
     ExtendedFileId([u8; 16]),
 }
 
@@ -151,7 +159,7 @@ impl FileIdentifier {
 #[derive(Debug)]
 #[must_use = "an unperformed request opens nothing"]
 pub struct OpenFileByIdentifier {
-    volume_hint: CapturedHandle,
+    volume_hint: SharedHandle,
     identifier: FileIdentifier,
     desired_access: u32,
     share_mode: FILE_SHARE_MODE,
@@ -166,10 +174,11 @@ impl OpenFileByIdentifier {
     /// As with [`crate::open::OpenFile`], the remaining parameters start at
     /// "the caller said nothing" and are set explicitly. There is no creation
     /// disposition to set: `OpenFileById` has none, which is one of the reasons
-    /// this is a separate entry rather than a variant.
-    pub fn new(volume_hint: CapturedHandle, identifier: FileIdentifier) -> Self {
+    /// this is a separate entry rather than a variant. The request holds `volume_hint` as one
+    /// more holder of it.
+    pub fn new(volume_hint: impl Into<SharedHandle>, identifier: FileIdentifier) -> Self {
         Self {
-            volume_hint,
+            volume_hint: volume_hint.into(),
             identifier,
             desired_access: 0,
             share_mode: 0,
@@ -206,8 +215,8 @@ impl OpenFileByIdentifier {
         self
     }
 
-    /// The owned duplicate of the volume-hint handle.
-    pub fn volume_hint(&self) -> &CapturedHandle {
+    /// The volume-hint handle, shared with its other holders.
+    pub fn volume_hint(&self) -> &SharedHandle {
         &self.volume_hint
     }
 
@@ -243,9 +252,9 @@ impl OpenFileByIdentifier {
 
     /// Copies the request, duplicating the volume-hint handle.
     ///
-    /// Not `Clone`, for the same reason [`crate::open::OpenFile::try_clone`] is
-    /// not: this request always owns a handle, and duplicating one is fallible, as is copying
-    /// the security attributes it may own.
+    /// Not `Clone`, for the same reason [`crate::open::OpenFile::try_clone`] is not: copying the
+    /// security attributes it may own is fallible. The hint is duplicated until `NR-6.2` (`D-32`
+    /// in the crate's `DESIGN-NOTES.md`), and shared after it.
     ///
     /// # Errors
     ///
@@ -253,7 +262,7 @@ impl OpenFileByIdentifier {
     /// [`crate::HandleCaptureFailure::CopySecurity`] when the memory for the security attributes
     /// cannot be allocated.
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        let volume_hint = self.volume_hint.try_clone()?;
+        let volume_hint = duplicate(&self.volume_hint)?;
         let security = self
             .security
             .as_ref()
@@ -287,7 +296,7 @@ impl OpenFileByIdentifier {
         let attributes_ptr = attributes.as_ref().map_or(ptr::null(), ptr::from_ref);
 
         let raw = perform_handle(|| {
-            // SAFETY: the volume hint is a duplicate this request owns and
+            // SAFETY: the volume hint is one this request holds and
             // keeps open across the call; the descriptor is fully initialised
             // with its tag and payload in step and is only read; the security
             // attributes, when present, point at a self-relative descriptor

@@ -19,6 +19,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::{FileInformationClass, QueryFileInformation};
 use crate::CapturedHandle;
+use crate::file_id::QueryFileIdInfo;
 use crate::handle::tests::{Fixture, handle_allocation};
 use io_buffers::AlignedBuf;
 
@@ -138,7 +139,9 @@ fn the_returned_buffer_is_eight_byte_aligned() {
 }
 
 #[test]
-fn the_id_class_reads_a_real_file_identity() {
+fn the_id_class_reads_what_the_typed_entry_reads() {
+    // The typed entry, `QueryFileIdInfo`, makes the same call into a `FILE_ID_INFO`; read through
+    // the bytes here, the two must agree field for field.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -153,10 +156,14 @@ fn the_id_class_reads_a_real_file_identity() {
     // SAFETY: Windows wrote a FILE_ID_INFO into an aligned buffer of exactly
     // that size.
     let info = unsafe { &*bytes.as_ptr().cast::<FILE_ID_INFO>() };
-    assert_ne!(
-        info.VolumeSerialNumber, 0,
-        "a real file has a real volume serial"
-    );
+    let typed = QueryFileIdInfo::new(
+        CapturedHandle::capture(file.as_handle()).expect("capture the handle"),
+    )
+    .perform()
+    .expect("the typed entry");
+
+    assert_eq!(typed.volume_serial_number(), info.VolumeSerialNumber);
+    assert_eq!(typed.file_id(), info.FileId.Identifier);
 }
 
 #[test]
