@@ -50,6 +50,16 @@ the workspace's release-scope rule where the two do not have to build together.
   **Next:** nothing further in this milestone; the order across crates is in
   [durable-ioring's checklist](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
 
+## WV-M3 -- What telling a volume or a disk from a file needs
+
+Opened 2026-10-18 by `durable-ioring`'s `DI-14.12`. `GetFileType` answers `DISK` for a file,
+a volume and a physical disk alike, so a caller that must tell them apart needs a control that only a
+volume or a disk answers.
+
+- [x] **WV-3.1** -- `storage_device_number`, the device type, number and partition number a volume or disk reports (`IOCTL_STORAGE_GET_DEVICE_NUMBER`), as it wrote them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wv-31)
+
+  **Next:** `durable-ioring`'s `DI-14.12`, which also needs `windows-namespace-request-sys`' `NR-3.9`.
+
 ## M-inf -- Parked
 
 Device controls a volume answers that this crate does not yet wrap, ungated: each graduates to a

@@ -45,12 +45,18 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Threading",
 ] }
 
-# Test-only. `Win32_System_Pipes` is for the named pipe whose overlapped read pends on demand,
-# which is how the device-control helper's pending path is run (`device_control/tests.rs`).
+# Test-only. The named pipe whose overlapped read pends on demand, which is how the device-control
+# helper's pending path is run (`device_control/tests.rs`), is made with `win-pipes-sys`.
+# Path-only, with no `version`: Cargo checks a pinned version against the path at every build, so a
+# release of that crate would break this one, and a versionless dev-dependency is left out of the
+# published manifest (see `windows-ioring-sys`'s manifest).
+[dev-dependencies]
+win-pipes-sys = { path = "../win-pipes-sys" }
+
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
-features = ["Win32_Foundation", "Win32_System_Pipes"]
+features = ["Win32_Foundation"]
 
 [package.metadata.docs.rs]
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
