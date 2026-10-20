@@ -25,7 +25,7 @@ impossible to pass ([WT-D-2](#wt-d-2)).
 
 **Scheduled work, and none beyond it.** The crate has no checklist of its own: its one function is
 [M43.1](../../CHECKLIST.md) in the workspace plan, and the two sites that call `CompareStringOrdinal` themselves
-move to it in `SAFE-4` of [windows-file-enumeration-sys' CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)
+move to it in `SAFE-4` of [windows-file-enumeration-sys' COMPLETED-CHECKLIST.md](../windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4)
 and `M17.1` of [windows-file-watcher's CHECKLIST.md](../windows-file-watcher/CHECKLIST.md). The other functions
 the section lists, such as `CompareStringEx` and `FindStringOrdinal`, are outside the item that made the crate.
 

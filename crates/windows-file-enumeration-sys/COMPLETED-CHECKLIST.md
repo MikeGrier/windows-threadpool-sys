@@ -151,3 +151,22 @@ count. `win-text-sys` is a dependency, and the `Win32_Globalization` and `Win32_
 the rationale in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Tests: the existing pattern tests unchanged, and new tests
 of the empty run and of each result, including the too-long arm that the earlier code could only argue. Evidence, in
 [sabotage.json](sabotage.json): four entries, all caught, and a control.
+
+## Moved 2026-10-20 17:03:19 -04:00 -- SAFE-5: the crate forbids unsafe code
+
+### <a id="safe-5"></a>SAFE-5 -- `#![forbid(unsafe_code)]` is on the crate root, and D-23 is current. *(completed 2026-10-20 17:03:19 -04:00)*
+
+The item as written:
+
+**`#![forbid(unsafe_code)]`.** On the crate root, so the build refuses any `unsafe` in the
+  crate or its unit tests. Whatever `unsafe` remains after `SAFE-2` to `SAFE-4` is found by the build, and each
+  is moved behind a wrapper or brought to the engineer. D-23 is then current rather than a target.
+
+What was done. [lib.rs](src/lib.rs) carries `#![forbid(unsafe_code)]` in place of `forbid(unsafe_op_in_unsafe_fn)`,
+which a crate with no `unsafe` has no use for, and its safety section says the crate holds none. The one `unsafe` the
+build found was in a test, a four-byte write that corrupted a record's `NextEntryOffset`; it is now a write through the
+engine buffer's `as_mut_slice`, so nothing was moved behind a wrapper or brought to the engineer. [D-23](DESIGN-NOTES.md#d-23)
+is stated as current, and the earlier steps' "scheduled work" lines say there is none. Recorded in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Evidence, in [sabotage.json](sabotage.json): an `unsafe` block added to the
+library is refused by the build, and a control adding the same item without `unsafe` survives. With this
+the `SAFE` group is complete, and its stubs left the checklist with it.

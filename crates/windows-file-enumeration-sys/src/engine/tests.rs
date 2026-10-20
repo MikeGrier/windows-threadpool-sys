@@ -429,13 +429,11 @@ fn a_still_full_ring_parks_again_without_losing_the_pending_entry() {
 /// record starting there fails validation, without needing to know anything
 /// about its other fields.
 fn corrupt_next_entry_offset(engine: &mut EngineState, offset: usize) {
-    // SAFETY: `offset` is a cursor this same engine reported, which is always
-    // within its buffer; four bytes are written, matching `NextEntryOffset`'s
-    // width and position at a record's very start.
-    unsafe {
-        let base = engine.buffer.as_mut_ptr().cast::<u8>();
-        base.add(offset).cast::<u32>().write_unaligned(u32::MAX);
-    }
+    // `offset` is a cursor this same engine reported, which is always within its
+    // buffer; four bytes are written, matching `NextEntryOffset`'s width and
+    // position at a record's very start.
+    engine.buffer.as_mut_slice()[offset..offset + size_of::<u32>()]
+        .copy_from_slice(&u32::MAX.to_le_bytes());
 }
 
 #[test]

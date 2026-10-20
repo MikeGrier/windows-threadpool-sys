@@ -16,28 +16,6 @@ itself. Status is tracked in [PLANS.md](PLANS.md).
 
 - [x] **ERR-1** -- `Win32Error` is `win_error_codes::Win32Error`, re-exported under the same name. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#err-1)
 
-## SAFE -- Every Win32 call through a safe wrapper, then `forbid(unsafe_code)`
-
-The target is [D-23](DESIGN-NOTES.md#d-23): this crate reaches Windows only through safe wrappers in other crates,
-holds its directory as a `SharedHandle`, and duplicates no handle. The order across the crates is `M43` in the
-workspace [CHECKLIST.md](../../CHECKLIST.md).
-
-- [x] **SAFE-1** -- The metadata test builds its `QueryFileIdInfo` from a `SharedHandle`, not a `CapturedHandle`. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#safe-1)
-
-  > **-> CROSS-COMPONENT HANDOFF:** this was one of the moves `NR-6.2` waited on, and the work that followed it
-  > in this crate was `SAFE-2`, after the request crate's release. See
-  > [windows-namespace-request-sys' COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -> `NR-6.2`.
-
-- [x] **SAFE-2** -- The directory's open and queries are the request crate's entries, the buffer an `AlignedBuf` and the handle a `SharedHandle`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-2)
-
-- [x] **SAFE-3** -- The doorbell is a `win-sync-sys` `Event`, and a `ThreadpoolWait` is handed a waitable handle that shares it, not a duplicate. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-3)
-
-- [x] **SAFE-4** -- Case-insensitive name matching is `win-text-sys`'s `compare_string_ordinal`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-4)
-
-- [ ] **SAFE-5** -- **`#![forbid(unsafe_code)]`.** On the crate root, so the build refuses any `unsafe` in the
-  crate or its unit tests. Whatever `unsafe` remains after `SAFE-2` to `SAFE-4` is found by the build, and each
-  is moved behind a wrapper or brought to the engineer. D-23 is then current rather than a target.
-
 ## M-inf -- Horizon (ungated)
 
 - [ ] **REVIEW-1** -- Review the request path contract against a traversal layer, before one is built.

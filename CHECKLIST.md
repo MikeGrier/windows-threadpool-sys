@@ -523,22 +523,22 @@ crates' checklists; this is only the order and the links, and each item's own ch
    additive for callers that build entries.
 2. The consumers move off `CapturedHandle`, in any order:
    [DI-16.1](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-161), [M7.1](crates/windows-platform-probes/COMPLETED-CHECKLIST.md#m71),
-   [SAFE-1](crates/windows-file-enumeration-sys/CHECKLIST.md).
+   [SAFE-1](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-1).
 3. [NR-6.2](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -- capture deleted. `NR-6.3` to `NR-6.5` may land
    at any point before the release.
 4. The request crate's release, a new minor. A release action, not an item.
 5. [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2) -- the directory's calls through the request crate.
 6. Independently of 1 to 5: [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md) then
    [WS-2.2](crates/win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) (reordered 2026-10-18: the shared wait target comes first), then
-   [SAFE-3](crates/windows-file-enumeration-sys/CHECKLIST.md); and `M43.1` below, then
-   [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) and the file watcher's
+   [SAFE-3](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-3); and `M43.1` below, then
+   [SAFE-4](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4) and the file watcher's
    [M17.1](crates/windows-file-watcher/CHECKLIST.md).
-7. [SAFE-5](crates/windows-file-enumeration-sys/CHECKLIST.md) -- `forbid(unsafe_code)`, last.
+7. [SAFE-5](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-5) -- `forbid(unsafe_code)`, last.
 
 - [x] **M43.1** -- `win-text-sys` is created, with `compare_string_ordinal` over `CompareStringOrdinal`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m431)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is
-  > [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) in `crates/windows-file-enumeration-sys` and
+  > [SAFE-4](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4) in `crates/windows-file-enumeration-sys` and
   > [M17.1](crates/windows-file-watcher/CHECKLIST.md) in `crates/windows-file-watcher`.
 
 ## M-inf -- Parked

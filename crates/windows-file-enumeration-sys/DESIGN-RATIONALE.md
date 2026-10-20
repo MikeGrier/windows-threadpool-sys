@@ -479,3 +479,18 @@ units on both sides.
 **A failure of the call is a non-match, as it was.** Under the earlier code any result other than `CSTR_EQUAL` was
 unequal, a failure included. Reporting the failure instead would change `matches`' signature for a call that, with
 the arguments this crate passes, has no documented way to fail.
+
+## What `forbid(unsafe_code)` covers, and what the census ended at (D-23)
+
+**Built 2026-10-20** as `SAFE-5`. The census D-23 gives was ten `unsafe` blocks outside tests, and the last of them
+went with `SAFE-4`. The build then found one more, which the census did not count because it was in a test: a raw
+four-byte write that corrupted a record's `NextEntryOffset`. It is a slice write through the buffer's own
+`as_mut_slice`, which is why the engine's buffer being an `io_buffers::AlignedBuf` ([D-24](DESIGN-NOTES.md#d-24)) was what
+made the attribute reachable.
+
+**What the attribute covers.** It sits on the library root, so it covers the library and its unit tests, which are
+compiled into it. It does not reach the integration tests or the doctests, which are separate crates; neither holds
+an `unsafe` token, and what the attribute guarantees is only the library's.
+
+**The older attribute is replaced and not kept beside it.** `forbid(unsafe_op_in_unsafe_fn)` governs the body of an
+`unsafe fn`, and a crate with no `unsafe` has none.

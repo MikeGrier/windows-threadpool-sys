@@ -210,6 +210,23 @@
       "why": "A control: the same comparison through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
       "replace": ["        Ok(ordering) => {\n            let equal = ordering == Ordering::Equal;\n            equal\n        }\n"]
+    },
+    {
+      "name": "SAFE-5: an unsafe block is added to the library",
+      "file": "src/lib.rs",
+      "expect": "refused-by-build",
+      "buildError": "usage of an `unsafe` block",
+      "why": "The attribute is the check D-23 rests on; a block added anywhere in the crate has to stop the build.",
+      "find": ["mod admission;\n"],
+      "replace": ["mod admission;\nconst _: u8 = unsafe { 0 };\n"]
+    },
+    {
+      "name": "SAFE-5 control: a constant is added to the library",
+      "file": "src/lib.rs",
+      "expect": "survives",
+      "why": "A control: the same item with no unsafe, which builds. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["mod admission;\n"],
+      "replace": ["mod admission;\nconst _: u8 = { 0 };\n"]
     }
   ]
 }
