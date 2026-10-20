@@ -37,6 +37,12 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
   and read from the entries' codes. Tests: the existing suite unchanged; an enumeration makes no handle beyond its
   open.
 
+  This discharges the workspace's [M21.3 and M21.4](../../CHECKLIST.md#m21----reconcile-with-the-shipped-namespace-plane-work),
+  which are checked off in the same commit, and their constraints are this item's acceptance conditions: the open
+  keeps its access (`FILE_LIST_DIRECTORY`), share mode and flags (`FILE_FLAG_BACKUP_SEMANTICS`); the directory's
+  handle stays unassociated; every code reaches the crate unaltered; the open's code is captured before the
+  impersonation context is restored; and the D-15 Globazog acceptance gate still passes.
+
   > **CROSS-COMPONENT PREREQUISITE:** the request crate's release carrying `NR-6.1` to `NR-6.5`
   > ([COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-65-into)).
 
@@ -45,7 +51,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
   than a duplicate; `completion_ring.rs`'s `DuplicateHandle`, `SetEvent` and `ResetEvent` are gone. The unit tests'
   raw waits move to `win-sync-sys`'s `wait_for_single_object`.
 
-  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.1](../win-sync-sys/CHECKLIST.md) and
+  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.2](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) and
   > [M-T15.1](../windows-threadpool-sys/CHECKLIST.md).
 
 - [ ] **SAFE-4** -- **Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s

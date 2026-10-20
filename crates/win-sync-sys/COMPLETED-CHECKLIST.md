@@ -147,7 +147,10 @@ The item as it stood at completion:
 
 ## Moved 2026-10-18 23:18:38 -04:00 -- WS-M2: an event's clones share one handle
 
-### <a id="ws-21"></a>WS-2.1 -- `Event` and `WaitOnlyEvent` hold a `SharedHandle` and their clones share it; `try_clone` is gone, and the one operation that makes a handle is `duplicate_wait_only`. *(completed 2026-10-18 23:18:38 -04:00)*
+### <a id="ws-22"></a>WS-2.2 -- `Event` and `WaitOnlyEvent` hold a `SharedHandle` and their clones share it; `try_clone` is gone, and the one operation that makes a handle is `duplicate_wait_only`. *(completed 2026-10-18 23:18:38 -04:00)*
+
+Planned and implemented as `WS-2.1`, an ID the single-object wait above already had; renumbered `WS-2.2` on
+2026-10-20 so the two have distinct anchors. Records written before then that mean this item say `WS-2.1`.
 
 Proposed by the assistant as the engineer's ruling of 2026-10-18 applied here, and started on "implement ws-2.1".
 The decision is [WS-D-10](DESIGN-NOTES.md#ws-d-10); [WS-D-5](DESIGN-NOTES.md#ws-d-5) and

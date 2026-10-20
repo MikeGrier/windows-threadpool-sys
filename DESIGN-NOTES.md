@@ -921,7 +921,7 @@ clone; this is [the same rule](#into_handle-now-declines-rather-than-lying) as a
 that hands the value back rather than an answer that is wrong.
 
 **Where the safe conversion from an `Event` lands.** `From<Event>` builds a shared target, since `win-sync-sys`'
-`WS-2.1` made an `Event`'s clones share one handle ([its WS-D-10](crates/win-sync-sys/DESIGN-NOTES.md#ws-d-10)): the
+`WS-2.2` made an `Event`'s clones share one handle ([its WS-D-10](crates/win-sync-sys/DESIGN-NOTES.md#ws-d-10)): the
 wait and every clone the caller keeps hold the one handle, and no duplicate is made to signal through.
 
 ## Re-arming is gated against teardown, under the same lock that arms

@@ -98,6 +98,10 @@ be settled rather than discovered later.
   `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
   Its D-15 Globazog acceptance gate must still pass afterwards.
 
+  > **Done by** `windows-file-enumeration-sys`' [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md),
+  > which makes this open the request crate's `OpenFile` and carries the constraints above as its acceptance
+  > conditions. Check this item off in the commit that completes `SAFE-2`.
+
 - [ ] **M21.4** -- Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
   crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
   leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
@@ -105,6 +109,11 @@ be settled rather than discovered later.
   operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
   completion, then submits the query. A compound entry is reserved for a measured performance argument
   and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
+
+  > **Done by** `windows-namespace-request-sys`' `NR-6.4` (the entry, `QueryFileBasicInfo`, in its
+  > [COMPLETED-CHECKLIST.md](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-64-basic)) and
+  > `windows-file-enumeration-sys`' [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) (the
+  > enumeration crate sequencing it after the open). Check this item off in the commit that completes `SAFE-2`.
 
 ## M34 -- Tooling
 
@@ -545,7 +554,7 @@ crates' checklists; this is only the order and the links, and each item's own ch
 4. The request crate's release, a new minor. A release action, not an item.
 5. [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) -- the directory's calls through the request crate.
 6. Independently of 1 to 5: [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md) then
-   [WS-2.1](crates/win-sync-sys/CHECKLIST.md) (reordered 2026-10-18: the shared wait target comes first), then
+   [WS-2.2](crates/win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) (reordered 2026-10-18: the shared wait target comes first), then
    [SAFE-3](crates/windows-file-enumeration-sys/CHECKLIST.md); and `M43.1` below, then
    [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) and the file watcher's
    [M17.1](crates/windows-file-watcher/CHECKLIST.md).

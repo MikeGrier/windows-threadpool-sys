@@ -1438,7 +1438,7 @@ Decided by the engineer on 2026-10-18 ("take the decision as yes now"); the deci
 assistant settled within it (the seam's contract, and what `into_handle` returns), are in the workspace
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle). `WaitTarget` has a `Shared(SharedHandle)` arm;
 releasing the wait's clone is the target's destructor, so both teardown paths already order it after the drain.
-Restructured while `WS-2.1` was implemented: switching `From<Event>` to the shared arm moved to
-[WS-2.1](../win-sync-sys/CHECKLIST.md), because it needs a shareable `Event` and `WS-2.1` needs this arm first.
+Restructured while `WS-2.2` (then numbered `WS-2.1`) was implemented: switching `From<Event>` to the shared arm moved to
+[WS-2.2](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22), because it needs a shareable `Event` and `WS-2.2` needs this arm first.
 Six tests, and three sabotages (two caught, one control survived); one is caught by the pool failing fast on a
 null handle, which the manifest says.

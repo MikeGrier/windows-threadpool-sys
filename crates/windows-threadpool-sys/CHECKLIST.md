@@ -1320,8 +1320,8 @@ finding is of a different and worse kind: a rule nothing tests.
 
 - [x] **M-T15.1** -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m-t151)
 
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-sync-sys` -> `WS-M2` -> `WS-2.1`. See
-  > [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-sync-sys` -> `WS-M2` -> `WS-2.2`. See
+  > [COMPLETED-CHECKLIST.md](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22).
 
 ## M-inf -- Diagnostic work with no gating deliverable
 

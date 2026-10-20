@@ -468,7 +468,7 @@ fn a_wait_only_event_is_send_and_sync() {
     assert_send_and_sync::<WaitOnlyEvent>();
 }
 
-// --- clones share one handle (WS-2.1, WS-D-10) ---
+// --- clones share one handle (WS-2.2, WS-D-10) ---
 
 #[test]
 fn a_clone_shares_the_handle_rather_than_making_one() {
