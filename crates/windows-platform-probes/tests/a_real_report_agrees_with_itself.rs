@@ -105,7 +105,7 @@ use windows_platform_probes::topology::{BracketOutcome, CacheLevel, CoreShape, O
 
 /// A host shape, named by the renderer branch it exists to reach.
 struct Shape {
-    what: &'static str,
+    what: String,
     observation: Observation,
 }
 
@@ -174,16 +174,15 @@ fn base() -> Observation {
     }
 }
 
-/// Representative shapes this renderer can be driven into, by the branch each
-/// reaches.
+/// Shapes this renderer can be driven into: the hand-written ones, each named for
+/// the branch it reaches, then the generated cross product of [`crossed_dimensions`].
 ///
-/// **Not every shape, and the difference is recorded rather than glossed.** This
-/// said "every shape this renderer can be driven into", which describes a closed
-/// set. Each entry below varies ONE dimension, so a branch selected by two at
-/// once is unreachable here by construction -- the reason the crossed
-/// anomaly-and-disagreement case at the end had to be written by hand, and the
-/// reason M2.17 exists. Until the cross product is generated, read this as a
-/// sample chosen from the renderer's branches, not as a proof of coverage.
+/// **Still not every shape, and the difference is recorded rather than glossed.**
+/// Each hand-written entry varies ONE dimension, so a branch selected by two at
+/// once was unreachable here by construction -- the reason the crossed
+/// anomaly-and-disagreement case below had to be written by hand. `M2.17` added
+/// the cross product, which reaches every combination of the dimensions it
+/// names; a dimension it does not name is still varied only by hand.
 ///
 /// **Which combinations are legal is DERIVED from `cross_check`, not assumed.**
 /// It pushes a `parse_incomplete` entry for an empty cache survey, for a named
@@ -194,7 +193,12 @@ fn base() -> Observation {
 /// cannot produce.
 fn shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
-    let mut push = |what, observation| shapes.push(Shape { what, observation });
+    let mut push = |what: &str, observation| {
+        shapes.push(Shape {
+            what: what.to_owned(),
+            observation,
+        });
+    };
 
     push("the level arm, agreeing", base());
 
@@ -355,6 +359,42 @@ fn shapes() -> Vec<Shape> {
     }];
     push("a cache level Windows does not number", unnumbered);
 
+    // **The states `M4.1` added, one shape each where none already reached
+    // them.** `numa_domains_only_in_cpu_sets` is reached by the parse-in-doubt
+    // shape above, and `cores_only_in_cpu_sets`, `numa_domains_unreported` and
+    // `processor_attribute_conflicts` by the several-at-once shape below.
+    let mut empty_level = base();
+    empty_level.partitioning_cache_level = None;
+    empty_level.caches = vec![CacheLevel {
+        level: 1,
+        processors_per_domain: Vec::new(),
+    }];
+    push("a cache level with no partitions", empty_level);
+
+    let mut no_groups = base();
+    no_groups.groups = 0;
+    push("a measured topology that reports no groups", no_groups);
+
+    let mut empty_core = base();
+    empty_core.cores_without_processors = 1;
+    push("a core that covers no processors", empty_core);
+
+    let mut overlapping = base();
+    overlapping.overlapping_walk_relations = 1;
+    push("two walk records claiming one processor", overlapping);
+
+    let mut described = base();
+    described.described_relations = 1;
+    push("a relation a caller described", described);
+
+    let mut unreported = base();
+    unreported.unreported_relations = 1;
+    push("a relation no source reported", unreported);
+
+    let mut conflicting_labels = base();
+    conflicting_labels.numa_domains_with_conflicting_labels = 1;
+    push("a NUMA domain with two node numbers", conflicting_labels);
+
     let mut anomalies = base();
     anomalies.enumeration_anomalies = vec![
         windows_topology_sys::EnumerationAnomaly {
@@ -384,8 +424,9 @@ fn shapes() -> Vec<Shape> {
     // That is how the anomaly-count rule came to be unread on a disagreeing
     // report while a comment above it said it was read for every verdict:
     // corrupting the count there raised no violation, and no corpus report
-    // could show it. Found by a review. This shape is the cross, and it is the
-    // only one here that varies two dimensions at once.
+    // could show it. Found by a review. This shape was the cross, written by
+    // hand; the generated product below now reaches it and every combination
+    // like it, and it stays as the named case that motivated that.
     let mut anomalies_while_disagreeing = base();
     anomalies_while_disagreeing.raw_active_processors = 8;
     anomalies_while_disagreeing.enumeration_anomalies =
@@ -399,9 +440,9 @@ fn shapes() -> Vec<Shape> {
         anomalies_while_disagreeing,
     );
 
-    // **Several conditions in ONE list, which nothing else here reaches.** Every
-    // other shape varies one dimension, so each lands at most one entry per
-    // list -- and a one-element list has no order to get wrong. That made the
+    // **Several conditions in ONE list, which no other hand-written shape
+    // reaches.** Each of those varies one dimension, so each lands at most one
+    // entry per list -- and a one-element list has no order to get wrong. That made the
     // ordering half of `the_row_lists_exactly_the_conditions_the_cross_check_found`
     // vacuous: reversing the row's `parse_incomplete` reddened nothing at all.
     //
@@ -415,7 +456,238 @@ fn shapes() -> Vec<Shape> {
     several.processor_attribute_conflicts = 1;
     push("several conditions at once, in one list", several);
 
+    shapes.extend(cross(base(), &crossed_dimensions()));
     shapes
+}
+
+// --- M2.17: the corpus, crossed -----------------------------------------------
+
+/// A change to an observation, named for what it makes the observation.
+type Change = (&'static str, fn(&mut Observation));
+
+/// The values one dimension takes. The first is always the identity, so `base()`
+/// is the shape where every dimension is at its first value.
+type Dimension = Vec<Change>;
+
+/// The dimensions the cross product varies, each over every value it takes.
+///
+/// **The ones `cross_check`, the verdict and the row branch on**: the partitioning
+/// arm, the bracket, coherence, the two kinds of counter result that fill
+/// `disagreements` and `not_compared`, anomalies (which fill `parse_incomplete`
+/// through their own push), and the efficiency classes, which the renderer gates
+/// on the parse being in doubt. The verdict is not a dimension of its own: it is a
+/// function of the three lists, so crossing what fills them crosses it.
+///
+/// **Each dimension changes fields no other one does**, so a combination is one
+/// observation rather than a later change overwriting an earlier one.
+/// `the_crossed_dimensions_are_independent_of_each_other` checks that rather than
+/// trusting this sentence.
+fn crossed_dimensions() -> Vec<Dimension> {
+    vec![
+        vec![
+            ("the level arm", |_| {}),
+            ("no level partitions the machine", |o| {
+                o.partitioning_cache_level = None;
+            }),
+            ("no unique outermost level", |o| {
+                o.partitioning_cache_level = None;
+                o.caches = vec![CacheLevel {
+                    level: 2,
+                    processors_per_domain: vec![2, 2],
+                }];
+            }),
+            ("no cache levels", |o| {
+                o.partitioning_cache_level = None;
+                o.caches = Vec::new();
+            }),
+            ("a summary missing", |o| {
+                o.partitioning_cache_level = Some(9)
+            }),
+        ],
+        vec![
+            ("the bracket held", |_| {}),
+            ("the machine changed", |o| {
+                o.bracket = BracketOutcome::Changed
+            }),
+            ("the bracket left open", |o| {
+                o.bracket = BracketOutcome::NotEstablished;
+            }),
+        ],
+        vec![
+            ("the enumerations agreed", |_| {}),
+            ("the enumerations disagreed", |o| {
+                o.coherence = windows_topology_sys::Coherence::Disagreed {
+                    attempts: 2,
+                    walk_only: Vec::new(),
+                    cpu_sets_only: Vec::new(),
+                };
+            }),
+            ("coherence not collected", |o| {
+                o.coherence = windows_topology_sys::Coherence::NotCollected;
+            }),
+        ],
+        vec![
+            ("the processor counter agrees", |_| {}),
+            ("the processor counter disagrees", |o| {
+                o.raw_active_processors = 8;
+            }),
+        ],
+        vec![
+            ("the NUMA counter read", |_| {}),
+            ("the NUMA counter failed", |o| {
+                o.raw_highest_numa_node = None
+            }),
+        ],
+        vec![
+            ("no anomalies", |_| {}),
+            ("an anomaly", |o| {
+                o.enumeration_anomalies = vec![windows_topology_sys::EnumerationAnomaly {
+                    source: windows_topology_sys::Source::RelationshipWalk,
+                    offset: 0,
+                    kind: windows_topology_sys::AnomalyKind::TrailingBytes { remaining: 8 },
+                }];
+            }),
+        ],
+        vec![
+            ("one efficiency class", |_| {}),
+            ("two efficiency classes", |o| {
+                o.cores = vec![
+                    CoreShape {
+                        simultaneous_multithreading: true,
+                        efficiency_class: 0,
+                        processors: 2,
+                    },
+                    CoreShape {
+                        simultaneous_multithreading: true,
+                        efficiency_class: 1,
+                        processors: 2,
+                    },
+                ];
+            }),
+        ],
+    ]
+}
+
+/// Every combination of one value from each of `dimensions`, applied to `start`
+/// in dimension order, each named for the values it took.
+fn cross(start: Observation, dimensions: &[Dimension]) -> Vec<Shape> {
+    let mut shapes = vec![Shape {
+        what: String::new(),
+        observation: start,
+    }];
+    for dimension in dimensions {
+        shapes = shapes
+            .iter()
+            .flat_map(|shape| {
+                dimension.iter().map(move |(name, change)| {
+                    let mut observation = shape.observation.clone();
+                    change(&mut observation);
+                    let what = if shape.what.is_empty() {
+                        (*name).to_owned()
+                    } else {
+                        format!("{}; {name}", shape.what)
+                    };
+                    Shape { what, observation }
+                })
+            })
+            .collect();
+    }
+    shapes
+}
+
+#[test]
+fn the_crossed_dimensions_are_independent_of_each_other() {
+    // **What makes the product a product.** If two dimensions wrote the same
+    // field, the later would overwrite the earlier and a combination would
+    // quietly collapse into one of its halves -- reaching fewer states than its
+    // name claims, with nothing reporting it. So every value other than a
+    // dimension's first must change the observation, and any two values from
+    // different dimensions must give the same observation in either order.
+    //
+    // `Observation` has no `PartialEq`, so they are compared by their `Debug`
+    // rendering, which prints every field.
+    let after = |changes: &[&Change]| {
+        let mut observation = base();
+        for (_, change) in changes {
+            change(&mut observation);
+        }
+        format!("{observation:?}")
+    };
+    let unchanged = after(&[]);
+    let dimensions = crossed_dimensions();
+
+    for dimension in &dimensions {
+        let (first, rest) = dimension.split_first().expect("no dimension is empty");
+        assert_eq!(
+            after(&[first]),
+            unchanged,
+            "`{}` is a dimension's first value, which is base()",
+            first.0
+        );
+        for value in rest {
+            assert_ne!(after(&[value]), unchanged, "`{}` changes nothing", value.0);
+        }
+    }
+
+    for (index, left) in dimensions.iter().enumerate() {
+        for right in &dimensions[index + 1..] {
+            for a in left {
+                for b in right {
+                    assert_eq!(
+                        after(&[a, b]),
+                        after(&[b, a]),
+                        "`{}` and `{}` touch the same field",
+                        a.0,
+                        b.0
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_crossed_corpus_reaches_each_verdict_under_each_partitioning_arm() {
+    // **The crossing that M2.17 was written for, checked for having happened.** A
+    // product whose combinations collapsed -- say, a counter disagreement that
+    // a dimension silently cancelled -- would still be a long list of shapes. So
+    // under every partitioning arm the corpus must reach `incomplete` and
+    // `disagree`, and `agree` wherever the arm alone does not block it, and
+    // somewhere a shape must fill all three diagnostic lists at once, which is
+    // the combination no single-dimension shape can reach.
+    use windows_platform_probes::topology::Verdict;
+
+    let dimensions = crossed_dimensions();
+    let (arms, rest) = dimensions.split_first().expect("there are dimensions");
+    for (arm, change) in arms {
+        let mut alone = base();
+        change(&mut alone);
+        let reached: Vec<Verdict> = cross(alone.clone(), rest)
+            .iter()
+            .map(|shape| shape.observation.cross_check().verdict())
+            .collect();
+
+        let mut wanted = vec![Verdict::Incomplete, Verdict::Disagree];
+        if alone.cross_check().verdict() == Verdict::Agree {
+            wanted.push(Verdict::Agree);
+        }
+        for verdict in wanted {
+            assert!(
+                reached.contains(&verdict),
+                "under `{arm}` the crossed corpus never reaches {verdict:?}"
+            );
+        }
+    }
+
+    assert!(
+        cross(base(), &dimensions).iter().any(|shape| {
+            let check = shape.observation.cross_check();
+            !check.disagreements.is_empty()
+                && !check.not_compared.is_empty()
+                && !check.parse_incomplete.is_empty()
+        }),
+        "no crossed shape fills all three diagnostic lists at once"
+    );
 }
 
 #[test]
@@ -629,6 +901,64 @@ fn codes_for(state: invariant::BlockingState) -> &'static [&'static str] {
         State::EnumerationsDisagreed => &["enumerations_disagreed"],
         State::CoherenceNotCollected => &["coherence_not_collected"],
         State::BracketNotHeld => &["machine_changed", "bracket_not_established"],
+        State::CacheLevelsWithoutPartitions => &["cache_levels_without_partitions"],
+        State::MeasuredButCountsAbsent => &["measured_but_counts_absent"],
+        State::NumaDomainsOnlyInCpuSets => &["numa_domains_only_in_cpu_sets"],
+        State::NumaDomainsUnreported => &["numa_domains_unreported"],
+        State::NumaDomainsWithConflictingLabels => &["numa_domains_with_conflicting_labels"],
+        State::CoresOnlyInCpuSets => &["cores_only_in_cpu_sets"],
+        State::RelationsWithoutProcessors => &["relations_without_processors"],
+        State::OverlappingWalkRelations => &["overlapping_walk_relations"],
+        State::DescribedRelations => &["described_relations"],
+        State::UnreportedRelations => &["unreported_relations"],
+        State::ProcessorAttributeConflicts => &["processor_attribute_conflicts"],
+    }
+}
+
+#[test]
+fn every_parse_incomplete_code_is_answered_by_a_blocking_state() {
+    // **The census `M4.1` closed, held closed.** `blocking_states` once modelled
+    // part of `parse_incomplete` and justified the rest by an argument that was
+    // false, so a push site deleted from `cross_check` for any of eleven
+    // conditions left the verdict free to reach `agree` with nothing noticing.
+    // Both sides of this comparison are generated: `ALL_CODES` from the list
+    // that defines `ParseIncomplete::code`, and `BlockingState::ALL` from the
+    // list that defines the enum. So a new condition with no state fails here,
+    // rather than waiting for a review to find it.
+    //
+    // **And the other direction**, because a guard tested one way is half a
+    // guard: every code a state names must be one the row can publish, or the
+    // per-state publication rule demands a code nothing emits.
+    use windows_platform_probes::topology::{Disagreement, NotCompared, ParseIncomplete};
+
+    let answered: Vec<&str> = invariant::BlockingState::ALL
+        .iter()
+        .flat_map(|state| codes_for(*state).iter().copied())
+        .collect();
+    let unanswered: Vec<&str> = ParseIncomplete::ALL_CODES
+        .iter()
+        .copied()
+        .filter(|code| !answered.contains(code))
+        .collect();
+    assert!(
+        unanswered.is_empty(),
+        "`cross_check` can file {unanswered:?} and no blocking state answers it, so \
+         deleting that push site lets the verdict reach `agree` unnoticed"
+    );
+
+    let publishable = [
+        ParseIncomplete::ALL_CODES,
+        NotCompared::ALL_CODES,
+        Disagreement::ALL_CODES,
+    ]
+    .concat();
+    for state in invariant::BlockingState::ALL {
+        for code in codes_for(*state) {
+            assert!(
+                publishable.contains(code),
+                "{state:?} names `{code}`, which no diagnostic list can publish"
+            );
+        }
     }
 }
 

@@ -11,7 +11,11 @@
 //! exceed it, and gets there promptly); this binary prints the numbers, which
 //! is what a new architecture actually needs to be re-measured against.
 
-use windows_platform_probes::pool_growth::{measure_growth, measure_raise_while_saturated};
+use windows_platform_probes::build_identity::this_build;
+use windows_platform_probes::pool_growth::{
+    GROWTH_RUNS, GrowthObservation, GrowthRun, RAISE_RUN, measure_growth,
+    measure_raise_while_saturated, raw_row,
+};
 use windows_platform_probes::report::emit_report;
 
 /// Measure one configuration and append its block to `out`.
@@ -19,16 +23,10 @@ use windows_platform_probes::report::emit_report;
 /// Takes the buffer rather than printing: a helper that wrote to stdout while
 /// its caller composed a string would emit its lines *before* the caller's,
 /// reordering the report even though every line still appeared.
-fn report(
-    out: &mut dyn std::fmt::Write,
-    label: &str,
-    maximum: u32,
-    submissions: usize,
-    runs_long: bool,
-) {
-    let observed = measure_growth(maximum, submissions, runs_long);
+fn report(out: &mut dyn std::fmt::Write, run: GrowthRun) -> GrowthObservation {
+    let observed = measure_growth(run.maximum, run.submissions, run.runs_long);
 
-    let _ = writeln!(out, "{label}");
+    let _ = writeln!(out, "{}", run.label);
     let _ = writeln!(
         out,
         "  max {} / submitted {} -> started while blocked {}, distinct threads {}",
@@ -45,6 +43,7 @@ fn report(
         observed.slowest_arrival()
     );
     let _ = writeln!(out, "  arrivals (us): {:?}", observed.arrivals_us);
+    observed
 }
 
 fn main() {
@@ -67,15 +66,24 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(out, "== how a blocked pool grows ==\n");
 
-    report(out, "P1 growth curve, max 4:", 4, 8, false);
-    let _ = writeln!(out);
-    report(out, "P1 growth curve, max 8:", 8, 16, false);
-    let _ = writeln!(out);
-    report(out, "P2 the same, runs-long:", 4, 8, true);
-    let _ = writeln!(out);
+    // One list drives both the prose and the row (`M8.5`), so they cannot
+    // describe different runs.
+    let mut growth = Vec::new();
+    for run in GROWTH_RUNS {
+        growth.push((run, report(out, run)));
+        let _ = writeln!(out);
+    }
 
-    let raise = measure_raise_while_saturated(2, 6, 8);
-    let _ = writeln!(out, "P3 raise while saturated (2 -> 6):");
+    let raise = measure_raise_while_saturated(
+        RAISE_RUN.base_max,
+        RAISE_RUN.raised_max,
+        RAISE_RUN.submissions,
+    );
+    let _ = writeln!(
+        out,
+        "P3 raise while saturated ({} -> {}):",
+        RAISE_RUN.base_max, RAISE_RUN.raised_max
+    );
     if raise.saturated_before_raise() {
         let _ = writeln!(
             out,
@@ -108,5 +116,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(
         out,
         "Re-run on another architecture rather than assuming they carry over."
+    );
+    // The raw data, last, as every probe's normal run emits it.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&growth, (RAISE_RUN, raise), &this_build().to_string()).render()
     );
 }

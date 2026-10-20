@@ -38,6 +38,7 @@ fn observation(isolated: Vec<Run>, drained: Vec<Run>) -> Observation {
         isolated,
         drained,
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     }
 }
 
@@ -263,24 +264,31 @@ fn every_shape_name_is_distinct() {
 /// refuse and stop being the regime it claims to be.
 ///
 /// `>=` rather than `>`: a `bounded(n)` queue accepts exactly `n` items
-/// (measured, not assumed), so an exact fit is sufficient. Today the product is
-/// never a power of two, so the distinction is unreachable -- but M4.2 makes the
-/// push count settable, and a stricter assertion than the contract requires would
-/// reject a valid configuration then.
+/// (measured, not assumed), so an exact fit is sufficient. The default product is
+/// never a power of two, but `M4.2` made the push count settable, and 1024 pushes
+/// at a power-of-two producer count is an exact fit: a stricter assertion than the
+/// contract requires would reject that valid configuration.
 #[test]
 fn capacity_for_leaves_room_for_every_push_at_every_producer_count() {
-    for &producers in PRODUCER_COUNTS {
-        let capacity = capacity_for(producers);
-        let pushes = producers * PUSHES_PER_PRODUCER;
-        assert!(
-            capacity >= pushes,
-            "{producers} producers push {pushes} but capacity is {capacity}"
-        );
-        assert!(
-            capacity.is_power_of_two(),
-            "{capacity} must be a power of two"
-        );
+    for pushes_per_producer in [PUSHES_PER_PRODUCER, 1, 1024, 1000] {
+        for &producers in PRODUCER_COUNTS {
+            let capacity = capacity_for(producers, pushes_per_producer);
+            let pushes = producers * pushes_per_producer;
+            assert!(
+                capacity >= pushes,
+                "{producers} producers push {pushes} but capacity is {capacity}"
+            );
+            assert!(
+                capacity.is_power_of_two(),
+                "{capacity} must be a power of two"
+            );
+        }
     }
+    assert_eq!(
+        capacity_for(2, 1024),
+        2048,
+        "an exact fit is not rounded up"
+    );
 }
 
 /// `measured_span` is the correction that round two of this branch's review
@@ -439,9 +447,9 @@ fn render_table_of_nothing_still_writes_its_header() {
 /// A timer that replays a scripted sequence instead of measuring anything, so
 /// `median_run`'s selection can be checked exactly. The first value is consumed
 /// by the untimed warmup pass.
-fn scripted(values: Vec<Repetition>) -> impl FnMut(usize) -> Repetition {
+fn scripted(values: Vec<Repetition>) -> impl FnMut(usize, usize) -> Repetition {
     let mut next = 0usize;
-    move |_producers| {
+    move |_producers, _pushes| {
         let value = values[next];
         next += 1;
         value
@@ -475,7 +483,12 @@ fn scripted_repetitions() -> Vec<Repetition> {
 
 #[test]
 fn median_run_reports_the_median_repetition_rather_than_the_first_or_last() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     // 3e6 ns over 1 * 50,000 pushes is 60 ns per op.
     assert!(
         (measured.nanos_per_op - 60.0).abs() < 1e-9,
@@ -492,7 +505,12 @@ fn median_run_reports_the_median_repetition_rather_than_the_first_or_last() {
 /// would misattribute the cause while leaving the timing plausible.
 #[test]
 fn median_run_pairs_the_refusal_count_with_the_median_repetition() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     assert_eq!(
         measured.refusals, 20,
         "3e6 ns is the median and its repetition refused 20; got {}",
@@ -506,7 +524,12 @@ fn median_run_pairs_the_refusal_count_with_the_median_repetition() {
 /// is visible.
 #[test]
 fn median_run_discards_the_warmup_pass() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     assert_ne!(
         measured.refusals, 9_999,
         "the warmup's refusals were reported"
@@ -524,7 +547,12 @@ fn median_run_discards_the_warmup_pass() {
 /// different runs.
 #[test]
 fn median_run_derives_both_rates_from_the_one_chosen_repetition() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     let round_trip = 1_000_000_000.0 / measured.nanos_per_op;
     assert!(
         (measured.ops_per_second - round_trip).abs() < 1e-3,
@@ -538,8 +566,18 @@ fn median_run_derives_both_rates_from_the_one_chosen_repetition() {
 /// durations must report a lower per-push cost when more producers shared them.
 #[test]
 fn median_run_divides_the_median_by_every_producers_pushes() {
-    let one = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
-    let four = median_run(shapes::RESERVING_MPSC, 4, scripted(scripted_repetitions()));
+    let one = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
+    let four = median_run(
+        shapes::RESERVING_MPSC,
+        4,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     assert!(
         (one.nanos_per_op / four.nanos_per_op - 4.0).abs() < 1e-9,
         "four producers push four times as many items in the same span: {} vs {}",
@@ -576,7 +614,12 @@ fn render_table_shows_a_nonzero_refusal_count() {
 /// median repeated or two adjacent repetitions.
 #[test]
 fn median_run_carries_the_fastest_and_slowest_repetitions() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     // Scripted timed repetitions are 1e6..5e6 ns over 50,000 pushes: 20..100 ns/op.
     assert!(
         (measured.fastest_nanos_per_op - 20.0).abs() < 1e-9,
@@ -595,7 +638,12 @@ fn median_run_carries_the_fastest_and_slowest_repetitions() {
 /// wrong vector or from an unsorted one.
 #[test]
 fn median_run_brackets_its_median_with_the_range() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     assert!(
         measured.fastest_nanos_per_op <= measured.nanos_per_op,
         "fastest {} must not exceed the median {}",
@@ -615,7 +663,12 @@ fn median_run_brackets_its_median_with_the_range() {
 /// wildly unstable.
 #[test]
 fn median_run_excludes_the_warmup_from_the_range() {
-    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let measured = median_run(
+        shapes::RESERVING_MPSC,
+        1,
+        &Sampling::default(),
+        scripted(scripted_repetitions()),
+    );
     assert!(
         measured.slowest_nanos_per_op < 1_000.0,
         "the warmup's 999e6 ns reached the range as {} ns/op",
@@ -821,6 +874,7 @@ fn scaling_bounds_reads_the_one_and_many_producer_rows() {
         ],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     let (low, high) = observation
         .scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8)
@@ -840,6 +894,7 @@ fn scaling_bounds_is_none_when_a_row_is_missing() {
         isolated: vec![run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0)],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     assert!(
         observation
@@ -1025,6 +1080,7 @@ fn a_many_producer_row_that_did_not_run_scales_to_the_marker() {
         ],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     let point = observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, 8);
     assert_eq!(
@@ -1125,6 +1181,7 @@ fn count_measured_counts_rows_that_ran_rather_than_rows_that_exist() {
         ],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     assert_eq!(
         observation.count_measured(&observation.isolated, &layouts, 1),
@@ -1245,6 +1302,7 @@ fn scaling_bounds_at_one_producer_is_exactly_one() {
         isolated: vec![run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0)],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     assert_eq!(
         observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, 1),
@@ -1266,6 +1324,7 @@ fn scaling_bounds_at_one_producer_is_exactly_one() {
         ],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     let (low, high) = observation
         .scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8)
@@ -1286,6 +1345,7 @@ fn scaling_bounds_at_one_producer_is_exactly_one() {
             isolated: vec![row],
             drained: Vec::new(),
             available_parallelism: Some(8),
+            sampling: Sampling::default(),
         };
         assert_eq!(
             observation.scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 1),
@@ -1311,6 +1371,7 @@ fn scaling_bounds_needs_both_rows_measured_not_merely_one() {
         isolated: vec![measured, absent],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     assert_eq!(
         one_ran.scaling_bounds(&one_ran.isolated, shapes::RESERVING_MPSC, 8),
@@ -1327,6 +1388,7 @@ fn scaling_bounds_needs_both_rows_measured_not_merely_one() {
         ],
         drained: Vec::new(),
         available_parallelism: Some(8),
+        sampling: Sampling::default(),
     };
     assert_eq!(
         other_ran.scaling_bounds(&other_ran.isolated, shapes::RESERVING_MPSC, 8),

@@ -1,0 +1,20 @@
+isolated regime, 7 run(s): interleaved-run1.txt, interleaved-run2.txt, interleaved-run3.txt, interleaved-run4.txt, interleaved-run5.txt, interleaved-run6.txt, interleaved-run7.txt
+each layout against reserving(32/32); control is reserving_mpsc against reserving(32/32)
+median of the per-run ratios, with the observed range beside it
+
+producers  control             (16/48)             (8/56)              (64/64)             
+1          1.00x [0.98-1.07]   1.00x [0.96-1.06]   1.04x [1.00-1.06]   1.39x [1.36-1.44]   
+2          1.01x [0.94-1.04]   1.01x [0.88-1.05]   0.99x [0.98-1.07]   1.17x [1.05-1.22]   
+4          1.03x [0.91-1.10]   0.98x [0.88-1.07]   0.94x [0.87-1.03]   1.25x [1.13-1.39]   
+8          1.03x [0.94-1.12]   1.02x [0.98-1.26]   1.07x [0.95-1.31]   1.98x [1.57-2.22]   
+16         1.01x [0.99-1.06]   1.30x [1.22-1.36]   1.39x [1.26-1.42]   4.00x [3.13-4.36]   
+32         0.98x [0.94-1.00]   1.25x [1.19-1.31]   1.26x [1.21-1.37]   4.16x [3.45-4.49]   
+
+where every run sat above the control's whole observed range:
+  reserving(16/48)   16, 32 producers
+  reserving(8/56)    16, 32 producers
+  reserving(64/64)   1, 2, 4, 8, 16, 32 producers
+
+The control's range here is 7 observation(s) per count, which is not
+a band. This reports what these runs did; it does not establish that a fresh
+run would land the same way.

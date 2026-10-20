@@ -20,9 +20,11 @@
 //! two-host comparison is in this crate's DESIGN-NOTES.md; a disagreement on a
 //! third host is exactly what this binary is for.
 
+use windows_platform_probes::build_identity::this_build;
 use windows_platform_probes::error_mode::{
-    alignment_bit_is_sticky_at_process_scope, bits, combined_invalid_installs_nothing, probe_bit,
-    settable_bits, thread_mode_independent_of_process,
+    Observation, PROBED_BITS, alignment_bit_is_sticky_at_process_scope, bits,
+    combined_invalid_installs_nothing, probe_bit, raw_row, settable_bits,
+    thread_mode_independent_of_process,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -62,13 +64,12 @@ fn render(out: &mut dyn std::fmt::Write) {
         windows_placement_probe::fingerprint::banner_line()
     );
     let _ = writeln!(out, "--- each bit on its own, set then read back ---");
-    for bit in [
-        bits::FAIL_CRITICAL_ERRORS,
-        bits::NO_GP_FAULT_ERROR_BOX,
-        bits::NO_ALIGNMENT_FAULT_EXCEPT,
-        bits::NO_OPEN_FILE_ERROR_BOX,
-    ] {
+    // Every observation is kept as it is taken, so the row (`M8.7`) carries
+    // exactly what the prose reported, in the order it was measured.
+    let mut outcomes = Vec::new();
+    for bit in PROBED_BITS {
         let outcome = probe_bit(bit);
+        outcomes.push(outcome);
         let verdict = if outcome.is_settable() {
             "SETTABLE"
         } else if outcome.is_silently_dropped() {
@@ -131,5 +132,18 @@ fn render(out: &mut dyn std::fmt::Write) {
         } else {
             "clearable"
         }
+    );
+
+    // The raw data, last, as every probe's normal run emits it.
+    let observed = Observation {
+        bits: outcomes,
+        combined_read_back: read_back,
+        process_versus_thread: observation,
+        alignment: (before, after),
+    };
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&observed, &this_build().to_string()).render()
     );
 }

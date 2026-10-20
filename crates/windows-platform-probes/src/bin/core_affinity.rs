@@ -4,6 +4,8 @@
 
 use windows_placement_probe::core_affinity::{Observation, Placement, measure};
 use windows_placement_probe::peer_index_cache::Strategy;
+use windows_platform_probes::build_identity::this_build;
+use windows_platform_probes::core_affinity::{declined_row, raw_row};
 use windows_platform_probes::report::emit_report;
 use windows_topology_sys::Observed;
 
@@ -61,6 +63,11 @@ fn render(out: &mut dyn std::fmt::Write) {
                 out,
                 "\nNothing below could be measured, so nothing below is reported. This is\n\
                  a failure to observe the host, not a finding about it."
+            );
+            let _ = writeln!(
+                out,
+                "{}",
+                declined_row(&error, announced.as_ref().ok(), &this_build().to_string()).render()
             );
             return;
         }
@@ -120,6 +127,25 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
     }
 
+    render_observation(out, observation);
+    // The raw data, last, as every probe's normal run emits it (`M8.4`), and
+    // after the interpretation rather than inside it: the interpretation
+    // returns early on a host with one placement, and the row is owed anyway.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(
+            observation,
+            announced.as_ref().ok(),
+            settled.as_ref().ok(),
+            &this_build().to_string()
+        )
+        .render()
+    );
+}
+
+/// The processors, the tables and their interpretation.
+fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) {
     let _ = writeln!(out, "\nprocessors, as discovered:");
     let _ = writeln!(
         out,

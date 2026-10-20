@@ -13,8 +13,11 @@
 //! completion arrived, and so read a clean failure -- result code
 //! `ERROR_INVALID_PARAMETER`, zero bytes -- as a success.
 
-use windows_platform_probes::completion_port::{CompletionPortFinding, ReadAttempt, measure};
-use windows_platform_probes::ioring::IoRingSupport;
+use windows_platform_probes::build_identity::this_build;
+use windows_platform_probes::completion_port::{
+    CompletionPortFinding, ReadAttempt, measure, raw_row,
+};
+use windows_platform_probes::ioring::{IoRingSupport, NO_USABLE_IORING};
 use windows_platform_probes::report::emit_report;
 
 fn describe(out: &mut dyn std::fmt::Write, label: &str, attempt: ReadAttempt) {
@@ -166,14 +169,20 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(out, "== IOCP association vs IoRing, on one handle ==\n");
 
-    match measure() {
+    let support = measure();
+    match &support {
         IoRingSupport::Unavailable => {
-            let _ = writeln!(
-                out,
-                "this host has no usable IoRing, so nothing was measured."
-            );
+            let _ = writeln!(out, "{NO_USABLE_IORING}, so nothing was measured.");
             let _ = writeln!(out, "('cannot ask' is not 'the answer is no'.)");
         }
-        IoRingSupport::Measured(finding) => report(out, finding),
+        IoRingSupport::Measured(finding) => report(out, *finding),
     }
+    // The raw data, last, as every probe's normal run emits it (`M8.12`), and
+    // after `report` rather than inside it: `report` returns early when a
+    // control failed, and the row is owed anyway.
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&support, &this_build().to_string()).render()
+    );
 }

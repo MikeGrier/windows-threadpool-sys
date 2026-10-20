@@ -358,6 +358,7 @@ version = "2026.1020.0"
 dependencies = [
  "serde",
  "serde_json",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-namespace-request-sys",
  "windows-placement-probe",

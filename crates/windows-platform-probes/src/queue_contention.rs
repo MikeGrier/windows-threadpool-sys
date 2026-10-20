@@ -86,6 +86,8 @@ use std::time::Instant;
 
 use windows_waitable_queues::{permit_mpsc, reserving_mpsc, slotwise_mpsc};
 
+use crate::probe_args::{self, ArgError, Flag};
+
 use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, Perpetual};
 
 /// The 128-bit layout exists only where a 128-bit exchange is native.
@@ -103,24 +105,212 @@ use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, P
 use windows_waitable_queues::reserving_mpsc::Wide;
 
 #[cfg(test)]
+mod sampling_tests;
+#[cfg(test)]
 mod tests;
 
-/// How many pushes each producer thread performs in one timed run.
+mod measure;
+mod raw_row;
+mod render;
+
+pub use self::measure::*;
+pub use self::raw_row::*;
+pub use self::render::*;
+
+/// How many pushes each producer thread performs in one timed run, unless
+/// [`Sampling`] says otherwise.
 pub const PUSHES_PER_PRODUCER: usize = 50_000;
 
-/// How many times each configuration is repeated; the median is reported.
+/// How many times each configuration is repeated, unless [`Sampling`] says
+/// otherwise; the median is reported.
 ///
 /// Odd, so the median is an observed value rather than an average of two. Five
 /// because these probes run on a virtual machine, where a single run can be
 /// perturbed by something entirely outside the process.
 pub const REPETITIONS: usize = 5;
 
-/// The producer counts measured, in order.
+/// The producer counts measured, in order, unless [`Sampling`] says otherwise.
 ///
 /// Fixed rather than derived from the host's processor count, so two runs on
 /// different machines produce comparable rows. The host's own count is reported
 /// alongside, since the interesting region is around and beyond it.
 pub const PRODUCER_COUNTS: &[usize] = &[1, 2, 4, 8, 16, 32];
+
+/// How a run samples: how long each timed pass is, how many are taken, and at
+/// which producer counts (`M4.2`).
+///
+/// Settable so that the first step the design notes prescribe on a wide control
+/// -- lengthen the span and raise the repetitions on the unchanged configuration
+/// -- is a command-line argument and not a source edit. The
+/// [default](Sampling::default) is the three constants above, so a run given no
+/// settings takes the published counts. What a run used travels with its
+/// [`Observation`] and is printed in its report.
+///
+/// **The order passes are taken in is a setting too, since `M4.4`**, and its
+/// default changed there: see [`Order`] for what the figures measured before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sampling {
+    /// Pushes each producer performs in one timed pass: the length of the span.
+    pub pushes_per_producer: usize,
+    /// Timed passes per configuration, of which the median is reported. With an
+    /// even count the median taken is the upper of the two middle passes, so it
+    /// is still one that was observed.
+    pub repetitions: usize,
+    /// The producer counts measured, in the order given. Scaling is reported
+    /// against the one-producer row, so a list without 1 reports no scaling.
+    pub producer_counts: Vec<usize>,
+    /// The order the timed passes are taken in.
+    pub order: Order,
+}
+
+impl Default for Sampling {
+    fn default() -> Self {
+        Self {
+            pushes_per_producer: PUSHES_PER_PRODUCER,
+            repetitions: REPETITIONS,
+            producer_counts: PRODUCER_COUNTS.to_vec(),
+            order: Order::Interleaved,
+        }
+    }
+}
+
+impl Sampling {
+    /// The settings `probe-queue-contention` takes, which are this type's
+    /// fields.
+    pub const FLAGS: [Flag; 4] = [
+        Flag {
+            name: "pushes-per-producer",
+            value: "N",
+            help: "pushes each producer performs in one timed pass; 50000 when not given",
+        },
+        Flag {
+            name: "repetitions",
+            value: "N",
+            help: "timed passes per configuration, the median reported; 5 when not given",
+        },
+        Flag {
+            name: "producers",
+            value: "N,N,...",
+            help: "producer counts to measure, in order; 1,2,4,8,16,32 when not given",
+        },
+        Flag {
+            name: "order",
+            value: "interleaved|sequential",
+            help: "how passes are ordered; interleaved when not given, sequential being the \
+                   order of the figures published before M4.4",
+        },
+    ];
+
+    /// The sampling a command line asks for: the defaults, with each setting it
+    /// gives in place of its default.
+    ///
+    /// # Errors
+    ///
+    /// What [`probe_args::parse`] refuses, a value that is not a whole number of
+    /// at least one or a producer list [`probe_args::positive_list`] refuses, and
+    /// a combination whose largest run would not fit the queue's capacity
+    /// arithmetic: the isolated regime sizes its queue to the next power of two
+    /// at or above producers times pushes, and a total with none is refused
+    /// rather than overflowing.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, ArgError> {
+        let given = probe_args::parse(args, &Self::FLAGS)?;
+        let mut sampling = Self::default();
+        if let Some(value) = given.get("pushes-per-producer") {
+            sampling.pushes_per_producer = probe_args::positive("pushes-per-producer", value)?;
+        }
+        if let Some(value) = given.get("repetitions") {
+            sampling.repetitions = probe_args::positive("repetitions", value)?;
+        }
+        if let Some(value) = given.get("producers") {
+            sampling.producer_counts = probe_args::positive_list("producers", value)?;
+        }
+        if let Some(value) = given.get("order") {
+            sampling.order = Order::from_name(value).ok_or_else(|| ArgError::Invalid {
+                flag: "order",
+                value: value.to_owned(),
+                reason: "is neither `interleaved` nor `sequential`".to_owned(),
+            })?;
+        }
+        let largest = sampling
+            .producer_counts
+            .iter()
+            .max()
+            .copied()
+            .expect("a parsed producer list is never empty");
+        if largest
+            .checked_mul(sampling.pushes_per_producer)
+            .and_then(usize::checked_next_power_of_two)
+            .is_none()
+        {
+            return Err(ArgError::Invalid {
+                flag: "pushes-per-producer",
+                value: sampling.pushes_per_producer.to_string(),
+                reason: format!(
+                    "{largest} producers times this many pushes is too large to size a queue for"
+                ),
+            });
+        }
+        Ok(sampling)
+    }
+
+    /// Whether this is the sampling a run given no settings uses.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The order a run takes its timed passes in (`M4.4`).
+///
+/// **Interleaved by default, because the same-code control is two rows.** The
+/// control is `reserving_mpsc` against `reserving(32/32)`: the same code measured
+/// twice in one run. Taken back to back, each configuration's passes fill their
+/// own stretch of the run, so the control's two halves were measured several
+/// configurations apart, and drift across that interval -- frequency, thermal,
+/// the scheduler -- landed inside the control and inside every comparison judged
+/// against it. Interleaved, every configuration at a producer count takes one pass
+/// per round, so each row's passes are spread across the same rounds.
+///
+/// **Sequential is kept, not replaced.** It is the order every figure published
+/// before `M4.4` was measured in, so it is what retakes them, and running both on
+/// one host is the measurement that says whether interleaving narrowed the
+/// control there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// One pass of every configuration per round, the first position moving on
+    /// by one each round so that no configuration is always measured first.
+    Interleaved,
+    /// Every pass of one configuration before the next configuration starts.
+    Sequential,
+}
+
+impl Order {
+    /// The name the command line and the test corpus give this order.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Interleaved => "interleaved",
+            Self::Sequential => "sequential",
+        }
+    }
+
+    /// The order a [`name`](Self::name) names, if it names one.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Interleaved, Self::Sequential]
+            .into_iter()
+            .find(|order| order.name() == name)
+    }
+
+    /// How the report's sampling line describes this order.
+    #[must_use]
+    pub const fn described(self) -> &'static str {
+        match self {
+            Self::Interleaved => "passes interleaved across configurations",
+            Self::Sequential => "each configuration's passes back to back",
+        }
+    }
+}
 
 /// The names a run is filed under.
 ///
@@ -183,20 +373,20 @@ pub struct Run {
     /// rather than by the claim, which is a fact about the measurement and not
     /// about the queue.
     pub refusals: u64,
-    /// Fastest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
-    /// operation.
+    /// Fastest of the run's timed repetitions ([`Sampling::repetitions`]), in
+    /// nanoseconds per operation.
     ///
     /// Carried because [`d-observations-not-verdicts`] obliges every published
     /// figure to arrive with its run count *and its dispersion*: a median alone
     /// is an anecdote a reader cannot compare against their own hardware. The
-    /// four repetitions the median discards are the only evidence this probe has
+    /// repetitions the median discards are the only evidence this probe has
     /// about its own stability within a run, and discarding them silently was
     /// the crate publishing a figure its own contract forbids.
     ///
     /// [`d-observations-not-verdicts`]: ../DESIGN-NOTES.md#d-observations-not-verdicts
     pub fastest_nanos_per_op: f64,
-    /// Slowest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
-    /// operation. See [`Run::fastest_nanos_per_op`].
+    /// Slowest of the run's timed repetitions, in nanoseconds per operation. See
+    /// [`Run::fastest_nanos_per_op`].
     pub slowest_nanos_per_op: f64,
 }
 
@@ -300,6 +490,8 @@ pub struct Observation {
     /// which the report then printed as a zero-processor host -- a value no host
     /// has, presented with the same confidence as a measured one.
     pub available_parallelism: Option<usize>,
+    /// How the run sampled, so its report states what produced its figures.
+    pub sampling: Sampling,
 }
 
 impl Observation {
@@ -408,388 +600,15 @@ impl Observation {
     }
 }
 
-/// The interval the cost ratio `numerator / denominator` could occupy, given
-/// each row's observed span.
-///
-/// Both arguments are rows whose costs are nanoseconds per operation, and the
-/// result is in those same terms: `0.20x` means the numerator cost a fifth of
-/// what the denominator cost. A caller wanting a *rate* ratio -- "how much
-/// faster" -- passes the two rows the other way round, which is what
-/// [`Observation::scaling_bounds`] does.
-///
-/// See [`Observation::scaling_bounds`] for why this is a bound rather than a
-/// sample.
-///
-/// **An earlier version of this function documented a cost ratio and returned
-/// the inverse**, leaving both internal callers to compensate by swapping their
-/// arguments. That works until somebody calls it directly, which is the defect a
-/// review caught: a public contract that is only correct if you read the
-/// implementation is not a contract.
-///
-/// `None` when either span touches zero, which cannot happen for a real run and
-/// is reported rather than divided by.
-#[must_use]
-pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
-    // **A `<= 0.0` test does not reject `NaN`.** IEEE comparison against NaN is
-    // false whichever way it is written, so every one of these four disjuncts is
-    // false for a NaN endpoint and the guard falls through to the division,
-    // which then renders `[NaN-NaN]`. Testing `is_finite()` first is what
-    // actually excludes it, and it excludes infinities in the same move.
-    let endpoints = [
-        numerator.fastest_nanos_per_op,
-        numerator.slowest_nanos_per_op,
-        denominator.fastest_nanos_per_op,
-        denominator.slowest_nanos_per_op,
-    ];
-    if endpoints
-        .iter()
-        .any(|endpoint| !endpoint.is_finite() || *endpoint <= 0.0)
-    {
-        return None;
-    }
-    // Widest is the numerator at its worst over the denominator at its best;
-    // narrowest is the reverse.
-    let low = numerator.fastest_nanos_per_op / denominator.slowest_nanos_per_op;
-    let high = numerator.slowest_nanos_per_op / denominator.fastest_nanos_per_op;
-    Some((low, high))
-}
-
-/// Renders a ratio together with the interval it could occupy, or `--`.
-///
-/// The bound is printed in square brackets to mark it as *not* a sampled range:
-/// the row ranges above it are observed spans, this is arithmetic over two of
-/// them.
-///
-/// **Both rows must have measured something.** A shape that failed to run
-/// reports zero nanoseconds, and zero is the sentinel for "no measurement here"
-/// on either side of the division -- a zero numerator would render `0.00x`,
-/// which is a number a reader takes for a result rather than for the absence of
-/// one. An earlier version guarded only the denominator, on the reasoning that
-/// division is what breaks; publishing a plausible figure from a row that never
-/// ran is the worse failure of the two.
-#[must_use]
-pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) -> String {
-    match (numerator, denominator) {
-        (Some(numerator), Some(denominator))
-            if numerator.is_measured() && denominator.is_measured() =>
-        {
-            let point = numerator.nanos_per_op / denominator.nanos_per_op;
-            match ratio_bounds(numerator, denominator) {
-                Some((low, high)) => format!("{point:.2}x [{low:.2}-{high:.2}]"),
-                None => format!("{point:.2}x"),
-            }
-        }
-        _ => "--".to_owned(),
-    }
-}
-
-/// The **minimum** width the report gives a bounded ratio column.
-///
-/// Named here, beside the formatter, rather than written as a literal in the
-/// report's format string. [`format_ratio_bounded`] emits a point estimate *and*
-/// its interval -- `1.00x [1.00-1.00]` is 17 characters, not the 5 a bare
-/// `1.00x` would take -- and a Rust width is a minimum rather than a maximum, so
-/// a field narrower than the value does not truncate it, it pushes every later
-/// column out of line with its header. The report had been allocating 10.
-///
-/// **This is a floor, not a bound, because the formatter has no bound.** The
-/// interval's endpoints come from measured spans, so a slow outlier -- an
-/// ordinary event on a loaded or virtualized host, and the reason `median_run`
-/// takes a median at all -- widens the cell without limit: a 300 ms repetition
-/// against a 4 ns one renders `10.00x [6.67-1500.00]`, which is 21. Use
-/// [`ratio_column_width`] to size the column against the values it must actually
-/// hold; this constant only stops a table of narrow values from looking cramped.
-pub const RATIO_COLUMN_WIDTH: usize = 20;
-
-/// The width a ratio column must take to keep its rows aligned with its header.
-///
-/// The widest cell the column has to hold, or [`RATIO_COLUMN_WIDTH`] when that
-/// is wider. Derived from the rendered cells rather than assumed, because
-/// [`format_ratio_bounded`]'s output length is a function of measured data and
-/// therefore has no compile-time bound -- see [`RATIO_COLUMN_WIDTH`] for the
-/// case that overruns it. A caller must render every cell of the column before
-/// emitting the header, which is the only ordering that can get this right.
-#[must_use]
-pub fn ratio_column_width<'a>(cells: impl IntoIterator<Item = &'a str>) -> usize {
-    column_width(cells, RATIO_COLUMN_WIDTH)
-}
-
-/// The width a column must take to keep its rows aligned with its header.
-///
-/// The widest cell, or `floor` when that is wider. Every column in this report
-/// holds rendered measurements, whose length is a function of the data rather
-/// than a constant, so a fixed field silently shifts everything to its right the
-/// first time a value outgrows it. `floor` only stops a table of narrow values
-/// from looking cramped; it is never an upper bound.
-#[must_use]
-pub fn column_width<'a>(cells: impl IntoIterator<Item = &'a str>, floor: usize) -> usize {
-    cells
-        .into_iter()
-        .map(str::len)
-        .max()
-        .map_or(floor, |widest| widest.max(floor))
-}
-
-/// Renders a scaling factor together with the interval it could occupy.
-///
-/// See [`Observation::scaling_bounds`]: the bracketed interval is a bound over
-/// two unpaired spans, not a distribution.
-#[must_use]
-pub fn format_scaling_bounded(point: Option<f64>, bounds: Option<(f64, f64)>) -> String {
-    match (point, bounds) {
-        // A scaling of zero is the sentinel, not a measurement: it means the
-        // many-producer row reported no throughput at all. Guarded here as well
-        // as against non-finite values, because zero is the half that renders
-        // plausibly -- `0.00x` looks like a contended queue, `infx` does not.
-        (Some(point), _) if !point.is_finite() || point <= 0.0 => "--".to_owned(),
-        (Some(point), Some((low, high))) if low.is_finite() && high.is_finite() => {
-            format!("{point:.2}x [{low:.2}-{high:.2}]")
-        }
-        (Some(point), _) => format!("{point:.2}x"),
-        (None, _) => "--".to_owned(),
-    }
-}
-
-/// Renders one regime's rows as the report's table body.
-///
-/// Here rather than in the binary so it can be tested without running the
-/// measurement. It takes a sink rather than writing to stdout for the reason
-/// [`crate::report`] records: a helper writing to stdout while its caller
-/// composes a string emits its lines first, reordering the report without losing
-/// any of it.
-pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
-    const HEADERS: [&str; 7] = [
-        "shape",
-        "producers",
-        "ns/op",
-        "ops/sec",
-        "refusals",
-        "ns/op range",
-        "spread",
-    ];
-    // The widths this table has always used, kept as floors so an ordinary
-    // report is unchanged. Every column is a measurement rendered at its natural
-    // width, and `spread` and `ns/op range` are quotients and pairs of measured
-    // endpoints with no upper bound -- a long pause, the very outlier
-    // `median_run` exists to tolerate, renders wider than any fixed field and
-    // pushes every column after it out of line. See `ratio_column_width`, which
-    // is the same argument for the ratio tables.
-    const FLOOR: [usize; 7] = [18, 10, 14, 16, 14, 18, 9];
-
-    let mut rows: Vec<[String; 7]> = Vec::with_capacity(runs.len());
-    for run in runs {
-        // `shape` and `producers` are configuration and always mean something.
-        // Every other column is a measurement, so a row that did not run has
-        // nothing to put in any of them -- including `refusals`, whose zero
-        // would otherwise read as "nothing was refused" rather than "nothing
-        // was attempted". See `Run::is_measured`.
-        let (nanos, ops, refusals, range, spread) = if run.is_measured() {
-            (
-                format!("{:.1}", run.nanos_per_op),
-                format!("{:.0}", run.ops_per_second),
-                run.refusals.to_string(),
-                format!(
-                    "{:.1}-{:.1}",
-                    run.fastest_nanos_per_op, run.slowest_nanos_per_op
-                ),
-                format_scaling(run.spread()),
-            )
-        } else {
-            (
-                "--".to_owned(),
-                "--".to_owned(),
-                "--".to_owned(),
-                "--".to_owned(),
-                "--".to_owned(),
-            )
-        };
-        rows.push([
-            run.shape.to_owned(),
-            run.producers.to_string(),
-            nanos,
-            ops,
-            refusals,
-            range,
-            spread,
-        ]);
-    }
-
-    let mut width = FLOOR;
-    for row in &rows {
-        for (column, cell) in row.iter().enumerate() {
-            width[column] = width[column].max(cell.len());
-        }
-    }
-
-    let _ = writeln!(
-        out,
-        "{:<a$} {:>b$} {:>c$} {:>d$} {:>e$} {:>f$} {:>g$}",
-        HEADERS[0],
-        HEADERS[1],
-        HEADERS[2],
-        HEADERS[3],
-        HEADERS[4],
-        HEADERS[5],
-        HEADERS[6],
-        a = width[0],
-        b = width[1],
-        c = width[2],
-        d = width[3],
-        e = width[4],
-        f = width[5],
-        g = width[6],
-    );
-    for row in &rows {
-        let _ = writeln!(
-            out,
-            "{:<a$} {:>b$} {:>c$} {:>d$} {:>e$} {:>f$} {:>g$}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            row[4],
-            row[5],
-            row[6],
-            a = width[0],
-            b = width[1],
-            c = width[2],
-            d = width[3],
-            e = width[4],
-            f = width[5],
-            g = width[6],
-        );
-    }
-}
-
-/// A scaling factor, or `--` when it is missing or not a number.
-///
-/// Guards non-finite values for the same reason [`format_ratio`] guards its
-/// denominator, and the guard belongs here rather than in [`Observation::scaling`]:
-/// a shape whose one-producer row reports zero makes the quotient infinite, and
-/// `infx` in a column of measurements reads as a measurement. `scaling` is
-/// deliberately allowed to return the non-finite value -- it is arithmetic, not
-/// a renderer -- so the display layer is where it has to be caught.
-#[must_use]
-pub fn format_scaling(scaling: Option<f64>) -> String {
-    match scaling {
-        Some(value) if value.is_finite() && value > 0.0 => format!("{value:.2}x"),
-        _ => "--".to_owned(),
-    }
-}
-
-/// `numerator / denominator` as a cost ratio, or `--` when either is missing.
-///
-/// Guards both rows rather than trusting them: a shape that failed to run
-/// reports zero, so a zero denominator would print `inf` or `NaN` and a zero
-/// numerator would print `0.00x` -- and of those two the second is the more
-/// dangerous, because it looks like a measurement rather than like a failure.
-#[must_use]
-pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
-    match (numerator, denominator) {
-        (Some(numerator), Some(denominator))
-            if numerator.is_measured() && denominator.is_measured() =>
-        {
-            format!("{:.2}x", numerator.nanos_per_op / denominator.nanos_per_op)
-        }
-        _ => "--".to_owned(),
-    }
-}
-
-/// One row's nanoseconds per operation, or `--` when the row is missing or did
-/// not run.
-///
-/// Guards the sentinel for the reason [`Run::is_measured`] records: this column
-/// is the report's most-read number, and `0.0` in it reads as a shape too fast
-/// to time rather than as one that never ran.
-#[must_use]
-pub fn format_nanos(run: Option<Run>) -> String {
-    match run {
-        Some(run) if run.is_measured() => format!("{:.1}", run.nanos_per_op),
-        _ => "--".to_owned(),
-    }
-}
-
-/// Time every configuration.
-#[must_use]
-pub fn measure() -> Observation {
-    let mut isolated = Vec::new();
-    let mut drained = Vec::new();
-
-    for &producers in PRODUCER_COUNTS {
-        isolated.push(median_run(shapes::BASELINE_FETCH_ADD, producers, |count| {
-            time_contended_atomic(count)
-        }));
-        isolated.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
-            time_isolated_mpsc(count)
-        }));
-        isolated.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
-            time_isolated_reserving(count)
-        }));
-        isolated.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
-            time_isolated_permit(count)
-        }));
-
-        drained.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
-            time_drained_mpsc(count)
-        }));
-        drained.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
-            time_drained_reserving(count)
-        }));
-        drained.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
-            time_drained_permit(count)
-        }));
-
-        isolated.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_isolated_layout::<Balanced>(count)
-        }));
-        isolated.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_isolated_layout::<Enduring>(count)
-        }));
-        isolated.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
-            time_isolated_layout::<Perpetual>(count)
-        }));
-        // Gated on the architectures where a 128-bit exchange is native; see the
-        // `Wide` import above. `#[cfg]` governs only the statement that follows
-        // it, so each of the two pushes carries its own.
-        #[cfg(any(
-            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
-            target_arch = "aarch64"
-        ))]
-        isolated.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_isolated_layout::<Wide>(count)
-        }));
-
-        drained.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_drained_layout::<Balanced>(count)
-        }));
-        drained.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_drained_layout::<Enduring>(count)
-        }));
-        drained.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
-            time_drained_layout::<Perpetual>(count)
-        }));
-        #[cfg(any(
-            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
-            target_arch = "aarch64"
-        ))]
-        drained.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_drained_layout::<Wide>(count)
-        }));
-    }
-
-    Observation {
-        isolated,
-        drained,
-        available_parallelism: thread::available_parallelism()
-            .ok()
-            .map(std::num::NonZeroUsize::get),
-    }
-}
-
 /// Raw result of one timed repetition: elapsed nanoseconds and refusals.
 type Repetition = (f64, u64);
 
-/// Run one configuration [`REPETITIONS`] times and keep the median.
+/// Run one configuration `sampling.repetitions` times and keep the median.
+///
+/// The timer is handed the producer count and `sampling.pushes_per_producer`,
+/// and the per-operation figures divide by that same value, so the pushes a
+/// pass performed and the pushes its time is divided by cannot come from two
+/// places.
 ///
 /// The median rather than the mean, because on a virtual machine the failure
 /// mode is one run being hugely slower rather than a spread around a centre,
@@ -797,8 +616,10 @@ type Repetition = (f64, u64);
 fn median_run(
     shape: &'static str,
     producers: usize,
-    mut timer: impl FnMut(usize) -> Repetition,
+    sampling: &Sampling,
+    mut timer: impl FnMut(usize, usize) -> Repetition,
 ) -> Run {
+    let pushes_per_producer = sampling.pushes_per_producer;
     // One untimed pass first. Be exact about what this does and does not warm:
     // for the queue timers, every call to `timer` builds and drops its OWN
     // queue, so this does not pre-touch the allocation any timed repetition will
@@ -811,18 +632,75 @@ fn median_run(
     // which is not true of an allocation made fresh each pass, and a later one
     // said every timer builds a queue, which is not true of the baseline.
     // Both found by review.
-    let _ = timer(producers);
+    let _ = timer(producers, pushes_per_producer);
 
-    let mut results: Vec<Repetition> = (0..REPETITIONS).map(|_| timer(producers)).collect();
+    let results: Vec<Repetition> = (0..sampling.repetitions)
+        .map(|_| timer(producers, pushes_per_producer))
+        .collect();
+    summarise(shape, producers, pushes_per_producer, results)
+}
+
+/// A configuration's timer, boxed so a run's configurations can sit in one list.
+type Timer<'a> = Box<dyn FnMut(usize, usize) -> Repetition + 'a>;
+
+/// Time every configuration in `timers` at `producers`, in the order
+/// `sampling.order` says, and return one [`Run`] per timer in the order given.
+///
+/// [`Order::Sequential`] is [`median_run`] once per timer. [`Order::Interleaved`]
+/// gives every timer its untimed pass first -- the same pass, for the reason
+/// `median_run` records -- and then takes `sampling.repetitions` rounds of one
+/// pass each, starting each round one position later than the last. So all the
+/// timed passes of every configuration fall within the same rounds, and the
+/// median of each is taken over passes spread across the same interval.
+fn runs(
+    producers: usize,
+    sampling: &Sampling,
+    timers: &mut [(&'static str, Timer<'_>)],
+) -> Vec<Run> {
+    let pushes_per_producer = sampling.pushes_per_producer;
+    if sampling.order == Order::Sequential {
+        return timers
+            .iter_mut()
+            .map(|(shape, timer)| median_run(shape, producers, sampling, &mut **timer))
+            .collect();
+    }
+
+    for (_, timer) in timers.iter_mut() {
+        let _ = timer(producers, pushes_per_producer);
+    }
+    let count = timers.len();
+    let mut results: Vec<Vec<Repetition>> = vec![Vec::with_capacity(sampling.repetitions); count];
+    for round in 0..sampling.repetitions {
+        for position in 0..count {
+            let index = (round + position) % count;
+            results[index].push((timers[index].1)(producers, pushes_per_producer));
+        }
+    }
+    timers
+        .iter()
+        .zip(results)
+        .map(|((shape, _), results)| summarise(shape, producers, pushes_per_producer, results))
+        .collect()
+}
+
+/// The [`Run`] a configuration's timed passes make: the median, with the extremes
+/// beside it, each divided by the pushes every pass performed.
+fn summarise(
+    shape: &'static str,
+    producers: usize,
+    pushes_per_producer: usize,
+    mut results: Vec<Repetition>,
+) -> Run {
+    let repetitions = results.len();
     results.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let (elapsed_nanos, refusals) = results[REPETITIONS / 2];
+    let (elapsed_nanos, refusals) = results[repetitions / 2];
     // The sort is ascending by elapsed time, so the extremes are the ends. They
     // are carried rather than discarded because a median without its dispersion
     // is what `d-observations-not-verdicts` forbids publishing.
     let (fastest_nanos, _) = results[0];
-    let (slowest_nanos, _) = results[REPETITIONS - 1];
+    let (slowest_nanos, _) = results[repetitions - 1];
 
-    let pushes = (producers * PUSHES_PER_PRODUCER) as f64;
+    let pushes = (producers * pushes_per_producer) as f64;
     Run {
         shape,
         producers,
@@ -834,49 +712,9 @@ fn median_run(
     }
 }
 
-/// The floor: N threads incrementing one shared counter.
-///
-/// Not a queue, and not trying to be. It is the cheapest possible operation on
-/// a contended line, so it says how much of a queue's scaling curve is the
-/// queue and how much is simply what this processor does when N cores fight
-/// over one cache line.
-fn time_contended_atomic(producers: usize) -> Repetition {
-    let counter = Arc::new(AtomicU64::new(0));
-    // One party per worker plus this thread. Every worker is created, then waits
-    // here; the clock starts as the barrier releases, so neither thread creation
-    // nor a solo head start by an early worker is inside the measurement. See
-    // `start_barrier`'s note for why that matters at these producer counts.
-    let gate = start_gate(producers);
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for _ in 0..producers {
-            let counter = Arc::clone(&counter);
-            let gate = Arc::clone(&gate);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                let began = Instant::now();
-                for _ in 0..PUSHES_PER_PRODUCER {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    (measured_span(&spans), 0)
-}
-
 /// Capacity big enough that a whole run fits, so nothing is ever refused.
-fn capacity_for(producers: usize) -> usize {
-    (producers * PUSHES_PER_PRODUCER).next_power_of_two()
+fn capacity_for(producers: usize, pushes_per_producer: usize) -> usize {
+    (producers * pushes_per_producer).next_power_of_two()
 }
 
 /// A gate holding every participant until all of them exist, or until the
@@ -1045,123 +883,6 @@ fn measured_span(spans: &[(Instant, Instant)]) -> f64 {
     ended.duration_since(began).as_nanos() as f64
 }
 
-fn time_isolated_mpsc(producers: usize) -> Repetition {
-    let (tx, rx) =
-        slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_gate(producers);
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
-                        .expect("the run fits in the capacity");
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-    let refusals = tx.refused();
-    // Drain before dropping: teardown would otherwise walk every slot, and that
-    // is not part of what is being timed.
-    while rx.pop().is_ok() {}
-    (elapsed, refusals)
-}
-
-fn time_isolated_reserving(producers: usize) -> Repetition {
-    let (tx, rx) =
-        reserving_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_gate(producers);
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
-                        .expect("the run fits in the capacity");
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-    let refusals = tx.refused();
-    while rx.pop().is_ok() {}
-    (elapsed, refusals)
-}
-
-/// The experimental permit claim, with no consumer and no possibility of refusal.
-///
-/// Not "the regime that isolates the claim", which an earlier wording said: this
-/// times the whole push path, including slot metadata, the item write,
-/// publication and the doorbell's fence. See the module header.
-///
-/// A line-for-line twin of [`time_isolated_reserving`] with one shape
-/// substituted. Deliberately not factored into a generic over the two, which
-/// would need a trait both implement and would put a dynamic or monomorphised
-/// indirection inside the timed region -- in a measurement whose whole output is
-/// a difference of a few nanoseconds per push.
-fn time_isolated_permit(producers: usize) -> Repetition {
-    let (tx, rx) = permit_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_gate(producers);
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
-                        .expect("the run fits in the capacity");
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-    let refusals = tx.refused();
-    while rx.pop().is_ok() {}
-    (elapsed, refusals)
-}
-
 /// A capacity a real system would choose, so the drained regime exercises
 /// backpressure the way a real one would.
 pub const DRAINED_CAPACITY: usize = 1024;
@@ -1242,445 +963,4 @@ fn await_consumer(ready: &AtomicBool) {
 fn drain_then_announce(pop_once: impl FnOnce(), ready: &AtomicBool) {
     pop_once();
     ready.store(true, Ordering::Release);
-}
-
-fn time_drained_mpsc(producers: usize) -> Repetition {
-    let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
-    let done = Arc::new(AtomicBool::new(false));
-    let consumer_done = Arc::clone(&done);
-    // Set on every exit path, not just the one that returns. See StopOnDrop.
-    let stop = StopOnDrop(done);
-    // Closes the undrained opening the gate alone leaves. See await_consumer.
-    let ready = Arc::new(AtomicBool::new(false));
-    let consumer_ready = Arc::clone(&ready);
-    // The consumer is a gate participant, not merely spawned: spawning is not
-    // readiness, and a consumer still in thread start-up while producers push
-    // turns the opening of the run into an undrained regime.
-    //
-    // The gate alone does not finish the job, which is why `await_consumer`
-    // exists. Arriving proves the consumer exists, is scheduled and is past
-    // start-up; it does not prove the consumer has reached its first `pop`, and
-    // the gate releases every party together. The handshake narrows that
-    // remainder to a stated guarantee: no producer begins timing until the
-    // consumer has executed its pop path at least once. Continuous draining is
-    // not guaranteed and cannot be by a flag. This is the M4.3 change, and it
-    // MOVED the drained numbers -- the figures taken before it are kept beside
-    // the ones taken after rather than replaced, because they measure two
-    // different pieces of code.
-    let gate = start_gate(producers + 1);
-    let consumer_gate = Arc::clone(&gate);
-
-    let consumer = thread::spawn(move || {
-        if !consumer_gate.arrive_and_wait() {
-            return rx.refused();
-        }
-        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
-        // Publishing first proves only that the consumer is about to drain: it
-        // can be descheduled between the store and its first `pop`, which is the
-        // same undrained opening in a narrower form. Popping first makes the
-        // announcement mean `this consumer has executed the pop path`, which is a
-        // fact rather than an intention. The queue is empty here, so it costs one
-        // failed pop, and it happens before any producer has started timing.
-        drain_then_announce(
-            || {
-                let _ = rx.pop();
-            },
-            &consumer_ready,
-        );
-        // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
-        // question, and parking here would measure that instead of the claim.
-        while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_ok() {}
-            std::hint::spin_loop();
-        }
-        while rx.pop().is_ok() {}
-        rx.refused()
-    });
-
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            let ready = Arc::clone(&ready);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                await_consumer(&ready);
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    // Retry a FULL queue, which is what a real producer does;
-                    // the refusal count is what makes that visible. Anything
-                    // else is not retryable -- a disconnected queue never
-                    // drains -- and retrying it is an infinite spin that
-                    // presents as a hung probe rather than as the consumer
-                    // failure it actually is. The queue crate says so itself:
-                    // "retrying the first is sensible and retrying the second
-                    // is a spin".
-                    while let Err(error) = tx.push(item) {
-                        assert!(
-                            error.is_retryable(),
-                            "the consumer is gone, so this push can never \
-                             succeed: {error}"
-                        );
-                        item = error.into_inner();
-                        std::hint::spin_loop();
-                    }
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-
-    drop(stop);
-    drop(tx);
-    let refusals = consumer.join().expect("the consumer must not panic");
-    (elapsed, refusals)
-}
-
-fn time_drained_reserving(producers: usize) -> Repetition {
-    // **Defaults on both sides, and that is a correction.** This row previously
-    // enabled high-water tracking here and nowhere else, to "also price the
-    // switch M31.4 made opt-in". But the number it feeds is presented as the
-    // cost of *reservation*, and tracking adds work to this shape's push path
-    // alone, so the ratio measured reservation plus a handicap with no way for a
-    // reader to separate them.
-    //
-    // **What the handicap actually is, corrected:** an earlier version of this
-    // comment said tracking adds a load of the consumer's position. It does not.
-    // `reserving_mpsc::publish` loads `head` **unconditionally** -- the slot
-    // write needs that acquire edge whether or not anything is measured, as the
-    // comment at that load says in as many words. What the switch adds is the
-    // depth arithmetic and the metric update on the far side of a branch that is
-    // taken either way. Smaller than claimed, and still not part of what this row
-    // is presented as measuring.
-    //
-    // Nothing consumes the high-water figure here either, so the tracking was
-    // paying a cost to produce a number nobody read. Pricing that switch is a
-    // worthwhile measurement and needs its own row, with both shapes tracking,
-    // rather than being folded into this comparison.
-    let (tx, rx) = reserving_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
-    let done = Arc::new(AtomicBool::new(false));
-    let consumer_done = Arc::clone(&done);
-    // Set on every exit path, not just the one that returns. See StopOnDrop.
-    let stop = StopOnDrop(done);
-    // Closes the undrained opening the gate alone leaves. See await_consumer.
-    let ready = Arc::new(AtomicBool::new(false));
-    let consumer_ready = Arc::clone(&ready);
-    // The consumer joins the gate here for the reason it does in the slotwise
-    // twin: a run whose opening is undrained is not the regime being measured.
-    let gate = start_gate(producers + 1);
-    let consumer_gate = Arc::clone(&gate);
-
-    let consumer = thread::spawn(move || {
-        if !consumer_gate.arrive_and_wait() {
-            return rx.refused();
-        }
-        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
-        // Publishing first proves only that the consumer is about to drain: it
-        // can be descheduled between the store and its first `pop`, which is the
-        // same undrained opening in a narrower form. Popping first makes the
-        // announcement mean `this consumer has executed the pop path`, which is a
-        // fact rather than an intention. The queue is empty here, so it costs one
-        // failed pop, and it happens before any producer has started timing.
-        drain_then_announce(
-            || {
-                let _ = rx.pop();
-            },
-            &consumer_ready,
-        );
-        while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_ok() {}
-            std::hint::spin_loop();
-        }
-        while rx.pop().is_ok() {}
-        rx.refused()
-    });
-
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            let ready = Arc::clone(&ready);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                await_consumer(&ready);
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while let Err(error) = tx.push(item) {
-                        // Only a FULL queue is retryable; see the note on the
-                        // first of these loops.
-                        assert!(
-                            error.is_retryable(),
-                            "the consumer is gone, so this push can never \
-                             succeed: {error}"
-                        );
-                        item = error.into_inner();
-                        std::hint::spin_loop();
-                    }
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-
-    drop(stop);
-    drop(tx);
-    let refusals = consumer.join().expect("the consumer must not panic");
-    (elapsed, refusals)
-}
-
-/// The experimental permit claim, against a consumer looping on `pop`.
-///
-/// The regime that can price the claim honestly, for the same reason the
-/// reserving twin needs it: the shared line a producer touches is only
-/// expensive when a consumer is writing it. Measured in isolation, an
-/// uncontended line looks free -- which would be a confident wrong answer, and
-/// this shape has more riding on that answer than the others, because it trades
-/// `reserving_mpsc`'s *load* of the consumer's position for a read-modify-write
-/// on a count the consumer also writes.
-fn time_drained_permit(producers: usize) -> Repetition {
-    let (tx, rx) = permit_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
-    let done = Arc::new(AtomicBool::new(false));
-    let consumer_done = Arc::clone(&done);
-    // Set on every exit path, not just the one that returns. See StopOnDrop.
-    let stop = StopOnDrop(done);
-    // Closes the undrained opening the gate alone leaves. See await_consumer.
-    let ready = Arc::new(AtomicBool::new(false));
-    let consumer_ready = Arc::clone(&ready);
-    let gate = start_gate(producers + 1);
-    let consumer_gate = Arc::clone(&gate);
-
-    let consumer = thread::spawn(move || {
-        if !consumer_gate.arrive_and_wait() {
-            return rx.refused();
-        }
-        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
-        // Publishing first proves only that the consumer is about to drain: it
-        // can be descheduled between the store and its first `pop`, which is the
-        // same undrained opening in a narrower form. Popping first makes the
-        // announcement mean `this consumer has executed the pop path`, which is a
-        // fact rather than an intention. The queue is empty here, so it costs one
-        // failed pop, and it happens before any producer has started timing.
-        drain_then_announce(
-            || {
-                let _ = rx.pop();
-            },
-            &consumer_ready,
-        );
-        while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_ok() {}
-            std::hint::spin_loop();
-        }
-        while rx.pop().is_ok() {}
-        rx.refused()
-    });
-
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            let ready = Arc::clone(&ready);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                await_consumer(&ready);
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while let Err(error) = tx.push(item) {
-                        // Only a FULL queue is retryable; see the note on the
-                        // first of these loops.
-                        assert!(
-                            error.is_retryable(),
-                            "the consumer is gone, so this push can never \
-                             succeed: {error}"
-                        );
-                        item = error.into_inner();
-                        std::hint::spin_loop();
-                    }
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-
-    drop(stop);
-    drop(tx);
-    let refusals = consumer.join().expect("the consumer must not panic");
-    (elapsed, refusals)
-}
-
-/// One claim-word layout, with no consumer and no possibility of refusal.
-///
-/// As with the other isolated timers, this is the whole push path and not the
-/// claim word alone; only the layout differs between these rows, so a difference
-/// is still attributable to the layout, but its magnitude is a share of total
-/// push cost rather than of the exchange.
-///
-/// **Generic over the layout, where [`time_isolated_permit`] is deliberately
-/// duplicated, and the difference is the point.** That twin compares two
-/// *different types*, which a generic could only unify behind a trait, putting
-/// an indirection that might not inline identically inside the timed region.
-/// These are the *same type* at different layout parameters, so this
-/// monomorphises to exactly the code a hand-written copy would produce -- there
-/// is nothing left to dispatch.
-///
-/// Measures `reserving_mpsc` itself rather than a stand-in. An earlier form of
-/// this probe carried its own duplicated implementation of the claim protocol,
-/// built so the layouts could be compared before the shipping crate had them;
-/// it drifted from the original twice while doing so. The shipping type takes
-/// the layout as a parameter now, so the duplicate is gone.
-fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
-    let (tx, rx) =
-        reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_gate(producers);
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
-                        .expect("the run fits in the capacity");
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-    let refusals = tx.refused();
-    while rx.pop().is_ok() {}
-    (elapsed, refusals)
-}
-
-/// One claim-word layout, against a consumer looping on `pop`.
-///
-/// Generic for [`time_isolated_layout`]'s reason.
-fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition {
-    let (tx, rx) =
-        reserving_mpsc::bounded_as::<u64, L>(DRAINED_CAPACITY).expect("a valid capacity");
-    let done = Arc::new(AtomicBool::new(false));
-    let consumer_done = Arc::clone(&done);
-    // Set on every exit path, not just the one that returns. See StopOnDrop.
-    let stop = StopOnDrop(done);
-    // Closes the undrained opening the gate alone leaves. See await_consumer.
-    let ready = Arc::new(AtomicBool::new(false));
-    let consumer_ready = Arc::clone(&ready);
-    // The consumer joins the gate for the reason its twins do: a run whose
-    // opening is undrained is not the regime being measured.
-    let gate = start_gate(producers + 1);
-    let consumer_gate = Arc::clone(&gate);
-
-    let consumer = thread::spawn(move || {
-        if !consumer_gate.arrive_and_wait() {
-            return rx.refused();
-        }
-        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
-        // Publishing first proves only that the consumer is about to drain: it
-        // can be descheduled between the store and its first `pop`, which is the
-        // same undrained opening in a narrower form. Popping first makes the
-        // announcement mean `this consumer has executed the pop path`, which is a
-        // fact rather than an intention. The queue is empty here, so it costs one
-        // failed pop, and it happens before any producer has started timing.
-        drain_then_announce(
-            || {
-                let _ = rx.pop();
-            },
-            &consumer_ready,
-        );
-        while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_ok() {}
-            std::hint::spin_loop();
-        }
-        while rx.pop().is_ok() {}
-        rx.refused()
-    });
-
-    let spans = thread::scope(|scope| {
-        let _release = ReleaseOnDrop(Arc::clone(&gate));
-        let mut workers = Vec::with_capacity(producers);
-        for producer in 0..producers {
-            let tx = tx.clone();
-            let gate = Arc::clone(&gate);
-            let ready = Arc::clone(&ready);
-            workers.push(scope.spawn(move || {
-                if !gate.arrive_and_wait() {
-                    // Abandoned before the party completed; see `StartGate`.
-                    return (Instant::now(), Instant::now());
-                }
-                await_consumer(&ready);
-                let began = Instant::now();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while let Err(error) = tx.push(item) {
-                        // Only a FULL queue is retryable; see the note on the
-                        // first of these loops.
-                        assert!(
-                            error.is_retryable(),
-                            "the consumer is gone, so this push can never \
-                             succeed: {error}"
-                        );
-                        item = error.into_inner();
-                        std::hint::spin_loop();
-                    }
-                }
-                (began, Instant::now())
-            }));
-        }
-        let _ = gate.arrive_and_wait();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a producer must not panic"))
-            .collect::<Vec<_>>()
-    });
-    let elapsed = measured_span(&spans);
-    drop(stop);
-    drop(tx);
-    let refusals = consumer.join().expect("the consumer must not panic");
-    (elapsed, refusals)
 }

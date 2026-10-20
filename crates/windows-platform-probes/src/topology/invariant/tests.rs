@@ -173,7 +173,116 @@ fn perturbations() -> Vec<Perturbation> {
             BlockingState::BracketNotHeld,
             Box::new(|o: &mut Observation| o.bracket = BracketOutcome::Changed),
         ),
+        (
+            BlockingState::CacheLevelsWithoutPartitions,
+            Box::new(|o: &mut Observation| {
+                o.caches = vec![CacheLevel {
+                    level: 1,
+                    processors_per_domain: Vec::new(),
+                }];
+            }),
+        ),
+        (
+            BlockingState::MeasuredButCountsAbsent,
+            Box::new(|o: &mut Observation| o.groups = 0),
+        ),
+        (
+            BlockingState::NumaDomainsOnlyInCpuSets,
+            Box::new(|o: &mut Observation| o.numa_domains_only_in_cpu_sets = 1),
+        ),
+        (
+            BlockingState::NumaDomainsUnreported,
+            Box::new(|o: &mut Observation| o.numa_domains_unreported = 1),
+        ),
+        (
+            BlockingState::NumaDomainsWithConflictingLabels,
+            Box::new(|o: &mut Observation| o.numa_domains_with_conflicting_labels = 1),
+        ),
+        (
+            BlockingState::CoresOnlyInCpuSets,
+            Box::new(|o: &mut Observation| o.cores_only_in_cpu_sets = 1),
+        ),
+        (
+            BlockingState::RelationsWithoutProcessors,
+            Box::new(|o: &mut Observation| o.cores_without_processors = 1),
+        ),
+        (
+            BlockingState::OverlappingWalkRelations,
+            Box::new(|o: &mut Observation| o.overlapping_walk_relations = 1),
+        ),
+        (
+            BlockingState::DescribedRelations,
+            Box::new(|o: &mut Observation| o.described_relations = 1),
+        ),
+        (
+            BlockingState::UnreportedRelations,
+            Box::new(|o: &mut Observation| o.unreported_relations = 1),
+        ),
+        (
+            BlockingState::ProcessorAttributeConflicts,
+            Box::new(|o: &mut Observation| o.processor_attribute_conflicts = 1),
+        ),
     ]
+}
+
+#[test]
+fn a_state_read_from_two_fields_is_reached_by_each_of_them_alone() {
+    // **The table above reaches each of these states through ONE field**, so a
+    // branch that dropped its other input would still pass every test that
+    // iterates the table. Each input is driven alone here, and the guard on the
+    // measured-but-absent state is driven both ways: `cross_check` files it only
+    // for a MEASURED topology, so an unmeasured one with no groups is in
+    // `NotMeasured` and not in this state.
+    let reached = |state: BlockingState, mutate: &dyn Fn(&mut Observation)| {
+        let mut observation = agreeing();
+        mutate(&mut observation);
+        let found = blocking_states(&observation).contains(&state);
+        let filed = observation.cross_check().verdict() != Verdict::Agree;
+        (found, filed)
+    };
+
+    for (what, mutate) in [
+        (
+            "a core with no processors",
+            Box::new(|o: &mut Observation| o.cores_without_processors = 1)
+                as Box<dyn Fn(&mut Observation)>,
+        ),
+        (
+            "a package with no processors",
+            Box::new(|o: &mut Observation| o.packages_without_processors = 1),
+        ),
+    ] {
+        assert_eq!(
+            reached(BlockingState::RelationsWithoutProcessors, &*mutate),
+            (true, true),
+            "{what}: the state and `cross_check` must both see it"
+        );
+    }
+
+    for (what, mutate) in [
+        (
+            "no processors",
+            Box::new(|o: &mut Observation| o.online_processors = 0)
+                as Box<dyn Fn(&mut Observation)>,
+        ),
+        ("no groups", Box::new(|o: &mut Observation| o.groups = 0)),
+    ] {
+        assert_eq!(
+            reached(BlockingState::MeasuredButCountsAbsent, &*mutate),
+            (true, true),
+            "{what}: the state and `cross_check` must both see it"
+        );
+    }
+
+    let (found, _) = reached(BlockingState::MeasuredButCountsAbsent, &|o| {
+        o.topology_was_measured = false;
+        o.groups = 0;
+    });
+    assert!(
+        !found,
+        "an unmeasured topology with no groups is `NotMeasured`, and is not \
+         also a measured one missing its counts"
+    );
 }
 
 #[test]
@@ -584,13 +693,14 @@ fn every_numa_counter_branch_in_the_real_cross_check_is_one_this_module_forbids(
     // demanding behaviour that does not.
     //
     // **Named for the counter on purpose.** This was
-    // `every_numa_branch_...`, which was false: `cross_check` also pushes
-    // `NumaDomainsOnlyInCpuSets`, `NumaDomainsUnreported` and
-    // `NumaDomainsWithConflictingLabels`, none of which has a `BlockingState`,
-    // so deleting one of those push sites is not caught. A review found the
-    // name claiming the whole family while the body covered the two branches
-    // that read `raw_highest_numa_node`. The absentees are queued as M4.1; the
-    // name now says which half is guarded.
+    // `every_numa_branch_...`, which was false at the time: `cross_check` also
+    // pushes `NumaDomainsOnlyInCpuSets`, `NumaDomainsUnreported` and
+    // `NumaDomainsWithConflictingLabels`, and none of them then had a
+    // `BlockingState`. A review found the name claiming the whole family while
+    // the body covered the two branches that read `raw_highest_numa_node`.
+    // `M4.1` gave those three their states, so they are guarded through the
+    // perturbation table like every other state; this test still covers only
+    // the counter half, and its name still says so.
     //
     // This is the pairing the other states get from
     // `every_blocking_state_is_one_the_real_cross_check_already_reports`; NUMA

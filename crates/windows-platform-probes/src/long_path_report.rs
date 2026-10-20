@@ -28,7 +28,20 @@ pub fn render(out: &mut dyn std::fmt::Write, manifest_aware: bool) {
     preamble(out);
     // Everything above is already in `out`, so the report survives whatever this
     // does.
-    body(out, &crate::long_path::measure(manifest_aware));
+    let observation = crate::long_path::measure(manifest_aware);
+    body(out, &observation);
+    // The raw data, last, as every probe's normal run emits it (`M8.6`), and
+    // after `body` rather than inside it: `body` returns early on an apparatus
+    // failure, and the row is owed anyway -- it says why.
+    let _ = writeln!(
+        out,
+        "{}",
+        crate::long_path::raw_row(
+            &observation,
+            &crate::build_identity::this_build().to_string()
+        )
+        .render()
+    );
 }
 
 /// Everything that can be written before the measurement runs.

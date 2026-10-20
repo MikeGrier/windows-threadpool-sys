@@ -232,3 +232,38 @@ fn a_key_is_escaped_too() {
 
     assert_eq!(row.render(), r#"{"reason":"x","odd\"name":1}"#);
 }
+
+#[test]
+fn every_unsigned_width_renders_as_the_number_it_holds() {
+    let row = Row::new("x")
+        .with("u16", u16::MAX)
+        .with("u32", u32::MAX)
+        .with("u64_small", 7_u64)
+        .with("option_u32", Some(9_u32))
+        .with("none_u32", None::<u32>);
+    assert_eq!(
+        row.render(),
+        r#"{"reason":"x","u16":65535,"u32":4294967295,"u64_small":7,"option_u32":9,"none_u32":null}"#
+    );
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_u64_is_lossless_on_a_64_bit_target() {
+    // The saturation `From<u64>` documents is a 32-bit case; here the widest
+    // value must come through exactly.
+    let row = Row::new("x").with("u64", u64::MAX);
+    assert_eq!(row.render(), r#"{"reason":"x","u64":18446744073709551615}"#);
+}
+
+#[test]
+fn a_yes_or_no_renders_as_a_json_boolean() {
+    let row = Row::new("x")
+        .with("yes", true)
+        .with("no", false)
+        .with("unknown", None::<bool>);
+    assert_eq!(
+        row.render(),
+        r#"{"reason":"x","yes":true,"no":false,"unknown":null}"#
+    );
+}

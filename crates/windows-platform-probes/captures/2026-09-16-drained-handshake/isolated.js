@@ -53,8 +53,9 @@ if (files.length === 0) {
   // be refused -- possible in principle, since the figures are rounded, and
   // vanishingly unlikely across this many of them. The refusal is loud and
   // diagnosable; accepting a duplicated run would silently fabricate agreement,
-  // which is the worse of the two. `M4.8` replaces the heuristic with a real
-  // identity once the report carries one.
+  // which is the worse of the two. The build identity `M4.8` added does not
+  // replace this: it names the build, which every run in a capture shares, and
+  // only a per-invocation identifier would tell two runs apart.
   const seen = new Map();
   for (const file of files) {
     const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -93,21 +94,31 @@ function attribution(text, where) {
   // Included because it can differ while the host banner does not: an affinity
   // mask changes how many processors the process may use without changing the
   // machine it names, and producer counts are read against that number.
-  return [line("host:"), profile, line("sampling:"), line("processors available to this process:")].join(
-    " | ",
-  );
+  // The build that produced the run (`M4.8`). Optional, because runs taken
+  // before the probe printed it have none -- but present or absent it must
+  // agree across the inputs like the rest, so a set mixing two builds, or a
+  // stamped run with an unstamped one, is refused.
+  const build = text.split(/\r?\n/).find((l) => l.startsWith("build:"));
+  return [
+    line("host:"),
+    build === undefined ? "build: (not stamped)" : build.trim(),
+    profile,
+    line("sampling:"),
+    line("processors available to this process:"),
+  ].join(" | ");
 }
 
 function requireOneConfiguration(entries) {
-  // **What this cannot check.** The report carries no build identity, so two
-  // runs of DIFFERENT probe commits on one host under one profile agree here.
-  // That matters most for exactly this capture: `M4.3` changed the drained
-  // procedure, so a pre-handshake and a post-handshake run would pass and have
-  // their medians combined as though one procedure produced both. The
-  // instrument commit is asserted by the capture README, which is a claim by
-  // the person who took the capture rather than something these scripts verify.
-  // Closing it needs the probe to stamp its own build identity into the report;
-  // `M4.8` in CHECKLIST.md owns that.
+  // **The build is part of what must agree, since `M4.8`.** Before it, two runs
+  // of DIFFERENT probe commits on one host under one profile agreed here, and a
+  // pre-handshake and a post-handshake run would have had their medians
+  // combined as though one procedure produced both.
+  //
+  // **What this still cannot check.** A DIRTY build names its commit, not its
+  // tree, so two dirty builds at one commit agree here while their sources may
+  // differ; and runs from before the probe printed a build agree with each
+  // other as "not stamped". For both, the capture README is still the only
+  // record of what was built.
   const first = entries[0];
   for (const entry of entries.slice(1)) {
     if (entry.attribution !== first.attribution) {

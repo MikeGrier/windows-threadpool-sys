@@ -136,14 +136,16 @@ of them are live here:
   once cannot attribute a difference to the one under test.
 - **A control that is not a paired control.** This probe's same-code control is
   the `reserving_mpsc` row against the `reserving(32/32)` row, and `measure()`
-  runs them **four measurements apart** -- the permit shape and all three drained
+  ran them **four measurements apart** -- the permit shape and all three drained
   shapes fall between them, each five repetitions of 50,000 pushes per producer.
   Any frequency, thermal or scheduler drift across that interval lands inside the
   control, and by the same token inside every candidate row it is compared
   against. This is a specific, mechanical candidate for the spread above rather
   than a general worry, and it was proposed by review rather than found here.
-  Queued as M4.4 in [CHECKLIST.md](CHECKLIST.md), because interleaving changes the
-  measurement and so obsoletes the published figures.
+  Addressed by `M4.4`: the passes are now interleaved by default, and the old
+  order is kept as `--order sequential` -- see [The queue probe interleaves its
+  passes](#d-interleaved-order), which also records what interleaving did to the
+  control on this host.
 - **A defect in the probe itself.** This crate has already shipped one -- the
   timing window that read the coordinator's clock rather than the producers'.
   That defect was invisible in the numbers until it was found by reading, and it
@@ -176,6 +178,14 @@ anything; if it does not, the width is structural and the remaining candidates
 are the interesting ones. Do this before pinning threads, before quiescing the
 machine, and before suspecting the probe -- each of those changes what is being
 measured, and a change made before the cheap check cannot be evaluated.
+
+That move is a command line, not a source edit: `probe-queue-contention` takes
+`--pushes-per-producer`, `--repetitions` and `--producers`, and the cost probes take
+`--iteration-multiplier`. See [The probes' sampling is set on the command
+line](#d-settable-sampling). Take the lengthened run in the default, interleaved
+order: under `--order sequential` the control's two halves are measured apart, so
+lengthening the run also lengthens the interval between them (see [The queue
+probe interleaves its passes](#d-interleaved-order)).
 
 **A warmup pass separates transient cost from ongoing noise, and the two are
 different things.** This probe already discards one untimed pass -- though not for
@@ -699,7 +709,15 @@ architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
 
-## The queue-contention probe, and why it must not run in the CI probe job
+## The queue-contention probe, and how much of it the CI probe job runs
+
+**Amended 2026-10-19: it now runs in the CI probe job at 1, 2 and 4 producers, on both architectures;
+see [The coherence probes run in CI](#d-coherence-probes-in-ci).**
+
+**Every figure this note gives from `probe-queue-contention` that predates `M4.4` was measured in
+the sequential order**, each configuration's passes back to back, because that was the only order
+the probe had. `--order sequential` still takes it; the default is now interleaved. See
+[The queue probe interleaves its passes](#d-interleaved-order).
 
 `probe-queue-contention` measures two things a design decision is waiting on: whether the bounded
 array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and how
@@ -718,10 +736,12 @@ rest of the queue work -- so this note deliberately names the QUESTIONS rather t
 that would dangle. The probe is the instrument; it is useful before the plan that consumes it lands,
 and it is landed first precisely so the decision is made against measurement rather than argument.
 
-**It is deliberately absent from the `platform-probes` CI job, and the reasons are a core count and a
+**The full curve is not run in the `platform-probes` CI job, and the reasons are a core count and a
 clock rather than a preference.** A contention curve needs more cores than a hosted runner has: the
 sixteen- and thirty-two-producer rows on a four-core runner would measure the scheduler and report it as
-contention. And the run costs about 65 seconds, against a job whose other probes are seconds apiece.
+contention. And the full run costs about 65 seconds, against a job whose other probes are seconds
+apiece. Both reasons are about producer counts above the runner's processors, which is why the job now
+runs the counts below them.
 
 **It must be run in release, which is a measurement and not a preference.** In a debug build
 `slotwise_mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
@@ -750,10 +770,39 @@ paragraph confused the two -- it said the CI job "runs `cargo run` without `--re
 of the job it describes: `probe-doorbell-cost` and `probe-request-cost` already run there with `--release`,
 under a comment establishing exactly the rule this probe would fall under. It also said "unlike every other
 probe", and `probe-cancel-io` is likewise absent. Corrected by a review. The release precedent exists; what
-keeps this one out is that it costs an order of magnitude more than the two probes that use it, on hardware
-that cannot answer the question anyway.
+keeps the full curve out is that it costs an order of magnitude more than the probes that use it, on
+hardware that cannot answer the high-producer question anyway.
 
-So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
+So the full curve is run by hand, on a known machine, and its numbers are recorded with the machine
+attached.
+
+### The coherence probes run in CI, below the runner's processor count
+
+<a id="d-coherence-probes-in-ci"></a>
+
+**Status: decided and implemented** by `M4.11`, on the engineer's direction of 2026-10-19 to implement
+the ARM64 coverage that [the queue crate's README](../windows-waitable-queues/README.md) had recorded as
+missing.
+
+The `platform-probes` job runs on an x64 and an ARM64 runner since `M2.15`, and it is the only ARM64
+hardware this workspace reaches. So it now runs, in release, on both:
+
+- **`probe-queue-contention --producers 1,2,4`.** A hosted runner has four processors, so these are
+  the counts that measure contention rather than the scheduler. The list is fixed rather than read from
+  the runner, so rows from different builds are comparable; the report prints the processors the run
+  had, so a runner with fewer is visible. The rest of the sampling is the default, and the report says
+  the run was not the defaults.
+- **`probe-peer-index-cache`**, whose finding inverts between the two architectures. It uses two
+  threads, so it fits any runner. Its earlier absence rested on a debug build burying the effects it
+  studies, which a release step answers.
+
+At these settings each run takes seconds, against the full queue curve's minute. Neither step asserts a
+magnitude: a red step means the probe failed to run, and the figures are in the build's log, from one
+runner of a heterogeneous fleet, beside the banner that says which.
+
+The full queue curve stays a manual run on a known machine, for the reasons above.
+
+**Scheduled work:** none.
 
 ### Reading it
 
@@ -856,8 +905,10 @@ straight past. The warming variant is a control for the hypothesis that a discar
 substitute for the real thing; it removes no read and moves no time, which is exactly what a control
 that confirms the null should do.
 
-Like `probe-queue-contention`, this probe is **absent from the CI probe job**, and for the same
-measured reason: the effects it studies are coherence effects that a debug build's overhead buries.
+**It runs in the CI probe job, in release, on both architectures**; see
+[The coherence probes run in CI](#d-coherence-probes-in-ci). It was absent until 2026-10-19 because
+the effects it studies are coherence effects that a debug build's overhead buries, which is a reason
+to run it in release rather than not at all.
 
 ## The fingerprint carries provenance inside the string, not beside it
 
@@ -1147,11 +1198,15 @@ allocation a timed pass will use -- every repetition builds and drops its own
 queue -- so what it warms is process state: the allocator's size class, the OS
 page cache, the instruction cache and the branch predictors. So a figure below
 rests on 35 timed passes per
-configuration, and "seven runs" alone would not let anyone reproduce it. These
-are fixed at
+configuration, and "seven runs" alone would not let anyone reproduce it. Each
+configuration's five passes were taken back to back, before the next
+configuration's -- the order `--order sequential` still takes, and no longer the
+default (see [The queue probe interleaves its passes](#d-interleaved-order)). The
+counts are fixed at
 [src/queue_contention.rs](src/queue_contention.rs)`::PUSHES_PER_PRODUCER` and
-`REPETITIONS`; M4.2 in [CHECKLIST.md](CHECKLIST.md) makes them adjustable, which
-is what the first diagnostic step above needs and cannot currently do.
+`REPETITIONS`, which are the defaults of `Sampling`; a run given other values on the
+command line says so beside its banner (see [The probes' sampling is set on the
+command line](#d-settable-sampling)).
 
 **The banner's `numa[16]` is load-bearing here: it means a single
 NUMA node holding all sixteen processors**, so every figure below was taken
@@ -1203,8 +1258,9 @@ measurements taken on a shared desktop that is doing other things. The dispersio
 alone cannot distinguish them, and this note does not guess. See
 [High variance in our own control is a finding about the
 instrument](#d-variance-is-a-finding) for what to try first and how to recognise
-the floor, and M4.2 in [CHECKLIST.md](CHECKLIST.md) for the probe controls that
-make those steps executable without a source edit.
+the floor, and [The probes' sampling is set on the command
+line](#d-settable-sampling) for the flags that make those steps executable without a
+source edit.
 
 What follows is therefore reported as *data with a known-unexplained spread*.
 
@@ -1920,6 +1976,10 @@ which is the decision below.
 
 <a id="d-encoded-row-is-the-contract"></a>
 
+**Amended 2026-10-19: the engineer does not treat probe rows as formal contracts; see [Every probe's
+normal run emits a row of raw data](#d-every-probe-emits-a-row). What follows still governs the
+topology row it was written for.**
+
 A probe is a data pipeline that renders, at its tail, to two artifacts: an NDJSON
 row and prose. **They are not peers.** The row is a machine contract -- mined
 across a fleet, joined against other runs, and the thing this workspace's designs
@@ -2030,6 +2090,29 @@ condition -- now exists, in
 blocking states against the row's keys, and `publication_holds` is the shared
 predicate the corpus rule and its sabotage both call. Landed as M3.5, archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+**Every `parse_incomplete` condition is a blocking state, and a test holds the
+census closed.** Until `M4.1` the states covered part of the list, and the rest
+were excused as "derived counts whose only source IS the cross-check's own
+arithmetic" -- false for every one of them, since each reads fields on
+`Observation` directly. `every_parse_incomplete_code_is_answered_by_a_blocking_state`
+compares `ParseIncomplete::ALL_CODES` with the codes the states answer to, both
+generated lists, so a new condition with no state fails a test rather than
+waiting for a review. The tautology test still governs membership: a state whose
+only source is `cross_check`'s own output restates `verdict()` and does not
+belong.
+
+A deleted push site is not always caught by the INVARIANT module, and the
+difference is worth knowing before reading a sabotage result. Where a condition
+also files a `not_compared` entry -- a described or unreported relation does,
+through `counts_include_unparsed_relations` -- the verdict stays `incomplete`
+without the push, so there is no agreeing verdict to forbid. What is lost is the
+code a survey groups by, and the corpus's per-state publication rule is what sees
+that in general; a described relation also has a dedicated unit test.
+
+[sabotage.json](sabotage.json) runs with `--all-features` because the corpus
+target requires `oracle-in-renderer`, and `codes_for` -- the schema between states
+and row codes -- lives there, so a defect in it is visible to no other target.
 
 (Until M3.5 landed this section said "nothing here enforces that rule yet" and
 pointed at CHECKLIST.md for the queued item. Both statements outlived the
@@ -2335,7 +2418,7 @@ decision, and the request crate's `NR-3.7` is done with it.
 
 The request crate's requests hold a `SharedHandle`
 ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and `CapturedHandle`, whose
-`DuplicateHandle` the probe timed as "what a request costs to carry a handle", is going. So the
+`DuplicateHandle` the probe timed as "what a request costs to carry a handle", is deleted (`NR-6.2`). So the
 probe times what a request now does with a handle:
 
 - **`share_handle`**: a clone of a `SharedHandle` and its drop, with the original held throughout,
@@ -2358,3 +2441,195 @@ the table with the NDJSON line derives its keys from the probe and needed no cha
 
 **Scheduled work:** none. This was the change the request crate's `NR-6.2`, which deleted
 `CapturedHandle`, waited on.
+
+## The probes' sampling is set on the command line, and a run says when it was not the default
+
+<a id="d-settable-sampling"></a>
+
+**Status: decided and implemented** by `M4.2`.
+
+[High variance in our own control is a finding about the instrument](#d-variance-is-a-finding)
+makes "more of the same" the first move against a wide control: a longer span and more repetitions
+on the unchanged configuration. Before `M4.2` that was a source edit and a rebuild. Now:
+
+- **`probe-queue-contention` takes `--pushes-per-producer N`, `--repetitions N` and
+  `--producers a,b,...`.** The three axes the item named -- duration, repetitions, concurrency --
+  are these three.
+- **The cost probes, `probe-request-cost` and `probe-doorbell-cost`, take one setting,
+  `--iteration-multiplier N`.** Each times fixed loops and divides; neither repeats a measurement
+  nor varies a thread count, so lengthening the loops is the whole of
+  "more of the same" for them. One multiplier scales every loop the probe runs, the doorbell
+  probe's park-and-wake rounds included, so the loops keep the lengths relative to each other that
+  they were written with.
+- **A value is given as `--name value` or `--name=value`**, parsed by
+  [src/probe_args.rs](src/probe_args.rs), shared so that every probe that takes settings parses
+  and refuses the same way.
+- **The defaults are the constants, unchanged.** When this decision landed, a run with no
+  arguments measured exactly what the published figures measured. `M4.4` then changed the default
+  ORDER of the queue probe's passes, not these counts; see
+  [The queue probe interleaves its passes](#d-interleaved-order).
+- **A refusal is exit status 2, written to stderr before anything is measured**, with stdout left
+  empty -- so a piped report is never a partial one, and a script can tell a mistyped flag (2)
+  from a probe that ran and failed (1). Refused: an unknown flag, a flag without a value, a
+  repeated flag, a value that is not a whole number of at least one, a producer list naming a
+  count twice, and a setting the probe's own arithmetic cannot carry -- the queue probe sizes its
+  queue to the next power of two above the largest producer count times the pushes, and a cost
+  probe counts its loop in `u32`. These are this crate's limits, not a platform's.
+- **A run reports what it used, beside the banner, and says when that was not the default.** The
+  queue probe's sampling line ends `(the defaults)` or `(NOT the defaults: ...)`; the cost probes
+  print `iteration multiplier: N` followed by the same distinction, and add
+  `"iteration_multiplier":N` to their NDJSON line. This is
+  [A probe reports observations parameterized by their capture](#d-observations-not-verdicts)
+  applied to settings that are now part of the capture.
+- **The sampling is carried in the observation, not beside it.** `Observation.sampling` is what
+  the renderer reads, its producer-count columns included, so a report cannot describe a sampling
+  other than the one its figures came from.
+- **The timer and the divisor read one value.** `median_run` hands each pass the push count the
+  per-operation figures are divided by, so the pushes a pass performed and the pushes its time is
+  divided by cannot come from two places.
+
+**A reading taken with these settings was confounded until `M4.4` landed, and still is under
+`--order sequential`.** Back to back, the same-code control's two rows are measured several
+configurations apart. Raising the pushes or the repetitions lengthens every measurement between
+them, and so lengthens the interval across which drift lands inside the control: the setting
+meant to narrow the control also widens the window that can widen it. `M4.4` made interleaving
+the default, which puts both halves inside the same rounds; see
+[The queue probe interleaves its passes](#d-interleaved-order).
+
+**Built ahead of `M4.4`, against the checklist's stated order.** That order was about reading a
+lengthened run, not about building the means to take one: the defaults are unchanged, so building
+the settings changed no figure. The reordering was this implementation's call when the engineer
+asked, on 2026-10-19, for `M4.2` to be implemented if it could be; `M4.4`'s note was re-planned in
+the same commit.
+
+**Scheduled work:** none new. The pairing it waited on landed as `M4.4`.
+
+## The queue probe interleaves its passes, and keeps the sequential order as a setting
+
+<a id="d-interleaved-order"></a>
+
+**Status: decided and implemented** by `M4.4`.
+
+`probe-queue-contention`'s same-code control is `reserving_mpsc` against `reserving(32/32)`, the
+same code measured twice in one run. Before `M4.4` every configuration's passes ran back to back, so
+the control's two halves were measured several configurations apart and any drift across that
+interval landed inside the control, and inside every comparison judged against it -- the specific
+mechanism [High variance in our own control is a finding about the
+instrument](#d-variance-is-a-finding) recorded for the control's width.
+
+- **The default order interleaves.** At each producer count, every configuration -- both regimes
+  -- takes its one untimed pass, then the run takes `--repetitions` rounds of one timed pass each,
+  each round starting one configuration later than the last. So every row's passes are spread
+  across the same rounds, and the median of each is taken over the same interval. The rotation is
+  the "balance the order" half of the item: no configuration is always the first pass of a round.
+  It is deterministic rather than random, so a run's procedure is fully stated by its settings.
+- **The sequential order is kept, as `--order sequential`.** It is the order every figure
+  published before `M4.4` was measured in, so it is what retakes them, and running both orders on
+  one host is the measurement that says whether interleaving narrowed the control there. A test
+  pins the list of configurations to that order, because nothing else would notice it changing.
+- **Neither order changes which rows a run reports or which table each lands in**; only when the
+  passes are taken.
+- **The order is a capture parameter.** The report's sampling line names it, and a run taken
+  sequentially says it was not the defaults. Each committed capture's attribution states the order.
+
+**What it did on the one host available:** the
+[2026-10-19 capture](captures/2026-10-19-interleaved-order/README.md) took seven runs of each order,
+alternating, and reports per producer count which order's control range was narrower. The figures
+are in that capture and are not restated here.
+
+**The figures published before `M4.4` are not retracted or retaken.** They are measurements of the
+sequential procedure, which the probe still runs; each place that gives them says which order
+produced them. Retaking them interleaved would replace one host's seven-run reading with another,
+and is not scheduled.
+
+**Scheduled work:** none.
+
+## A queue report names the build that produced it, and a capture refuses two builds
+
+<a id="d-report-names-its-build"></a>
+
+**Status: decided and implemented** by `M4.8`.
+
+A capture's runs are comparable only when one build produced them, and before `M4.8` nothing but the
+capture README -- a claim by whoever took it -- said which build that was. So:
+
+- **`probe-queue-contention` prints `build: <identity>` beside its banner.** The identity is
+  `windows-placement-probe`'s `BuildIdentity` -- crate version, commit, dirty flag, and whether the
+  build came from CI -- rendered the way that crate renders it, unofficial builds marked.
+- **It is stamped by the same build-script code, not a copy.** This crate's
+  [build.rs](build.rs) includes `windows-placement-probe`'s `build/stamp.rs` and calls it under the
+  `PLATFORM_PROBES` prefix, and `BuildIdentity::from_stamps` reads the stamps for both crates. The
+  git-watching rules in that file were each found by measuring a stale stamp; a second copy would be
+  the copy the next fix missed.
+- **The CI probe job stamps its builds as CI builds** with the commit it checked out, so a report
+  in a build log names that commit.
+- **The capture scripts include the build line in the attribution every run must share.** A set
+  mixing two builds, or a stamped run with an unstamped one, is refused. A run without the line is
+  read as "not stamped", so every capture committed before `M4.8` still regenerates, byte for byte.
+  `tests/the_capture_scripts_refuse_runs_of_different_builds.rs` runs every committed copy of both
+  scripts with `node`, in both directions.
+
+**What it does not establish.** A dirty build names its commit, not its tree, so two dirty builds at
+one commit agree while their sources may differ; the capture README is still the record of what was
+built for those, and for every capture taken before this. And the build identity does not replace
+the scripts' refusal of byte-identical runs: it names the build, which every run in a capture shares.
+
+**Scheduled work:** none.
+
+## Every probe's normal run emits a row of raw data
+
+<a id="d-every-probe-emits-a-row"></a>
+
+**Status: decided** by `M4.10`; applied by milestone `M8`, archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m814).
+
+The engineer, 2026-10-19, choosing the first of three rules put to him (every probe; only probes
+something other than a person reads; only host-dependent magnitudes): "The answer is A for the
+normal simplified runs. We may have modes that give the other two interpretations/readings but in
+general they produce raw data."
+
+- **Every probe binary's normal run emits an `x-probe-*` row**, beside its prose. Before this, three
+  of the crate's probes did and the rest printed prose only, with no stated rule for which applied.
+- **The row carries raw data**: what the probe observed, not a verdict drawn from it. An
+  interpreting reading -- a summary, a judgement against a threshold, a filter to what some consumer
+  wants -- may exist as a separate mode, and is not what a normal run emits.
+- **A row is not a formal contract.** The engineer, same date: "I don't necessarily see these as
+  'contractual'. Probes produce what they produce." And: "these probes are meant as somewhat
+  informal means to validate platform behaviors. They are not a formal validation scheme." So adding
+  a row does not bring the obligations [The encoded row is the contract](#d-encoded-row-is-the-contract)
+  attached to the topology row; whether a given row's values are machine-checked is decided by the
+  probe, not required by this rule.
+- **What a row does owe is honesty about its identity.** The engineer: "If we retire a probe or if
+  it measures something different over time, we need to be honest and give it a new name/identifier."
+  So a row whose meaning changes is renamed rather than reused -- the rule `M6.1` already followed
+  when it dropped the request probe's old keys instead of carrying them under new meanings.
+
+**Not decided here, and left to each probe's item:** what a refusal looks like in a row. Topology's
+`report_unmeasured` is the existing example of a probe saying it declined to measure; each item
+follows it or says why not. Every `M8` item that had a way to decline followed it: the same row,
+with a `declined` member carrying the reason and `null` on a run that measured. A probe with no way
+to decline -- its measurement completes or panics, and a panic prints no report -- carries no such
+member.
+
+**Conventions the `M8` rows share**, each chosen so a row carries what was observed rather than a
+reading of it:
+
+- **A timing is a whole number of elapsed nanoseconds**, never a per-operation float. The
+  per-operation figures are the prose's division of an elapsed time, and the row writer has no float
+  for them; where a measurement kept only the derived figure, the raw one was carried at its source
+  (`core_affinity::Measurement` gained the median pass's elapsed time and read counts) rather than
+  reversed out of a division.
+- **A value read only on failure is `null` when it was not read.** `GetLastError` after a call that
+  succeeded is a zero nothing asked for; publishing it reads as an observed code.
+- **A signed code or identifier is hexadecimal text** -- an HRESULT as `0x80070057`, a LUID as
+  `high:low` -- as the prose prints it. The row writer carries no signed number, and these are names
+  to look up rather than quantities.
+- **Every enumerated choice is published by a stable record name** (`name()`), separate from the
+  prose label the table prints, so the table can be reworded without renaming a row's values.
+
+**Enforced** by the row census,
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs),
+which runs every registered probe under a deadline and fails for any whose normal run emits no row
+(`M8.14`). A probe added later without one fails it rather than joining a list.
+
+**Scheduled work:** none.

@@ -11,9 +11,11 @@
 //! observations themselves -- the actual file names each handle returned --
 //! which is what makes a surprising result diagnosable rather than merely red.
 
+use windows_platform_probes::build_identity::this_build;
 use windows_platform_probes::handle_state::{
-    Fixture, SingleShot, closing_duplicate_preserves_source, duplicate_shares_cursor, ground_truth,
-    query_disturbs_cursor, separate_opens_are_independent,
+    Fixture, Observation, QUERIES, QueryObservation, closing_duplicate_preserves_source,
+    duplicate_shares_cursor, ground_truth, interleave_query, raw_row,
+    separate_opens_are_independent,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -71,10 +73,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
 
     let _ = writeln!(out, "--- does closing the duplicate break the source? ---");
+    let source_survived_close = closing_duplicate_preserves_source(&fixture);
     let _ = writeln!(
         out,
         "  -> {}\n",
-        if closing_duplicate_preserves_source(&fixture) {
+        if source_survived_close {
             "no: the source kept enumerating"
         } else {
             "YES: the source was broken, so owning a duplicate is unsafe to drop"
@@ -85,13 +88,10 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "--- does an interleaved single-shot query move the cursor? ---"
     );
-    for (query, on_duplicate) in [
-        (SingleShot::BasicInfo, false),
-        (SingleShot::IdInfo, false),
-        (SingleShot::NonEx, false),
-        (SingleShot::BasicInfo, true),
-    ] {
-        let (succeeded, disturbed) = query_disturbs_cursor(&fixture, query, on_duplicate, &truth);
+    let mut queries = Vec::new();
+    for (query, on_duplicate) in QUERIES {
+        let (succeeded, cursor) = interleave_query(&fixture, query, on_duplicate);
+        let disturbed = !cursor.continued(&truth);
         let _ = writeln!(
             out,
             "{query:?}{}  succeeded={succeeded}  -> {}",
@@ -106,5 +106,25 @@ fn render(out: &mut dyn std::fmt::Write) {
                 "undisturbed"
             }
         );
+        queries.push(QueryObservation {
+            query,
+            on_duplicate,
+            succeeded,
+            cursor,
+        });
     }
+
+    // The raw data, last, as every probe's normal run emits it (`M8.8`).
+    let observed = Observation {
+        ground_truth: truth,
+        duplicate: observation,
+        separate_opens: control,
+        source_survived_close,
+        queries,
+    };
+    let _ = writeln!(
+        out,
+        "{}",
+        raw_row(&observed, &this_build().to_string()).render()
+    );
 }

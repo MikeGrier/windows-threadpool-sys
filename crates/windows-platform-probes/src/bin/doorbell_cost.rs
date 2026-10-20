@@ -15,20 +15,30 @@
 use std::fmt::Write as _;
 
 use windows_platform_probes::doorbell_cost::{
-    EVERY_LABEL, Presence, json_key, measure, measure_park_and_wake,
+    EVERY_LABEL, LONGEST_LOOP, PARK_ROUNDS, Presence, json_key, measure, measure_park_and_wake,
 };
 
-use windows_platform_probes::report::emit_report;
+use windows_platform_probes::probe_args::{IterationMultiplier, usage};
+use windows_platform_probes::report::{emit_report, refuse_arguments};
 
 fn main() {
+    // Read before anything is measured, so a command line the probe cannot honour
+    // is refused rather than half-run. See `M4.2`.
+    let multiplier = IterationMultiplier::from_args(std::env::args().skip(1), LONGEST_LOOP)
+        .unwrap_or_else(|error| {
+            refuse_arguments(
+                &error,
+                &usage("probe-doorbell-cost", &IterationMultiplier::FLAGS),
+            )
+        });
     // The probe's whole output policy, and it is one line: hand the renderer to
     // the sink. Nothing here or below names a stream -- that is chosen once, in
     // `report`, so retargeting a probe is not a rewrite.
-    emit_report(render);
+    emit_report(|out| render(out, multiplier));
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut dyn std::fmt::Write) {
+fn render(out: &mut dyn std::fmt::Write, multiplier: IterationMultiplier) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -38,6 +48,9 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
+    // Beside the banner, because a figure is only interpretable with what
+    // produced it, and the span is settable (M4.2).
+    let _ = writeln!(out, "{}", multiplier.report_line());
     let _ = writeln!(
         out,
         "== what does a doorbell cost, against the syscall it guards? ==\n"
@@ -58,8 +71,8 @@ fn render(out: &mut dyn std::fmt::Write) {
     // larger than when this `main` was written -- adding loud failures to a
     // probe while leaving it outside the mechanism that reports them is half a
     // change.
-    let observation = &measure();
-    let park = measure_park_and_wake(20_000);
+    let observation = &measure(multiplier);
+    let park = measure_park_and_wake(multiplier.scale(PARK_ROUNDS));
 
     let _ = writeln!(out, "{:<30} {:>12}", "operation", "ns/op");
     for timing in &observation.timings {
@@ -367,10 +380,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(
         out,
         concat!(
-            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}",{}"#,
+            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","iteration_multiplier":{},{}"#,
             r#""park_and_wake_round_trip_ns":{},"doorbell_over_empty_submit":{}}}"#
         ),
         std::env::consts::ARCH,
+        multiplier.get(),
         fields,
         park.map_or("null".to_string(), |n| format!("{n:.1}")),
         observation

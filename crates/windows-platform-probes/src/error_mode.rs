@@ -34,6 +34,25 @@ pub mod bits {
     pub const NO_OPEN_FILE_ERROR_BOX: u32 = 0x8000;
 }
 
+/// Every bit probed on its own, in the order the report lists them.
+pub const PROBED_BITS: [u32; 4] = [
+    bits::FAIL_CRITICAL_ERRORS,
+    bits::NO_GP_FAULT_ERROR_BOX,
+    bits::NO_ALIGNMENT_FAULT_EXCEPT,
+    bits::NO_OPEN_FILE_ERROR_BOX,
+];
+
+/// The valid bits [`combined_invalid_installs_nothing`] sets beside an invalid
+/// one.
+pub const COMBINED_VALID: u32 = bits::FAIL_CRITICAL_ERRORS | bits::NO_GP_FAULT_ERROR_BOX;
+
+/// The whole mask [`combined_invalid_installs_nothing`] attempts.
+pub const COMBINED_ATTEMPT: u32 = COMBINED_VALID | bits::NO_ALIGNMENT_FAULT_EXCEPT;
+
+mod raw_row;
+
+pub use self::raw_row::*;
+
 /// What happened when one bit was set on its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BitOutcome {
@@ -174,15 +193,10 @@ pub fn probe_bit(bit: u32) -> BitOutcome {
 /// Every bit this platform accepts per thread, as a mask.
 #[must_use]
 pub fn settable_bits() -> u32 {
-    [
-        bits::FAIL_CRITICAL_ERRORS,
-        bits::NO_GP_FAULT_ERROR_BOX,
-        bits::NO_ALIGNMENT_FAULT_EXCEPT,
-        bits::NO_OPEN_FILE_ERROR_BOX,
-    ]
-    .into_iter()
-    .filter(|bit| probe_bit(*bit).is_settable())
-    .fold(0, |mask, bit| mask | bit)
+    PROBED_BITS
+        .into_iter()
+        .filter(|bit| probe_bit(*bit).is_settable())
+        .fold(0, |mask, bit| mask | bit)
 }
 
 /// Does one invalid bit cost the caller the whole call, or only that bit?
@@ -193,8 +207,8 @@ pub fn settable_bits() -> u32 {
 /// combining it with valid bits silently loses the entire change.
 #[must_use]
 pub fn combined_invalid_installs_nothing() -> (bool, u32) {
-    let valid = bits::FAIL_CRITICAL_ERRORS | bits::NO_GP_FAULT_ERROR_BOX;
-    let combined = valid | bits::NO_ALIGNMENT_FAULT_EXCEPT;
+    let valid = COMBINED_VALID;
+    let combined = COMBINED_ATTEMPT;
 
     // The whole finding is read out of `read_back`, and the call under test is
     // expected to *fail* -- so `read_back` is whatever the thread was already
