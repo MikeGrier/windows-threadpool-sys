@@ -26,7 +26,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
 
   > **-> CROSS-COMPONENT HANDOFF:** this was one of the moves `NR-6.2` waits on; the next work in this crate
   > is `SAFE-2`, gated on the request crate's release. See
-  > [windows-namespace-request-sys' CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md) -> `NR-6.2`.
+  > [windows-namespace-request-sys' COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -> `NR-6.2`.
 
 - [ ] **SAFE-2** -- **The directory's calls through the request crate.** The engine holds the directory as a
   `SharedHandle`. [native.rs](src/native.rs)'s four calls become entries: the open is `OpenFile` built from the
@@ -38,7 +38,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
   open.
 
   > **CROSS-COMPONENT PREREQUISITE:** the request crate's release carrying `NR-6.1` to `NR-6.5`
-  > ([CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md)).
+  > ([COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-65-into)).
 
 - [ ] **SAFE-3** -- **The doorbell is a shared event.** The completion ring holds the doorbell as a `win-sync-sys`
   `Event`, set and reset through it, and hands a `ThreadpoolWait` a waitable handle that shares the event rather
