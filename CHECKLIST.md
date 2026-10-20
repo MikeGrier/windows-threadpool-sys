@@ -535,20 +535,7 @@ crates' checklists; this is only the order and the links, and each item's own ch
    [M17.1](crates/windows-file-watcher/CHECKLIST.md).
 7. [SAFE-5](crates/windows-file-enumeration-sys/CHECKLIST.md) -- `forbid(unsafe_code)`, last.
 
-- [ ] **M43.1** -- **Create `win-text-sys`, with `CompareStringOrdinal`.** The name is the engineer's, 2026-10-18:
-  "I lean towards win-text-sys for the crate name. locale implies that text handling that was not specific to a
-  locale would not belong", then "win-text-sys is the name of the crate unless you have a solid argument against
-  it". None was found; the name was unclaimed on crates.io when checked that day. By [the placement rule](DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under),
-  the snapshot files `CompareStringOrdinal` under Internationalization's National Language Support functions; the
-  name is the subject, text handling whether or not it is particular to a locale, so the crate's notes record that
-  National Language Support is its section and that Unicode and Character Sets, which the snapshot files
-  separately, is judged by the same subject when a wrapper from it is wanted. Recorded at creation, in the new
-  crate's DESIGN-NOTES as its naming decision and placement: the name with the quotation above; the section; that
-  a `-sys` crate here is memory-safe over the call and adds no policy. The first wrapper takes two `&[u16]` and a
-  case choice and returns the comparison as an `Ordering`, with the call's failure as its error; nothing else is
-  added until a consumer's item asks. Tests: equal and unequal strings both ways, case folded and not, embedded
-  NULs compared as units, lengths the call's `int` cannot represent refused with the citation (the
-  documented-contract rule), and the failure path.
+- [x] **M43.1** -- `win-text-sys` is created, with `compare_string_ordinal` over `CompareStringOrdinal`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m431)
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is
   > [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) in `crates/windows-file-enumeration-sys` and

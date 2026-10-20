@@ -73,6 +73,10 @@
             "package-name": "win-volume-sys",
             "component": "win-volume-sys"
         },
+        "crates/win-text-sys": {
+            "package-name": "win-text-sys",
+            "component": "win-text-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

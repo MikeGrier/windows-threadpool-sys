@@ -1,0 +1,103 @@
+{
+  "package": "win-text-sys",
+  "description": "Sabotages for win-text-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The counts are never passed as the page's -1. A sabotage that passed -1 for a count would make the call read each slice as a NUL-terminated string, which a slice is not, so it would read past the slice's end: the embedded-NUL test would catch it, but by whatever the memory past a Vec holds, which is not a result to record. A slice of more than i32::MAX units cannot be made by a test, so the refusal's limit is observed through the function that makes the counts and not through compare_string_ordinal.",
+  "sabotages": [
+    {
+      "name": "WT-1: the less-than result is reported as greater",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The two orderings are the same shape in the match, so a swap compiles; every comparison of unequal strings then reads backwards.",
+      "find": ["        CSTR_LESS_THAN => Ok(Ordering::Less),\n"],
+      "replace": ["        CSTR_LESS_THAN => Ok(Ordering::Greater),\n"]
+    },
+    {
+      "name": "WT-1: the equal result is reported as less",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "Equality is what the workspace's name matching reads, so it has to be the one result that is reported as itself.",
+      "find": ["        CSTR_EQUAL => Ok(Ordering::Equal),\n"],
+      "replace": ["        CSTR_EQUAL => Ok(Ordering::Less),\n"]
+    },
+    {
+      "name": "WT-1: a result the page does not list is reported as equal",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "A value the call should never give must not be read as a successful match.",
+      "find": ["        _ => Err(Win32Error::from_code(0)),\n"],
+      "replace": ["        _ => Ok(Ordering::Equal),\n"]
+    },
+    {
+      "name": "WT-1: a zero result does not report the call's last error",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The code is the one thing the failure carries; without it a caller cannot tell a call's refusal from no code at all.",
+      "find": ["        0 => Err(last_error()),\n"],
+      "replace": ["        0 => Err(Win32Error::from_code(0)),\n"]
+    },
+    {
+      "name": "WT-1: a case-insensitive comparison is made case-sensitive",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The flag is the only thing that separates the two; folding case is observed by comparing strings that differ only in case.",
+      "find": ["            Self::Insensitive => TRUE,\n"],
+      "replace": ["            Self::Insensitive => FALSE,\n"]
+    },
+    {
+      "name": "WT-1: a case-sensitive comparison is made case-insensitive",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The opposite direction: a comparison that was asked to take the units as they are folds them.",
+      "find": ["            Self::Sensitive => FALSE,\n"],
+      "replace": ["            Self::Sensitive => TRUE,\n"]
+    },
+    {
+      "name": "WT-1: the two strings are passed in each other's place",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "A comparison of unequal strings reads backwards, and swapping the arguments no longer reverses the result.",
+      "find": ["            first.as_ptr(),\n            first_count,\n            second.as_ptr(),\n            second_count,\n"],
+      "replace": ["            second.as_ptr(),\n            second_count,\n            first.as_ptr(),\n            first_count,\n"]
+    },
+    {
+      "name": "WT-1: a length is truncated to the count instead of refused",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "A length above i32::MAX would wrap to a small or negative count, and the call would compare a different string, or take a negative count as the page's -1.",
+      "find": ["        i32::try_from(len).map_err(|_| CompareStringOrdinalError::TooLong { operand, len })\n"],
+      "replace": ["        {\n            let _ = operand;\n            Ok(len as i32)\n        }\n"]
+    },
+    {
+      "name": "WT-1: the second string is named as the first when it is too long",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The refusal names the string; a caller that reports which one is too long reports the wrong one.",
+      "find": ["count(Operand::Second, second)?"],
+      "replace": ["count(Operand::First, second)?"]
+    },
+    {
+      "name": "WT-1: the second length is checked before the first",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "When both strings are too long the first is the one named; the order of the two checks is that guarantee.",
+      "find": ["    Ok((\n        count(Operand::First, first)?,\n        count(Operand::Second, second)?,\n    ))\n"],
+      "replace": ["    let second = count(Operand::Second, second)?;\n    Ok((count(Operand::First, first)?, second))\n"]
+    },
+    {
+      "name": "WT-1: the call's failure has no source",
+      "file": "src/compare.rs",
+      "expect": "caught",
+      "why": "The code is the failure's cause; dropping it as the source leaves an error chain that stops at the wrapper.",
+      "find": ["            Self::Call(error) => Some(error),\n"],
+      "replace": ["            Self::Call(_) => None,\n"]
+    },
+    {
+      "name": "WT-1 control: the equal result is reported through a binding",
+      "file": "src/compare.rs",
+      "expect": "survives",
+      "why": "A control: the same ordering through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        CSTR_EQUAL => Ok(Ordering::Equal),\n"],
+      "replace": ["        CSTR_EQUAL => {\n            let equal = Ordering::Equal;\n            Ok(equal)\n        }\n"]
+    }
+  ]
+}

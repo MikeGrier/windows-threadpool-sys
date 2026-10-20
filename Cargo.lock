@@ -213,6 +213,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-text-sys"
+version = "0.0.1"
+dependencies = [
+ "win-error-codes",
+ "windows-sys",
+]
+
+[[package]]
 name = "win-time-sys"
 version = "0.1.0"
 dependencies = [

@@ -4121,3 +4121,22 @@ Done in two steps. The entry is the request crate's `QueryFileBasicInfo`, built 
 sequences it after the open as [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2): the open
 completes, then the directory check is a separate query on a clone of the same handle, client-side, with no compound
 open-and-classify entry.
+
+## Moved 2026-10-20 16:10:00 -04:00 -- M43.1: win-text-sys is created
+
+### <a id="m431"></a>M43.1 -- `win-text-sys` is created, with `compare_string_ordinal` over `CompareStringOrdinal`. *(completed 2026-10-20 16:10:00 -04:00)*
+
+The item's text, with the engineer's ruling on the name and the placement it records, is the crate's
+[WT-D-1](crates/win-text-sys/DESIGN-NOTES.md#wt-d-1), and the first wrapper's shape and its one refusal are
+[WT-D-2](crates/win-text-sys/DESIGN-NOTES.md#wt-d-2).
+
+What was done. [crates/win-text-sys](crates/win-text-sys/Cargo.toml) is a new workspace member, registered for
+release-please and the publish workflow, with `compare_string_ordinal` taking two `&[u16]` and a `Case` and giving
+an `Ordering`. The count is always passed, so a NUL is a unit. A slice of more than `i32::MAX` units is refused as
+`CompareStringOrdinalError::TooLong` with the page's syntax block as the citation, and the call's failure is
+`CompareStringOrdinalError::Call` with a `Win32Error`. Tests: equal and unequal strings both ways, case folded and not
+(ASCII and beyond), embedded NULs, unpaired surrogates, a slice shorter than its buffer, a long string, the
+reversal and reflexivity of the order, the refusal and the order in which it names the strings, the mapping of every
+result and the call's own failure through the page's invalid value of `bIgnoreCase`. Evidence, in
+[sabotage.json](crates/win-text-sys/sabotage.json): eleven entries, all caught, and a control. The two sites that call
+`CompareStringOrdinal` themselves move to it in `SAFE-4` and `M17.1`.
