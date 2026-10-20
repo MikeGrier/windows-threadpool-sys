@@ -19,6 +19,54 @@
       "replace": [
         "            while false {"
       ]
+    },
+    {
+      "name": "M17.1: a case-insensitive directory compares case-sensitively",
+      "file": "src/route.rs",
+      "expect": "caught",
+      "why": "The case choice is the only thing that makes a file route match a differently cased stored name.",
+      "find": ["        Case::Insensitive\n"],
+      "replace": ["        Case::Sensitive\n"]
+    },
+    {
+      "name": "M17.1: a case-sensitive directory folds case",
+      "file": "src/route.rs",
+      "expect": "caught",
+      "why": "On a case-sensitive directory A.txt and a.txt are different files, and folding routes one's changes to the other's subscription.",
+      "find": ["        Case::Sensitive\n    } else {"],
+      "replace": ["        Case::Insensitive\n    } else {"]
+    },
+    {
+      "name": "M17.1: a comparison that says less is a match",
+      "file": "src/route.rs",
+      "expect": "caught",
+      "why": "Only an equal result is the same name.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => ordering != Ordering::Greater,\n"]
+    },
+    {
+      "name": "M17.1: a name too long for the call is not compared exactly",
+      "file": "src/route.rs",
+      "expect": "caught",
+      "why": "Reaching it takes a slice of more than 2^31 units, so it is observed through the comparison's result: the fallback is the exact comparison, and equal names must still match.",
+      "find": ["        Err(CompareStringOrdinalError::TooLong { .. }) => a == b,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::TooLong { .. }) => false,\n"]
+    },
+    {
+      "name": "M17.1: a failure of the call is a match",
+      "file": "src/route.rs",
+      "expect": "caught",
+      "why": "A failed comparison must never route a change to a subscription.",
+      "find": ["        Err(CompareStringOrdinalError::Call(_)) => false,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::Call(_)) => true,\n"]
+    },
+    {
+      "name": "M17.1 control: the equal result is read through a binding",
+      "file": "src/route.rs",
+      "expect": "survives",
+      "why": "A control: the same comparison through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => {\n            let equal = ordering == Ordering::Equal;\n            equal\n        }\n"]
     }
   ]
 }

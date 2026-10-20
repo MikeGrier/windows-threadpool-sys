@@ -24,9 +24,9 @@ given, reports what the call reports, and refuses ahead of the call only what th
 impossible to pass ([WT-D-2](#wt-d-2)).
 
 **Scheduled work, and none beyond it.** The crate has no checklist of its own: its one function is
-[M43.1](../../CHECKLIST.md) in the workspace plan, and the two sites that call `CompareStringOrdinal` themselves
+[M43.1](../../COMPLETED-CHECKLIST.md#m431) in the workspace plan, and the two sites that call `CompareStringOrdinal` themselves
 move to it in `SAFE-4` of [windows-file-enumeration-sys' COMPLETED-CHECKLIST.md](../windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-4)
-and `M17.1` of [windows-file-watcher's CHECKLIST.md](../windows-file-watcher/CHECKLIST.md). The other functions
+and `M17.1` of [windows-file-watcher's COMPLETED-CHECKLIST.md](../windows-file-watcher/COMPLETED-CHECKLIST.md#m171). The other functions
 the section lists, such as `CompareStringEx` and `FindStringOrdinal`, are outside the item that made the crate.
 
 ## <a id="wt-d-2"></a>WT-D-2: `compare_string_ordinal` takes two slices and a case and gives an `Ordering`, with the call's failure and the crate's one refusal as distinct errors

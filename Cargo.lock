@@ -272,6 +272,8 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "win-error-codes",
+ "win-text-sys",
  "windows-overlapped-io-sys",
  "windows-sys",
  "windows-threadpool-sys",

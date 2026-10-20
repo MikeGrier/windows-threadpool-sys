@@ -95,6 +95,10 @@ windows-overlapped-io-sys = { version = "0.3.0", path = "../windows-overlapped-i
 # own.
 windows-threadpool-sys = { version = "0.3.0", path = "../windows-threadpool-sys" }
 
+# A single-file route's case-insensitive leaf-name match (PR #20 review response): `CompareStringOrdinal`,
+# the OS's own ordinal case folding and not an ASCII-only approximation, over counted slices (M17.1).
+win-text-sys = { version = "0.0.1", path = "../win-text-sys" }
+
 # Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
 # handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them
 # in that representation end to end, so neither direction pays the WTF-8
@@ -132,10 +136,6 @@ features = [
 	# wait for notifications on its own thread pool rather than dedicating a
 	# thread to a blocking recv.
 	"Win32_System_Threading",
-	# CompareStringOrdinal (a single-file route's case-insensitive leaf-name
-	# match, PR #20 review response) -- the OS's own ordinal case folding,
-	# not an ASCII-only approximation.
-	"Win32_Globalization",
 ]
 
 # Integration tests exercise the decoder against a buffer produced by a real
@@ -146,6 +146,10 @@ features = [
 # `CreateEventW` / `CreateFileW` signatures -- declared here rather than relied on
 # transitively through `windows-threadpool-sys`.
 [dev-dependencies]
+# The code a failed comparison carries, which `route`'s tests build (M17.1). Path-only, with no `version`, so a
+# release of `win-error-codes` cannot break this crate and the published manifest leaves it out.
+win-error-codes = { path = "../win-error-codes" }
+
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Security",

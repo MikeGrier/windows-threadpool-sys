@@ -1172,3 +1172,26 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 - [x] **M15.7** -- Decided and implemented: `NOTIFY_TIMEOUT` lowered 30s -> 5s across all three copies, after measuring that 45 of 46 waits finish in <=2.5ms and the whole tail is one structural ~515ms backoff, unchanged under 4x oversubscription. One previously-timing-out mutant: 93.6s -> 31.8s. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m157)
 
 - [x] **M15.11** -- Bounded the loop in `no_wakeup_is_lost_under_a_concurrent_burst` (a bounded wait inside an unbounded loop is still an unbounded loop) and aligned `await_signal`'s budget with M15.7's. The suite-wide sweep for the same shape found no other instance. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1511)
+
+## Moved 2026-10-20 17:18:37 -04:00 -- M17: the ordinal comparison through win-text-sys
+
+### <a id="m171"></a>M17.1 -- `route.rs`'s case-insensitive comparison calls `win-text-sys`. *(completed 2026-10-20 17:18:37 -04:00)*
+
+The item as written:
+
+**`route.rs`'s case-insensitive comparison calls `win-text-sys`.** The crate's private
+  `CompareStringOrdinal` call in [route.rs](src/route.rs), the one `unsafe` block there, becomes the wrapper in the
+  new `win-text-sys` (the workspace's `M43.1`), which `windows-file-enumeration-sys` adopts in the same way. The
+  comparison's meaning, ordinal with case folded only when asked, is unchanged; the existing route tests are the
+  check.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (`win-text-sys` is created).
+
+What was done. [route.rs](src/route.rs)'s `names_match` is `compare_string_ordinal` with `Case::Sensitive` or
+`Case::Insensitive`, and `equal_from` reads the result: equal is a match, a failure of the call is not, and a name too
+long for the call's count is compared exactly. The `unsafe` block is gone, and so is the `Win32_Globalization` feature of
+`windows-sys`; `win-text-sys` is a dependency, and `win-error-codes` a path-only dev-dependency for the tests. The
+existing route tests passed unchanged. Recorded as [D-86](DESIGN-NOTES.md#d-86), which also records the one behaviour
+that changed, for a name of more than 2^31 units, and that it cannot be reached. Tests: seven new, of `names_match` in both
+modes, an interior NUL, and each result of the comparison. Evidence, in [sabotage.json](sabotage.json): five entries, all
+caught, and a control. The workspace's `M43` is complete with this and `SAFE-5` of `windows-file-enumeration-sys`.
