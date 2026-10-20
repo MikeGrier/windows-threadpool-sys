@@ -580,57 +580,28 @@ the assistant's, taken on that instruction, and stand until amended.
 - **Not decided here:** a serial port, which was not measured and which nothing rests on (above), and the open's
   documentation of [DI-D-67](#di-d-67), which is [DI-14.6.4](COMPLETED-CHECKLIST.md#di-1464).
 
-**What DI-14.12 built: what a handle answers as, asked of an observer** ([DI-14.12](COMPLETED-CHECKLIST.md#di-1412)).
-The engineer, 2026-10-18, on the assistant's sketch ("I like it, build it. We can tweak it if we don't like it"); the
-two points the sketch raised and the engineer did not rule, the variants' names and whether the result also carries a
-path, stand as built until amended.
-
-- **The shape is a type, not a function, and the opener returns nothing.** `HandleKindQuery`, built from any handle
-  by `HandleKindQuery::of` and made with `perform`, holds a share of the `SharedHandle` it is given (`QueryFileType`
-  over a clone of it), so it can be performed on any thread, more than once, and after the caller drops its own
-  share. It makes no handle, so building one cannot fail. For an opened file, volume or disk, pass its `handle()`.
-  As first built it held a duplicate, in the request crate's pattern of the time; [DI-16.1](#di-16-1) changed that.
-- **Three queries, each asked only if the one before leaves the question open.** `GetFileType`; then, for `DISK` only,
-  `IOCTL_STORAGE_GET_DEVICE_NUMBER`; then, if that answered, `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`. The result,
-  `HandleKind`, is `DiskFile`, `Volume { number, extents }`, `PhysicalDisk(number)`, `CharacterDevice`, `Pipe` or
-  `Other(FileType)`, which carries any other value as it came.
-- **The variants name what answered, and the documentation says so.** `DiskFile` is `DISK` with the storage-device
-  control refused; `Volume` is both controls answered; `PhysicalDisk` is the device-number control answered and the
-  extents control refused. Each is a name for a pattern of answers observed on one machine, and no page establishes
-  that a handle answering a pattern is the kind its variant is called: neither the Win32 nor the WDK page for
-  `IOCTL_STORAGE_GET_DEVICE_NUMBER` says which devices answer it, and the `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` page
-  names only SMB 3.0, which does not support it, and the Cluster Shared Volume File System, which does ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12), which withdrew the claim from
-  `win-volume-sys`). What the names rest on is [DI-17.2](CHECKLIST.md)'s to decide. The pages do not list the errors a
-  handle of another kind gets, so a refusal is taken as one whatever its code, and a device that refused for another
-  reason is classified as the variant its answer matches. The one error passed on and not read as a refusal is
-  out of memory, which is `win-volume-sys`'s own report that the extents reply was too large to hold.
-- **It reports and refuses nothing, and changes nothing an `OpenedFile` claims.** [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)
-  settled that. It is the classification after the open that [DI-D-67](#di-d-67) says is how a caller learns what a
-  name reached, so a caller who is responsible for it has an instrument.
-- **Observed 2026-10-18, one machine with one physical disk.** The system volume answered the device-number control with
-  type 7 and partition 4 and the extents control with one extent; `\\.\PhysicalDrive0` answered the device-number
-  control with type 7 and partition 0 and the extents control with `ERROR_INVALID_FUNCTION`. The two controls' answers are
-  what the classification rests on; the partition number is carried and is not used to tell the two apart, since
-  nothing documents what a disk's is.
-- **Not reached.** The error of `GetFileType` is not reached: the query holds a share of an open handle, which keeps it
-  open, so there is no input that makes the call fail. The sabotage that reads that failure as an unknown type is a
-  declared survivor.
+**What DI-14.12 built was withdrawn: `HandleKindQuery` and `HandleKind` are removed.**
+**Withdrawn by [DI-D-73](#di-d-73).** [DI-14.12](COMPLETED-CHECKLIST.md#di-1412) was an observer over any handle that
+asked `GetFileType`, then `IOCTL_STORAGE_GET_DEVICE_NUMBER`, then `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, and named the
+pattern of answers `DiskFile`, `Volume` or `PhysicalDisk`; the engineer approved the sketch on 2026-10-18 ("I like it,
+build it. We can tweak it if we don't like it"). What it answered with, observed on 2026-10-18 on one machine with
+one physical disk, stays as a measurement: the system volume answered the device-number control with type 7 and
+partition 4 and the extents control with one extent, and `\\.\PhysicalDrive0` answered the device-number control with
+type 7 and partition 0 and the extents control with `ERROR_INVALID_FUNCTION`.
 
 <a id="di-16-1"></a>
 **What DI-16.1 changed: the request crate is handed the handle already held** ([DI-16.1](COMPLETED-CHECKLIST.md#di-161)).
 The request crate's entries hold a `SharedHandle` ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), so
 nothing here duplicates a handle it holds to ask a question of it.
 
-- **`HandleKindQuery::of` takes `&SharedHandle` and is infallible.** It had taken any `AsHandle` and returned the
-  duplicate's error; the signature change is breaking for `win-durable-ioring`. A caller with a handle it does not
-  share wraps it in `SharedHandle::from` first.
+- **`HandleKindQuery::of` took `&SharedHandle`**, and the query was later removed ([DI-D-73](#di-d-73)).
 - **An opened file's final path is asked of the handle it holds.** `final_location` takes the `SharedHandle` and gives
   the request a clone.
 - **`OpenedVolume` and `OpenedDisk` were checked and had nothing to change**: they hold a `SharedHandle` and never hand
   one to the request crate.
-- **What is tested.** That asking an opened file's kind makes no handle: the query's handle is the same shared handle,
-  with the same raw value. A duplicate in `final_location` is not observable, since the request is made and dropped
-  inside it and only the path comes back; its sabotage is a declared survivor.
+- **What is tested.** A duplicate in `final_location` is not observable, since the request is made and dropped inside
+  it and only the path comes back; its sabotage is a declared survivor. The kind query, whose handle a caller held and
+  so could compare with the share, was the one place a duplicate was observable, and is removed.
 
 **Measured for DI-13.7: which access each disposition accepts.** Windows 11 build 26300, local NTFS, through
 the request crate's `OpenFile` (which is `CreateFileW` with nothing added), cached and unbuffered, with
@@ -879,9 +850,10 @@ So restricting the hazard to opens that follow reparse points does not separate 
 it from those that do not. The engineer, 2026-10-18, on that: "The problem is that you don't know which
 names may carry the hazard."
 
-**Why a check of the handle does not answer it.** Classifying the handle after the open
-(`GetFileType`, a device control) can say what was reached, and is how [DI-14.5](COMPLETED-CHECKLIST.md#di-145)
-judges a remote file. It cannot reach an open that has not returned.
+**Why a check of the handle does not answer it.** A check of the handle after the open can answer a documented
+question about it, as [DI-14.5](COMPLETED-CHECKLIST.md#di-145) does for a remote file. It cannot say in general what a
+name reached, which no documented call answers ([DI-D-73](#di-d-73)), and it cannot reach an open that has not
+returned.
 
 **Why no bounded open.** Read 2026-10-18: `CancelSynchronousIo` (`ms.date` 12/05/2018) and "Canceling
 Pending I/O Operations" (05/31/2018).
@@ -1145,3 +1117,36 @@ handle.
   commit that succeeds on a directory target is not a statement that the directory's entries are on stable media.
 
 **Scheduled work.** None.
+
+## <a id="di-d-73"></a>DI-D-73: there is no query for what kind of handle a handle is
+
+**What is decided.** The engineer, 2026-10-20, on the review of PR #155 and what [DI-17.2](COMPLETED-CHECKLIST.md#di-172)
+asked: "this query is a bug farm, we will never get it right because the question as stated is not answerable within
+the Windows API set as far as I know. Remove the API and if that is the only way to obtain that type, the type."
+`HandleKindQuery` and `HandleKind` are removed from `win-durable-ioring`, along with the types and the dependency that
+existed only for them. It had not been released, so nothing is withdrawn from a published version. Withdraws
+[DI-14.12](COMPLETED-CHECKLIST.md#di-1412)'s build.
+
+**Why the question has no answer.** The query turned the success or refusal of two controls into a taxonomy. Neither
+the Win32 nor the WDK page for `IOCTL_STORAGE_GET_DEVICE_NUMBER` says which devices answer it, and the page for
+`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` names only SMB 3.0, which does not support it, and the Cluster Shared Volume
+File System, which does ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)). What a handle that refuses a control is,
+no page says either. Every route that was named ended in some part of the storage stack's own word: the `device_type`
+the control reports, which both a volume and a physical disk reported as 7; the disk and volume device interfaces
+matched by device number, which is an inference over a number; or the kind recorded at the open, which is not an
+answer for a handle this crate did not open, nor for a name whose reach is the question
+([DI-D-67](#di-d-67)). The part that is documented, `GetFileType`'s five values, is the request crate's
+`QueryFileType`, and each control's own result is `win-volume-sys`'s; a caller who wants either asks it directly, and
+what the query added was the taxonomy over them, which is the part nobody can stand behind.
+
+**What stays.** `QueryFileType` in the request crate, and `storage_device_number` and `volume_disk_extents` in
+`win-volume-sys`, each of which reports one documented call's result as the call gave it. `OpenedVolume` and
+`OpenedDisk` still record what they were opened as, which is a fact of their construction and not a classification.
+`DiskExtent` stays re-exported, as `OpenedVolume::disk_extents` returns it; `StorageDeviceNumber` and `FileType` are no
+longer re-exported, because `HandleKind` was the only way this crate gave one.
+
+**Measured, and kept as measurement.** The 2026-10-18 observations of what a handle answered, recorded under
+"Measured for DI-14.6" and above, stand as measurements and are no longer the ground of anything.
+
+**Scheduled work.** None. The sabotage entries for the module, nine in `win-durable-ioring`'s manifest, are removed with
+it.

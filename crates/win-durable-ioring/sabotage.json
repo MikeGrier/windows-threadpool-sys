@@ -1831,82 +1831,10 @@
       "replace": ["    pub fn new_attested_exclusive<B: Buffering, A: HasData>(file: OpenedFile<B, A>) -> Self {\n"]
     },
     {
-      "name": "DI-14.12: a character device is read from the pipe value",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "The two values are neighbouring constants of one type, so a swap compiles; NUL then reads as a pipe.",
-      "find": ["    if file_type == FileType::CHAR {\n"],
-      "replace": ["    if file_type == FileType::PIPE {\n"]
-    },
-    {
-      "name": "DI-14.12: a handle that is not a DISK is classified as one",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "The test of the type is inverted, so a pipe or a character device falls to the storage-device control, and a file would be passed over.",
-      "find": ["    if file_type != FileType::DISK {\n"],
-      "replace": ["    if file_type == FileType::DISK {\n"]
-    },
-    {
-      "name": "DI-14.12: a volume and a physical disk are given each other's kind",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "The extents control is the one thing that tells the two apart, so reading its answer the wrong way round swaps them.",
-      "find": ["        Some(extents) => HandleKind::Volume { number, extents },\n        None => HandleKind::PhysicalDisk(number),\n"],
-      "replace": ["        Some(_) => HandleKind::PhysicalDisk(number),\n        None => HandleKind::Volume { number, extents: Vec::new() },\n"]
-    },
-    {
-      "name": "DI-14.12: the storage-device control is always taken as refused",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "A volume and a disk would both be reported as a disk file.",
-      "find": ["    let Some(number) = device_number()? else {\n"],
-      "replace": ["    let Some(number) = device_number()?.filter(|_| false) else {\n"]
-    },
-    {
-      "name": "DI-14.12: a type that is none of the named ones is reported as unknown",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "A value a later system returns would be lost, which is why the type is carried as it came.",
-      "find": ["        return Ok(HandleKind::Other(file_type));\n"],
-      "replace": ["        return Ok(HandleKind::Other(FileType::UNKNOWN));\n"]
-    },
-    {
-      "name": "DI-14.12: an out-of-memory error from a control is taken as a refusal",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "It is the extents reply being too large to hold and not the device's answer, so reading it as a refusal reports a volume as a physical disk.",
-      "find": ["        Err(error) if error.kind() == io::ErrorKind::OutOfMemory => Err(error),\n"],
-      "replace": ["        Err(error) if false && error.kind() == io::ErrorKind::OutOfMemory => Err(error),\n"]
-    },
-    {
-      "name": "DI-14.12: the type query's failure is taken as an unknown type",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "survives",
-      "why": "Declared, and not a gap a test can close: the query holds a share of an open handle, which keeps it open, so GetFileType cannot be made to fail on it, and the error path has no input. What would reach it is a handle the system revokes while the query is held, which a test does not make.",
-      "find": ["            .map_err(|error| error.to_io_error())?;\n"],
-      "replace": ["            .unwrap_or(FileType::UNKNOWN);\n"]
-    },
-    {
-      "name": "DI-16.1: asking a handle's kind duplicates it again",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "caught",
-      "why": "The query would hold a handle of its own, the pattern DI-16.1 removed; the query's handle is then a different raw value and not the same shared handle.",
-      "find": ["            file_type: QueryFileType::new(handle.clone()),\n"],
-      "replace": ["            file_type: QueryFileType::new(SharedHandle::from(std::os::windows::io::AsHandle::as_handle(handle).try_clone_to_owned().expect(\"a duplicate\"))),\n"]
-    },
-    {
-      "name": "DI-16.1 control: the query is given the shared handle by another spelling",
-      "file": "src/windows_backend/handle_kind.rs",
-      "expect": "survives",
-      "why": "Control. The same clone, spelled through the type, shares the same handle, so the test that the query makes no handle must not fire on it.",
-      "find": ["            file_type: QueryFileType::new(handle.clone()),\n"],
-      "replace": ["            file_type: QueryFileType::new(SharedHandle::clone(handle)),\n"]
-    },
-    {
       "name": "DI-16.1: the final path is asked of a duplicate",
       "file": "src/windows_backend/opened_file.rs",
       "expect": "survives",
-      "why": "Declared, and not a gap a test can close: the request is made and dropped inside final_location, which returns only the path, so a duplicate would exist only for the call and nothing outside can tell it from the share. The kind query, which a caller holds, is where a duplicate is observable, and the entry above covers it.",
+      "why": "Declared, and not a gap a test can close: the request is made and dropped inside final_location, which returns only the path, so a duplicate would exist only for the call and nothing outside can tell it from the share. The kind query that once held a share was the one place a duplicate was observable, and was removed (DI-D-73 in durable-ioring's notes).",
       "find": ["    let path = QueryFinalPath::new(handle.clone())\n"],
       "replace": ["    let path = QueryFinalPath::new(SharedHandle::from(std::os::windows::io::AsHandle::as_handle(handle).try_clone_to_owned()?))\n"]
     },

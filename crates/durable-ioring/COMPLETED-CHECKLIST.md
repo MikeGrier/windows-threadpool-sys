@@ -3555,3 +3555,28 @@ establishes. The DI-14.12 paragraph of [DESIGN-NOTES.md](DESIGN-NOTES.md) says t
 [WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12) and at `DI-17.2`, which decides what the names rest on. The
 DI-14.6 measurement note's bullet "The device-number control does [tell them apart]" stated the same claim as a rule
 and is restated as an observation too. No behaviour, name or signature changed.
+
+## Moved 2026-10-20 18:25:16 -04:00 -- DI-M17: HandleKindQuery is removed, and what a handle's kind rests on is decided
+
+### <a id="di-172"></a>DI-17.2 -- `HandleKindQuery` and `HandleKind` are removed: the question they answered has no answer in the Windows API set. *(completed 2026-10-20 18:25:16 -04:00)*
+
+The item as written:
+
+**Decide what `HandleKind`'s kind rests on** (the engineer's ruling). The
+  documented routes WV-D-12 names, each ending in some part of the storage stack's own word: the
+  device's `device_type` from the device-number control; the disk and volume device interfaces
+  (`SetupDiGetClassDevs` with `GUID_DEVINTERFACE_DISK` / `GUID_DEVINTERFACE_VOLUME`) matched by device
+  number; or the kind recorded where the handle is opened, which `OpenedVolume` and `OpenedDisk`
+  already do for handles this crate opens. Keeping the answer pattern, with names that say so, is also
+  an answer, and so is leaving it as it is for now. The implementation the ruling implies is
+  scheduled by it as a following item.
+
+The engineer, 2026-10-20: "this query is a bug farm, we will never get it right because the question as stated is not
+answerable within the Windows API set as far as I know. Remove the API and if that is the only way to obtain that
+type, the type." So the answer to the item is none of its options: the query is removed, which makes
+[DI-17.1](#di-171)'s restatement of it moot, and the work the ruling implies is done with the ruling and not scheduled.
+The module and its tests, the exports of `HandleKind` and `HandleKindQuery`, the `StorageDeviceNumber` and `FileType`
+re-exports that only it needed, the `win-pipes-sys` dev-dependency, and nine sabotage entries are deleted from
+`win-durable-ioring`. The reasoning and what stays are [DI-D-73](DESIGN-NOTES.md#di-d-73). The review's finding is
+discharged by removal: `win-volume-sys` makes no claim about what a handle is
+([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)), and nothing here makes one now.

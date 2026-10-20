@@ -75,24 +75,3 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   Microsoft assigning the handling to the application, and nothing on retention after a failed
   flush -- was gathered on 2026-10-09 and is in
   [the design session](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md#what-the-published-record-says-research-2026-10-09).
-
-## DI-M17 -- What a handle's kind rests on
-
-The review of PR #155 ([#155](https://github.com/MikeGrier/windows-threadpool-sys/pull/155)) found
-`win-volume-sys` claiming that a successful `IOCTL_STORAGE_GET_DEVICE_NUMBER` shows a volume or a disk,
-and that a successful `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` shows a local volume. No page says either.
-The engineer, 2026-10-20: "we are asserting too much based on the ioctl completing successfully". The
-claims were withdrawn there as `win-volume-sys` WV-D-12, which leaves how a consumer establishes a
-handle's kind to the consumer. `HandleKindQuery` ([DI-14.12](COMPLETED-CHECKLIST.md#di-1412)) is the
-consumer built on the withdrawn reading.
-
-- [x] **DI-17.1** -- HandleKind is restated as what was observed, and its variants as patterns of answers, not a kind any page establishes. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-171)
-
-- [ ] **DI-17.2** -- **Decide what `HandleKind`'s kind rests on** (the engineer's ruling). The
-  documented routes WV-D-12 names, each ending in some part of the storage stack's own word: the
-  device's `device_type` from the device-number control; the disk and volume device interfaces
-  (`SetupDiGetClassDevs` with `GUID_DEVINTERFACE_DISK` / `GUID_DEVINTERFACE_VOLUME`) matched by device
-  number; or the kind recorded where the handle is opened, which `OpenedVolume` and `OpenedDisk`
-  already do for handles this crate opens. Keeping the answer pattern, with names that say so, is also
-  an answer, and so is leaving it as it is for now. The implementation the ruling implies is
-  scheduled by it as a following item.

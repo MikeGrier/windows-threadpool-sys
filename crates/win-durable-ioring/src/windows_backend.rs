@@ -52,7 +52,6 @@ mod file_attributes;
 mod file_id;
 mod file_rights;
 mod file_target;
-mod handle_kind;
 mod opened_disk;
 mod opened_file;
 mod opened_volume;
@@ -73,7 +72,6 @@ pub use file_attributes::FileAttributes;
 pub use file_id::{FileId, FileIdentifier};
 pub use file_rights::FileRights;
 pub use file_target::Win32FileTarget;
-pub use handle_kind::{HandleKind, HandleKindQuery};
 pub use opened_disk::{DiskOptions, DiskPath, OpenedDisk};
 pub use opened_file::{
     Buffering, ByIdOptions, ByIdRequest, Cached, FileOptions, IdentityMismatch, OpenRequest,
@@ -84,9 +82,8 @@ pub use opened_volume::{
     OpenedVolume, VolumeOptions, VolumePath, VolumePathError, disk_flush_domain,
 };
 pub use share_mode::ShareMode;
-// The types a `HandleKind` carries, so a caller who matches on one names them from here.
-pub use win_volume_sys::{DiskExtent, StorageDeviceNumber};
-pub use windows_namespace_request_sys::FileType;
+// The type `OpenedVolume::disk_extents` returns, so a caller who matches on one names it from here.
+pub use win_volume_sys::DiskExtent;
 // The descriptor a created file is given, owned and freed by the type that built it, so a caller
 // never holds a raw pointer (DI-14.3).
 pub use win_authorization_sys::{SecurityCaptureError, SecurityDescriptor};

@@ -81,14 +81,10 @@ windows-ioring-sys = { path = "../windows-ioring-sys", features = ["kernel-seam"
 # Aligned buffers, for the tests that write to an unbuffered file, whose buffers must start on a
 # sector (DI-D-60).
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
-# The named pipe the handle-kind tests ask about (DI-14.12), made with the crate Microsoft Learn files
-# `CreateNamedPipeW` under. Path-only, with no `version`: Cargo checks a pinned version against the path
-# at every build, so a release of that crate would break this one, and a versionless dev-dependency is
-# left out of the published manifest.
-win-pipes-sys = { path = "../win-pipes-sys" }
 # A directory listing's identities, which the open by identifier is tested with (DI-15.2): the record
-# `FileIdExtdDirectoryInfo` fills, read by the crate that enumerates with it. Path-only, for the reason
-# given above.
+# `FileIdExtdDirectoryInfo` fills, read by the crate that enumerates with it. Path-only, with no `version`: Cargo checks a pinned
+# version against the path at every build, so a release of that crate would break this one, and a
+# versionless dev-dependency is left out of the published manifest.
 windows-file-enumeration-sys = { path = "../windows-file-enumeration-sys" }
 
 # A blocking push, built on the public API as a helper to use or adapt (DI-7.4, DI-D-56). Its own

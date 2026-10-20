@@ -58,7 +58,7 @@ volume or a disk answers.
 
 - [x] **WV-3.1** -- `storage_device_number`, the device type, number and partition number a volume or disk reports (`IOCTL_STORAGE_GET_DEVICE_NUMBER`), as it wrote them. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#wv-31)
 
-  **Next:** `durable-ioring`'s `DI-14.12`, which also needs `windows-namespace-request-sys`' `NR-3.9`.
+  **Next:** none. `durable-ioring`'s `DI-14.12`, which this was built for, was withdrawn ([DI-D-73](../durable-ioring/DESIGN-NOTES.md#di-d-73)); the entry stays, since it reports one documented call's result.
 
 ## M-inf -- Parked
 
