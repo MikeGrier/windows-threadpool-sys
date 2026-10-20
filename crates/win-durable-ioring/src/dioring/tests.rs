@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use win_shared_os_owned_handle::SharedHandle;
 use win_time_sys::{InterruptTime, TimePoint};
+use wtf_string::Wtf16String;
 
 use super::{DeliveryMode, Dioring, Setup, SetupError, SetupRefusal, TargetSetup};
 use crate::windows_backend::{FileOptions, OpenedFile, Win32FileTarget};
@@ -46,6 +47,8 @@ mod raw_disk;
 mod raw_volume;
 // A file opened unbuffered, through an instance: DI-D-60.
 mod unbuffered;
+// A typed key at registration and at construction: DI-13.10.
+mod keys;
 
 type Ring = Dioring<Vec<u8>>;
 type V = crate::WindowsIds<u64>;
@@ -102,6 +105,11 @@ pub(crate) fn empty() -> Ring {
         .0
 }
 
+/// `path` as the open takes it (DI-13.7.1): the caller converts, and nothing is lost.
+pub(crate) fn wtf(path: &Path) -> Wtf16String {
+    Wtf16String::from_os_str(path.as_os_str())
+}
+
 /// A temporary file, removed when dropped.
 pub(crate) struct TempFile(pub(crate) PathBuf);
 
@@ -118,7 +126,7 @@ impl TempFile {
     }
 
     pub(crate) fn open(&self) -> OpenedFile {
-        OpenedFile::open(&self.0, FileOptions::new().read(true).write(true))
+        OpenedFile::open(wtf(&self.0), FileOptions::new().read().write())
             .expect("open the temporary file")
     }
 
@@ -147,10 +155,7 @@ fn domain(name: &str) -> FlushDomain {
 }
 
 fn file(key: u64, temp: &TempFile, domains: &[&str]) -> TargetSetup {
-    TargetSetup {
-        key: IoTargetKey(key),
-        target: target(temp.open(), domains),
-    }
+    TargetSetup::new(IoTargetKey(key), target(temp.open(), domains))
 }
 
 /// A target over `file`, declared with `domains`.

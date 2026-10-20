@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod access;
 pub mod backend;
 mod clock;
 mod contract;
@@ -23,6 +24,7 @@ mod error_code;
 mod ids;
 mod io_core;
 mod io_target;
+mod key;
 pub mod memory;
 pub mod oracle;
 mod provider;
@@ -31,6 +33,9 @@ mod pump;
 mod test_support;
 mod types;
 
+pub use access::{
+    Access, CanRead, CanWrite, DataAccess, HasData, NoData, ReadOnly, ReadWrite, WriteOnly,
+};
 pub use clock::{Instant, StampClock};
 pub use contract::{
     DurableRing, EntryOf, EpochId, EpochIdOf, FailureIdOf, HandleOf, Identities, Lin, OpIdOf,
@@ -45,14 +50,15 @@ pub use io_core::{CoreActions, DuplicateDomain, DurableIoCore};
 pub use io_target::{
     Capabilities, Geometry, GeometryError, IoTarget, IoTargetDescription, WarrantyClass,
 };
+pub use key::{Key, ReadKey, TargetKey, WriteKey};
 pub use provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites, ProviderPart, ProviderRequest,
 };
 pub use pump::Waitable;
 pub use types::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry, Epoch,
-    EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
+    AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Entry,
+    Epoch, EpochState, Failed, FailureCause, FailureInfo, FlushDomain, HeldOperation, ImportScope,
     Imported, IoFault, IoTargetBusy, IoTargetKey, Leftovers, LineageBusy, LineageInfo, Marking,
     MarkingKind, OpCompletion, OpKind, Outcome, PushError, PushRefusal, ReadOptions,
     RemoveTargetError, Resolution, ResolveError, ResolveRefusal, RetireLineageError,

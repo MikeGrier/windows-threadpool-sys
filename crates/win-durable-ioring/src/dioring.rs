@@ -53,9 +53,9 @@ use durable_ioring::driver::first_repeat;
 use durable_ioring::driver::{Answer, DomainCall};
 use durable_ioring::driver::{Engine, EngineGuard};
 use durable_ioring::{
-    AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal, Epoch, EpochState,
-    FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers, LineageInfo,
-    ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
+    Access, AddTargetCause, AddTargetError, DurabilityRequest, EndLineageError, EndLineageRefusal,
+    Epoch, EpochState, FailureInfo, FlushDomain, ImportScope, Imported, IoTargetKey, Leftovers,
+    LineageInfo, ReadOptions, RemoveTargetError, Resolution, ResolveError, RetireLineageError,
     RetireLineageRefusal, SealError, Tag, UnknownLineage, WriteOptions,
 };
 use durable_ioring::{DiagnosticSink, NoDiagnostics};
@@ -65,6 +65,7 @@ use durable_ioring::{
     ProviderRequest,
 };
 use durable_ioring::{DurableRing, EntryOf, EpochId, PushResult, RegisteredBufferRing};
+use durable_ioring::{ReadKey, TargetKey, WriteKey};
 
 mod delivery;
 mod hub;
@@ -178,6 +179,34 @@ pub struct TargetSetup {
     pub key: IoTargetKey,
     /// The target: its file, and what it states, flush domains among it.
     pub target: Win32FileTarget,
+    /// The access the consumer's key declares for it, if the key was a typed one (DI-13.10).
+    /// Construction is refused with [`SetupRefusal::AccessNotCovered`] when the target states
+    /// less.
+    pub declared: Option<Access>,
+}
+
+impl TargetSetup {
+    /// `target` under `key`, which may be a [`Key<A>`](durable_ioring::Key) declaring what the
+    /// target can do, or an untyped [`IoTargetKey`], which declares nothing.
+    #[must_use]
+    pub fn new<K: TargetKey>(key: K, target: Win32FileTarget) -> Self {
+        Self {
+            key: key.untyped(),
+            declared: key.declared(),
+            target,
+        }
+    }
+
+    /// What construction refuses this target for, if it declared more than it states.
+    fn refusal(&self) -> Option<SetupRefusal> {
+        let declared = self.declared?;
+        let actual = self.target.access();
+        (!actual.covers(declared)).then_some(SetupRefusal::AccessNotCovered {
+            key: self.key,
+            declared,
+            actual,
+        })
+    }
 }
 
 /// Why construction failed.
@@ -185,6 +214,15 @@ pub struct TargetSetup {
 pub enum SetupRefusal {
     /// Two targets share a key.
     DuplicateKey(IoTargetKey),
+    /// A target's key declared more access than the target states (DI-13.10).
+    AccessNotCovered {
+        /// The key.
+        key: IoTargetKey,
+        /// What the key declared.
+        declared: Access,
+        /// What the target states.
+        actual: Access,
+    },
     /// The provider named a domain twice.
     DuplicateProviderDomain(FlushDomain),
     /// Creating the ring, making a registration, or wiring the ring's delivery failed.
@@ -322,6 +360,14 @@ where
                 provider,
             });
         }
+        if let Some(reason) = files.iter().find_map(TargetSetup::refusal) {
+            return Err(SetupError {
+                reason,
+                files,
+                buffers: Some(buffers),
+                provider,
+            });
+        }
         let provider_domains = provider.as_ref().map(|p| p.domains()).unwrap_or_default();
         if let Some(domain) = first_repeat(provider_domains.iter().cloned()) {
             return Err(SetupError {
@@ -332,8 +378,8 @@ where
             });
         }
 
-        let signals = Event::new(ResetMode::Auto, false)
-            .and_then(|readiness| Ok((readiness.try_clone()?, readiness)));
+        let signals =
+            Event::new(ResetMode::Auto, false).map(|readiness| (readiness.clone(), readiness));
         let (ready, readiness) = match signals {
             Ok(signals) => signals,
             Err(error) => {
@@ -352,13 +398,18 @@ where
             DurableIoCore::new(clock, Arc::clone(&diagnostics))
         };
         let keys: Vec<IoTargetKey> = files.iter().map(|f| f.key).collect();
+        // Kept so that a failed construction hands the files back as they were given.
+        let declarations: Vec<(IoTargetKey, Access)> = files
+            .iter()
+            .filter_map(|f| f.declared.map(|declared| (f.key, declared)))
+            .collect();
         for file in &files {
             core.add_target(file.key, file.target.describe())
                 .expect("the keys were checked unique above");
         }
         let targets = files
             .into_iter()
-            .map(|TargetSetup { key, target }| (key, target))
+            .map(|TargetSetup { key, target, .. }| (key, target))
             .collect();
         let backend = match WindowsBackend::construct(
             WindowsBackendSetup {
@@ -381,7 +432,7 @@ where
                 };
                 return Err(SetupError {
                     reason,
-                    files: setups(targets),
+                    files: setups(targets, &declarations),
                     buffers,
                     provider,
                 });
@@ -413,9 +464,11 @@ where
                 let files = keys
                     .into_iter()
                     .filter_map(|key| {
-                        backend
-                            .detach(key)
-                            .map(|target| TargetSetup { key, target })
+                        backend.detach(key).map(|target| TargetSetup {
+                            key,
+                            target,
+                            declared: declared_for(&declarations, key),
+                        })
                     })
                     .collect();
                 return Err(SetupError {
@@ -447,11 +500,25 @@ where
 }
 
 /// Targets handed back as they were given.
-fn setups(targets: Vec<(IoTargetKey, Win32FileTarget)>) -> Vec<TargetSetup> {
+fn setups(
+    targets: Vec<(IoTargetKey, Win32FileTarget)>,
+    declarations: &[(IoTargetKey, Access)],
+) -> Vec<TargetSetup> {
     targets
         .into_iter()
-        .map(|(key, target)| TargetSetup { key, target })
+        .map(|(key, target)| TargetSetup {
+            key,
+            target,
+            declared: declared_for(declarations, key),
+        })
         .collect()
+}
+
+/// What the key declared at construction, if it was a typed key.
+fn declared_for(declarations: &[(IoTargetKey, Access)], key: IoTargetKey) -> Option<Access> {
+    declarations
+        .iter()
+        .find_map(|&(given, access)| (given == key).then_some(access))
 }
 
 /// Where an instance's lineage handles report their release.
@@ -484,14 +551,20 @@ where
         self.hub.readiness()
     }
 
-    fn add_target(
+    fn add_target<T: TargetKey>(
         &mut self,
-        key: IoTargetKey,
+        declared: T,
         target: Win32FileTarget,
     ) -> Result<(), AddTargetError<Win32FileTarget>> {
+        let key = declared.untyped();
         let mut engine = self.engine();
-        if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {
-            return Err(AddTargetError { key, target });
+        let cause = if engine.core.target(key).is_some() || engine.backend.target(key).is_some() {
+            Some(AddTargetCause::KeyInUse)
+        } else {
+            declared.admitted_by(target.access()).err()
+        };
+        if let Some(cause) = cause {
+            return Err(AddTargetError { key, target, cause });
         }
         engine
             .core
@@ -516,9 +589,9 @@ where
             .expect("a target the core decided for is attached"))
     }
 
-    fn write_with(
+    fn write_with<T: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: T,
         offset: u64,
         buffer: B,
         tag: Tag<'_, Self::Ids>,
@@ -531,7 +604,7 @@ where
         let (pushed, attention) = {
             let mut engine = self.engine();
             let pushed = engine.write(
-                file,
+                file.untyped(),
                 offset,
                 SubmissionData::Owned(buffer),
                 tag.epoch(),
@@ -544,9 +617,9 @@ where
         pushed
     }
 
-    fn read_with(
+    fn read_with<T: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: T,
         offset: u64,
         buffer: B,
         context: C,
@@ -561,7 +634,7 @@ where
             // (DI-D-17).
             engine.backend.enable_owned_reads();
             let pushed = engine.read(
-                file,
+                file.untyped(),
                 offset,
                 SubmissionData::Owned(buffer),
                 context,
@@ -807,9 +880,9 @@ where
         pumped.waited.map(|_| pumped.ready)
     }
 
-    /// A duplicate of the event the thread pool sets whenever completions may be waiting, for the
+    /// A clone of the event the thread pool sets whenever completions may be waiting, for the
     /// consumer to wait on beside its own handles, and then to [`pump`](Self::pump) (DI-7.5). Each
-    /// call makes another duplicate of the one event.
+    /// call gives another clone, sharing the event's one handle.
     ///
     /// The event is the instance's own and shares nothing with the ring: it is auto-reset, so a wait
     /// takes the signal, and the consumer may set or reset it, which costs it nothing but its own
@@ -819,7 +892,6 @@ where
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] unless the instance was built with [`DeliveryMode::Signalled`].
-    /// Otherwise the duplication's: the process cannot get another handle.
     pub fn completion_signal(&self) -> io::Result<Event> {
         self.delivery
             .as_ref()
@@ -1022,9 +1094,9 @@ where
         self.engine().backend.registered_buffer_mut(i).map(f)
     }
 
-    fn write_registered_with(
+    fn write_registered_with<T: WriteKey>(
         &mut self,
-        file: IoTargetKey,
+        file: T,
         offset: u64,
         span: RegisteredSpan,
         tag: Tag<'_, Self::Ids>,
@@ -1032,7 +1104,7 @@ where
         options: WriteOptions<Self::Ids>,
     ) -> PushResult<Self> {
         self.engine().write(
-            file,
+            file.untyped(),
             offset,
             SubmissionData::Registered(region(span)),
             tag.epoch(),
@@ -1041,16 +1113,16 @@ where
         )
     }
 
-    fn read_registered_with(
+    fn read_registered_with<T: ReadKey>(
         &mut self,
-        file: IoTargetKey,
+        file: T,
         offset: u64,
         span: RegisteredSpan,
         context: C,
         options: ReadOptions<Self::Ids>,
     ) -> PushResult<Self> {
         self.engine().read(
-            file,
+            file.untyped(),
             offset,
             SubmissionData::Registered(region(span)),
             context,

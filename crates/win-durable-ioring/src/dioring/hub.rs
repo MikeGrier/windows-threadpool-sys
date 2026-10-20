@@ -72,9 +72,9 @@ where
         }
     }
 
-    /// A duplicate of the readiness event.
+    /// A clone of the readiness event, sharing its handle.
     pub(crate) fn readiness(&self) -> io::Result<Event> {
-        self.readiness.try_clone()
+        Ok(self.readiness.clone())
     }
 
     /// Entries became poppable where there were none: set the readiness event (DI-D-28). Called

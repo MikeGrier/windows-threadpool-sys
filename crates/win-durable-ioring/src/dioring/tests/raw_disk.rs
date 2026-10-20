@@ -14,8 +14,9 @@
 //! once and cannot be disk 0 ([`crate::scratch_volume::associated_disk`]), and every write is to
 //! that number. A test never names a disk number of its own.
 
-use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::windows::io::AsHandle;
 use std::time::{Duration, Instant};
 
 use io_buffers::AlignedBuf;
@@ -24,7 +25,8 @@ use super::QUEUE;
 use crate::dioring::{DeliveryMode, Dioring, Setup, TargetSetup};
 use crate::scratch_volume::ScratchDisk;
 use crate::windows_backend::{
-    DiskPath, OpenedDisk, Unbuffered, Win32FileTarget, disk_flush_domain,
+    DiskOptions, DiskPath, OpenedDisk, ReadOnly, ShareMode, SharingViolation, Unbuffered,
+    Win32FileTarget, disk_flush_domain,
 };
 use durable_ioring::backend::RefusalCause;
 use durable_ioring::{
@@ -42,10 +44,7 @@ fn raw_instance(disk: OpenedDisk<Unbuffered>) -> (DiskRing, LineageHandle) {
     DiskRing::new(Setup {
         submission_queue_size: QUEUE,
         completion_queue_size: QUEUE,
-        files: vec![TargetSetup {
-            key: DISK,
-            target: Win32FileTarget::from_disk(disk),
-        }],
+        files: vec![TargetSetup::new(DISK, Win32FileTarget::from_disk(disk))],
         buffers: Vec::<Vec<u8>>::new(),
         provider: None,
         diagnostics: None,
@@ -89,8 +88,62 @@ fn read_back(disk_number: u32, offset: u64, length: usize) -> Vec<u8> {
 }
 
 fn open(scratch: &ScratchDisk) -> OpenedDisk<Unbuffered> {
-    OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()))
+    OpenedDisk::<Unbuffered>::open(DiskPath::number(scratch.disk_number()), DiskOptions::new())
         .expect("open the scratch disk")
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn an_exclusive_raw_disk_refuses_a_second_open_until_it_closes() {
+    let scratch = ScratchDisk::create(MEGABYTES).expect("a scratch disk");
+    let path = DiskPath::number(scratch.disk_number());
+    let exclusive = OpenedDisk::<Unbuffered>::open(path, DiskOptions::new().share(ShareMode::NONE))
+        .expect("open exclusively");
+    let refused = OpenedDisk::<Unbuffered>::open(path, DiskOptions::new())
+        .expect_err("an exclusive open is open");
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::ResourceBusy,
+        "{refused}"
+    );
+    assert!(
+        refused
+            .get_ref()
+            .is_some_and(|inner| inner.is::<SharingViolation>()),
+        "{refused}"
+    );
+    drop(exclusive);
+    OpenedDisk::<Unbuffered>::open(path, DiskOptions::new()).expect("nothing holds the disk now");
+}
+
+#[test]
+#[ignore = "needs an administrator: creates and attaches a virtual disk"]
+fn a_raw_disk_opened_for_reading_only_reads_and_is_refused_a_write_by_the_kernel() {
+    let scratch = ScratchDisk::create(MEGABYTES).expect("a scratch disk");
+    let disk = OpenedDisk::<Unbuffered, ReadOnly>::open(
+        DiskPath::number(scratch.disk_number()),
+        DiskOptions::new(),
+    )
+    .expect("open the scratch disk for reading only");
+    let sector = disk.geometry().offset_alignment() as usize;
+    let mut through = File::from(disk.as_handle().try_clone_to_owned().expect("duplicate"));
+
+    let mut buffer = AlignedBuf::zeroed(sector, sector).expect("an aligned buffer");
+    through
+        .read_exact(buffer.as_mut_slice())
+        .expect("a read of the first sector");
+    let refused = through
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| through.write_all(sector_of(1, sector).as_slice()));
+    assert_eq!(
+        refused
+            .expect_err("a write the access does not cover")
+            .raw_os_error(),
+        Some(5),
+        "ERROR_ACCESS_DENIED"
+    );
+    // A disk opened for reading only still has a data right, so it is a target.
+    let _target = Win32FileTarget::from_disk(disk);
 }
 
 #[test]

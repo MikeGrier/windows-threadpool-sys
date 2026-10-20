@@ -376,7 +376,7 @@ The decision is [DI-D-17](DESIGN-NOTES.md#di-d-17), and the authoritative text i
 
 The decision is [DI-D-18](DESIGN-NOTES.md#di-d-18). The item as it stood at completion, with each point's outcome, follows verbatim. Point 11's prerequisite moved to `DI-3+.2` on the engineer's agreement: the design binds to the contract `M31.1` states, and the first code that relies on it is `DI-3+.2`.
 
-- [ ] **DI-2.3** -- **Completion routing under Model A and Model B.** The two delivery
+- [x] **DI-2.3** -- **Completion routing under Model A and Model B.** The two delivery
   architectures `windows-ioring-sys` supports ([D-3](../windows-ioring-sys/DESIGN-NOTES.md#d-3)):
   **Model A, threadless dispatch**, is the thread pool's -- the ring's completion event is wired to
   a pool wait (`EventDelivery`), and a pool thread runs a callback when completions arrive, so no
@@ -442,7 +442,7 @@ The decision is [DI-D-18](DESIGN-NOTES.md#di-d-18). The item as it stood at comp
 
 The decision is [DI-D-19](DESIGN-NOTES.md#di-d-19), whose closing summary states the settled specifics, and the authoritative text is [API.md](API.md) section 12. Point 8's outcome is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose specifics continue as `DI-2.10`. The item as it stood at completion follows verbatim, including point 1's superseded answer and point 5's correction.
 
-- [ ] **DI-2.9** -- **Durability lineages: the specifics** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
+- [x] **DI-2.9** -- **Durability lineages: the specifics** ([DI-D-19](DESIGN-NOTES.md#di-d-19)).
   Lineages are adopted as the normal way to get independent durability within one instance; this
   item settles how they work. Working position from the session (not decided):
 
@@ -541,7 +541,7 @@ The decision is [DI-D-19](DESIGN-NOTES.md#di-d-19), whose closing summary states
 
 The decision is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose closing summary states the settled specifics, and the authoritative text is [API.md](API.md) section 13 and [CONTRACT.md](CONTRACT.md)'s failures section and requirements. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.10** -- **Caller-declared flush domains: the specifics**
+- [x] **DI-2.10** -- **Caller-declared flush domains: the specifics**
   ([DI-D-21](DESIGN-NOTES.md#di-d-21)). Graduated from the parked `DI-6+.2`, whose concept and
   handover are recorded at `M33+.5` in [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md).
   Reworked 2026-10-06 from "one declared regime per file" to **a set of flush domains per file**.
@@ -604,7 +604,7 @@ The decision is [DI-D-21](DESIGN-NOTES.md#di-d-21), whose closing summary states
 
 The decisions are [DI-D-22](DESIGN-NOTES.md#di-d-22) (completion-gated flushes only) and [DI-D-23](DESIGN-NOTES.md#di-d-23) (gate cycles detected); the contract change is [CONTRACT.md](CONTRACT.md)'s non-guarantee `Nothing about writes outside the seal`. Point 2 moved to DI-2.12, point 3's optimization is DI-6+.7, and the redefinition of `covered` that point 5 surfaced is DI-2.12 point 9. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.4** -- **Multi-file epochs.** The set of files each epoch wrote, and how
+- [x] **DI-2.4** -- **Multi-file epochs.** The set of files each epoch wrote, and how
   `make_durable_through(n)` over epochs that touched N files is done: a chain of N covering flushes
   (serialised device flushes, and a barrier that also waits on writes of still-open epochs above
   `n`) or host sequencing (observe only the writes tagged at or below `n`, then N unordered flushes
@@ -691,7 +691,7 @@ The decisions are [DI-D-22](DESIGN-NOTES.md#di-d-22) (completion-gated flushes o
 
 The decision is [DI-D-24](DESIGN-NOTES.md#di-d-24). The readiness signal's form and wake-up rules continue as DI-2.14, restating [API.md](API.md) as the trait is DI-2.15, and the conformance oracle is DI-3+.7. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.5** -- **A trait or a concrete type first.** The contract is something layers above may
+- [x] **DI-2.5** -- **A trait or a concrete type first.** The contract is something layers above may
   implement as well as consume; decide whether it is a trait from the start, or a concrete type
   until the fault-injecting implementation (DI-3+.3) gives a second implementation to extract one
   from.
@@ -730,7 +730,7 @@ The decision is [DI-D-24](DESIGN-NOTES.md#di-d-24). The readiness signal's form 
 
 The authoritative text is [API.md](API.md) section 11 (`WriteOptions::caching`, no consumer flush). The completion fence is parked as DI-6+.8, and per-operation cancel stays parked as DI-6+.4. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.6** -- **The operation set.** Reads go through the ring and are not epoch members;
+- [x] **DI-2.6** -- **The operation set.** Reads go through the ring and are not epoch members;
   tagged writes; `make_durable_through`. No consumer operation may interfere with dioring's control
   of the ring ([DI-D-10](DESIGN-NOTES.md#di-d-10)), so what remains open is which *mediated*
   operations dioring offers. **Cancel: the engineer leans towards not offering it in v1**, because
@@ -764,7 +764,7 @@ The authoritative text is [API.md](API.md) section 11 (`WriteOptions::caching`, 
 
 The decision is [DI-D-25](DESIGN-NOTES.md#di-d-25); the authoritative text is [CONTRACT.md](CONTRACT.md)'s `Ending an instance` and [API.md](API.md) section 14. Ending a lineage, which need not wait, continues under DI-2.13. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.7** -- **Review what dropping a dioring instance means.** Raised by the engineer while
+- [x] **DI-2.7** -- **Review what dropping a dioring instance means.** Raised by the engineer while
   approving DI-1.2 Q3 ("I suspect none but something that should be reviewed"). Points to settle,
   each with the assistant's first view:
 
@@ -858,7 +858,7 @@ The decision is [DI-D-25](DESIGN-NOTES.md#di-d-25); the authoritative text is [C
 
 The decision is [DI-D-26](DESIGN-NOTES.md#di-d-26). What each event names, the time base, the provider's name and GUID, and installing the manifest continue as DI-3+.6. The ring crate's `M31+.1` was queued and withdrawn during this item. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.11** -- **ETW events for delays.** The engineer, 2026-10-06: "delays are inevitable
+- [x] **DI-2.11** -- **ETW events for delays.** The engineer, 2026-10-06: "delays are inevitable
   with shared resources. we should plan for etw logging for delays." Lineages and instances share
   submission-queue capacity, the deliverer, dioring's lock and (under Model B) a thread, so a seal
   can be delayed by work it has no durability relation to; the remedy is to make every such delay
@@ -928,7 +928,7 @@ The decision is [DI-D-26](DESIGN-NOTES.md#di-d-26). What each event names, the t
 
 The decision is [DI-D-27](DESIGN-NOTES.md#di-d-27). Points 2-9 were the assistant's stances, approved together by the engineer ("seems right, let's move on"). Writing them into [CONTRACT.md](CONTRACT.md) and [API.md](API.md) is DI-2.16; the router is DI-3+.8; the default provider's optimizations are DI-6+.6. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.12** -- **The durability provider.** From DI-2.4 point 2. The engineer first proposed
+- [x] **DI-2.12** -- **The durability provider.** From DI-2.4 point 2. The engineer first proposed
   registered domains and a three-phase flush session, so that coupled domains with different names
   could minimise the physical flush count. Reshaped 2026-10-06 after the assistant's feedback that
   per-domain participants and a session protocol add back the coupling they were meant to remove
@@ -1029,7 +1029,7 @@ The decision is [DI-D-27](DESIGN-NOTES.md#di-d-27). Points 2-9 were the assistan
 
 The decision is [DI-D-28](DESIGN-NOTES.md#di-d-28). Stating the wake-up rules in [CONTRACT.md](CONTRACT.md) and the signal in [API.md](API.md) is DI-2.16; the harness check is DI-3+.7. Point 5 went against the assistant's stance, and point 4's first stance is superseded in place. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.14** -- **The readiness signal: form and wake-up rules.** From DI-2.5 point 4: the trait
+- [x] **DI-2.14** -- **The readiness signal: form and wake-up rules.** From DI-2.5 point 4: the trait
   carries a signal set whenever an entry becomes available, from any source, so Model A and Model
   B are written once over the trait. To settle, and to state in CONTRACT.md rather than leave to
   each implementation:
@@ -1071,7 +1071,7 @@ The decision is [DI-D-28](DESIGN-NOTES.md#di-d-28). Stating the wake-up rules in
 
 The authoritative text is [CONTRACT.md](CONTRACT.md) (Terms `Durability provider` and `Covered`; guarantee 4; the non-guarantees on writes outside the seal, on what a commit waits for, and on timeouts; the provider warranty; `How a seal is made durable`; per-domain failure reach; `The readiness signal`) and [API.md](API.md) sections 15 and 16 with the sketch. Two restatements outside the item's list were corrected in the same sweep: guarantee 4's `never a silent stall` (with an amendment marker on [DI-D-13](DESIGN-NOTES.md#di-d-13)), and `No bound on what a commit waits for`, which still described the ring barrier DI-D-22 had removed. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.16** -- **Write the durability provider into [CONTRACT.md](CONTRACT.md) and
+- [x] **DI-2.16** -- **Write the durability provider into [CONTRACT.md](CONTRACT.md) and
   [API.md](API.md)** ([DI-D-27](DESIGN-NOTES.md#di-d-27)). CONTRACT.md: redefine "Covered" in
   Terms; restate DI-D-9 rule (c)'s incidental coverage; add the per-domain failure scope beside
   DI-D-21's rule; add the provider's success warranty to the consumer's requirements; state that a
@@ -1089,7 +1089,7 @@ The authoritative text is [CONTRACT.md](CONTRACT.md) (Terms `Durability provider
 
 The authoritative text is [API.md](API.md) section 17 and its sketch. One consequence was forced rather than chosen and is recorded as a refinement on [DI-D-24](DESIGN-NOTES.md#di-d-24): `Epoch` and every shared type that carries an identity is generic over one `Identities` bundle, because an epoch holds a lineage. The readiness signal is `readiness()` rather than a placeholder, DI-2.14 having settled its form. Renaming the concrete type to `Dioring` and the signal's move to dioring's own event left markers on DI-D-15, DI-D-17 and DI-D-18. One open question surfaced and is DI-2.17. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.15** -- **Restate [API.md](API.md) as the trait** ([DI-D-24](DESIGN-NOTES.md#di-d-24)).
+- [x] **DI-2.15** -- **Restate [API.md](API.md) as the trait** ([DI-D-24](DESIGN-NOTES.md#di-d-24)).
   The sketch becomes a core trait with associated identity types and a registered-buffer extension
   trait, `DurableRing` becomes dioring's implementation of both, and the prose sections that name
   concrete types are updated to match. The readiness signal is a placeholder until DI-2.14 settles
@@ -1101,7 +1101,7 @@ The authoritative text is [API.md](API.md) section 17 and its sketch. One conseq
 
 The decision, with the list of features such a type has, is [DI-D-29](DESIGN-NOTES.md#di-d-29); the type is in [API.md](API.md)'s sketch and section 17. The engineer asked whether a canonical type existed and, assuming not, for one of the crate's own: none fits -- `std::fs::File` is not cheap to share, the ring's `SharedFile` exposes no handle (so a provider could not flush it out of band), and the namespace crate's `CapturedHandle` owns a duplicate. Handing the ring the same handle needs `windows-ioring-sys` `M31.3`, added to DI-3+.2's prerequisite. The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.17** -- **Does the contract own its file type?** Found while restating the API as the
+- [x] **DI-2.17** -- **Does the contract own its file type?** Found while restating the API as the
   trait (DI-2.15): the core trait names `windows-ioring-sys`' `SharedFile` in `add_file`,
   `remove_file` and `FileWrites`, so every implementation depends on the ring crate for that one
   type -- unlike `WriteCaching`, which the contract owns for exactly that reason (DI-2.6). Either
@@ -1114,7 +1114,7 @@ The decision, with the list of features such a type has, is [DI-D-29](DESIGN-NOT
 
 The decision is [DI-D-30](DESIGN-NOTES.md#di-d-30); the authoritative text is [CONTRACT.md](CONTRACT.md) `Ending a lineage` and [API.md](API.md) section 18 (`end_lineage`, `EndLineageError`, `Entry::LineageEnded`), compile-checked. The engineer approved the assistant's six stances together ("close it"). The item as it stood at completion follows verbatim.
 
-- [ ] **DI-2.13** -- **A lineage its holder will not finish.** Raised with DI-2.4 point 4; the
+- [x] **DI-2.13** -- **A lineage its holder will not finish.** Raised with DI-2.4 point 4; the
   engineer, 2026-10-06: "We may need to implementation cancellation just in general but only because
   somewhere along the line the holder of a lineage may decide not to finish it for whatever reason."
   Working position, hedged as the engineer hedged it -- whether v1 needs it is itself open:
@@ -1127,7 +1127,7 @@ The decision is [DI-D-30](DESIGN-NOTES.md#di-d-30); the authoritative text is [C
   3. [x] **Other lineages' gates on it.** The hard part: a gate in another lineage naming an epoch
      that will now never be durable can never release. Those writes must end -- refused, or reported
      never issued -- rather than wait forever, and this is the case cycle detection cannot see.
-  4. [x] **Relation to cancel.** Not operation cancel, which [DI-6+.4](CHECKLIST.md) parks; this is
+  4. [x] **Relation to cancel.** Not operation cancel, which [DI-6+.4](PARKED.md) parks; this is
      cancelling a lineage's future. Whether the two share a mechanism is open.
   5. [x] **Ending a lineage does not wait.** The engineer, 2026-10-06: shutting down a lineage "does
      not have to wait because there is not a lifetime issue and there is not a dependency around
@@ -1226,6 +1226,7 @@ Two findings. The kernel accepts queue sizes of zero, so ring creation is refuse
 and a zero-length buffer both registered -- so those error paths are unreached by tests;
 [dioring.rs](src/dioring.rs) says what would reach them, and [sabotage.json](sabotage.json) records
 it. Six sabotages, each caught, and a control that survives.
+
 ## Moved 2026-10-07 19:18:33 -04:00 -- DI-3.2.2.1: plain I/O and the shared delivery
 
 ### <a id="di-3221"></a>DI-3.2.2.1 -- Plain I/O and the delivery every front end shares: pushes, `pop`, the readiness `Event`, and the conformance oracle with its readiness check. *(completed 2026-10-07 19:18:33 -04:00)*
@@ -2250,7 +2251,7 @@ what is left for it. The assistant's choices are queued in `DI-9.7`.
 
 The item as it stood at completion:
 
-- [ ] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
+- [x] **DI-8.1** -- **The core's tests made portable, while still in one crate.** They read
   interrupt time and Windows faults today, so they move to a portable mock clock and fault, which
   the split needs: once `durable-ioring` has no Windows dependency, they could not build.
 
@@ -2280,7 +2281,7 @@ its own crate, and the core's runs both, because the driver's tests also pin the
 
 The item as it stood at completion:
 
-- [ ] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
+- [x] **DI-8.2** -- **The split**: `win-durable-ioring` created and registered for release, holding
   the driver, the Windows backend and file target, `ErrorCode`'s reading from an `io::Error`, the
   readiness `Event`, the interrupt clock, the oracle's readiness check, and `DioringIds`' default
   time type; `durable-ioring` left with no Windows dependency. CONTRACT.md's worked examples drive
@@ -2304,7 +2305,7 @@ they are, and a failure there is the item's finding, not a regression in the spl
 
 The item as it stood at completion:
 
-- [ ] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
+- [x] **DI-8.3** -- **`durable-ioring` added to CI's `portable` job**, so its non-Windows build,
   tests and lints are checked on Linux and macOS, as [DEVELOPMENT.md](../../DEVELOPMENT.md)
   describes for a crate with a portable core.
 
@@ -2772,7 +2773,7 @@ Done by the assistant, as the item was its own. Of the gaps the Windows driver's
 - **Not covered, with what would cover them:** the wait ending *abandoned* needs a mutex to abandon, which
   is [WS-1+.3](../win-sync-sys/CHECKLIST.md); and the creation failures (events, thread-pool waits,
   duplicating the notification) need a fault seam in `win-sync-sys` and `windows-threadpool-sys`. Both are
-  parked as [DI-6+.10](CHECKLIST.md), and the manifest's `notCoveredHere` says each.
+  parked as [DI-6+.10](PARKED.md), and the manifest's `notCoveredHere` says each.
 
 Changed in `win-durable-ioring`: a test-only [held_pool.rs](../win-durable-ioring/src/held_pool.rs), four
 tests, and the manifest.
@@ -2838,6 +2839,7 @@ of [DI-D-46](DESIGN-NOTES.md#di-d-46): a panic is for a programming error, never
   panics; no test can reach it, since making one needs `unsafe`, so the manifest's `notCoveredHere` says so.
 - The manifest's `notCoveredHere` no longer says a failing pop and a full submission queue are
   untestable: a failing pop is reached through the ring crate's call responder, and a push no longer submits.
+
 ### <a id="di-7+4"></a>DI-7+.4 -- Model A's handler is told when the instance's pop fails, and the in-memory backend refuses what it cannot hold. *(completed 2026-10-14 18:04:18 -04:00)*
 
 From the second round of the review of [PR 126](https://github.com/MikeGrier/windows-threadpool-sys/pull/126).
@@ -2854,6 +2856,7 @@ From the second round of the review of [PR 126](https://github.com/MikeGrier/win
   panics if an operation is queued or a completion is waiting, since replacing the buffers would
   invalidate a region it names, a caller's programming error ([DI-D-59](DESIGN-NOTES.md#di-d-59)). Three
   sabotage entries.
+
 ## Moved 2026-10-14 19:26:34 -04:00 -- DI-9.8.2: the portable job's first CI run
 
 ### <a id="di-982"></a>DI-9.8.2 -- The portable CI job's first run is read: the crate's tests run on Linux and macOS. *(completed 2026-10-14 19:26:34 -04:00)*
@@ -2911,3 +2914,620 @@ The sabotage entry that masked a Win32 code to sixteen bits left the core's mani
 covered; the rule is covered by `win-error-codes`' own entries, and `win-durable-ioring`'s manifest
 gained entries for the three ways its helpers can go wrong, with a control. The tests that pinned
 the three facts moved with the helpers and gained one that the wrapping agrees with `HResult`.
+
+## Moved 2026-10-16 18:40:00 -04:00 -- DI-13.1, DI-13.5 and DI-13.6: the open surface written down, and the request crate's release taken
+
+### <a id="di-131"></a>DI-13.1 -- The open surface, written down as a table over every parameter of the open calls, with the engineer's rulings (a) to (g). *(completed 2026-10-16 18:40:00 -04:00)*
+
+The table, its sources, what was not verified and the calls awaiting the engineer's confirmation are
+[DI-D-64](DESIGN-NOTES.md#di-d-64). The rulings of 2026-10-15 are in its Ruling column. The
+rulings of 2026-10-16, recorded here because the checklist item that carried them is archived:
+
+- (a) `open` takes a `Wtf16String` only; the caller converts. Passing an empty path to Win32 was
+  proposed with it and not separately ruled.
+- (b) The only check before the open is syntactic, on the path handed to Win32, and only for the forms
+  a string alone shows remote (UNC and verbatim UNC): no drive-type query and nothing that opens the
+  path. Every other validation is made on the opened handle, so an unbuffered create refused there has
+  already created the file, which is documented and not prevented.
+- (c) Nothing refuses a path for being able to block. A blocking `CreateFileW` is answered by the
+  request crate: a request is built on one thread and performed on another, and `open` becomes that
+  two-phase shape (`DI-13.7`). Whether `CancelSynchronousIo` interrupts a create changes nothing in the
+  design; the engineer expects it cannot.
+- (d) What an `OpenedFile` claims when its path names a device is measured before anything is decided,
+  as part of `DI-14.6`.
+- (e) The assistant's recommendation, adopted: `CaptureSet`-style typed sets for rights, share mode
+  and attributes, an enum for the disposition, builder methods for flags, and `create`, `create_new` and
+  `truncate` removed outright, a breaking change to `win-durable-ioring` that ships as a new minor.
+- (f) A cache hint on an unbuffered file is passed through and documented, not refused (`DI-14.1`).
+- (g) The evidence-only test of the ring on an overlapped handle is `DI-14.7`.
+
+### <a id="di-135"></a>DI-13.5 -- `SecurityDescriptor` from SDDL, taken from `windows-namespace-request-sys`. *(completed 2026-10-16 18:40:00 -04:00)*
+
+Done when this crate depends on the release that carries the constructor. `win-durable-ioring`
+depends on `windows-namespace-request-sys` 0.4.0, and that release's tag carries
+`SecurityDescriptor::from_sddl` and `to_sddl` (`NR-3.1`), checked against the tag's source on
+2026-10-16. `DI-14.3` uses it.
+
+### <a id="di-136"></a>DI-13.6 -- A `ReOpenFile` entry, taken from `windows-namespace-request-sys`. *(completed 2026-10-16 18:40:00 -04:00)*
+
+As `DI-13.5`: the same release's tag carries the `ReOpenFile` entry (`NR-3.2`), checked against the
+tag's source on 2026-10-16. `DI-15.4` uses it.
+
+## Moved 2026-10-16 19:57:37 -04:00 -- DI-14.1: cache hints
+
+### <a id="di-141"></a>DI-14.1 -- Cache hints: `FILE_FLAG_RANDOM_ACCESS` and `FILE_FLAG_SEQUENTIAL_SCAN` are builder methods on `FileOptions`, passed to a cached and an unbuffered file alike. *(completed 2026-10-16 19:57:37 -04:00)*
+
+`FileOptions::random_access` and `FileOptions::sequential_scan` add their flag to what the buffering
+mode and the options already imply, and never refuse. The ruling that a hint is passed to an unbuffered
+file and documented there ([DI-13.1](COMPLETED-CHECKLIST.md#di-131) (f)) is what the methods' own
+documentation says, with the measurement: every combination of the two hints, cached and unbuffered,
+opens and carries a sector-aligned write and read, an unbuffered one also through the ring, on Windows
+11 build 26300. Whether a hint changes the system's caching was not measured. A hint changes neither
+the class, the alignment nor what a target offers, which a test reads off the target made from each
+file. Five sabotage entries in `win-durable-ioring`, including a control, cover the flag, the pair, the
+flags the mode opens with, and a refusal on an unbuffered file. Handle-level `FILE_FLAG_WRITE_THROUGH`
+stays out of v1, and the per-write flag's error 509 on a cached handle is the test that was already
+kept.
+
+### <a id="di-133"></a>DI-13.3 -- Access is a typed set of named rights, `FileRights`, with no raw `u32`; a file target needs a data right, checked when it is opened. *(completed 2026-10-16 20:22:03 -04:00)*
+
+`FileOptions::access` takes a `FileRights`, joined with `|`, in place of the `read` and `write`
+booleans, which are removed. The set holds the documented file rights and the generic ones, per
+[DI-D-64](DESIGN-NOTES.md#di-d-64); there is no constructor from a raw mask and no member for
+`FILE_APPEND_DATA` alone, so append-only access cannot be asked for. An open with no data right is
+refused as invalid input before any call is made; what the file's security allows is the kernel's to
+say, and a right it refuses reaches the caller as its error. Tests open each right and have the kernel
+judge the operation it does and does not cover. Measured: an unbuffered open of `FILE_ALL_ACCESS` is
+refused with `ERROR_INVALID_PARAMETER`, which is recorded in the `DI-D-64` row for the generic rights
+and on the constant. Six sabotage entries, including a control, are in `win-durable-ioring`.
+
+### <a id="di-138"></a>DI-13.8 -- Data access is the type parameter `A` of `OpenedFile`, `OpenedDisk` and `OpenedVolume`, and `FileRights` keeps only the rest. *(completed 2026-10-16 21:15:29 -04:00)*
+
+The engineer's ruling of 2026-10-16, [DI-D-65](DESIGN-NOTES.md#di-d-65), which holds the types, where the
+line between the type and the rights set falls, and what building it settled. `FileOptions<A>` moves `A`
+with `read()` and `write()`; the three opened types carry it, and a disk and a volume can be opened for
+reading only; `Win32FileTarget::new`, `from_disk` and `from_volume` take `A: HasData`. `FileRights` lost
+the data rights, the generic constants and `ALL_ACCESS`. Ten sabotage entries, two of them controls; a
+`compile_fail` doctest for each refusal; and a read-only test for a raw disk and a raw volume that runs
+in CI, since it needs an administrator. A transition that leaves a marker where it was changes a type, so
+its detection is a compile error and not a sabotage entry.
+
+### <a id="di-139"></a>DI-13.9 -- `IoTarget` states its data access, and the core refuses what the access does not cover. *(completed 2026-10-16 21:46:00 -04:00)*
+
+The engineer's ruling of 2026-10-16, layer 1 of [DI-D-66](DESIGN-NOTES.md#di-d-66). The markers moved to
+`durable-ioring`; `IoTarget::access` is required with no default, `IoTargetDescription` carries it, and
+`RefusalCause::AccessDenied` is a permission-denied fault. Both backends refuse a write to a target that
+cannot write and a read from one that cannot read at the push, after the unknown-target check and before
+geometry; a commit has no rule. `Win32FileTarget` states the access of its marker. What a marker asks of
+Win32 is a function over the core's `READ` and `WRITE`, not a trait, so the Windows crate adds nothing the
+core must know. Nine sabotage entries in `durable-ioring` and seven in `win-durable-ioring`, each set
+with a control. The read-only raw disk and volume tests run only in CI, and the stated access of a disk
+and a volume is pinned locally by assembled targets.
+
+### <a id="di-1310"></a>DI-13.10 -- A typed `Key<A>` carries the access to the ring's submit methods. *(completed 2026-10-16 22:08:00 -04:00)*
+
+Layer 2 of [DI-D-66](DESIGN-NOTES.md#di-d-66), which holds the types and what building them settled.
+`Key<A: HasData>` is an `IoTargetKey` with a declaration; a sealed `TargetKey` is what registration takes,
+and `WriteKey` and `ReadKey` over it are what the four submit methods and the four registered-buffer
+methods take, so a write through a `Key<ReadOnly>` does not compile and an untyped key is judged at the
+push. `add_target` and construction refuse a key that declares more than its target states, with the
+target or every file handed back; `AddTargetError` gained a `cause` and `TargetSetup` gained `declared`.
+Five sabotage entries in `durable-ioring` and five in `win-durable-ioring`, each set with a control, and
+`compile_fail` doctests on `WriteKey` and `ReadKey`.
+
+### <a id="di-134"></a>DI-13.4 -- Share mode as a typed set, with a sharing violation as a typed error. *(completed 2026-10-16 22:40:00 -04:00)*
+
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s `dwShareMode` row, and its "What building DI-13.4 settled", which holds the
+decisions. `ShareMode` is a set of `READ`, `WRITE` and `DELETE`; `FileOptions::share` takes it and the
+default stays all three. A conflict is a `SharingViolation`, kind `ResourceBusy`, naming what this open
+asked for and keeping the kernel's error as its source; the kernel does not say which side conflicted. All
+576 pairs of opens over the three accesses and eight modes are tested against the documented rule.
+Twelve sabotage entries, one a control. `DI-13.11` carries the volume and the disk.
+
+### <a id="di-1311"></a>DI-13.11 -- A share mode for `OpenedVolume` and `OpenedDisk`, through one device open. *(completed 2026-10-16 23:05:00 -04:00)*
+
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-13.11 settled". `VolumeOptions::share` and a new
+`DiskOptions` take the `ShareMode` of `DI-13.4`, and a conflict is its `SharingViolation`. Both opens are
+`raw_open::open`, tried on a file against the documented rule. The two exclusive tests run only in CI and
+are unrun; `DI-13.12` carries them and the lock. Nine sabotage entries caught, three expected to survive.
+
+### <a id="di-1312"></a>DI-13.12 -- The exclusive-volume and exclusive-disk tests run elevated, and the lock measured against the share mode. *(completed 2026-10-16 23:20:00 -04:00)*
+
+Run through `sudo` on 2026-10-16; the findings are in [DI-D-64](DESIGN-NOTES.md#di-d-64). Both exclusive
+tests pass and each wiring mutated to ignore its options fails its test; a locked volume refuses a data
+open as access denied whatever the share mode. The two `survives` entries stay, as the sweep runs no ignored test.
+
+### <a id="di-1371"></a>DI-13.7.1 -- The path is handed over as the caller gave it, a `Wtf16String`. *(completed 2026-10-16 23:30:00 -04:00)*
+
+Commit `5ac36393`. `OpenedFile::open` takes a `Wtf16String` and nothing is lengthened, shortened or refused:
+a path past `MAX_PATH` without a verbatim prefix and an empty one are `CreateFileW`'s to answer. Converting a
+`Path` is `Wtf16String::from_os_str`, re-exported at the crate root. The `DI-13.2` long-path sabotage entry is
+replaced by one that shows the path reaches the request unaltered, with a `survives` control.
+
+### <a id="di-1373"></a>DI-13.7.3 -- The disposition is Win32's own, an enum, and `FILE_FLAG_OPEN_REPARSE_POINT` is an explicit option. *(completed 2026-10-17 00:27:16 -04:00)*
+
+Commit `dfdecb8a`; the ruling is [DI-D-64](DESIGN-NOTES.md#di-d-64)'s `dwCreationDisposition` row.
+`Disposition` is `CreateNew`, `OpenExisting` (the default) or `OpenAlways`, `#[non_exhaustive]`, and
+`FileOptions::disposition` replaces `create`, `create_new` and `truncate`. `FileOptions::open_reparse_point`
+sets the flag, which a new-file open no longer sets itself. Deleted: `truncate_after`, the `OPEN_ALWAYS` plus
+`set_len(0)` stand-in and the refusal of a create without the right to write, so `parameters()` is infallible.
+Tests open each disposition against a present and an absent file for each typed access, and make a link to
+show a new file is created through it unless the option is set; the link test is skipped where a symbolic link
+cannot be made. Seven sabotage entries and a `survives` control replace the five that pinned std's behaviours.
+
+### <a id="di-1374"></a>DI-13.7.4 -- `open` is a build, `OpenedFile::request`, and a perform, `OpenRequest::perform`. *(completed 2026-10-17 13:03:45 -04:00)*
+
+Commit `013990cd`; ruling (c) of [DI-13.1](#di-131). `OpenedFile::request(path, options)` builds an
+`OpenRequest<B, A>` on the calling thread, fixing a relative path to the current directory as it is then, and
+`perform(&self)` makes the call wherever the caller chooses; `open` is the two inline and is documented as
+blocking. The request is `Send` and can be performed repeatedly, each time opening the file again. The
+unbuffered remote check stays on the path inside `perform` until `DI-14.5`, recorded in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) as an interim. The tests are in `opened_file/request_tests.rs`; the
+remote refusal itself is the existing test that needs an administrative share, which passed here. Three
+sabotage entries and a `survives` control.
+
+### <a id="di-137"></a>DI-13.7 -- `OpenedFile::open` reflects Win32 and not `std`, and `DI-D-63` is amended. *(completed 2026-10-17 14:14:17 -04:00)*
+
+Five items, each its own commit, under the engineer's ruling that this crate reflects Win32
+([DI-D-64](DESIGN-NOTES.md#di-d-64)): [DI-13.7.1](#di-1371) (the path as given), `DI-13.7.2` (ruled: v1 offers
+neither `TRUNCATE_EXISTING` nor `CREATE_ALWAYS`), [DI-13.7.3](#di-1373) (`Disposition` and
+`open_reparse_point`), [DI-13.7.4](#di-1374) (`request` and `perform`), and `DI-13.7.5` below. The two that broke
+`win-durable-ioring` ship as one new minor (the ruling of [DI-13.1](#di-131), item (e)).
+
+### <a id="di-1375"></a>DI-13.7.5 -- `DI-D-63` amended, and the README and module documentation say what the open now is. *(completed 2026-10-17 14:14:17 -04:00)*
+
+[DI-D-63](DESIGN-NOTES.md#di-d-63)'s superseded list of what was kept so that a caller sees no difference from
+`std` is replaced by what the open is now, and its two checks and its unverified items are kept. The README's
+open section gains the path, the disposition, the reparse option and `request`/`perform`, with a doctest of the
+second; the module documentation of `opened_file.rs` says the same. [DI-14.2](#di-142) already
+lacks the reparse flag.
+
+### <a id="di-142"></a>DI-14.2 -- `FILE_FLAG_DELETE_ON_CLOSE`, `FILE_FLAG_OPEN_NO_RECALL` and `FILE_FLAG_POSIX_SEMANTICS` are builder methods on `FileOptions`. *(completed 2026-10-17 16:05:14 -04:00)*
+
+`FileOptions::delete_on_close`, `open_no_recall` and `posix_semantics`, each setting its own bit and passed to
+a cached and an unbuffered file alike; measurements and the three non-findings are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.2 settled". Delete-on-close removes the file when the
+last handle closes and is not refused without the right to delete. `FILE_FLAG_OVERLAPPED`, which this item's
+text named conditionally, is not offered here: it waits on [DI-14.7](CHECKLIST.md)'s run, which now carries the
+question of whether `FileOptions` offers it. The reparse-target requirement moved to
+[DI-14.5](CHECKLIST.md). Eight sabotage entries.
+
+### <a id="di-143"></a>DI-14.3 -- Creation attributes (`FileAttributes`), a security descriptor on the request, and no inheritance. *(completed 2026-10-17 16:22:48 -04:00)*
+
+`FileAttributes` is a typed set of the six attributes the table keeps, passed with `FileOptions::attributes`;
+`OpenRequest::with_security_descriptor` gives a created file a `SecurityDescriptor` built from SDDL, owned and
+freed by the request; no handle is asked to be inheritable. What was measured and the choices made are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.3 settled". **Not done as written:** the item asked
+for the descriptor and the inheritance read back with documented queries; both need `unsafe`, which this crate
+forbids and no workspace crate offers safely, so the descriptor is read back by behaviour (a deny-read DACL
+refuses a later open) and the inheritance choice is pinned on the request, and the read-backs are
+[DI-14.8](CHECKLIST.md), raised with the engineer. The item named *encrypted* among the attributes and the
+table excludes it. Five sabotage entries.
+
+### <a id="di-147"></a>DI-14.7 -- The ring on a handle opened with `FILE_FLAG_OVERLAPPED`, run against the same handle without it, on a cached and an unbuffered file. *(completed 2026-10-17 20:36:00 -04:00)*
+
+`win-durable-ioring`'s `tests/overlapped_evidence.rs` opens four handles through the request crate's `OpenFile`
+(cached and unbuffered, with the flag and without) and drives one sequence through `windows-ioring-sys` on
+each. What was measured is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.7 settled". **Not done
+as written:** the item asked for the status and information values, which the safe API does not expose
+separately from the completion's result and byte count, so those are what was compared. The ruling the
+item's text left to the engineer is [DI-14.9](CHECKLIST.md). The test adds no public API, so there is no
+sabotage entry.
+
+### <a id="di-145"></a>DI-14.5 -- The remote-device check is made on the opened handle, and nowhere else. *(completed 2026-10-18 00:10:00 -04:00)*
+
+`OpenRequest::perform` opens the file and then asks the handle where it is, with `GetFinalPathNameByHandleW`
+through the request crate's `QueryFinalPath`, and refuses an unbuffered file whose final path is a UNC share.
+The path canonicalised ahead of the open is gone, and with it the window in which a link could be swapped.
+Which documented queries were checked, why the final path was chosen, how a link is judged, and what was
+measured are in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled". **Not decided:** whether a
+handle opened on a link to a share (`open_reparse_point`) should be refused, since the handle is the link on a
+local volume; the item's text asked that the check see the target, and this item judges what the handle is.
+The ruling is [DI-14.10](CHECKLIST.md).
+Two sabotage entries replace the one that named the removed path function; the refusal itself is reached only by
+the ignored administrative-share tests, which were run with the ignored tests included.
+
+### <a id="di-149"></a>DI-14.9 -- `FILE_FLAG_OVERLAPPED` is a builder method on `FileOptions`, ruled by the engineer, 2026-10-18. *(completed 2026-10-18 00:36:00 -04:00)*
+
+The engineer ruled that it is offered. `FileOptions::overlapped` is a bool that sets its own bit, is passed to a
+cached and an unbuffered file alike, and is kept when the data access changes. `tests/overlapped_evidence.rs`
+now drives the [DI-14.7](#di-147) sequence on handles opened through it as well as on the raw ones, with the
+same result for every step in each buffering mode, and with the option left off the completions are inline, so
+the flag is not set unasked. The table row in [DI-D-64](DESIGN-NOTES.md#di-d-64) is amended. Three sabotage
+entries. `opened_file.rs` is past 32 KiB with this; the one fracture candidate, the two refusal types with
+their helpers, would need the helpers' visibility changed, which a pure relocation does not do, so it is left whole.
+
+### <a id="di-1481"></a>DI-14.8.1 -- `win-authorization-sys` is created and the request crate's `security` module is moved into it and re-exported. *(completed 2026-10-18 00:51:00 -04:00)*
+
+The engineer ruled on 2026-10-18 that the crate is named `win-authorization-sys` and that the types move with
+it. `SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState` and the capture errors, with
+their tests and eighteen sabotage entries (all behaving as declared), are in the new crate, and the request
+crate re-exports it as `security` and at its root. It is two commits so the request crate's release is not
+attributed to the move: the crate added with the code copied (`Split-Source` and `Split-Into` trailers, and
+`blame -w -C1 -C1` traces all but four lines of `sddl.rs` back through it), then the request crate switched over
+and its copy deleted. What changed in the code: `SecurityCaptureError::into_source` is `pub`, and the tests that
+open a file through a request stayed in the request crate. The request crate's own tests that built an absolute
+descriptor now build one from SDDL, since the absolute form is the new crate's to test. See
+[win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-1`.
+
+### <a id="di-1482"></a>DI-14.8.2 -- `GetSecurityInfo` as a safe query in `win-authorization-sys`. *(completed 2026-10-18 01:22:00 -04:00)*
+
+`get_security_info(handle, ObjectType, SecurityInformation)` returns an owned `SecurityDescriptor`; Windows'
+refusal comes back with its own code. Tests cover files created with ten different DACLs, a file made without a
+descriptor (owner, group and DACL), the selection of single parts, a directory, a handle without the right to
+read, a SACL without the right, a named event as a kernel object, and a descriptor outliving its handle; five
+sabotage entries, all caught, and 100 repeat runs without a failure. **Not done as written:** the item named "a
+handle that is not a securable object". Every handle measured is securable, and what stands in for it is an
+object that has no descriptor, which reads as one with no parts, and a kind Windows refuses. What was measured
+is in [win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md) `WA-D-2`. The request crate's test that
+created files with a descriptor now reads them back through this query and no longer needs the authorization
+feature of `windows-sys`.
+
+### <a id="di-1483"></a>DI-14.8.3 -- `win-handles-sys` is created and `duplicate_handle_with_access` and its `Access` mask move into it from `win-sync-sys`. *(completed 2026-10-18 01:42:00 -04:00)*
+
+Two commits, as for [DI-14.8.1](#di-1481): the crate added with the code copied (`Split-Source` and `Split-Into`
+trailers), then `win-sync-sys` switched over and its copy, its tests and its seven sabotage entries moved or
+deleted. `win-sync-sys` re-exports both names at the paths they had, and `win-durable-ioring`, which takes them
+from `win-sync-sys`, is unchanged. The tests observe a duplicate through raw calls, so they now make their events
+with `CreateEventW` where they used the sync crate's `Event`; one of them reads the inheritance flag back through
+raw `GetHandleInformation`, which [DI-14.8.4](CHECKLIST.md) replaces with the safe query. `Access` keeps both of
+its constants, `EVENT_MODIFY_STATE` included though it is an event's right, because an associated constant can
+be declared only where the type is and moving it would have broken `Access::EVENT_MODIFY_STATE`; that is
+recorded in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-1`.
+
+### <a id="di-1484"></a>DI-14.8.4 -- `GetHandleInformation` as a safe query in `win-handles-sys`. *(completed 2026-10-18 01:52:00 -04:00)*
+
+`get_handle_information(handle)` returns `HandleFlags`, a typed set of `INHERIT` and `PROTECT_FROM_CLOSE` that keeps
+a bit it does not name. Tests set the flags through raw `SetHandleInformation` and read them back through the
+query (neither flag, either, both, set and cleared, a handle `std` opens, a duplicate of an inheritable source,
+and the handle borrowed, owned and by reference), with five sabotage entries caught and one declared blind spot,
+and 100 repeat runs without a failure. The duplicate's inheritance test, which read the flag through the raw
+call, reads it through this query. The error path has no test, since `AsHandle` makes a handle that is not open
+unrepresentable, and says so where it is defined. What was measured is in [win-handles-sys](../win-handles-sys/DESIGN-NOTES.md) `WH-D-2`.
+
+### <a id="di-1485"></a>DI-14.8.5 -- `win-durable-ioring`'s `DI-14.3` tests read back through the two queries. *(completed 2026-10-18 02:05:00 -04:00)*
+
+A created file's DACL reads back, through `get_security_info`, as the one it was given, for five descriptors on a
+cached file and one on an unbuffered one; a created file's handle, with a descriptor and without, reads back
+through `get_handle_information` as carrying neither flag. Each was seen to fail alone, in a run with the
+mutation it guards applied by hand (the descriptor withheld from the call fails the read-back tests; the
+inheritance choice flipped fails the handle test), and the two sabotage entries now say so; the five `DI-14.3`
+entries still behave as declared. The crate also takes `SecurityDescriptor` from `win-authorization-sys` and
+`duplicate_handle_with_access` from `win-handles-sys`, the crates the Learn-section rule gives them, instead of
+through the request and sync crates, which still re-export them; the types are the same, so no public path
+changed.
+
+### <a id="di-148"></a>DI-14.8 -- Safe read-backs of what an open was given, in the two crates the Learn-section rule names: `win-authorization-sys` and `win-handles-sys`. *(completed 2026-10-18 02:06:00 -04:00)*
+
+`DI-14.3` could not read back a handle's inheritability or a file's descriptor, because this crate forbids `unsafe`
+and no crate offered `GetHandleInformation` or `GetSecurityInfo` safely. The engineer ruled on 2026-10-18 that the
+crates are `win-authorization-sys` (Security and Identity > Authorization) and `win-handles-sys` (System Services >
+Windows System Information > Handles and Objects), and that the function and the types that belong move with
+them. It was five items: [DI-14.8.1](#di-1481) (the request crate's `security` module moved to the first),
+[DI-14.8.2](#di-1482) (`GetSecurityInfo`), [DI-14.8.3](#di-1483) (`duplicate_handle_with_access` and `Access`
+moved to the second), [DI-14.8.4](#di-1484) (`GetHandleInformation`) and [DI-14.8.5](#di-1485) (the read-backs).
+The remaining functions of the two Learn sections are queued in the two crates' own checklists
+([win-authorization-sys](../win-authorization-sys/CHECKLIST.md), [win-handles-sys](../win-handles-sys/CHECKLIST.md)),
+and not here.
+
+### <a id="di-1410"></a>DI-14.10 -- An unbuffered open of a link to a share, opened as the link, is accepted, ruled by the engineer, 2026-10-18. *(completed 2026-10-18 13:25:00 -04:00)*
+
+The engineer ruled that it is accepted. [DI-14.5](#di-145) judges an opened handle by where it is, so a local link
+that leads to a share, opened with `open_reparse_point`, is a local handle and passes; followed, the handle is the
+share's file and is refused. Refusing the first case would have needed a second open that follows the link, which
+brings back the window `DI-14.5` closed. No code changed: the ignored administrative-share test
+`a_refusal_made_on_the_handle_comes_after_a_new_file_was_created_and_a_link_is_judged_by_the_handle` already
+asserts both cases, and the reading is in [DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What building DI-14.5 settled".
+
+### <a id="di-1441"></a>DI-14.4.1 -- The reading pass: every condition the pages state on the open's arguments, sorted and cited. *(completed 2026-10-18 15:14:02 -04:00)*
+
+Read on 2026-10-18 from the sources the Learn pages are built from: `CreateFileW`, "Creating and Opening Files"
+(added because the `CreateFileW` page defers to it for combinations and special cases), "File Buffering", "File
+Access Rights Constants" and "File Attribute Constants". The sorted list, with citations and page dates, is in
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s "What the reading pass of DI-14.4.1 found". Findings: every condition on the
+arguments alone that a page calls invalid is already unrepresentable in v1 (`FILE_ATTRIBUTE_NORMAL` alone, the
+reparse flag with `CREATE_ALWAYS`, `TRUNCATE_EXISTING` with `GENERIC_WRITE`, the dispositions not combinable), and
+the two that return with [DI-6+.11](PARKED.md) are recorded there. **Two citations this crate carried were
+wrong:** that delete-on-close needs the `DELETE` right, and that the append right is incompatible with
+no-buffering, are on `ZwCreateFile`'s page and not on any page `CreateFileW` is governed by; both statements are
+corrected, and whether the lower layer's conditions count is asked in [DI-14.4.2](CHECKLIST.md). The volume
+section's requirement of `FILE_SHARE_WRITE` is a condition on `OpenedVolume`'s arguments that its share option
+does not honour, raised as [DI-14.11](CHECKLIST.md).
+
+### <a id="di-1442"></a>DI-14.4.2 -- No check ahead of `OpenedFile`'s open: a lower layer's page is not the call's contract. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The engineer ruled on 2026-10-18 that `ZwCreateFile`'s page "is not direct evidence" of `CreateFileW`'s contract,
+though it is "good evidence to use for an experiment". With the reading pass having found every other documented
+condition unrepresentable, there is nothing to check, and nothing was built. Delete-on-close without `DELETE` and
+the append right with no-buffering stay what they were measured to be, evidence and not checks. The rule is
+amended to say so ([DESIGN-NOTES.md](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract)).
+
+### <a id="di-1443"></a>DI-14.4.3 -- `FILE_ATTRIBUTE_TEMPORARY` on an unbuffered file is supported. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The engineer, 2026-10-18: "I think we should support it." The pages are silent on the pair, so it was never a
+contract refusal; the assistant had raised it as a possible narrowing because the warranty was not demonstrated
+for it, and there is no analytic ground for that: the attribute concerns when cached data is written back, and an
+epoch's durability comes from the flush this crate issues. No code changed; the attribute was already offered.
+
+### <a id="di-144"></a>DI-14.4 -- The open's arguments, read against the documented contract: no condition `OpenedFile` can express is invalid, so no check is built. *(completed 2026-10-18 15:26:12 -04:00)*
+
+Re-planned under the documented-contract rule and split in three: [DI-14.4.1](#di-1441) (the reading pass),
+[DI-14.4.2](#di-1442) (no check, ruled) and [DI-14.4.3](#di-1443) (`TEMPORARY` supported, ruled). As first written
+the item would have refused what the kernel refused on this machine. What it produced is a sorted, cited list of
+every condition the pages state on the open's arguments, in [DI-D-64](DESIGN-NOTES.md#di-d-64); two corrected
+citations; the conditions that return with `CREATE_ALWAYS` and `TRUNCATE_EXISTING`, recorded on
+[DI-6+.11](PARKED.md); and [DI-14.11](#di-1411).
+
+### <a id="di-1411"></a>DI-14.11 -- A volume opened without sharing writes stays allowed: the measurement contradicts the page's requirement, so it is documented and not refused. *(completed 2026-10-18 15:26:12 -04:00)*
+
+The `CreateFileW` page says a volume open "must have the `FILE_SHARE_WRITE` flag"; `DI-13.12`'s elevated test
+opened a volume exclusively and was refused a second open until it closed. The engineer's amendment of
+2026-10-18 settles it: "If we have evidence that the documentation is wrong, I believe the remedy is to not embody
+the documentation structurally." `VolumeOptions::share` keeps every mode, and its documentation quotes the page and
+names the test; the test's comment says it is that evidence.
+
+### <a id="di-1461"></a>DI-14.6.1 -- What an open handle reports about its own kind is measured over a disk file, a directory, `NUL`, a console, a pipe, a volume and a physical disk. *(completed 2026-10-18 15:41:29 -04:00)*
+
+`DI-14.6` split in three when the measuring started: this item (the measurements), [DI-14.6.2](CHECKLIST.md)
+(the decision, the engineer's) and [DI-14.6.3](CHECKLIST.md) (the serial port, blocked on a port that opens).
+The table and what it shows are in [DI-D-64](DESIGN-NOTES.md#di-d-64), under "Measured for DI-14.6". The pinned
+part is [device_handle_evidence.rs](../windows-namespace-request-sys/tests/device_handle_evidence.rs), six tests
+over `OpenFile`'s handles, with both directions of the device-number control checked by sabotage. The candidate
+named in the item, `GetFileType`, answers `DISK` for a volume and a physical disk as it does for a file, so it
+does not tell the two apart; the device-number control does. `FlushFileBuffers` on `NUL` fails with
+`ERROR_INVALID_FUNCTION`. The `ReadFile`/`CancelIoEx` part could not be measured: no serial port opened
+repeatably, one open blocked for over 45 seconds, and the process holding it was hard to kill.
+
+### <a id="di-1462"></a>DI-14.6.2 -- A cached open of a handle that is not a disk file is accepted; an unbuffered one is refused as `UnknownLocation`, this crate's own narrowing, and no longer as the final-path call's error. *(completed 2026-10-18 16:44:12 -04:00)*
+
+The item was a decision with the engineer and was implemented on his instruction after the value of refusing had
+been discussed and not ruled, so the positions are the assistant's and stand until amended. Recorded in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) under "What DI-14.6.2 settled". The discussion leaned toward removing the
+unbuffered refusal of `NUL`; building it showed that removal would let an unbuffered `NUL` claim
+`WarrantyClass::SharedDevice`, so it stays and is named. An open that blocks is not this item's
+([DI-D-67](DESIGN-NOTES.md#di-d-67)). Three sabotages in `win-durable-ioring`'s manifest, one of them refused by a
+`const` assertion at build.
+
+### <a id="di-103"></a>DI-10.3 -- Whether a handle opened elsewhere can be given to a file target is decided: not in this version, and a device's exclusivity can be attested instead. *(completed 2026-10-18 19:23:26 -04:00)*
+
+Decided by the engineer, 2026-10-18, on the assistant's recommendation: [DI-D-68](DESIGN-NOTES.md#di-d-68). The item
+bundled two questions. Foreign handles stay out, with a `ReOpenFile` route that needs no attestation
+([DI-15.4](CHECKLIST.md), amended to take any handle) and a measured residue parked as `DI-10.6` with its blocker
+named. The attestation of exclusivity needs no foreign handle, since the handle is one this crate opened, and is
+`DI-10.5`. The item's own argument for `unsafe` is not followed: the class is information only, so a wrong claim
+mislabels a report and changes nothing the layer does.
+
+### <a id="di-105"></a>DI-10.5 -- A consumer who knows a device is theirs alone can attest it through `new_attested_exclusive`, `from_volume_attested_exclusive` and `from_disk_attested_exclusive`, and the target is then `Complete`. *(completed 2026-10-18 19:29:21 -04:00)*
+
+Three constructors on `Win32FileTarget`, each taking only a handle this crate opened `Unbuffered`, so a cached one is a
+compile error (a `compile_fail` doctest, and a sabotage that widens the type, which only that doctest catches). One
+private function makes the claim, and the domains, geometry, capabilities and access are those of the same handle
+through the plain constructor, as tests of each of the three kinds compare. A declaration of domains still adds and
+never removes. The constructors are not `unsafe`, for the reason in [DI-D-68](DESIGN-NOTES.md#di-d-68), which is the
+assistant's position until amended. Six sabotages, one of them a control that survives.
+
+### <a id="di-1464"></a>DI-14.6.4 -- The open's documentation states that where a name leads is the caller's responsibility. *(completed 2026-10-18 19:35:11 -04:00)*
+
+The statement is on `OpenedFile::open`, which `OpenRequest::perform` points to: a name can be redirected to a device
+by a reparse point in an intermediate directory or an object-manager link, no reparse flag applies to the second, an
+open of a serial port's name was observed not to return, and this crate does not inspect, refuse, bound or cancel it.
+It cites what `CancelSynchronousIo` is documented as, and names [DI-D-67](DESIGN-NOTES.md#di-d-67) for the sources and
+the measurement; it gives no advice, and carries no figure from the measurement. Documentation only: no behaviour
+changed, so no sabotage applies.
+
+### <a id="di-1463"></a>DI-14.6.3 -- The serial-port measurement is withdrawn: nothing decided rests on it, and what was observed is recorded. *(withdrawn 2026-10-18 19:52:00 -04:00)*
+
+Withdrawn, not completed. The item queued the measurements `DI-14.6.1` could not make on a serial port. The engineer
+asked why they are needed at all, and nothing decided depends on them: [DI-14.6.2](#di-1462) takes cached opens of any
+non-disk handle and refuses unbuffered ones with no final path, and [DI-D-67](DESIGN-NOTES.md#di-d-67) leaves a
+blocking open to the caller. It was filed open in a milestone it could not be worked in, which the checklist's rule
+for deferred work does not allow. The investigation found the ports are Remote Desktop redirections of the client's,
+and that `CancelSynchronousIo` returned success on a blocked open there without shortening it; both are in
+[DI-D-64](DESIGN-NOTES.md#di-d-64) under "Measured for DI-14.6". The unmeasured remainder is listed there with the
+reason it is not queued.
+
+### <a id="di-1412"></a>DI-14.12 -- A caller asks what kind of handle an opened file is, of an observer, `HandleKindQuery`, and the opener does not return it. *(completed 2026-10-18 20:13:46 -04:00)*
+
+The engineer, 2026-10-18: "There is no need to return the type to the caller", and the `win-*-sys` crates first, then
+the observer. `HandleKindQuery::of(handle)` and `perform` compose `QueryFileType`
+([NR-3.9](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-39-filetype)), `storage_device_number`
+([WV-3.1](../win-volume-sys/COMPLETED-CHECKLIST.md#wv-31)) and `volume_disk_extents` into a `HandleKind`. The shape, what
+each variant claims and the measurement are in [DI-D-64](DESIGN-NOTES.md#di-d-64) under "What DI-14.12 built". Eighteen
+tests, the classification over every answer and then real handles (a file, a directory, `NUL`, a named pipe, the system
+volume and its disk), and seven sabotages, one of them a declared survivor.
+
+### <a id="di-151"></a>DI-15.1 -- A file's identity, `FileId`, is read from an opened file or any shared handle, and the `lpFileId` row cites the `FILE_ID_DESCRIPTOR` page. *(completed 2026-10-18 23:38:29 -04:00)*
+
+`FileId` in `win-durable-ioring`'s `windows_backend` carries the volume serial and the 128-bit identifier that
+`QueryFileIdInfo` ([NR-3.10](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-310-fileid)) reports, read
+through the handle shared; `FileId::of(&SharedHandle)` and `OpenedFile::file_id` are the two ways in. The decision is
+[DI-D-69](DESIGN-NOTES.md#di-d-69). The page was read and lists the request crate's three kinds, so
+[DI-D-64](DESIGN-NOTES.md#di-d-64)'s `lpFileId` row now cites it and the ruling stands; [DI-15.2](CHECKLIST.md) was
+amended to open by all three. The tests include the item's two (stable across two opens, different between two files),
+and the sabotages include a control.
+
+### <a id="di-152"></a>DI-15.2 -- An open by identifier, `OpenedFile::open_by_id`, takes any of the three identifier kinds, its own `ByIdOptions` and any handle as the hint, and checks a `FileId` against the file opened. *(completed 2026-10-19 00:22:26 -04:00)*
+
+`FileIdentifier` names the three kinds of the `FILE_ID_DESCRIPTOR` page (`Extended(FileId)`, `FileId64(u64)`,
+`ObjectId([u8; 16])`); `ByIdOptions<A>` carries what `OpenFileById` takes and [DI-D-64](DESIGN-NOTES.md#di-d-64)
+exposes; `request_by_id` and `open_by_id` build and perform the open, with the path open's checks made by the same
+function. An open by `FileId` reads the opened file's identity and refuses another volume's file with
+`IdentityMismatch`, and `SharingViolation` now names the file by `OpenedBy`. The decision and what was observed are
+[DI-D-70](DESIGN-NOTES.md#di-d-70). The observation that a directory opens by identifier without the backup flag is
+queued as [DI-15.5](CHECKLIST.md) for the engineer to rule on.
+
+### <a id="di-154"></a>DI-15.4 -- A reopen, `OpenedFile::reopen`, makes a new file of the type asked for from any handle through `ReOpenFile`, with its own `ReopenOptions` and the path open's checks. *(completed 2026-10-19 09:44:07 -04:00)*
+
+`OpenedFile::reopen` and `request_reopen` take any handle as the original and `ReopenOptions<A>`, which carries what
+the `ReOpenFile` page lists and [DI-D-64](DESIGN-NOTES.md#di-d-64) exposes. The result's alignment is its new mode's,
+the checks on the reopened handle are the open's by the same function, and a sharing violation names the file by
+`OpenedBy::Reopen`. The decision and what was observed are [DI-D-71](DESIGN-NOTES.md#di-d-71): every pair of an
+original and a reopen follows the page's sharing rule, judged by the share-mode tests' statement of it; `NUL` reaches
+`UnknownLocation`; a handle from `OpenFileById` reopens; a volume and a disk do not, unelevated.
+
+## Moved 2026-10-19 10:51:05 -04:00 -- DI-M15: opening by identity, and reopening
+
+The milestone's items are complete: `DI-15.1`, `DI-15.2` and `DI-15.4` are archived above, and `DI-15.5` below.
+`DI-15.3`, opening relative to a directory handle, was deferred by the engineer and is parked in the checklist's
+horizon section, not completed.
+
+### <a id="di-155"></a>DI-15.5 -- A directory reached by an open by identifier is allowed, and what it does is documented. *(completed 2026-10-19 10:51:05 -04:00)*
+
+The engineer ruled it "harmless" after the measurements, directly and through the ring, and the assistant agreed on
+the contract's first guarantee: a faulted write is covered by no durability report. A directory target faults every
+read and write with the kernel's error and completes every commit. The decision and the measurements are
+[DI-D-72](DESIGN-NOTES.md#di-d-72); the ring's behaviour is a test in `win-durable-ioring`, and `open_by_id`'s
+documentation says it.
+
+## Moved 2026-10-19 11:54:55 -04:00 -- DI-M15+: handles opened elsewhere, decided
+
+`DI-10.3` is archived above. With `DI-10.6` decided, the parked milestone is empty and is removed.
+
+### <a id="di-106"></a>DI-10.6 -- A handle opened elsewhere that `ReOpenFile` cannot convert is not accepted at this time, in any form. *(completed 2026-10-19 11:54:55 -04:00)*
+
+The engineer, 2026-10-19: "I say it's not accepted at this time." The residue is restrictive sharing, an access the
+caller was never granted (the broker case), objects not created by `CreateFile`, and, observed in `DI-15.4`, volume
+and disk handles. A consumer's declaration of such a handle's mode is not accepted. The ruling and the option that
+was laid out are in [DI-D-68](DESIGN-NOTES.md#di-d-68); nothing is scheduled.
+
+## Moved 2026-10-19 12:04:14 -04:00 -- DI-M7+, DI-M9, DI-M10, DI-M13 and DI-M14 complete, with the open-surface order
+
+Every item of these milestones was already archived above when it completed; the stubs that stood in the checklist
+are dropped, and what follows is the prose each section carried, moved verbatim, with headings one level deeper.
+`DI-M7+` and `DI-M14` carried none. `DI-M15` was moved on 2026-10-19 10:51:05 -04:00, above.
+
+### <a id="open-surface-order"></a>Where the open-surface work goes next (read this first when picking the work back up)
+
+The open surface of a file ([DI-M13](#di-m13----opening-a-file-the-surface-and-its-home) to
+[DI-M15](COMPLETED-CHECKLIST.md#di-151)) cannot be done in this crate alone: it
+changes four others. This is the order across all of them. **No status is kept here**, because each
+item's own checkbox is the status and a copy would go stale; this list is only the order and the
+links. Each item below also ends with a `Next:` line pointing at the step after it.
+
+**Step 0, added 2026-10-15, before step 1** (the engineer ruled that volume operations belong in the
+volume crate and that the error codes become one shared type; see
+[WV-D-5](../win-volume-sys/DESIGN-NOTES.md#wv-d-5) and
+[WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1)):
+
+- 0.1. [WE-1.1 to WE-1.3](../win-error-codes/CHECKLIST.md) -- the new `win-error-codes` crate.
+- 0.2. In any order, each needing only `WE-1.1`:
+  [NR-4.1](../windows-namespace-request-sys/CHECKLIST.md) (request crate adopts it),
+  [ERR-1](../windows-file-enumeration-sys/CHECKLIST.md) (enumeration crate adopts it), and
+  [WV-2.1 to WV-2.5](../win-volume-sys/CHECKLIST.md) (the volume crate takes in the storage-locality
+  entries, in that order).
+- 0.3. [NR-2.8](../windows-namespace-request-sys/CHECKLIST.md) -- the request crate deletes the
+  originals. **It must land before step 4's release**, or the entries are published from the crate
+  they do not belong in. `NR-4.1` should land before it too, so that release carries the
+  `io::Error` fix.
+
+Steps 1 to 3 do not depend on step 0 and may be done first if the order suits; step 4 does.
+
+1. [NR-3.3](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the captured root and the
+   graft, as one internal type. Additive; nothing breaks.
+2. [NR-3.4](../windows-namespace-request-sys/CHECKLIST.md),
+   [NR-3.5](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.6](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: **one coupled breaking
+   commit.** `OpenFile` and `WatchDirectory` take a `Wtf16String`, an interior NUL is refused,
+   `prepare` is retired. `win-durable-ioring` and `windows-platform-probes` call `prepare` through
+   path dependencies, so **the same commit adapts both just enough to build**, and the request
+   crate's own tests and docs; a commit that leaves the workspace unbuilt is the worse outcome.
+3. [NR-3.1](../windows-namespace-request-sys/CHECKLIST.md) and
+   [NR-3.2](../windows-namespace-request-sys/CHECKLIST.md) -- request crate: the SDDL constructor and
+   the `ReOpenFile` entry. Additive, independent of steps 1 and 2; may be done first.
+4. **Release the request crate** (the release-please pull request, then publish). A breaking change,
+   so a new minor. This is a release action and not a checklist item.
+5. `DI-13.1` is done: its table is [DI-D-64](DESIGN-NOTES.md#di-d-64), and `DI-13.3` onward build on
+   it.
+6. After step 4: [PATH-1](../windows-file-enumeration-sys/CHECKLIST.md), the enumeration crate
+   consumes the new contract and deletes its older copy (the workspace's `M26+.3`, and
+   [REVIEW-1](../windows-file-enumeration-sys/CHECKLIST.md) is re-read); `DI-13.5` and `DI-13.6`, this
+   crate takes the release that carries the SDDL constructor and the `ReOpenFile` entry.
+7. Then, here: `DI-13.7`, which is five items `DI-13.7.1` to `DI-13.7.5` (none needs another crate), `DI-M14`,
+   `DI-M15`. `DI-10.5` needs none of them and may be done at any point.
+
+If you remember only one thing: **the request crate comes first, and its breaking commit moves three
+crates at once.**
+
+### <a id="di-m9----reviews-the-engineer-confirms-or-amends-the-assistants-choices-ungated-gates-nothing"></a>DI-M9 -- Reviews: the engineer confirms or amends the assistant's choices (ungated; gates nothing)
+
+Each item is one choice the assistant made while building and the engineer has not yet confirmed.
+The code binds to each already, because the steps could not be built without choosing; what is open
+is the review. These reviews gate no other work (the engineer, 2026-10-10: "I cannot be the blocking
+factor"). Where the engineer had already decided part of a row, that part is not here. A rejected
+point is reworked as an item of the milestone current when it is rejected, with its decision row
+amended. Every item carries one of three tags, which say what is asked:
+
+- **DECIDE** -- the choice changes what a consumer can do or must avoid, or trades against a real
+  alternative. The action is to accept it or amend it; "accept 9.1.1" is a complete answer. Each says
+  what the code does now.
+- **RATIFY** -- a name, a placement, an internal shape or a test method. It stands unless the
+  engineer objects; "ratify 9.3.3" closes it.
+- **MINE** -- not a choice: a gap or check the assistant owes. Nothing is asked of the engineer.
+
+A group may be answered whole ("accept all DECIDE in 9.1"). The wording of each choice as first
+written, which these items condense, is in git at the revision before the one that restructured this
+milestone; the decision rows named below carry the reasons.
+
+#### DI-9.1 -- Lineage handles ([DI-D-42](DESIGN-NOTES.md#di-d-42), from `DI-3.2.5.1`)
+
+#### DI-9.2 -- Gates and seals ([DI-D-43](DESIGN-NOTES.md#di-d-43), from `DI-3.2.5.2`; the refusal of a seal that closes a cycle is the engineer's own)
+
+#### DI-9.3 -- The provider ([DI-D-44](DESIGN-NOTES.md#di-d-44), from `DI-3.2.6`; read it with its amendments by DI-D-46 and DI-D-50)
+
+#### DI-9.4 -- Faults, diagnostics, the clock ([DI-3.10.3.1 to DI-3.10.3.4](COMPLETED-CHECKLIST.md))
+
+#### DI-9.5 -- The backend trait and the core on it ([DI-3.10.3.5.1 to DI-3.10.3.5.5](COMPLETED-CHECKLIST.md))
+
+#### DI-9.6 -- The driver on the core ([DI-3.10.3.5.6.1 to DI-3.10.3.5.6.2.6](COMPLETED-CHECKLIST.md))
+
+#### DI-9.7 -- From DI-M7 on (each later step adds its own here as `DI-9.7.n`, with a tag)
+
+#### DI-9.8 -- Owed by the assistant
+
+### DI-M10 -- Target backings
+
+`DI-10.3` and `DI-10.6`, whether a handle opened elsewhere can be given to a file target, are decided by
+[DI-D-68](DESIGN-NOTES.md#di-d-68): not in this version, and not on a consumer's declaration of its mode.
+
+### <a id="di-m13----opening-a-file-the-surface-and-its-home"></a>DI-M13 -- Opening a file: the surface and its home
+
+Why this milestone exists. [DI-D-60](DESIGN-NOTES.md#di-d-60) made a file target from a file this
+crate opened and from nothing else, and [`FileOptions`](../win-durable-ioring/src/windows_backend/opened_file.rs)
+carries only `read`, `write`, `create`, `create_new` and `truncate`. A consumer whose open needs more
+(a share mode, a security descriptor, delete-on-close, an open by file ID) cannot say so, and would
+want a handle from elsewhere ([DI-D-68](DESIGN-NOTES.md#di-d-68), [DI-10.6](COMPLETED-CHECKLIST.md#di-106)).
+Widening what this crate can open is the structural answer: every option a consumer can pass is an
+option recorded by construction. The rule throughout is documented APIs only
+([copilot-instructions.md](../../.github/copilot-instructions.md)): no `Nt*`, no `Rtl*`.
+
+## Moved 2026-10-19 12:13:59 -04:00 -- DI-6+.3, withdrawn, on the parked work's move to PARKED.md
+
+The parked milestones moved from [CHECKLIST.md](CHECKLIST.md) to [PARKED.md](PARKED.md), which holds no checked
+items; this withdrawn item, checked in place in `DI-M6+`, comes here instead, verbatim.
+
+- [x] **DI-6+.3** -- **Withdrawn: rebinding a file to a new handle is not this layer's**
+  ([DI-D-11](DESIGN-NOTES.md#di-d-11)). Nothing remains to do here; the obligation it left is in
+  DI-2.2.
+
+## Moved 2026-10-19 20:44:41 -04:00 -- DI-M16, the request crate handed the handles already held
+
+### <a id="di-161"></a>DI-16.1 -- `win-durable-ioring` stops duplicating handles it holds. *(completed 2026-10-19 20:44:41 -04:00)*
+
+`HandleKindQuery::of` takes `&SharedHandle` and is infallible; `final_location` asks the final path of the
+`SharedHandle` an `OpenedFile` holds. `OpenedVolume` and `OpenedDisk` had nothing to change. What was decided and
+what is tested: [DESIGN-NOTES.md](DESIGN-NOTES.md#di-16-1). The item as it stood at completion follows verbatim.
+
+- [x] **DI-16.1** -- **`win-durable-ioring` stops duplicating handles it holds.** The request crate's `NR-6`
+  ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) has its entries hold a `SharedHandle`. An
+  `OpenedFile` already holds one, yet `final_location` in
+  [opened_file.rs](../win-durable-ioring/src/windows_backend/opened_file.rs) and `HandleKindQuery::of` in
+  [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) duplicate it to ask its final path and
+  kind. Both take the `SharedHandle` instead and give the entry a clone; `HandleKindQuery::of` changes signature,
+  so this is breaking for `win-durable-ioring`, in a commit of its own. `OpenedVolume` and `OpenedDisk` are
+  checked for the same pattern. Tests: the existing ones, and that asking an opened file's kind makes no handle.
+  Lands after `NR-6.1` and before `NR-6.2`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys` -> `NR-M6` ->
+  > `NR-6.2` (delete capture). See [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).

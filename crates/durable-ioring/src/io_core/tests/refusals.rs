@@ -108,6 +108,41 @@ fn a_gated_operation_its_target_does_not_admit_is_refused_and_one_it_admits_is_h
 }
 
 #[test]
+fn a_gated_operation_its_targets_access_does_not_cover_is_refused_at_push() {
+    // DI-D-66: the target states what it can do, and the backend refuses what that does not cover,
+    // for a gated operation at the call that gave it and not when its gate releases.
+    let mut rig = Rig::new();
+    rig.attach(
+        OTHER,
+        MemoryTarget::new().with_access(crate::access::Access::ReadOnly),
+    );
+    let gate = rig.epoch(1);
+    let epoch = rig.epoch(2);
+    let refused = rig
+        .write_with(OTHER, epoch, 0, &[7; 4], gated(gate))
+        .expect_err("a write to a read-only target");
+    assert!(matches!(
+        refused.reason,
+        PushRefusal::Backend(RefusalCause::AccessDenied)
+    ));
+    assert_eq!(refused.buffer, Some(vec![7; 4]), "handed back");
+    let refused = rig
+        .write_with(OTHER, epoch, 0, &[7; 4], WriteOptions::new())
+        .expect_err("ungated, the push refuses it");
+    assert!(matches!(
+        refused.reason,
+        PushRefusal::Backend(RefusalCause::AccessDenied)
+    ));
+
+    // Nothing was held and no id was spent: the next accepted operation takes the first.
+    let first = rig
+        .read_with(0, 1, ReadOptions::new().gate(gate))
+        .expect("a read of the read-write target is held");
+    assert_eq!(first.seq, 0);
+    assert_eq!(rig.core.close().held.len(), 1);
+}
+
+#[test]
 fn the_cores_own_checks_come_before_the_backends() {
     let mut rig = Rig::new();
     let gate = rig.epoch(1);

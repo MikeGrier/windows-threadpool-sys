@@ -204,6 +204,11 @@ dioring binds to these obligations, never to how a backing happens to meet them
   shares fate with every target.
 - **Its geometry and capabilities are stated**: the alignment its offsets, lengths and buffers
   need, and what it offers beyond these obligations, such as per-write write-through.
+- **Its access is stated**: whether it can be read, written, or both. An operation its access does not
+  cover is refused when it is pushed, as `AccessDenied`, and never reaches the target; a commit is not
+  one of them. A consumer may register the target under a typed `Key<A>`, which declares the access
+  it expects: a declaration the stated access does not cover is refused at registration, with the
+  target handed back, and a declaration of less is accepted.
 - **A fault names its source**: the layer that reported it, and that layer's code where it gives one
   (see "Where every report comes from").
 
@@ -459,7 +464,7 @@ synthesizes ([DI-D-13](DESIGN-NOTES.md#di-d-13), [DI-D-30](DESIGN-NOTES.md#di-d-
 
 An instance has a **readiness signal**, of a type its driver chooses -- the ring trait's
 `Readiness` ([DI-D-52](DESIGN-NOTES.md#di-d-52) Q6); the Windows driver's is an auto-reset event it
-owns, of which the consumer can take a duplicate, as a `win-sync-sys` `Event`
+owns, of which the consumer can take a clone sharing its handle, as a `win-sync-sys` `Event`
 ([DI-D-28](DESIGN-NOTES.md#di-d-28), [DI-D-50](DESIGN-NOTES.md#di-d-50)). These rules bind every
 implementation of this contract and whoever waits on the signal, and the conformance module's
 `check_readiness` checks the instance's half of them, for an implementation whose signal is an

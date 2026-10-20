@@ -1706,6 +1706,118 @@
       "why": "A first drain that delivered returns that it did, which sets the readiness event and tells the consumer to pop.",
       "find": ["        if lock(&self.engine).as_mut().is_some_and(Engine::drain) {"],
       "replace": ["        if !lock(&self.engine).as_mut().is_some_and(Engine::drain) {"]
+    },
+    {
+      "name": "DI-13.9: a write-only access is said to be able to read",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "Whether an access can read is what the backends ask, so a write-only access that said it could read would let a read through to a target that cannot serve it.",
+      "find": ["        matches!(self, Self::ReadOnly | Self::ReadWrite)\n"],
+      "replace": ["        matches!(self, Self::ReadOnly | Self::ReadWrite | Self::WriteOnly)\n"]
+    },
+    {
+      "name": "DI-13.9: the read-only marker names the read and write access",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "A target made from a read-only handle states what the marker names, so a marker that named another access would state more than the handle was opened with.",
+      "find": ["    const ACCESS: Access = Access::ReadOnly;\n"],
+      "replace": ["    const ACCESS: Access = Access::ReadWrite;\n"]
+    },
+    {
+      "name": "DI-13.9: a description states a different access than its target",
+      "file": "src/io_target.rs",
+      "expect": "caught",
+      "why": "What the core decides with is the description, taken once, so a description that did not carry the target's access would leave the refusal to a backend that has already been told otherwise.",
+      "find": ["            access: self.access(),\n"],
+      "replace": ["            access: Access::ReadWrite,\n"]
+    },
+    {
+      "name": "DI-13.9: a refusal for access ends an operation with some other kind of error",
+      "file": "src/backend.rs",
+      "expect": "caught",
+      "why": "The fault a refused operation of the core's own ends with names the cause as the error's kind, and a refusal for access is permission denied.",
+      "find": ["        RefusalCause::AccessDenied => io::ErrorKind::PermissionDenied,\n"],
+      "replace": ["        RefusalCause::AccessDenied => io::ErrorKind::Other,\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend lets a write through to a target that cannot write",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A write is covered by a target that can write.",
+      "find": ["            SubmissionOp::Write { .. } => target.access.can_write(),\n"],
+      "replace": ["            SubmissionOp::Write { .. } => target.access.can_read(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend lets a read through from a target that cannot read",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A read is covered by a target that can read.",
+      "find": ["            SubmissionOp::Read { .. } => target.access.can_read(),\n"],
+      "replace": ["            SubmissionOp::Read { .. } => target.access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend refuses a commit to a target that cannot write",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A commit is not covered or refused by access: it is issued only to a target with writes, and a target that cannot write has none, so no rule is made for it.",
+      "find": ["            SubmissionOp::Commit => true,\n"],
+      "replace": ["            SubmissionOp::Commit => target.access.can_write(),\n"]
+    },
+    {
+      "name": "DI-13.9: the in-memory backend does not refuse what the access does not cover",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "An operation the access does not cover is refused as AccessDenied.",
+      "find": ["        if !covered {\n            return Err(RefusalCause::AccessDenied);\n"],
+      "replace": ["        if false && !covered {\n            return Err(RefusalCause::AccessDenied);\n"]
+    },
+    {
+      "name": "DI-13.9 control: a target states its access through a binding",
+      "file": "src/memory.rs",
+      "expect": "survives",
+      "why": "A control: the same value returned through a local, which no test can tell apart.",
+      "find": ["    fn access(&self) -> Access {\n        self.access\n    }\n"],
+      "replace": ["    fn access(&self) -> Access {\n        let access = self.access;\n        access\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: a key declaring more than its target states is admitted",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "Registration refuses a key whose declaration the target does not cover. Admitting exactly those it does cover, and refusing the rest, is the one runtime step a typed key adds.",
+      "find": ["            Some(declared) if !actual.covers(declared) => {\n"],
+      "replace": ["            Some(declared) if actual.covers(declared) => {\n"]
+    },
+    {
+      "name": "DI-13.10: a typed key declares some other access than its marker names",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "What a key declares is what its marker says; a key that always declared read and write would be admitted by every target that can do both and refused by none it should be.",
+      "find": ["        Some(A::ACCESS)\n"],
+      "replace": ["        Some(Access::ReadWrite)\n"]
+    },
+    {
+      "name": "DI-13.10: an untyped key declares an access",
+      "file": "src/key.rs",
+      "expect": "caught",
+      "why": "An untyped key declares nothing, so any target registers under it and the core judges what is pushed.",
+      "find": ["    fn declared(&self) -> Option<Access> {\n        None\n    }\n"],
+      "replace": ["    fn declared(&self) -> Option<Access> {\n        Some(Access::ReadWrite)\n    }\n"]
+    },
+    {
+      "name": "DI-13.10: an access covers what it cannot do",
+      "file": "src/access.rs",
+      "expect": "caught",
+      "why": "An access covers another when it can do everything the other can, so joining the two axes with an or covers a key that declares one axis the target lacks.",
+      "find": ["(self.can_read() || !other.can_read()) && (self.can_write() || !other.can_write())"],
+      "replace": ["(self.can_read() || !other.can_read()) || (self.can_write() || !other.can_write())"]
+    },
+    {
+      "name": "DI-13.10 control: a typed key's number is taken through a binding",
+      "file": "src/key.rs",
+      "expect": "survives",
+      "why": "A control: the same number returned through a local, which no test can tell apart.",
+      "find": ["    fn untyped(&self) -> IoTargetKey {\n        self.key\n    }\n"],
+      "replace": ["    fn untyped(&self) -> IoTargetKey {\n        let key = self.key;\n        key\n    }\n"]
     }
   ]
 }
