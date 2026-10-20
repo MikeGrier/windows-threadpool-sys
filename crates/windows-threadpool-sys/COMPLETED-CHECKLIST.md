@@ -179,6 +179,7 @@ implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIG
 The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
 as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
 in test commentary rather than in documentation or the pull request description.
+
 ## Moved 2026-08-21 -- M17 custom-close owner for non-`CloseHandle` wait targets
 
 - [x] **M17.1** -- Let `ThreadpoolWait` own a wait target whose close routine is **not** `CloseHandle`. Today
@@ -427,6 +428,7 @@ the already-traced `io` trampoline.
 **The one gap left open deliberately:** `CallbackEnviron::set_cleanup_group` is a public raw seam
 that lets a caller install their own cleanup-group cancel callback. That function would be the
 caller's, not ours, so there is nothing here to bracket.
+
 ## Moved 2026-10-01 11:54:34 -04:00 -- M-T4.9, which channel carries a developer-facing report
 
 ### <a id="m-t49"></a>M-T4.9 -- Decided: a developer-facing report is a trace event, and the crate writes nothing to stderr. *(completed 2026-10-01 11:54:34 -04:00)*
@@ -584,6 +586,7 @@ shows the cancelling form leaves the default pool unable to make its first worke
   Note what it does *not* establish: it excludes "the rate is unchanged", not "the rate is zero",
   and it is not a root cause. `M26.9` may be called closed on this; the open question is why the
   close-behind-disarm stalls the pool at all.
+
 ### M-T5 -- Why the pool stops making workers
 
 Opened 2026-09-30. `M-T4` shipped a fix whose correctness is structural rather than statistical --
@@ -1426,3 +1429,16 @@ The item as it stood at completion:
   > **CROSS-COMPONENT PREREQUISITE:** `crates/win-sync-sys` -> `WS-M1` -> `WS-1.1` (the crate, with `Event`). See [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/durable-ioring` -> `DI-M3` -> `DI-3.2.2` (dioring's plain I/O and Model A front end, whose readiness event is an `Event`). See [CHECKLIST.md](../durable-ioring/CHECKLIST.md).
+
+## Moved 2026-10-18 22:58:35 -04:00 -- M-T15.1, a wait that shares its handle
+
+### <a id="m-t151"></a>M-T15.1 -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. *(completed 2026-10-18 22:58:35 -04:00)*
+
+Decided by the engineer on 2026-10-18 ("take the decision as yes now"); the decision, and the two points the
+assistant settled within it (the seam's contract, and what `into_handle` returns), are in the workspace
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-wait-may-share-its-handle). `WaitTarget` has a `Shared(SharedHandle)` arm;
+releasing the wait's clone is the target's destructor, so both teardown paths already order it after the drain.
+Restructured while `WS-2.1` was implemented: switching `From<Event>` to the shared arm moved to
+[WS-2.1](../win-sync-sys/CHECKLIST.md), because it needs a shareable `Event` and `WS-2.1` needs this arm first.
+Six tests, and three sabotages (two caught, one control survived); one is caught by the pool failing fast on a
+null handle, which the manifest says.

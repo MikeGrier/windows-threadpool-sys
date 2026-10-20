@@ -1316,6 +1316,13 @@ finding is of a different and worse kind: a rule nothing tests.
   the model, and test it as that conversion is. It lets a consumer hand a thread-pool wait the
   handle it was given without giving the pool the power to signal it.
 
+## M-T15 -- A wait that shares its handle
+
+- [x] **M-T15.1** -- A wait target may be a shared handle, through `assume_waitable_shared`, and `into_handle` gives it back only to its last holder. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m-t151)
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/win-sync-sys` -> `WS-M2` -> `WS-2.1`. See
+  > [CHECKLIST.md](../win-sync-sys/CHECKLIST.md).
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
