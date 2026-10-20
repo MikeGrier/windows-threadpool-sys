@@ -449,6 +449,7 @@ rejected; four sabotages in [sabotage.json](sabotage.json), one of them refused 
 *Milestones M16 and M17 below were numbered M15 and M16 on the branch that built them, and renumbered when
 that branch merged with `main`, whose M15 above was archived first. Their commit messages keep the branch
 numbers.*
+
 ## Moved 2026-10-14 19:25:01 -04:00 -- M16.1: owned versus shared endpoint handles
 
 ### <a id="m161"></a>M16.1 -- Investigated owned versus shared endpoint handles; the engineer chose observers. *(completed 2026-10-14 19:25:01 -04:00)*

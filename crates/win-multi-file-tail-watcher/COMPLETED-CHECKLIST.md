@@ -1192,6 +1192,7 @@ fan's group never exceeds a chunk, a small fan's allocations stay within it, ind
 ### <a id="tw-86"></a>TW-8.6 -- The root `PLANS.md` row for this crate no longer carries a milestone status that the crate's checklist owns. *(completed 2026-10-16 19:20:00 -04:00)*
 
 The row said reads were parked behind M4. It now says what the crate is and links its checklist.
+
 ## Moved 2026-10-16 20:58:29 -04:00 -- TW-8.7 to TW-8.10: the third pre-merge review
 
 ### <a id="tw-87"></a>TW-8.7 -- CI sweeps every sabotage manifest a crate carries, not only `sabotage.json`, so this crate's integration and doctest manifests are run. *(completed 2026-10-16 20:58:29 -04:00)*

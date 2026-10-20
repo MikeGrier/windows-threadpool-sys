@@ -269,7 +269,7 @@ The assistant's choices in it are queued in `durable-ioring`'s `DI-9.7`; the dec
 
 The item as it stood at completion:
 
-- [ ] **IB-2+.4** -- **Whether `windows-namespace-request-sys`' `AlignedBuffer` moves onto
+- [x] **IB-2+.4** -- **Whether `windows-namespace-request-sys`' `AlignedBuffer` moves onto
   `AlignedBuf`, and by which route.** The engineer's decision, because the type is public API of a
   published crate (0.2.3): it appears in public return types (`Outcome<AlignedBuffer>`, the query and
   security captures) and is re-exported. Its differences from `AlignedBuf` are

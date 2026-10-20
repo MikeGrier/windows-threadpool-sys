@@ -167,6 +167,16 @@ fn captured_token_type_is_send_sync_and_clone() {
 }
 
 #[test]
+fn a_clone_shares_the_captured_token_and_a_second_capture_does_not() {
+    let token = ImpersonationToken::capture().expect("capture the thread's context");
+    let clone = token.clone();
+    let recaptured = ImpersonationToken::capture().expect("capture it again");
+
+    assert!(token.handle.same_handle(&clone.handle));
+    assert!(!token.handle.same_handle(&recaptured.handle));
+}
+
+#[test]
 fn application_guard_is_neither_send_nor_sync() {
     trait AmbiguousIfSend<A> {
         fn marker() {}

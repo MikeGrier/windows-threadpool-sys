@@ -162,6 +162,9 @@ windows-topology-sys = { path = "../windows-topology-sys", features = [
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
 serde_json = "1.0"
+# `tests/bounded_pop.rs` makes its overlapped named pipe with this crate, in place of an `unsafe`
+# `CreateNamedPipeW` call of its own. Path-only, as `windows-topology-sys` above and for its reason.
+win-pipes-sys = { path = "../win-pipes-sys" }
 # M7's ring-copy sample additionally needs `GROUP_AFFINITY` (pinned-thread
 # affinity); M14.1's epoch-log sample needs `Win32_System_Ioctl` for the
 # `FSCTL_SET_ZERO_DATA` reclamation it orders against ring epochs, and for the
@@ -173,7 +176,6 @@ serde_json = "1.0"
 # `VirtualAllocExNuma` on its own.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Ioctl",
-	"Win32_System_Pipes",
 	"Win32_System_SystemInformation",
 ] }
 # M14.1's epoch-log sample orders a non-ring `FSCTL` against ring epochs, which

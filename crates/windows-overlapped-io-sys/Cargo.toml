@@ -93,6 +93,13 @@ version = "0.1.0"
 path = "../wtf-string"
 optional = true
 
+# The tests make their overlapped named pipes with `win-pipes-sys`, in place of an `unsafe`
+# `CreateNamedPipeW` call each. Path-only, with no `version`: Cargo checks a pinned version against the
+# path at every build, so a release of that crate would break this one, and a versionless
+# dev-dependency is left out of the published manifest (see `windows-ioring-sys`'s manifest).
+[dev-dependencies]
+win-pipes-sys = { path = "../win-pipes-sys" }
+
 # Extra windows-sys features used only by tests that issue real overlapped I/O.
 # These stay out of the published crate's feature set for downstream consumers.
 [dev-dependencies.windows-sys]

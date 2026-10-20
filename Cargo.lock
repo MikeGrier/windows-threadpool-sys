@@ -286,6 +286,7 @@ dependencies = [
 name = "windows-impersonation-token-sys"
 version = "0.1.1"
 dependencies = [
+ "win-shared-os-owned-handle",
  "windows-sys",
 ]
 
@@ -296,6 +297,7 @@ dependencies = [
  "io-buffers",
  "serde_json",
  "win-numa-sys",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-guard-alloc",
  "windows-overlapped-io-sys",
@@ -336,6 +338,7 @@ name = "windows-overlapped-io-sys"
 version = "0.3.0"
 dependencies = [
  "io-buffers",
+ "win-pipes-sys",
  "win-shared-os-owned-handle",
  "windows-sys",
  "wtf-string",

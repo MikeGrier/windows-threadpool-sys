@@ -73,8 +73,8 @@ use std::marker::PhantomData;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
 
+use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Foundation::{ERROR_CANT_OPEN_ANONYMOUS, ERROR_NO_TOKEN, FALSE, TRUE};
 use windows_sys::Win32::Security::{
     DuplicateTokenEx, GetTokenInformation, SECURITY_IMPERSONATION_LEVEL, SecurityAnonymous,
@@ -241,17 +241,10 @@ impl std::error::Error for ApplyError {
 /// callers to mutate the captured token. The value is safe to send to and share
 /// between threads; each call to [`Self::with_impersonation`] affects only the
 /// calling thread for the duration of its closure.
+#[derive(Clone)]
 #[must_use = "dropping the token discards the captured impersonation context"]
 pub struct ImpersonationToken {
-    handle: Arc<OwnedHandle>,
-}
-
-impl Clone for ImpersonationToken {
-    fn clone(&self) -> Self {
-        Self {
-            handle: Arc::clone(&self.handle),
-        }
-    }
+    handle: SharedHandle,
 }
 
 impl ImpersonationToken {
@@ -295,7 +288,7 @@ impl ImpersonationToken {
         // that must be released with CloseHandle, which OwnedHandle does.
         let handle = unsafe { OwnedHandle::from_raw_handle(captured) };
         Ok(Self {
-            handle: Arc::new(handle),
+            handle: SharedHandle::new(handle),
         })
     }
 

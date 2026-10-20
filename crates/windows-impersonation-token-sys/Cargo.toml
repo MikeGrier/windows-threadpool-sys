@@ -24,6 +24,11 @@ path = "src/lib.rs"
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
 
+[dependencies]
+# The captured token is shared by every clone through the workspace's one shared owner of a handle,
+# rather than an `Arc<OwnedHandle>` of this crate's own (IT-inf.1).
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
