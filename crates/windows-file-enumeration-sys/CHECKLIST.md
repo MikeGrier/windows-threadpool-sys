@@ -32,10 +32,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
 
 - [x] **SAFE-3** -- The doorbell is a `win-sync-sys` `Event`, and a `ThreadpoolWait` is handed a waitable handle that shares it, not a duplicate. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-3)
 
-- [ ] **SAFE-4** -- **Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s
-  `CompareStringOrdinal` call is that crate's wrapper.
-
-  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (the crate is created).
+- [x] **SAFE-4** -- Case-insensitive name matching is `win-text-sys`'s `compare_string_ordinal`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-4)
 
 - [ ] **SAFE-5** -- **`#![forbid(unsafe_code)]`.** On the crate root, so the build refuses any `unsafe` in the
   crate or its unit tests. Whatever `unsafe` remains after `SAFE-2` to `SAFE-4` is found by the build, and each

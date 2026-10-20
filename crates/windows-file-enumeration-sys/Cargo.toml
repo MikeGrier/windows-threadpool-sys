@@ -54,6 +54,9 @@ win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned
 # client arms rather than duplicated for it (SAFE-3).
 win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
 
+# The case-insensitive name comparison, `CompareStringOrdinal` over counted slices (SAFE-4).
+win-text-sys = { version = "0.0.1", path = "../win-text-sys" }
+
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps a
 # code of 2^31 or more, where this crate's own earlier type panicked on one (WE-D-1).
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
@@ -63,7 +66,5 @@ version = "0.61.2"
 default-features = false
 features = [
 	"Win32_Foundation",
-	"Win32_Globalization",
 	"Win32_Storage_FileSystem",
-	"Win32_System_Threading",
 ]

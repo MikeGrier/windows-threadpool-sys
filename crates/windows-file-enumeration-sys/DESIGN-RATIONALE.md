@@ -37,13 +37,11 @@ Windows contracts.
 ## Why these direct windows-sys features are sufficient
 
 `Win32_Foundation` provides native handles, errors, and metadata value types.
-`Win32_Globalization` provides `CompareStringOrdinal` for crate-owned
-non-linguistic name comparison.
 `Win32_Storage_FileSystem` provides directory open/enumeration APIs and record
-layouts. `Win32_System_Threading` provides signaling and resetting the lazily
-created manual-reset CQ event. Event creation itself comes from the safe
-`WaitableHandle` constructor in `windows-threadpool-sys`, so this crate does not
-need direct Security bindings. The enumeration API is not overlapped, so direct
+layouts. The lazily created manual-reset CQ event is a `win-sync-sys` `Event`
+(D-25), and the non-linguistic name comparison is `win-text-sys`'s (D-26), so
+this crate needs neither Threading nor Globalization bindings and no direct
+Security bindings. The enumeration API is not overlapped, so direct
 System IO bindings would claim a capability this design intentionally excludes.
 
 ## Why paths are snapshotted before submission
@@ -464,3 +462,20 @@ that no caller could act on.
 **What the tests no longer need.** The model's check made a duplicate of the doorbell only to hand a wait an owned
 handle; the wait takes a borrowed one, so the duplicate is gone with the helper. The engine tests' raw byte write is
 not a wait and is `SAFE-5`'s to find.
+
+## Why a comparison's result is read in one function, and what the earlier fallbacks were (D-26)
+
+**Built 2026-10-20** as `SAFE-4`. Of the census D-23 gives, the comparison's one `unsafe` block is gone, and with it
+the last in this crate's non-test code: what remains is a raw byte write in an engine test, for `SAFE-5`.
+
+**The earlier code declared two fallbacks unreachable.** Both turned a run too long for the call's count into an exact
+comparison, and its mutation run showed them surviving, which it explained by the four gigabytes a test would need.
+The wrapper reports that case as an error and not as a count, so what the crate does with it is a function of a
+result, and a result can be made in a test. The fallback is therefore tested, where it had only been argued.
+Considered: **treating the refusal as a non-match**, which would make a name that long unequal to itself under
+`Insensitive` and equal under `Sensitive`; the exact comparison keeps the two consistent for a run that is the same
+units on both sides.
+
+**A failure of the call is a non-match, as it was.** Under the earlier code any result other than `CSTR_EQUAL` was
+unequal, a failure included. Reporting the failure instead would change `matches`' signature for a call that, with
+the arguments this crate passes, has no documented way to fail.

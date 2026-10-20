@@ -131,3 +131,23 @@ the target are each other's other holder, and that the event outlives the ring; 
 the target is woken by an entry, drains, and is woken again. Evidence, in [sabotage.json](sabotage.json): four
 entries, the target made a second event, set and reset swapped, the initial state ignored, and the refresh removed, all
 caught, and a control. The engine tests' raw byte write is not a wait and remains for `SAFE-5`.
+
+## Moved 2026-10-20 16:55:17 -04:00 -- SAFE-4: the name comparison is win-text-sys's
+
+### <a id="safe-4"></a>SAFE-4 -- Case-insensitive name matching is `win-text-sys`'s `compare_string_ordinal`. *(completed 2026-10-20 16:55:17 -04:00)*
+
+The item as written:
+
+**Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s
+  `CompareStringOrdinal` call is that crate's wrapper.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (the crate is created).
+
+What was done. [pattern.rs](src/pattern.rs) compares an equal-length pair of runs through `compare_string_ordinal` with
+`Case::Insensitive`, and reads the result in `equal_from`: equal is a match, a failure of the call is not, and a run too
+long for the call's count is compared exactly. The empty-run shortcut is gone, since the wrapper always passes the
+count. `win-text-sys` is a dependency, and the `Win32_Globalization` and `Win32_System_Threading` features of
+`windows-sys` are removed, the second having been unused since `SAFE-3`. Recorded as [D-26](DESIGN-NOTES.md#d-26), with
+the rationale in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Tests: the existing pattern tests unchanged, and new tests
+of the empty run and of each result, including the too-long arm that the earlier code could only argue. Evidence, in
+[sabotage.json](sabotage.json): four entries, all caught, and a control.

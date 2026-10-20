@@ -257,6 +257,7 @@ dependencies = [
  "win-error-codes",
  "win-shared-os-owned-handle",
  "win-sync-sys",
+ "win-text-sys",
  "windows-impersonation-token-sys",
  "windows-namespace-request-sys",
  "windows-sys",

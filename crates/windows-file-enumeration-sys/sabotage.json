@@ -170,6 +170,46 @@
       "why": "A control: the same clone through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))\n"],
       "replace": ["        let event = self.doorbell_event()?.clone();\n        Ok(WaitableHandle::from(event))\n"]
+    },
+    {
+      "name": "SAFE-4: a case-insensitive run is compared case-sensitively",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "The case choice is the only thing that makes the comparison insensitive; matching \"README\" against \"readme\" observes it.",
+      "find": ["        compare_string_ordinal(left, right, Case::Insensitive),\n"],
+      "replace": ["        compare_string_ordinal(left, right, Case::Sensitive),\n"]
+    },
+    {
+      "name": "SAFE-4: a comparison that says less is read as equal",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "Only an equal result is a match.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => ordering != Ordering::Greater,\n"]
+    },
+    {
+      "name": "SAFE-4: a run too long for the call is not compared exactly",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "Reaching it takes a slice of more than 2^31 units, so it is observed through the comparison's result: the fallback is the exact comparison, and equal runs must still match.",
+      "find": ["        Err(CompareStringOrdinalError::TooLong { .. }) => left == right,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::TooLong { .. }) => false,\n"]
+    },
+    {
+      "name": "SAFE-4: a failure of the call is read as equality",
+      "file": "src/pattern.rs",
+      "expect": "caught",
+      "why": "A failed comparison must never produce a match.",
+      "find": ["        Err(CompareStringOrdinalError::Call(_)) => false,\n"],
+      "replace": ["        Err(CompareStringOrdinalError::Call(_)) => true,\n"]
+    },
+    {
+      "name": "SAFE-4 control: the equal result is read through a binding",
+      "file": "src/pattern.rs",
+      "expect": "survives",
+      "why": "A control: the same comparison through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(ordering) => ordering == Ordering::Equal,\n"],
+      "replace": ["        Ok(ordering) => {\n            let equal = ordering == Ordering::Equal;\n            equal\n        }\n"]
     }
   ]
 }
