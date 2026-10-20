@@ -712,9 +712,18 @@ fn summarise(
     }
 }
 
-/// Capacity big enough that a whole run fits, so nothing is ever refused.
+/// The smallest capacity every timed queue accepts, which `M4.2`'s settable push count can fall below: one
+/// producer making one push needs room for one item, and the slotwise queue refuses a capacity under two.
+/// Larger than the run needs is harmless, since nothing is refused either way, so the minimum raises the
+/// capacity and leaves the workload as it was asked for.
+const MINIMUM_QUEUE_CAPACITY: usize = 2;
+
+/// Capacity big enough that a whole run fits, so nothing is ever refused, and no smaller than a timed queue
+/// accepts.
 fn capacity_for(producers: usize, pushes_per_producer: usize) -> usize {
-    (producers * pushes_per_producer).next_power_of_two()
+    (producers * pushes_per_producer)
+        .next_power_of_two()
+        .max(MINIMUM_QUEUE_CAPACITY)
 }
 
 /// A gate holding every participant until all of them exist, or until the

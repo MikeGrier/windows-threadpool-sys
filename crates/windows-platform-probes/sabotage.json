@@ -1573,6 +1573,18 @@
       "replace": [
         "    let count = timers.iter().count();"
       ]
+    },
+    {
+      "name": "review: the capacity has no minimum, so the smallest run panics",
+      "file": "src/queue_contention.rs",
+      "expect": "caught",
+      "why": "One producer making one push sized a queue of one, which the slotwise queue refuses; the probe panicked after its report had begun. The unit test asks each shape's own constructor, and the binary-level test runs the smallest run.",
+      "find": [
+        "        .max(MINIMUM_QUEUE_CAPACITY)\n"
+      ],
+      "replace": [
+        "        .max(1)\n"
+      ]
     }
   ]
 }

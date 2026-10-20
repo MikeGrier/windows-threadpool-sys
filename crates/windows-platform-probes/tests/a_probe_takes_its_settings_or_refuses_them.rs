@@ -103,6 +103,35 @@ fn a_queue_run_given_settings_reports_them_and_measures_only_the_counts_given() 
     );
 }
 
+/// The smallest run the settings accept is measured and not a crash: one producer making one push sizes
+/// a queue every shape takes, where the slotwise queue refused a capacity of one and the probe panicked
+/// after its report had begun.
+#[test]
+fn a_queue_run_of_one_producer_making_one_push_is_measured() {
+    let output = run(
+        QUEUE,
+        &[
+            "--producers",
+            "1",
+            "--pushes-per-producer",
+            "1",
+            "--repetitions",
+            "1",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "exit {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("sampling: 1 pushes per producer"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn a_cost_probe_given_a_multiplier_reports_it_beside_its_banner_and_in_its_row() {
     let output = run(REQUEST, &["--iteration-multiplier", "2"]);

@@ -291,6 +291,28 @@ fn capacity_for_leaves_room_for_every_push_at_every_producer_count() {
     );
 }
 
+/// The smallest run the settings accept, one producer making one push, must size a queue every timed
+/// shape accepts: the slotwise queue refuses a capacity of one, and the probe panicked on it after
+/// starting its report. Each shape's own constructor is asked, so the minimum is theirs and not this
+/// test's.
+#[test]
+fn the_smallest_run_the_settings_accept_sizes_a_queue_every_timed_shape_accepts() {
+    let capacity = capacity_for(1, 1);
+    assert!(
+        capacity >= 1,
+        "capacity {capacity} cannot hold the one push"
+    );
+    assert!(
+        slotwise_mpsc::bounded::<u64>(capacity).is_ok(),
+        "{capacity}"
+    );
+    assert!(
+        reserving_mpsc::bounded::<u64>(capacity).is_ok(),
+        "{capacity}"
+    );
+    assert!(permit_mpsc::bounded::<u64>(capacity).is_ok(), "{capacity}");
+}
+
 /// `measured_span` is the correction that round two of this branch's review
 /// produced, and it had no test until round seventeen asked for one. The probe
 /// previously timed from the coordinator's clock, which understated elapsed time
