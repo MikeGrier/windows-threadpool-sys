@@ -48,7 +48,7 @@ the workspace's release-scope rule where the two do not have to build together.
 - [x] **WV-2.5** -- `storage_dependency_information`, the virtdisk dependency query, with the version as an input and names copied out of the reply. -> [completed 2026-10-15](COMPLETED-CHECKLIST.md#wv-25)
 
   **Next:** nothing further in this milestone; the order across crates is in
-  [durable-ioring's checklist](../durable-ioring/CHECKLIST.md#where-the-open-surface-work-goes-next-read-this-first-when-picking-the-work-back-up).
+  [durable-ioring's archive](../durable-ioring/COMPLETED-CHECKLIST.md#open-surface-order).
 
 ## WV-M3 -- What telling a volume or a disk from a file needs
 

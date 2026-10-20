@@ -3521,7 +3521,7 @@ what is tested: [DESIGN-NOTES.md](DESIGN-NOTES.md#di-16-1). The item as it stood
   ([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)) has its entries hold a `SharedHandle`. An
   `OpenedFile` already holds one, yet `final_location` in
   [opened_file.rs](../win-durable-ioring/src/windows_backend/opened_file.rs) and `HandleKindQuery::of` in
-  [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) duplicate it to ask its final path and
+  `handle_kind.rs` (since removed, [DI-D-73](DESIGN-NOTES.md#di-d-73)) duplicate it to ask its final path and
   kind. Both take the `SharedHandle` instead and give the entry a clone; `HandleKindQuery::of` changes signature,
   so this is breaking for `win-durable-ioring`, in a commit of its own. `OpenedVolume` and `OpenedDisk` are
   checked for the same pattern. Tests: the existing ones, and that asking an opened file's kind makes no handle.
@@ -3546,7 +3546,7 @@ The item as written:
   and say that `Volume`, `PhysicalDisk` and `DiskFile` name a pattern of answers and not a kind any
   page establishes. Documentation only; behaviour does not change.
 
-What was done. The module doc of [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) no longer
+What was done. The module doc of `handle_kind.rs` (since removed, [DI-D-73](DESIGN-NOTES.md#di-d-73)) no longer
 says the control's page names the devices that answer it. It says no page does, and gives what was observed on one
 machine: a volume and a physical disk answered the device-number control, an ordinary file, a directory, `NUL`, a
 console and a pipe refused it, and a volume answered the extents control where a physical disk refused it. The docs of
