@@ -699,10 +699,10 @@ one of those, that right becomes an axis, and the cost of one more axis is in
 
 **What the type does not reach, and what then reaches it** ([DI-D-66](#di-d-66)). The ring addresses a target by `IoTargetKey(pub u64)`, a number the
 consumer chooses, and `Win32FileTarget` is not generic, so a compile-time check ends where the target is
-built. A write submitted to a read-only target still reaches the kernel and fails with its error, as the
-existing test `a_write_through_a_read_only_handle_fails` expects. Whether the target states its data
-access to the core, as it states its warranty and geometry, so that the core can refuse at submission, and
-whether a key carries it, are decided by [DI-D-66](#di-d-66).
+built. A write submitted to a read-only target reached the kernel and failed with its error, which the
+test `a_write_through_a_read_only_handle_fails` then expected. [DI-D-66](#di-d-66) decided what replaced
+that: the target states its data access to the core, as it states its warranty and geometry, so the core
+refuses the write at the push and hands its buffer back, and the test changed with it.
 
 **What building it settled** ([DI-13.8](COMPLETED-CHECKLIST.md#di-138)). None of these was a ruling; each is
 the choice the code made, with the measurement.
