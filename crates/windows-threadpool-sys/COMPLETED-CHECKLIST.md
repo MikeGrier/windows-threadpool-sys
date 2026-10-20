@@ -4,9 +4,9 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 [PLANS.md](PLANS.md) for plan status. Design decisions are in the workspace-root
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-## Moved 2026-08-17 -- M1 callback environment, M2 work submission, M3 TP_IO backend
+## Moved 2026-08-17 — M1 callback environment, M2 work submission, M3 TP_IO backend
 
-### M1 -- Callback environment
+### M1 — Callback environment
 
 - [x] **M1-1** -- Implement SDK-equivalent `TP_CALLBACK_ENVIRON_V3` initialization and mutation -- the
 	header-only helpers that `windows-sys` does not emit. See [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
@@ -14,7 +14,7 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 - [x] **M1-2** -- Unit-test callback-environment init and mutation against the documented default field values
 	(version, priority, size).
 
-### M2 -- Work submission and callback ownership
+### M2 — Work submission and callback ownership
 
 - [x] **M2-1** -- Implement and test one end-to-end work submission abstraction over `CreateThreadpoolWork`,
 	`SubmitThreadpoolWork`, `WaitForThreadpoolWorkCallbacks`, and `CloseThreadpoolWork`.
@@ -22,7 +22,7 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 - [x] **M2-2** -- Validate the callback ownership model with the work abstraction before extending it to timers
 	and waits.
 
-### M3 -- TP_IO backend over the shared seam
+### M3 — TP_IO backend over the shared seam
 
 - [x] **M3-1** -- Wire the `windows-threadpool-sys` -> `windows-overlapped-io-sys` dependency (path plus
 	version), and update the publish workflow so the overlapped crate releases before this one.
@@ -56,7 +56,7 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 	That contract was undocumented and is now recorded on `OperationId` and in the overlapped crate's
 	design notes.
 
-## Moved 2026-08-17 -- M4 safe abstractions and documentation
+## Moved 2026-08-17 — M4 safe abstractions and documentation
 
 M4 was restructured during execution. Its original first item bundled work, timer, wait, and I/O, but work had
 landed in M2 and I/O in M3, so only timer and wait remained; those became separate implementation and test
@@ -120,7 +120,7 @@ M4-8 (the one-shot/periodic timer split).
 	Crate-level guidance, runnable doc examples for every object type, a rewritten README, and docs.rs metadata
 	pinning a Windows target -- without which documentation for this Windows-only crate would fail to build.
 
-## Moved 2026-08-17 -- M5 timer stress suite
+## Moved 2026-08-17 — M5 timer stress suite
 
 An opt-in load suite for the timer types, gated on `WINDOWS_THREADPOOL_STRESS` and scaled by
 `WINDOWS_THREADPOOL_STRESS_SCALE`. 24 scenarios, about a minute at scale 1. See
@@ -162,9 +162,9 @@ record zero callbacks while appearing to pass.
 	Crate README section covering both environment variables, the deliberate CI exclusion, the two measurements
 	that shape the scenarios, and what is asserted versus reported.
 
-## Moved 2026-08-18 -- M16, thirteenth review round on PR #3
+## Moved 2026-08-18 — M16, thirteenth review round on PR #3
 
-### <a id="mf-3"></a>MF-3 -- Name the callback-environment ABI version, and pin ABI values against independently written expectations. *(completed 2026-08-18 02:42:11 -04:00)*
+### <a id="mf-3"></a>MF-3 — Name the callback-environment ABI version, and pin ABI values against independently written expectations. *(completed 2026-08-18 02:42:11 -04:00)*
 
 `Version: 3` was written inline while the flag bit beside it was a named constant, contrary to the repository's
 rule against inline numeric identities. It is now `ENVIRON_VERSION`, documented as a breaking ABI change.
@@ -174,7 +174,7 @@ that importing the implementation's constant to check the implementation's const
 `expected_abi` module satisfies both rules at once: the expectation is written independently of the
 implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-### <a id="mf-4"></a>MF-4 -- Correct the `set_pool` ownership comment in the callback-environment tests. *(completed 2026-08-18 02:42:11 -04:00)*
+### <a id="mf-4"></a>MF-4 — Correct the `set_pool` ownership comment in the callback-environment tests. *(completed 2026-08-18 02:42:11 -04:00)*
 
 The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
 as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
