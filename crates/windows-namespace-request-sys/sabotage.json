@@ -660,6 +660,38 @@
       "why": "Control. The same value, so the tests of the fields must not fire on it.",
       "find": ["        info.CreationTime,\n"],
       "replace": ["        { info.CreationTime },\n"]
+    },
+    {
+      "name": "NR-6.5: the call into the caller's buffer is limited by the request's capacity",
+      "file": "src/query.rs",
+      "expect": "caught",
+      "why": "The buffer's length is the size the call is given; a request built with a small capacity would refuse a buffer that fits. Written as the smaller of the two so that the sabotage cannot overrun the buffer and be caught by a crash rather than a test.",
+      "find": ["        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"],
+      "replace": ["        let size = u32::try_from(buffer.len().min(self.capacity)).unwrap_or(u32::MAX);\n"]
+    },
+    {
+      "name": "NR-6.5: the caller's buffer is cleared before the call",
+      "file": "src/query.rs",
+      "expect": "caught",
+      "why": "The buffer is not cleared: bytes the call does not write keep what the caller left there. Clearing would cost a pass over every batch's buffer and change what the caller sees.",
+      "find": ["        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"],
+      "replace": ["        buffer.as_mut_slice().fill(0);\n        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"]
+    },
+    {
+      "name": "NR-6.5: the caller's buffer is replaced by a new allocation",
+      "file": "src/query.rs",
+      "expect": "caught",
+      "why": "The point of the form is that one allocation serves every call; a fresh buffer swapped in would allocate per call and leave the caller holding a different address.",
+      "find": ["        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"],
+      "replace": ["        *buffer = AlignedBuf::zeroed(buffer.len(), buffer.align()).expect(\"a new buffer\");\n        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"]
+    },
+    {
+      "name": "NR-6.5: control -- the length is read through the slice",
+      "file": "src/query.rs",
+      "expect": "survives",
+      "why": "Control. The same length, so the tests of the size given must not fire on it.",
+      "find": ["        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);\n"],
+      "replace": ["        let size = u32::try_from(buffer.as_slice().len()).unwrap_or(u32::MAX);\n"]
     }
   ]
 }

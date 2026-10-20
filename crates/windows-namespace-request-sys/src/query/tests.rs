@@ -459,3 +459,170 @@ fn a_request_survives_the_handle_it_was_built_from() {
         .perform()
         .expect("the request's handle outlives the caller's");
 }
+
+// --- Into a buffer the caller owns (NR-6.5) ----------------------------------------------------
+
+/// Where a buffer lives and how it is laid out, to show it is the same allocation after a call.
+fn allocation_of(buffer: &AlignedBuf) -> (*const u8, usize, usize) {
+    (buffer.as_ptr(), buffer.len(), buffer.align())
+}
+
+/// Reads a directory batch by batch into one buffer, checking after every call, the last one
+/// included, that the buffer is the allocation it started as. Returns the names and the batch count.
+fn names_through_one_buffer(directory: &File, buffer: &mut AlignedBuf) -> (Vec<String>, usize) {
+    let restart = query(directory, FileInformationClass::ID_EXTD_DIRECTORY_RESTART);
+    let next = query(directory, FileInformationClass::ID_EXTD_DIRECTORY);
+    let allocation = allocation_of(buffer);
+
+    restart.perform_into(buffer).expect("the first batch");
+    assert_eq!(allocation_of(buffer), allocation);
+    let mut names = names_in(buffer);
+    let mut batches = 1;
+    loop {
+        let outcome = next.perform_into(buffer);
+        assert_eq!(allocation_of(buffer), allocation, "after batch {batches}");
+        match outcome {
+            Ok(()) => {
+                names.extend(names_in(buffer));
+                batches += 1;
+            }
+            Err(error) if error.code() == ERROR_NO_MORE_FILES => break,
+            Err(error) => panic!("unexpected enumeration failure: {error}"),
+        }
+    }
+    (names, batches)
+}
+
+#[test]
+fn a_directory_read_into_one_buffer_lists_what_the_allocating_form_lists() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::with_extra_files("query-into-lists", ENOUGH_TO_SPAN_BATCHES);
+
+    // Two opens, so each form reads the directory from its own cursor.
+    let allocating = fixture.open_directory();
+    let restart = query(&allocating, FileInformationClass::ID_EXTD_DIRECTORY_RESTART)
+        .with_capacity(SMALL_BATCH);
+    let next =
+        query(&allocating, FileInformationClass::ID_EXTD_DIRECTORY).with_capacity(SMALL_BATCH);
+    let mut expected = next_names(&restart).expect("the first batch");
+    while let Some(batch) = next_names(&next) {
+        expected.extend(batch);
+    }
+
+    let mut buffer = AlignedBuf::zeroed(SMALL_BATCH, 8).expect("a buffer");
+    let (listed, batches) = names_through_one_buffer(&fixture.open_directory(), &mut buffer);
+
+    assert!(batches > 1, "the directory must span batches to test reuse");
+    assert_eq!(listed, expected);
+}
+
+#[test]
+fn the_callers_buffer_is_the_same_allocation_after_every_call() {
+    // `names_through_one_buffer` asserts it after each call; this runs it with a buffer of another
+    // size and alignment, so the check is not of one layout only.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::with_extra_files("query-into-allocation", ENOUGH_TO_SPAN_BATCHES);
+    let mut buffer = AlignedBuf::zeroed(SMALL_BATCH * 2, 64).expect("a buffer");
+    let before = allocation_of(&buffer);
+
+    let (_, batches) = names_through_one_buffer(&fixture.open_directory(), &mut buffer);
+
+    assert!(batches > 1);
+    assert_eq!(allocation_of(&buffer), before);
+}
+
+#[test]
+fn the_end_of_the_directory_is_the_calls_code_through_the_callers_buffer() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::with_extra_files("query-into-end", ENOUGH_TO_SPAN_BATCHES);
+    let directory = fixture.open_directory();
+    let mut buffer = AlignedBuf::zeroed(SMALL_BATCH, 8).expect("a buffer");
+    names_through_one_buffer(&directory, &mut buffer);
+
+    let next = query(&directory, FileInformationClass::ID_EXTD_DIRECTORY);
+    for _ in 0..2 {
+        let error = next
+            .perform_into(&mut buffer)
+            .expect_err("the directory is done");
+        assert_eq!(error.code(), ERROR_NO_MORE_FILES);
+    }
+}
+
+#[test]
+fn the_buffers_length_is_the_size_given_and_the_requests_capacity_is_not_used() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("query-into-length");
+    let file = fixture.open_file();
+
+    // A capacity the allocating form would be refused for, and a buffer that fits.
+    let small_capacity = query(&file, FileInformationClass::BASIC).with_capacity(1);
+    assert_eq!(
+        small_capacity.perform().expect_err("one byte").code(),
+        ERROR_BAD_LENGTH
+    );
+    let mut fits = AlignedBuf::zeroed(size_of::<FILE_BASIC_INFO>(), 8).expect("a buffer");
+    small_capacity
+        .perform_into(&mut fits)
+        .expect("the buffer's length is what the call is given");
+
+    // And the other way: the default capacity fits, a one-byte buffer does not.
+    let mut one_byte = AlignedBuf::zeroed(1, 8).expect("a buffer");
+    let error = query(&file, FileInformationClass::BASIC)
+        .perform_into(&mut one_byte)
+        .expect_err("one byte");
+    assert_eq!(error.code(), ERROR_BAD_LENGTH);
+}
+
+#[test]
+fn an_empty_buffer_gives_the_code_the_allocating_form_gives_for_no_capacity() {
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("query-into-empty");
+    let file = fixture.open_file();
+    let request = query(&file, FileInformationClass::BASIC).with_capacity(0);
+    let mut empty = AlignedBuf::zeroed(0, 8).expect("an empty buffer");
+
+    let into = request.perform_into(&mut empty).expect_err("no room");
+    let allocating = request.perform().expect_err("no room");
+
+    assert_eq!(into.code(), allocating.code());
+}
+
+#[test]
+fn the_call_writes_what_the_allocating_form_returns_and_the_rest_keeps_what_it_held() {
+    // The buffer is not cleared: what the call does not write is left as the caller had it.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("query-into-untouched");
+    let file = fixture.open_file();
+    const MARK: u8 = 0xAB;
+    const SPARE: usize = 16;
+    let written = size_of::<FILE_BASIC_INFO>();
+    let mut buffer =
+        AlignedBuf::from_bytes(&[MARK; size_of::<FILE_BASIC_INFO>() + SPARE], 8).expect("a buffer");
+
+    query(&file, FileInformationClass::BASIC)
+        .perform_into(&mut buffer)
+        .expect("query FileBasicInfo");
+    let allocating = query(&file, FileInformationClass::BASIC)
+        .with_capacity(written)
+        .perform()
+        .expect("query FileBasicInfo");
+
+    assert_eq!(&buffer.as_slice()[..written], allocating.as_slice());
+    assert!(
+        buffer.as_slice()[written..]
+            .iter()
+            .all(|&byte| byte == MARK)
+    );
+}

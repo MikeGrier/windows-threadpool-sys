@@ -700,3 +700,14 @@ past what `SystemTime` holds on a platform would need a refusal or a clamp of th
 neither; the value is the call's, and a consumer converts it where it knows what it wants. The attributes stay a raw
 `u32` for the same reason D-29 carries a `FileType` as it came: the constants list grows, and a typed set would drop
 a bit it did not know.
+
+## D-34: querying into the caller's buffer
+
+**Why `&mut AlignedBuf` and not `&mut [u8]`.** A slice carries no alignment, so the entry could only check one, and a
+check is what the page gives no ground for; an `AlignedBuf` states its alignment as a property of the type, so the
+caller who chose it can see it, and the entry passes it on. The same buffer is what `perform` returns, so a consumer
+can keep the one `perform` gave it.
+
+**Why the buffer is not cleared.** Clearing would cost a pass over the buffer on every batch, which is the cost the
+form exists to remove, and would add a guarantee about bytes no consumer reads: a batch is walked by its own
+next-entry offsets, and a fixed-size class's structure is the bytes it occupies.

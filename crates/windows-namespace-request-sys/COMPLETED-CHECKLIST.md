@@ -555,3 +555,47 @@ control. The item as it stood at completion follows verbatim.
   them (the four times as `i64`, the attributes as their raw `u32`), with nothing said beyond the page. Its
   decision is recorded beside D-31's. Tests: a directory reports the directory attribute and a file does not; the
   fields agree with the untyped entry's bytes; a refused handle reports the untyped entry's code.
+
+## Moved 2026-10-19 21:36:30 -04:00 -- NR-6 complete: a request shares the caller's handle
+
+The milestone's last item, with the milestone's own text; its other items were archived as they completed
+([NR-6.1](#nr-61-shared), [NR-6.2](#nr-62-capture), [NR-6.3](#nr-63-anchored), [NR-6.4](#nr-64-basic)). NR-6.1's
+handoff, discharged by `DI-16.1`, `M7.1` and `SAFE-1`, is kept below the preamble.
+
+NR-6 -- A request shares the caller's handle
+
+`NR-inf.1`, graduated 2026-10-18 by the engineer's ruling recorded as [D-32](DESIGN-NOTES.md#d-32): a request
+holds a `SharedHandle`, and nothing in this crate duplicates a handle. The parked item's text is archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-inf1-graduated), and D-32 answers each of its questions.
+The order across crates is `M43` in the workspace [CHECKLIST.md](../../CHECKLIST.md). Here: `NR-6.1`, then the
+consumers move (the handoff below), then `NR-6.2`. `NR-6.3` to `NR-6.5` are additive and independent of those and
+of each other. Then this crate is released, a new minor.
+
+  > **-> CROSS-COMPONENT HANDOFF:** the consumers move off `CapturedHandle` before `NR-6.2`:
+  > [DI-16.1](../durable-ioring/COMPLETED-CHECKLIST.md#di-161) (`win-durable-ioring`),
+  > [M7.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m71) (`windows-platform-probes`), and
+  > [SAFE-1](../windows-file-enumeration-sys/CHECKLIST.md) (`windows-file-enumeration-sys`' metadata test).
+
+### <a id="nr-65-into"></a>NR-6.5 -- `QueryFileInformation::perform_into` makes the call into an `AlignedBuf` the caller owns and keeps, allocating nothing and refusing nothing about the buffer ahead of the call. *(completed 2026-10-19 21:36:30 -04:00)*
+
+The decision is [D-34](DESIGN-NOTES.md#d-34), with the page it rests on and why the buffer is neither checked nor
+cleared; `perform` is now an allocation followed by `perform_into`, so the call has one site. Tests in
+[query/tests.rs](src/query/tests.rs): a directory read batch by batch into one buffer lists what the allocating form
+lists, over more than one batch; the buffer is the same allocation (address, length, alignment) after every call,
+the failing last one included, at two layouts; the end of the directory is `ERROR_NO_MORE_FILES`, twice; the buffer's
+length is the size given and the request's capacity is not used, both ways; an empty buffer gets the code the
+allocating form gets for a capacity of zero; and bytes the call does not write keep what they held. Sabotage: the
+capacity used as a limit, the buffer cleared, and the buffer replaced, all caught by test assertions, and a control.
+The item as it stood at completion follows verbatim; its handoff to `SAFE-2` waits on this crate's release.
+
+- [x] **NR-6.5** -- **`QueryFileInformation` into a buffer the caller owns.** A form that performs the call into
+  an `AlignedBuf` the caller passes and keeps, so a consumer reading a directory batch after batch (the
+  enumeration crate's refill) allocates once and not once per call. What it requires of that buffer (alignment,
+  a size that fits the call's `u32`) follows the call's page, with the citation, per the workspace's
+  [documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract). Tests: a directory
+  read batch by batch into one buffer lists what the allocating form lists; the buffer is the same allocation
+  after every call; the end of the directory is the call's code, as now.
+
+  > **-> CROSS-COMPONENT HANDOFF:** after this crate's release, the next work is in component
+  > `crates/windows-file-enumeration-sys` -> `SAFE` -> `SAFE-2`. See
+  > [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).

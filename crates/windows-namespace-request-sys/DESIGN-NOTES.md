@@ -1300,3 +1300,31 @@ through a handle of its own.
 
 **Scheduled work:** none in this crate. The consumer is the enumeration crate's `SAFE-2`
 ([its CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)).
+
+## <a id="d-34"></a>D-34: `QueryFileInformation` also performs into a buffer the caller owns, and refuses nothing about that buffer ahead of the call
+
+**Queued as `NR-6.5`** for `windows-file-enumeration-sys`' `SAFE-2`, whose refill reads a directory batch after batch
+and, through [`perform`](src/query.rs), would allocate once per call. Source read 2026-10-19: the
+`GetFileInformationByHandleEx` page (`ms.date` 2018-12-05).
+
+**What is decided.** `QueryFileInformation::perform_into(&self, &mut AlignedBuf) -> Outcome<()>` makes the same one
+call into the caller's buffer and allocates nothing; `perform` is now an allocation followed by `perform_into`, so
+the call has one site. The buffer's length is the size given, and the request's `capacity` is not used by this
+form. The buffer is not cleared first: bytes the call does not write keep what the caller left, which differs from
+`perform`'s buffer, which starts zeroed. After a failure the contents are whatever the call left.
+
+**Nothing about the buffer is refused**, per the workspace's
+[documented-contract rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract). The page gives
+`lpFileInformation` as "a pointer to the buffer that receives the requested file information" and `dwBufferSize` as
+"the size of the *lpFileInformation* buffer, in bytes", a `DWORD`; it states no alignment. So:
+
+- **Alignment** is the buffer's own stated property (`AlignedBuf::align`), passed through. That the directory classes
+  fail with `ERROR_NOACCESS` on a misaligned buffer is a measurement, recorded in the module documentation where
+  `perform`'s 8-byte alignment is explained; it does not become a check.
+- **A length above `u32::MAX`** is given as `u32::MAX`, its first that many bytes, as `perform` already gives an
+  over-large capacity. That is not a refusal: the buffer is writable for at least the size stated.
+- **An empty buffer** is passed as one, and the call answers it; the tests compare its code with `perform`'s for a
+  capacity of zero.
+
+**Scheduled work:** none in this crate. The consumer is the enumeration crate's `SAFE-2`
+([its CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)).

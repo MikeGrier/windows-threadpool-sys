@@ -277,12 +277,85 @@ impl QueryFileInformation {
     pub fn perform(&self) -> Outcome<AlignedBuf> {
         let mut buffer =
             AlignedBuf::zeroed(self.capacity, BATCH_ALIGNMENT).map_err(|_| out_of_memory())?;
-        let size = u32::try_from(self.capacity).unwrap_or(u32::MAX);
+        self.perform_into(&mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// Performs the query on the calling thread, into a buffer the caller owns and keeps.
+    ///
+    /// For a consumer that reads batch after batch: one buffer serves every call, and nothing is
+    /// allocated here. The buffer's length is the size the call is given, and this request's
+    /// [`capacity`](Self::capacity) is not used.
+    ///
+    /// # What is asked of the buffer
+    ///
+    /// Nothing is refused ahead of the call. The `GetFileInformationByHandleEx` page (`ms.date`
+    /// 2018-12-05, read 2026-10-19) gives `lpFileInformation` as "a pointer to the buffer that
+    /// receives the requested file information" and `dwBufferSize` as its size in bytes, a
+    /// `DWORD`; it states no alignment, so none is required here. The buffer states its own
+    /// ([`AlignedBuf::align`]); the directory classes were measured failing with
+    /// `ERROR_NOACCESS` on a misaligned buffer, which is why [`perform`](Self::perform) allocates
+    /// at 8. A buffer longer than a `DWORD` can count is given as `u32::MAX` bytes, its first that
+    /// many, as `perform` gives an over-large capacity.
+    ///
+    /// # What the buffer holds afterwards
+    ///
+    /// What the call wrote. The buffer is not cleared first, so bytes the call does not write keep
+    /// what they held -- unlike `perform`'s buffer, which starts zeroed. A batch is walked by its
+    /// own next-entry offsets, so a consumer reads only what the call wrote. After a failure the
+    /// contents are whatever the call left; the page does not say.
+    ///
+    /// # Errors
+    ///
+    /// Returns the raw Win32 code, unaltered, as [`perform`](Self::perform) does. With no
+    /// allocation, the out-of-memory report `perform` can make does not arise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows_namespace_request_sys::AlignedBuf;
+    /// use windows_namespace_request_sys::query::{FileInformationClass, QueryFileInformation};
+    /// use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
+    /// use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    ///
+    /// use std::os::windows::fs::OpenOptionsExt;
+    ///
+    /// let path = std::env::temp_dir().join(format!("wnrs-into-{}", std::process::id()));
+    /// std::fs::create_dir_all(&path)?;
+    /// std::fs::write(path.join("a.t"), b"a")?;
+    /// let directory = std::fs::OpenOptions::new()
+    ///     .read(true)
+    ///     .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+    ///     .open(&path)?;
+    /// let restart = QueryFileInformation::new(
+    ///     directory.try_clone()?,
+    ///     FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
+    /// );
+    /// let next = QueryFileInformation::new(directory, FileInformationClass::ID_EXTD_DIRECTORY);
+    ///
+    /// // One buffer, allocated once, for every batch.
+    /// let mut buffer = AlignedBuf::zeroed(64 * 1024, 8)?;
+    /// restart.perform_into(&mut buffer)?;
+    /// let mut batches = 1;
+    /// loop {
+    ///     match next.perform_into(&mut buffer) {
+    ///         Ok(()) => batches += 1,
+    ///         Err(error) if error.code() == ERROR_NO_MORE_FILES => break,
+    ///         Err(error) => return Err(error.into()),
+    ///     }
+    /// }
+    /// assert!(batches >= 1);
+    /// # drop((restart, next));
+    /// # std::fs::remove_dir_all(&path)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn perform_into(&self, buffer: &mut AlignedBuf) -> Outcome<()> {
+        let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
 
         perform_bool(|| {
-            // SAFETY: the handle is one this request holds and keeps
-            // open across the call; the buffer is writable for `size` bytes and
-            // 8-byte aligned, which is what the directory classes require.
+            // SAFETY: the handle is one this request holds and keeps open across the call, and the
+            // buffer is writable for at least `size` bytes, its length or `u32::MAX` if that is
+            // less. Its alignment is the caller's (see the documentation above).
             unsafe {
                 GetFileInformationByHandleEx(
                     self.handle.raw(),
@@ -291,9 +364,7 @@ impl QueryFileInformation {
                     size,
                 )
             }
-        })?;
-
-        Ok(buffer)
+        })
     }
 }
 
