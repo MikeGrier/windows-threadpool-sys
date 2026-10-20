@@ -274,6 +274,8 @@ changes.
 
 - [x] **M34.17** -- Teach the scoped sabotage run as the default local check. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3417)
 
+- [x] **M34.18** -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#m3418)
+
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing
@@ -503,6 +505,70 @@ as one domain -- so it does not belong in a `-sys` crate. It is built on the per
   documentation rather than papered over: a Storage Spaces virtual disk hides its pool members,
   which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
   domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
+
+## M42 -- Apply the documented-contract rule to the refusals that already exist
+
+The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
+2026-10-18): a refusal ahead of a platform call rests on the documented contract and carries its citation,
+a component's own narrowing is named as its own, and a measurement is never a check. These items apply it to
+code written before it was stated. `win-durable-ioring`'s open is not here; it is
+[DI-14.4](crates/durable-ioring/CHECKLIST.md).
+
+- [ ] **M42.1** -- **Census every refusal made ahead of a platform call, across the workspace.** Every place a
+  component returns an error, panics or asserts on its arguments before the call they are for. The census is
+  produced by a search recorded with it, not from recollection, and lists each site with its crate.
+
+- [ ] **M42.2** -- **Classify each one against the rule:** a documented condition on the arguments alone (with
+  the citation, re-read), the component's own narrowing, or neither -- a check resting on a measurement or on
+  a target condition judged ahead of the call. The classification is recorded beside the census.
+
+- [ ] **M42.3** -- **Bring each site of the third kind to the engineer**, with what it rests on and what
+  removing it would let through, before anything is changed. Then carry out what is ruled, one crate per
+  commit, and give each contract refusal its citation and each narrowing its own error kind where it lacks
+  them.
+
+## M43 -- Shared handles, and safe wrappers under the enumeration crate
+
+Opened 2026-10-18. The engineer ruled a request crate's handle duplication legacy, to be removed rather than
+kept for compatibility ([D-32](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and set
+`windows-file-enumeration-sys`' target as reaching Windows only through safe wrappers, under
+`forbid(unsafe_code)` ([D-23](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-23)). The work is in six
+crates' checklists; this is only the order and the links, and each item's own checkbox is its status.
+
+1. [NR-6.1](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-61-shared) -- request entries hold a `SharedHandle`;
+   additive for callers that build entries.
+2. The consumers move off `CapturedHandle`, in any order:
+   [DI-16.1](crates/durable-ioring/COMPLETED-CHECKLIST.md#di-161), [M7.1](crates/windows-platform-probes/COMPLETED-CHECKLIST.md#m71),
+   [SAFE-1](crates/windows-file-enumeration-sys/CHECKLIST.md).
+3. [NR-6.2](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -- capture deleted. `NR-6.3` to `NR-6.5` may land
+   at any point before the release.
+4. The request crate's release, a new minor. A release action, not an item.
+5. [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) -- the directory's calls through the request crate.
+6. Independently of 1 to 5: [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md) then
+   [WS-2.1](crates/win-sync-sys/CHECKLIST.md) (reordered 2026-10-18: the shared wait target comes first), then
+   [SAFE-3](crates/windows-file-enumeration-sys/CHECKLIST.md); and `M43.1` below, then
+   [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) and the file watcher's
+   [M17.1](crates/windows-file-watcher/CHECKLIST.md).
+7. [SAFE-5](crates/windows-file-enumeration-sys/CHECKLIST.md) -- `forbid(unsafe_code)`, last.
+
+- [ ] **M43.1** -- **Create `win-text-sys`, with `CompareStringOrdinal`.** The name is the engineer's, 2026-10-18:
+  "I lean towards win-text-sys for the crate name. locale implies that text handling that was not specific to a
+  locale would not belong", then "win-text-sys is the name of the crate unless you have a solid argument against
+  it". None was found; the name was unclaimed on crates.io when checked that day. By [the placement rule](DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under),
+  the snapshot files `CompareStringOrdinal` under Internationalization's National Language Support functions; the
+  name is the subject, text handling whether or not it is particular to a locale, so the crate's notes record that
+  National Language Support is its section and that Unicode and Character Sets, which the snapshot files
+  separately, is judged by the same subject when a wrapper from it is wanted. Recorded at creation, in the new
+  crate's DESIGN-NOTES as its naming decision and placement: the name with the quotation above; the section; that
+  a `-sys` crate here is memory-safe over the call and adds no policy. The first wrapper takes two `&[u16]` and a
+  case choice and returns the comparison as an `Ordering`, with the call's failure as its error; nothing else is
+  added until a consumer's item asks. Tests: equal and unequal strings both ways, case folded and not, embedded
+  NULs compared as units, lengths the call's `int` cannot represent refused with the citation (the
+  documented-contract rule), and the failure path.
+
+  > **-> CROSS-COMPONENT HANDOFF:** next work is
+  > [SAFE-4](crates/windows-file-enumeration-sys/CHECKLIST.md) in `crates/windows-file-enumeration-sys` and
+  > [M17.1](crates/windows-file-watcher/CHECKLIST.md) in `crates/windows-file-watcher`.
 
 ## M-inf -- Parked
 

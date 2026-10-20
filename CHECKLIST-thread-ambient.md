@@ -18,7 +18,7 @@ Authoritative decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md) and, for the f
 parked no longer: every `M26+` item was gated on the namespace-facility design branch reaching
 `main`, and both [crates/windows-namespace-request-sys](crates/windows-namespace-request-sys) and
 [crates/windows-thread-ambient-sys](crates/windows-thread-ambient-sys) are on `main` now, so the
-gate has lifted and the three items are pending. They keep the `M26+` id until someone graduates
+gate has lifted and the items still unchecked are pending. They keep the `M26+` id until someone graduates
 them to a number, which `M34.7` in [CHECKLIST.md](CHECKLIST.md) owns.
 
 ## M26+ -- Was gated on the namespace-facility design branch landing; that gate has lifted
@@ -40,22 +40,4 @@ them to a number, which `M34.7` in [CHECKLIST.md](CHECKLIST.md) owns.
   measured trap in the same edit: an invalid bit fails the whole `SetThreadErrorMode` call, so a
   forced-plus-transplanted combination installs nothing if the transplanted part is invalid.
 
-- [ ] **M26+.3** -- Make the merge-or-delete decision on the duplicated path preparation. M24.4 copied
-  `windows-file-enumeration-sys`'s `path.rs` into `windows-namespace-request-sys` rather than depending on
-  it, because that crate is released and this one was not, and this branch exists to reach publication with
-  minimal impact on what already ships. **The de-duplication happens after this branch merges with `main`**,
-  which is what gates this item -- not a release of the new crate. Decide then: either make the enumeration
-  crate consume it and delete the older copy, or keep both and record what makes them genuinely separate. Do **not** let the duplication become permanent by nobody circling back -- that is
-  the failure mode the duplicate-then-decide procedure exists to prevent, and it is why this item is here
-  rather than only in a design note. Until it is settled, a fix to either copy must be applied to both.
-  See [crates/windows-namespace-request-sys/DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md)
-  -> `D-9`.
-
-  **Decided 2026-10-15, at the engineer's request: the enumeration crate consumes the request crate's
-  path contract and deletes its older copy.** The branch has merged with `main`, which was the gate.
-  The work is `PATH-1` in [crates/windows-file-enumeration-sys/CHECKLIST.md](crates/windows-file-enumeration-sys/CHECKLIST.md),
-  after the request crate's `NR-3.3` to `NR-3.6`
-  ([CHECKLIST.md](crates/windows-namespace-request-sys/CHECKLIST.md)); this item is done when `PATH-1`
-  is. The request crate's path contract is itself replaced by
-  [D-19](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-19), so what the enumeration crate
-  consumes is that one, not the copy that was made.
+- [x] **M26+.3** -- The duplicated path preparation is merged: `windows-file-enumeration-sys` consumes the request crate's `AnchoredPath` and its older copy is deleted. -> [completed 2026-10-18](COMPLETED-CHECKLIST.md#m263)

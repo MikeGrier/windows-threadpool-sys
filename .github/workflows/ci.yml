@@ -44,6 +44,34 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # Every COMPLETED-CHECKLIST.md: a blank line above each heading, no heading
+  # glued onto a line, no open box, and no heading or anchor changed against the
+  # merge base (root CHECKLIST.md, M34.18). The last needs the base commit, so the
+  # checkout is full. On a pull request the base is the target branch; on a push
+  # it is the previous tip, and a push with none (a new branch) skips that rule
+  # rather than failing on a missing commit.
+  archives:
+    name: completed-checklist archives
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run test-check-archives.ps1
+        shell: pwsh
+        run: ./tools/test-check-archives.ps1
+      - name: Run check-archives.ps1
+        shell: pwsh
+        env:
+          ARCHIVE_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: |
+          if (-not $env:ARCHIVE_BASE -or $env:ARCHIVE_BASE -match '^0+$') {
+            ./tools/check-archives.ps1 -NoHistory
+          } else {
+            ./tools/check-archives.ps1 -Base $env:ARCHIVE_BASE
+          }
+          exit $LASTEXITCODE
+
   # release-please decides which crates are versioned and tagged;
   # publish-crate.yml decides which tags publish. Nothing connected the two, so
   # a crate could be release-managed and unpublishable at once -- and the
@@ -420,20 +448,44 @@ jobs:
     # `#[ignore]`d tests, and the binaries that print the magnitudes.
     #
     # Every measurement in this workspace was originally taken on ARM64, so
-    # running them on this x64 runner is what answers "which findings are
+    # running them on an x64 runner is what answers "which findings are
     # architecture-dependent" (CHECKLIST-thread-ambient.md, M27.5).
+    #
+    # The ARM64 entry is the other half (windows-platform-probes M2.15). Every
+    # other job here only BUILDS aarch64, and architecture is the one report
+    # shape a test corpus cannot vary, because it is fixed at compile time: a
+    # fixture that hard-codes one architecture passes on that host and no other.
+    # Only running the suite on a second architecture can see that class. The
+    # windows-11-arm label is a GitHub-hosted Windows 11 ARM64 runner, free for
+    # public repositories.
     #
     # A FAILURE HERE IS A RESULT, NOT A BUILD BREAK TO PATCH AWAY. The ignored
     # tests assert the *shape* of a measured platform fact, so a failure means
     # the fact differs on this architecture and the design note resting on it
     # needs revisiting. Read the output before changing an assertion.
-    name: platform probes (x64, ignored tier + magnitudes)
-    runs-on: windows-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One architecture's result must not cancel the other's: a difference
+      # between the two is the finding, and it needs both halves.
+      fail-fast: false
+      matrix:
+        include:
+          - name: platform probes (x64, ignored tier + magnitudes)
+            runner: windows-latest
+          - name: platform probes (arm64, ignored tier + magnitudes)
+            runner: windows-11-arm
     # Bounded so a probe that wedges reports rather than burning the job's
     # default six-hour ceiling. The suite takes seconds when healthy.
     timeout-minutes: 15
     env:
       RUSTUP_TOOLCHAIN: stable
+      # The probes' build script stamps these into the binaries (M4.8), so a
+      # report from this job names the commit it was built from and says it came
+      # from CI. The commit is what the checkout built: on a pull request, the
+      # merge commit.
+      PLATFORM_PROBES_COMMIT: ${{ github.sha }}
+      PLATFORM_PROBES_SOURCE: ci
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -466,6 +518,8 @@ jobs:
       # probe-cancel-io is DELIBERATELY ABSENT and must stay that way. It is
       # binary-only because CancelSynchronousIo can block indefinitely -- that
       # is the finding -- so running it here would hang the job by design.
+      # (The row census in the test step above does run it, under a deadline,
+      # reading its row as it is written rather than waiting for it to exit.)
       #
       # One step per probe, deliberately, rather than one `run: |` block listing
       # them. These steps take the Windows runner's default shell, `pwsh`, where
@@ -533,13 +587,13 @@ jobs:
       - name: probe magnitudes (topology)
         if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
-      # `--release` on the next two, and ONLY on those two, because they are the
-      # only probes here that report nanoseconds. Everything above measures
+      # `--release` on the next four, and ONLY on those four, because they are
+      # the only probes here that report nanoseconds. Everything above measures
       # BEHAVIOUR -- what an API refuses, what a handle reports, which errors
       # appear -- and that does not change with the optimisation level, so those
       # keep the dev profile and the build time it saves.
       #
-      # These two do not have that luxury. They compare operations a few tens of
+      # These do not have that luxury. The two cost probes compare operations a few tens of
       # nanoseconds apart, and in an unoptimized build the loop, the closure
       # indirection, and the request construction around each measured call
       # carry overhead that does not shrink uniformly across them. The RATIOS
@@ -572,6 +626,22 @@ jobs:
       - name: probe magnitudes (request cost)
         if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
+      # The two coherence probes, run here so that every build's log carries a
+      # run of each on BOTH architectures -- this job's arm64 entry is the only
+      # ARM64 hardware this workspace reaches, and the peer-index probe's finding
+      # is one that inverts between the two (windows-platform-probes M4.11).
+      #
+      # The queue probe is limited to 1, 2 and 4 producers because a hosted
+      # runner has four processors: rows above that would measure the scheduler
+      # and report it as contention. Its report says the run was not the
+      # defaults, and prints the processors it had. The full curve is still run
+      # by hand on a known machine.
+      - name: probe magnitudes (queue contention, 1 to 4 producers)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: cargo run -p windows-platform-probes --bin probe-queue-contention --locked --release -- --producers 1,2,4
+      - name: probe magnitudes (peer index cache)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: cargo run -p windows-platform-probes --bin probe-peer-index-cache --locked --release
       # Both halves of the long-path pair, deliberately. Either alone says
       # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,

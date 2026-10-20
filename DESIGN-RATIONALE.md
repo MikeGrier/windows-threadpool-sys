@@ -883,6 +883,17 @@ safe, or something new built on such crates?* The decision says that judgement i
 crate's own naming decision, so each answer can be argued with. The design session that raised it
 is [DESIGN-SESSION-2026-10-05-epoch-ring.md](design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md).
 
+## <a id="why-a-wait-may-share-its-handle"></a>Why a wait may hold its handle shared
+
+The question arose while planning the removal of handle duplication from `windows-file-enumeration-sys`
+([DESIGN-NOTES.md](DESIGN-NOTES.md#a-wait-may-share-its-handle)). Its completion ring keeps a doorbell event it
+sets and resets, and gives a client a `ThreadpoolWait` on the same event; because a wait owned its handle
+exclusively, the ring made a `DuplicateHandle` copy for the wait. `WaitableHandle::event`'s own documentation told
+callers to do the same with `Event::try_clone`. Exclusive ownership was the means, not the requirement: what the
+pool needs is that the handle stays open while a wait is pending, and a reference count gives that. The engineer
+first answered "let's assume yes" and the assistant wrote the item to test the assumption; the engineer then took
+the decision outright.
+
 ## <a id="a-link-that-could-not-open-its-output"></a>A link that could not open its output: why the harness builds a second time
 
 A full sabotage sweep of `win-multi-file-tail-watcher` reported, once per sweep, an entry as

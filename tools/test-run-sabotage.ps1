@@ -1189,6 +1189,22 @@ Test-Case 'reports a patch that changes nothing as inert' {
     finally { Remove-Fixture $root }
 }
 
+# The inert check once compared with PowerShell's `-eq`, which ignores case, so a
+# patch that changed nothing but case -- a variable to the constant of the same
+# name, say -- was refused as inert while the patch itself was applied with an
+# ordinal replace. Source code is case-sensitive; so is this check.
+Test-Case 'sweeps a patch that changes only the case of the text' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ replace = @('// MARKER LINE') })
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'caught \(suite failed' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'accepts a control that is declared to survive' {
     $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ expect = 'survives' })
     try {

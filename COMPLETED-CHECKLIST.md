@@ -1704,6 +1704,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   the tests, which is why the patch is now printed on every unexpected result; and a **too-short
   timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
   against, so the bound errs generous.
+
 ## Moved 2026-09-01 -- Thread ambient mutation gaps
 
 ### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
@@ -2185,6 +2186,7 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   Queued rather than left as a note precisely because a half-adopted abstraction is the state most
   likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
   reasonably conclude that is the house style.
+
 ## Moved 2026-09-07 -- M34.4: the native-command guard became shared support, proven on both hosts
 
 ### <a id="m344"></a>M34.4 -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route every capture site through it, and prove it on both PowerShell hosts. *(completed 2026-09-07 21:16:31 -04:00)*
@@ -2362,6 +2364,7 @@ namespace operation is.
   `#[cfg(doctest)] #[doc = include_str!("../README.md")]`, so a contract change breaks the build instead of
   leaving the README teaching the old answer. Verify by sabotage that the README examples are genuinely
   executed rather than merely parsed. M23.4 retains the *composite's* documentation.
+
 ## M23 -- `windows-thread-ambient-sys`: the composite
 
 - [x] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
@@ -2550,6 +2553,7 @@ assumed:
   holding a prepared path, two captured handles, and captured security attributes, outliving every input
   at once and still working on a thread that saw none of them -- plus the crate example, the README
   example compiled as a doctest, and confirmation that the changelog baseline matches its siblings.
+
 ## M25 -- `windows-namespace-request-sys`: the handle-producing entries
 
 Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.
@@ -4039,3 +4043,39 @@ The repository instructions' sabotage guidance in [.github/copilot-instructions.
 [tools/README-sabotage.md](tools/README-sabotage.md) say to verify a change with `-Since origin/main`, that `-List` shows which
 entries and why, that a clone takes every entry of a touched crate until it has swept the manifest once, and to sweep the whole
 manifest for a change scoping cannot see.
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The duplicated path preparation is merged
+
+### <a id="m263"></a>M26+.3 -- The duplicated path preparation is merged: `windows-file-enumeration-sys` consumes the request crate's `AnchoredPath` and its older copy is deleted. *(completed 2026-10-18 20:52:23 -04:00)*
+
+Decided 2026-10-15 at the engineer's request, as the first of the two options the item named. The request
+crate's side is its `NR-3.8` and
+[D-30](crates/windows-namespace-request-sys/DESIGN-NOTES.md#d-30); the enumeration crate's is its `PATH-1`
+and [D-22](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-22), which also records what that crate
+gave up. The workspace principle the enumerator used to exemplify is amended at
+[A layer's path contract is decided by whether it constructs paths](DESIGN-NOTES.md#path-contracts-follow-path-construction).
+
+## Moved 2026-10-19 17:42:21 -04:00 -- M34.18: the archives are linted
+
+### <a id="m3418"></a>M34.18 -- Lint every `COMPLETED-CHECKLIST.md` mechanically, locally and in CI. *(completed 2026-10-19 17:42:21 -04:00)*
+
+Moved here from `windows-platform-probes`, where it was `M2.13`. An investigation of the 23 archives
+before building found that two of the three checks as first written would have failed on records kept
+on purpose, and the engineer settled four rules on 2026-10-19:
+
+1. A heading is preceded by a blank line, as style; the breaches were fixed. Applied to every heading
+   level, since the reason is the same at each: 49 blank lines across seven archives, inserted in a
+   `chore` commit of their own so released crates' archives earned no release.
+2. No `- [ ]` remains. The 18 open boxes were all verbatim copies of items "as they stood at
+   completion", in `durable-ioring` and `io-buffers`; they were ticked.
+3. Headings and `<a id>` anchors are immutable against the merge base, in place of the proposed "zero
+   deleted lines": since August, 62 of the 417 commits touching an archive deleted lines from one,
+   including link repointing this repository's own rules require. A heading glued onto a line is
+   checked too.
+4. A checked stub left after its item was archived may simply be deleted; recorded in the copilot
+   instructions beside the archive rules, which now also state rules 1 to 3 and name the tool.
+
+`tools/check-archives.ps1` checks all four, untracked archives included, and exits 0, 1 or 2 like its
+siblings; `tools/test-check-archives.ps1` covers each rule in both directions against throwaway git
+repositories, and a manual sabotage of the heading rule turned its case red. The `archives` CI job runs
+both, against the target branch on a pull request and the previous tip on a push.
