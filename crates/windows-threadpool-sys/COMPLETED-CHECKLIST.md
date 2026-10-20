@@ -4,27 +4,27 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 [PLANS.md](PLANS.md) for plan status. Design decisions are in the workspace-root
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-## Moved 2026-08-17 — M1 callback environment, M2 work submission, M3 TP_IO backend
+## Moved 2026-08-17 -- M1 callback environment, M2 work submission, M3 TP_IO backend
 
-### M1 — Callback environment
+### M1 -- Callback environment
 
-- [x] **M1-1** — Implement SDK-equivalent `TP_CALLBACK_ENVIRON_V3` initialization and mutation — the
+- [x] **M1-1** -- Implement SDK-equivalent `TP_CALLBACK_ENVIRON_V3` initialization and mutation -- the
 	header-only helpers that `windows-sys` does not emit. See [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-- [x] **M1-2** — Unit-test callback-environment init and mutation against the documented default field values
+- [x] **M1-2** -- Unit-test callback-environment init and mutation against the documented default field values
 	(version, priority, size).
 
-### M2 — Work submission and callback ownership
+### M2 -- Work submission and callback ownership
 
-- [x] **M2-1** — Implement and test one end-to-end work submission abstraction over `CreateThreadpoolWork`,
+- [x] **M2-1** -- Implement and test one end-to-end work submission abstraction over `CreateThreadpoolWork`,
 	`SubmitThreadpoolWork`, `WaitForThreadpoolWorkCallbacks`, and `CloseThreadpoolWork`.
 
-- [x] **M2-2** — Validate the callback ownership model with the work abstraction before extending it to timers
+- [x] **M2-2** -- Validate the callback ownership model with the work abstraction before extending it to timers
 	and waits.
 
-### M3 — TP_IO backend over the shared seam
+### M3 -- TP_IO backend over the shared seam
 
-- [x] **M3-1** — Wire the `windows-threadpool-sys` → `windows-overlapped-io-sys` dependency (path plus
+- [x] **M3-1** -- Wire the `windows-threadpool-sys` -> `windows-overlapped-io-sys` dependency (path plus
 	version), and update the publish workflow so the overlapped crate releases before this one.
 	*(completed 2026-08-17 15:37:00 -04:00)*
 
@@ -33,7 +33,7 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 	resolves the versioned dependency from the registry rather than the workspace path. That makes the
 	release order independent of the order the two tags are pushed.
 
-- [x] **M3-2** — Implement the `TP_IO` backend over the shared seam with balanced `StartThreadpoolIo` /
+- [x] **M3-2** -- Implement the `TP_IO` backend over the shared seam with balanced `StartThreadpoolIo` /
 	`CancelThreadpoolIo` accounting and callback-driven reclamation.
 	*(completed 2026-08-17 15:56:00 -04:00)*
 
@@ -42,7 +42,7 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 	kernel or pool still owns. Required widening the shared seam with `OperationId::from_ptr`, which was
 	fixed in `windows-overlapped-io-sys` rather than worked around here.
 
-- [x] **M3-3** — Test `TP_IO` across the behavioral matrix: immediate failure, immediate success, pending
+- [x] **M3-3** -- Test `TP_IO` across the behavioral matrix: immediate failure, immediate success, pending
 	completion, cancellation, and object rundown with operations outstanding.
 	*(completed 2026-08-17 16:06:00 -04:00)*
 
@@ -52,18 +52,18 @@ Append-only archive of completed work items. See [CHECKLIST.md](CHECKLIST.md) fo
 	zero-length reads, mixed payload types, unclaimed completions, and repeated idempotent rundown.
 
 	The matrix surfaced that an operation identity is unique only among *simultaneously outstanding*
-	operations — reclaiming an operation returns its storage address to the allocator, which may reissue it.
+	operations -- reclaiming an operation returns its storage address to the allocator, which may reissue it.
 	That contract was undocumented and is now recorded on `OperationId` and in the overlapped crate's
 	design notes.
 
-## Moved 2026-08-17 — M4 safe abstractions and documentation
+## Moved 2026-08-17 -- M4 safe abstractions and documentation
 
 M4 was restructured during execution. Its original first item bundled work, timer, wait, and I/O, but work had
 landed in M2 and I/O in M3, so only timer and wait remained; those became separate implementation and test
 items. Two items were added from defects found while building: M4-1 (a `CallbackEnviron` soundness hole) and
 M4-8 (the one-shot/periodic timer split).
 
-- [x] **M4-1** — Close the `CallbackEnviron` soundness hole: add an owned `ThreadpoolPool` and change
+- [x] **M4-1** -- Close the `CallbackEnviron` soundness hole: add an owned `ThreadpoolPool` and change
 	`set_pool` to accept it, and make `set_cleanup_group` `unsafe` pending a full cleanup-group design.
 	*(completed 2026-08-17 17:00:00 -04:00)*
 
@@ -71,31 +71,31 @@ M4-8 (the one-shot/periodic timer split).
 	(bare `isize`) that the thread pool later dereferences, so safe code could cause undefined behavior.
 	`set_library` next door was already `unsafe` for exactly this reason.
 
-- [x] **M4-2** — Implement a safe timer over `CreateThreadpoolTimer`, `SetThreadpoolTimer`,
+- [x] **M4-2** -- Implement a safe timer over `CreateThreadpoolTimer`, `SetThreadpoolTimer`,
 	`IsThreadpoolTimerSet`, `WaitForThreadpoolTimerCallbacks`, and `CloseThreadpoolTimer`.
 	*(completed 2026-08-17 17:05:00 -04:00)*
 
-- [x] **M4-3** — Test the timer across one-shot, periodic, absolute, disarming, cancellation, and destruction.
+- [x] **M4-3** -- Test the timer across one-shot, periodic, absolute, disarming, cancellation, and destruction.
 	*(completed 2026-08-17 17:05:00 -04:00)*
 
 	The tests corrected the implementation's specification: `IsThreadpoolTimerSet` reports whether a due time is
 	set, not whether the timer will fire again, so a one-shot timer stays set after firing. The `is_set`
 	documentation had said the opposite.
 
-- [x] **M4-4** — Implement a safe `ThreadpoolWait` that owns its waitable handle and rearms per activation.
+- [x] **M4-4** -- Implement a safe `ThreadpoolWait` that owns its waitable handle and rearms per activation.
 	*(completed 2026-08-17 17:12:00 -04:00)*
 
 	The object owns the handle so it cannot be closed under a pending wait, and the callback receives a
 	`WaitActivation` carrying `rearm`, since the SDK consumes the arming on each activation.
 
-- [x] **M4-5** — Test the wait across signalled and timeout activation, rearming, disarming, and destruction.
+- [x] **M4-5** -- Test the wait across signalled and timeout activation, rearming, disarming, and destruction.
 	*(completed 2026-08-17 17:12:00 -04:00)*
 
 	Also de-flaked the identity tests in both crates: they required the allocator to naturally reuse an address,
 	which is not guaranteed. Natural reuse is now reported rather than asserted, and the hazard is covered
 	deterministically by tests that synthesize a stale generation at a live address via `OperationId::from_parts`.
 
-- [x] **M4-8** — Split the timer into `ThreadpoolTimer` (one-shot) and `ThreadpoolPeriodicTimer`, and give each
+- [x] **M4-8** -- Split the timer into `ThreadpoolTimer` (one-shot) and `ThreadpoolPeriodicTimer`, and give each
 	callback a token. *(completed 2026-08-17 17:25:00 -04:00)*
 
 	The first implementation followed the platform and modelled both kinds with one object, where a `period`
@@ -105,22 +105,22 @@ M4-8 (the one-shot/periodic timer split).
 	`PeriodicTick::stop` lets a periodic timer end itself. A zero period is rejected rather than silently
 	degenerating to a one-shot.
 
-- [x] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
+- [x] **M4-6** -- Design and implement safe cleanup-group membership across every callback object.
 	*(completed 2026-08-17 17:33:00 -04:00)*
 
 	Option (A) of the three considered: the group creates and owns its members. Flagging objects as
 	"group-owned" is insufficient, because each also owns a heap callback context that is only safe to free once
-	the bulk release has finished — a moment an individual object cannot observe. Use-after-release is a compile
+	the bulk release has finished -- a moment an individual object cannot observe. Use-after-release is a compile
 	error, pinned by a `compile_fail` doc test. Thread-pool I/O is excluded on purpose: a `TP_IO` object must not
 	be closed with an operation outstanding, and a bulk release cannot satisfy that.
 
-- [x] **M4-7** — Add API examples and generated documentation.
+- [x] **M4-7** -- Add API examples and generated documentation.
 	*(completed 2026-08-17 17:20:00 -04:00)*
 
 	Crate-level guidance, runnable doc examples for every object type, a rewritten README, and docs.rs metadata
-	pinning a Windows target — without which documentation for this Windows-only crate would fail to build.
+	pinning a Windows target -- without which documentation for this Windows-only crate would fail to build.
 
-## Moved 2026-08-17 — M5 timer stress suite
+## Moved 2026-08-17 -- M5 timer stress suite
 
 An opt-in load suite for the timer types, gated on `WINDOWS_THREADPOOL_STRESS` and scaled by
 `WINDOWS_THREADPOOL_STRESS_SCALE`. 24 scenarios, about a minute at scale 1. See
@@ -131,40 +131,40 @@ Two measurements shaped the whole suite and are recorded in the design note: poo
 system tick, and a loop that arms without pausing outruns the pool entirely -- which made three early scenarios
 record zero callbacks while appearing to pass.
 
-- [x] **ST-1** — Stress harness plus the one-shot arming and re-arming scenarios. *(completed 2026-08-17 20:14:49 -04:00)*
+- [x] **ST-1** -- Stress harness plus the one-shot arming and re-arming scenarios. *(completed 2026-08-17 20:14:49 -04:00)*
 
 	Env-var gate applied by a macro so it cannot be forgotten per test, a scale knob, and a serialization lane
 	so two heavy scenarios never measure each other. Scenarios: self-re-arm chains asserting the documented
 	non-overlap guarantee, past-instant `rearm_at` chains, arming churn across eight threads, arm/disarm races,
 	deterministic arm-fire cycles, a large one-shot population, coalescing windows, and contained panics.
 
-- [x] **ST-2** — One-shot teardown stress: `Drop` racing a firing and a re-arming callback. *(completed 2026-08-17 20:14:49 -04:00)*
+- [x] **ST-2** -- One-shot teardown stress: `Drop` racing a firing and a re-arming callback. *(completed 2026-08-17 20:14:49 -04:00)*
 
 	Rapid create/arm/drop churn, drops walking across the due time, drops landing mid-callback with a deferred
 	re-arm pending, and concurrent teardown across eight threads. Targets the window closed by the second PR
 	review round, where a regression appears as a hang or a crash rather than a failed assertion.
 
-- [x] **ST-3** — Periodic timer stress: high-frequency ticking, self-stop, and deliberate tick overlap. *(completed 2026-08-17 20:14:49 -04:00)*
+- [x] **ST-3** -- Periodic timer stress: high-frequency ticking, self-stop, and deliberate tick overlap. *(completed 2026-08-17 20:14:49 -04:00)*
 
 	Sustained ticking, deliberately overlapping ticks (peak 3 concurrent, confirming the documented contract
 	empirically), self-stop from inside the callback, start/stop churn, drops while ticking and mid-tick, a
 	large ticking population, and zero-period rejection under repetition.
 
-- [x] **ST-4** — Cleanup-group timer members and a mixed load scenario. *(completed 2026-08-17 20:14:49 -04:00)*
+- [x] **ST-4** -- Cleanup-group timer members and a mixed load scenario. *(completed 2026-08-17 20:14:49 -04:00)*
 
 	A group releasing its members is a distinct teardown path: large member populations released as a unit under
 	both dispositions of `cancel_pending`, concurrent release across threads, and a group left to drop. The
 	mixed scenario runs a self-re-arming one-shot, a periodic population, and timer and group churn together,
 	asserting the non-overlap guarantee survives a loaded pool.
 
-- [x] **ST-5** — Document how to run the suite. *(completed 2026-08-17 20:14:49 -04:00)*
+- [x] **ST-5** -- Document how to run the suite. *(completed 2026-08-17 20:14:49 -04:00)*
 
 	Crate README section covering both environment variables, the deliberate CI exclusion, the two measurements
 	that shape the scenarios, and what is asserted versus reported.
 
-## Moved 2026-08-18 — M16, thirteenth review round on PR #3
+## Moved 2026-08-18 -- M16, thirteenth review round on PR #3
 
-### <a id="mf-3"></a>MF-3 — Name the callback-environment ABI version, and pin ABI values against independently written expectations. *(completed 2026-08-18 02:42:11 -04:00)*
+### <a id="mf-3"></a>MF-3 -- Name the callback-environment ABI version, and pin ABI values against independently written expectations. *(completed 2026-08-18 02:42:11 -04:00)*
 
 `Version: 3` was written inline while the flag bit beside it was a named constant, contrary to the repository's
 rule against inline numeric identities. It is now `ENVIRON_VERSION`, documented as a breaking ABI change.
@@ -174,7 +174,7 @@ that importing the implementation's constant to check the implementation's const
 `expected_abi` module satisfies both rules at once: the expectation is written independently of the
 implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-### <a id="mf-4"></a>MF-4 — Correct the `set_pool` ownership comment in the callback-environment tests. *(completed 2026-08-18 02:42:11 -04:00)*
+### <a id="mf-4"></a>MF-4 -- Correct the `set_pool` ownership comment in the callback-environment tests. *(completed 2026-08-18 02:42:11 -04:00)*
 
 The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
 as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
@@ -675,7 +675,8 @@ what is not.**
   below are **ours, assigned for this investigation**, not the platform's. They are written in
   `snake_case` to keep that visible. The sole exception is `create_in_progress`, which is a real
   field of the public `WORKER_FACTORY_BASIC_INFORMATION` and is already what
-  [hook.rs](src/trace/hook.rs) records.
+  `src/trace/hook.rs` recorded (that file was deleted with the crate's inline hooking facility, under the
+  repository's rule against undocumented APIs).
 
   Four properties matter for this investigation:
 
