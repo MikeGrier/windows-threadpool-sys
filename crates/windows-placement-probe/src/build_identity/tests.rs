@@ -219,3 +219,54 @@ fn a_local_development_build_does_not_claim_to_be_official() {
         BuildIdentity::current()
     );
 }
+
+#[test]
+fn from_stamps_reads_each_stamp_the_build_script_can_emit() {
+    let identity = BuildIdentity::from_stamps("1.2.3", "0123456789ab", "0", "ci");
+    assert_eq!(
+        identity,
+        BuildIdentity {
+            crate_version: "1.2.3",
+            commit: Some("0123456789ab"),
+            dirty: Some(false),
+            source: BuildSource::Ci,
+        }
+    );
+    assert!(identity.is_official());
+
+    assert_eq!(
+        BuildIdentity::from_stamps("1.2.3", "0123456789ab", "1", "local").dirty,
+        Some(true)
+    );
+    assert_eq!(
+        BuildIdentity::from_stamps("1.2.3", "0123456789ab", "1", "local").source,
+        BuildSource::Local
+    );
+}
+
+#[test]
+fn from_stamps_reads_anything_it_does_not_recognise_as_unknown() {
+    // The build script emits an empty value for "could not be determined", and
+    // nothing else it emits is anything but the values above -- so anything
+    // else must land on the unofficial side rather than be guessed at.
+    for (commit, dirty, source) in [("", "", ""), ("", "yes", "CI-ish"), ("", "2", "remote")] {
+        let identity = BuildIdentity::from_stamps("1.2.3", commit, dirty, source);
+        assert_eq!(identity.commit, None, "{commit:?}");
+        assert_eq!(identity.dirty, None, "{dirty:?}");
+        assert_eq!(identity.source, BuildSource::Unknown, "{source:?}");
+        assert!(!identity.is_official());
+    }
+}
+
+#[test]
+fn current_is_from_stamps_over_this_crates_own_stamps() {
+    assert_eq!(
+        BuildIdentity::current(),
+        BuildIdentity::from_stamps(
+            env!("CARGO_PKG_VERSION"),
+            env!("PLACEMENT_PROBE_COMMIT_OUT"),
+            env!("PLACEMENT_PROBE_DIRTY_OUT"),
+            env!("PLACEMENT_PROBE_SOURCE_OUT"),
+        )
+    );
+}

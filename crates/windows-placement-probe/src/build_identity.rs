@@ -98,15 +98,39 @@ impl BuildIdentity {
     /// This binary's identity, as its build script stamped it.
     #[must_use]
     pub fn current() -> Self {
+        Self::from_stamps(
+            env!("CARGO_PKG_VERSION"),
+            env!("PLACEMENT_PROBE_COMMIT_OUT"),
+            env!("PLACEMENT_PROBE_DIRTY_OUT"),
+            env!("PLACEMENT_PROBE_SOURCE_OUT"),
+        )
+    }
+
+    /// The identity a build script's stamps describe, for a crate that stamps
+    /// itself with the same build-script code under its own names.
+    ///
+    /// The arguments are the `*_COMMIT_OUT`, `*_DIRTY_OUT` and `*_SOURCE_OUT`
+    /// values as the build script emitted them: an empty commit is unknown, a
+    /// dirty flag other than `1` or `0` is unknown, and a source other than `ci`
+    /// or `local` is [`BuildSource::Unknown`]. Read here rather than by each
+    /// caller, so the stamps mean the same thing in every crate that carries
+    /// them.
+    #[must_use]
+    pub fn from_stamps(
+        crate_version: &'static str,
+        commit: &'static str,
+        dirty: &'static str,
+        source: &'static str,
+    ) -> Self {
         Self {
-            crate_version: env!("CARGO_PKG_VERSION"),
-            commit: non_empty(env!("PLACEMENT_PROBE_COMMIT_OUT")),
-            dirty: match env!("PLACEMENT_PROBE_DIRTY_OUT") {
+            crate_version,
+            commit: non_empty(commit),
+            dirty: match dirty {
                 "1" => Some(true),
                 "0" => Some(false),
                 _ => None,
             },
-            source: match env!("PLACEMENT_PROBE_SOURCE_OUT") {
+            source: match source {
                 "ci" => BuildSource::Ci,
                 "local" => BuildSource::Local,
                 _ => BuildSource::Unknown,
