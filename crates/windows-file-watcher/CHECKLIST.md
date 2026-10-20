@@ -15,7 +15,7 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M17.1**, once `win-text-sys` exists (the workspace's `M43.1`). M1 through M16 are
+> **NEXT ACTIONABLE ITEM: M17.1**, which uses `win-text-sys` (the workspace's [M43.1](../../COMPLETED-CHECKLIST.md#m431)). M1 through M16 are
 > done; the M-inf horizon items are parked and ungated.
 
 ## M4 -- Coalescing by directory and file targets
@@ -78,7 +78,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m15).
   comparison's meaning, ordinal with case folded only when asked, is unchanged; the existing route tests are the
   check.
 
-  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../CHECKLIST.md) (`win-text-sys` is created).
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (`win-text-sys` is created).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

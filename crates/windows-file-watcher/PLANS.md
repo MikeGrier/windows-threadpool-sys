@@ -9,4 +9,4 @@ horizon bucket, which is outside v1 by recorded design decision and is not pendi
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | not started | M17: the route's ordinal comparison through `win-text-sys`, once the workspace's `M43.1` creates it. | N/A |
+| [CHECKLIST.md](CHECKLIST.md) | not started | M17: the route's ordinal comparison through `win-text-sys`, which the workspace's `M43.1` created. | N/A |

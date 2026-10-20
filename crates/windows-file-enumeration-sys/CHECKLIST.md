@@ -35,7 +35,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
 - [ ] **SAFE-4** -- **Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s
   `CompareStringOrdinal` call is that crate's wrapper.
 
-  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../CHECKLIST.md) (the crate is created).
+  > **CROSS-COMPONENT PREREQUISITE:** [M43.1](../../COMPLETED-CHECKLIST.md#m431) (the crate is created).
 
 - [ ] **SAFE-5** -- **`#![forbid(unsafe_code)]`.** On the crate root, so the build refuses any `unsafe` in the
   crate or its unit tests. Whatever `unsafe` remains after `SAFE-2` to `SAFE-4` is found by the build, and each
