@@ -101,3 +101,11 @@ elevated token. The module's tests are split into `tests.rs` (the real machine, 
 shared builders), `tests/reply.rs` (what is read out of a built reply) and `tests/device.rs` (the size
 protocol against a stand-in device). With this the last of the storage-locality entries is here;
 what this left to do is `NR-2.8`, in the namespace crate.
+
+## Moved 2026-10-18 17:07:59 -04:00 -- The device number
+
+### <a id="wv-31"></a>WV-3.1 -- `storage_device_number`, the device type, number and partition number a volume or disk reports (`IOCTL_STORAGE_GET_DEVICE_NUMBER`), as it wrote them. *(completed 2026-10-18 17:07:59 -04:00)*
+
+The engineer, 2026-10-18 ("build both of these now"), so that a caller can tell a volume or a disk from a file,
+which `GetFileType` does not. The decision and what was observed are [WV-D-11](DESIGN-NOTES.md#wv-d-11). Four
+sabotages, one a control that survives by design.

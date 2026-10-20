@@ -7,31 +7,29 @@
 //! down. `IOCTL_DISK_GET_DRIVE_GEOMETRY` on a file that is not a volume is a control that fails
 //! with the device's own code, which is what the error tests need.
 
-use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::mem::{offset_of, size_of};
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::ptr;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use win_error_codes::Win32Error;
+use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NOT_ENOUGH_MEMORY, ERROR_VIRTDISK_NOT_VIRTUAL_DISK,
     FALSE, GetLastError, INVALID_HANDLE_VALUE, SetLastError, TRUE,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile};
+use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, ReadFile};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     FSCTL_GET_COMPRESSION, FSCTL_REQUEST_OPLOCK, IOCTL_DISK_GET_DRIVE_GEOMETRY,
     OPLOCK_LEVEL_CACHE_READ, REQUEST_OPLOCK_CURRENT_VERSION, REQUEST_OPLOCK_INPUT_BUFFER,
     REQUEST_OPLOCK_INPUT_FLAG_REQUEST, REQUEST_OPLOCK_OUTPUT_BUFFER,
 };
-use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT};
 
 use super::{device_control, length, overlapped_call, u32_at, zeroed_output};
 use crate::test_support::ordinary_file;
@@ -324,25 +322,16 @@ const WRITER_DELAY: Duration = Duration::from_millis(200);
 /// A connected pair: an overlapped server end, and a client end.
 fn pipe_pair(label: &str) -> (File, File) {
     let name = format!(r"\\.\pipe\wvs-dc-{}-{label}", std::process::id());
-    let wide: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
-
-    // SAFETY: `wide` is a NUL-terminated name that outlives the call, and no security
-    // attributes are passed.
-    let server = unsafe {
-        CreateNamedPipeW(
-            wide.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_WAIT,
-            1,
-            64,
-            64,
-            0,
-            ptr::null(),
-        )
+    let options = NamedPipeOptions {
+        open_mode: PipeOpenMode::ACCESS_DUPLEX | PipeOpenMode::OVERLAPPED,
+        pipe_mode: PipeMode::TYPE_BYTE | PipeMode::WAIT,
+        max_instances: 1,
+        out_buffer_size: 64,
+        in_buffer_size: 64,
+        default_timeout_ms: 0,
     };
-    assert_ne!(server, INVALID_HANDLE_VALUE, "create the named pipe");
-    // SAFETY: a successful `CreateNamedPipeW` returns a handle nothing else owns.
-    let server = File::from(unsafe { OwnedHandle::from_raw_handle(server) });
+    let server =
+        File::from(create_named_pipe(&name, &options, None).expect("create the named pipe"));
     let client = OpenOptions::new()
         .read(true)
         .write(true)

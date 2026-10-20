@@ -29,6 +29,10 @@
       "package-name": "win-numa-sys",
       "component": "win-numa-sys"
     },
+    "crates/win-pipes-sys": {
+      "package-name": "win-pipes-sys",
+      "component": "win-pipes-sys"
+    },
         "crates/win-error-codes": {
             "package-name": "win-error-codes",
             "component": "win-error-codes"
@@ -40,6 +44,14 @@
         "crates/io-buffers": {
             "package-name": "io-buffers",
             "component": "io-buffers"
+        },
+        "crates/win-authorization-sys": {
+            "package-name": "win-authorization-sys",
+            "component": "win-authorization-sys"
+        },
+        "crates/win-handles-sys": {
+            "package-name": "win-handles-sys",
+            "component": "win-handles-sys"
         },
         "crates/win-durable-ioring": {
             "package-name": "win-durable-ioring",

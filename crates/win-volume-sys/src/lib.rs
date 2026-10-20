@@ -5,6 +5,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod device_control;
+mod device_number;
 mod extents;
 mod geometry;
 mod lock;
@@ -17,6 +18,7 @@ mod storage_unique_id;
 mod test_support;
 mod volume_numa;
 
+pub use device_number::{StorageDeviceNumber, storage_device_number};
 pub use extents::{DiskExtent, volume_disk_extents};
 pub use geometry::bytes_per_sector;
 pub use lock::{lock_volume, unlock_volume};

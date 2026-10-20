@@ -7,12 +7,16 @@ promise, as the workspace's naming decision defines it.
 ## What is here
 
 - **`volume_disk_extents`** -- the runs on disks that make up a volume
-  (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), each a disk number, an offset and a length. A volume on a
-  remote system, or a handle that is not a volume, does not answer, so success also shows that a
-  handle names a volume on this machine's own disks.
+  (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), each a disk number, an offset and a length. A success
+  shows the device answered; it is not taken to show what the handle is or that its disks are this
+  machine's. See [WV-D-12](DESIGN-NOTES.md#wv-d-12).
 - **`bytes_per_sector`** -- the sector size a volume is addressed in
   (`IOCTL_DISK_GET_DRIVE_GEOMETRY`), which an unbuffered volume handle's transfers must be a multiple
   of and aligned to. A handle to a whole physical disk answers it too (tried on one opened for reading and writing by an administrator).
+- **`storage_device_number`** -- the `FILE_DEVICE_XXX` type, device number and partition number a
+  volume or a disk reports (`IOCTL_STORAGE_GET_DEVICE_NUMBER`), as the device wrote them. A success
+  shows the device answered and not what kind of device it is; `device_type` is the device's own report
+  of that. See [WV-D-12](DESIGN-NOTES.md#wv-d-12).
 - **`volume_numa_node`** -- the NUMA node the volume a file, a directory or the volume itself is on
   resides on (`FSCTL_QUERY_VOLUME_NUMA_INFO`), as the device wrote it. A volume that advertises no
   proximity domain answers with its own error, and no value is taken to mean "no node".

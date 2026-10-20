@@ -279,7 +279,8 @@ fn a_buffer_with_no_room_for_one_extent_is_refused_as_an_invalid_parameter() {
 }
 
 #[test]
-fn a_handle_that_is_not_a_volume_is_refused_by_the_device() {
+fn an_ordinary_file_is_refused_by_the_device() {
+    // Observed, and not a contract: the page does not say which handles refuse the control (WV-D-12).
     let (file, path) = ordinary_file("not-a-volume");
     let refused = volume_disk_extents(&file).expect_err("a file has no disk extents");
     assert!(

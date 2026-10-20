@@ -35,13 +35,15 @@ pub struct DiskExtent {
 /// The runs on disks that make up `volume`, in the order the device reports them.
 ///
 /// `volume` is a handle to a volume -- `\\.\C:` or `\\?\Volume{...}` -- and needs no access to it:
-/// a handle opened with none is enough, which an ordinary account can open. A volume on a remote
-/// system, or anything that is not a volume, does not answer, so success is also what shows a
-/// handle names a volume on this machine's own disks.
+/// a handle opened with none is enough, which an ordinary account can open. The control's page
+/// (`ms.date` 12/05/2018) says the control is not supported over SMB 3.0 and is supported by the
+/// Cluster Shared Volume File System, and nothing else about which handles answer, so a success shows
+/// that the device answered and is not taken here to show what the handle is or where its disks are.
+/// Observed, and not a contract: an ordinary file was refused.
 ///
 /// # Errors
 ///
-/// The device's own error, such as `ERROR_INVALID_FUNCTION` for a handle that is not a volume, and
+/// The device's own error, which is what a device that does not answer the control gives, and
 /// [`io::ErrorKind::InvalidData`] for an answer that does not hold the extents it counts, a call
 /// that claims to have written more than the buffer it was given, a negative offset or length, and
 /// a volume whose extents kept changing between the calls. An allocation that cannot be made for a
