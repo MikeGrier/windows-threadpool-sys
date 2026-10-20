@@ -1150,3 +1150,60 @@ longer re-exported, because `HandleKind` was the only way this crate gave one.
 
 **Scheduled work.** None. The sabotage entries for the module, nine in `win-durable-ioring`'s manifest, are removed with
 it.
+
+## <a id="di-d-74"></a>DI-D-74: the in-memory backend's targets and the backend itself fault on a script
+
+**What is decided.** [DI-D-50](#di-d-50) P13 made the in-memory backend public and deterministic, and the engineer
+approved it on 2026-10-09 ("In-memory is a good basis for unit testing and driving"). Its fault script is
+[DI-11.1](COMPLETED-CHECKLIST.md#di-111), built as below; the shape is the assistant's and stands as built until
+amended. A `FaultScript` is a list of steps, each a `When` and a `Fault`, given to a `MemoryBackend` with
+`with_script`. It answers the problem P13 names: a flush failure cannot be produced on a healthy machine, so
+a consumer's failure paths, and the core's, had nothing to run against but a target detached underneath them.
+
+**Where a step applies, and how it counts.** Each fault belongs to one point in the backend: a refusal to a push
+the backend would otherwise admit; a failure, a short count, a hold or a late completion to a submission the doorbell
+executes; a refused doorbell to a doorbell; a failed pop to a pop. A `When` names the operation (write, read or commit),
+the target, and which occurrence: the nth, or the nth and every one after, or every one. **Every step that matches a
+point counts it, whether or not an earlier step fired**, so a step's count does not depend on the steps before it;
+when several fire for one submission the earliest in the script is applied. The counts belong to the backend and not
+to the script, so one script drives many backends, each from the start. Nothing is random and nothing depends on
+timing: a run with a script is the same run every time.
+
+**What each fault does.**
+
+- `Refuse(cause)`: the push comes back unchanged with that cause, so a queue that is not full can be refused as full.
+  **A refusal the backend would have made is made, first, and is not counted**, so a script never hides a real
+  refusal and never has its count spent by one. `check` is not scripted: it answers what a target and an operation
+  admit, which a transient scripted refusal is not.
+- `Fail(fault)` and `FailAfterApplying(fault)`: a write or a commit either does not reach its target, which is a
+  flush that failed with every byte still undecided, or reaches it and is reported failed, which is the other
+  direction of the same lie. Both are provided because [DI-D-50](#di-d-50) P2 treats a failed commit as ending every
+  statement about the writes it covered, whether or not they reached the media, and a consumer's path is
+  not the same for the two.
+- `Short(count)`: a write or a read transfers at most that many bytes and completes successfully with the count.
+  **A short write breaks the obligation that a write completes in full or with a fault** (P2), which the conformance
+  oracle refuses; it is provided as a source of short counts, which a backend's short-write policy exists to handle
+  and which the in-memory backend has no policy for. The policy is not built here. A short read is an ordinary one.
+- `Hold` and `Late(n)`: the operation executes at the doorbell as it would, and its completion is withheld, until
+  the test calls `release` or `release_all`, or until `n` doorbells later. Holding and releasing in an order the test
+  chooses is how completions arrive late and out of order. **A held completion counts against the completion queue**,
+  so a completion always has room when it is released, as it does for one that is ready.
+- `RefuseDoorbell(cause)` and `FailPop(fault)`: the backend itself fails. A refused doorbell issues nothing and
+  leaves what was queued; a failed pop takes nothing and leaves what was ready. Neither names an operation or a
+  target, which a doorbell and a pop do not have.
+
+**A script a run could only ignore is refused where it is written.** A step that names `Short` for commits, a
+refused doorbell or a failed pop that names an operation or a target, and an occurrence counted from zero, panic in
+`FaultScript::on` and `When::nth` and `When::from`, since a run would otherwise do nothing and say nothing.
+
+**What the core is tested with.** The core's tests had made a commit fail by detaching the target from the backend. They
+now also drive it with a script ([scripted.rs](src/io_core/tests/scripted.rs)): a commit that
+fails, a write whose completion is held, completions out of order, a refusal with its cause. Verified by the tests in
+`memory/script/tests.rs`, by those, and by sabotage entries in [sabotage.json](sabotage.json), with a control. Older
+entries in the manifest were re-pointed at the lines the change moved, with the faults they inject unchanged.
+
+**Not scripted, and the reason.** `notification()` takes `&self`, and a script's counts need `&mut`, so scripting it
+means interior mutability in every backend for one rare fault; `attach` and `detach` have no failure type to
+script. Both are open to the engineer's ruling and nothing is scheduled by this note.
+
+**Scheduled work.** None. [DI-11.2](CHECKLIST.md) is the merge-or-delete decision this makes possible.

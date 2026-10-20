@@ -3580,3 +3580,27 @@ re-exports that only it needed, the `win-pipes-sys` dev-dependency, and nine sab
 `win-durable-ioring`. The reasoning and what stays are [DI-D-73](DESIGN-NOTES.md#di-d-73). The review's finding is
 discharged by removal: `win-volume-sys` makes no claim about what a handle is
 ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)), and nothing here makes one now.
+
+## Moved 2026-10-20 19:26:09 -04:00 -- DI-11.1: the in-memory backend faults on a script
+
+### <a id="di-111"></a>DI-11.1 -- The in-memory backend's targets and the backend itself fault on a script: failed, held, late, out of order, short, refused. *(completed 2026-10-20 19:26:09 -04:00)*
+
+The item as written:
+
+**An in-memory backend whose targets and backend fault on a script**
+  ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an
+  operation failed, held, or completed late or out of order; a submission refused; a full queue; a
+  short count, to test a backend's short-write policy. It answers the problem that flush failure
+  cannot be produced on a healthy machine, for consumers' failure paths and not only this crate's,
+  in the spirit of [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md), and is the basis
+  for unit testing and driving the core (the engineer: "In-memory is a good basis for unit testing
+  and driving"). It does not replace DI-4.1.
+
+What was done. [memory/script.rs](src/memory/script.rs) holds `FaultScript`, `When`, `Fault`, `ScriptOp` and `Fired`, and
+[memory.rs](src/memory.rs) runs them: `MemoryBackend::with_script` takes a script, and `held`, `release`, `release_all`
+and `fired` let a test hold completions, release them in an order it chooses, and see what fired. The faults are a refused
+push, a failed or failed-after-applying write, read or commit, a short count, a held or late completion, a refused
+doorbell and a failed pop. A held completion counts against the completion queue. Recorded as
+[DI-D-74](DESIGN-NOTES.md#di-d-74), which also names what is not scripted and why. Tests: those of
+`memory/script/tests.rs`, those driving the core in [scripted.rs](src/io_core/tests/scripted.rs), and sabotage
+entries, with a control, in [sabotage.json](sabotage.json). It does not replace `DI-4.1`.

@@ -14,14 +14,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 ## DI-M11 -- The core driven by script
 
-- [ ] **DI-11.1** -- **An in-memory backend whose targets and backend fault on a script**
-  ([DI-D-50](DESIGN-NOTES.md#di-d-50) P13), public and deterministic, in the portable crate: an
-  operation failed, held, or completed late or out of order; a submission refused; a full queue; a
-  short count, to test a backend's short-write policy. It answers the problem that flush failure
-  cannot be produced on a healthy machine, for consumers' failure paths and not only this crate's,
-  in the spirit of [RESPONSE-SPACE.md](../windows-ioring-sys/RESPONSE-SPACE.md), and is the basis
-  for unit testing and driving the core (the engineer: "In-memory is a good basis for unit testing
-  and driving"). It does not replace DI-4.1.
+- [x] **DI-11.1** -- The in-memory backend's targets and the backend itself fault on a script: failed, held, late, out of order, short, refused. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-111)
 
 - [ ] **DI-11.2** -- **The fault seam's merge-or-delete decision**, once `DI-11.1` is proven: the
   `fault-injection` feature's `fail_next_flush`, and the Windows backend's `fail_next_commit` added

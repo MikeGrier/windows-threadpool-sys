@@ -28,6 +28,7 @@ mod gates;
 mod lineages;
 mod provider;
 mod refusals;
+mod scripted;
 
 const KEY: IoTargetKey = IoTargetKey(1);
 const OTHER: IoTargetKey = IoTargetKey(2);
@@ -58,6 +59,14 @@ impl Rig {
     fn with_queues(submissions: u32, completions: u32) -> Self {
         let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
         rig.backend = MemoryBackend::new(nz(submissions), nz(completions));
+        rig.attach(KEY, MemoryTarget::new());
+        rig
+    }
+
+    /// A rig over a backend that does what `script` says, with the key attached.
+    fn scripted(script: crate::memory::FaultScript) -> Self {
+        let mut rig = Self::over(Core::new(Ticks::default(), Arc::new(NoDiagnostics)));
+        rig.backend = MemoryBackend::new(nz(8), nz(16)).with_script(script);
         rig.attach(KEY, MemoryTarget::new());
         rig
     }

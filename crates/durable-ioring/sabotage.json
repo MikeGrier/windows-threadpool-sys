@@ -1042,8 +1042,8 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "DI-D-52: a refusal names its cause. A backend that admits more than its completion queue holds never tells the caller to drain.",
-      "find": ["        let drain = self.queued.len() + self.completed.len() >= self.completion_queue_size;\n"],
-      "replace": ["        let drain = self.queued.len() >= self.completion_queue_size;\n"]
+      "find": ["        let outstanding = self.queued.len() + self.completed.len() + self.held.len();\n"],
+      "replace": ["        let outstanding = self.queued.len();\n"]
     },
     {
       "name": "DI-3.10.3.5.1: a full submission queue is reported as needing a drain",
@@ -1074,8 +1074,8 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "A read may complete short, and the count is the consumer's to handle; reporting the buffer's length claims bytes that were not read.",
-      "find": ["        count\n"],
-      "replace": ["        into.len()\n"]
+      "find": ["        into[..count].copy_from_slice(&available[..count]);\n        count\n"],
+      "replace": ["        into[..count].copy_from_slice(&available[..count]);\n        into.len()\n"]
     },
     {
       "name": "DI-3.10.3.5.1: a buffer's address is not checked",
@@ -1090,16 +1090,16 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "Buffers go in owned and come back (DI-D-50 P10), on a fault as on a success.",
-      "find": ["                } => Some(buffer),\n"],
-      "replace": ["                } => {\n                    drop(buffer);\n                    None\n                }\n"]
+      "find": ["        } => Some(buffer),\n"],
+      "replace": ["        } => {\n            drop(buffer);\n            None\n        }\n"]
     },
     {
       "name": "CONTROL: the memory backend tests emptiness by length",
       "file": "src/memory.rs",
       "expect": "survives",
       "why": "The manifest checking itself on the new code: an empty queue has length zero, so this is an equivalent change. If it comes back caught, something is reacting to more than behaviour.",
-      "find": ["        let was_empty = self.completed.is_empty();\n"],
-      "replace": ["        let was_empty = self.completed.len() == 0;\n"]
+      "find": ["        if was_empty && !self.completed.is_empty() {\n"],
+      "replace": ["        if was_empty && self.completed.len() != 0 {\n"]
     },
     {
       "name": "DI-3.10.3.5.1: needing both is not reported as needing a drain",
@@ -1513,7 +1513,7 @@
       "file": "src/memory.rs",
       "expect": "caught",
       "why": "A queued or finished operation may name a registered region, which replacing the buffers invalidates; the builder refuses it as a caller's programming error. Caught by the two should_panic tests, one with an operation queued and one with a completion waiting.",
-      "find": ["            self.queued.is_empty() && self.completed.is_empty(),\n"],
+      "find": ["            self.queued.is_empty() && self.completed.is_empty() && self.held.is_empty(),\n"],
       "replace": ["            true,\n"]
     },    {
       "name": "CONTROL: the engine tests a pass's pops by comparison",
@@ -1818,6 +1818,126 @@
       "why": "A control: the same number returned through a local, which no test can tell apart.",
       "find": ["    fn untyped(&self) -> IoTargetKey {\n        self.key\n    }\n"],
       "replace": ["    fn untyped(&self) -> IoTargetKey {\n        let key = self.key;\n        key\n    }\n"]
+    },
+    {
+      "name": "DI-11.1: a failed write is applied to the target anyway",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Fail must leave the target as it was; applying it and then reporting the fault is FailAfterApplying, which is a different and separately tested fault.",
+      "find": ["            Some(Fault::Fail(fault)) => (\n                Completion {\n                    token: submission.token,\n                    result: Err(fault),\n                    buffer: owned_buffer(submission.op),\n                },\n                None,\n            ),\n"],
+      "replace": ["            Some(Fault::Fail(fault)) => {\n                let mut completion = self.execute(submission, None);\n                completion.result = Err(fault);\n                (completion, None)\n            }\n"]
+    },
+    {
+      "name": "DI-11.1: a write failed after applying is reported as having succeeded",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The fault is the point of the variant: a write whose bytes are in the target and which is reported failed.",
+      "find": ["                if completion.result.is_ok() {\n                    completion.result = Err(fault);\n                }\n"],
+      "replace": ["                let _ = fault;\n"]
+    },
+    {
+      "name": "DI-11.1: a short count is ignored",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A short write is what the fault exists to produce; ignoring the count completes it in full.",
+      "find": ["            Some(Fault::Short(count)) => (self.execute(submission, Some(count)), None),\n"],
+      "replace": ["            Some(Fault::Short(_)) => (self.execute(submission, None), None),\n"]
+    },
+    {
+      "name": "DI-11.1: a short count larger than the buffer transfers the count",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The transfer is at most the count and never more than the buffer holds; max would slice past the end and panic.",
+      "find": ["    short.map_or(length, |count| length.min(position(count)))\n"],
+      "replace": ["    short.map_or(length, |count| length.max(position(count)))\n"]
+    },
+    {
+      "name": "DI-11.1: a held completion is delivered at once",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Holding is withholding the completion until the test releases it; delivering it at once is an ordinary completion.",
+      "find": ["            Some(Fault::Hold) => (self.execute(submission, None), Some(None)),\n"],
+      "replace": ["            Some(Fault::Hold) => (self.execute(submission, None), None),\n"]
+    },
+    {
+      "name": "DI-11.1: a late completion of zero doorbells is held",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "Zero is an ordinary completion; held with a count of zero it would be aged below zero by the next doorbell.",
+      "find": ["            Some(Fault::Late(0)) => (self.execute(submission, None), None),\n"],
+      "replace": [""]
+    },
+    {
+      "name": "DI-11.1: a late completion is aged by two doorbells at a time",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A completion late by two doorbells is released after two, and not after one.",
+      "find": ["                *left -= 1;\n"],
+      "replace": ["                *left = left.saturating_sub(2);\n"]
+    },
+    {
+      "name": "DI-11.1: a held completion takes no room in the completion queue",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "A held completion is outstanding: if it took no room, a completion might have nowhere to go when it is released.",
+      "find": ["        let outstanding = self.queued.len() + self.completed.len() + self.held.len();\n"],
+      "replace": ["        let outstanding = self.queued.len() + self.completed.len();\n"]
+    },
+    {
+      "name": "DI-11.1: the notification is raised when the completions were not empty",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The notification is raised on a transition from none to some; raising it on every release or doorbell into a non-empty queue wakes a waiter for nothing, and not raising it into an empty one loses the wakeup.",
+      "find": ["        if was_empty && !self.completed.is_empty() {\n"],
+      "replace": ["        if !was_empty && !self.completed.is_empty() {\n"]
+    },
+    {
+      "name": "DI-11.1: a scripted refusal is never consulted at the push",
+      "file": "src/memory.rs",
+      "expect": "caught",
+      "why": "The refusal is applied at the push; consulted at the wrong point it never fires.",
+      "find": ["        if let Some(Fault::Refuse(cause)) = self.script.consult(Point::Push, probe) {\n"],
+      "replace": ["        if let Some(Fault::Refuse(cause)) = self.script.consult(Point::Execute, probe) {\n"]
+    },
+    {
+      "name": "DI-11.1: a step counts only when no earlier step has fired",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "Every matching step counts every occurrence, so a step's count does not depend on the steps before it.",
+      "find": ["            self.seen[index] = self.seen[index].saturating_add(1);\n"],
+      "replace": ["            if firing.is_none() {\n                self.seen[index] = self.seen[index].saturating_add(1);\n            }\n"]
+    },
+    {
+      "name": "DI-11.1: from fires one occurrence late",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "From n is the nth match and every one after it.",
+      "find": ["            Occurrence::From(n) => seen >= n,\n"],
+      "replace": ["            Occurrence::From(n) => seen > n,\n"]
+    },
+    {
+      "name": "DI-11.1: nth fires on every match from the nth",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "Nth is that match and no other.",
+      "find": ["            Occurrence::Nth(n) => seen == n,\n"],
+      "replace": ["            Occurrence::Nth(n) => seen >= n,\n"]
+    },
+    {
+      "name": "DI-11.1: a step ignores the target it names",
+      "file": "src/memory/script.rs",
+      "expect": "caught",
+      "why": "A step that names a target fires only for operations on it.",
+      "find": ["        self.op.is_none_or(|wanted| op == Some(wanted))\n            && self.target.is_none_or(|wanted| target == Some(wanted))\n"],
+      "replace": ["        self.op.is_none_or(|wanted| op == Some(wanted))\n"]
+    },
+    {
+      "name": "DI-11.1 control: the count limit is taken through a match",
+      "file": "src/memory.rs",
+      "expect": "survives",
+      "why": "A control: the same limit by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    short.map_or(length, |count| length.min(position(count)))\n"],
+      "replace": ["    match short {\n        Some(count) => length.min(position(count)),\n        None => length,\n    }\n"]
     }
   ]
 }
