@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "win-durable-ioring"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "durable-ioring",
  "io-buffers",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "win-volume-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "io-buffers",
  "win-error-codes",

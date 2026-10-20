@@ -2,7 +2,7 @@
 
 [package]
 name = "win-durable-ioring"
-version = "0.3.0"
+version = "0.3.1"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -33,7 +33,7 @@ windows-threadpool-sys = { version = "0.3.0", path = "../windows-threadpool-sys"
 win-time-sys = { version = "0.1.0", path = "../win-time-sys" }
 # The disks a raw volume sits on, its sector size and its lock: device controls that need `unsafe`,
 # which this crate forbids (DI-D-61).
-win-volume-sys = { version = "0.1.0", path = "../win-volume-sys" }
+win-volume-sys = { version = "0.1.1", path = "../win-volume-sys" }
 # The open of a file (DI-13.2): every parameter of `CreateFileW`, made safe and decided by no one,
 # so what an open means is decided here and this crate has no `unsafe` of its own for it. The
 # handle it returns is plain and unassociated, as the ring needs.
