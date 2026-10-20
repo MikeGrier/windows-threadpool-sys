@@ -3531,3 +3531,27 @@ what is tested: [DESIGN-NOTES.md](DESIGN-NOTES.md#di-16-1). The item as it stood
 
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-namespace-request-sys` -> `NR-M6` ->
   > `NR-6.2` (delete capture). See [CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md).
+
+## Moved 2026-10-20 17:59:38 -04:00 -- DI-17.1: HandleKind rests on what was observed
+
+### <a id="di-171"></a>DI-17.1 -- `HandleKind` is restated as what was observed, and its variants as patterns of answers, not a kind any page establishes. *(completed 2026-10-20 17:59:38 -04:00)*
+
+The item as written:
+
+**Correct what `HandleKind` says it rests on.** The module doc of
+  `win-durable-ioring/src/windows_backend/handle_kind.rs` says "`IOCTL_STORAGE_GET_DEVICE_NUMBER`, which
+  the control's page says a volume or a disk answers"; neither the Win32 nor the WDK page says which
+  devices answer. Restate it, and the DI-14.12 paragraph in [DESIGN-NOTES.md](DESIGN-NOTES.md), as what
+  was observed (a volume and a physical disk answered, an ordinary file was refused, on one machine),
+  and say that `Volume`, `PhysicalDisk` and `DiskFile` name a pattern of answers and not a kind any
+  page establishes. Documentation only; behaviour does not change.
+
+What was done. The module doc of [handle_kind.rs](../win-durable-ioring/src/windows_backend/handle_kind.rs) no longer
+says the control's page names the devices that answer it. It says no page does, and gives what was observed on one
+machine: a volume and a physical disk answered the device-number control, an ordinary file, a directory, `NUL`, a
+console and a pipe refused it, and a volume answered the extents control where a physical disk refused it. The docs of
+`HandleKind` and of `DiskFile`, `Volume` and `PhysicalDisk` say they name those patterns and not a kind any page
+establishes. The DI-14.12 paragraph of [DESIGN-NOTES.md](DESIGN-NOTES.md) says the same and points at
+[WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12) and at `DI-17.2`, which decides what the names rest on. The
+DI-14.6 measurement note's bullet "The device-number control does [tell them apart]" stated the same claim as a rule
+and is restated as an observation too. No behaviour, name or signature changed.

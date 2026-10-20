@@ -523,8 +523,10 @@ tests red, and one that always reports a number turns the file, directory, `NUL`
 
 - **`GetFileType` does not tell a file from a volume or a disk.** It answers `DISK` for all of them, so a
   query of it alone cannot say whether a handle is a file.
-- **The device-number control does.** It succeeds on a volume and on a physical disk and fails on a file, a
-  directory, `NUL`, a console and a pipe, so the two sets are told apart by it over these kinds. It succeeded
+- **The device-number control separated them, on this machine.** It succeeded on a volume and on a physical disk
+  and failed on a file, a directory, `NUL`, a console and a pipe, so over these handles the two sets were told apart
+  by it; no page says which devices answer it, so this is an observation and not a rule about them
+  ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12)). It succeeded
   with no access requested on both, unelevated; the volume's reply carries a non-zero partition number, and the
   disk opened from that reply's device number reports the same device number. Opening the volume or the disk
   for `GENERIC_READ` was refused with 5 in this unelevated session.
@@ -593,9 +595,14 @@ path, stand as built until amended.
   `HandleKind`, is `DiskFile`, `Volume { number, extents }`, `PhysicalDisk(number)`, `CharacterDevice`, `Pipe` or
   `Other(FileType)`, which carries any other value as it came.
 - **The variants name what answered, and the documentation says so.** `DiskFile` is `DISK` with the storage-device
-  control refused; `PhysicalDisk` is that control answered and the extents control refused. The pages do not list the
-  errors a handle of another kind gets, so a refusal is taken as one whatever its code, and a device that refused for
-  another reason is classified as the variant its answer matches. The one error passed on and not read as a refusal is
+  control refused; `Volume` is both controls answered; `PhysicalDisk` is the device-number control answered and the
+  extents control refused. Each is a name for a pattern of answers observed on one machine, and no page establishes
+  that a handle answering a pattern is the kind its variant is called: neither the Win32 nor the WDK page for
+  `IOCTL_STORAGE_GET_DEVICE_NUMBER` says which devices answer it, and the `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` page
+  names only SMB 3.0, which does not support it, and the Cluster Shared Volume File System, which does ([WV-D-12](../win-volume-sys/DESIGN-NOTES.md#wv-d-12), which withdrew the claim from
+  `win-volume-sys`). What the names rest on is [DI-17.2](CHECKLIST.md)'s to decide. The pages do not list the errors a
+  handle of another kind gets, so a refusal is taken as one whatever its code, and a device that refused for another
+  reason is classified as the variant its answer matches. The one error passed on and not read as a refusal is
   out of memory, which is `win-volume-sys`'s own report that the extents reply was too large to hold.
 - **It reports and refuses nothing, and changes nothing an `OpenedFile` claims.** [DI-14.6.2](COMPLETED-CHECKLIST.md#di-1462)
   settled that. It is the classification after the open that [DI-D-67](#di-d-67) says is how a caller learns what a

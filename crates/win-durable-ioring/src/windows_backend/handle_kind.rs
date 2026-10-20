@@ -7,10 +7,14 @@
 //!
 //! The answer is what the handle answered and not a promise of what it is. Three queries are made, in
 //! order, and each is made only if the one before leaves the question open: `GetFileType`, whose five
-//! values are documented; `IOCTL_STORAGE_GET_DEVICE_NUMBER`, which the control's page says a volume or a
-//! disk answers and which other handles were observed refusing; and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`,
-//! a volume control, which a physical disk was observed refusing. The pages do not list the errors a
-//! handle of another kind gets, so a refusal is taken as a refusal whatever its code.
+//! values are documented; `IOCTL_STORAGE_GET_DEVICE_NUMBER`; and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`.
+//! No page says which devices answer either control, or what a device that refuses one is. What was
+//! observed, on one machine, is that a volume and a physical disk answered the device-number control and
+//! an ordinary file, a directory, `NUL`, a console and a pipe refused it, and that a volume answered the
+//! extents control and a physical disk refused it. [`HandleKind`]'s `DiskFile`, `Volume` and `PhysicalDisk`
+//! are names for those patterns of answers; no page establishes that a handle which answers one way is
+//! the kind its variant is called. The pages do not list the errors a handle of another kind gets, so a
+//! refusal is taken as a refusal whatever its code.
 
 use std::io;
 
@@ -24,15 +28,17 @@ mod tests;
 /// What a handle answered when it was asked its kind, by [`HandleKindQuery::perform`].
 ///
 /// The variants name what answered. A handle that answered the same way as one of them and is something
-/// else, because a device refused for a reason other than being the wrong kind, is that variant.
+/// else, because a device refused for a reason other than being the wrong kind, or answered though it is
+/// a device of another kind, is that variant. `DiskFile`, `Volume` and `PhysicalDisk` name patterns of
+/// answers that were observed on one machine, and not a kind any page establishes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HandleKind {
-    /// `GetFileType` reported `FILE_TYPE_DISK` and the storage-device control refused the handle: a
-    /// file or a directory on a file system, as far as these queries can tell.
+    /// `GetFileType` reported `FILE_TYPE_DISK` and the storage-device control refused the handle: the
+    /// answer an ordinary file and a directory were observed giving.
     DiskFile,
     /// `GetFileType` reported `FILE_TYPE_DISK`, the storage-device control answered, and the
-    /// volume-extents control answered: a volume, with the number it reported and the extents of the
-    /// disks it is on.
+    /// volume-extents control answered: the answer a volume was observed giving, with the number it
+    /// reported and the extents it reported.
     Volume {
         /// What the storage-device control reported, as the device wrote it.
         number: StorageDeviceNumber,
@@ -40,7 +46,8 @@ pub enum HandleKind {
         extents: Vec<DiskExtent>,
     },
     /// `GetFileType` reported `FILE_TYPE_DISK`, the storage-device control answered, and the
-    /// volume-extents control refused: a whole disk, with the number it reported.
+    /// volume-extents control refused: the answer a physical disk was observed giving, with the number
+    /// it reported.
     PhysicalDisk(StorageDeviceNumber),
     /// `GetFileType` reported `FILE_TYPE_CHAR`: "a character file, typically an LPT device or a
     /// console", and `NUL` was observed reporting it.

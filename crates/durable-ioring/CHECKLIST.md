@@ -86,13 +86,7 @@ claims were withdrawn there as `win-volume-sys` WV-D-12, which leaves how a cons
 handle's kind to the consumer. `HandleKindQuery` ([DI-14.12](COMPLETED-CHECKLIST.md#di-1412)) is the
 consumer built on the withdrawn reading.
 
-- [ ] **DI-17.1** -- **Correct what `HandleKind` says it rests on.** The module doc of
-  `win-durable-ioring/src/windows_backend/handle_kind.rs` says "`IOCTL_STORAGE_GET_DEVICE_NUMBER`, which
-  the control's page says a volume or a disk answers"; neither the Win32 nor the WDK page says which
-  devices answer. Restate it, and the DI-14.12 paragraph in [DESIGN-NOTES.md](DESIGN-NOTES.md), as what
-  was observed (a volume and a physical disk answered, an ordinary file was refused, on one machine),
-  and say that `Volume`, `PhysicalDisk` and `DiskFile` name a pattern of answers and not a kind any
-  page establishes. Documentation only; behaviour does not change.
+- [x] **DI-17.1** -- HandleKind is restated as what was observed, and its variants as patterns of answers, not a kind any page establishes. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-171)
 
 - [ ] **DI-17.2** -- **Decide what `HandleKind`'s kind rests on** (the engineer's ruling). The
   documented routes WV-D-12 names, each ending in some part of the storage stack's own word: the
