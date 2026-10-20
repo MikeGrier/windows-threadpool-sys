@@ -6,6 +6,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::path::{Path, PathBuf};
 
 use io_buffers::AlignedBuf;
+use win_shared_os_owned_handle::SharedHandle;
 
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_APPEND_DATA, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_RANDOM_ACCESS,
@@ -345,7 +346,8 @@ fn a_path_on_a_local_volume_does_not() {
 fn where_a_handle_is_is_the_final_path_of_the_file_it_names() {
     let temp = TempFile::new("of-location");
     let file = File::open(&temp.0).expect("open");
-    let location = final_location(file.as_handle()).expect("the final path of an open file");
+    let location =
+        final_location(&SharedHandle::from(file)).expect("the final path of an open file");
     assert_eq!(location, fs::canonicalize(&temp.0).expect("canonical"));
     assert!(!names_a_remote_device(&location));
 }
@@ -354,7 +356,7 @@ fn where_a_handle_is_is_the_final_path_of_the_file_it_names() {
 fn the_location_of_a_handle_with_no_final_path_is_the_calls_own_error() {
     // `NUL` is not a file of a volume, so it has no final path, and the error read is the call's.
     let nul = File::open("NUL").expect("open NUL");
-    let error = final_location(nul.as_handle()).expect_err("NUL has no final path");
+    let error = final_location(&SharedHandle::from(nul)).expect_err("NUL has no final path");
     assert!(error.raw_os_error().is_some(), "{error:?}");
     assert_ne!(error.kind(), io::ErrorKind::Unsupported);
 }
@@ -400,7 +402,7 @@ fn an_open_is_judged_where_the_handle_is_so_a_link_is_followed_unless_the_link_i
     // Followed: the handle is the target's.
     let followed = OpenedFile::<Cached>::open(wtf(&link), read_write()).expect("open the target");
     assert_eq!(
-        final_location(followed.as_handle()).expect("a location"),
+        final_location(followed.handle()).expect("a location"),
         fs::canonicalize(&temp.0).expect("canonical")
     );
 
@@ -410,10 +412,7 @@ fn an_open_is_judged_where_the_handle_is_so_a_link_is_followed_unless_the_link_i
     let expected = fs::canonicalize(link.parent().expect("a directory"))
         .expect("canonical")
         .join(link.file_name().expect("a name"));
-    assert_eq!(
-        final_location(own.as_handle()).expect("a location"),
-        expected
-    );
+    assert_eq!(final_location(own.handle()).expect("a location"), expected);
 
     drop((followed, own));
     fs::remove_file(&link).expect("remove the link");

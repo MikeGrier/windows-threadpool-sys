@@ -9,9 +9,10 @@
 
 use std::cell::Cell;
 use std::io;
-use std::os::windows::io::{AsHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 
 use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, StorageDeviceNumber};
 use windows_namespace_request_sys::{FileType, OpenFile};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -190,22 +191,20 @@ fn a_refusal_is_an_answer_whatever_its_code_and_out_of_memory_is_not() {
 
 // --- Real handles ------------------------------------------------------------------------------------
 
-fn open(path: &str, access: u32, flags: u32) -> OwnedHandle {
-    OpenFile::new(Wtf16String::from(path))
+fn open(path: &str, access: u32, flags: u32) -> SharedHandle {
+    let opened = OpenFile::new(Wtf16String::from(path))
         .expect("the path has no NUL")
         .with_desired_access(access)
         .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .with_creation_disposition(OPEN_EXISTING)
         .with_flags_and_attributes(flags)
         .perform()
-        .unwrap_or_else(|error| panic!("open {path}: {error:?}"))
+        .unwrap_or_else(|error| panic!("open {path}: {error:?}"));
+    SharedHandle::from(opened)
 }
 
-fn kind_of(handle: &impl AsHandle) -> HandleKind {
-    HandleKindQuery::of(handle)
-        .expect("a query")
-        .perform()
-        .expect("a kind")
+fn kind_of(handle: &SharedHandle) -> HandleKind {
+    HandleKindQuery::of(handle).perform().expect("a kind")
 }
 
 fn system_volume() -> String {
@@ -257,7 +256,7 @@ fn both_ends_of_a_named_pipe_are_a_pipe() {
         in_buffer_size: 4096,
         default_timeout_ms: 0,
     };
-    let server = create_named_pipe(&name, &options, None).expect("a pipe");
+    let server = SharedHandle::from(create_named_pipe(&name, &options, None).expect("a pipe"));
     let client = open(&name, GENERIC_READ, 0);
     assert_eq!(kind_of(&server), HandleKind::Pipe);
     assert_eq!(kind_of(&client), HandleKind::Pipe);
@@ -304,7 +303,7 @@ fn a_query_outlives_the_handle_it_was_built_from() {
     let name = Wtf16String::from_os_str(path.as_os_str());
     let file =
         OpenedFile::<Cached, _>::open(name, FileOptions::new().read().write()).expect("open");
-    let query = HandleKindQuery::of(file.handle()).expect("a query");
+    let query = HandleKindQuery::of(file.handle());
     drop(file);
     std::fs::remove_file(&path).expect("remove the file");
 
@@ -314,7 +313,7 @@ fn a_query_outlives_the_handle_it_was_built_from() {
 #[test]
 fn a_query_can_be_performed_again_and_on_another_thread() {
     let handle = open(r"\\.\NUL", GENERIC_READ, 0);
-    let query = HandleKindQuery::of(&handle).expect("a query");
+    let query = HandleKindQuery::of(&handle);
     assert_eq!(
         query.perform().expect("a kind"),
         HandleKind::CharacterDevice
@@ -324,4 +323,31 @@ fn a_query_can_be_performed_again_and_on_another_thread() {
         on_a_thread.join().expect("the thread"),
         HandleKind::CharacterDevice
     );
+}
+
+#[test]
+fn asking_an_opened_files_kind_makes_no_handle() {
+    // DI-16.1: the query holds the opened file's own handle, shared, where it used to hold a
+    // duplicate. One shared handle, and the same raw value, is what "makes no handle" means here.
+    let path = std::env::temp_dir().join(format!("wdi-kind-shared-{}.tmp", std::process::id()));
+    std::fs::write(&path, b"x").expect("create the file");
+    let name = Wtf16String::from_os_str(path.as_os_str());
+    let file =
+        OpenedFile::<Cached, _>::open(name, FileOptions::new().read().write()).expect("open");
+
+    let query = HandleKindQuery::of(file.handle());
+
+    assert_eq!(
+        query.file_type.handle().as_raw_handle(),
+        file.handle().as_raw_handle(),
+        "the query holds the file's handle itself"
+    );
+    assert!(
+        query.file_type.handle().same_handle(file.handle()),
+        "one shared handle, not two"
+    );
+    assert_eq!(query.perform().expect("a kind"), HandleKind::DiskFile);
+
+    drop((query, file));
+    std::fs::remove_file(&path).expect("remove the file");
 }

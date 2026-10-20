@@ -2,8 +2,8 @@
 //! What kind of handle an open handle is, asked of an observer (DI-14.12, DI-D-64, DI-D-67).
 //!
 //! The opener does not return the kind: a caller who wants it builds a [`HandleKindQuery`] from the
-//! handle and performs it. It is the request crate's pattern, a request over a duplicate of the handle,
-//! so it can be performed on any thread and does not hold the file open.
+//! handle and performs it. It is the request crate's pattern, a request over the handle, shared and not
+//! duplicated (DI-16.1), so it can be performed on any thread and makes no handle of its own.
 //!
 //! The answer is what the handle answered and not a promise of what it is. Three queries are made, in
 //! order, and each is made only if the one before leaves the question open: `GetFileType`, whose five
@@ -13,10 +13,10 @@
 //! handle of another kind gets, so a refusal is taken as a refusal whatever its code.
 
 use std::io;
-use std::os::windows::io::AsHandle;
 
+use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{DiskExtent, StorageDeviceNumber, storage_device_number, volume_disk_extents};
-use windows_namespace_request_sys::{CapturedHandle, FileType, QueryFileType};
+use windows_namespace_request_sys::{FileType, QueryFileType};
 
 #[cfg(test)]
 mod tests;
@@ -54,8 +54,9 @@ pub enum HandleKind {
 
 /// A request for a handle's kind, built from the handle and made with [`perform`](Self::perform).
 ///
-/// It owns a duplicate of the handle, so the handle it was built from can be closed first, and it is
-/// `Send`, so it can be performed where the caller chooses.
+/// It shares the handle it was built from, so that owner can be dropped first and the handle stays open
+/// until the query is dropped too, and it is `Send`, so it can be performed where the caller chooses.
+/// Building one makes no handle.
 ///
 /// # Example
 ///
@@ -70,7 +71,7 @@ pub enum HandleKind {
 /// let name = Wtf16String::from_os_str(path.as_os_str());
 /// let file = OpenedFile::<Cached, _>::open(name, FileOptions::new().read().write())?;
 ///
-/// let kind = HandleKindQuery::of(file.handle())?.perform()?;
+/// let kind = HandleKindQuery::of(file.handle()).perform()?;
 /// assert_eq!(kind, HandleKind::DiskFile);
 /// # drop(file);
 /// # std::fs::remove_file(&path)?;
@@ -83,22 +84,15 @@ pub struct HandleKindQuery {
 }
 
 impl HandleKindQuery {
-    /// A query over a duplicate of `handle`, which is not changed and need not stay open.
+    /// A query over `handle`, shared with it and not changed.
     ///
-    /// For an [`OpenedFile`](super::OpenedFile), `OpenedVolume` or `OpenedDisk`, pass its `handle()`.
-    ///
-    /// # Errors
-    ///
-    /// The error of duplicating the handle.
-    pub fn of(handle: &impl AsHandle) -> io::Result<Self> {
-        let captured = CapturedHandle::capture(handle.as_handle()).map_err(|error| {
-            error
-                .raw_os_error()
-                .map_or_else(|| io::Error::other(error), io::Error::from_raw_os_error)
-        })?;
-        Ok(Self {
-            file_type: QueryFileType::new(captured),
-        })
+    /// For an [`OpenedFile`](super::OpenedFile), `OpenedVolume` or `OpenedDisk`, pass its `handle()`;
+    /// any other handle becomes a [`SharedHandle`] with `SharedHandle::from`. Infallible: the query
+    /// holds a clone of the shared handle, so nothing is duplicated and nothing can fail.
+    pub fn of(handle: &SharedHandle) -> Self {
+        Self {
+            file_type: QueryFileType::new(handle.clone()),
+        }
     }
 
     /// Asks the handle its kind, on the calling thread.

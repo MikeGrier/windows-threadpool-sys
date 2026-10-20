@@ -28,7 +28,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use win_authorization_sys::{SecurityAttributes, SecurityDescriptor};
 use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::open::OpenFile;
-use windows_namespace_request_sys::{CapturedHandle, FinalPathError, QueryFinalPath};
+use windows_namespace_request_sys::{FinalPathError, QueryFinalPath};
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -783,7 +783,7 @@ impl<B: Buffering, A: DataAccess> OpenedFile<B, A> {
     /// handle's final path must be readable and must not name a device of another machine.
     fn admit(handle: SharedHandle) -> io::Result<Self> {
         if B::LOCAL_DEVICE_ONLY {
-            let location = final_location(handle.as_handle()).map_err(|cause| {
+            let location = final_location(&handle).map_err(|cause| {
                 io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })
             })?;
             if names_a_remote_device(&location) {
@@ -831,12 +831,10 @@ impl<B: Buffering, A: DataAccess> AsRawHandle for OpenedFile<B, A> {
 /// Where an opened handle is: its final path, in `GetFinalPathNameByHandleW`'s default form, which
 /// follows links and mapped drives to the object the handle names. A handle opened on a link itself
 /// (`FILE_FLAG_OPEN_REPARSE_POINT`) names the link, on its own volume.
-fn final_location(handle: BorrowedHandle<'_>) -> io::Result<PathBuf> {
-    let captured = CapturedHandle::capture(handle).map_err(|error| match error.raw_os_error() {
-        Some(code) => io::Error::from_raw_os_error(code),
-        None => io::Error::other(error),
-    })?;
-    let path = QueryFinalPath::new(captured)
+///
+/// The request is given the handle shared, not a duplicate of it (DI-16.1).
+fn final_location(handle: &SharedHandle) -> io::Result<PathBuf> {
+    let path = QueryFinalPath::new(handle.clone())
         .perform()
         .map_err(|error| match error {
             FinalPathError::Win32(code) => {

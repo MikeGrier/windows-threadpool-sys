@@ -986,8 +986,8 @@
       "file": "src/windows_backend/opened_file.rs",
       "expect": "caught",
       "why": "An unbuffered file claims that its writes reach a local device. A handle whose location cannot be read, NUL for one, must not be given that claim.",
-      "find": ["            let location = final_location(handle.as_handle()).map_err(|cause| {\n                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })\n            })?;"],
-      "replace": ["            let location = final_location(handle.as_handle()).unwrap_or_default();"]
+      "find": ["            let location = final_location(&handle).map_err(|cause| {\n                io::Error::new(io::ErrorKind::Unsupported, UnknownLocation { cause })\n            })?;"],
+      "replace": ["            let location = final_location(&handle).unwrap_or_default();"]
     },
     {
       "name": "DI-14.6.2: the refusal of a handle with no final path is the call's error and not this crate's own",
@@ -1882,9 +1882,33 @@
       "name": "DI-14.12: the type query's failure is taken as an unknown type",
       "file": "src/windows_backend/handle_kind.rs",
       "expect": "survives",
-      "why": "Declared, and not a gap a test can close: the query holds its own duplicate of an open handle, so GetFileType cannot be made to fail on it, and the error path has no input. What would reach it is a handle the system revokes while the query is held, which a test does not make.",
+      "why": "Declared, and not a gap a test can close: the query holds a share of an open handle, which keeps it open, so GetFileType cannot be made to fail on it, and the error path has no input. What would reach it is a handle the system revokes while the query is held, which a test does not make.",
       "find": ["            .map_err(|error| error.to_io_error())?;\n"],
       "replace": ["            .unwrap_or(FileType::UNKNOWN);\n"]
+    },
+    {
+      "name": "DI-16.1: asking a handle's kind duplicates it again",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "caught",
+      "why": "The query would hold a handle of its own, the pattern DI-16.1 removed; the query's handle is then a different raw value and not the same shared handle.",
+      "find": ["            file_type: QueryFileType::new(handle.clone()),\n"],
+      "replace": ["            file_type: QueryFileType::new(SharedHandle::from(std::os::windows::io::AsHandle::as_handle(handle).try_clone_to_owned().expect(\"a duplicate\"))),\n"]
+    },
+    {
+      "name": "DI-16.1 control: the query is given the shared handle by another spelling",
+      "file": "src/windows_backend/handle_kind.rs",
+      "expect": "survives",
+      "why": "Control. The same clone, spelled through the type, shares the same handle, so the test that the query makes no handle must not fire on it.",
+      "find": ["            file_type: QueryFileType::new(handle.clone()),\n"],
+      "replace": ["            file_type: QueryFileType::new(SharedHandle::clone(handle)),\n"]
+    },
+    {
+      "name": "DI-16.1: the final path is asked of a duplicate",
+      "file": "src/windows_backend/opened_file.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test can close: the request is made and dropped inside final_location, which returns only the path, so a duplicate would exist only for the call and nothing outside can tell it from the share. The kind query, which a caller holds, is where a duplicate is observable, and the entry above covers it.",
+      "find": ["    let path = QueryFinalPath::new(handle.clone())\n"],
+      "replace": ["    let path = QueryFinalPath::new(SharedHandle::from(std::os::windows::io::AsHandle::as_handle(handle).try_clone_to_owned()?))\n"]
     },
     {
       "name": "DI-10.5 control: the attested claim is made through a binding",
