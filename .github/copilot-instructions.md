@@ -1685,7 +1685,7 @@ recollection must not.** Run the command, paste nothing, and where the claim mat
 
 - **Rung: integration tests**, and the first attempt got that wrong, which is the lesson.
   `the_probes_that_emit_a_machine_readable_row` in `windows-platform-probes` runs every registered
-  probe binary except one it names with a reason, and asserts which ones emit a row. It replaced a
+  probe binary under a deadline, and asserts that each emits a row. It replaced a
   *unit* test that walked `src/bin`
   and grepped for a substring -- cheaper, and unsound twice over: the walk was shallow, so it never
   saw the one probe whose classification the test existed to pin down, and a bare substring matched

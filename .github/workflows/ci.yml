@@ -503,6 +503,8 @@ jobs:
       # probe-cancel-io is DELIBERATELY ABSENT and must stay that way. It is
       # binary-only because CancelSynchronousIo can block indefinitely -- that
       # is the finding -- so running it here would hang the job by design.
+      # (The row census in the test step above does run it, under a deadline,
+      # reading its row as it is written rather than waiting for it to exit.)
       #
       # One step per probe, deliberately, rather than one `run: |` block listing
       # them. These steps take the Windows runner's default shell, `pwsh`, where

@@ -182,10 +182,10 @@
       "expect": "caught",
       "why": "A run asked for more repetitions would report the default's median while its settings line said otherwise -- the settings would be decoration.",
       "find": [
-        "    let repetitions = sampling.repetitions;"
+        "    for round in 0..sampling.repetitions {"
       ],
       "replace": [
-        "    let repetitions = REPETITIONS;"
+        "    for round in 0..REPETITIONS {"
       ]
     },
     {
@@ -266,10 +266,14 @@
       "expect": "survives",
       "why": "A control: the untimed pass still runs with the same arguments and its result is still thrown away, which no test can tell apart.",
       "find": [
-        "    let _ = timer(producers, pushes_per_producer);"
+        "    let _ = timer(producers, pushes_per_producer);",
+        "",
+        "    let results: Vec<Repetition> = (0..sampling.repetitions)"
       ],
       "replace": [
-        "    let _warmup = timer(producers, pushes_per_producer);"
+        "    let _warmup = timer(producers, pushes_per_producer);",
+        "",
+        "    let results: Vec<Repetition> = (0..sampling.repetitions)"
       ]
     },
     {
@@ -397,7 +401,7 @@
       "name": "M8.1: the queue probe stops emitting its row",
       "file": "src/bin/queue_contention/main.rs",
       "expect": "caught",
-      "why": "The census runs this probe rather than reading its sources, so whether its row exists is decided by its output. Before M8.1 the census grepped for the literal \"reason\":\"x-probe, which a row built with Row::new never contains; since M8.2 the probe emits exactly such a row, and deleting it must change the census's set.",
+      "why": "The census runs this probe rather than reading its sources, so whether its row exists is decided by its output. Before M8.1 the census grepped for the literal \"reason\":\"x-probe, which a row built with Row::new never contains; since M8.2 the probe emits exactly such a row, and since M8.14 the census fails for any probe without one.",
       "find": [
         "        raw_row(",
         "            &observation,",
@@ -1357,6 +1361,66 @@
       "replace": [
         "        .with(\"build\", build)",
         "        .with(\"arch\", std::env::consts::ARCH)"
+      ]
+    },
+    {
+      "name": "M8.14: the cancel-io probe stops emitting its row",
+      "file": "src/bin/cancel_io.rs",
+      "expect": "caught",
+      "why": "Before M8.14 the census did not run this probe and checked only that its sources carried no emission literal, so it survived; the census now runs every registered probe and requires a row from each.",
+      "find": [
+        "        raw_row(idle, &busy, &this_build().to_string()).render()"
+      ],
+      "replace": [
+        "        \"\""
+      ]
+    },
+    {
+      "name": "M8.14: a report that never finishes is accepted when its time runs out",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "The deadline is what keeps a probe whose subject can fail to return from hanging the suite; reading a timeout as a finished report would pass a probe that never wrote its row.",
+      "find": [
+        "                panic!(\"{name} did not finish its report within {limit:?}\");"
+      ],
+      "replace": [
+        "                return row;"
+      ]
+    },
+    {
+      "name": "M8.14: an unsuccessful exit is accepted",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "A probe that failed part-way may still have written a row; a run that failed is not one the census can stand behind.",
+      "find": [
+        "                    status.success(),"
+      ],
+      "replace": [
+        "                    true,"
+      ]
+    },
+    {
+      "name": "M8.14: a probe excused from exiting is waited on anyway",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "caught",
+      "why": "The excuse is what lets the census run the cancel-io probe at all; waiting on a process whose canceller may never return reintroduces the hang.",
+      "find": [
+        "                    if may_not_exit {"
+      ],
+      "replace": [
+        "                    if may_not_exit && false {"
+      ]
+    },
+    {
+      "name": "M8.14 control: the deadline is a second shorter",
+      "file": "tests/the_probes_that_emit_a_machine_readable_row.rs",
+      "expect": "survives",
+      "why": "A control: the deadline's size is margin over the slowest probe, not a claim the tests make.",
+      "find": [
+        "const DEADLINE: Duration = Duration::from_secs(120);"
+      ],
+      "replace": [
+        "const DEADLINE: Duration = Duration::from_secs(119);"
       ]
     },
     {

@@ -1,6 +1,7 @@
 // Copyright (c) Mike Grier.
 
-//! Which probes carry a machine-readable row, established by running them.
+//! Every registered probe emits a machine-readable row, established by running
+//! them.
 //!
 //! **This replaces a unit test that asked the wrong question and got the right
 //! answer.** That test walked `src/bin` and grepped each file for the string
@@ -18,56 +19,47 @@
 //! one that crosses a process boundary, which is this one.
 //!
 //! The binary list comes from `Cargo.toml` rather than from a list kept here, so
-//! a probe added tomorrow joins the census without anyone remembering to add it.
+//! a probe added tomorrow joins the census without anyone remembering to add it
+//! -- and, since `M8.14`, fails it unless it emits a row, because the rule
+//! (`d-every-probe-emits-a-row` in DESIGN-NOTES.md) is that every probe does.
+//! Until then this test kept a list of the probes that emitted one, which a
+//! probe without a row could join as easily as one with.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
-/// The probes whose report carries an `x-probe-*` NDJSON line.
-///
-/// Measured, not recalled. A document that describes the split -- `M4.10` in
-/// CHECKLIST.md is the current one -- is corrected by this failing rather than
-/// by somebody noticing.
-const EMIT_A_ROW: [&str; 15] = [
-    "probe-completion-port",
-    "probe-core-affinity",
-    "probe-device-map",
-    "probe-doorbell-cost",
-    "probe-error-mode",
-    "probe-handle-state",
-    "probe-ioring",
-    "probe-long-path-aware",
-    "probe-long-path-unaware",
-    "probe-peer-index-cache",
-    "probe-pool-growth",
-    "probe-queue-contention",
-    "probe-request-cost",
-    "probe-topology",
-    "probe-worker-context",
-];
+/// What a row looks like as it is written: the start of its `reason` member.
+/// Not the bare tag -- a probe that only mentions `x-probe` in prose is not a
+/// probe that emits one, and that exact confusion is why this test moved off a
+/// source grep.
+const ROW: &str = r#""reason":"x-probe"#;
 
-/// The probes this test does not run, and why each one is excluded.
+/// How long one probe may run before the census gives up on it.
 ///
-/// A list of pairs rather than a bare name, because an exclusion without its
-/// reason is indistinguishable from an oversight -- and the second entry here
-/// was exactly that until a review found it.
+/// **Every probe runs under it**, because `Command::output` waits on a child
+/// without limit, and one probe's subject is a call that can fail to return. A
+/// probe that runs out of time fails the census with its name rather than
+/// hanging the suite. The longest run is the cancel-io probe's worst case,
+/// several five-second watchdogs; this is several times that.
+const DEADLINE: Duration = Duration::from_secs(120);
+
+/// Probes the census does not wait to exit once their row has been read.
 ///
-/// - `probe-cancel-io` measures a call that **can fail to return**. Its own
-///   module doc says so and draws the conclusion: "Binary only, and deliberately
-///   not a test ... a wedged `#[test]` would take the whole suite with it." It
-///   guards each case with an internal watchdog, but `Command::output` waits on
-///   the child without one, so running it here would reintroduce the hazard that
-///   probe is shaped to avoid.
+/// - `probe-cancel-io` measures a call that **can fail to return**, and its own
+///   module doc draws the conclusion: a canceller wedged that way is left
+///   running, since nothing can stop it safely. Whether such a thread also holds
+///   up the process's exit is not something this census should stake a hang on.
+///   Its report streams line by line, so its row is written before `main`
+///   returns; reading the row is the census's whole question, and having read
+///   it the census ends the process rather than waiting for it.
 ///
-/// It is still censused, by the one question a source can answer soundly --
-/// whether the emission literal appears anywhere in its sources at all. That is
-/// weaker than running it, and it is stated as weaker rather than blended in
-/// with the rest: a row built with `Row::new` contains no such literal.
-///
-/// `probe-queue-contention` was excluded here too, as "about sixty-five
-/// seconds, with no short mode". `M4.2` gave it one, so it is run, with the
-/// command line in [`SHORT_RUNS`] (`M8.1`).
-const NOT_RUN: [(&str, &str); 1] = [("probe-cancel-io", "src/bin/cancel_io.rs")];
+/// This is why the probe can be censused at all. Until `M8.14` it was excluded
+/// and checked only for an emission literal in its sources -- a question a row
+/// built with `Row::new` answers falsely.
+const MAY_NOT_EXIT: [&str; 1] = ["probe-cancel-io"];
 
 /// Probes run with a command line that keeps them short, and that command line.
 ///
@@ -123,25 +115,97 @@ fn binary_directory() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every `.rs` file under `root`, at any depth.
-fn walk(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return found;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(walk(&path));
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push(path);
+/// Ends a child the census has given up on, without waiting for it.
+///
+/// Waiting is exactly what cannot be relied on for the one probe whose subject
+/// can fail to return, so the child is terminated and left.
+fn abandon(child: &mut Child) {
+    let _ = child.kill();
+}
+
+/// Run one probe under `deadline` and say whether its report carried a row.
+///
+/// `may_not_exit` ends the process as soon as a row is read, for a probe in
+/// [`MAY_NOT_EXIT`]; every other probe must also exit successfully in time.
+///
+/// # Panics
+///
+/// Panics, naming the probe, when it cannot be started, does not finish its
+/// report in time, or exits unsuccessfully -- a probe that cannot run cannot be
+/// censused.
+fn emits_a_row(name: &str, mut command: Command, may_not_exit: bool, deadline: Duration) -> bool {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{name} could not be run: {error}"));
+    let stdout = child.stdout.take().expect("stdout was piped");
+
+    // Lines arrive on another thread so the wait below has a deadline; a read
+    // on the pipe itself has none.
+    let (send, lines) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).split(b'\n') {
+            let Ok(line) = line else { break };
+            if send
+                .send(String::from_utf8_lossy(&line).into_owned())
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let limit = deadline;
+    let deadline = Instant::now() + limit;
+    let mut row = false;
+    loop {
+        match lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => {
+                if line.contains(ROW) {
+                    row = true;
+                    if may_not_exit {
+                        abandon(&mut child);
+                        return true;
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                abandon(&mut child);
+                panic!("{name} did not finish its report within {limit:?}");
+            }
         }
     }
-    found
+
+    // The report is closed, so the probe is exiting; it still has to say how.
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                assert!(
+                    status.success(),
+                    "{name} exited {:?}; a probe that cannot run cannot be censused",
+                    status.code()
+                );
+                return row;
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // Not reached by a test below: it needs a child that closes its
+            // own standard output and then keeps running, which no `cmd.exe`
+            // one-liner does. A probe that freed its console and kept working
+            // would reach it.
+            Ok(None) | Err(_) => {
+                abandon(&mut child);
+                panic!("{name} closed its report but did not exit within {limit:?}");
+            }
+        }
+    }
 }
 
 #[test]
-fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
+fn every_registered_probe_emits_a_machine_readable_row() {
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml"))
         .expect("the crate's manifest is readable");
     let registered = registered_binaries(&manifest);
@@ -150,12 +214,12 @@ fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
         "no `[[bin]]` targets were read from the manifest, so this test checked \
          nothing -- the manifest's shape has probably changed"
     );
-    for (name, _) in NOT_RUN {
+    for name in MAY_NOT_EXIT {
         assert!(
             registered.iter().any(|registered| registered == name),
-            "`{name}` is excluded by name, so it must still be a registered \
-             target; if it was renamed, this exclusion is silently covering a \
-             probe nobody is censusing"
+            "`{name}` is excused from exiting by name, so it must still be a \
+             registered target; if it was renamed, the renamed probe would be \
+             waited on, which is the hang the excuse exists to avoid"
         );
     }
     for (name, _) in SHORT_RUNS {
@@ -168,82 +232,126 @@ fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
     }
 
     let directory = binary_directory();
-    let mut emitting: Vec<String> = Vec::new();
+    let mut without_a_row: Vec<&str> = Vec::new();
     for name in &registered {
-        if NOT_RUN.iter().any(|(excluded, _)| excluded == name) {
-            continue;
-        }
         let executable = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
         let arguments = SHORT_RUNS
             .iter()
             .find(|(short, _)| short == name)
             .map_or(&[][..], |(_, arguments)| *arguments);
-        let output = Command::new(&executable)
-            .args(arguments)
-            .output()
-            .unwrap_or_else(|error| panic!("{} could not be run: {error}", executable.display()));
-        assert!(
-            output.status.success(),
-            "{name} exited {:?}; a probe that cannot run cannot be censused",
-            output.status.code()
-        );
-        // The row as it is actually written, not the bare tag: a probe that only
-        // mentions `x-probe` in prose is not a probe that emits one, and that
-        // exact confusion is why this test moved off a source grep.
-        if String::from_utf8_lossy(&output.stdout).contains(r#""reason":"x-probe"#) {
-            emitting.push(name.clone());
+        let mut command = Command::new(&executable);
+        command.args(arguments);
+        let may_not_exit = MAY_NOT_EXIT.contains(&name.as_str());
+        if !emits_a_row(name, command, may_not_exit, DEADLINE) {
+            without_a_row.push(name);
         }
     }
-    emitting.sort();
 
-    assert_eq!(
-        emitting, EMIT_A_ROW,
-        "the set of probes emitting a machine-readable row has changed; update \
-         `EMIT_A_ROW` and every document that describes the split, rather than \
-         leaving the two to disagree"
+    assert!(
+        without_a_row.is_empty(),
+        "every probe's normal run emits a row of raw data (`d-every-probe-emits-a-row` \
+         in DESIGN-NOTES.md), and these did not: {without_a_row:?}"
+    );
+}
+
+/// A `cmd.exe` running `script`, with a stdin it can wait on forever.
+///
+/// The census's deadline paths need a child that does not finish, and `set /p`
+/// blocks reading a pipe nothing writes to. It is a `cmd` builtin, so ending
+/// `cmd` ends it -- no grandchild outlives the test.
+fn cmd(script: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new("cmd.exe");
+    command
+        .raw_arg(format!("/d /c {script}"))
+        .stdin(Stdio::piped());
+    command
+}
+
+#[test]
+fn a_report_that_never_finishes_fails_the_census_by_its_deadline() {
+    let started = Instant::now();
+    let outcome = std::panic::catch_unwind(|| {
+        emits_a_row(
+            "hangs",
+            cmd("set /p never="),
+            false,
+            Duration::from_millis(500),
+        )
+    });
+    let message = *outcome
+        .expect_err("a probe that never finishes must fail the census")
+        .downcast::<String>()
+        .expect("a formatted message");
+    assert!(message.contains("did not finish its report"), "{message}");
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "the deadline bounded the wait"
+    );
+}
+
+#[test]
+fn a_probe_excused_from_exiting_is_ended_once_its_row_is_read() {
+    // Both directions: the row is found while the process is still running, and
+    // the same child, not excused, is not ended on the row -- it runs into the
+    // deadline instead.
+    let script = r#"echo {"reason":"x-probe-test"}& set /p never="#;
+    let started = Instant::now();
+    assert!(emits_a_row(
+        "excused",
+        cmd(script),
+        true,
+        Duration::from_secs(60)
+    ));
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "the census stopped waiting once it read the row"
     );
 
-    // The excluded probes, by the weaker question. If an emission literal ever
-    // appears in their sources this stops being answerable without running
-    // them, and the assertion says so rather than quietly going stale.
-    for (name, source_path) in NOT_RUN {
-        let path = crate_root().join(source_path);
-        // **One read for both shapes, and it fails loudly.** These were two
-        // reads with opposite failure behaviour: the file branch panicked on an
-        // unreadable source, the directory branch mapped it to an empty string
-        // through `unwrap_or_default`. An empty string contains no emission
-        // literal, so a source this census could not read passed it -- and the
-        // non-empty guard below passed too, because the vector still had an
-        // entry. The weaker half of the census could therefore report a clean
-        // answer having read nothing, which is the one outcome it must not have.
-        let read = |file: &Path| -> String {
-            std::fs::read_to_string(file).unwrap_or_else(|error| {
-                panic!(
-                    "{name}'s source at {} could not be read: {error} -- the \
-                     source census cannot stand in for running it if it cannot \
-                     read it",
-                    file.display()
-                )
-            })
-        };
-        let sources: Vec<String> = if path.is_dir() {
-            walk(&path).iter().map(|file| read(file)).collect()
-        } else {
-            vec![read(&path)]
-        };
-        assert!(
-            !sources.is_empty(),
-            "no sources were found for `{name}` at {}, so its half of the \
-             census checked nothing",
-            path.display()
-        );
-        assert!(
-            sources
-                .iter()
-                .all(|source| !source.contains(r#""reason":"x-probe"#)),
-            "`{name}` has gained an emission literal, so the source question can \
-             no longer stand in for running it -- either run it here and accept \
-             the cost, or state plainly that it is uncensused"
-        );
-    }
+    let outcome = std::panic::catch_unwind(|| {
+        emits_a_row(
+            "not excused",
+            cmd(script),
+            false,
+            Duration::from_millis(500),
+        )
+    });
+    assert!(
+        outcome.is_err(),
+        "a probe that is not excused must still finish in time"
+    );
+}
+
+#[test]
+fn a_probe_that_exits_unsuccessfully_fails_the_census() {
+    let outcome = std::panic::catch_unwind(|| {
+        emits_a_row(
+            "fails",
+            cmd(r#"echo {"reason":"x-probe-test"}& exit 3"#),
+            false,
+            Duration::from_secs(60),
+        )
+    });
+    let message = *outcome
+        .expect_err("a probe that exits unsuccessfully must fail the census")
+        .downcast::<String>()
+        .expect("a formatted message");
+    assert!(message.contains("exited Some(3)"), "{message}");
+}
+
+#[test]
+fn a_report_is_read_as_written_whether_or_not_it_carries_a_row() {
+    assert!(emits_a_row(
+        "row",
+        cmd(r#"echo prose& echo {"reason":"x-probe-test","n":1}"#),
+        false,
+        Duration::from_secs(60),
+    ));
+    // A mention of the tag in prose is not a row.
+    assert!(!emits_a_row(
+        "prose",
+        cmd("echo this probe writes x-probe-test in prose only"),
+        false,
+        Duration::from_secs(60),
+    ));
 }

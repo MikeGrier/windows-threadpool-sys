@@ -2067,3 +2067,49 @@ Evidence, in [sabotage.json](sabotage.json): six `M8.6` entries are each caught 
 test -- among them the row claiming the manifest whatever the binary declares, and an unread
 registry value published as off, the defect the module's own note records against the prose -- and
 a key-order control survives.
+
+## Moved 2026-10-19 20:00:57 -04:00 -- M8: every probe's normal run emits a row of raw data
+
+Applied [Every probe's normal run emits a row of raw data](DESIGN-NOTES.md#d-every-probe-emits-a-row),
+decided by `M4.10`. `M8.1` and `M8.6` were archived above when they completed; their stubs were
+deleted with the milestone. Each item's row, its refusal form and its sabotage evidence are in the
+commit that completed it; the conventions the rows share are recorded in the decision.
+
+- [x] **M8.2** -- `probe-queue-contention` emits a row.
+- [x] **M8.3** -- `probe-peer-index-cache` emits a row.
+- [x] **M8.4** -- `probe-core-affinity` emits a row, including when it declines to measure.
+- [x] **M8.5** -- `probe-pool-growth` emits a row.
+- [x] **M8.7** -- `probe-error-mode` emits a row.
+- [x] **M8.8** -- `probe-handle-state` emits a row.
+- [x] **M8.9** -- `probe-worker-context` emits a row.
+- [x] **M8.10** -- `probe-device-map` emits a row.
+- [x] **M8.11** -- `probe-ioring` emits a row.
+- [x] **M8.12** -- `probe-completion-port` emits a row.
+- [x] **M8.13** -- `probe-cancel-io` emits a row, including for a case its watchdog abandons.
+
+### <a id="m814"></a>M8.14 -- The row census asserts that every registered probe emits a row. *(completed 2026-10-19 20:00:57 -04:00)*
+
+The item as written: "Make the row census assert that every registered probe emits a row, so a probe
+added later without one fails rather than joining an exception list."
+
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs)
+no longer keeps a list of the probes that emit a row; it runs every `[[bin]]` the manifest registers
+and fails naming any whose report carries none. Every probe runs under a deadline, its output read
+as it arrives, so no probe can hang the suite. `probe-cancel-io`, excluded until now because its
+subject is a call that can fail to return, is run too: the census stops at its row rather than
+waiting on an exit its own finding says may not come, which the report's line-by-line streaming
+(`M1`) makes possible. Its old stand-in -- a check that its sources carried no emission literal --
+is gone, since a row built with `Row::new` answers it falsely.
+
+The deadline paths are each driven by a test against a `cmd.exe` child: a report that never
+finishes, a probe excused from exiting that prints its row and then blocks (and the same child, not
+excused, running into the deadline), an unsuccessful exit, and a report read as written with and
+without a row. The one path no test reaches -- a child that closes its output and keeps running --
+says so at its definition.
+
+Evidence, in [sabotage.json](sabotage.json): `probe-cancel-io` losing its row **survived** the census
+as it stood, checked by running the entry before the rewrite, and is caught by the census that runs
+it. Accepting a timed-out report, accepting an unsuccessful exit, and waiting on an excused probe are
+each caught by their intended test; a control shortening the deadline survives. Two `M4.2` entries
+whose find text the `M4.4` rewrite had left matching zero and two times were repaired in the same
+change, and every entry in the manifest now matches exactly once.

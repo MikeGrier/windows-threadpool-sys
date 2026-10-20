@@ -828,3 +828,20 @@ formally as being a contract." And: "these probes are meant as somewhat informal
 platform behaviors. They are not a formal validation scheme." The "I don't know if" is recorded as
 said; what is settled is that a new row does not inherit the topology row's machinery, and that a
 change of meaning is a change of name.
+
+### How `M8` applied it
+
+**Floats.** The queue probe's first row needed per-operation figures, and the row writer's `Value`
+has no float, with a recorded reason. Adding one was the obvious move and was not made: the
+per-operation figure is the prose's division of an elapsed time by a push count, so under rule A it
+is a reading rather than the observation. The row publishes the elapsed time, recovered exactly from
+the stored figure, and every later timing row followed. Where a measurement had kept only derived
+figures -- `core_affinity` stored batch depths as `ITEMS / max(1, reads)`, which no division can
+undo at zero -- the raw values were added at the source in `windows-placement-probe`.
+
+**The cancel-io probe.** It had been excluded from the census because `Command::output` waits on a
+child without limit and its subject is a call that can fail to return. Excluding it again would have
+left the rule unenforced for exactly the probe least likely to be run by hand. The census instead
+runs every probe under a deadline, reading output as it arrives, and for this one probe stops at
+its row rather than waiting on an exit its own finding says may not come. The report streams line
+by line (`M1`), which is what lets the row arrive before `main` returns.

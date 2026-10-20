@@ -2580,7 +2580,8 @@ the scripts' refusal of byte-identical runs: it names the build, which every run
 
 <a id="d-every-probe-emits-a-row"></a>
 
-**Status: decided** by `M4.10`; applied by milestone `M8` in [CHECKLIST.md](CHECKLIST.md).
+**Status: decided** by `M4.10`; applied by milestone `M8`, archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#m814).
 
 The engineer, 2026-10-19, choosing the first of three rules put to him (every probe; only probes
 something other than a person reads; only host-dependent magnitudes): "The answer is A for the
@@ -2605,6 +2606,30 @@ general they produce raw data."
 
 **Not decided here, and left to each probe's item:** what a refusal looks like in a row. Topology's
 `report_unmeasured` is the existing example of a probe saying it declined to measure; each item
-follows it or says why not.
+follows it or says why not. Every `M8` item that had a way to decline followed it: the same row,
+with a `declined` member carrying the reason and `null` on a run that measured. A probe with no way
+to decline -- its measurement completes or panics, and a panic prints no report -- carries no such
+member.
 
-**Scheduled work:** milestone `M8` in [CHECKLIST.md](CHECKLIST.md), one item per probe without a row.
+**Conventions the `M8` rows share**, each chosen so a row carries what was observed rather than a
+reading of it:
+
+- **A timing is a whole number of elapsed nanoseconds**, never a per-operation float. The
+  per-operation figures are the prose's division of an elapsed time, and the row writer has no float
+  for them; where a measurement kept only the derived figure, the raw one was carried at its source
+  (`core_affinity::Measurement` gained the median pass's elapsed time and read counts) rather than
+  reversed out of a division.
+- **A value read only on failure is `null` when it was not read.** `GetLastError` after a call that
+  succeeded is a zero nothing asked for; publishing it reads as an observed code.
+- **A signed code or identifier is hexadecimal text** -- an HRESULT as `0x80070057`, a LUID as
+  `high:low` -- as the prose prints it. The row writer carries no signed number, and these are names
+  to look up rather than quantities.
+- **Every enumerated choice is published by a stable record name** (`name()`), separate from the
+  prose label the table prints, so the table can be reworded without renaming a row's values.
+
+**Enforced** by the row census,
+[tests/the_probes_that_emit_a_machine_readable_row.rs](tests/the_probes_that_emit_a_machine_readable_row.rs),
+which runs every registered probe under a deadline and fails for any whose normal run emits no row
+(`M8.14`). A probe added later without one fails it rather than joining a list.
+
+**Scheduled work:** none.
