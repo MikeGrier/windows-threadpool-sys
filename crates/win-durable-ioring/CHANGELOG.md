@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.3.0...win-durable-ioring-v0.3.1) (2026-10-20)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * win-volume-sys bumped from 0.1.0 to 0.1.1
+
 ## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-durable-ioring-v0.2.1...win-durable-ioring-v0.3.0) (2026-10-17)
 
 

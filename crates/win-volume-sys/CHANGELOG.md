@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.1.0...win-volume-sys-v0.1.1) (2026-10-20)
+
+
+### Features
+
+* **volume:** add storage_device_number, the device number a volume or disk reports ([02b4d8a](https://github.com/MikeGrier/windows-threadpool-sys/commit/02b4d8a18385b520ddf76d7714a17cdc944a53a2))
+
 ## [0.1.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/win-volume-sys-v0.0.1...win-volume-sys-v0.1.0) (2026-10-16)
 
 
