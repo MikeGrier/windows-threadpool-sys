@@ -596,3 +596,130 @@ constructor.
 refuse it adds a check this crate's other entries do not have, and `CreateFileW` already answers an
 empty path with a code. `win-durable-ioring`'s open keeps refusing it, as invalid input, because it
 did before and a caller of that crate must not see a difference.
+
+## D-28: the forms of a path
+
+**Why not `GetFullPathNameW`'s output.** It is the call this crate already makes to resolve a path, it
+is documented, and it does no I/O in the common case, so it was the first thing to try as the
+oracle: classify a string by what it returns. The run showed it cannot be one. It normalises an
+exactly-backslash `\\?\` path that `CreateFileW` leaves alone, it reads `\??\` as a rooted path on the
+current drive where `CreateFileW` takes it as an NT path, and it turns a `/` after `UNC` into a
+backslash where `CreateFileW` keeps it as a name character. A consumer that refused a path because
+`GetFullPathNameW` called it local would be wrong in each of those cases, and the cases are the
+ones that reach the network.
+
+**Why not `PathCch*`.** They are lexical, they do not read `\??\` at all, and they were already ruled
+out for the graft by [D-19](DESIGN-NOTES.md#d-19) for returning a drive-relative path unresolved.
+
+**Why not the function `CreateFileW` itself uses.** The conversion of a DOS path to an NT path is
+done below `CreateFileW` by a routine that is not a documented Win32 function, and this repository
+does not bind one (the rule on documented APIs only), so its answers are reached by behaviour, which
+is what the table is.
+
+**Why measure the open and not the documentation.** The documentation names `\\?\`, `\\.\` and UNC
+paths. What it leaves for a measurement is the spelling: whether `//?/` is a verbatim prefix, whether
+`UNC` is matched without regard to case, whether a slash after `UNC` is a separator, and whether a
+`.` under each prefix is removed. Those are exactly the questions a refusal that is made on a string
+has to get right, and a wrong answer to the first or fourth is a path that reaches the network with
+nothing to stop it.
+
+**Why the example asserts nothing.** What it prints is what one machine did. A test that asserted it
+would fail on another Windows build for a reason that is a finding, not a defect. The example is the
+means of redoing the measurement when a row is in doubt.
+
+**Why the classifier was withdrawn.** It was planned (`NR-5.2` to `NR-5.4`) so that durable-ioring
+could refuse a path that is evidently remote before the open, to avoid a file left behind by an
+unbuffered create and a network call made before a refusal. The engineer's answer, 2026-10-16, was
+that finding out late is acceptable, and that the check on the opened handle is the only one needed.
+That left the classifier with one consumer that had dropped it, a new public type in a published crate,
+and one row (`\??\`) whose behaviour this repository found rather than read, which the
+platform-integrity rule says not to bind to. The graft rules it would also have derived from stayed
+as they are. It would be reopened by a consumer that needs to know a path is remote before it makes any
+call.
+
+## D-31: the typed `FileIdInfo` entry
+
+**Delegating to the untyped entry.** The typed entry could have held a `QueryFileInformation` for the class and
+read the structure out of the buffer it returns, so that `GetFileInformationByHandleEx` is called from one place
+in the crate. That allocates a buffer for a structure of 24 bytes and reads it back through a cast; calling into
+a `FILE_ID_INFO` on the stack allocates nothing and needs no cast. The shared part, the faithful report of the
+code, is [D-10](DESIGN-NOTES.md#d-10)'s primitive either way, and the class value is shared through
+`FileInformationClass::ID`, so the direct call was taken.
+
+**A `From<FILE_ID_INFO>` impl.** It would let a caller holding the structure convert it, and it would make the
+dependency's type part of the surface, which [D-13](DESIGN-NOTES.md#d-13) refuses. The conversion is private.
+
+**Where the agreement with the enumeration crate is tested.** That crate depends on this one, so a test here that
+used it would be a dependency cycle through a dev-dependency, built against a second copy of this crate. The test
+is in the enumeration crate's integration tests, where both are already in reach, and this crate tests the same
+agreement against the `FileIdExtdDirectoryInfo` record the enumeration crate reads.
+
+**Refusal codes.** The codes observed for a pipe, `NUL` and a volume are not on the page. Naming them in the tests
+would assert the machine; comparing each with the untyped entry's code for the same handle asserts what this
+entry promises, that the code passes through unaltered.
+
+## D-32: sharing rather than duplicating
+
+**How the question was put.** The assistant first proposed keeping `CapturedHandle` as the type entries take,
+holding a `SharedHandle`, with a second route that still duplicated for a caller holding only a borrow. The
+engineer asked whether the wrapper was wanted or merely there, and whether the duplicating route would be added
+if the crate were started now. Taken item by item (the list in D-32), every job the wrapper did came from
+duplicating, and the borrow-only caller already has two routes outside this crate, std's `try_clone_to_owned` and
+`win-handles-sys`'s `duplicate_handle_with_access`. Keeping either would have been compatibility with the crate's
+own first design and nothing more.
+
+**The values std allows in an `OwnedHandle`.** Its documentation says one "may have the value `-1`, which in
+`OwnedHandle` always represents a valid handle value, such as the current process handle", and "may have the
+value `NULL`", which a detached console produces. D-7 refused both before duplicating; D-32 does not refuse them,
+because an entry's call answers for them, and an answer from the call is what [D-10](DESIGN-NOTES.md#d-10)
+reports.
+
+**The consumers.** `win-durable-ioring` duplicated handles its `OpenedFile` already held as a `SharedHandle` to
+ask their final path and kind; `windows-file-enumeration-sys` read its volume serial privately rather than
+duplicate its directory handle for [D-31](DESIGN-NOTES.md#d-31)'s entry. Both are the cost the duplication
+imposed, and both go with it.
+
+**`new`'s parameter, settled by `NR-6.2`.** `NR-6.1` gave `new` `impl Into<SharedHandle>` so that a capturing
+caller kept building through the transition `From`; with that conversion deleted, the question was whether to
+narrow it to `SharedHandle`. Narrowing excludes nothing a caller could pass, since `SharedHandle` converts to
+itself, and adds `SharedHandle::from` at every call site that holds a `File` or an `OwnedHandle`, which is most of
+them, in this crate's own tests and in its consumers. So it stays.
+
+## D-30 addendum: building a path entry from an `AnchoredPath` (`NR-6.3`)
+
+**Why a named constructor and not `From<AnchoredPath>`.** Both entries are built by chaining `with_*` calls onto a
+constructor, and `OpenFile::from_anchored(path).with_...` says which input it starts from where
+`OpenFile::from(path)` does not; a `From` would also invite `path.into()` at a call site, where the reader cannot
+see that the anchoring already happened. The constructor is the only addition, so nothing else is offered for
+choosing between.
+
+## D-33: the typed `FileBasicInfo` entry
+
+**Why the times are not converted.** A `SystemTime` would read better at a call site, but a `FILETIME` before 1970 or
+past what `SystemTime` holds on a platform would need a refusal or a clamp of this crate's own, and the page offers
+neither; the value is the call's, and a consumer converts it where it knows what it wants. The attributes stay a raw
+`u32` for the same reason D-29 carries a `FileType` as it came: the constants list grows, and a typed set would drop
+a bit it did not know.
+
+## D-34: querying into the caller's buffer
+
+**Why `&mut AlignedBuf` and not `&mut [u8]`.** An `AlignedBuf` states its alignment as a property of the type, so
+the caller who chose it can see it, and the same buffer is what `perform` returns. (As first written this said a check
+of alignment was what the page gives no ground for. That read the call's page alone; the ground is in the structure
+pages, below.) The same buffer is what `perform` returns, so a consumer
+can keep the one `perform` gave it.
+
+**Why the buffer is not cleared.** Clearing would cost a pass over the buffer on every batch, which is the cost the
+form exists to remove, and would add a guarantee about bytes no consumer reads: a batch is walked by its own
+next-entry offsets, and a fixed-size class's structure is the bytes it occupies.
+
+**How the alignment refusal was reached (2026-10-20).** A review of the release branch found that
+`FILE_ID_BOTH_DIR_INFO` and `FILE_FULL_DIR_INFO` each "must be aligned on a" "(8-byte) boundary", that both classes
+are reachable through `FileInformationClass::from_raw`, and that a misaligned buffer fails with `ERROR_NOACCESS`. A
+sweep of every structure the call's page lists found a third, `FILE_STREAM_INFO`. The pages count as the call's own:
+the call's page names each as the `lpFileInformation` type, so they say what the buffer is. Nothing unsound had been
+possible -- the call writes bytes into a byte buffer -- so this is the contract, not memory safety. Considered and
+not taken: **requiring a buffer stated at 8 or more**, deterministic for a caller but a refusal of calls the pages
+allow (a class with no requirement, or a buffer that lies on the boundary); and **a buffer type that guarantees 8**,
+which would narrow every class for the sake of five. The refusal is reachable end to end only with an empty buffer,
+which lies at its stated alignment; where a non-empty one lies is the allocator's.

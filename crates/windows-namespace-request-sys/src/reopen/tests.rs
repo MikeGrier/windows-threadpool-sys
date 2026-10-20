@@ -22,14 +22,20 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::ReOpenFile;
+use crate::Win32Error;
+use crate::handle::SharedRaw;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
 use crate::request::Request;
-use crate::{CapturedHandle, Win32Error};
+use win_shared_os_owned_handle::SharedHandle;
 
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
 fn request_for(file: &File) -> ReOpenFile {
-    ReOpenFile::new(CapturedHandle::capture(file.as_handle()).expect("capture the handle"))
+    ReOpenFile::new(SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 /// The file at the fixture's path, opened as `read` and `write` say, sharing as `share` says.
@@ -289,7 +295,7 @@ fn a_request_reopens_after_the_handle_it_was_built_from_is_gone() {
 }
 
 #[test]
-fn a_copy_keeps_every_parameter_and_its_own_handle() {
+fn a_clone_keeps_every_parameter_and_shares_the_handle() {
     let _allocating = handle_allocation().read().expect("not poisoned");
     let fixture = Fixture::new("reopen-copy");
     let original = open(&fixture, true, false, SHARE_ALL);
@@ -298,12 +304,12 @@ fn a_copy_keeps_every_parameter_and_its_own_handle() {
         .with_share_mode(SHARE_ALL)
         .with_flags_and_attributes(FILE_FLAG_NO_BUFFERING);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
     assert_eq!(copy.desired_access(), FILE_GENERIC_READ);
     assert_eq!(copy.share_mode(), SHARE_ALL);
     assert_eq!(copy.flags_and_attributes(), FILE_FLAG_NO_BUFFERING);
-    assert_ne!(copy.original().raw(), request.original().raw());
+    assert!(copy.original().same_handle(request.original()));
     drop(request);
     drop(original);
     assert!(copy.perform().is_ok(), "the copy still reopens");

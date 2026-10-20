@@ -1779,3 +1779,21 @@ fails the run through the probe's own check of its samples.
 
 The probe's report prose was rewritten with it. It states the figures and the mechanism of the
 difference between the two builds, and does not say whether the graft matters.
+
+## Moved 2026-10-19 12:27:37 -04:00 -- M7.1: the request_cost probe times a shared handle; M6 and M7 complete
+
+`M6` held only `M6.1`, archived above, and is removed from the checklist with `M7`.
+
+### <a id="m71"></a>M7.1 -- The `request_cost` probe times what a request does with a handle now, sharing it, and keeps a borrowed handle's duplication only as the caller's cost. *(completed 2026-10-19 12:27:37 -04:00)*
+
+The rows `capture_handle` and `close_handle`, which timed `CapturedHandle::capture`, are replaced by
+`share_handle` (a `SharedHandle` clone and its drop), `build_request_with_handle` (the absolute-path build
+carrying a template), and `duplicate_borrowed_handle` with `close_duplicate`, labelled in the report as what a
+caller holding only a borrowed handle pays outside the request crate. The module section "Handle duplication is
+the part that is easy to under-count" is rewritten as "A handle is shared with a request, not duplicated for
+it". The decision is
+[the request_cost probe times a shared handle](DESIGN-NOTES.md#d-request-cost-shares-handles). Two sabotage
+entries were added, one a control.
+
+> **-> CROSS-COMPONENT HANDOFF:** the request crate's
+> [NR-6.2](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) no longer waits on this crate.

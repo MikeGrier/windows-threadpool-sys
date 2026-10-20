@@ -32,7 +32,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use wtf_string::Wtf16String;
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::SharedRaw;
 use crate::outcome::{Win32Error, perform_nonzero};
 
 /// How many times the buffer is grown before the result is called unstable.
@@ -162,10 +164,8 @@ impl From<Win32Error> for FinalPathError {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::final_path::QueryFinalPath;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-fp-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
@@ -173,29 +173,28 @@ impl From<Win32Error> for FinalPathError {
 ///
 /// // Built here; it would resolve identically on a worker, which is the point:
 /// // Globazog performs this on its submitting thread today.
-/// let resolved = QueryFinalPath::new(CapturedHandle::capture(file.as_handle())?)
+/// let resolved = QueryFinalPath::new(file)
 ///     .perform()?
 ///     .to_string_lossy();
 ///
 /// // The result is a verbatim path, so it names the object unambiguously.
 /// assert!(resolved.starts_with(r"\\?\"), "unexpected: {resolved}");
 /// assert!(resolved.ends_with(".tmp"), "unexpected: {resolved}");
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request resolves nothing"]
 pub struct QueryFinalPath {
-    handle: CapturedHandle,
+    handle: SharedHandle,
     flags: FinalPathFlags,
 }
 
 impl QueryFinalPath {
     /// Begins a request against `handle`, in the form the audited watcher uses.
-    pub fn new(handle: CapturedHandle) -> Self {
+    pub fn new(handle: impl Into<SharedHandle>) -> Self {
         Self {
-            handle,
+            handle: handle.into(),
             flags: FinalPathFlags::DEFAULT,
         }
     }
@@ -206,8 +205,8 @@ impl QueryFinalPath {
         self
     }
 
-    /// The owned duplicate of the handle being resolved.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being resolved, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
     }
 
@@ -215,18 +214,6 @@ impl QueryFinalPath {
     #[must_use]
     pub fn flags(&self) -> FinalPathFlags {
         self.flags
-    }
-
-    /// Copies the request, duplicating the handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: self.handle.try_clone()?,
-            flags: self.flags,
-        })
     }
 
     /// Performs the call on the calling thread, growing the buffer as needed.
@@ -243,7 +230,7 @@ impl QueryFinalPath {
             let requested = u32::try_from(capacity).unwrap_or(u32::MAX);
 
             let written = perform_nonzero(|| {
-                // SAFETY: the handle is a duplicate this request owns and keeps
+                // SAFETY: the handle is one this request holds and keeps
                 // open across the call, and the buffer is writable for
                 // `requested` characters. The buffer's invariant is restored
                 // below before it is observed.

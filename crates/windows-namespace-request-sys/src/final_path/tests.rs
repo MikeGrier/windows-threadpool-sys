@@ -8,11 +8,11 @@
 //! always fitted.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::os::windows::io::AsHandle;
 
 use super::{FinalPathFlags, QueryFinalPath};
-use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
+use win_shared_os_owned_handle::SharedHandle;
 
 /// Long enough that the resolved path exceeds the 260-character first attempt,
 /// so the retry path is exercised rather than merely present.
@@ -20,7 +20,11 @@ const DEEP_NESTING: usize = 12;
 const SEGMENT: &str = "a-directory-with-a-deliberately-long-name";
 
 fn request_for(file: &File) -> QueryFinalPath {
-    QueryFinalPath::new(CapturedHandle::capture(file.as_handle()).expect("capture the handle"))
+    QueryFinalPath::new(SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 #[test]
@@ -179,7 +183,7 @@ fn two_handles_to_one_file_resolve_to_the_same_path() {
 }
 
 #[test]
-fn a_copy_duplicates_the_handle_and_resolves_the_same_way() {
+fn a_clone_shares_the_handle_and_resolves_the_same_way() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -187,12 +191,9 @@ fn a_copy_duplicates_the_handle_and_resolves_the_same_way() {
     let file = fixture.open_file();
     let request = request_for(&file);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     assert_eq!(
         copy.perform().expect("the copy resolves").to_string_lossy(),
         request
@@ -216,7 +217,7 @@ fn a_request_survives_the_handle_it_was_built_from() {
 
     let resolved = request
         .perform()
-        .expect("the owned duplicate outlives its source")
+        .expect("the request's handle outlives the caller's")
         .to_string_lossy();
     assert!(resolved.ends_with("f.t"), "unexpected: {resolved}");
 }

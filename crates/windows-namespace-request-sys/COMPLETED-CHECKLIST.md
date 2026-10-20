@@ -355,3 +355,246 @@ and the item is archived there as
 [M6.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m61). The probe was first adapted just
 enough to build by the commit of `NR-3.4` to `NR-3.6`, as this item said it would be, and then
 rewritten.
+
+## Moved 2026-10-16 18:52:01 -04:00 -- NR-5.1: the forms of a path, measured
+
+### <a id="nr-51-forms"></a>NR-5.1 -- The decision for the path-form classifier, from measurements, before the type exists. *(completed 2026-10-16 18:52:01 -04:00)*
+
+The decision and the table of measurements are [D-28](DESIGN-NOTES.md#d-28), with its Tier 2 entry in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). They were made with
+[examples/path_form_measurements.rs](examples/path_form_measurements.rs), which reproduces them.
+The four questions this item named are answered there: the NT prefix `\??\` is read by `CreateFileW` as
+an NT path and not normalised, and by `GetFullPathNameW` as a rooted path; forward slashes in a
+verbatim prefix make it normalised, so only the exactly-backslash form suppresses normalisation (the
+claim of `D-19` rule 6, measured here for the first time); `UNC` is matched without regard to ASCII case;
+and `\\.\UNC\` is a UNC form. The run also showed that `\\.\` is normalised, which corrects the reason
+given for rule 6, and that `GetFullPathNameW` cannot be the oracle.
+
+### <a id="nr-52-withdrawn"></a>NR-5.2 to NR-5.4 -- withdrawn, not done. *(withdrawn 2026-10-16 19:59:00 -04:00)*
+
+Withdrawn by the engineer on 2026-10-16. They were a public `PathForm`, the graft rules derived from it,
+and `win32_path_form()` on the path-taking entries, planned so that durable-ioring could refuse a path
+that is evidently remote before the open. The engineer ruled that finding out late is acceptable and
+that the check on the opened handle is the only one needed (`durable-ioring`'s `DI-13.1`
+(b), amended), so the one consumer dropped it, and a
+new public type in a published crate was not worth what was left. What would reopen them is a consumer
+that needs to know a path is remote before it makes any call. The graft rules stay as they are,
+including rule 6, whose reason [D-28](DESIGN-NOTES.md#d-28) corrects. The reasons are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+A working position recorded with them, not a decision: the entries keep taking the `windows-sys` types
+and raw access masks they take now, and the typed vocabulary for rights, share mode, disposition and
+attributes belongs to durable-ioring's `DI-13.3`, `DI-13.4` and `DI-13.7`, so this crate stays the
+policy-free catalogue.
+
+## Moved 2026-10-18 17:04:20 -04:00 -- `GetFileType`
+
+### <a id="nr-39-filetype"></a>NR-3.9 -- `GetFileType` is a `QueryFileType` entry on a captured handle, with the value carried as it came. *(completed 2026-10-18 17:04:20 -04:00)*
+
+The engineer, 2026-10-18 ("build both of these now"), so that a caller can ask what kind of handle an opened
+file is without the opener returning it. The decision and what was observed are
+[D-29](DESIGN-NOTES.md#d-29). Four sabotages, one declared as surviving because no handle tried returns an unknown
+type from a call that worked.
+
+## Moved 2026-10-18 20:52:23 -04:00 -- The enumeration crate's duplicate of the path preparation
+
+### <a id="nr-38-dedupe"></a>NR-3.8 -- The enumeration crate consumes this crate's `AnchoredPath` and its older copy of the path preparation is deleted; done with that crate's `PATH-1`. *(completed 2026-10-18 20:52:23 -04:00)*
+
+The engineer, 2026-10-15: schedule resolving it, as the first option the workspace's `M26+.3`
+([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)) names. What this crate gave to make it
+possible is [D-30](DESIGN-NOTES.md#d-30): `AnchoredPath` is public, with `new`, `given` and `win32`. What the
+enumeration crate gave up in taking it is that crate's
+`D-22`, and the work is its `PATH-1`.
+
+## Moved 2026-10-18 21:05:37 -04:00 -- A typed `FileIdInfo` read
+
+### <a id="nr-310-fileid"></a>NR-3.10 -- `QueryFileIdInfo` reads `FileIdInfo` as a `FileIdInfo` value: the volume serial number as a `u64` and the 128-bit file ID as 16 bytes. *(completed 2026-10-18 21:05:37 -04:00)*
+
+Queued from the review of durable-ioring's `DI-M15`, for `DI-15.1`. The decision and what was observed are
+[D-31](DESIGN-NOTES.md#d-31). The untyped entry's own test now checks that its bytes and the typed entry agree,
+and the agreement with what `windows-file-enumeration-sys` reports is a test in that crate. Four sabotages caught
+and one control survived.
+
+## Moved 2026-10-18 21:05:37 -04:00 -- `NR-2`, `NR-3` and `NR-4` are complete
+
+Every item of the three groups is archived above under its own heading; their stubs were deleted with this move.
+What follows is each group's opening text, which was in the checklist and is recorded nowhere else.
+
+### NR-2 -- Storage-locality queries, one entry per call
+
+Opened 2026-10-06 from the durable-ioring design session
+([DESIGN-SESSION-2026-10-05-epoch-ring.md](../../design-sessions/DESIGN-SESSION-2026-10-05-epoch-ring.md)).
+durable-ioring lets a consumer declare each file's **flush domains** -- the disks, caches, virtual
+disks or shares its writes depend on
+([DI-D-21](../durable-ioring/DESIGN-NOTES.md#di-d-21)) -- and a locality helper (root `M39`) derives
+them from Windows' storage topology. Each call was a catalogue entry of its own, per [D-3](DESIGN-NOTES.md#d-3),
+and the entries moved to `win-volume-sys` with `NR-2.6` and `NR-2.8`.
+
+### NR-4 -- Adopt `win-error-codes`
+
+Opened 2026-10-15. This crate had its own `Win32Error`, which converted a code of 2^31 or more to
+`io::Error` without keeping the code. See [WE-D-1](../win-error-codes/DESIGN-NOTES.md#we-d-1).
+
+### NR-3 -- What durable-ioring's open surface needs of this crate
+
+Opened 2026-10-15 from durable-ioring's `DI-M13` to `DI-M15`. durable-ioring opens its files through
+`OpenFile` ([DI-D-63](../durable-ioring/DESIGN-NOTES.md#di-d-63)), so the options it can offer a
+consumer are the ones this crate can carry, and some were missing or in the way. All are policy-free,
+like the rest of this crate: durable-ioring decides which of them a consumer may use.
+
+The path work was **one regularisation of the whole crate**, by the engineer's ruling of 2026-10-15 ("the
+whole crate should be regularized"), decided in [D-19](DESIGN-NOTES.md#d-19) and split into
+`NR-3.3` to `NR-3.7`. Paths enter this crate at three entries: `OpenFile`, `WatchDirectory` and
+`ResolveFullPath`. Every other entry takes a handle, an identifier or a class. All three take a
+`Wtf16String`, and none has a length limit, a validation of its own beyond an interior NUL, or a
+`\\?\` rewrite.
+
+## Moved 2026-10-18 22:21:18 -04:00 -- `NR-inf.1` graduated to `NR-6`
+
+### <a id="nr-inf1-graduated"></a>NR-inf.1 -- A request shares the caller's handle as a `SharedHandle` instead of duplicating it. *(graduated 2026-10-18 22:21:18 -04:00)*
+
+Not completed: graduated to `NR-6` in [CHECKLIST.md](CHECKLIST.md) by the engineer's ruling of 2026-10-18, which
+[D-32](DESIGN-NOTES.md#d-32) records and which answers each question below. The item as it was parked:
+
+> **A request shares the caller's handle as a `SharedHandle` instead of duplicating it.** The engineer's
+> direction, 2026-10-07, and a working position rather than a decision: this crate should use
+> win-shared-os-owned-handle's `SharedHandle` (its `SH-1+.1`), and the `DuplicateHandle` capture of D-4 and D-7
+> was non-trivial work that is probably not worth it over an `Arc<OwnedHandle>`. **Deferred by the engineer
+> because it is not a drop-in replacement**; nothing else gates it. What it changes, each to be settled when
+> this is picked up:
+>
+> - **Construction.** Capture takes a `BorrowedHandle` from a caller who keeps ownership. A shared form needs a
+>   `SharedHandle` the caller already holds, and a caller with only a borrow cannot make one without giving up
+>   its handle. Whether duplication survives as a second capture path is open.
+> - **D-7's refusals.** Re-check which of the null, `INVALID_HANDLE_VALUE` and pseudo-handle refusals still
+>   apply to a value that arrives already owned.
+> - **Inheritance.** A duplicate is made non-inheritable (D-7); a shared handle keeps whatever the opener chose.
+> - **Getting the handle back.** `into_owned_handle` and `From<CapturedHandle> for OwnedHandle` are infallible
+>   today; `SharedHandle::try_into_owned` fails while another clone exists. `try_clone` would become infallible.
+> - **Unchanged:** D-4's measured state-sharing. Shared or duplicated, the request names the caller's kernel
+>   object.
+> - A breaking change to the published crate.
+
+## Moved 2026-10-18 23:30:14 -04:00 -- A request holds a `SharedHandle`
+
+### <a id="nr-61-shared"></a>NR-6.1 -- Every entry that takes a handle holds a `SharedHandle`, built from `impl Into<SharedHandle>`, and all but the two carrying security attributes derive `Clone`. *(completed 2026-10-18 23:30:14 -04:00)*
+
+The first step of [D-32](DESIGN-NOTES.md#d-32). The entries: `QueryFileType`, `QueryFileIdInfo`,
+`QueryFileInformation`, `QueryFileInformationByHandle`, `QueryFinalPath`, `QueryVolumeInformation`,
+`ReOpenFile`'s original, `OpenFileByIdentifier`'s volume hint, and `OpenFile`'s template, which the item's list had
+missed. `From<CapturedHandle> for SharedHandle` keeps every caller that still captures building, so the workspace
+built with no change outside this crate; the crate's own callers of `with_template`, which takes an
+`Option<SharedHandle>`, add `.into()`. `try_clone` still duplicates until `NR-6.2`, so the tests that pin a copy's
+separate handle are unchanged. Two crate-private helpers carry the transition: `SharedRaw::raw` and `duplicate`.
+Tests in [shared_handle_tests.rs](src/shared_handle_tests.rs); three sabotages, two caught and a control that
+survives.
+
+## Moved 2026-10-19 20:59:29 -04:00 -- Capture is deleted
+
+### <a id="nr-62-capture"></a>NR-6.2 -- Capture is deleted: `CapturedHandle` and its errors go, and the two remaining `try_clone`s share the handle and fail only on the attributes' copy. *(completed 2026-10-19 20:59:29 -04:00)*
+
+The second step of [D-32](DESIGN-NOTES.md#d-32), after the consumers moved (`DI-16.1`, `M7.1`, `SAFE-1`).
+`handle` is now a private module holding only `SharedRaw`, and its tests are the shared fixture. The seven `Clone`
+entries' `try_clone`s are gone and their copy tests became clone tests (same handle, same answer); `OpenFile`'s and
+`OpenFileByIdentifier`'s `try_clone` return `SecurityCaptureError` as the attributes report it. `new` keeps
+`impl Into<SharedHandle>`, recorded in D-32 and its rationale. D-4 is marked superseded, D-7 withdrawn and D-26
+amended; D-8, D-15, D-16 and D-29 no longer restate duplication. The crate documentation and README say "a handle is
+shared" and their example hands a `File` over as it is. Tests that held a borrow make their own owned handle with
+`try_clone_to_owned`, which is D-32's route for such a caller. Sabotage: four entries on deleted code removed, the two
+`NR-6.1` entries rewritten to duplicate inline (they had called the deleted helper and would have been caught by the
+build), and two caught entries plus a control for the `try_clone`s. Swept `duplicat` and `captur`: what remains is
+measured behaviour of duplicates, duplicates the tests make themselves, and path and security capture, which are
+another concept. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.2** -- **Capture is deleted.** `CapturedHandle`, `capture`, `capture_raw`, `into_owned_handle`,
+  `HandleCaptureError`, `HandleCaptureFailure`, the transition `From`, the crate-private `duplicate` helper, each
+  `Clone` entry's `try_clone`, and the `handle` module's tests of D-7's refusals. `OpenFile`'s and
+  `OpenFileByIdentifier`'s `try_clone` stay, for their security attributes, and share the handle instead of
+  duplicating it; their error type then reports only the attributes' copy. Whether `new` keeps `impl Into<SharedHandle>` (which takes an `OwnedHandle` or a
+  `File` as it is) or takes `SharedHandle` is settled here and recorded in D-32. [D-4](DESIGN-NOTES.md#d-4) is
+  marked superseded and [D-7](DESIGN-NOTES.md#d-7) withdrawn, both by D-32. The crate documentation's "A path is
+  copied; a handle is duplicated" and the README are rewritten for sharing; sweep `duplicat` and `captur` across
+  the crate's `src`, `tests`, `README.md` and design notes. Breaking. Needs every consumer moved (the handoff
+  above).
+
+## Moved 2026-10-19 21:10:34 -04:00 -- The path entries are built from an anchored path
+
+### <a id="nr-63-anchored"></a>NR-6.3 -- `OpenFile::from_anchored` and `WatchDirectory::from_anchored` build a request from an `AnchoredPath` the caller holds, without anchoring it again. *(completed 2026-10-19 21:10:34 -04:00)*
+
+Recorded beside [D-30](DESIGN-NOTES.md#d-30), with the naming in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Both
+constructors are infallible, and each `new` is `from_anchored` over `AnchoredPath::new`, so the two cannot start
+a request differently. Tests in each entry's module: a path anchored onto a root that is not the current directory
+reaches Win32 as anchored; a request built from an anchored path starts as one built from text; and, in a child
+process, a path anchored before the current directory changes opens (or watches) what it named then, with the
+same name anchored after the change refused as a control. Two sabotages that anchor the path again, each caught
+by both its entry's tests, and a control that survives. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.3** -- **`OpenFile` and `WatchDirectory` from an `AnchoredPath`.** An infallible constructor on each
+  taking an `AnchoredPath` the caller already holds, so a crate that anchored its path when its own request was
+  built (the enumeration crate's `SAFE-2`) does not anchor it a second time. Both path entries get it, so they
+  stay one shape. Tests: the Win32 path is the anchored path's; a relative path anchored before the current
+  directory changes opens what it named when it was anchored.
+
+## Moved 2026-10-19 21:30:06 -04:00 -- A typed read of `FileBasicInfo`
+
+### <a id="nr-64-basic"></a>NR-6.4 -- `QueryFileBasicInfo` reads `FileBasicInfo` as five values, the four times as `i64` and the attributes as their raw `u32`. *(completed 2026-10-19 21:30:06 -04:00)*
+
+The decision is [D-33](DESIGN-NOTES.md#d-33), with what was observed. Tests in
+[file_basic/tests.rs](src/file_basic/tests.rs): three times set through std read back in their own fields; the fields
+equal the untyped entry's bytes for a file with four distinct times and for a directory; a directory reports the
+directory attribute and a file does not; a read-only file reports read-only; a write moves the write time and not the
+creation time; a no-access file, `NUL`, an anonymous pipe and a no-access volume each give the untyped entry's
+outcome; an event is `ERROR_INVALID_HANDLE`; and the clone, seam and thread tests of its neighbours. The entry is in the
+crate-wide sharing tests. Sabotage: two field swaps, a dropped attribute field and the wrong class, all caught, and a
+control. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.4** -- **A typed read of `FileBasicInfo`.** `QueryFileBasicInfo`, shaped as
+  [D-31](DESIGN-NOTES.md#d-31)'s `QueryFileIdInfo` is: one `GetFileInformationByHandleEx` call into a
+  `FILE_BASIC_INFO`, the class from `FileInformationClass::BASIC`, and the five fields carried as the call wrote
+  them (the four times as `i64`, the attributes as their raw `u32`), with nothing said beyond the page. Its
+  decision is recorded beside D-31's. Tests: a directory reports the directory attribute and a file does not; the
+  fields agree with the untyped entry's bytes; a refused handle reports the untyped entry's code.
+
+## Moved 2026-10-19 21:36:30 -04:00 -- NR-6 complete: a request shares the caller's handle
+
+The milestone's last item, with the milestone's own text; its other items were archived as they completed
+([NR-6.1](#nr-61-shared), [NR-6.2](#nr-62-capture), [NR-6.3](#nr-63-anchored), [NR-6.4](#nr-64-basic)). NR-6.1's
+handoff, discharged by `DI-16.1`, `M7.1` and `SAFE-1`, is kept below the preamble.
+
+NR-6 -- A request shares the caller's handle
+
+`NR-inf.1`, graduated 2026-10-18 by the engineer's ruling recorded as [D-32](DESIGN-NOTES.md#d-32): a request
+holds a `SharedHandle`, and nothing in this crate duplicates a handle. The parked item's text is archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-inf1-graduated), and D-32 answers each of its questions.
+The order across crates was the workspace's `M43`. Here: `NR-6.1`, then the
+consumers move (the handoff below), then `NR-6.2`. `NR-6.3` to `NR-6.5` are additive and independent of those and
+of each other. Then this crate is released, a new minor.
+
+  > **-> CROSS-COMPONENT HANDOFF:** the consumers move off `CapturedHandle` before `NR-6.2`:
+  > `DI-16.1` (`win-durable-ioring`),
+  > [M7.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m71) (`windows-platform-probes`), and
+  > `SAFE-1` (`windows-file-enumeration-sys`' metadata test).
+
+### <a id="nr-65-into"></a>NR-6.5 -- `QueryFileInformation::perform_into` makes the call into an `AlignedBuf` the caller owns and keeps, allocating nothing and refusing nothing about the buffer ahead of the call. *(completed 2026-10-19 21:36:30 -04:00)*
+
+The decision is [D-34](DESIGN-NOTES.md#d-34), with the page it rests on and why the buffer is neither checked nor
+cleared; `perform` is now an allocation followed by `perform_into`, so the call has one site. Tests in
+[query/tests.rs](src/query/tests.rs): a directory read batch by batch into one buffer lists what the allocating form
+lists, over more than one batch; the buffer is the same allocation (address, length, alignment) after every call,
+the failing last one included, at two layouts; the end of the directory is `ERROR_NO_MORE_FILES`, twice; the buffer's
+length is the size given and the request's capacity is not used, both ways; an empty buffer gets the code the
+allocating form gets for a capacity of zero; and bytes the call does not write keep what they held. Sabotage: the
+capacity used as a limit, the buffer cleared, and the buffer replaced, all caught by test assertions, and a control.
+The item as it stood at completion follows verbatim; its handoff was to `SAFE-2`, after this crate's release.
+
+- [x] **NR-6.5** -- **`QueryFileInformation` into a buffer the caller owns.** A form that performs the call into
+  an `AlignedBuf` the caller passes and keeps, so a consumer reading a directory batch after batch (the
+  enumeration crate's refill) allocates once and not once per call. What it requires of that buffer (alignment,
+  a size that fits the call's `u32`) follows the call's page, with the citation, per the workspace's
+  documented-contract rule. Tests: a directory
+  read batch by batch into one buffer lists what the allocating form lists; the buffer is the same allocation
+  after every call; the end of the directory is the call's code, as now.
+
+  > **-> CROSS-COMPONENT HANDOFF:** after this crate's release, the next work is in component
+  > `crates/windows-file-enumeration-sys` -> `SAFE` -> `SAFE-2`. See
+  > [CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md).

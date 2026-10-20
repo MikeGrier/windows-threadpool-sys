@@ -20,12 +20,13 @@ use std::fs::File;
 use std::os::windows::io::AsHandle;
 use std::sync::Arc;
 
+use win_shared_os_owned_handle::SharedHandle;
+use windows_namespace_request_sys::Request;
 use windows_namespace_request_sys::close::CloseRequest;
 use windows_namespace_request_sys::file_info::QueryFileInformationByHandle;
 use windows_namespace_request_sys::final_path::QueryFinalPath;
 use windows_namespace_request_sys::open_by_id::{FileIdentifier, OpenFileByIdentifier};
 use windows_namespace_request_sys::query::{FileInformationClass, QueryFileInformation};
-use windows_namespace_request_sys::{CapturedHandle, Request};
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY};
 use windows_thread_ambient_sys::{AmbientState, CaptureSet};
 
@@ -34,8 +35,12 @@ use crate::support::{AUDITED_SHARE, Tree, audited_directory_open, open_directory
 /// Globazog's stated worker count.
 const CONCURRENT_WORKERS: usize = 16;
 
-fn captured(file: &File) -> CapturedHandle {
-    CapturedHandle::capture(file.as_handle()).expect("capture the handle")
+fn shared(file: &File) -> SharedHandle {
+    SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    )
 }
 
 #[test]
@@ -104,7 +109,7 @@ fn one_capture_serves_many_requests_across_concurrent_workers() {
 #[test]
 fn a_handle_opened_by_one_request_is_carried_into_a_later_one() {
     // The combination no single-entry test exercises, and the one the audit
-    // named: M24.2's owned duplicate meeting M26.1's shared enumeration cursor.
+    // named: a caller's owned duplicate meeting M26.1's shared enumeration cursor.
     let tree = Tree::new("scenario-carry");
 
     // First request: open the directory.
@@ -116,7 +121,7 @@ fn a_handle_opened_by_one_request_is_carried_into_a_later_one() {
 
     // Second request: enumerate through a *duplicate* of that handle.
     let restart = QueryFileInformation::new(
-        captured(&opened),
+        shared(&opened),
         FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
     )
     .with_capacity(320);
@@ -124,9 +129,8 @@ fn a_handle_opened_by_one_request_is_carried_into_a_later_one() {
 
     // Third request: continue, through another duplicate. The cursor is shared,
     // so this is a continuation rather than a restart.
-    let next =
-        QueryFileInformation::new(captured(&opened), FileInformationClass::ID_EXTD_DIRECTORY)
-            .with_capacity(320);
+    let next = QueryFileInformation::new(shared(&opened), FileInformationClass::ID_EXTD_DIRECTORY)
+        .with_capacity(320);
     let second = next.perform().expect("the second batch");
 
     assert_ne!(
@@ -136,12 +140,12 @@ fn a_handle_opened_by_one_request_is_carried_into_a_later_one() {
     );
 
     // Fourth request: the same handle becomes a volume hint for a reopen.
-    let identity = QueryFileInformationByHandle::new(captured(&opened))
+    let identity = QueryFileInformationByHandle::new(shared(&opened))
         .perform()
         .expect("read the identity");
     let file_id = (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow);
 
-    let reopened = OpenFileByIdentifier::new(captured(&opened), FileIdentifier::FileId(file_id))
+    let reopened = OpenFileByIdentifier::new(shared(&opened), FileIdentifier::FileId(file_id))
         .with_desired_access(FILE_LIST_DIRECTORY)
         .with_share_mode(AUDITED_SHARE)
         .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)
@@ -162,7 +166,7 @@ fn a_traversal_runs_many_requests_from_one_capture_over_time() {
     let mut resolved = 0_usize;
     for index in 0..8 {
         let file = File::open(tree.file(index)).expect("open a file in the tree");
-        let request = QueryFinalPath::new(captured(&file));
+        let request = QueryFinalPath::new(shared(&file));
 
         state
             .with_applied(|| request.perform())
@@ -223,11 +227,11 @@ fn the_catalogue_needs_no_ambient_context_of_its_own() {
     let tree = Tree::new("scenario-no-context");
     let directory = open_directory(tree.root());
 
-    QueryFileInformation::new(captured(&directory), FileInformationClass::BASIC)
+    QueryFileInformation::new(shared(&directory), FileInformationClass::BASIC)
         .with_capacity(4096)
         .perform()
         .expect("a query with no ambient context whatsoever");
-    QueryFinalPath::new(captured(&directory))
+    QueryFinalPath::new(shared(&directory))
         .perform()
         .expect("a resolution with no ambient context whatsoever");
 }

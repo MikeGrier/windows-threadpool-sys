@@ -26,10 +26,11 @@
 //! 5. no component of the child is a reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM` or
 //!    `LPT` with a digit, `CONIN$` or `CONOUT$`, compared without regard to ASCII case, after
 //!    removing everything from the first `.` and any trailing spaces;
-//! 6. the captured directory does not begin with `\\?\` or `\\.\`. A path with either prefix is not
-//!    normalised by Win32, so a child joined onto one would be taken literally, `.` and `..`
+//! 6. the captured directory does not begin with `\\?\` or `\\.\`. A path with the `\\?\` prefix is
+//!    not normalised by Win32, so a child joined onto one would be taken literally, `.` and `..`
 //!    components, forward slashes and trailing dots and spaces among what would then mean something
-//!    else than they meant relative to that directory.
+//!    else than they meant relative to that directory. A `\\.\` path is normalised (measured, in
+//!    D-28), so for it the rule is wider than its reason, which errs toward not grafting.
 //!
 //! The rules err toward not grafting. Where they are wider than Microsoft's list, the child is
 //! passed through, which is what happens to every form that is not grafted. The digits of rule 5
@@ -122,9 +123,30 @@ impl std::error::Error for PathCaptureError {
 
 /// A path as given, and the path to hand to Win32 for it.
 ///
-/// The two are the same unless the path was grafted.
+/// The two are the same unless the path was grafted, by the rules in this module's documentation. It is
+/// what [`OpenFile`](crate::OpenFile) and [`WatchDirectory`](crate::WatchDirectory) hold, and is public
+/// for a crate that builds a request of its own and performs it later on another thread, so that it
+/// fixes the meaning of a relative path by the same contract and does not keep a second one (D-30).
+///
+/// # Example
+///
+/// ```
+/// use windows_namespace_request_sys::AnchoredPath;
+/// use wtf_string::Wtf16String;
+///
+/// // An absolute path is handed to Win32 as it was given.
+/// let absolute = AnchoredPath::new(Wtf16String::from(r"C:\Windows"))?;
+/// assert_eq!(absolute.given(), absolute.win32());
+///
+/// // A relative name is grafted onto the current directory as it is now.
+/// let relative = AnchoredPath::new(Wtf16String::from("a-child"))?;
+/// assert_eq!(relative.given().to_string_lossy(), "a-child");
+/// let expected = std::env::current_dir()?.join("a-child");
+/// assert_eq!(relative.win32().to_string_lossy(), expected.to_string_lossy());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AnchoredPath {
+pub struct AnchoredPath {
     given: Wtf16String,
     grafted: Option<Wtf16String>,
 }
@@ -137,7 +159,7 @@ impl AnchoredPath {
     /// [`PathCaptureError::InteriorNul`] for a path with a NUL before its end, and otherwise the
     /// failure of `GetCurrentDirectoryW`, which is called only for a path whose shape permits a
     /// graft.
-    pub(crate) fn new(given: Wtf16String) -> Result<Self, PathCaptureError> {
+    pub fn new(given: Wtf16String) -> Result<Self, PathCaptureError> {
         if given.has_interior_nul() {
             return Err(PathCaptureError::InteriorNul);
         }
@@ -162,13 +184,13 @@ impl AnchoredPath {
 
     /// The path exactly as the caller gave it.
     #[must_use]
-    pub(crate) fn given(&self) -> &Wtf16Str {
+    pub fn given(&self) -> &Wtf16Str {
         &self.given
     }
 
     /// The path that is handed to Win32.
     #[must_use]
-    pub(crate) fn win32(&self) -> &Wtf16Str {
+    pub fn win32(&self) -> &Wtf16Str {
         self.grafted.as_ref().unwrap_or(&self.given)
     }
 

@@ -2281,7 +2281,8 @@ check is to pass.
 
 <a id="d-request-cost-follows-the-request-crate"></a>
 
-**Status: decided and implemented** by `M6.1`.
+**Status: decided and implemented** by `M6.1`. **Its handle rows are amended by
+[the request_cost probe times a shared handle](#d-request-cost-shares-handles).**
 
 The probe was written against `windows_namespace_request_sys::prepare`, which copied a path and
 resolved it through `GetFullPathNameW` into a buffer of `MAX_PATH`. That function is gone; a request now keeps the
@@ -2305,7 +2306,8 @@ does now, and the rows are named for it:
   and as a request built and performed, so the cost of building can be read against the call it
   carries. Each is an open-and-close cycle, because the handle the open returns is dropped inside
   the timed region.
-- **Handle duplication and its close are unchanged.**
+- **Handle duplication and its close are unchanged.** (Amended by `M7.1`, below: the request crate
+  stopped duplicating, and the rows now time sharing.)
 
 **The figures the old probe produced are not carried.** The row keys `prepare_short_cycle_ns`,
 `prepare_long_cycle_ns`, `build_open_request_cycle_ns` and `clone_prepared_units_cycle_ns` are
@@ -2324,3 +2326,35 @@ consulted is neither established nor needed.
 
 **Scheduled work:** none in this crate. The probe's own checklist item is archived with this
 decision, and the request crate's `NR-3.7` is done with it.
+
+## The request_cost probe times a shared handle, and a borrowed handle's duplication only as the caller's cost
+
+<a id="d-request-cost-shares-handles"></a>
+
+**Status: decided and implemented** by `M7.1`.
+
+The request crate's requests hold a `SharedHandle`
+([D-32](../windows-namespace-request-sys/DESIGN-NOTES.md#d-32)), and `CapturedHandle`, whose
+`DuplicateHandle` the probe timed as "what a request costs to carry a handle", is going. So the
+probe times what a request now does with a handle:
+
+- **`share_handle`**: a clone of a `SharedHandle` and its drop, with the original held throughout,
+  so the drop closes nothing. That is the whole cost of giving a request a handle the caller already
+  shares.
+- **`build_request_with_handle`**: the absolute-path build of `build_request_kept`, also carrying a
+  template handle, so the two rows read side by side. It is built and not performed.
+- **`duplicate_borrowed_handle`** and **`close_duplicate`**: kept, as the item allowed, and labelled
+  as what a caller holding only a borrowed handle pays **outside** the request crate for a handle
+  it can share. They use std's `try_clone_to_owned`, which is that caller's route, rather than any
+  request-crate type, and are timed apart for the reason the old rows were: dropping an
+  `OwnedHandle` is a second kernel transition. The report says in words that neither is part of
+  building a request.
+
+**The old keys are not carried.** `capture_handle_ns` and `close_handle_ns` are gone and nothing
+replaces them under those names, for the reason the `M6.1` decision gives: a successor under an old
+name would read as a continuation of a series it is not part of. The duplication row is renamed
+rather than kept because what it is *for* changed, from a request's cost to a caller's. The test that compares
+the table with the NDJSON line derives its keys from the probe and needed no change.
+
+**Scheduled work:** none. This was the change the request crate's `NR-6.2`, which deleted
+`CapturedHandle`, waited on.

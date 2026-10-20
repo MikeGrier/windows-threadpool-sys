@@ -26,7 +26,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
 };
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_bool};
 
 /// An owned, marshalable parameter set for `GetFileInformationByHandle`.
@@ -35,19 +37,14 @@ use crate::outcome::{Outcome, perform_bool};
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::file_info::QueryFileInformationByHandle;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-fi-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// let information = QueryFileInformationByHandle::new(
-///     CapturedHandle::capture(file.as_handle())?,
-/// )
-/// .perform()?;
+/// let information = QueryFileInformationByHandle::new(file).perform()?;
 ///
 /// // The 64-bit file index this call reports in one shot, which the Ex form's
 /// // FileIdInfo does not give in this shape.
@@ -55,36 +52,26 @@ use crate::outcome::{Outcome, perform_bool};
 ///     | u64::from(information.nFileIndexLow);
 /// assert_ne!(index, 0);
 /// assert_eq!(information.nFileSizeLow, b"example".len() as u32);
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request queries nothing"]
 pub struct QueryFileInformationByHandle {
-    handle: CapturedHandle,
+    handle: SharedHandle,
 }
 
 impl QueryFileInformationByHandle {
-    /// Begins a request against `handle`.
-    pub fn new(handle: CapturedHandle) -> Self {
-        Self { handle }
+    /// Begins a request against `handle`, which the request holds as one more holder of it.
+    pub fn new(handle: impl Into<SharedHandle>) -> Self {
+        Self {
+            handle: handle.into(),
+        }
     }
 
-    /// The owned duplicate of the handle being queried.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being queried, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
-    }
-
-    /// Copies the request, duplicating the handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: self.handle.try_clone()?,
-        })
     }
 
     /// Performs the query on the calling thread.
@@ -96,7 +83,7 @@ impl QueryFileInformationByHandle {
         let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
 
         perform_bool(|| {
-            // SAFETY: the handle is a duplicate this request owns and keeps
+            // SAFETY: the handle is one this request holds and keeps
             // open across the call, and the out-parameter points at writable
             // storage of exactly the right size.
             unsafe { GetFileInformationByHandle(self.handle.raw(), information.as_mut_ptr()) }

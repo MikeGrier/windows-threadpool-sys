@@ -13,7 +13,7 @@
 use std::fs::File;
 use std::os::windows::io::AsHandle;
 
-use windows_namespace_request_sys::CapturedHandle;
+use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::close::CloseRequest;
 use windows_namespace_request_sys::file_info::QueryFileInformationByHandle;
 use windows_namespace_request_sys::final_path::{FinalPathFlags, QueryFinalPath};
@@ -33,8 +33,12 @@ use crate::support::{
     AUDITED_SHARE, Tree, audited_directory_open, open_directory, open_file, watch_directory,
 };
 
-fn captured(file: &File) -> CapturedHandle {
-    CapturedHandle::capture(file.as_handle()).expect("capture the handle")
+fn shared(file: &File) -> SharedHandle {
+    SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    )
 }
 
 // -- Entry 1: CreateFileW -------------------------------------------------
@@ -82,7 +86,7 @@ fn globazog_canonicalize_shape_is_reachable() {
         .expect("open for canonicalisation");
 
     let file = File::from(handle);
-    let resolved = QueryFinalPath::new(captured(&file))
+    let resolved = QueryFinalPath::new(shared(&file))
         .perform()
         .expect("resolve the final path")
         .to_string_lossy();
@@ -101,12 +105,12 @@ fn watcher_openfilebyid_shape_is_reachable() {
     // FILE_LIST_DIRECTORY, share R|W|D, BACKUP_SEMANTICS | OVERLAPPED.
     let tree = Tree::new("op-watcher-byid");
     let hint = open_directory(tree.root());
-    let id = QueryFileInformationByHandle::new(captured(&hint))
+    let id = QueryFileInformationByHandle::new(shared(&hint))
         .perform()
         .expect("read the directory identity");
     let file_id = (u64::from(id.nFileIndexHigh) << 32) | u64::from(id.nFileIndexLow);
 
-    let reopened = OpenFileByIdentifier::new(captured(&hint), FileIdentifier::FileId(file_id))
+    let reopened = OpenFileByIdentifier::new(shared(&hint), FileIdentifier::FileId(file_id))
         .with_desired_access(FILE_LIST_DIRECTORY)
         .with_share_mode(AUDITED_SHARE)
         .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)
@@ -181,7 +185,7 @@ fn all_five_audited_information_classes_are_reachable() {
         FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
         FileInformationClass::ID_EXTD_DIRECTORY,
     ] {
-        let request = QueryFileInformation::new(captured(&directory), class).with_capacity(4096);
+        let request = QueryFileInformation::new(shared(&directory), class).with_capacity(4096);
         assert_eq!(request.class(), class);
 
         // Reachability is what this asserts, and `ERROR_NO_MORE_FILES` is a
@@ -208,7 +212,7 @@ fn an_unaudited_information_class_is_also_reachable() {
     let file = File::open(tree.file(0)).expect("open a file");
 
     QueryFileInformation::new(
-        captured(&file),
+        shared(&file),
         FileInformationClass::from_raw(FileStandardInfo),
     )
     .with_capacity(4096)
@@ -225,7 +229,7 @@ fn watcher_getfileinformationbyhandle_shape_is_reachable() {
     let tree = Tree::new("op-watcher-fileinfo");
     let directory = open_directory(tree.root());
 
-    let information = QueryFileInformationByHandle::new(captured(&directory))
+    let information = QueryFileInformationByHandle::new(shared(&directory))
         .perform()
         .expect("the watcher's identity query");
 
@@ -244,7 +248,7 @@ fn watcher_getfinalpathnamebyhandle_shape_is_reachable() {
     let tree = Tree::new("op-watcher-finalpath");
     let directory = open_directory(tree.root());
 
-    let resolved = QueryFinalPath::new(captured(&directory))
+    let resolved = QueryFinalPath::new(shared(&directory))
         .with_flags(FinalPathFlags::VOLUME_NAME_DOS | FinalPathFlags::NAME_NORMALIZED)
         .perform()
         .expect("the watcher's final-path shape")
@@ -264,7 +268,7 @@ fn watcher_getvolumeinformationbyhandle_shape_is_reachable() {
     let tree = Tree::new("op-watcher-volume");
     let directory = open_directory(tree.root());
 
-    let volume = QueryVolumeInformation::new(captured(&directory))
+    let volume = QueryVolumeInformation::new(shared(&directory))
         .perform()
         .expect("the watcher's volume query");
 
@@ -307,7 +311,7 @@ fn the_unused_createfilew_parameters_are_still_expressible() {
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(captured(&template_source)));
+        .with_template(Some(shared(&template_source)));
 
     assert!(request.template().is_some());
     let handle = request.perform().expect("open with a template");

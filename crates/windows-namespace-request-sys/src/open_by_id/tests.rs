@@ -18,8 +18,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{FileIdentifier, OpenFileByIdentifier};
+use crate::SecurityAttributes;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::{CapturedHandle, SecurityAttributes};
+use win_shared_os_owned_handle::SharedHandle;
 
 const AUDITED_SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
@@ -49,7 +50,11 @@ fn an_object_is_reopened_by_its_identifier() {
     let hint = open_directory_for_hint(&fixture);
 
     let reopened = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_GENERIC_READ)
@@ -69,7 +74,7 @@ fn an_object_is_reopened_by_its_identifier() {
 #[test]
 fn the_reopen_survives_the_source_handle_being_closed_first() {
     // The property that makes reopen-by-id worth having: the request holds a
-    // duplicate of the *hint*, which is never the object being reopened, so the
+    // share of the *hint*, which is never the object being reopened, so the
     // handle the id came from can be gone entirely.
     let _allocating = handle_allocation()
         .read()
@@ -81,7 +86,11 @@ fn the_reopen_survives_the_source_handle_being_closed_first() {
         let file = fixture.open_file();
         let id = file_id_of(&file);
         let request = OpenFileByIdentifier::new(
-            CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+            SharedHandle::from(
+                hint.as_handle()
+                    .try_clone_to_owned()
+                    .expect("own the volume hint"),
+            ),
             FileIdentifier::FileId(id),
         )
         .with_desired_access(FILE_GENERIC_READ)
@@ -115,7 +124,12 @@ fn a_directory_is_reopened_in_the_audited_shape() {
     let id = file_id_of(&directory);
 
     let reopened = OpenFileByIdentifier::new(
-        CapturedHandle::capture(directory.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            directory
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_LIST_DIRECTORY)
@@ -141,7 +155,11 @@ fn an_unknown_identifier_reports_the_raw_code() {
     let hint = open_directory_for_hint(&fixture);
 
     let outcome = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         // An id that names nothing on this volume.
         FileIdentifier::FileId(u64::MAX - 1),
     )
@@ -184,7 +202,11 @@ fn all_three_identifier_kinds_are_expressible() {
         FileIdentifier::ExtendedFileId([9; 16]),
     ] {
         let request = OpenFileByIdentifier::new(
-            CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+            SharedHandle::from(
+                hint.as_handle()
+                    .try_clone_to_owned()
+                    .expect("own the volume hint"),
+            ),
             identifier,
         )
         .with_desired_access(FILE_GENERIC_READ)
@@ -206,7 +228,11 @@ fn a_new_request_defaults_nothing_and_has_no_creation_disposition() {
     let hint = open_directory_for_hint(&fixture);
 
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(1),
     );
 
@@ -219,23 +245,26 @@ fn a_new_request_defaults_nothing_and_has_no_creation_disposition() {
 }
 
 #[test]
-fn a_copy_duplicates_the_volume_hint() {
+fn a_copy_shares_the_volume_hint() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("byid-copy");
     let hint = open_directory_for_hint(&fixture);
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(1),
     );
 
-    let copy = request.try_clone().expect("duplicate the volume hint");
+    let copy = request.try_clone().expect("copy the request");
 
-    assert_ne!(
-        copy.volume_hint().as_handle().as_raw_handle(),
-        request.volume_hint().as_handle().as_raw_handle(),
-        "each request owns its own duplicate"
+    assert!(
+        copy.volume_hint().same_handle(request.volume_hint()),
+        "the copy shares the original's hint"
     );
     assert_eq!(copy.identifier(), request.identifier());
 }
@@ -248,7 +277,11 @@ fn a_copy_keeps_the_security_attributes() {
     let fixture = Fixture::new("byid-copy-security");
     let hint = open_directory_for_hint(&fixture);
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(1),
     )
     .with_security(Some(SecurityAttributes::new(None, true)));
@@ -276,7 +309,11 @@ fn a_request_performs_the_same_way_on_another_thread() {
     let hint = open_directory_for_hint(&fixture);
 
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_GENERIC_READ)
@@ -316,7 +353,11 @@ fn every_configured_parameter_reads_back_through_its_own_accessor() {
     let hint = open_directory_for_hint(&fixture);
 
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_GENERIC_READ)
@@ -363,7 +404,11 @@ fn supplied_security_attributes_read_back_rather_than_reporting_none() {
     let hint = open_directory_for_hint(&fixture);
 
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_security(Some(SecurityAttributes::new(None, false)));

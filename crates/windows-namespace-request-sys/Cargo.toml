@@ -31,6 +31,10 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
+# The security descriptor and attributes a request takes, which were this crate's `security` module
+# until they were moved to where Microsoft Learn files them. Re-exported at the paths they had.
+win-authorization-sys = { version = "0.1.0", path = "../win-authorization-sys" }
+
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps
 # a code of 2^31 or more, which this crate's own earlier type did not (WE-D-1).
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
@@ -40,6 +44,9 @@ win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
 # io-buffers' COMPLETED-CHECKLIST.md). The version is the one io-buffers' first release is fixed to.
 io-buffers = { version = "0.1.0", path = "../io-buffers" }
 
+# The handle an entry takes, held shared with its other holders rather than duplicated (D-32).
+win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
+
 # A *dev* dependency only. The crate itself deliberately does not depend on the
 # ambient-context crate (see DESIGN-NOTES.md, D-1); the acceptance test pairs
 # the two at a submission site, which is precisely the relationship being
@@ -48,12 +55,22 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 [dev-dependencies]
 windows-thread-ambient-sys = { version = "0.3.2", path = "../windows-thread-ambient-sys" }
 
+# Test-only: `tests/device_handle_evidence.rs` asks a volume or a disk for its device number, which
+# this crate does not wrap because Learn files it with the volume controls, and makes a named pipe,
+# which Learn files with the pipe functions. Neither crate depends on this one.
+#
+# Path-only, with no `version`, as `windows-ioring-sys`'s dev-dependencies are and for the reason it
+# gives: Cargo checks a pinned version against the path at every build, so a release of either crate
+# would break this one, and a versionless dev-dependency is left out of the published manifest.
+win-volume-sys = { path = "../win-volume-sys" }
+win-pipes-sys = { path = "../win-pipes-sys" }
+
 # Test-only. `Win32_System_Environment` is for the hidden `=X:` per-drive current-directory entries. Rust's
 # `std::env` cannot reach them at all -- it rejects a key containing `=` -- and
 # they are the state `GetFullPathNameW` reads and rewrites when it roots a
 # drive-relative path, so a test that does not control them can only bound that
-# behaviour rather than pin it. A dev-dependency, so no consumer inherits the
-# feature.
+# behaviour rather than pin it. A dev-dependency, so no consumer
+# inherits the feature.
 [dev-dependencies.windows-sys]
 version = "0.61.2"
 default-features = false
@@ -61,7 +78,11 @@ default-features = false
 # below: reading an entry has to clear and re-read the last error to tell an
 # empty value from an absent one, and a test target must not depend on a
 # feature staying enabled for a reason unrelated to it.
-features = ["Win32_Foundation", "Win32_System_Environment"]
+features = [
+	"Win32_Foundation",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Environment",
+]
 
 [dependencies.windows-sys]
 version = "0.61.2"
@@ -69,7 +90,6 @@ default-features = false
 features = [
 	"Win32_Foundation",
 	"Win32_Security",
-	"Win32_Security_Authorization",
 	"Win32_Storage_FileSystem",
 	"Win32_System_Environment",
 	"Win32_System_Threading",

@@ -29,7 +29,7 @@
 //! construction cost of the queue's *heaviest* payload. Two distinctions the
 //! result must not be stretched across:
 //!
-//!   - **Operation type.** A namespace open carries a path and may duplicate a
+//!   - **Operation type.** A namespace open carries a path and may carry a
 //!     handle. A registered-buffer read -- the hot path -- does neither: its
 //!     descriptor is a slot index and an offset, and there the queue's own
 //!     mechanics are the whole per-operation cost.
@@ -64,14 +64,22 @@
 //! each timed build, because a caller must supply an owned path; `clone_path_string`
 //! is that clone on its own, so a reader can see how much of a build it is.
 //!
-//! # Handle duplication is the part that is easy to under-count
+//! # A handle is shared with a request, not duplicated for it
 //!
 //! A request that carries a handle -- a template handle for an open, or the
-//! subject of a query -- must **duplicate** it, because the submitting thread
-//! may close its own copy the moment it returns. `CapturedHandle::capture` does
-//! that with `DuplicateHandle`, which is a kernel transition, not a memory
-//! copy. So "what does a request cost" is not only an allocation question, and
-//! measuring only the path would understate it.
+//! subject of a query -- holds a `SharedHandle` (`D-32` in the request crate's
+//! design notes). Giving it one is a clone of a handle the caller already
+//! shares, which counts one more holder; the handle is closed when the last
+//! holder drops it, so the submitting thread may drop its own copy the moment it
+//! returns. `share_handle` times that clone and its drop, and
+//! `build_request_with_handle` times a build that also carries a template, to be
+//! read beside `build_request_kept`, the same build without one.
+//!
+//! A caller that holds only a **borrowed** handle has no shared one to give, and
+//! making one is a `DuplicateHandle`: a kernel transition, paid by that caller
+//! **outside** the request crate before any request is built.
+//! `duplicate_borrowed_handle` times it, and `close_duplicate` the close of each
+//! duplicate, timed apart. Neither is a cost of building a request.
 //!
 //! # Performing is timed too, against a real file
 //!
@@ -86,7 +94,10 @@ use std::time::Instant;
 
 use wtf_string::Wtf16String;
 
-use windows_namespace_request_sys::{CapturedHandle, OpenFile};
+use std::os::windows::io::{AsHandle, OwnedHandle};
+
+use win_shared_os_owned_handle::SharedHandle;
+use windows_namespace_request_sys::OpenFile;
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -134,8 +145,10 @@ pub fn json_key(label: &str) -> &'static str {
         "clone_request_grafted" => "clone_request_grafted_cycle_ns",
         "perform_open" => "perform_open_cycle_ns",
         "build_and_perform_open" => "build_and_perform_open_cycle_ns",
-        "capture_handle" => "capture_handle_ns",
-        "close_handle" => "close_handle_ns",
+        "share_handle" => "share_handle_cycle_ns",
+        "build_request_with_handle" => "build_request_with_handle_cycle_ns",
+        "duplicate_borrowed_handle" => "duplicate_borrowed_handle_ns",
+        "close_duplicate" => "close_duplicate_ns",
         other => panic!(
             "`{other}` is measured but has no machine-readable name; add it to \
              `json_key` so it reaches the NDJSON line too"
@@ -152,7 +165,7 @@ pub fn json_key(label: &str) -> &'static str {
 /// *stopped* being measured, so a dropped timing would quietly shrink the
 /// NDJSON schema. `main` caught that with a per-field panic; this is the same
 /// guard, stated once.
-pub const EVERY_LABEL: [&str; 10] = [
+pub const EVERY_LABEL: [&str; 12] = [
     "clone_path_string",
     "build_request_kept",
     "build_request_kept_long",
@@ -161,8 +174,10 @@ pub const EVERY_LABEL: [&str; 10] = [
     "clone_request_grafted",
     "perform_open",
     "build_and_perform_open",
-    "capture_handle",
-    "close_handle",
+    "share_handle",
+    "build_request_with_handle",
+    "duplicate_borrowed_handle",
+    "close_duplicate",
 ];
 
 /// Every timing taken by [`measure`].
@@ -195,16 +210,17 @@ impl Observation {
 ///
 /// It is reported this way rather than restructured, and the reason is that the
 /// obvious alternative is not more truthful. Retaining each value -- what the
-/// captured-handle loop below does, for a reason that does not apply here --
+/// duplicated-handle loop below does, for a reason that does not apply here --
 /// would hold 100_000 live allocations, which measures an allocator that never
 /// reuses a block instead of one that does. A queue holds a bounded number of
 /// requests, so neither regime is the shipping one, and the honest course is to
 /// say which one this is.
 ///
-/// The captured-handle loop is different in kind and is genuinely restructured:
-/// dropping a `CapturedHandle` calls `CloseHandle`, so leaving it in the timed
-/// region reports two kernel transitions as one number. A free is not a
-/// syscall.
+/// The duplicated-handle loop is different in kind and is genuinely restructured:
+/// dropping the `OwnedHandle` a duplication returns calls `CloseHandle`, so
+/// leaving it in the timed region reports two kernel transitions as one number. A
+/// free is not a syscall. The `share_handle` row needs no such care: dropping a
+/// clone of a `SharedHandle` that another holder keeps closes nothing.
 fn time_loop<T>(label: &'static str, iterations: u32, mut body: impl FnMut() -> T) -> Timing {
     // Warm the path: the first pass pays for lazily resolved syscall stubs and
     // for the allocator's first touch of a fresh size class.
@@ -236,8 +252,8 @@ fn open_request(path: &Wtf16String) -> OpenFile {
         .with_creation_disposition(OPEN_EXISTING)
 }
 
-/// Time request construction, request cloning, performing an open, and handle
-/// duplication.
+/// Time request construction, request cloning, performing an open, sharing a
+/// handle with a request, and duplicating a borrowed handle outside one.
 ///
 /// # Panics
 ///
@@ -361,49 +377,68 @@ pub fn measure() -> Observation {
         },
     ));
 
-    // The kernel transition a captured handle costs. Measured against a handle
-    // this process already owns, so nothing here depends on the filesystem.
+    // A handle a request carries, shared as a request now holds it. The file is
+    // this process's own, so nothing here depends on the filesystem beyond
+    // opening it once.
+    let shared =
+        SharedHandle::from(std::fs::File::open(&system_dll).expect("kernel32.dll is readable"));
+
+    // A clone and its drop. `shared` outlives the loop, so a dropped clone only
+    // counts one holder fewer and closes nothing: this is the whole cost of
+    // giving a request a handle the caller already shares.
+    timings.push(time_loop("share_handle", ITERATIONS, || shared.clone()));
+
+    // The kept-path build again, now also carrying a template handle, to read
+    // against `build_request_kept`. It is only built, never performed.
+    timings.push(time_loop("build_request_with_handle", ITERATIONS, || {
+        open_request(&kept).with_template(Some(shared.clone()))
+    }));
+
+    // What a caller holding only a borrow pays, outside the request crate, for a
+    // handle it can share: a `DuplicateHandle`, a kernel transition. It is not a
+    // cost of building a request and is labelled so.
     //
-    // Capture and close are timed SEPARATELY, and that separation is the whole
+    // Duplicate and close are timed SEPARATELY, and that separation is the whole
     // point. `time_loop` black-boxes its closure's return value and drops it at
-    // the end of the statement, so a loop that captures and returns a
-    // `CapturedHandle` -- which owns an `OwnedHandle` -- also calls
-    // `CloseHandle` inside the timed region. That is two kernel transitions
-    // reported as one number, and the report reads that number as the cost of
-    // duplication alone, so it overstated it by however much a close costs.
+    // the end of the statement, so a loop that duplicates and returns an
+    // `OwnedHandle` also calls `CloseHandle` inside the timed region. That is two
+    // kernel transitions reported as one number, read as the cost of the
+    // duplication alone.
     //
     // Retaining every duplicate in a pre-sized `Vec` keeps the close out of the
-    // capture loop, and timing the drop of that same `Vec` recovers the close as
-    // its own figure rather than discarding it. The `push` is a pointer bump
+    // duplication loop, and timing the drop of that same `Vec` recovers the close
+    // as its own figure rather than discarding it. The `push` is a pointer bump
     // into reserved capacity, which is not free but is nowhere near a syscall.
-    let file = std::fs::File::open(&system_dll).expect("kernel32.dll is readable");
-    let borrowed = std::os::windows::io::AsHandle::as_handle(&file);
+    let borrowed = shared.as_handle();
 
     // Warmed the same way `time_loop` warms, and for the same reason: the first
     // pass pays for lazily resolved syscall stubs and the allocator's first
     // touch of a fresh size class.
     for _ in 0..256 {
-        let _ =
-            std::hint::black_box(CapturedHandle::capture(borrowed).expect("duplicating a handle"));
+        let _ = std::hint::black_box(borrowed.try_clone_to_owned().expect("duplicating a handle"));
     }
 
-    let mut captured = Vec::with_capacity(HANDLE_ITERATIONS as usize);
+    let mut duplicates: Vec<OwnedHandle> = Vec::with_capacity(HANDLE_ITERATIONS as usize);
     let start = Instant::now();
     for _ in 0..HANDLE_ITERATIONS {
-        captured.push(CapturedHandle::capture(borrowed).expect("duplicating an owned handle"));
+        duplicates.push(
+            borrowed
+                .try_clone_to_owned()
+                .expect("duplicating an owned handle"),
+        );
     }
-    let capture_elapsed = start.elapsed();
+    let duplicate_elapsed = start.elapsed();
     timings.push(Timing {
-        label: "capture_handle",
+        label: "duplicate_borrowed_handle",
         iterations: HANDLE_ITERATIONS,
-        nanos_per_op: capture_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
+        nanos_per_op: duplicate_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
     });
 
     let start = Instant::now();
-    drop(captured);
+    drop(duplicates);
     let close_elapsed = start.elapsed();
     timings.push(Timing {
-        label: "close_handle",
+        label: "close_duplicate",
         iterations: HANDLE_ITERATIONS,
         nanos_per_op: close_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
     });

@@ -23,7 +23,9 @@ use std::fmt;
 use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
 use wtf_string::Wtf16String;
 
-use crate::handle::{CapturedHandle, HandleCaptureError};
+use win_shared_os_owned_handle::SharedHandle;
+
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_bool};
 
 /// The longest volume label Windows supports, plus room for the terminator.
@@ -102,29 +104,25 @@ impl fmt::Display for VolumeInformation {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::volume::QueryVolumeInformation;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-vol-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// let volume = QueryVolumeInformation::new(CapturedHandle::capture(file.as_handle())?)
-///     .perform()?;
+/// let volume = QueryVolumeInformation::new(file).perform()?;
 ///
 /// // A real volume names its filesystem and reports a component limit.
 /// assert!(!volume.filesystem_name().is_empty());
 /// assert!(volume.maximum_component_length() > 0);
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "an unperformed request queries nothing"]
 pub struct QueryVolumeInformation {
-    handle: CapturedHandle,
+    handle: SharedHandle,
 }
 
 impl QueryVolumeInformation {
@@ -132,24 +130,15 @@ impl QueryVolumeInformation {
     ///
     /// The handle names any file or directory on the volume; the volume is what
     /// gets reported.
-    pub fn new(handle: CapturedHandle) -> Self {
-        Self { handle }
+    pub fn new(handle: impl Into<SharedHandle>) -> Self {
+        Self {
+            handle: handle.into(),
+        }
     }
 
-    /// The owned duplicate of the handle being queried.
-    pub fn handle(&self) -> &CapturedHandle {
+    /// The handle being queried, shared with its other holders.
+    pub fn handle(&self) -> &SharedHandle {
         &self.handle
-    }
-
-    /// Copies the request, duplicating the handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: self.handle.try_clone()?,
-        })
     }
 
     /// Performs the query on the calling thread.
@@ -165,7 +154,7 @@ impl QueryVolumeInformation {
         let mut flags = 0_u32;
 
         perform_bool(|| {
-            // SAFETY: the handle is a duplicate this request owns and keeps
+            // SAFETY: the handle is one this request holds and keeps
             // open across the call; both buffers are writable for the
             // capacities passed; the three scalar out-parameters point at
             // writable storage. Each buffer's invariant is restored below

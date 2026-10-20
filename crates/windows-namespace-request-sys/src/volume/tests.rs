@@ -3,17 +3,19 @@
 //! Tests for the `GetVolumeInformationByHandleW` entry.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::os::windows::io::AsHandle;
 
 use super::{QueryVolumeInformation, VolumeInformation};
-use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
+use win_shared_os_owned_handle::SharedHandle;
 use wtf_string::Wtf16String;
 
 fn request_for(file: &File) -> QueryVolumeInformation {
-    QueryVolumeInformation::new(
-        CapturedHandle::capture(file.as_handle()).expect("capture the handle"),
-    )
+    QueryVolumeInformation::new(SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 #[test]
@@ -120,7 +122,7 @@ fn the_display_form_names_the_filesystem_and_serial() {
 }
 
 #[test]
-fn a_copy_duplicates_the_handle_and_reports_the_same_volume() {
+fn a_clone_shares_the_handle_and_reports_the_same_volume() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -128,12 +130,9 @@ fn a_copy_duplicates_the_handle_and_reports_the_same_volume() {
     let file = fixture.open_file();
     let request = request_for(&file);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     assert_eq!(
         copy.perform().expect("the copy queries").serial_number(),
         request
@@ -157,7 +156,7 @@ fn a_request_survives_the_handle_it_was_built_from() {
 
     request
         .perform()
-        .expect("the owned duplicate outlives its source");
+        .expect("the request's handle outlives the caller's");
 }
 
 #[test]
