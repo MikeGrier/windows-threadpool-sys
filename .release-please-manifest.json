@@ -13,17 +13,17 @@
   "crates/io-buffers": "0.1.0",
   "crates/win-authorization-sys": "0.1.0",
   "crates/win-handles-sys": "0.1.0",
-  "crates/win-durable-ioring": "0.3.1",
+  "crates/win-durable-ioring": "0.3.2",
   "crates/win-sync-sys": "0.0.2",
   "crates/win-time-sys": "0.1.0",
   "crates/win-multi-file-tail-watcher": "0.2.0",
   "crates/win-volume-sys": "0.1.1",
   "crates/windows-overlapped-io-sys": "0.3.0",
-  "crates/windows-namespace-request-sys": "0.4.2",
+  "crates/windows-namespace-request-sys": "0.5.0",
   "crates/windows-thread-ambient-sys": "0.3.2",
   "crates/windows-threadpool-sys": "0.3.0",
   "crates/windows-topology-sys": "0.2.0",
   "crates/windows-waitable-queues": "0.1.2",
   "crates/wtf-string": "0.1.0",
-  "crates/windows-platform-probes": "2026.1018.0"
+  "crates/windows-platform-probes": "2026.1020.0"
 }

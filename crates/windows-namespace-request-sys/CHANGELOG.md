@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.4.2...windows-namespace-request-sys-v0.5.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace-request:** delete handle capture; every request shares its handle
+* **namespace-request:** every entry that takes a handle holds a SharedHandle
+
+### Features
+
+* **namespace-request:** add QueryFileBasicInfo, a typed read of FileBasicInfo ([40d9f92](https://github.com/MikeGrier/windows-threadpool-sys/commit/40d9f92869930f434bd37d76fb41996229c5c915))
+* **namespace-request:** add QueryFileIdInfo, FileIdInfo read as a volume serial and a 128-bit file ID ([24f6ebd](https://github.com/MikeGrier/windows-threadpool-sys/commit/24f6ebd40b29f8547c13319cf7907492733fe1f1))
+* **namespace-request:** add QueryFileType, the GetFileType entry ([24f6ebd](https://github.com/MikeGrier/windows-threadpool-sys/commit/24f6ebd40b29f8547c13319cf7907492733fe1f1))
+* **namespace-request:** build OpenFile and WatchDirectory from an AnchoredPath ([40d9f92](https://github.com/MikeGrier/windows-threadpool-sys/commit/40d9f92869930f434bd37d76fb41996229c5c915))
+* **namespace-request:** delete handle capture; every request shares its handle ([40d9f92](https://github.com/MikeGrier/windows-threadpool-sys/commit/40d9f92869930f434bd37d76fb41996229c5c915))
+* **namespace-request:** every entry that takes a handle holds a SharedHandle ([24f6ebd](https://github.com/MikeGrier/windows-threadpool-sys/commit/24f6ebd40b29f8547c13319cf7907492733fe1f1))
+* **namespace-request:** make AnchoredPath public, so a crate building its own request takes the path contract from here ([24f6ebd](https://github.com/MikeGrier/windows-threadpool-sys/commit/24f6ebd40b29f8547c13319cf7907492733fe1f1))
+* **namespace-request:** QueryFileInformation::perform_into, into a caller's buffer, refusing an address off the boundary a structure's page requires (PerformIntoError) ([40d9f92](https://github.com/MikeGrier/windows-threadpool-sys/commit/40d9f92869930f434bd37d76fb41996229c5c915))
+
 ## [0.4.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.4.1...windows-namespace-request-sys-v0.4.2) (2026-10-17)
 
 
