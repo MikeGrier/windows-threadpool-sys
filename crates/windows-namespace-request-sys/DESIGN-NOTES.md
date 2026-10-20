@@ -77,7 +77,8 @@ concurrency and thread-freedom rather than latency.
 
 ## <a id="d-4"></a>D-4: A request owns duplicates of any handle it names
 
-**To be superseded by [D-32](#d-32) when `NR-6.2` lands (a request shares a `SharedHandle`); current until then.**
+**Superseded by [D-32](#d-32)** (`NR-6.2`): a request shares a `SharedHandle` and nothing is duplicated. The measured
+state-sharing below still holds, since a request names the caller's kernel object.
 
 Five of the round-one entries take a handle rather than a path. A request
 **duplicates** such a handle at capture and owns the duplicate for its life.
@@ -169,7 +170,7 @@ our convenience rather than by consumer need.
 
 ## <a id="d-7"></a>D-7: A handle that cannot be captured fails at construction
 
-**To be withdrawn by [D-32](#d-32) when `NR-6.2` lands: with nothing duplicated, there is no capture to fail; current until then.**
+**Withdrawn -- with nothing duplicated there is no capture to fail; [D-32](#d-32) records why none of its refusals is kept** (`NR-6.2`).
 
 Handle capture validates the source and duplicates it on the **calling** thread,
 and every way that can go wrong is a construction error. The alternative --
@@ -265,8 +266,8 @@ and an allocation that fails is now an error the caller receives, at every site:
   both of its allocations, which share one function.
 - `SecurityDescriptor` and `SecurityAttributes` are no longer `Clone`: copying
   one allocates, and an infallible `clone` could only panic or abort. Each has a
-  `try_clone`, which reports `Allocate`; a request's `try_clone` reports it as
-  `HandleCaptureFailure::CopySecurity`.
+  `try_clone`, which reports `Allocate`; a request's `try_clone` returns that
+  error as it is ([D-32](#d-32)).
 
 Every call site passes a constant alignment, so the alignment's own refusal
 cannot occur; the constants are asserted to be powers of two at build time, and
@@ -469,8 +470,8 @@ demonstrate:
   distinction, where collapsing a pair inverts a grant ([D-8](#d-8));
 - the two handle-failure conventions, where using one for the other turns a
   failure into a plausible-looking handle ([D-10](#d-10));
-- what a duplicated handle does and does not share, which a caller reasoning in
-  value semantics gets backwards ([D-4](#d-4));
+- that a request shares the caller's handle rather than copying it, which a
+  caller reasoning in value semantics gets backwards ([D-32](#d-32));
 - rearming a notification, without which a waiting loop spins;
 - that a close is one-shot while an open is repeatable ([D-14](#d-14)).
 
@@ -493,7 +494,7 @@ split is structural rather than a heading:
   *shape*: a request built on one thread and executed on another under a
   captured context, many requests across concurrent workers from one shared
   capture, and a handle opened by one request carried into a later one -- the
-  combination where [D-4](#d-4)'s owned duplicate meets
+  combination where a handle a request shares ([D-32](#d-32)) meets
   [D-10](#d-10)'s shared enumeration cursor, and the one no single-entry test
   reaches.
 
@@ -934,6 +935,8 @@ that carries this.
 
 ## <a id="d-26"></a>D-26: `ReOpenFile` is one entry that owns a duplicate of the original, and nothing in it is defaulted
 
+**Amended by [D-32](#d-32)** (`NR-6.2`): the request holds a share of the original, not a duplicate.
+
 **Status: decided and implemented** by `NR-3.2` (`src/reopen.rs`).
 
 **What is decided.**
@@ -1129,9 +1132,9 @@ decision was made; the same files are now `crates/win-authorization-sys/src/secu
 handle an opened file is of an observer, and the opener need not return it. Sources read that day: the
 `GetFileType` page (`ms.date` 12/05/2018).
 
-**One entry, `QueryFileType`, in the shape of its neighbours:** a captured duplicate of the handle, a
+**One entry, `QueryFileType`, in the shape of its neighbours:** a share of the handle ([D-32](#d-32)), a
 `perform` that returns the call's outcome with the code snapshotted before anything else runs, and
-`try_clone`. Learn files the call under File Management Functions, with `CreateFile` and
+`Clone`. Learn files the call under File Management Functions, with `CreateFile` and
 `GetFinalPathNameByHandle`, so it is here.
 
 **The value is carried as it came.** `FileType` holds what the call returned and names the five values the
@@ -1246,10 +1249,15 @@ kernel object, and a request is not an independent enumeration.
 be taken back (`SharedHandle::try_into_owned`) only when no request still holds a clone.
 
 **Two entries are not `Clone`, and the reason is not the handle.** `OpenFile` and `OpenFileByIdentifier` carry
-`SecurityAttributes`, whose copy allocates and can fail, so they keep `try_clone` for that; after `NR-6.2` it shares
-the handle and copies only the attributes. Every other handle-taking entry derives `Clone`. `new` takes
-`impl Into<SharedHandle>`, so an `OwnedHandle` or a `File` is given as it is; `OpenFile::with_template` takes an
-`Option<SharedHandle>`, since `None` would leave a generic parameter with nothing to infer from.
+`SecurityAttributes`, whose copy allocates and can fail, so they keep `try_clone` for that; it shares the handle
+and copies only the attributes, and its error is the attributes' own (`SecurityCaptureError`). Every other
+handle-taking entry derives `Clone`.
 
-**Scheduled work:** `NR-6.1` and `NR-6.2` in [CHECKLIST.md](CHECKLIST.md), with the consumers' moves named in
-`NR-6.1`'s handoff.
+**`new` keeps `impl Into<SharedHandle>`** (settled by `NR-6.2`). A `SharedHandle` converts to itself, so a caller
+holding one passes a clone, and an `OwnedHandle` or a `File` is given as it is, with no `SharedHandle::from` at
+every call site; taking `SharedHandle` would add that ceremony and exclude nothing. `OpenFile::with_template`
+takes an `Option<SharedHandle>`, since `None` would leave a generic parameter with nothing to infer from.
+
+**Scheduled work:** none left in this crate for the decision itself: `NR-6.1` and `NR-6.2` are complete
+([COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md)). The release that carries it is `M43`'s step 4 in the workspace
+[CHECKLIST.md](../../CHECKLIST.md).

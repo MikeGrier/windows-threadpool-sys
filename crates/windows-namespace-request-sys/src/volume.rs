@@ -25,7 +25,7 @@ use wtf_string::Wtf16String;
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_bool};
 
 /// The longest volume label Windows supports, plus room for the terminator.
@@ -104,22 +104,18 @@ impl fmt::Display for VolumeInformation {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::volume::QueryVolumeInformation;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-vol-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// let volume = QueryVolumeInformation::new(CapturedHandle::capture(file.as_handle())?)
-///     .perform()?;
+/// let volume = QueryVolumeInformation::new(file).perform()?;
 ///
 /// // A real volume names its filesystem and reports a component limit.
 /// assert!(!volume.filesystem_name().is_empty());
 /// assert!(volume.maximum_component_length() > 0);
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -143,18 +139,6 @@ impl QueryVolumeInformation {
     /// The handle being queried, shared with its other holders.
     pub fn handle(&self) -> &SharedHandle {
         &self.handle
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: duplicate(&self.handle)?,
-        })
     }
 
     /// Performs the query on the calling thread.

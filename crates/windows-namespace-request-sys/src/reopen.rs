@@ -10,12 +10,12 @@
 //! way to *change how* a file is open, such as adding `FILE_FLAG_NO_BUFFERING` to a handle that was
 //! opened without it, without the race a second open by path would run.
 //!
-//! # The original is an input handle, and is owned
+//! # The original is an input handle, and is shared
 //!
-//! As with the volume hint of [`crate::open_by_id::OpenFileByIdentifier`], the request owns a
-//! duplicate of the handle it reopens, so the request cannot be left naming a handle its originator
-//! has closed. A duplicate names the same file object as the original, so what the call sees of it
-//! is the open the original belongs to.
+//! As with the volume hint of [`crate::open_by_id::OpenFileByIdentifier`], the request holds a share
+//! of the handle it reopens, so the request cannot be left naming a handle its originator has
+//! closed. It is the original's own handle, so what the call sees of it is the open the original
+//! belongs to.
 //!
 //! # Nothing is defaulted
 //!
@@ -40,7 +40,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_handle};
 
 /// An owned, marshalable parameter set for `ReOpenFile`.
@@ -52,10 +52,8 @@ use crate::outcome::{Outcome, perform_handle};
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::reopen::ReOpenFile;
-/// use windows_namespace_request_sys::CapturedHandle;
 /// use windows_sys::Win32::Storage::FileSystem::{
 ///     FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 /// };
@@ -64,13 +62,13 @@ use crate::outcome::{Outcome, perform_handle};
 /// fs::write(&path, b"example")?;
 /// let original = fs::OpenOptions::new().read(true).write(true).open(&path)?;
 ///
-/// let request = ReOpenFile::new(CapturedHandle::capture(original.as_handle())?)
+/// let request = ReOpenFile::new(original)
 ///     .with_desired_access(FILE_GENERIC_READ)
 ///     .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
 /// let reopened = fs::File::from(request.perform()?);
 ///
 /// assert_eq!(reopened.metadata()?.len(), b"example".len() as u64);
-/// # drop((original, reopened));
+/// # drop(reopened);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -139,21 +137,6 @@ impl ReOpenFile {
     #[must_use]
     pub fn flags_and_attributes(&self) -> FILE_FLAGS_AND_ATTRIBUTES {
         self.flags_and_attributes
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            original: duplicate(&self.original)?,
-            desired_access: self.desired_access,
-            share_mode: self.share_mode,
-            flags_and_attributes: self.flags_and_attributes,
-        })
     }
 
     /// Performs the reopen on the calling thread.

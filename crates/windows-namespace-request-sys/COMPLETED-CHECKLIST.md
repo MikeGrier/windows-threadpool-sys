@@ -489,3 +489,31 @@ built with no change outside this crate; the crate's own callers of `with_templa
 separate handle are unchanged. Two crate-private helpers carry the transition: `SharedRaw::raw` and `duplicate`.
 Tests in [shared_handle_tests.rs](src/shared_handle_tests.rs); three sabotages, two caught and a control that
 survives.
+
+## Moved 2026-10-19 20:59:29 -04:00 -- Capture is deleted
+
+### <a id="nr-62-capture"></a>NR-6.2 -- Capture is deleted: `CapturedHandle` and its errors go, and the two remaining `try_clone`s share the handle and fail only on the attributes' copy. *(completed 2026-10-19 20:59:29 -04:00)*
+
+The second step of [D-32](DESIGN-NOTES.md#d-32), after the consumers moved (`DI-16.1`, `M7.1`, `SAFE-1`).
+`handle` is now a private module holding only `SharedRaw`, and its tests are the shared fixture. The seven `Clone`
+entries' `try_clone`s are gone and their copy tests became clone tests (same handle, same answer); `OpenFile`'s and
+`OpenFileByIdentifier`'s `try_clone` return `SecurityCaptureError` as the attributes report it. `new` keeps
+`impl Into<SharedHandle>`, recorded in D-32 and its rationale. D-4 is marked superseded, D-7 withdrawn and D-26
+amended; D-8, D-15, D-16 and D-29 no longer restate duplication. The crate documentation and README say "a handle is
+shared" and their example hands a `File` over as it is. Tests that held a borrow make their own owned handle with
+`try_clone_to_owned`, which is D-32's route for such a caller. Sabotage: four entries on deleted code removed, the two
+`NR-6.1` entries rewritten to duplicate inline (they had called the deleted helper and would have been caught by the
+build), and two caught entries plus a control for the `try_clone`s. Swept `duplicat` and `captur`: what remains is
+measured behaviour of duplicates, duplicates the tests make themselves, and path and security capture, which are
+another concept. The item as it stood at completion follows verbatim.
+
+- [x] **NR-6.2** -- **Capture is deleted.** `CapturedHandle`, `capture`, `capture_raw`, `into_owned_handle`,
+  `HandleCaptureError`, `HandleCaptureFailure`, the transition `From`, the crate-private `duplicate` helper, each
+  `Clone` entry's `try_clone`, and the `handle` module's tests of D-7's refusals. `OpenFile`'s and
+  `OpenFileByIdentifier`'s `try_clone` stay, for their security attributes, and share the handle instead of
+  duplicating it; their error type then reports only the attributes' copy. Whether `new` keeps `impl Into<SharedHandle>` (which takes an `OwnedHandle` or a
+  `File` as it is) or takes `SharedHandle` is settled here and recorded in D-32. [D-4](DESIGN-NOTES.md#d-4) is
+  marked superseded and [D-7](DESIGN-NOTES.md#d-7) withdrawn, both by D-32. The crate documentation's "A path is
+  copied; a handle is duplicated" and the README are rewritten for sharing; sweep `duplicat` and `captur` across
+  the crate's `src`, `tests`, `README.md` and design notes. Breaking. Needs every consumer moved (the handoff
+  above).

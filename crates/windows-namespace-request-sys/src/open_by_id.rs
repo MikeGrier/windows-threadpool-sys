@@ -36,9 +36,9 @@ use windows_sys::core::GUID;
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_handle};
-use crate::security::SecurityAttributes;
+use crate::security::{SecurityAttributes, SecurityCaptureError};
 
 /// Which kind of identifier names the object to open.
 ///
@@ -132,10 +132,8 @@ impl FileIdentifier {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::open_by_id::{FileIdentifier, OpenFileByIdentifier};
-/// use windows_namespace_request_sys::CapturedHandle;
 /// use windows_sys::Win32::Storage::FileSystem::{
 ///     FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 /// };
@@ -144,15 +142,14 @@ impl FileIdentifier {
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// // Any still-open handle on the same volume will do as the hint; it is never
-/// // the object being reopened.
-/// let hint = CapturedHandle::capture(file.as_handle())?;
-/// let request = OpenFileByIdentifier::new(hint, FileIdentifier::FileId(0))
+/// // Any open handle on the same volume will do as the hint; it is never the
+/// // object being reopened. The request holds it, shared.
+/// let request = OpenFileByIdentifier::new(file, FileIdentifier::FileId(0))
 ///     .with_desired_access(FILE_GENERIC_READ)
 ///     .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
 ///
 /// assert_eq!(request.identifier(), FileIdentifier::FileId(0));
-/// # drop(file);
+/// # drop(request);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -250,25 +247,23 @@ impl OpenFileByIdentifier {
         self.flags_and_attributes
     }
 
-    /// Copies the request, duplicating the volume-hint handle.
+    /// Copies the request, sharing the volume-hint handle.
     ///
     /// Not `Clone`, for the same reason [`crate::open::OpenFile::try_clone`] is not: copying the
-    /// security attributes it may own is fallible. The hint is duplicated until `NR-6.2` (`D-32`
-    /// in the crate's `DESIGN-NOTES.md`), and shared after it.
+    /// security attributes it may own is fallible. The hint is shared, not duplicated (`D-32` in
+    /// the crate's `DESIGN-NOTES.md`), so it cannot fail.
     ///
     /// # Errors
     ///
-    /// Returns the handle-capture failure when the hint cannot be duplicated, or
-    /// [`crate::HandleCaptureFailure::CopySecurity`] when the memory for the security attributes
-    /// cannot be allocated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        let volume_hint = duplicate(&self.volume_hint)?;
+    /// Returns [`SecurityAttributes::try_clone`]'s error when the memory for the security
+    /// attributes cannot be allocated. A request without them cannot fail.
+    pub fn try_clone(&self) -> Result<Self, SecurityCaptureError> {
+        let volume_hint = self.volume_hint.clone();
         let security = self
             .security
             .as_ref()
             .map(SecurityAttributes::try_clone)
-            .transpose()
-            .map_err(|error| HandleCaptureError::copying_security(error.into_source()))?;
+            .transpose()?;
 
         Ok(Self {
             volume_hint,

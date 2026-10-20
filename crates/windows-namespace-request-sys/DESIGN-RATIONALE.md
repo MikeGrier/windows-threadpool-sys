@@ -678,3 +678,9 @@ reports.
 ask their final path and kind; `windows-file-enumeration-sys` read its volume serial privately rather than
 duplicate its directory handle for [D-31](DESIGN-NOTES.md#d-31)'s entry. Both are the cost the duplication
 imposed, and both go with it.
+
+**`new`'s parameter, settled by `NR-6.2`.** `NR-6.1` gave `new` `impl Into<SharedHandle>` so that a capturing
+caller kept building through the transition `From`; with that conversion deleted, the question was whether to
+narrow it to `SharedHandle`. Narrowing excludes nothing a caller could pass, since `SharedHandle` converts to
+itself, and adds `SharedHandle::from` at every call site that holds a `File` or an `OwnedHandle`, which is most of
+them, in this crate's own tests and in its consumers. So it stays.

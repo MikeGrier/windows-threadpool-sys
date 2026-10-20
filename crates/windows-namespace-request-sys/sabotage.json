@@ -1,7 +1,7 @@
 {
   "package": "windows-namespace-request-sys",
   "description": "Sabotages for windows-namespace-request-sys's allocation-failure paths (NR-3): an allocation that fails is an error the caller receives, never a panic or an abort. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format.",
-  "notCoveredHere": "The allocation-failure paths (NR-3) have entries. The catalogue's other entries, and the capture of handles and paths, are not covered. The security descriptor's entries, which were here, are in the win-authorization-sys manifest, where the code was moved (DI-14.8.1). The volume and disk entries this manifest once covered, with the device-control helper, are in the win-volume-sys manifest.",
+  "notCoveredHere": "The allocation-failure paths (NR-3) have entries. The catalogue's other entries, and the capture of paths, are not covered. The security descriptor's entries, which were here, are in the win-authorization-sys manifest, where the code was moved (DI-14.8.1). The volume and disk entries this manifest once covered, with the device-control helper, are in the win-volume-sys manifest.",
   "testArgs": ["-p", "windows-namespace-request-sys", "--lib", "--locked"],
   "sabotages": [
     {
@@ -11,14 +11,6 @@
       "why": "A query whose buffer cannot be allocated reports ERROR_NOT_ENOUGH_MEMORY, the code a caller reads as 'ask for less'. Any other code would read as the call's own failure.",
       "find": ["    Win32Error::from_code(ERROR_NOT_ENOUGH_MEMORY)\n"],
       "replace": ["    Win32Error::from_code(0)\n"]
-    },
-    {
-      "name": "NR-3: a failed security copy is reported as a failed duplication",
-      "file": "src/handle.rs",
-      "expect": "caught",
-      "why": "A request's try_clone reports a failed copy of its security attributes as HandleCaptureFailure::CopySecurity, not as DuplicateHandle, which would send a caller looking at a handle that was never the problem.",
-      "find": ["        Self::new(HandleCaptureFailure::CopySecurity, source)\n"],
-      "replace": ["        Self::new(HandleCaptureFailure::DuplicateHandle, source)\n"]
     },
     {
       "name": "NR-3: an open request's copy forgets its security attributes",
@@ -132,30 +124,6 @@
       "why": "As for the access: a default flag would be a choice made for the caller.",
       "find": ["            flags_and_attributes: 0,\n"],
       "replace": ["            flags_and_attributes: 1,\n"]
-    },
-    {
-      "name": "NR-3.2: a copy forgets the access",
-      "file": "src/reopen.rs",
-      "expect": "caught",
-      "why": "A copy is the same request.",
-      "find": ["            desired_access: self.desired_access,\n"],
-      "replace": ["            desired_access: 0,\n"]
-    },
-    {
-      "name": "NR-3.2: a copy forgets the share mode",
-      "file": "src/reopen.rs",
-      "expect": "caught",
-      "why": "A copy is the same request.",
-      "find": ["            share_mode: self.share_mode,\n"],
-      "replace": ["            share_mode: 0,\n"]
-    },
-    {
-      "name": "NR-3.2: a copy forgets the flags",
-      "file": "src/reopen.rs",
-      "expect": "caught",
-      "why": "A copy is the same request.",
-      "find": ["            flags_and_attributes: self.flags_and_attributes,\n"],
-      "replace": ["            flags_and_attributes: 0,\n"]
     },
     {
       "name": "NR-3.2: control, the zero share mode of a new request written as hexadecimal",
@@ -587,7 +555,7 @@
       "expect": "caught",
       "why": "An entry is one more holder of the handle it is given (D-32); making a handle of its own is the duplication the change removes, and it would leave a caller that recovers its OwnedHandle unable to tell what still holds the object.",
       "find": ["            handle: handle.into(),\n"],
-      "replace": ["            handle: crate::handle::duplicate(&handle.into()).expect(\"a duplicate\"),\n"]
+      "replace": ["            handle: SharedHandle::from(std::os::windows::io::AsHandle::as_handle(&Into::<SharedHandle>::into(handle)).try_clone_to_owned().expect(\"a duplicate\")),\n"]
     },
     {
       "name": "NR-6.1: a reopen holds a duplicate of the original",
@@ -595,7 +563,7 @@
       "expect": "caught",
       "why": "As for the queries: the original is held shared, not copied, and a copy would be invisible to every behavioural test but the one that asks which handle is held.",
       "find": ["            original: original.into(),\n"],
-      "replace": ["            original: crate::handle::duplicate(&original.into()).expect(\"a duplicate\"),\n"]
+      "replace": ["            original: SharedHandle::from(std::os::windows::io::AsHandle::as_handle(&Into::<SharedHandle>::into(original)).try_clone_to_owned().expect(\"a duplicate\")),\n"]
     },
     {
       "name": "NR-6.1: control -- the accessor's documentation is reworded",
@@ -604,6 +572,30 @@
       "why": "Control: documentation that no test reads.",
       "find": ["    /// The handle being queried, shared with its other holders.\n"],
       "replace": ["    /// The handle the query is made on.\n"]
+    },
+    {
+      "name": "NR-6.2: a copy of an open duplicates its template",
+      "file": "src/open.rs",
+      "expect": "caught",
+      "why": "The copy shares the template (D-32); a duplicate would be the duplication NR-6.2 removed, and a fallible step in a copy whose only failure is meant to be the attributes'.",
+      "find": ["        let template = self.template.clone();\n"],
+      "replace": ["        let template = self.template.as_ref().map(|template| SharedHandle::from(std::os::windows::io::AsHandle::as_handle(template).try_clone_to_owned().expect(\"a duplicate\")));\n"]
+    },
+    {
+      "name": "NR-6.2: a copy of an open-by-identifier duplicates its hint",
+      "file": "src/open_by_id.rs",
+      "expect": "caught",
+      "why": "As for the path-named open: the copy shares the volume hint.",
+      "find": ["        let volume_hint = self.volume_hint.clone();\n"],
+      "replace": ["        let volume_hint = SharedHandle::from(std::os::windows::io::AsHandle::as_handle(&self.volume_hint).try_clone_to_owned().expect(\"a duplicate\"));\n"]
+    },
+    {
+      "name": "NR-6.2: control -- the copy clones the template through its type",
+      "file": "src/open.rs",
+      "expect": "survives",
+      "why": "Control. The same share, spelled through Option's Clone, so the test that the copy shares its template must not fire on it.",
+      "find": ["        let template = self.template.clone();\n"],
+      "replace": ["        let template = Option::clone(&self.template);\n"]
     }
   ]
 }

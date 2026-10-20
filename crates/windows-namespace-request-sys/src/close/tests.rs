@@ -14,7 +14,6 @@ use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_HANDLE, FALSE, H
 use wtf_string::Wtf16String;
 
 use super::CloseRequest;
-use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
 use crate::watch::{NotifyFilter, WatchDirectory};
 
@@ -28,11 +27,8 @@ fn was_still_open(handle: HANDLE) -> bool {
     unsafe { CloseHandle(handle) != FALSE }
 }
 
-fn captured_duplicate(fixture: &Fixture) -> OwnedHandle {
-    let file = fixture.open_file();
-    CapturedHandle::capture(std::os::windows::io::AsHandle::as_handle(&file))
-        .expect("capture the file handle")
-        .into_owned_handle()
+fn an_owned_handle(fixture: &Fixture) -> OwnedHandle {
+    OwnedHandle::from(fixture.open_file())
 }
 
 #[test]
@@ -41,7 +37,7 @@ fn an_ordinary_handle_closes() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-ordinary");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw = owned.as_raw_handle().cast();
 
     CloseRequest::for_handle(owned)
@@ -62,7 +58,7 @@ fn a_dropped_request_still_closes_its_handle() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-dropped");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw = owned.as_raw_handle().cast();
 
     drop(CloseRequest::for_handle(owned));
@@ -82,7 +78,7 @@ fn performing_the_request_does_not_also_close_on_drop() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-once");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw = owned.as_raw_handle().cast();
 
     CloseRequest::for_handle(owned)
@@ -104,7 +100,7 @@ fn taking_the_handle_stops_owned_handle_from_closing_it_first() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-ownership");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw: HANDLE = owned.as_raw_handle().cast();
 
     let request = CloseRequest::for_handle(owned);
@@ -175,10 +171,7 @@ fn the_two_routines_are_distinguishable() {
         .perform()
         .expect("start a watch");
 
-    let ordinary = format!(
-        "{:?}",
-        CloseRequest::for_handle(captured_duplicate(&fixture))
-    );
+    let ordinary = format!("{:?}", CloseRequest::for_handle(an_owned_handle(&fixture)));
     let custom = format!("{:?}", CloseRequest::for_change_notification(notification));
 
     assert!(ordinary.contains("CloseHandle"), "unexpected: {ordinary}");
@@ -196,7 +189,7 @@ fn a_caller_supplied_routine_is_carried() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-custom");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw: HANDLE = owned.as_raw_handle().cast();
     std::mem::forget(owned);
 
@@ -214,7 +207,7 @@ fn closing_an_already_closed_handle_reports_the_raw_code() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-stale");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw: HANDLE = owned.as_raw_handle().cast();
     drop(owned);
 
@@ -244,7 +237,7 @@ fn a_close_performs_the_same_way_on_another_thread() {
         .write()
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("close-thread");
-    let owned = captured_duplicate(&fixture);
+    let owned = an_owned_handle(&fixture);
     let raw: HANDLE = owned.as_raw_handle().cast();
     let request = CloseRequest::for_handle(owned);
 

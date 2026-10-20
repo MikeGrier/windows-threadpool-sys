@@ -4,7 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, FromRawHandle, OwnedHandle};
 use std::process::{Command, Stdio};
 
 use windows_sys::Win32::Foundation::{
@@ -16,11 +16,17 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Threading::CreateEventW;
 
 use super::{FileType, QueryFileType, unknown_with_no_error_is_a_result};
+use crate::Win32Error;
 use crate::handle::tests::{Fixture, handle_allocation};
-use crate::{CapturedHandle, Win32Error};
+use win_shared_os_owned_handle::SharedHandle;
 
 fn request_for(handle: &impl AsHandle) -> QueryFileType {
-    QueryFileType::new(CapturedHandle::capture(handle.as_handle()).expect("capture the handle"))
+    QueryFileType::new(SharedHandle::from(
+        handle
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 fn kind_of(handle: &impl AsHandle) -> FileType {
@@ -157,7 +163,7 @@ fn the_values_are_the_pages_and_are_named_when_printed() {
 }
 
 #[test]
-fn a_copy_duplicates_the_handle() {
+fn a_clone_shares_the_handle() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -165,12 +171,9 @@ fn a_copy_duplicates_the_handle() {
     let file = fixture.open_file();
     let request = request_for(&file);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     assert_eq!(copy.perform().expect("the copy"), FileType::DISK);
 }
 

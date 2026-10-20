@@ -33,7 +33,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform};
 
 /// The value `GetFileType` returned, carried as it came.
@@ -87,19 +87,16 @@ impl fmt::Debug for FileType {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::file_type::{FileType, QueryFileType};
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-ft-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// let kind = QueryFileType::new(CapturedHandle::capture(file.as_handle())?).perform()?;
+/// let kind = QueryFileType::new(file).perform()?;
 ///
 /// assert_eq!(kind, FileType::DISK);
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -120,18 +117,6 @@ impl QueryFileType {
     /// The handle being queried, shared with its other holders.
     pub fn handle(&self) -> &SharedHandle {
         &self.handle
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: duplicate(&self.handle)?,
-        })
     }
 
     /// Performs the query on the calling thread.

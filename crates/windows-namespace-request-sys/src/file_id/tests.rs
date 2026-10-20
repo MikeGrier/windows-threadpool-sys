@@ -4,7 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, FromRawHandle, OwnedHandle};
 use std::process::{Command, Stdio};
 
 use windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE;
@@ -14,13 +14,18 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Threading::CreateEventW;
 
 use super::{FileIdInfo, QueryFileIdInfo};
-use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
 use crate::query::{FileInformationClass, QueryFileInformation};
 use crate::request::Request;
+use win_shared_os_owned_handle::SharedHandle;
 
 fn request_for(handle: &impl AsHandle) -> QueryFileIdInfo {
-    QueryFileIdInfo::new(CapturedHandle::capture(handle.as_handle()).expect("capture the handle"))
+    QueryFileIdInfo::new(SharedHandle::from(
+        handle
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 fn identity_of(handle: &impl AsHandle) -> FileIdInfo {
@@ -32,7 +37,12 @@ const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 /// The code the untyped entry reports for the same class on the same handle.
 fn untyped_code(handle: &impl AsHandle) -> u32 {
     QueryFileInformation::new(
-        CapturedHandle::capture(handle.as_handle()).expect("capture the handle"),
+        SharedHandle::from(
+            handle
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the handle"),
+        ),
         FileInformationClass::ID,
     )
     .with_capacity(size_of::<FILE_ID_INFO>())
@@ -184,7 +194,12 @@ fn the_identifier_is_the_one_a_directory_listing_reports_for_the_same_file() {
     let directory = fixture.open_directory();
 
     let batch = QueryFileInformation::new(
-        CapturedHandle::capture(directory.as_handle()).expect("capture the directory"),
+        SharedHandle::from(
+            directory
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the directory"),
+        ),
         FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
     )
     .perform()
@@ -230,7 +245,13 @@ fn the_identifier_opens_the_file_it_names_by_its_extended_form() {
     let identity = identity_of(&file);
 
     let reopened = OpenFileByIdentifier::new(
-        CapturedHandle::capture(fixture.open_directory().as_handle()).expect("capture the hint"),
+        SharedHandle::from(
+            fixture
+                .open_directory()
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the hint"),
+        ),
         FileIdentifier::ExtendedFileId(identity.file_id()),
     )
     .with_share_mode(SHARE_ALL)
@@ -270,7 +291,7 @@ fn a_value_is_its_two_fields_and_equality_needs_both() {
 }
 
 #[test]
-fn a_copy_duplicates_the_handle() {
+fn a_clone_shares_the_handle() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -278,12 +299,9 @@ fn a_copy_duplicates_the_handle() {
     let file = fixture.open_file();
     let request = request_for(&file);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     assert_eq!(
         copy.perform().expect("the copy"),
         request.perform().expect("the original")

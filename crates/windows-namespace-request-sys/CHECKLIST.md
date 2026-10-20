@@ -25,16 +25,7 @@ of each other. Then this crate is released, a new minor.
   > [M7.1](../windows-platform-probes/COMPLETED-CHECKLIST.md#m71) (`windows-platform-probes`), and
   > [SAFE-1](../windows-file-enumeration-sys/CHECKLIST.md) (`windows-file-enumeration-sys`' metadata test).
 
-- [ ] **NR-6.2** -- **Capture is deleted.** `CapturedHandle`, `capture`, `capture_raw`, `into_owned_handle`,
-  `HandleCaptureError`, `HandleCaptureFailure`, the transition `From`, the crate-private `duplicate` helper, each
-  `Clone` entry's `try_clone`, and the `handle` module's tests of D-7's refusals. `OpenFile`'s and
-  `OpenFileByIdentifier`'s `try_clone` stay, for their security attributes, and share the handle instead of
-  duplicating it; their error type then reports only the attributes' copy. Whether `new` keeps `impl Into<SharedHandle>` (which takes an `OwnedHandle` or a
-  `File` as it is) or takes `SharedHandle` is settled here and recorded in D-32. [D-4](DESIGN-NOTES.md#d-4) is
-  marked superseded and [D-7](DESIGN-NOTES.md#d-7) withdrawn, both by D-32. The crate documentation's "A path is
-  copied; a handle is duplicated" and the README are rewritten for sharing; sweep `duplicat` and `captur` across
-  the crate's `src`, `tests`, `README.md` and design notes. Breaking. Needs every consumer moved (the handoff
-  above).
+- [x] **NR-6.2** -- Capture is deleted: `CapturedHandle` and its errors go, and the two remaining `try_clone`s share the handle and fail only on the attributes' copy. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#nr-62-capture)
 
 - [ ] **NR-6.3** -- **`OpenFile` and `WatchDirectory` from an `AnchoredPath`.** An infallible constructor on each
   taking an `AnchoredPath` the caller already holds, so a crate that anchored its path when its own request was

@@ -3,7 +3,7 @@
 //! The property that binds the foundations together.
 //!
 //! Each foundation already proves its own independence in its own module: a
-//! duplicated handle outlives its source, a captured descriptor outlives the
+//! shared handle outlives its other holders, a captured descriptor outlives the
 //! absolute one it was built from, a request's path outlives the string it came
 //! from. What only a test at this level can show is the **composite** -- one
 //! value holding all three, outliving *every* input at once and still working
@@ -15,17 +15,18 @@
 use std::fs::File;
 use std::os::windows::io::AsHandle;
 
+use win_shared_os_owned_handle::SharedHandle;
 use wtf_string::Wtf16String;
 
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::{AclState, CapturedHandle, OpenFile, SecurityAttributes, SecurityDescriptor};
+use crate::{AclState, OpenFile, SecurityAttributes, SecurityDescriptor};
 
 /// Everything an entry will hold, standing in for the entries themselves,
 /// which land with M25.
 struct Foundations {
     path: OpenFile,
-    directory: CapturedHandle,
-    file: CapturedHandle,
+    directory: SharedHandle,
+    file: SharedHandle,
     security: SecurityAttributes,
 }
 
@@ -44,9 +45,17 @@ impl Foundations {
 
         Self {
             path: OpenFile::new(Wtf16String::from(text)).expect("build the request"),
-            directory: CapturedHandle::capture(directory.as_handle())
-                .expect("capture the directory handle"),
-            file: CapturedHandle::capture(file.as_handle()).expect("capture the file handle"),
+            directory: SharedHandle::from(
+                directory
+                    .as_handle()
+                    .try_clone_to_owned()
+                    .expect("own the directory handle"),
+            ),
+            file: SharedHandle::from(
+                file.as_handle()
+                    .try_clone_to_owned()
+                    .expect("own the file handle"),
+            ),
             security: SecurityAttributes::new(Some(descriptor), true),
         }
     }
@@ -58,23 +67,23 @@ impl Foundations {
 
         let directory = File::from(
             self.directory
-                .try_clone()
-                .expect("duplicate the directory handle")
-                .into_owned_handle(),
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the directory handle"),
         );
         assert!(
             directory
                 .metadata()
                 .expect("read directory metadata")
                 .is_dir(),
-            "the captured directory handle must still name the directory"
+            "the shared directory handle must still name the directory"
         );
 
         let file = File::from(
             self.file
-                .try_clone()
-                .expect("duplicate the file handle")
-                .into_owned_handle(),
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the file handle"),
         );
         assert_eq!(
             file.metadata().expect("read file metadata").len(),

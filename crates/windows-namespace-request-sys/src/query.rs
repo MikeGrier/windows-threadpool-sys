@@ -51,8 +51,8 @@
 //! **only the two directory-enumeration classes mutate the shared cursor**, and
 //! every other query is a pure read that composes freely with an enumeration in
 //! progress, on the same handle or on a duplicate. What follows is specific --
-//! a duplicate is *not* an independent enumeration, and an independent
-//! traversal needs a fresh open.
+//! a request shares the caller's handle, and even a duplicate is *not* an
+//! independent enumeration, so an independent traversal needs a fresh open.
 //!
 //! # This is single-shot, and is not a streaming engine
 //!
@@ -84,7 +84,7 @@ use io_buffers::AlignedBuf;
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, out_of_memory, perform_bool};
 
 /// The alignment a directory-information batch requires.
@@ -186,27 +186,20 @@ impl FileInformationClass {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::query::{FileInformationClass, QueryFileInformation};
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-q-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 /// let file = fs::File::open(&path)?;
 ///
-/// let request = QueryFileInformation::new(
-///     CapturedHandle::capture(file.as_handle())?,
-///     FileInformationClass::BASIC,
-/// )
-/// .with_capacity(256);
+/// let request = QueryFileInformation::new(file, FileInformationClass::BASIC).with_capacity(256);
 ///
 /// // The whole buffer comes back: the call reports no written length, so the
 /// // consumer bounds its own reads rather than trusting a count we invented.
 /// let bytes = request.perform()?;
 /// assert_eq!(bytes.len(), 256);
 /// assert_eq!(bytes.as_ptr() as usize % 8, 0);
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -262,23 +255,6 @@ impl QueryFileInformation {
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// Either way the copy shares the original's enumeration cursor, per this module's
-    /// measurements -- it is a second reference, not a second enumeration.
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: duplicate(&self.handle)?,
-            class: self.class,
-            capacity: self.capacity,
-        })
     }
 
     /// Performs the query on the calling thread.

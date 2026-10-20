@@ -20,10 +20,9 @@
 use std::os::windows::io::{AsHandle, OwnedHandle};
 
 use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{StorageDeviceNumber, storage_device_number};
-use windows_namespace_request_sys::{
-    CapturedHandle, CloseRequest, FileType, OpenFile, QueryFileType,
-};
+use windows_namespace_request_sys::{CloseRequest, FileType, OpenFile, QueryFileType};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
@@ -45,9 +44,14 @@ fn open(path: &str, access: u32, flags: u32) -> OwnedHandle {
 }
 
 fn file_type(handle: &OwnedHandle) -> FileType {
-    QueryFileType::new(CapturedHandle::capture(handle.as_handle()).expect("capture the handle"))
-        .perform()
-        .expect("query the handle's type")
+    QueryFileType::new(SharedHandle::from(
+        handle
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
+    .perform()
+    .expect("query the handle's type")
 }
 
 fn device_number(handle: &OwnedHandle) -> Option<StorageDeviceNumber> {

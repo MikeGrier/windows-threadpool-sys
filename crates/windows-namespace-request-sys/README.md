@@ -51,31 +51,33 @@ without normalising them.
 The convention is stated for the whole workspace in the repository's
 [README](../../README.md#crate-naming).
 
-## A path is copied; a handle is duplicated
+## A path is copied; a handle is shared
 
-Several entries take a handle rather than a path, and a request owns a
-**duplicate** of any handle it names. The distinction is easy to get backwards: a
-path is a value and is copied, while a handle is a reference to a kernel object,
-so duplicating it *shares that object* rather than cloning it.
+Several entries take a handle rather than a path, and a request holds a
+[`SharedHandle`](../win-shared-os-owned-handle/README.md): a share of the
+caller's handle, not a new one, and a clone of the request shares it again.
+Nothing in this crate duplicates a handle. The distinction is easy to get
+backwards: a path is a value and is copied, while a handle is a reference to a
+kernel object.
 
-A request is therefore self-contained with respect to **lifetime** -- it cannot
-be left pointing at a handle its originator closed -- and **not** isolated with
-respect to **state**. Measured: a duplicated handle continues the source's
-directory enumeration rather than starting its own, closing the duplicate leaves
-the source usable, and single-shot metadata queries disturb nothing. An
-independent traversal needs a fresh open, not a duplicate.
+A request is therefore self-contained with respect to **lifetime** -- the handle
+stays open while any holder keeps its share, so a request cannot be left naming a
+handle its originator closed -- and **not** isolated with respect to **state**. A
+request names the caller's kernel object, so an enumeration through it continues
+the caller's rather than starting its own, and single-shot metadata queries
+disturb nothing. An independent traversal needs a fresh open. A caller holding
+only a borrow makes an owned handle itself, visibly, before handing it over.
 
 ## Example
 
-Capture on the submitting thread, where a failure is still the caller's to see,
+Build on the submitting thread, where a failure is still the caller's to see,
 then use the result on a worker that saw none of the inputs:
 
 ```rust
 use std::fs;
-use std::os::windows::io::AsHandle;
 use std::thread;
 
-use windows_namespace_request_sys::{CapturedHandle, OpenFile};
+use windows_namespace_request_sys::{FileType, OpenFile, QueryFileType};
 use wtf_string::Wtf16String;
 
 let path = std::env::temp_dir().join(format!("wnrs-readme-{}.tmp", std::process::id()));
@@ -85,22 +87,18 @@ fs::write(&path, b"example")?;
 // current directory now, which is shared mutable state that any thread can
 // change in between. This one is absolute, so it is handed over as given.
 let text = path.to_str().expect("a temporary path is valid UTF-8");
-let request = OpenFile::new(Wtf16String::from(text))?;
-assert_eq!(request.win32_path().to_string_lossy(), text);
+let open = OpenFile::new(Wtf16String::from(text))?;
+assert_eq!(open.win32_path().to_string_lossy(), text);
 
-// An owned duplicate, so the captured parameters cannot be left pointing at a
-// handle the caller has since closed.
-let file = fs::File::open(&path)?;
-let captured = CapturedHandle::capture(file.as_handle())?;
-drop(file);
+// A handle is shared, not duplicated: the request holds the caller's handle, so
+// it stays open for the worker however the caller lets go.
+let query = QueryFileType::new(fs::File::open(&path)?);
 
-let length = thread::spawn(move || {
-    fs::File::from(captured.into_owned_handle()).metadata().map(|m| m.len())
-})
-.join()
-.expect("the worker did not panic")?;
+let kind = thread::spawn(move || query.perform())
+    .join()
+    .expect("the worker did not panic")?;
 
-assert_eq!(length, b"example".len() as u64);
+assert_eq!(kind, FileType::DISK);
 # fs::remove_file(&path)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

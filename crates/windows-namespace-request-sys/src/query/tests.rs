@@ -18,10 +18,10 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{FileInformationClass, QueryFileInformation};
-use crate::CapturedHandle;
 use crate::file_id::QueryFileIdInfo;
 use crate::handle::tests::{Fixture, handle_allocation};
 use io_buffers::AlignedBuf;
+use win_shared_os_owned_handle::SharedHandle;
 
 /// Small on purpose: large enough for a few entries, far too small to drain the
 /// fixture, so the enumeration cursor is left mid-directory.
@@ -35,7 +35,11 @@ const ENOUGH_TO_SPAN_BATCHES: usize = 24;
 
 fn query(file: &File, class: FileInformationClass) -> QueryFileInformation {
     QueryFileInformation::new(
-        CapturedHandle::capture(file.as_handle()).expect("capture the handle"),
+        SharedHandle::from(
+            file.as_handle()
+                .try_clone_to_owned()
+                .expect("own the handle"),
+        ),
         class,
     )
 }
@@ -156,9 +160,11 @@ fn the_id_class_reads_what_the_typed_entry_reads() {
     // SAFETY: Windows wrote a FILE_ID_INFO into an aligned buffer of exactly
     // that size.
     let info = unsafe { &*bytes.as_ptr().cast::<FILE_ID_INFO>() };
-    let typed = QueryFileIdInfo::new(
-        CapturedHandle::capture(file.as_handle()).expect("capture the handle"),
-    )
+    let typed = QueryFileIdInfo::new(SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
     .perform()
     .expect("the typed entry");
 
@@ -205,7 +211,8 @@ fn a_duplicate_shares_the_enumeration_cursor() {
         .with_capacity(SMALL_BATCH);
     let first = next_names(&restart).expect("the first batch");
 
-    // A *duplicate* of the same handle, which is what a request owns.
+    // A *duplicate* of the same handle, which is what a caller holding only a borrow hands a
+    // request (`D-32`).
     let duplicate =
         query(&directory, FileInformationClass::ID_EXTD_DIRECTORY).with_capacity(SMALL_BATCH);
     let continued = next_names(&duplicate).expect("the duplicate continues");
@@ -250,7 +257,7 @@ fn two_separate_opens_do_not_share_the_cursor() {
 
 #[test]
 fn dropping_a_duplicate_does_not_disturb_the_source_enumeration() {
-    // What makes it safe for a request to own a duplicate and drop it.
+    // What makes it safe for a caller to hand a request a duplicate, which the request drops.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -394,7 +401,7 @@ fn a_new_request_carries_a_stated_default_capacity() {
 }
 
 #[test]
-fn a_copy_duplicates_the_handle() {
+fn a_clone_shares_the_handle() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -402,13 +409,9 @@ fn a_copy_duplicates_the_handle() {
     let file = fixture.open_file();
     let request = query(&file, FileInformationClass::BASIC).with_capacity(SMALL_BATCH);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    use std::os::windows::io::AsRawHandle;
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     assert_eq!(copy.capacity(), request.capacity());
 }
 
@@ -454,5 +457,5 @@ fn a_request_survives_the_handle_it_was_built_from() {
 
     request
         .perform()
-        .expect("the owned duplicate outlives its source");
+        .expect("the request's handle outlives the caller's");
 }

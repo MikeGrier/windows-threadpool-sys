@@ -18,7 +18,8 @@ use wtf_string::Wtf16String;
 
 use super::OpenFile;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::{CapturedHandle, SecurityAttributes, SecurityDescriptor};
+use crate::{SecurityAttributes, SecurityDescriptor};
+use win_shared_os_owned_handle::SharedHandle;
 
 /// The share mode all three audited consumers use: a watcher or an enumerator
 /// is an observer and must not stop anyone else touching the directory.
@@ -228,14 +229,18 @@ fn a_template_handle_is_expressible_though_no_consumer_uses_one() {
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("open-template");
     let template_source = fixture.open_file();
-    let template =
-        CapturedHandle::capture(template_source.as_handle()).expect("capture the template handle");
+    let template = SharedHandle::from(
+        template_source
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the template handle"),
+    );
 
     let request = request_for(&fixture.file())
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(template.into()));
+        .with_template(Some(template));
 
     assert!(request.template().is_some());
     // OPEN_EXISTING ignores hTemplateFile, so this asserts the parameter is
@@ -260,9 +265,12 @@ fn a_request_survives_every_input_it_was_built_from() {
             .with_creation_disposition(OPEN_EXISTING)
             .with_security(Some(SecurityAttributes::new(Some(descriptor), false)))
             .with_template(Some(
-                CapturedHandle::capture(template_source.as_handle())
-                    .expect("capture the template handle")
-                    .into(),
+                SharedHandle::from(
+                    template_source
+                        .as_handle()
+                        .try_clone_to_owned()
+                        .expect("own the template handle"),
+                ),
             ));
 
         // The fixture is deliberately leaked so the file outlives this scope;
@@ -328,10 +336,10 @@ fn a_request_can_be_performed_more_than_once() {
 }
 
 #[test]
-fn a_copy_is_fallible_because_a_request_may_own_a_handle() {
-    // Not `Clone`: duplicating a handle can fail, and the request inherits that
-    // from CapturedHandle rather than hiding it behind a signature that would
-    // have to panic.
+fn a_copy_without_security_attributes_is_made() {
+    // Not `Clone`: copying security attributes allocates, and the request
+    // inherits that rather than hiding it behind a signature that would have to
+    // panic. A request without them has nothing that can fail.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -377,7 +385,7 @@ fn a_copy_owns_its_own_copy_of_the_security_attributes() {
 }
 
 #[test]
-fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
+fn a_copy_shares_the_template() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -387,25 +395,20 @@ fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(
-            CapturedHandle::capture(template_source.as_handle())
-                .expect("capture the template handle")
-                .into(),
-        ));
+        .with_template(Some(SharedHandle::from(
+            template_source
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the template handle"),
+        )));
 
-    let copy = request.try_clone().expect("duplicate the template");
+    let copy = request.try_clone().expect("copy the request");
 
-    assert_ne!(
+    assert!(
         copy.template()
             .expect("the copy kept a template")
-            .as_handle()
-            .as_raw_handle(),
-        request
-            .template()
-            .expect("the original kept a template")
-            .as_handle()
-            .as_raw_handle(),
-        "each request owns its own duplicate"
+            .same_handle(request.template().expect("the original kept a template")),
+        "the copy shares the original's template"
     );
     drop(request);
     copy.perform()
