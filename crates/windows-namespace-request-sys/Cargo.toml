@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-namespace-request-sys"
-version = "0.4.2" # x-release-please-version
+version = "0.5.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

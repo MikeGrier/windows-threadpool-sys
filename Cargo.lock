@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "win-durable-ioring"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "durable-ioring",
  "io-buffers",
@@ -311,7 +311,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 
 [[package]]
 name = "windows-namespace-request-sys"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "io-buffers",
  "win-authorization-sys",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "windows-platform-probes"
-version = "2026.1018.0"
+version = "2026.1020.0"
 dependencies = [
  "serde",
  "serde_json",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026.1020.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1018.0...windows-platform-probes-v2026.1020.0) (2026-10-20)
+
+
+### Features
+
+* **platform-probes:** time a shared handle in request_cost, not a captured one ([98edaa0](https://github.com/MikeGrier/windows-threadpool-sys/commit/98edaa0643e7207f29383e01c3b599812e252133))
+
 ## [2026.1018.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-platform-probes-v2026.1017.1...windows-platform-probes-v2026.1018.0) (2026-10-18)
 
 
