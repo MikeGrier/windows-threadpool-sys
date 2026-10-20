@@ -38,23 +38,14 @@ pub use win_error_codes::Win32Error;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RequestFailure {
-    /// The path had no code units. An empty path names no directory.
-    EmptyPath,
     /// The path contained an interior NUL. Win32 would stop at it and open a
     /// different, shorter path than the caller named.
     InteriorNul,
-    /// An ordinary path, or the fully qualified form it resolved to, did not fit
-    /// the ordinary `MAX_PATH` limit including its terminator.
-    ///
-    /// This limit is deliberate rather than incidental: it keeps behaviour
-    /// independent of the host executable's `longPathAware` manifest. Supply a
-    /// fully qualified `\\?\` path to enumerate a longer one.
-    PathTooLong,
-    /// A `\\?\` path was not fully qualified, so Win32 would not interpret it as
-    /// the verbatim absolute path that prefix promises.
-    NotFullyQualified,
-    /// Windows could not resolve an ordinary path to its fully qualified form.
-    PathResolution,
+    /// A relative path could not be fixed to the current directory, because
+    /// the current directory could not be read: [`RequestError::code`] is the
+    /// code `GetCurrentDirectoryW` reported, or `None` if its size kept
+    /// changing between attempts.
+    PathCapture,
     /// The requested native buffer capacity, after clamping and alignment,
     /// cannot be passed to Win32 as a `u32`.
     BufferCapacityUnrepresentable,
@@ -64,13 +55,8 @@ impl RequestFailure {
     /// A short description of the failure, without any raw code.
     const fn describe(self) -> &'static str {
         match self {
-            RequestFailure::EmptyPath => "the path is empty",
             RequestFailure::InteriorNul => "the path contains an interior NUL",
-            RequestFailure::PathTooLong => {
-                "the path exceeds MAX_PATH; supply a fully qualified \\\\?\\ path"
-            }
-            RequestFailure::NotFullyQualified => "the \\\\?\\ path is not fully qualified",
-            RequestFailure::PathResolution => "the path could not be resolved",
+            RequestFailure::PathCapture => "the path could not be fixed to the current directory",
             RequestFailure::BufferCapacityUnrepresentable => {
                 "the native buffer capacity does not fit a Win32 u32"
             }
@@ -110,7 +96,8 @@ impl RequestError {
 
     /// The raw Win32 code behind the failure, when Windows produced one.
     ///
-    /// Only [`RequestFailure::PathResolution`] arises from a Win32 call; the
+    /// Only [`RequestFailure::PathCapture`] arises from a Win32 call, and it
+    /// carries no code when the current directory's size kept changing; the
     /// other failures are decided by this crate before any call is made.
     #[must_use]
     pub const fn code(&self) -> Option<Win32Error> {

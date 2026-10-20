@@ -243,6 +243,7 @@ version = "0.2.2"
 dependencies = [
  "win-error-codes",
  "windows-impersonation-token-sys",
+ "windows-namespace-request-sys",
  "windows-sys",
  "windows-threadpool-sys",
  "wtf-string",

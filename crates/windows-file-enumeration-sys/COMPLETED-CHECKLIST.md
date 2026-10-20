@@ -24,3 +24,42 @@ caller was this crate's own `last`, which reads the thread's last error and so a
 the shared type has `last` of its own; nothing in the workspace outside the crate used the function.
 No sabotage manifest exists for this crate, so the tests carry the change: a code of 2^31 or more is
 converted and read back, and an error with no code is `None`.
+
+## Moved 2026-10-18 20:49:59 -04:00 -- PATH: one path contract across the namespace crates
+
+### <a id="path-1"></a>PATH-1 -- This crate takes the request crate's path contract, `AnchoredPath`, and its older copy of the preparation is deleted. *(completed 2026-10-18 20:49:59 -04:00)*
+
+The item, as it was written: consume the namespace request crate's path contract, and delete this crate's older copy
+of the preparation. It was the merge-or-delete decision of the workspace checklist's `M26+.3`
+([CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md)) and of
+[D-9](../windows-namespace-request-sys/DESIGN-NOTES.md#d-9) in the request crate, made on 2026-10-15 at the engineer's
+request as: this crate depends on `windows-namespace-request-sys` and its `path.rs` preparation is deleted. What
+it named as changing: `D-7`'s `MAX_PATH` cap on an ordinary path goes; a request captures the current directory when
+it is built and grafts a clearly safe child onto it; `EnumerationRequest::path()` says what it returns, the path as
+given, with a second accessor for the path handed to Win32; an interior NUL is refused. A `feat!` of a published
+crate.
+
+What was done. The request crate's `AnchoredPath` was made public to be consumed (its
+[D-30](../windows-namespace-request-sys/DESIGN-NOTES.md#d-30)). A request holds one; `path()` is the path as given and
+`win32_path()`, new, is what the worker opens. `RequestFailure` loses `EmptyPath`, `PathTooLong`, `NotFullyQualified`
+and `PathResolution` and gains `PathCapture`, a failure to read the current directory, with the code when Windows
+gave one; so an empty path, a long one and an unqualified `\\?\` path reach the open, and its error is the terminal
+`DirectoryOpen`. `src/path.rs` and its tests are deleted. Recorded as [D-22](DESIGN-NOTES.md#d-22), with the rationale
+in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The crate's first [sabotage.json](sabotage.json) covers the binding:
+the worker opening the path as given is caught only by a child-process test that moves the current directory after
+the request is built.
+
+## Moved 2026-10-19 20:10:23 -04:00 -- SAFE-1: the metadata test hands the request crate a SharedHandle
+
+### <a id="safe-1"></a>SAFE-1 -- The metadata test builds its `QueryFileIdInfo` from a `SharedHandle`, not a `CapturedHandle`. *(completed 2026-10-19 20:10:23 -04:00)*
+
+The item as written: "**The metadata test takes a `SharedHandle`.**
+`a_required_identity_is_what_the_request_crate_reads_from_the_file_itself` in
+[metadata.rs](tests/integration/metadata.rs) builds its `QueryFileIdInfo` from a `SharedHandle` rather than a
+`CapturedHandle`." Prerequisite: the request crate's `NR-6.1`.
+
+What was done. `QueryFileIdInfo::new` takes `impl Into<SharedHandle>` since `NR-6.1`, and `SharedHandle` is
+`From<File>`, so the test hands it the opened file: the file is the handle's one owner, and nothing is
+captured or duplicated. No dependency was added. That was this crate's last use of `CapturedHandle`. Evidence, in
+[sabotage.json](sabotage.json): reading the identity from a different file than the one enumerated is caught by the
+test, and a control opening the same file another way survives.

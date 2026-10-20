@@ -288,7 +288,7 @@ pub(crate) fn advance(
 /// Returns the failure that ends the enumeration, or `None` when it is ready to
 /// read.
 fn start(engine: &mut EngineState) -> Option<EnumerationError> {
-    let directory = match native::open_directory(engine.request.path(), &engine.token) {
+    let directory = match native::open_directory(engine.request.win32_path(), &engine.token) {
         Ok(directory) => directory,
         Err(error) => return Some(error),
     };

@@ -376,3 +376,36 @@ first was reverted once the actual defect was fixed: the original 30s ceiling
 was never the problem, and inflating it for every integration test would only
 have made a future genuine hang in any other test take four times as long to
 be reported as a failure.
+
+## Why the path contract is taken from the request crate, and what that gave up (D-22)
+
+`D-7` had this crate resolve an ordinary path with `GetFullPathNameW` when the request was built, cap it at
+`MAX_PATH` so that acceptance would not depend on the host executable's long-path manifest, and validate a
+`\\?\` path's qualification. The request crate was given a copy of that preparation when it was made, rather
+than a dependency, because this crate was released and that one was not (its D-9). The copy was then replaced
+there by a graft onto a captured root (its D-19), and the engineer decided on 2026-10-15 that this crate takes
+that contract and deletes its own (`PATH-1`, the workspace's `M26+.3`).
+
+What was given up is the manifest independence `D-7` argued for: an unprefixed path past `MAX_PATH` now opens
+or fails as the host's manifest and the machine's policy decide. `D-7` argued it for a layer that builds paths.
+This crate enumerates one directory and builds none; the layer that would build paths, a traversal composed on
+this one, does not exist, and whether it needs that contract is `REVIEW-1`'s question. The refusals that went
+were checks ahead of `CreateFileW` that its documentation does not make conditions of the call, which [the
+workspace rule](../../DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) does not keep.
+
+The request crate's type had to be public for this (its D-30). Holding that crate's `OpenFile` in the request
+instead was not taken: it is not `Clone` or `Eq`, which `EnumerationRequest` is, and the worker's open, under
+the captured token, is this crate's.
+
+## Why the crate's target is `forbid(unsafe_code)` (D-23)
+
+**Asked on 2026-10-18**, after `NR-3.10` left this crate reading a volume serial with its own `unsafe` call
+because the request crate's typed entry would have duplicated the directory handle. The engineer ruled that
+duplication legacy and asked what moving this crate onto shared handles and the safe `win-*` wrappers would take.
+The census then was ten `unsafe` blocks outside tests: five in the native calls, one in the buffer, three in the
+completion ring's doorbell, one in the case-insensitive comparison. Each has a wrapper that exists or is planned
+(D-23), so the attribute can be the end state rather than an aspiration, and the build is what checks it.
+
+**What was not chosen.** Keeping the native calls private and only removing the duplication would have left this
+crate a second implementation of calls the request crate already makes faithfully, with its own reading of their
+codes; the typed outcomes this crate derives from those codes are kept, and only the calls move.
