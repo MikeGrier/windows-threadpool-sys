@@ -134,9 +134,7 @@ fn two_entries_from_the_same_enumeration_share_a_volume_serial() {
 fn a_required_identity_is_what_the_request_crate_reads_from_the_file_itself() {
     // The enumeration reads the identifier from the listing and the serial from the directory; the
     // request crate's `QueryFileIdInfo` reads both from a handle on the file. They describe one file.
-    use std::os::windows::io::AsHandle;
-
-    use windows_namespace_request_sys::{CapturedHandle, QueryFileIdInfo};
+    use windows_namespace_request_sys::QueryFileIdInfo;
 
     let scratch = Scratch::with_files(&["identified.txt"]);
     let request = EnumerationRequest::for_path(scratch.path())
@@ -155,8 +153,10 @@ fn a_required_identity_is_what_the_request_crate_reads_from_the_file_itself() {
         unreachable!();
     };
 
+    // The entry holds the handle as a `SharedHandle`, made from the opened file: the file is the
+    // handle's one owner, and nothing duplicates it.
     let file = std::fs::File::open(scratch.child("identified.txt")).expect("open the file");
-    let read = QueryFileIdInfo::new(CapturedHandle::capture(file.as_handle()).expect("capture"))
+    let read = QueryFileIdInfo::new(file)
         .perform()
         .expect("the file's identity");
 

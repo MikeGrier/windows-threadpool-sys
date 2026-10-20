@@ -22,12 +22,11 @@ The target is [D-23](DESIGN-NOTES.md#d-23): this crate reaches Windows only thro
 holds its directory as a `SharedHandle`, and duplicates no handle. The order across the crates is `M43` in the
 workspace [CHECKLIST.md](../../CHECKLIST.md).
 
-- [ ] **SAFE-1** -- **The metadata test takes a `SharedHandle`.** `a_required_identity_is_what_the_request_crate_reads_from_the_file_itself`
-  in [metadata.rs](tests/integration/metadata.rs) builds its `QueryFileIdInfo` from a `SharedHandle` rather than
-  a `CapturedHandle`.
+- [x] **SAFE-1** -- The metadata test builds its `QueryFileIdInfo` from a `SharedHandle`, not a `CapturedHandle`. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#safe-1)
 
-  > **CROSS-COMPONENT PREREQUISITE:** [NR-6.1](../windows-namespace-request-sys/CHECKLIST.md). This is one of the
-  > moves `NR-6.2` waits on, so it lands between the two.
+  > **-> CROSS-COMPONENT HANDOFF:** this was one of the moves `NR-6.2` waits on; the next work in this crate
+  > is `SAFE-2`, gated on the request crate's release. See
+  > [windows-namespace-request-sys' CHECKLIST.md](../windows-namespace-request-sys/CHECKLIST.md) -> `NR-6.2`.
 
 - [ ] **SAFE-2** -- **The directory's calls through the request crate.** The engine holds the directory as a
   `SharedHandle`. [native.rs](src/native.rs)'s four calls become entries: the open is `OpenFile` built from the

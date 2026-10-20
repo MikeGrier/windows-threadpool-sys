@@ -48,3 +48,18 @@ gave one; so an empty path, a long one and an unqualified `\\?\` path reach the 
 in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The crate's first [sabotage.json](sabotage.json) covers the binding:
 the worker opening the path as given is caught only by a child-process test that moves the current directory after
 the request is built.
+
+## Moved 2026-10-19 20:10:23 -04:00 -- SAFE-1: the metadata test hands the request crate a SharedHandle
+
+### <a id="safe-1"></a>SAFE-1 -- The metadata test builds its `QueryFileIdInfo` from a `SharedHandle`, not a `CapturedHandle`. *(completed 2026-10-19 20:10:23 -04:00)*
+
+The item as written: "**The metadata test takes a `SharedHandle`.**
+`a_required_identity_is_what_the_request_crate_reads_from_the_file_itself` in
+[metadata.rs](tests/integration/metadata.rs) builds its `QueryFileIdInfo` from a `SharedHandle` rather than a
+`CapturedHandle`." Prerequisite: the request crate's `NR-6.1`.
+
+What was done. `QueryFileIdInfo::new` takes `impl Into<SharedHandle>` since `NR-6.1`, and `SharedHandle` is
+`From<File>`, so the test hands it the opened file: the file is the handle's one owner, and nothing is
+captured or duplicated. No dependency was added. That was this crate's last use of `CapturedHandle`. Evidence, in
+[sabotage.json](sabotage.json): reading the identity from a different file than the one enumerated is caught by the
+test, and a control opening the same file another way survives.

@@ -4,6 +4,22 @@
   "notCoveredHere": "The graft's own rules are the request crate's and are sabotaged in its manifest (the NR-3.3 entries); this one covers only this crate's use of them. A failure to read the current directory cannot be made by a test, so the code it carries is a declared survivor.",
   "sabotages": [
     {
+      "name": "SAFE-1: the identity is read from a different file than the one enumerated",
+      "file": "tests/integration/metadata.rs",
+      "expect": "caught",
+      "why": "The test now hands the request crate a SharedHandle made from the opened file; this shows the comparison still tells one file from another rather than passing on any identity.",
+      "find": ["    let file = std::fs::File::open(scratch.child(\"identified.txt\")).expect(\"open the file\");"],
+      "replace": ["    let other = scratch.child(\"other.txt\");\n    std::fs::write(&other, b\"x\").expect(\"write a second file\");\n    let file = std::fs::File::open(other).expect(\"open the file\");"]
+    },
+    {
+      "name": "SAFE-1 control: the same file is opened another way",
+      "file": "tests/integration/metadata.rs",
+      "expect": "survives",
+      "why": "A control: how the file is opened is incidental; which file it is, is what the test claims.",
+      "find": ["    let file = std::fs::File::open(scratch.child(\"identified.txt\")).expect(\"open the file\");"],
+      "replace": ["    let file = std::fs::OpenOptions::new().read(true).open(scratch.child(\"identified.txt\")).expect(\"open the file\");"]
+    },
+    {
       "name": "PATH-1: the worker opens the path as given and not the grafted one",
       "file": "src/engine.rs",
       "expect": "caught",
