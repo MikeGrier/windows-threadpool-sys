@@ -816,8 +816,8 @@
       "name": "DI-7.5: each call for the signal makes a new event",
       "file": "src/windows_backend/signalled.rs",
       "expect": "caught",
-      "why": "Every duplicate is a handle to the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
-      "find": ["        self.signal.try_clone()"],
+      "why": "Every clone shares the one event the pool sets; a fresh event is never set, and the consumer waits on it for ever.",
+      "find": ["        Ok(self.signal.clone())"],
       "replace": ["        Event::new(ResetMode::Auto, false)"]
     },
     {
@@ -1523,8 +1523,8 @@
       "file": "src/windows_backend/file_target.rs",
       "expect": "caught",
       "why": "The same for a whole disk.",
-      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// Declare every flush domain"],
-      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// Declare every flush domain"]
+      "find": ["            access: A::ACCESS,\n        }\n    }\n\n    /// The target `file` makes, with the consumer's attestation"],
+      "replace": ["            access: Access::ReadWrite,\n        }\n    }\n\n    /// The target `file` makes, with the consumer's attestation"]
     },
     {
       "name": "DI-13.9: the backend lets a write through to a target that cannot write",

@@ -366,10 +366,10 @@
       "expect": "caught",
       "why": "A wait target that is a different event looks like a working wait in isolation; it fails only where the caller signals through the clone it kept, which is the documented way to signal a pool-owned event. Caught in this crate by the_conversion_keeps_the_event_it_was_given, without a timing window.",
       "find": [
-        "            target: WaitTarget::Owned(event.into()),\n"
+        "            target: WaitTarget::Shared(event.into()),\n"
       ],
       "replace": [
-        "            target: WaitTarget::Owned(Event::new(ResetMode::Manual, false).expect(\"sabotage\").into()),\n"
+        "            target: WaitTarget::Shared(Event::new(ResetMode::Manual, false).expect(\"sabotage\").into()),\n"
       ]
     },
     {
