@@ -19,7 +19,8 @@
 //! Open the directory and obtain any volume identity the request asked for, on
 //! the quantum that finds it unopened. A refill happens at most once per
 //! quantum: when the record cursor says the loaded batch is exhausted, one
-//! `GetFileInformationByHandleEx` call loads the next one. Whatever batch is
+//! directory query (`GetFileInformationByHandleEx`, through the request crate's
+//! `QueryFileInformation`) loads the next one. Whatever batch is
 //! then current -- freshly loaded or left over from a quantum that could not
 //! finish it -- is parsed record by record: `.` and `..` are dropped, the
 //! request's predicate is evaluated, and every match is offered to the
@@ -48,12 +49,12 @@
 //! - A record fails validation, which ends the enumeration outright rather
 //!   than leaving a cursor to resume from.
 
-use std::os::windows::io::OwnedHandle;
 use std::time::{Duration, Instant};
 
+use io_buffers::AlignedBuf;
+use win_shared_os_owned_handle::SharedHandle;
 use windows_impersonation_token_sys::ImpersonationToken;
 
-use crate::buffer::NativeBuffer;
 use crate::completion::{Completion, EnumerationId, TerminalOutcome};
 use crate::completion_ring::CompletionRing;
 use crate::entry::{DirectoryEntry, FileIdentityMode};
@@ -107,8 +108,8 @@ enum Phase {
 pub(crate) struct EngineState {
     request: EnumerationRequest,
     token: ImpersonationToken,
-    buffer: NativeBuffer,
-    directory: Option<OwnedHandle>,
+    buffer: AlignedBuf,
+    directory: Option<SharedHandle>,
     volume_serial: Option<u64>,
     phase: Phase,
     /// Where the next record starts in the currently loaded batch.
@@ -131,7 +132,7 @@ impl EngineState {
     pub(crate) fn new(
         request: EnumerationRequest,
         token: ImpersonationToken,
-        buffer: NativeBuffer,
+        buffer: AlignedBuf,
     ) -> Self {
         Self {
             request,
@@ -247,7 +248,7 @@ pub(crate) fn advance(
             return QuantumOutcome::Yielded;
         }
 
-        let (parsed, next) = match record::parse_record(engine.buffer.as_bytes(), offset) {
+        let (parsed, next) = match record::parse_record(engine.buffer.as_slice(), offset) {
             Ok(parsed) => parsed,
             Err(detail) => {
                 return QuantumOutcome::Finished(TerminalOutcome::Failed(
@@ -288,7 +289,7 @@ pub(crate) fn advance(
 /// Returns the failure that ends the enumeration, or `None` when it is ready to
 /// read.
 fn start(engine: &mut EngineState) -> Option<EnumerationError> {
-    let directory = match native::open_directory(engine.request.win32_path(), &engine.token) {
+    let directory = match native::open_directory(engine.request.anchored_path(), &engine.token) {
         Ok(directory) => directory,
         Err(error) => return Some(error),
     };

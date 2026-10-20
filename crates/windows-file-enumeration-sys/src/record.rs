@@ -20,8 +20,8 @@
 //!
 //! # Why fields are read from a byte slice rather than a pointer cast
 //!
-//! The batch is already known to be 8-byte aligned as a whole (see
-//! [`buffer`](crate::buffer)), but a record's *content* -- its name -- is not
+//! The batch is already known to be 8-byte aligned as a whole (it is read
+//! into an [`io_buffers::AlignedBuf`] made at 8), but a record's *content* -- its name -- is not
 //! fixed width, so later records in the same batch are not guaranteed to sit on
 //! any particular alignment beyond the 8-byte boundary the API itself
 //! maintains between records. Reading every field with `from_ne_bytes` over a

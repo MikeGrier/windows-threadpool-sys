@@ -42,8 +42,8 @@ pub(crate) const RECORD_ALIGNMENT: usize = 8;
 ///
 /// **It says nothing about alignment**, and an earlier version of this comment
 /// claimed it did -- twice, in two places six lines apart, of which only one
-/// was corrected on the first attempt. [`crate::buffer::NativeBuffer`] stores
-/// `Vec<u64>`, so the allocation is 8-byte aligned; a length that is a whole
+/// was corrected on the first attempt. The buffer is an [`io_buffers::AlignedBuf`]
+/// made at 8 bytes, so its allocation is 8-byte aligned; a length that is a whole
 /// number of pages does not decide where the buffer *starts*, and a refill can
 /// begin partway through a page. What the constraint buys is a round request
 /// size with no part-page tail. Large-page allocations are a different
@@ -68,7 +68,7 @@ const PAGE_SIZE: usize = 4096;
 //
 // **And the first repair over-claimed in turn**, which the same review caught:
 // it said a page-multiple length makes "each refill begin on a page boundary".
-// It does not. `NativeBuffer` stores `Vec<u64>`, so the allocation is 8-byte
+// It does not. The buffer is an `AlignedBuf` made at 8, so the allocation is 8-byte
 // aligned and nothing more -- a length that is a whole number of pages says
 // nothing about where the buffer starts. What the constraint actually buys is a
 // page-sized *request*: a round amount for the kernel to fill per call, and one
@@ -201,6 +201,11 @@ impl EnumerationRequest {
     #[must_use]
     pub fn win32_path(&self) -> &Wtf16Str {
         self.path.win32()
+    }
+
+    /// The path contract the open is built from, which is the request crate's.
+    pub(crate) fn anchored_path(&self) -> &AnchoredPath {
+        &self.path
     }
 
     /// The predicate entries must satisfy.

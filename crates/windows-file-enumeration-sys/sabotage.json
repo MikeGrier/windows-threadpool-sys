@@ -23,9 +23,9 @@
       "name": "PATH-1: the worker opens the path as given and not the grafted one",
       "file": "src/engine.rs",
       "expect": "caught",
-      "why": "The two name the same directory until the current directory moves, so only the child-process test that moves it after the request is built tells them apart.",
-      "find": ["native::open_directory(engine.request.win32_path(), &engine.token)"],
-      "replace": ["native::open_directory(engine.request.path(), &engine.token)"]
+      "why": "The two name the same directory until the current directory moves, so only the child-process test that moves it after the request is built tells them apart. Since SAFE-2 the open takes the request's AnchoredPath, so this opens the given path anchored again at open time instead.",
+      "find": ["native::open_directory(engine.request.anchored_path(), &engine.token)"],
+      "replace": ["native::open_directory(&windows_namespace_request_sys::AnchoredPath::new(wtf_string::Wtf16String::from_units(engine.request.path().as_units())).expect(\"anchored\"), &engine.token)"]
     },
     {
       "name": "PATH-1: the path as given is reported as the grafted one",
@@ -58,6 +58,78 @@
       "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        Ok(Self {\n            path,\n"],
       "replace": ["        Ok(Self {\n            path: { let anchored = path; anchored },\n"]
+    },
+    {
+      "name": "SAFE-2: the open drops delete sharing",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "A held enumeration would stop a rename of its directory; the rename test and the request-shape test see it.",
+      "find": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)\n"],
+      "replace": ["        .with_share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)\n"]
+    },
+    {
+      "name": "SAFE-2: the open asks for read access instead of listing",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "M21.3's constraint: listing access and not GENERIC_READ, so a directory a caller may list but not read still opens.",
+      "find": ["        .with_desired_access(FILE_LIST_DIRECTORY)\n"],
+      "replace": ["        .with_desired_access(0x8000_0000)\n"]
+    },
+    {
+      "name": "SAFE-2: the open drops backup semantics",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "Without it CreateFileW fails on any directory.",
+      "find": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)\n"],
+      "replace": ["        .with_flags_and_attributes(0)\n"]
+    },
+    {
+      "name": "SAFE-2: the open adds the overlapped flag",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "The handle must not be overlapped; the request-shape test pins the flags to backup semantics alone.",
+      "find": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS)\n"],
+      "replace": ["        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS | 0x4000_0000)\n"]
+    },
+    {
+      "name": "SAFE-2: the first refill continues instead of restarting",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "The first query restarts the enumeration; the class test sees the swap.",
+      "find": ["        Refill::First => FileInformationClass::ID_EXTD_DIRECTORY_RESTART,\n"],
+      "replace": ["        Refill::First => FileInformationClass::ID_EXTD_DIRECTORY,\n"]
+    },
+    {
+      "name": "SAFE-2: every directory is taken for one",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "FILE_LIST_DIRECTORY opens an ordinary file too; the check is what keeps naming a file from reading as a capability failure.",
+      "find": ["    Ok(info.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0)\n"],
+      "replace": ["    let _ = info;\n    Ok(true)\n"]
+    },
+    {
+      "name": "SAFE-2: the volume serial is reported as zero",
+      "file": "src/native.rs",
+      "expect": "caught",
+      "why": "A real volume's serial is non-zero.",
+      "find": ["        .map(|info| info.volume_serial_number())\n"],
+      "replace": ["        .map(|_| 0)\n"]
+    },
+    {
+      "name": "SAFE-2: a refused refill buffer is reported as exhaustion",
+      "file": "src/native.rs",
+      "expect": "survives",
+      "why": "Declared: the arm cannot be reached. The request crate refuses a buffer ahead of the call only for classes whose structure page requires an alignment, neither extended-directory class is one, and this buffer is 8-aligned besides. What would reach it is a refusal added to those classes' table.",
+      "find": ["            RefillOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(0)))\n"],
+      "replace": ["            RefillOutcome::Exhausted\n"]
+    },
+    {
+      "name": "SAFE-2 control: the volume serial is read through a binding",
+      "file": "src/native.rs",
+      "expect": "survives",
+      "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        .map(|info| info.volume_serial_number())\n"],
+      "replace": ["        .map(|info| {\n            let serial = info.volume_serial_number();\n            serial\n        })\n"]
     }
   ]
 }

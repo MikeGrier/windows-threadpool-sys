@@ -63,3 +63,43 @@ What was done. `QueryFileIdInfo::new` takes `impl Into<SharedHandle>` since `NR-
 captured or duplicated. No dependency was added. That was this crate's last use of `CapturedHandle`. Evidence, in
 [sabotage.json](sabotage.json): reading the identity from a different file than the one enumerated is caught by the
 test, and a control opening the same file another way survives.
+
+## Moved 2026-10-20 15:42:27 -04:00 -- SAFE-2: the directory's calls are the request crate's entries
+
+### <a id="safe-2"></a>SAFE-2 -- The directory's open and queries are the request crate's entries, the buffer an `AlignedBuf` and the handle a `SharedHandle`. *(completed 2026-10-20 15:42:27 -04:00)*
+
+The item as written, with the paragraph that tied it to the workspace's `M21.3` and `M21.4`:
+
+**The directory's calls through the request crate.** The engine holds the directory as a
+  `SharedHandle`. [native.rs](src/native.rs)'s four calls become entries: the open is `OpenFile` built from the
+  request's `AnchoredPath` and performed under the captured token; the directory check is `QueryFileBasicInfo`;
+  the volume serial is `QueryFileIdInfo`, on a clone of the directory's handle; a refill is `QueryFileInformation`
+  into the crate's buffer, which becomes an `io_buffers::AlignedBuf` in place of `NativeBuffer`. The typed
+  outcomes `native.rs` derives (the end of a directory, `UnsupportedExtendedDirectoryInfo`, and the rest) are kept
+  and read from the entries' codes. Tests: the existing suite unchanged; an enumeration makes no handle beyond its
+  open.
+
+  This discharges the workspace's [M21.3 and M21.4](../../CHECKLIST.md#m21----reconcile-with-the-shipped-namespace-plane-work),
+  which are checked off in the same commit, and their constraints are this item's acceptance conditions: the open
+  keeps its access (`FILE_LIST_DIRECTORY`), share mode and flags (`FILE_FLAG_BACKUP_SEMANTICS`); the directory's
+  handle stays unassociated; every code reaches the crate unaltered; the open's code is captured before the
+  impersonation context is restored; and the D-15 Globazog acceptance gate still passes.
+
+  > **CROSS-COMPONENT PREREQUISITE:** the request crate's release carrying `NR-6.1` to `NR-6.5`
+  > ([COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-65-into)).
+
+What was done. [native.rs](src/native.rs) makes no call of its own: the open is `OpenFile` built from the request's
+`AnchoredPath` and performed under the captured token, with listing access, every share, an existing directory and
+backup semantics; the directory check is `QueryFileBasicInfo`; the volume serial is `QueryFileIdInfo`; and a refill is
+`QueryFileInformation`, the restart class for the first and the continuing class for the rest, each on a clone of the
+directory's `SharedHandle`. The staging buffer is an `io_buffers::AlignedBuf` made at 8, which replaced `NativeBuffer`
+and its `buffer.rs`; the engine holds the directory as a `SharedHandle`. The typed outcomes are kept and read from the
+entries' codes. `perform_into` now returns the request crate's `PerformIntoError`, whose refusal ahead of the call
+cannot apply to the extended-directory classes, so that arm reports a failure with no code. Two dependencies were
+added, `io-buffers` and `win-shared-os-owned-handle`; no public item changed. Recorded as
+[D-24](DESIGN-NOTES.md#d-24), with the rationale in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Tests: the existing
+suites unchanged apart from the buffer's constructor, including the Globazog acceptance gate; new unit tests of the
+open's parameters, the refill's class and handle, a held directory not stopping a rename, and the engine and a whole
+read leaving the directory with no other holder. Evidence, in [sabotage.json](sabotage.json): nine entries, the open's
+delete sharing, access, backup semantics and overlapped flag, the first refill's class, the directory check, and the
+volume serial, all caught, one declared survivor for the arm that cannot be reached, and a control.

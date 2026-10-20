@@ -893,7 +893,7 @@ across fifteen consecutive runs; targeted all-target Clippy and
 
 ### <a id="fe-8"></a>FE-8 -- Allocate the fixed native buffer and get one directory open and reading. *(completed 2026-08-27 20:12:34 UTC-04:00)*
 
-[buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs) allocates the
+`buffer.rs` (deleted by the enumeration crate's `SAFE-2`) allocated the
 staging buffer at admission, fallibly and as `u64` words so its base address is
 8-byte aligned by construction rather than by hope; the ordinary growable-vector
 path would abort the process on failure and guarantee only byte alignment.
@@ -2645,8 +2645,8 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   Two constraints that are not negotiable and are already solved in this repository, so bind to the
   precedent rather than re-deriving it. The buffer must be **8-byte aligned**: a `Vec<u8>` fails the very
   first query with `ERROR_NOACCESS`, which is why
-  [crates/windows-file-enumeration-sys/src/buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs)
-  backs its storage with `Vec<u64>`. And the call **reports no written length** -- a batch is walked by its
+  `crates/windows-file-enumeration-sys/src/buffer.rs` (deleted by `SAFE-2`, whose `AlignedBuf` states the alignment)
+  backed its storage with `Vec<u64>`. And the call **reports no written length** -- a batch is walked by its
   own next-entry offsets -- so the completion returns the whole buffer and the consumer bounds its own
   reads, rather than the entry inventing a byte count it cannot know.
 
@@ -4079,3 +4079,45 @@ on purpose, and the engineer settled four rules on 2026-10-19:
 siblings; `tools/test-check-archives.ps1` covers each rule in both directions against throwaway git
 repositories, and a manual sabotage of the heading rule turned its case red. The `archives` CI job runs
 both, against the target branch on a pull request and the previous tip on a push.
+
+## Moved 2026-10-20 15:42:27 -04:00 -- M21.3 and M21.4: the enumeration crate's open and basic-info query are the request crate's entries
+
+### <a id="m213"></a>M21.3 -- The enumeration crate's inline `open_directory` is the request crate's `OpenFile`, keeping the access, share mode, flags and unassociated handle it needed. *(completed 2026-10-20 15:42:27 -04:00)*
+
+The item as written:
+
+Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
+  facility's catalogue operation. The direction is settled, not open: that open is the committed first
+  consumer, and the inline path exists only until the general one is proven. The replacement must preserve
+  everything the shipped open already gets right, each of which is a constraint on the catalogue rather
+  than an implementation detail: arbitrary access, share mode and flags (it opens with
+  `FILE_LIST_DIRECTORY`, not `GENERIC_READ`, and requires `FILE_FLAG_BACKUP_SEMANTICS` to obtain a
+  directory handle at all); an **unassociated** handle, since `GetFileInformationByHandleEx` is
+  synchronous; the raw Win32 code unaltered, because `ERROR_FILE_NOT_FOUND` means three different things
+  across the open and the first and later queries and only the consumer can disambiguate; and
+  `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
+  Its D-15 Globazog acceptance gate must still pass afterwards.
+
+Done by [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2): the open is `OpenFile` built from the
+request's `AnchoredPath`, with listing access, every share, an existing directory and backup semantics and no overlapped
+flag, performed under the captured token; the open's code is read before the token is restored, by the request
+crate's entry; and the Globazog acceptance gate passes. The constraints above are pinned by a unit test of the request the
+open builds, and by sabotage entries in the crate's [sabotage.json](crates/windows-file-enumeration-sys/sabotage.json).
+
+### <a id="m214"></a>M21.4 -- The `FileBasicInfo` query is its own catalogue entry, `QueryFileBasicInfo`, and the enumeration crate sequences it after the open. *(completed 2026-10-20 15:42:27 -04:00)*
+
+The item as written:
+
+Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
+  crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
+  leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
+  this facility exists for. One entry per Win32 call: this is **not** a compound open-and-classify
+  operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
+  completion, then submits the query. A compound entry is reserved for a measured performance argument
+  and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
+
+Done in two steps. The entry is the request crate's `QueryFileBasicInfo`, built as
+[NR-6.4](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-64-basic) (its D-33), and the enumeration crate
+sequences it after the open as [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2): the open
+completes, then the directory check is a separate query on a clone of the same handle, client-side, with no compound
+open-and-classify entry.

@@ -2,19 +2,23 @@
 //! Tests for one enumeration's quantum, against real directories.
 
 use super::*;
-use crate::buffer::NativeBuffer;
 use crate::completion::{Completion, EnumerationId};
 use crate::completion_ring::{CompletionRing, MINIMUM_COMPLETION_CAPACITY};
 use crate::entry::FileIdentityMode;
 use crate::pattern::{CaseSensitivity, NamePattern};
 use crate::predicate::{PredicateClause, QueryByExample};
-use crate::request::MINIMUM_BUFFER_CAPACITY;
+use crate::request::{MINIMUM_BUFFER_CAPACITY, RECORD_ALIGNMENT};
 use crate::scratch::Scratch;
 use wtf_string::Wtf16Str;
 
 /// The single enumeration identity these tests need: nothing here shares a
 /// ring with a second enumeration, so one arbitrary value names it throughout.
 const ENUMERATION: EnumerationId = EnumerationId::from_raw(0);
+
+/// The staging buffer a request asks for, as admission makes it.
+fn buffer_for(request: &EnumerationRequest) -> AlignedBuf {
+    AlignedBuf::zeroed(request.buffer_capacity(), RECORD_ALIGNMENT).expect("allocation")
+}
 
 fn engine_for(path: &std::path::Path, mode: FileIdentityMode) -> EngineState {
     let request = EnumerationRequest::for_path(path)
@@ -23,7 +27,7 @@ fn engine_for(path: &std::path::Path, mode: FileIdentityMode) -> EngineState {
         .with_buffer_capacity(MINIMUM_BUFFER_CAPACITY)
         .expect("representable");
     let token = ImpersonationToken::capture().expect("the calling thread has a context");
-    let buffer = NativeBuffer::try_new(request.buffer_capacity()).expect("allocation");
+    let buffer = buffer_for(&request);
     EngineState::new(request, token, buffer)
 }
 
@@ -34,7 +38,7 @@ fn engine_with_predicate(path: &std::path::Path, predicate: QueryByExample) -> E
         .with_buffer_capacity(MINIMUM_BUFFER_CAPACITY)
         .expect("representable");
     let token = ImpersonationToken::capture().expect("the calling thread has a context");
-    let buffer = NativeBuffer::try_new(request.buffer_capacity()).expect("allocation");
+    let buffer = buffer_for(&request);
     EngineState::new(request, token, buffer)
 }
 
@@ -44,7 +48,7 @@ fn engine_with_capacity(path: &std::path::Path, capacity: usize) -> EngineState 
         .with_buffer_capacity(capacity)
         .expect("representable");
     let token = ImpersonationToken::capture().expect("the calling thread has a context");
-    let buffer = NativeBuffer::try_new(request.buffer_capacity()).expect("allocation");
+    let buffer = buffer_for(&request);
     EngineState::new(request, token, buffer)
 }
 
@@ -98,6 +102,24 @@ fn an_empty_directory_completes() {
         completions.try_take().is_none(),
         "no entries in an empty directory"
     );
+}
+
+#[test]
+fn a_finished_enumeration_leaves_its_directory_with_no_other_holder() {
+    // `try_into_owned` succeeds only for the last holder: no query, request or clone outlives the
+    // quanta that made it, and nothing made a handle of its own.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt"]);
+    let mut engine = engine_for(scratch.path(), FileIdentityMode::Required);
+    let completions = CompletionRing::new(8);
+    run_to_completion(&mut engine, &completions);
+    assert!(engine.volume_serial().is_some());
+
+    engine
+        .directory
+        .take()
+        .expect("the directory was opened")
+        .try_into_owned()
+        .expect("the engine is the directory's only holder");
 }
 
 #[test]

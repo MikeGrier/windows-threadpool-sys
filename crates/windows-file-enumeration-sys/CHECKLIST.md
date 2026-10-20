@@ -24,27 +24,11 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
 
 - [x] **SAFE-1** -- The metadata test builds its `QueryFileIdInfo` from a `SharedHandle`, not a `CapturedHandle`. -> [completed 2026-10-19](COMPLETED-CHECKLIST.md#safe-1)
 
-  > **-> CROSS-COMPONENT HANDOFF:** this was one of the moves `NR-6.2` waits on; the next work in this crate
-  > is `SAFE-2`, gated on the request crate's release. See
+  > **-> CROSS-COMPONENT HANDOFF:** this was one of the moves `NR-6.2` waited on, and the work that followed it
+  > in this crate was `SAFE-2`, after the request crate's release. See
   > [windows-namespace-request-sys' COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -> `NR-6.2`.
 
-- [ ] **SAFE-2** -- **The directory's calls through the request crate.** The engine holds the directory as a
-  `SharedHandle`. [native.rs](src/native.rs)'s four calls become entries: the open is `OpenFile` built from the
-  request's `AnchoredPath` and performed under the captured token; the directory check is `QueryFileBasicInfo`;
-  the volume serial is `QueryFileIdInfo`, on a clone of the directory's handle; a refill is `QueryFileInformation`
-  into the crate's buffer, which becomes an `io_buffers::AlignedBuf` in place of `NativeBuffer`. The typed
-  outcomes `native.rs` derives (the end of a directory, `UnsupportedExtendedDirectoryInfo`, and the rest) are kept
-  and read from the entries' codes. Tests: the existing suite unchanged; an enumeration makes no handle beyond its
-  open.
-
-  This discharges the workspace's [M21.3 and M21.4](../../CHECKLIST.md#m21----reconcile-with-the-shipped-namespace-plane-work),
-  which are checked off in the same commit, and their constraints are this item's acceptance conditions: the open
-  keeps its access (`FILE_LIST_DIRECTORY`), share mode and flags (`FILE_FLAG_BACKUP_SEMANTICS`); the directory's
-  handle stays unassociated; every code reaches the crate unaltered; the open's code is captured before the
-  impersonation context is restored; and the D-15 Globazog acceptance gate still passes.
-
-  > **CROSS-COMPONENT PREREQUISITE:** the request crate's release carrying `NR-6.1` to `NR-6.5`
-  > ([COMPLETED-CHECKLIST.md](../windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-65-into)).
+- [x] **SAFE-2** -- The directory's open and queries are the request crate's entries, the buffer an `AlignedBuf` and the handle a `SharedHandle`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-2)
 
 - [ ] **SAFE-3** -- **The doorbell is a shared event.** The completion ring holds the doorbell as a `win-sync-sys`
   `Event`, set and reset through it, and hands a `ThreadpoolWait` a waitable handle that shares the event rather

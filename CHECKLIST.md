@@ -86,34 +86,9 @@ be settled rather than discovered later.
   bits stay forced. Note `SEM_NOALIGNMENTFAULTEXCEPT`'s behaviour is architecture-dependent, so this needs
   measurement on both ARM64 and x64 rather than reasoning.
 
-- [ ] **M21.3** -- Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
-  facility's catalogue operation. The direction is settled, not open: that open is the committed first
-  consumer, and the inline path exists only until the general one is proven. The replacement must preserve
-  everything the shipped open already gets right, each of which is a constraint on the catalogue rather
-  than an implementation detail: arbitrary access, share mode and flags (it opens with
-  `FILE_LIST_DIRECTORY`, not `GENERIC_READ`, and requires `FILE_FLAG_BACKUP_SEMANTICS` to obtain a
-  directory handle at all); an **unassociated** handle, since `GetFileInformationByHandleEx` is
-  synchronous; the raw Win32 code unaltered, because `ERROR_FILE_NOT_FOUND` means three different things
-  across the open and the first and later queries and only the consumer can disambiguate; and
-  `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
-  Its D-15 Globazog acceptance gate must still pass afterwards.
+- [x] **M21.3** -- The enumeration crate's inline `open_directory` is the request crate's `OpenFile`, keeping the access, share mode, flags and unassociated handle it needed. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m213)
 
-  > **Done by** `windows-file-enumeration-sys`' [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md),
-  > which makes this open the request crate's `OpenFile` and carries the constraints above as its acceptance
-  > conditions. Check this item off in the commit that completes `SAFE-2`.
-
-- [ ] **M21.4** -- Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
-  crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
-  leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
-  this facility exists for. One entry per Win32 call: this is **not** a compound open-and-classify
-  operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
-  completion, then submits the query. A compound entry is reserved for a measured performance argument
-  and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
-
-  > **Done by** `windows-namespace-request-sys`' `NR-6.4` (the entry, `QueryFileBasicInfo`, in its
-  > [COMPLETED-CHECKLIST.md](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-64-basic)) and
-  > `windows-file-enumeration-sys`' [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) (the
-  > enumeration crate sequencing it after the open). Check this item off in the commit that completes `SAFE-2`.
+- [x] **M21.4** -- The `FileBasicInfo` query is its own catalogue entry, `QueryFileBasicInfo`, and the enumeration crate sequences it after the open. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#m214)
 
 ## M34 -- Tooling
 
@@ -552,7 +527,7 @@ crates' checklists; this is only the order and the links, and each item's own ch
 3. [NR-6.2](crates/windows-namespace-request-sys/COMPLETED-CHECKLIST.md#nr-62-capture) -- capture deleted. `NR-6.3` to `NR-6.5` may land
    at any point before the release.
 4. The request crate's release, a new minor. A release action, not an item.
-5. [SAFE-2](crates/windows-file-enumeration-sys/CHECKLIST.md) -- the directory's calls through the request crate.
+5. [SAFE-2](crates/windows-file-enumeration-sys/COMPLETED-CHECKLIST.md#safe-2) -- the directory's calls through the request crate.
 6. Independently of 1 to 5: [M-T15.1](crates/windows-threadpool-sys/CHECKLIST.md) then
    [WS-2.2](crates/win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) (reordered 2026-10-18: the shared wait target comes first), then
    [SAFE-3](crates/windows-file-enumeration-sys/CHECKLIST.md); and `M43.1` below, then

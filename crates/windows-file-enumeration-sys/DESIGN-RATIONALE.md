@@ -409,3 +409,35 @@ completion ring's doorbell, one in the case-insensitive comparison. Each has a w
 **What was not chosen.** Keeping the native calls private and only removing the duplication would have left this
 crate a second implementation of calls the request crate already makes faithfully, with its own reading of their
 codes; the typed outcomes this crate derives from those codes are kept, and only the calls move.
+
+## Why a refill is a request on a clone, and how the move went (D-24)
+
+**Built 2026-10-20** as `SAFE-2`. Of the census D-23 gives, the native calls and the buffer are gone: five `unsafe`
+blocks in `native.rs` and the one in the buffer's byte view. The completion ring's three and the comparison's one
+remain, for `SAFE-3` and `SAFE-4`.
+
+**A request per refill was chosen over holding the two queries.** The engine could build the restart and continuing
+`QueryFileInformation` once, when the directory opens, and perform them for the enumeration's life. That moves a
+clone of the handle from each refill to the open, and adds two fields of engine state to save one atomic increment per
+batch beside a system call. A request built where the query is made also keeps the class and the handle visible at the
+one site that uses them, which is what the class and handle test reads.
+
+**The buffer's replacement was not a new type.** This crate's own buffer was a `Vec<u64>` with a fallible reservation
+and a byte view that needed an `unsafe` slice. `io_buffers::AlignedBuf` is the type the request crate's
+`perform_into` takes, it states its alignment as a property of the type and reports an allocation failure instead of
+aborting, and its slice is safe. Considered and not taken: **keeping `NativeBuffer` and copying into an `AlignedBuf`
+per call**, which would have added a copy of every batch to keep a type whose only remaining job was the one the
+other type does.
+
+**The arm that cannot be reached.** `perform_into` returns a refusal ahead of the call as well as the call's code.
+Considered for the refusal: **a new `EnumerationError` variant**, a public addition for a case no caller can cause;
+**a panic**, which in a thread-pool callback loses the enumeration's terminal record; and **a failure with code zero**,
+which is what `engine::advance` already does for its own unreachable state and which says Windows produced no code.
+The third was taken. That it cannot be reached is an argument from the request crate's table of classes and this
+crate's buffer, not a measurement, so the sabotage that would make it report exhaustion is declared a survivor with
+what would reach it: a refusal added to the extended-directory classes.
+
+**What the request crate's entries changed about the open's error.** The old open read the thread's last error itself,
+before the guard restored the token, and said so in a comment. The request crate's `perform` reads it in the statement
+after the call, so the same ordering now holds without this crate arranging it, and the open's code reaches the
+enumeration unaltered for the missing directory and the file named as a directory, which the existing tests pin.
