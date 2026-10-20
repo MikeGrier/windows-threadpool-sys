@@ -39,21 +39,22 @@
 //! will happily clobber. That guarantee is a primitive rather than a rule each
 //! entry remembers: see [`outcome`].
 //!
-//! # A path is copied; a handle is duplicated
+//! # A path is copied; a handle is shared
 //!
-//! Several entries take a handle rather than a path, and a request owns a
-//! **duplicate** of any handle it names. The distinction matters and is easy to
-//! get backwards: a path is a value and is copied, while a handle is a reference
-//! to a kernel object, so duplicating it *shares that object* rather than
-//! cloning it.
+//! Several entries take a handle rather than a path, and a request holds a
+//! [`SharedHandle`](win_shared_os_owned_handle::SharedHandle): a share of the
+//! caller's handle, not a new one, and a clone of the request shares it again.
+//! Nothing in this crate duplicates a handle. The distinction is easy to get
+//! backwards: a path is a value and is copied, while a handle is a reference to a
+//! kernel object.
 //!
-//! A request is therefore self-contained with respect to **lifetime** -- it
-//! cannot be left pointing at a handle its originator closed -- and is **not**
-//! isolated with respect to **state**. Measured: a duplicated handle continues
-//! the source's directory enumeration rather than starting its own, while
-//! closing the duplicate leaves the source usable and single-shot metadata
-//! queries disturb nothing. An independent traversal needs a fresh open, not a
-//! duplicate.
+//! A request is therefore self-contained with respect to **lifetime** -- the
+//! handle stays open while any holder keeps its share, so a request cannot be
+//! left naming a handle its originator closed -- and is **not** isolated with
+//! respect to **state**. A request names the caller's kernel object, so an
+//! enumeration through it continues the caller's rather than starting its own;
+//! an independent traversal needs a fresh open. A caller holding only a borrow
+//! makes an owned handle itself, visibly, before handing it over.
 //!
 //! # Scope
 //!
@@ -72,10 +73,9 @@
 //!
 //! ```
 //! use std::fs;
-//! use std::os::windows::io::AsHandle;
 //! use std::thread;
 //!
-//! use windows_namespace_request_sys::{CapturedHandle, OpenFile};
+//! use windows_namespace_request_sys::{FileType, OpenFile, QueryFileType};
 //! use wtf_string::Wtf16String;
 //!
 //! let path = std::env::temp_dir().join(format!("wnrs-doc-{}.tmp", std::process::id()));
@@ -85,22 +85,18 @@
 //! // current directory now, which is shared mutable state that any thread can
 //! // change in between. This one is absolute, so it is handed over as given.
 //! let text = path.to_str().expect("a temporary path is valid UTF-8");
-//! let request = OpenFile::new(Wtf16String::from(text))?;
-//! assert_eq!(request.win32_path().to_string_lossy(), text);
+//! let open = OpenFile::new(Wtf16String::from(text))?;
+//! assert_eq!(open.win32_path().to_string_lossy(), text);
 //!
-//! // An owned duplicate, so the captured parameters cannot be left pointing
-//! // at a handle the caller has since closed.
-//! let file = fs::File::open(&path)?;
-//! let captured = CapturedHandle::capture(file.as_handle())?;
-//! drop(file);
+//! // A handle is shared, not duplicated: the request holds the caller's
+//! // handle, so it stays open for the worker however the caller lets go.
+//! let query = QueryFileType::new(fs::File::open(&path)?);
 //!
-//! let length = thread::spawn(move || {
-//!     fs::File::from(captured.into_owned_handle()).metadata().map(|m| m.len())
-//! })
-//! .join()
-//! .expect("the worker did not panic")?;
+//! let kind = thread::spawn(move || query.perform())
+//!     .join()
+//!     .expect("the worker did not panic")?;
 //!
-//! assert_eq!(length, b"example".len() as u64);
+//! assert_eq!(kind, FileType::DISK);
 //! # fs::remove_file(&path)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -111,12 +107,13 @@
 
 mod anchored;
 pub mod close;
+pub mod file_basic;
 pub mod file_id;
 pub mod file_info;
 pub mod file_type;
 pub mod final_path;
 pub mod full_path;
-pub mod handle;
+mod handle;
 pub mod open;
 pub mod open_by_id;
 pub mod outcome;
@@ -128,17 +125,17 @@ pub mod watch;
 
 pub use anchored::{AnchoredPath, PathCaptureError};
 pub use close::{CloseFn, CloseRequest};
+pub use file_basic::{FileBasicInfo, QueryFileBasicInfo};
 pub use file_id::{FileIdInfo, QueryFileIdInfo};
 pub use file_info::QueryFileInformationByHandle;
 pub use file_type::{FileType, QueryFileType};
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
 pub use full_path::{FullPathError, ResolveFullPath};
-pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
 pub use io_buffers::AlignedBuf;
 pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
 pub use outcome::{Outcome, Win32Error};
-pub use query::{FileInformationClass, QueryFileInformation};
+pub use query::{FileInformationClass, PerformIntoError, QueryFileInformation};
 pub use reopen::ReOpenFile;
 pub use request::{ConsumingRequest, Request};
 

@@ -10,7 +10,7 @@ use std::fs::File;
 use std::os::windows::io::AsHandle;
 use std::time::Duration;
 
-use windows_namespace_request_sys::CapturedHandle;
+use win_shared_os_owned_handle::SharedHandle;
 use windows_namespace_request_sys::close::CloseRequest;
 use windows_namespace_request_sys::open_by_id::{FileIdentifier, OpenFileByIdentifier};
 use windows_namespace_request_sys::watch::{ChangeNotification, NotifyFilter};
@@ -50,7 +50,12 @@ fn a_handle_opened_by_one_entry_is_carried_into_a_later_one() {
     let id = file_id_of(&opened);
 
     let reopened = OpenFileByIdentifier::new(
-        CapturedHandle::capture(opened.as_handle()).expect("capture the opened handle as a hint"),
+        SharedHandle::from(
+            opened
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the opened handle as a hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_LIST_DIRECTORY)
@@ -79,7 +84,11 @@ fn a_reopen_survives_its_source_handle_being_closed_first() {
     let id = file_id_of(&target);
 
     let request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_LIST_DIRECTORY)
@@ -113,7 +122,11 @@ fn the_whole_chain_runs_on_a_worker_that_saw_none_of_its_inputs() {
 
     let open_request = unassociated_directory(tree.root());
     let reopen_request = OpenFileByIdentifier::new(
-        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        SharedHandle::from(
+            hint.as_handle()
+                .try_clone_to_owned()
+                .expect("own the volume hint"),
+        ),
         FileIdentifier::FileId(id),
     )
     .with_desired_access(FILE_LIST_DIRECTORY)

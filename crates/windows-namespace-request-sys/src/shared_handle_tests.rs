@@ -4,8 +4,6 @@
 //! of the handle it was given, a clone of the request is another, and no entry makes a handle of its
 //! own to hold.
 
-use std::os::windows::io::{AsHandle, AsRawHandle};
-
 use win_shared_os_owned_handle::SharedHandle;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -13,10 +11,11 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::Wtf16String;
 
 use crate::handle::tests::{Fixture, handle_allocation};
+use crate::security::SecurityAttributes;
 use crate::{
-    CapturedHandle, FileIdentifier, FileInformationClass, FileType, OpenFile, OpenFileByIdentifier,
-    QueryFileIdInfo, QueryFileInformation, QueryFileInformationByHandle, QueryFileType,
-    QueryFinalPath, QueryVolumeInformation, ReOpenFile,
+    FileIdentifier, FileInformationClass, FileType, OpenFile, OpenFileByIdentifier,
+    QueryFileBasicInfo, QueryFileIdInfo, QueryFileInformation, QueryFileInformationByHandle,
+    QueryFileType, QueryFinalPath, QueryVolumeInformation, ReOpenFile,
 };
 
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
@@ -40,6 +39,11 @@ fn every_entry_holds_the_handle_it_is_given_and_makes_none_of_its_own() {
     );
     assert!(
         QueryFileIdInfo::new(handle.clone())
+            .handle()
+            .same_handle(&handle)
+    );
+    assert!(
+        QueryFileBasicInfo::new(handle.clone())
             .handle()
             .same_handle(&handle)
     );
@@ -99,6 +103,8 @@ fn a_clone_of_a_request_shares_the_handle_the_request_holds() {
     assert!(file_type.clone().handle().same_handle(file_type.handle()));
     let file_id = QueryFileIdInfo::new(handle.clone());
     assert!(file_id.clone().handle().same_handle(file_id.handle()));
+    let file_basic = QueryFileBasicInfo::new(handle.clone());
+    assert!(file_basic.clone().handle().same_handle(file_basic.handle()));
     let by_handle = QueryFileInformationByHandle::new(handle.clone());
     assert!(by_handle.clone().handle().same_handle(by_handle.handle()));
     let final_path = QueryFinalPath::new(handle.clone());
@@ -121,6 +127,7 @@ fn a_request_keeps_its_handle_open_after_every_other_holder_drops() {
 
     let file_type = QueryFileType::new(handle.clone());
     let file_id = QueryFileIdInfo::new(handle.clone());
+    let file_basic = QueryFileBasicInfo::new(handle.clone());
     let by_handle = QueryFileInformationByHandle::new(handle.clone());
     let final_path = QueryFinalPath::new(handle.clone());
     let volume = QueryVolumeInformation::new(handle.clone());
@@ -136,6 +143,7 @@ fn a_request_keeps_its_handle_open_after_every_other_holder_drops() {
         FileType::DISK
     );
     file_id.perform().expect("the file's identity");
+    file_basic.perform().expect("the file's basic information");
     by_handle.perform().expect("the file's information");
     final_path.perform().expect("the file's final path");
     volume.perform().expect("the file's volume");
@@ -160,19 +168,35 @@ fn a_request_performs_on_another_thread_with_its_clone_left_behind() {
 }
 
 #[test]
-fn a_captured_handle_converts_into_a_shared_handle_holding_its_duplicate() {
-    // The transition conversion, deleted by `NR-6.2`: the shared handle is the captured duplicate,
-    // not a further one.
+fn a_copy_of_an_open_shares_its_handle_and_copies_its_attributes() {
+    // The two entries that are not `Clone`, because their security attributes are copied: the copy
+    // holds the same handle, and its own attributes.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
-    let fixture = Fixture::new("shared-from-captured");
-    let file = fixture.open_file();
-    let captured = CapturedHandle::capture(file.as_handle()).expect("capture the handle");
-    let raw = captured.as_handle().as_raw_handle();
+    let fixture = Fixture::new("shared-try-clone");
+    let handle = file_handle(&fixture);
+    let attributes = || Some(SecurityAttributes::new(None, false));
+    let path = fixture.file();
 
-    let shared = SharedHandle::from(captured);
+    let open = OpenFile::new(Wtf16String::from(
+        path.to_str().expect("the fixture path is valid UTF-8"),
+    ))
+    .expect("build the request")
+    .with_template(Some(handle.clone()))
+    .with_security(attributes());
+    let open_copy = open.try_clone().expect("copy the request");
+    assert!(
+        open_copy
+            .template()
+            .expect("the template is held")
+            .same_handle(&handle)
+    );
+    assert!(open_copy.security().is_some());
 
-    assert_eq!(shared.as_raw_handle(), raw);
-    assert_ne!(shared.as_raw_handle(), file.as_raw_handle());
+    let by_id = OpenFileByIdentifier::new(handle.clone(), FileIdentifier::FileId(0))
+        .with_security(attributes());
+    let by_id_copy = by_id.try_clone().expect("copy the request");
+    assert!(by_id_copy.volume_hint().same_handle(&handle));
+    assert!(by_id_copy.security().is_some());
 }

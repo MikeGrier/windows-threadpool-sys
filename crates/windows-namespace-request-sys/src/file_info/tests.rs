@@ -3,14 +3,14 @@
 //! Tests for the `GetFileInformationByHandle` entry.
 
 use std::fs::File;
-use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::os::windows::io::AsHandle;
 
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 
 use super::QueryFileInformationByHandle;
-use crate::CapturedHandle;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
 use crate::query::{FileInformationClass, QueryFileInformation};
+use win_shared_os_owned_handle::SharedHandle;
 
 /// Small enough that the fixture directory cannot be drained in one batch.
 const SMALL_BATCH: usize = 320;
@@ -19,9 +19,11 @@ const SMALL_BATCH: usize = 320;
 const ENOUGH_TO_SPAN_BATCHES: usize = 24;
 
 fn request_for(file: &File) -> QueryFileInformationByHandle {
-    QueryFileInformationByHandle::new(
-        CapturedHandle::capture(file.as_handle()).expect("capture the handle"),
-    )
+    QueryFileInformationByHandle::new(SharedHandle::from(
+        file.as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
 }
 
 fn file_index(
@@ -116,7 +118,12 @@ fn the_query_does_not_disturb_an_enumeration_in_progress() {
     let directory = fixture.open_directory();
 
     let restart = QueryFileInformation::new(
-        CapturedHandle::capture(directory.as_handle()).expect("capture the handle"),
+        SharedHandle::from(
+            directory
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the handle"),
+        ),
         FileInformationClass::ID_EXTD_DIRECTORY_RESTART,
     )
     .with_capacity(SMALL_BATCH);
@@ -127,7 +134,12 @@ fn the_query_does_not_disturb_an_enumeration_in_progress() {
         .expect("an interleaved non-Ex query");
 
     let next = QueryFileInformation::new(
-        CapturedHandle::capture(directory.as_handle()).expect("capture the handle"),
+        SharedHandle::from(
+            directory
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the handle"),
+        ),
         FileInformationClass::ID_EXTD_DIRECTORY,
     )
     .with_capacity(SMALL_BATCH);
@@ -150,14 +162,14 @@ fn a_stale_handle_reports_the_raw_code() {
     let request = request_for(&file);
     drop(file);
 
-    // The request owns a duplicate, so it still works -- the point of M24.2.
+    // The request holds a handle of its own, so it still works once the caller's is closed.
     request
         .perform()
-        .expect("the duplicate outlives its source handle");
+        .expect("the request's handle outlives the caller's");
 }
 
 #[test]
-fn a_copy_duplicates_the_handle() {
+fn a_clone_shares_the_handle() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -165,12 +177,9 @@ fn a_copy_duplicates_the_handle() {
     let file = fixture.open_file();
     let request = request_for(&file);
 
-    let copy = request.try_clone().expect("duplicate the handle");
+    let copy = request.clone();
 
-    assert_ne!(
-        copy.handle().as_handle().as_raw_handle(),
-        request.handle().as_handle().as_raw_handle()
-    );
+    assert!(copy.handle().same_handle(request.handle()));
     copy.perform().expect("the copy queries the same object");
 }
 

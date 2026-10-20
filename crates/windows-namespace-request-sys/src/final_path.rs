@@ -34,7 +34,7 @@ use wtf_string::Wtf16String;
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Win32Error, perform_nonzero};
 
 /// How many times the buffer is grown before the result is called unstable.
@@ -164,10 +164,8 @@ impl From<Win32Error> for FinalPathError {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::final_path::QueryFinalPath;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-fp-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
@@ -175,14 +173,13 @@ impl From<Win32Error> for FinalPathError {
 ///
 /// // Built here; it would resolve identically on a worker, which is the point:
 /// // Globazog performs this on its submitting thread today.
-/// let resolved = QueryFinalPath::new(CapturedHandle::capture(file.as_handle())?)
+/// let resolved = QueryFinalPath::new(file)
 ///     .perform()?
 ///     .to_string_lossy();
 ///
 /// // The result is a verbatim path, so it names the object unambiguously.
 /// assert!(resolved.starts_with(r"\\?\"), "unexpected: {resolved}");
 /// assert!(resolved.ends_with(".tmp"), "unexpected: {resolved}");
-/// # drop(file);
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -217,19 +214,6 @@ impl QueryFinalPath {
     #[must_use]
     pub fn flags(&self) -> FinalPathFlags {
         self.flags
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: duplicate(&self.handle)?,
-            flags: self.flags,
-        })
     }
 
     /// Performs the call on the calling thread, growing the buffer as needed.

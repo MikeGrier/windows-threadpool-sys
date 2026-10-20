@@ -678,3 +678,48 @@ reports.
 ask their final path and kind; `windows-file-enumeration-sys` read its volume serial privately rather than
 duplicate its directory handle for [D-31](DESIGN-NOTES.md#d-31)'s entry. Both are the cost the duplication
 imposed, and both go with it.
+
+**`new`'s parameter, settled by `NR-6.2`.** `NR-6.1` gave `new` `impl Into<SharedHandle>` so that a capturing
+caller kept building through the transition `From`; with that conversion deleted, the question was whether to
+narrow it to `SharedHandle`. Narrowing excludes nothing a caller could pass, since `SharedHandle` converts to
+itself, and adds `SharedHandle::from` at every call site that holds a `File` or an `OwnedHandle`, which is most of
+them, in this crate's own tests and in its consumers. So it stays.
+
+## D-30 addendum: building a path entry from an `AnchoredPath` (`NR-6.3`)
+
+**Why a named constructor and not `From<AnchoredPath>`.** Both entries are built by chaining `with_*` calls onto a
+constructor, and `OpenFile::from_anchored(path).with_...` says which input it starts from where
+`OpenFile::from(path)` does not; a `From` would also invite `path.into()` at a call site, where the reader cannot
+see that the anchoring already happened. The constructor is the only addition, so nothing else is offered for
+choosing between.
+
+## D-33: the typed `FileBasicInfo` entry
+
+**Why the times are not converted.** A `SystemTime` would read better at a call site, but a `FILETIME` before 1970 or
+past what `SystemTime` holds on a platform would need a refusal or a clamp of this crate's own, and the page offers
+neither; the value is the call's, and a consumer converts it where it knows what it wants. The attributes stay a raw
+`u32` for the same reason D-29 carries a `FileType` as it came: the constants list grows, and a typed set would drop
+a bit it did not know.
+
+## D-34: querying into the caller's buffer
+
+**Why `&mut AlignedBuf` and not `&mut [u8]`.** An `AlignedBuf` states its alignment as a property of the type, so
+the caller who chose it can see it, and the same buffer is what `perform` returns. (As first written this said a check
+of alignment was what the page gives no ground for. That read the call's page alone; the ground is in the structure
+pages, below.) The same buffer is what `perform` returns, so a consumer
+can keep the one `perform` gave it.
+
+**Why the buffer is not cleared.** Clearing would cost a pass over the buffer on every batch, which is the cost the
+form exists to remove, and would add a guarantee about bytes no consumer reads: a batch is walked by its own
+next-entry offsets, and a fixed-size class's structure is the bytes it occupies.
+
+**How the alignment refusal was reached (2026-10-20).** A review of the release branch found that
+`FILE_ID_BOTH_DIR_INFO` and `FILE_FULL_DIR_INFO` each "must be aligned on a" "(8-byte) boundary", that both classes
+are reachable through `FileInformationClass::from_raw`, and that a misaligned buffer fails with `ERROR_NOACCESS`. A
+sweep of every structure the call's page lists found a third, `FILE_STREAM_INFO`. The pages count as the call's own:
+the call's page names each as the `lpFileInformation` type, so they say what the buffer is. Nothing unsound had been
+possible -- the call writes bytes into a byte buffer -- so this is the contract, not memory safety. Considered and
+not taken: **requiring a buffer stated at 8 or more**, deterministic for a caller but a refusal of calls the pages
+allow (a class with no requirement, or a buffer that lies on the boundary); and **a buffer type that guarantees 8**,
+which would narrow every class for the sake of five. The refusal is reachable end to end only with an empty buffer,
+which lies at its stated alignment; where a non-empty one lies is the allocator's.

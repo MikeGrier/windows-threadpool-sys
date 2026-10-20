@@ -1,5 +1,5 @@
 // Copyright (c) Mike Grier.
-//! Evidence for `DI-14.6`: what an open handle reports about its own kind, over the handle kinds a
+//! Evidence for `durable-ioring`'s `DI-14.6`: what an open handle reports about its own kind, over the handle kinds a
 //! path can reach.
 //!
 //! These are measurements, not the contract. `GetFileType`'s return values are documented; what
@@ -20,10 +20,9 @@
 use std::os::windows::io::{AsHandle, OwnedHandle};
 
 use win_pipes_sys::{NamedPipeOptions, PipeMode, PipeOpenMode, create_named_pipe};
+use win_shared_os_owned_handle::SharedHandle;
 use win_volume_sys::{StorageDeviceNumber, storage_device_number};
-use windows_namespace_request_sys::{
-    CapturedHandle, CloseRequest, FileType, OpenFile, QueryFileType,
-};
+use windows_namespace_request_sys::{CloseRequest, FileType, OpenFile, QueryFileType};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
@@ -45,13 +44,25 @@ fn open(path: &str, access: u32, flags: u32) -> OwnedHandle {
 }
 
 fn file_type(handle: &OwnedHandle) -> FileType {
-    QueryFileType::new(CapturedHandle::capture(handle.as_handle()).expect("capture the handle"))
-        .perform()
-        .expect("query the handle's type")
+    QueryFileType::new(SharedHandle::from(
+        handle
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the handle"),
+    ))
+    .perform()
+    .expect("query the handle's type")
 }
 
 fn device_number(handle: &OwnedHandle) -> Option<StorageDeviceNumber> {
     storage_device_number(handle).ok()
+}
+
+/// The system volume's device path, as the crate's other volume tests choose it: `C:` is not
+/// guaranteed to exist, or to be the system volume.
+fn system_volume() -> String {
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    format!(r"\\.\{drive}")
 }
 
 fn close(handle: OwnedHandle) {
@@ -127,7 +138,7 @@ fn a_named_pipe_is_pipe_and_has_no_device_number() {
 fn a_volume_is_disk_like_a_file_but_has_a_device_number() {
     // No access is requested: a device-number query needs none, and this keeps the test from
     // needing elevation.
-    let volume = open(r"\\.\C:", NO_ACCESS, 0);
+    let volume = open(&system_volume(), NO_ACCESS, 0);
 
     assert_eq!(file_type(&volume), FileType::DISK);
     let number = device_number(&volume).expect("a volume reports its device number");
@@ -138,7 +149,7 @@ fn a_volume_is_disk_like_a_file_but_has_a_device_number() {
 
 #[test]
 fn a_physical_disk_is_disk_like_a_file_but_has_a_device_number() {
-    let volume = open(r"\\.\C:", NO_ACCESS, 0);
+    let volume = open(&system_volume(), NO_ACCESS, 0);
     let number = device_number(&volume).expect("a volume reports its device number");
     close(volume);
 

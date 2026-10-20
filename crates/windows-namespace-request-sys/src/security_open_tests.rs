@@ -74,21 +74,3 @@ fn a_file_created_with_a_descriptor_from_text_is_given_that_dacl() {
     );
     assert_eq!(dacl_of(&read_only), "D:P(A;;FR;;;WD)(A;;FA;;;BA)");
 }
-
-#[test]
-fn a_failed_security_copy_is_reported_by_a_request_under_its_own_failure() {
-    use crate::{HandleCaptureError, HandleCaptureFailure};
-    use windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY;
-
-    let source = std::io::Error::from_raw_os_error(
-        i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"),
-    );
-
-    let error = HandleCaptureError::copying_security(source);
-
-    assert_eq!(error.failure(), HandleCaptureFailure::CopySecurity);
-    assert_eq!(
-        error.raw_os_error(),
-        Some(i32::try_from(ERROR_NOT_ENOUGH_MEMORY).expect("the code fits in i32"))
-    );
-}

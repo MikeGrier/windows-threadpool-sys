@@ -77,7 +77,8 @@ concurrency and thread-freedom rather than latency.
 
 ## <a id="d-4"></a>D-4: A request owns duplicates of any handle it names
 
-**To be superseded by [D-32](#d-32) when `NR-6.2` lands (a request shares a `SharedHandle`); current until then.**
+**Superseded by [D-32](#d-32)** (`NR-6.2`): a request shares a `SharedHandle` and nothing is duplicated. The measured
+state-sharing below still holds, since a request names the caller's kernel object.
 
 Five of the round-one entries take a handle rather than a path. A request
 **duplicates** such a handle at capture and owns the duplicate for its life.
@@ -169,7 +170,7 @@ our convenience rather than by consumer need.
 
 ## <a id="d-7"></a>D-7: A handle that cannot be captured fails at construction
 
-**To be withdrawn by [D-32](#d-32) when `NR-6.2` lands: with nothing duplicated, there is no capture to fail; current until then.**
+**Withdrawn -- with nothing duplicated there is no capture to fail; [D-32](#d-32) records why none of its refusals is kept** (`NR-6.2`).
 
 Handle capture validates the source and duplicates it on the **calling** thread,
 and every way that can go wrong is a construction error. The alternative --
@@ -265,8 +266,8 @@ and an allocation that fails is now an error the caller receives, at every site:
   both of its allocations, which share one function.
 - `SecurityDescriptor` and `SecurityAttributes` are no longer `Clone`: copying
   one allocates, and an infallible `clone` could only panic or abort. Each has a
-  `try_clone`, which reports `Allocate`; a request's `try_clone` reports it as
-  `HandleCaptureFailure::CopySecurity`.
+  `try_clone`, which reports `Allocate`; a request's `try_clone` returns that
+  error as it is ([D-32](#d-32)).
 
 Every call site passes a constant alignment, so the alignment's own refusal
 cannot occur; the constants are asserted to be powers of two at build time, and
@@ -469,8 +470,8 @@ demonstrate:
   distinction, where collapsing a pair inverts a grant ([D-8](#d-8));
 - the two handle-failure conventions, where using one for the other turns a
   failure into a plausible-looking handle ([D-10](#d-10));
-- what a duplicated handle does and does not share, which a caller reasoning in
-  value semantics gets backwards ([D-4](#d-4));
+- that a request shares the caller's handle rather than copying it, which a
+  caller reasoning in value semantics gets backwards ([D-32](#d-32));
 - rearming a notification, without which a waiting loop spins;
 - that a close is one-shot while an open is repeatable ([D-14](#d-14)).
 
@@ -493,7 +494,7 @@ split is structural rather than a heading:
   *shape*: a request built on one thread and executed on another under a
   captured context, many requests across concurrent workers from one shared
   capture, and a handle opened by one request carried into a later one -- the
-  combination where [D-4](#d-4)'s owned duplicate meets
+  combination where a handle a request shares ([D-32](#d-32)) meets
   [D-10](#d-10)'s shared enumeration cursor, and the one no single-entry test
   reaches.
 
@@ -712,9 +713,8 @@ The drafts themselves, and why each failed, are Tier 2:
   until it is settled, this crate documents the hazard rather than implying its
   resolution is complete.
 - **Reusing the shipped path preparation.** **Resolved 2026-10-18, in the other
-  direction:** the enumeration crate consumes this crate's `AnchoredPath`
-  ([D-30](#d-30)) and its own preparation is deleted
-  ([its D-22](../windows-file-enumeration-sys/DESIGN-NOTES.md#d-22)).
+  direction:** the enumeration crate is to consume this crate's `AnchoredPath`
+  ([D-30](#d-30)) and delete its own preparation (its `D-22`).
 
 ## <a id="d-19"></a>D-19: A relative path is grafted onto a root captured at construction, by concatenation, and only when it is clearly safe
 
@@ -934,6 +934,8 @@ that carries this.
 
 ## <a id="d-26"></a>D-26: `ReOpenFile` is one entry that owns a duplicate of the original, and nothing in it is defaulted
 
+**Amended by [D-32](#d-32)** (`NR-6.2`): the request holds a share of the original, not a duplicate.
+
 **Status: decided and implemented** by `NR-3.2` (`src/reopen.rs`).
 
 **What is decided.**
@@ -1083,8 +1085,8 @@ added, and of `C:` is the current directory of that drive.
   It makes the path UNC, which reaches the network.
 
 **What a string alone can show to be remote** is UNC, and a verbatim, device or NT path with a UNC
-marker; nothing else. A refusal on that was planned before an open ([DI-13.1
-(b)](../durable-ioring/COMPLETED-CHECKLIST.md#di-131)) and dropped by the engineer on 2026-10-16: there
+marker; nothing else. A refusal on that was planned before an open (`durable-ioring`'s `DI-13.1`
+(b)) and dropped by the engineer on 2026-10-16: there
 is no check before the open, and the check on the opened handle is the only one. Discovering a remote
 device late costs a file left behind by an unbuffered create, which is documented, and a network call
 made before the refusal.
@@ -1116,8 +1118,7 @@ normalisation, the claim rule 6 made with no measurement recorded.
 
 The engineer, 2026-10-18. `SecurityDescriptor`, `SecurityAttributes`, `SecurityInformation`, `AclState` and the
 capture errors, which this crate held only because a request takes a descriptor, are in
-[win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md), where Microsoft Learn files them
-([the rule](../../DESIGN-NOTES.md#safe-wrappers-are-placed-by-the-learn-section-they-are-documented-under)).
+[win-authorization-sys](../win-authorization-sys/DESIGN-NOTES.md), where Microsoft Learn files them.
 This crate re-exports that crate as `security` and at its root, so no published path changed. Text above that
 names `src/security.rs` or `src/security/sddl.rs` (including `NR-3.1`'s) describes where the code was when the
 decision was made; the same files are now `crates/win-authorization-sys/src/security.rs` and
@@ -1129,9 +1130,9 @@ decision was made; the same files are now `crates/win-authorization-sys/src/secu
 handle an opened file is of an observer, and the opener need not return it. Sources read that day: the
 `GetFileType` page (`ms.date` 12/05/2018).
 
-**One entry, `QueryFileType`, in the shape of its neighbours:** a captured duplicate of the handle, a
+**One entry, `QueryFileType`, in the shape of its neighbours:** a share of the handle ([D-32](#d-32)), a
 `perform` that returns the call's outcome with the code snapshotted before anything else runs, and
-`try_clone`. Learn files the call under File Management Functions, with `CreateFile` and
+`Clone`. Learn files the call under File Management Functions, with `CreateFile` and
 `GetFinalPathNameByHandle`, so it is here.
 
 **The value is carried as it came.** `FileType` holds what the call returned and names the five values the
@@ -1151,7 +1152,7 @@ made the call fail with `ERROR_INVALID_HANDLE`. A handle whose call worked and r
 found, so the clearing of the last error is not exercised by any handle here; its sabotage is declared as
 surviving, with that reason, and the clearing rests on the page.
 
-**Scheduled work:** none in this crate. [DI-14.12](../durable-ioring/CHECKLIST.md) is the consumer, with
+**Scheduled work:** none in this crate. The consumer it was built for is `durable-ioring`'s `DI-14.12`, with
 `WV-3.1` in [win-volume-sys](../win-volume-sys/CHECKLIST.md).
 
 ## <a id="d-30"></a>D-30: `AnchoredPath` is public, so a crate that builds a request of its own takes the path contract from here
@@ -1171,6 +1172,14 @@ process state, and `win32_terminated`, which returns a raw pointer for this crat
 
 **The contract is unchanged.** The rules, the one refusal (an interior NUL) and the two failures of reading the
 current directory are [D-19](#d-19)'s and [D-27](#d-27)'s.
+
+**The two path entries are built from one too** (`NR-6.3`). `OpenFile::from_anchored` and
+`WatchDirectory::from_anchored` take an `AnchoredPath` the caller holds and are infallible, because the path's one
+refusal and its one read of the current directory already happened when it was anchored. Neither anchors it again: a
+caller that anchored its path when its own request was built has fixed what the
+path names, and a second anchoring would read the current directory as it is when the open is built, which may be
+later and elsewhere. `new` is `from_anchored` over `AnchoredPath::new`, so the two cannot start a request
+differently. Both entries get it, so they stay one shape.
 
 ## <a id="d-31"></a>D-31: `FileIdInfo` has a typed entry, `QueryFileIdInfo`, which makes the one call and carries the two fields as the call wrote them
 
@@ -1205,9 +1214,8 @@ table gives no supported client; the call worked on this one.
 
 **Scheduled work:** none in this crate. [DI-15.1](../durable-ioring/CHECKLIST.md) is the consumer.
 `windows-file-enumeration-sys` kept its private read of the serial, on the handle it owns, because this entry
-would have duplicated that handle per enumeration ([D-4](#d-4)). [D-32](#d-32) removes the duplication, and the
-enumeration crate's `SAFE-2` ([its CHECKLIST.md](../windows-file-enumeration-sys/CHECKLIST.md)) moves it onto
-this entry. Its agreement with this entry is a test in that crate.
+would have duplicated that handle per enumeration ([D-4](#d-4)). [D-32](#d-32) removes the duplication, so the
+enumeration crate can move its read onto this entry, with a test there that the two agree.
 
 ## <a id="d-32"></a>D-32: A request shares the caller's handle as a `SharedHandle`, and nothing in this crate duplicates one
 
@@ -1246,10 +1254,88 @@ kernel object, and a request is not an independent enumeration.
 be taken back (`SharedHandle::try_into_owned`) only when no request still holds a clone.
 
 **Two entries are not `Clone`, and the reason is not the handle.** `OpenFile` and `OpenFileByIdentifier` carry
-`SecurityAttributes`, whose copy allocates and can fail, so they keep `try_clone` for that; after `NR-6.2` it shares
-the handle and copies only the attributes. Every other handle-taking entry derives `Clone`. `new` takes
-`impl Into<SharedHandle>`, so an `OwnedHandle` or a `File` is given as it is; `OpenFile::with_template` takes an
-`Option<SharedHandle>`, since `None` would leave a generic parameter with nothing to infer from.
+`SecurityAttributes`, whose copy allocates and can fail, so they keep `try_clone` for that; it shares the handle
+and copies only the attributes, and its error is the attributes' own (`SecurityCaptureError`). Every other
+handle-taking entry derives `Clone`.
 
-**Scheduled work:** `NR-6.1` and `NR-6.2` in [CHECKLIST.md](CHECKLIST.md), with the consumers' moves named in
-`NR-6.1`'s handoff.
+**`new` keeps `impl Into<SharedHandle>`** (settled by `NR-6.2`). A `SharedHandle` converts to itself, so a caller
+holding one passes a clone, and an `OwnedHandle` or a `File` is given as it is, with no `SharedHandle::from` at
+every call site; taking `SharedHandle` would add that ceremony and exclude nothing. `OpenFile::with_template`
+takes an `Option<SharedHandle>`, since `None` would leave a generic parameter with nothing to infer from.
+
+**Scheduled work:** none left in this crate for the decision itself: `NR-6.1` and `NR-6.2` are complete
+([COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md)).
+
+## <a id="d-33"></a>D-33: `FileBasicInfo` has a typed entry, `QueryFileBasicInfo`, shaped as D-31's, which carries the five fields as the call wrote them
+
+**Built as `NR-6.4`** ([COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-64-basic)) for `windows-file-enumeration-sys`,
+whose check that an opened root is a directory reads the attributes under `forbid(unsafe_code)`, and so cannot read
+them out of the untyped entry's bytes. Source read 2026-10-19: the
+`FILE_BASIC_INFO` page (`ms.date` 2024-08-02).
+
+**The shape is [D-31](#d-31)'s, and so is the reason it is still one entry per call.** `QueryFileBasicInfo` makes
+one `GetFileInformationByHandleEx` call with `FileBasicInfo`, the class taken from `FileInformationClass::BASIC`,
+into a `FILE_BASIC_INFO` on the stack. It holds a `SharedHandle` and is `Clone` ([D-32](#d-32)). The untyped entry
+remains the catalogue's form of the call for every class.
+
+**The values are carried as the call wrote them.** `FileBasicInfo` holds `CreationTime`, `LastAccessTime`,
+`LastWriteTime` and `ChangeTime` as `i64` and `FileAttributes` as its raw `u32`. The page gives the times "in FILETIME
+format", 100-nanosecond intervals since 1601-01-01 UTC, and the attributes as the file attribute constants; nothing
+here converts a time to another type or names an attribute bit, and `FILE_BASIC_INFO` is not part of the surface
+([D-13](#d-13)). A refusal is the call's code, unaltered.
+
+**Observed 2026-10-19, Windows 11 build 26300, local NTFS, unelevated.** Three times set through std's `set_times`
+read back exactly in their fields, with the change time after them. A directory reported the directory attribute and
+a file did not; a read-only file reported the read-only attribute. A file opened with no access answered (attributes
+`0x20`), and so did an anonymous pipe (`0x80`), which `FileIdInfo` refuses. Refused: an event with
+`ERROR_INVALID_HANDLE`, `NUL` with `ERROR_INVALID_PARAMETER`, and a volume opened with no access with
+`ERROR_INVALID_FUNCTION`. None of these outcomes is on the page, so the tests compare each handle's outcome with the
+untyped entry's for the same handle, except the event's code, which is named as [D-29](#d-29) names it. One
+observation about NTFS rather than this entry, recorded because a test depends on it: a time set explicitly through a
+handle did not move when the file was later written through that same handle, so the test of the write time writes
+through a handle of its own.
+
+**Scheduled work:** none in this crate. The consumer it was built for is `windows-file-enumeration-sys`.
+
+## <a id="d-34"></a>D-34: `QueryFileInformation` also performs into a buffer the caller owns, and refuses only the alignment a structure's page requires of it
+
+**Amended 2026-10-20: a buffer whose address is off the boundary the class's structure page requires is refused
+before the call.** It had refused nothing, on a reading of the call's page alone; see "Alignment" below.
+
+**Built as `NR-6.5`** ([COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#nr-65-into)) for `windows-file-enumeration-sys`,
+whose refill reads a directory batch after batch
+and, through [`perform`](src/query.rs), would allocate once per call. Source read 2026-10-19: the
+`GetFileInformationByHandleEx` page (`ms.date` 2018-12-05).
+
+**What is decided.** `QueryFileInformation::perform_into(&self, &mut AlignedBuf) -> Result<(), PerformIntoError>`
+makes the same one call into the caller's buffer and allocates nothing; `perform` is now an allocation followed by
+the same call, so the call has one site. The buffer's length is the size given, and the request's `capacity` is not used by this
+form. The buffer is not cleared first: bytes the call does not write keep what the caller left, which differs from
+`perform`'s buffer, which starts zeroed. After a failure the contents are whatever the call left.
+
+**What is refused rests on the pages, and is the alignment three of them require.** The call's page gives
+`lpFileInformation` as "a pointer to the buffer that receives the requested file information" and `dwBufferSize` as
+"the size of the *lpFileInformation* buffer, in bytes", a `DWORD`, and states no alignment itself. It also gives, for
+each class, "the corresponding data structure types for use with this function" as the `lpFileInformation` type,
+and those structures' pages are the contract for what the buffer holds. Read 2026-10-20, all `ms.date` 2018-12-05:
+
+- **Alignment.** `FILE_STREAM_INFO`, `FILE_ID_BOTH_DIR_INFO` and `FILE_FULL_DIR_INFO` each "must be aligned on a"
+  "(8-byte) boundary"; no other structure the call's page lists says so. So for `FileStreamInfo`,
+  `FileIdBothDirectoryInfo`, `FileIdBothDirectoryRestartInfo`, `FileFullDirectoryInfo` and
+  `FileFullDirectoryRestartInfo`, a buffer whose **address** is not on an 8-byte boundary is
+  `PerformIntoError::Misaligned`, with no OS code, and the call is not made. The address is checked and not the
+  stated alignment (`AlignedBuf::align`), because the address is what the pages constrain: a check of the stated
+  alignment would refuse a buffer stated at less that lies on the boundary, which the pages allow. The table is one
+  constant, `REQUIRED_ALIGNMENT`, checked by a pure function and tested in memory in both directions; `perform`
+  allocates at 8, which every entry divides (asserted at build), so it shares the unchecked call.
+  The engineer, 2026-10-20, on review of the release branch, which found the structure pages' requirement: "this
+  is a clearly documented alignment requirement. Refuse and ensure we also document." **Observed, and not a
+  check:** the two `FileIdExtdDirectory` classes, whose `FILE_ID_EXTD_DIR_INFO` page states no alignment, fail with
+  `ERROR_NOACCESS` on a misaligned buffer; that stays a measurement, recorded where `perform`'s 8-byte alignment is
+  explained.
+- **A length above `u32::MAX`** is given as `u32::MAX`, its first that many bytes, as `perform` already gives an
+  over-large capacity. That is not a refusal: the buffer is writable for at least the size stated.
+- **An empty buffer** is passed as one, and the call answers it; the tests compare its code with `perform`'s for a
+  capacity of zero.
+
+**Scheduled work:** none in this crate. The consumer it was built for is `windows-file-enumeration-sys`.

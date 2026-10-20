@@ -23,7 +23,7 @@ use windows_sys::Win32::Storage::FileSystem::{FILE_ID_INFO, GetFileInformationBy
 
 use win_shared_os_owned_handle::SharedHandle;
 
-use crate::handle::{HandleCaptureError, SharedRaw, duplicate};
+use crate::handle::SharedRaw;
 use crate::outcome::{Outcome, perform_bool};
 use crate::query::FileInformationClass;
 
@@ -70,22 +70,19 @@ fn from_raw(info: &FILE_ID_INFO) -> FileIdInfo {
 ///
 /// ```
 /// use std::fs;
-/// use std::os::windows::io::AsHandle;
 ///
 /// use windows_namespace_request_sys::file_id::QueryFileIdInfo;
-/// use windows_namespace_request_sys::CapturedHandle;
 ///
 /// let path = std::env::temp_dir().join(format!("wnrs-fid-{}.tmp", std::process::id()));
 /// fs::write(&path, b"example")?;
 ///
 /// let first = fs::File::open(&path)?;
 /// let second = fs::File::open(&path)?;
-/// let one = QueryFileIdInfo::new(CapturedHandle::capture(first.as_handle())?).perform()?;
-/// let two = QueryFileIdInfo::new(CapturedHandle::capture(second.as_handle())?).perform()?;
+/// let one = QueryFileIdInfo::new(first).perform()?;
+/// let two = QueryFileIdInfo::new(second).perform()?;
 ///
 /// // Two opens of one file report one identity.
 /// assert_eq!(one, two);
-/// # drop((first, second));
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -106,18 +103,6 @@ impl QueryFileIdInfo {
     /// The handle being queried, shared with its other holders.
     pub fn handle(&self) -> &SharedHandle {
         &self.handle
-    }
-
-    /// Copies the request with a duplicate of the handle, where `Clone` shares it. Deleted by
-    /// `NR-6.2` (`D-32` in the crate's `DESIGN-NOTES.md`).
-    ///
-    /// # Errors
-    ///
-    /// Returns the handle-capture failure when the handle cannot be duplicated.
-    pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
-        Ok(Self {
-            handle: duplicate(&self.handle)?,
-        })
     }
 
     /// Performs the query on the calling thread.

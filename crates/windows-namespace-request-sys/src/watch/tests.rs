@@ -17,6 +17,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use wtf_string::Wtf16String;
 
 use super::{ChangeNotification, NotifyFilter, WatchDirectory};
+use crate::AnchoredPath;
 use crate::handle::tests::{Fixture, handle_allocation};
 
 /// Long enough that a working watch signals well inside it, short enough that a
@@ -412,6 +413,87 @@ fn a_relative_path_names_the_directory_it_was_built_in_after_the_directory_chang
         .arg(CHILD_TEST)
         .arg("--nocapture")
         .env(CHILD_MARKER, "1")
+        .current_dir(fixture.directory())
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_request_from_an_anchored_path_hands_the_call_the_anchored_path() {
+    // As for `open::tests`: a root that is not the current directory, so anchoring again would show.
+    let anchored = AnchoredPath::anchored_at(
+        Wtf16String::from("a-child"),
+        &Wtf16String::from(r"C:\anchored-elsewhere"),
+    );
+
+    let request = WatchDirectory::from_anchored(anchored.clone());
+
+    assert_eq!(request.path(), anchored.given());
+    assert_eq!(request.win32_path(), anchored.win32());
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        r"C:\anchored-elsewhere\a-child"
+    );
+}
+
+#[test]
+fn a_request_from_an_anchored_path_starts_as_one_built_from_text() {
+    let text = Wtf16String::from(r"C:\Windows");
+    let built = WatchDirectory::new(text.clone()).expect("build the request");
+    let anchored = WatchDirectory::from_anchored(AnchoredPath::new(text).expect("anchor the path"));
+
+    assert_eq!(anchored.path(), built.path());
+    assert_eq!(anchored.win32_path(), built.win32_path());
+    assert!(!anchored.subtree());
+    assert_eq!(anchored.filter(), NotifyFilter::NONE);
+}
+
+const ANCHORED_CHILD_MARKER: &str = "WNRS_WATCH_ANCHORED_CHILD";
+const ANCHORED_CHILD_TEST: &str =
+    "watch::tests::a_path_anchored_before_the_directory_changes_watches_what_it_named_then";
+
+// As for `open::tests`: built after the directory changes, from a path anchored before it, in a
+// child process because the current directory is shared.
+#[test]
+fn a_path_anchored_before_the_directory_changes_watches_what_it_named_then() {
+    const NAME: &str = "wnrs-watch-anchored";
+
+    if std::env::var_os(ANCHORED_CHILD_MARKER).is_some() {
+        let anchored = AnchoredPath::new(Wtf16String::from(NAME)).expect("anchor the path");
+        let elsewhere = std::env::var_os("SystemRoot").expect("Windows names its directory");
+        std::env::set_current_dir(elsewhere).expect("change the current directory");
+
+        let _watching = WatchDirectory::from_anchored(anchored)
+            .with_filter(NotifyFilter::FILE_NAME)
+            .perform()
+            .expect("watch the directory anchored before the move");
+
+        let later = WatchDirectory::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_filter(NotifyFilter::FILE_NAME);
+        assert!(later.perform().is_err(), "no such directory here");
+        return;
+    }
+
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("watch-anchored-child");
+    std::fs::create_dir(fixture.directory().join(NAME)).expect("create the directory");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(ANCHORED_CHILD_TEST)
+        .arg("--nocapture")
+        .env(ANCHORED_CHILD_MARKER, "1")
         .current_dir(fixture.directory())
         .output()
         .expect("run this test in a child process");

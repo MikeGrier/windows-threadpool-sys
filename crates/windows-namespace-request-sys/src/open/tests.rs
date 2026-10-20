@@ -17,8 +17,10 @@ use windows_sys::Win32::Storage::FileSystem::{
 use wtf_string::Wtf16String;
 
 use super::OpenFile;
+use crate::AnchoredPath;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
-use crate::{CapturedHandle, SecurityAttributes, SecurityDescriptor};
+use crate::{SecurityAttributes, SecurityDescriptor};
+use win_shared_os_owned_handle::SharedHandle;
 
 /// The share mode all three audited consumers use: a watcher or an enumerator
 /// is an observer and must not stop anyone else touching the directory.
@@ -228,14 +230,18 @@ fn a_template_handle_is_expressible_though_no_consumer_uses_one() {
         .expect("the lock is not poisoned");
     let fixture = Fixture::new("open-template");
     let template_source = fixture.open_file();
-    let template =
-        CapturedHandle::capture(template_source.as_handle()).expect("capture the template handle");
+    let template = SharedHandle::from(
+        template_source
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("own the template handle"),
+    );
 
     let request = request_for(&fixture.file())
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(template.into()));
+        .with_template(Some(template));
 
     assert!(request.template().is_some());
     // OPEN_EXISTING ignores hTemplateFile, so this asserts the parameter is
@@ -259,11 +265,12 @@ fn a_request_survives_every_input_it_was_built_from() {
             .with_share_mode(FILE_SHARE_READ)
             .with_creation_disposition(OPEN_EXISTING)
             .with_security(Some(SecurityAttributes::new(Some(descriptor), false)))
-            .with_template(Some(
-                CapturedHandle::capture(template_source.as_handle())
-                    .expect("capture the template handle")
-                    .into(),
-            ));
+            .with_template(Some(SharedHandle::from(
+                template_source
+                    .as_handle()
+                    .try_clone_to_owned()
+                    .expect("own the template handle"),
+            )));
 
         // The fixture is deliberately leaked so the file outlives this scope;
         // the point is that the *request's* inputs are gone, not the file.
@@ -328,10 +335,10 @@ fn a_request_can_be_performed_more_than_once() {
 }
 
 #[test]
-fn a_copy_is_fallible_because_a_request_may_own_a_handle() {
-    // Not `Clone`: duplicating a handle can fail, and the request inherits that
-    // from CapturedHandle rather than hiding it behind a signature that would
-    // have to panic.
+fn a_copy_without_security_attributes_is_made() {
+    // Not `Clone`: copying security attributes allocates, and the request
+    // inherits that rather than hiding it behind a signature that would have to
+    // panic. A request without them has nothing that can fail.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -377,7 +384,7 @@ fn a_copy_owns_its_own_copy_of_the_security_attributes() {
 }
 
 #[test]
-fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
+fn a_copy_shares_the_template() {
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -387,25 +394,20 @@ fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
         .with_desired_access(FILE_GENERIC_READ)
         .with_share_mode(FILE_SHARE_READ)
         .with_creation_disposition(OPEN_EXISTING)
-        .with_template(Some(
-            CapturedHandle::capture(template_source.as_handle())
-                .expect("capture the template handle")
-                .into(),
-        ));
+        .with_template(Some(SharedHandle::from(
+            template_source
+                .as_handle()
+                .try_clone_to_owned()
+                .expect("own the template handle"),
+        )));
 
-    let copy = request.try_clone().expect("duplicate the template");
+    let copy = request.try_clone().expect("copy the request");
 
-    assert_ne!(
+    assert!(
         copy.template()
             .expect("the copy kept a template")
-            .as_handle()
-            .as_raw_handle(),
-        request
-            .template()
-            .expect("the original kept a template")
-            .as_handle()
-            .as_raw_handle(),
-        "each request owns its own duplicate"
+            .same_handle(request.template().expect("the original kept a template")),
+        "the copy shares the original's template"
     );
     drop(request);
     copy.perform()
@@ -654,6 +656,101 @@ fn a_relative_path_is_not_grafted_onto_a_verbatim_current_directory() {
         .arg(VERBATIM_CHILD_TEST)
         .arg("--nocapture")
         .env(VERBATIM_CHILD_MARKER, "1")
+        .output()
+        .expect("run this test in a child process");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "the child did not pass: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_request_from_an_anchored_path_hands_win32_the_anchored_path() {
+    // Anchored onto a root that is not the current directory, so a constructor that anchored the
+    // path again would hand Win32 a different one.
+    let anchored = AnchoredPath::anchored_at(
+        Wtf16String::from("a-child"),
+        &Wtf16String::from(r"C:\anchored-elsewhere"),
+    );
+
+    let request = OpenFile::from_anchored(anchored.clone());
+
+    assert_eq!(request.path(), anchored.given());
+    assert_eq!(request.win32_path(), anchored.win32());
+    assert_eq!(
+        request.win32_path().to_string_lossy(),
+        r"C:\anchored-elsewhere\a-child"
+    );
+}
+
+#[test]
+fn a_request_from_an_anchored_path_starts_as_one_built_from_text() {
+    let text = Wtf16String::from(r"C:\Windows");
+    let built = OpenFile::new(text.clone()).expect("build the request");
+    let anchored = OpenFile::from_anchored(AnchoredPath::new(text).expect("anchor the path"));
+
+    assert_eq!(anchored.path(), built.path());
+    assert_eq!(anchored.win32_path(), built.win32_path());
+    assert_eq!(anchored.desired_access(), 0);
+    assert_eq!(anchored.share_mode(), 0);
+    assert!(anchored.security().is_none());
+    assert_eq!(anchored.creation_disposition(), 0);
+    assert_eq!(anchored.flags_and_attributes(), 0);
+    assert!(anchored.template().is_none());
+}
+
+const ANCHORED_CHILD_MARKER: &str = "WNRS_OPEN_ANCHORED_CHILD";
+const ANCHORED_CHILD_TEST: &str =
+    "open::tests::a_path_anchored_before_the_directory_changes_opens_what_it_named_then";
+
+// The request is built after the directory changes, from a path anchored before it, which is the
+// enumeration crate's case: it anchors when its own request is built and opens later. The process
+// current directory is shared, so this runs in a child process.
+#[test]
+fn a_path_anchored_before_the_directory_changes_opens_what_it_named_then() {
+    const NAME: &str = "wnrs-open-anchored.t";
+
+    if std::env::var_os(ANCHORED_CHILD_MARKER).is_some() {
+        let anchored = AnchoredPath::new(Wtf16String::from(NAME)).expect("anchor the path");
+        let elsewhere = std::env::var_os("SystemRoot").expect("Windows names its directory");
+        std::env::set_current_dir(elsewhere).expect("change the current directory");
+
+        let opened = OpenFile::from_anchored(anchored)
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING)
+            .perform()
+            .expect("open by the path anchored before the move");
+        assert!(File::from(opened).metadata().expect("metadata").is_file());
+
+        // Anchored now, the same name is a path in this directory, where there is no such file.
+        let refused = OpenFile::new(Wtf16String::from(NAME))
+            .expect("build the request")
+            .with_desired_access(FILE_GENERIC_READ)
+            .with_share_mode(AUDITED_SHARE)
+            .with_creation_disposition(OPEN_EXISTING)
+            .perform()
+            .expect_err("the file is not in this directory");
+        assert_eq!(refused.code(), ERROR_FILE_NOT_FOUND);
+        return;
+    }
+
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("open-anchored-child");
+    std::fs::write(fixture.directory().join(NAME), b"contents").expect("create the file");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .arg("--exact")
+        .arg(ANCHORED_CHILD_TEST)
+        .arg("--nocapture")
+        .env(ANCHORED_CHILD_MARKER, "1")
+        .current_dir(fixture.directory())
         .output()
         .expect("run this test in a child process");
 
