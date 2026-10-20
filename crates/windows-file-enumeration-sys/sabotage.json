@@ -130,6 +130,46 @@
       "why": "A control: the same value through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        .map(|info| info.volume_serial_number())\n"],
       "replace": ["        .map(|info| {\n            let serial = info.volume_serial_number();\n            serial\n        })\n"]
+    },
+    {
+      "name": "SAFE-3: the shared wait target is a second event, not the ring's",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "A wait armed on a separate event would never be woken by the ring; the shared-handle test and the thread pool test see it.",
+      "find": ["        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))\n"],
+      "replace": ["        Ok(WaitableHandle::from(Event::new(ResetMode::Manual, false)?))\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell is set when nothing is pending and reset when something is",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "The doorbell's one invariant, inverted.",
+      "find": ["            event.set()\n        } else {\n            event.reset()\n"],
+      "replace": ["            event.reset()\n        } else {\n            event.set()\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell starts unsignalled however much has already arrived",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "A client that asks for the doorbell after records have arrived must find it signalled.",
+      "find": ["                let event = Event::new(ResetMode::Manual, state.pending())?;\n"],
+      "replace": ["                let event = Event::new(ResetMode::Manual, false)?;\n"]
+    },
+    {
+      "name": "SAFE-3: the doorbell is never refreshed",
+      "file": "src/completion_ring.rs",
+      "expect": "caught",
+      "why": "Without the refresh the event stays as it was created.",
+      "find": ["        let refreshed = if state.pending() {\n            event.set()\n        } else {\n            event.reset()\n        };\n"],
+      "replace": ["        let _ = event;\n        let refreshed: io::Result<()> = Ok(());\n"]
+    },
+    {
+      "name": "SAFE-3 control: the shared target is made through a binding",
+      "file": "src/completion_ring.rs",
+      "expect": "survives",
+      "why": "A control: the same clone through a local, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Ok(WaitableHandle::from(self.doorbell_event()?.clone()))\n"],
+      "replace": ["        let event = self.doorbell_event()?.clone();\n        Ok(WaitableHandle::from(event))\n"]
     }
   ]
 }

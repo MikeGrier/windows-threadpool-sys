@@ -30,13 +30,7 @@ workspace [CHECKLIST.md](../../CHECKLIST.md).
 
 - [x] **SAFE-2** -- The directory's open and queries are the request crate's entries, the buffer an `AlignedBuf` and the handle a `SharedHandle`. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-2)
 
-- [ ] **SAFE-3** -- **The doorbell is a shared event.** The completion ring holds the doorbell as a `win-sync-sys`
-  `Event`, set and reset through it, and hands a `ThreadpoolWait` a waitable handle that shares the event rather
-  than a duplicate; `completion_ring.rs`'s `DuplicateHandle`, `SetEvent` and `ResetEvent` are gone. The unit tests'
-  raw waits move to `win-sync-sys`'s `wait_for_single_object`.
-
-  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.2](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) and
-  > [M-T15.1](../windows-threadpool-sys/CHECKLIST.md).
+- [x] **SAFE-3** -- The doorbell is a `win-sync-sys` `Event`, and a `ThreadpoolWait` is handed a waitable handle that shares it, not a duplicate. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#safe-3)
 
 - [ ] **SAFE-4** -- **Case-insensitive name matching through `win-text-sys`.** [pattern.rs](src/pattern.rs)'s
   `CompareStringOrdinal` call is that crate's wrapper.

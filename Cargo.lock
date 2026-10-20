@@ -248,6 +248,7 @@ dependencies = [
  "io-buffers",
  "win-error-codes",
  "win-shared-os-owned-handle",
+ "win-sync-sys",
  "windows-impersonation-token-sys",
  "windows-namespace-request-sys",
  "windows-sys",

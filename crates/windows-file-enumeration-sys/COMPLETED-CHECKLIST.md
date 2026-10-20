@@ -103,3 +103,31 @@ open's parameters, the refill's class and handle, a held directory not stopping 
 read leaving the directory with no other holder. Evidence, in [sabotage.json](sabotage.json): nine entries, the open's
 delete sharing, access, backup semantics and overlapped flag, the first refill's class, the directory check, and the
 volume serial, all caught, one declared survivor for the arm that cannot be reached, and a control.
+
+## Moved 2026-10-20 16:05:00 -04:00 -- SAFE-3: the doorbell is a shared event
+
+### <a id="safe-3"></a>SAFE-3 -- The doorbell is a `win-sync-sys` `Event`, and a `ThreadpoolWait` is handed a waitable handle that shares it, not a duplicate. *(completed 2026-10-20 16:05:00 -04:00)*
+
+The item as written:
+
+**The doorbell is a shared event.** The completion ring holds the doorbell as a `win-sync-sys`
+  `Event`, set and reset through it, and hands a `ThreadpoolWait` a waitable handle that shares the event rather
+  than a duplicate; `completion_ring.rs`'s `DuplicateHandle`, `SetEvent` and `ResetEvent` are gone. The unit tests'
+  raw waits move to `win-sync-sys`'s `wait_for_single_object`.
+
+  > **CROSS-COMPONENT PREREQUISITE:** [WS-2.2](../win-sync-sys/COMPLETED-CHECKLIST.md#ws-22) and
+  > [M-T15.1](../windows-threadpool-sys/CHECKLIST.md).
+
+What was done. [completion_ring.rs](src/completion_ring.rs) holds the doorbell as a `win_sync_sys::Event` and sets and
+resets it through that type; it makes no `SetEvent`, `ResetEvent` or `DuplicateHandle` call and its `duplicate`
+helper is gone. `Receiver::doorbell_owned` is replaced by `Receiver::doorbell_waitable`, a
+`windows_threadpool_sys::wait::WaitableHandle` made from a clone of the ring's event, so the wait shares the ring's
+handle; a client cannot set or reset it without `unsafe`. `Receiver::doorbell` is unchanged. The removal is a breaking
+change to the public surface. `win-sync-sys` was added as a dependency. The unit tests' raw waits and the model's
+check use `wait_for_single_object`, and the model no longer duplicates the handle. Recorded as
+[D-25](DESIGN-NOTES.md#d-25), with the rationale in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Tests: the owned-handle
+test is replaced by tests that the target's raw handle is the ring's and sees what the ring signals, that the ring and
+the target are each other's other holder, and that the event outlives the ring; and a real `ThreadpoolWait` armed on
+the target is woken by an entry, drains, and is woken again. Evidence, in [sabotage.json](sabotage.json): four
+entries, the target made a second event, set and reset swapped, the initial state ignored, and the refresh removed, all
+caught, and a control. The engine tests' raw byte write is not a wait and remains for `SAFE-5`.

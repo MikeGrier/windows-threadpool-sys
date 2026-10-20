@@ -441,3 +441,26 @@ what would reach it: a refusal added to the extended-directory classes.
 before the guard restored the token, and said so in a comment. The request crate's `perform` reads it in the statement
 after the call, so the same ordering now holds without this crate arranging it, and the open's code reaches the
 enumeration unaltered for the missing directory and the file named as a directory, which the existing tests pin.
+
+## Why the doorbell's wait target shares the ring's handle, and what it gave up (D-25)
+
+**Built 2026-10-20** as `SAFE-3`. Of the census D-23 gives, the completion ring's three `unsafe` blocks are gone: the
+`SetEvent` and `ResetEvent` calls and the duplicate. The comparison's one remains, for `SAFE-4`.
+
+**A wait target was chosen over handing out the event.** The shared handle could have been a clone of the ring's
+`Event`, which is also a share. That clone can be set and reset in safe code, so a client could break the one
+invariant the doorbell has, that it is signalled exactly while there is something to take. A `WaitableHandle` made
+from the clone is the same handle, and it exposes only a borrowed view and the handle's return, so what a client can
+do with it is what a `ThreadpoolWait` needs. Considered and not taken: **a `WaitOnlyEvent`**, which needs a
+duplicate and so is the thing the item removes; and **keeping `doorbell_owned` beside the new method**, which would
+leave the duplicate in the public surface after the engineer's ruling that duplication is legacy.
+
+**The refresh's result.** `Event::set` and `Event::reset` return a result where the raw calls returned a value this
+crate ignored. The event is made by the ring with full access, so a failure would be a defect in this crate and not a
+condition a caller can cause; `debug_assert` reports it in a build that runs the tests, and a release build does what
+it always did. Considered: **returning the error from every mutation**, which would give sends and takes a failure
+that no caller could act on.
+
+**What the tests no longer need.** The model's check made a duplicate of the doorbell only to hand a wait an owned
+handle; the wait takes a borrowed one, so the duplicate is gone with the helper. The engine tests' raw byte write is
+not a wait and is `SAFE-5`'s to find.

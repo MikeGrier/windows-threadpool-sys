@@ -50,6 +50,10 @@ io-buffers = { version = "0.1.0", path = "../io-buffers" }
 # a clone of that handle rather than a duplicate (SAFE-2).
 win-shared-os-owned-handle = { version = "0.1.0", path = "../win-shared-os-owned-handle" }
 
+# The completion ring's doorbell is one of its events, set and reset through it and shared with the wait a
+# client arms rather than duplicated for it (SAFE-3).
+win-sync-sys = { version = "0.0.2", path = "../win-sync-sys" }
+
 # `Win32Error`, re-exported under the name this crate has always used. Its `io::Error` form keeps a
 # code of 2^31 or more, where this crate's own earlier type panicked on one (WE-D-1).
 win-error-codes = { version = "0.0.2", path = "../win-error-codes" }
