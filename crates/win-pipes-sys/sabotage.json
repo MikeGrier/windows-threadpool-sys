@@ -1,0 +1,471 @@
+{
+  "package": "win-pipes-sys",
+  "description": "Sabotages for win-pipes-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "What several modes do is not observed, only their values: FILE_FLAG_WRITE_THROUGH affects only a pipe whose client is on another computer, PIPE_REJECT_REMOTE_CLIENTS needs a remote client to show, and WRITE_DAC, WRITE_OWNER and ACCESS_SYSTEM_SECURITY change what the caller may do to the pipe's security after it is made, which no test here does. A sabotage that swaps one of those values for another is caught by the test that pins the value, and a sabotage that dropped the mode from the call would not be caught for these four. The overlapped flag is observed in the positive direction only (an overlapped pipe starts a read and returns), because a read with an OVERLAPPED on a pipe that was not created overlapped is documented to fail in unpredictable ways and is not made by the suite as written. A security descriptor inside the attributes is not observed: the tests pass attributes with no descriptor and read only whether the handle is inheritable, so a descriptor that was dropped would not be caught.",
+  "sabotages": [
+    {
+      "name": "WP-1.1: the open mode and the pipe mode are passed in each other's place",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The two are both u32s in adjacent positions, so a swap compiles; the direction and the type then take each other's bits.",
+      "find": ["            options.open_mode.0,\n            options.pipe_mode.0,\n"],
+      "replace": ["            options.pipe_mode.0,\n            options.open_mode.0,\n"]
+    },
+    {
+      "name": "WP-1.1: the instance count is not the one given",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The count is the one parameter a test can observe by making instances until the call refuses.",
+      "find": ["            options.max_instances,\n"],
+      "replace": ["            1,\n"]
+    },
+    {
+      "name": "WP-1.1: the security attributes are not passed",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "Whether the handle can be inherited is decided by the attributes, so dropping them makes an inheritable request produce a handle that is not.",
+      "find": ["            security_pointer,\n        )\n"],
+      "replace": ["            ptr::null(),\n        )\n"]
+    },
+    {
+      "name": "WP-1.1: a name with an interior NUL reaches the call",
+      "file": "src/name.rs",
+      "expect": "caught",
+      "why": "The call would read the name up to the NUL and make a pipe with a name the caller did not give.",
+      "find": ["    if wide.contains(&0) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.1: the name is made lossy before it reaches the call",
+      "file": "src/name.rs",
+      "expect": "caught",
+      "why": "A name that is not valid UTF-16 must reach the call as it is; converting it through a String replaces a lone surrogate and names a different pipe.",
+      "find": ["    let mut wide: Vec<u16> = name.encode_wide().collect();\n"],
+      "replace": ["    let mut wide: Vec<u16> = name.to_string_lossy().encode_utf16().collect();\n"]
+    },
+    {
+      "name": "WP-1.1: a failed call is not reported as one",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "INVALID_HANDLE_VALUE would be wrapped as an owned handle, so every refusal the page describes would come back as a success.",
+      "find": ["    if handle == INVALID_HANDLE_VALUE {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.1: the overlapped flag is the write-through flag",
+      "file": "src/named_pipe.rs",
+      "expect": "caught",
+      "why": "The two are neighbouring bits in the same word, and a pipe that is not overlapped does not start a read and return. The sabotaged suite is caught by hanging: its overlapped read is made on a pipe that is not overlapped and blocks, and the sweep's 15 second limit ends it.",
+      "find": ["    pub const OVERLAPPED: Self = Self(FILE_FLAG_OVERLAPPED);"],
+      "replace": ["    pub const OVERLAPPED: Self = Self(FILE_FLAG_WRITE_THROUGH);"]
+    },
+    {
+      "name": "WP-1.1: control, the terminator pushed as an extension",
+      "file": "src/name.rs",
+      "expect": "survives",
+      "why": "A control: pushing a zero and extending by one are the same operation, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    wide.push(0);\n"],
+      "replace": ["    wide.extend([0]);\n"]
+    },
+    {
+      "name": "WP-1.3: a client that connected first is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The call returns zero for it and the page says there is a good connection, so reading every zero as a failure turns a connected pipe into an error.",
+      "find": ["    if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.3: a nonzero return is reported as an already connected client",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The two outcomes are told apart by what the call returned; a client that arrived after the call and one that was there before it are different results.",
+      "find": ["    if connected != FALSE {\n        return Ok(ConnectOutcome::Succeeded);\n    }\n"],
+      "replace": ["    if connected != FALSE {\n        return Ok(ConnectOutcome::AlreadyConnected);\n    }\n"]
+    },
+    {
+      "name": "WP-1.3: a pending overlapped connect is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "ERROR_IO_PENDING is how the call says an operation was started, so reading it as a failure makes every overlapped connect with no client fail.",
+      "find": ["        Ok(ERROR_IO_PENDING) => Ok(ConnectStart::Pending),\n"],
+      "replace": ["        Ok(ERROR_IO_PENDING) => Err(error),\n"]
+    },
+    {
+      "name": "WP-1.3: an overlapped connect to a client already there is reported as an error",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The page says a client that connects before the call is a good connection with a zero return, in the overlapped form as in the synchronous one.",
+      "find": ["        Ok(ERROR_PIPE_CONNECTED) => Ok(ConnectStart::Finished(ConnectOutcome::AlreadyConnected)),\n"],
+      "replace": ["        Ok(ERROR_PIPE_CONNECTED) => Err(error),\n"]
+    },
+    {
+      "name": "WP-1.3: the overlapped connect is made without its OVERLAPPED",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "The page says that on an overlapped pipe a null OVERLAPPED can incorrectly report the connect complete, so a connect made that way does not pend. The sabotaged suite may be caught by hanging instead.",
+      "find": ["    let connected = unsafe { ConnectNamedPipe(pipe.as_raw_handle(), overlapped) };\n"],
+      "replace": ["    let connected = unsafe { ConnectNamedPipe(pipe.as_raw_handle(), ptr::null_mut()) };\n"]
+    },
+    {
+      "name": "WP-1.3: a failed disconnect is not reported",
+      "file": "src/connect.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe instance is refused by the call, and that refusal must reach the caller.",
+      "find": ["    if disconnected == FALSE {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.3: control, the already-connected comparison written the other way round",
+      "file": "src/connect.rs",
+      "expect": "survives",
+      "why": "A control: equality is symmetric, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {\n"],
+      "replace": ["    if Some(ERROR_PIPE_CONNECTED as i32) == error.raw_os_error() {\n"]
+    },
+    {
+      "name": "WP-1.4: the two ends are returned in each other's place",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "caught",
+      "why": "Both ends are OwnedHandles in adjacent fields, so a swap compiles; a write to the read end then fails.",
+      "find": ["            read: OwnedHandle::from_raw_handle(read),\n            write: OwnedHandle::from_raw_handle(write),\n"],
+      "replace": ["            read: OwnedHandle::from_raw_handle(write),\n            write: OwnedHandle::from_raw_handle(read),\n"]
+    },
+    {
+      "name": "WP-1.4: the security attributes are not passed",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "caught",
+      "why": "Whether the ends can be inherited is decided by the attributes, so dropping them makes an inheritable request produce ends that are not.",
+      "find": ["CreatePipe(&mut read, &mut write, security_pointer, size)"],
+      "replace": ["CreatePipe(&mut read, &mut write, ptr::null(), size)"]
+    },
+    {
+      "name": "WP-1.4: the buffer size is not the one given",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a test could close: the page says the size \"is only a suggestion\", so no assertion about what it did would be on the page, and one on what the system happens to do would bind to that. A larger and a smaller size both give a working pipe, which is all the tests assert.",
+      "find": ["CreatePipe(&mut read, &mut write, security_pointer, size)"],
+      "replace": ["CreatePipe(&mut read, &mut write, security_pointer, 0)"]
+    },
+    {
+      "name": "WP-1.4: a failed call is taken for a success",
+      "file": "src/anonymous_pipe.rs",
+      "expect": "survives",
+      "why": "Declared: no argument this crate can give makes the call fail on the measuring machine (the largest size succeeds), so no test traverses the error edge. What would reach it is a condition that exhausts the system, which a unit test does not make. A failed call here would take two handles from output parameters the page calls indeterminate.",
+      "find": ["    if created == FALSE {\n"],
+      "replace": ["    if false {\n"]
+    },
+    {
+      "name": "WP-1.5: the two buffer sizes are reported in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "Both are u32s in adjacent out pointers, so a swap compiles; the pipe is made with different sizes in each direction, so the report differs.",
+      "find": ["            &mut out_buffer_size,\n            &mut in_buffer_size,\n"],
+      "replace": ["            &mut in_buffer_size,\n            &mut out_buffer_size,\n"]
+    },
+    {
+      "name": "WP-1.5: a failed info call is taken for a success",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe makes the call fail, and the outputs are then zeros the caller would take for a report.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(PipeInfo {"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(PipeInfo {"]
+    },
+    {
+      "name": "WP-1.5: the server end is read from the client bit",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The client bit is zero, so every value contains it and every handle would report as the server end.",
+      "find": ["        self.contains(Self::SERVER_END)\n"],
+      "replace": ["        self.contains(Self::CLIENT_END)\n"]
+    },
+    {
+      "name": "WP-1.5: the state is read from the instance count",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "Both are u32 locals asked for together in a query, so a wrong one compiles; the instance count is one where the state is a mode.",
+      "find": ["        state: query.state.then(|| PipeMode::from_bits(state)),\n"],
+      "replace": ["        state: query.state.then(|| PipeMode::from_bits(current_instances)),\n"]
+    },
+    {
+      "name": "WP-1.5: a value that was not asked for is reported anyway",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The result says which values were requested by which are Some; reporting the instance count unasked makes the zero a local held, and not a value the call wrote, look like one.",
+      "find": ["        current_instances: query.current_instances.then_some(current_instances),\n"],
+      "replace": ["        current_instances: Some(current_instances),\n"]
+    },
+    {
+      "name": "WP-1.5: the user name is the whole buffer and not the string in it",
+      "file": "src/name.rs",
+      "expect": "caught",
+      "why": "The call writes a NUL-terminated string into the buffer, so a name taken to the end of the buffer carries its zeros, and two capacities give two different names.",
+      "find": ["        .position(|&unit| unit == 0)\n"],
+      "replace": ["        .position(|&unit| unit == 0xffff)\n"]
+    },
+    {
+      "name": "WP-1.5: the user name capacity is not passed",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A buffer the call is told has no room is refused, so a query that asks for the name fails.",
+      "find": ["            user_name_pointer,\n            query.user_name_capacity.unwrap_or(0),\n"],
+      "replace": ["            user_name_pointer,\n            0,\n"]
+    },
+    {
+      "name": "WP-1.5: the new mode is not passed",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "The state is read back after each set, so a mode that was dropped leaves the old one.",
+      "find": ["            optional(&mode),\n"],
+      "replace": ["            ptr::null(),\n"]
+    },
+    {
+      "name": "WP-1.5: a failed set is taken for a success",
+      "file": "src/pipe_state.rs",
+      "expect": "caught",
+      "why": "A message read mode for a byte pipe is refused by the call, and the test expects the refusal.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"]
+    },
+    {
+      "name": "WP-1.5: the collection count and the timeout are set in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "survives",
+      "why": "Declared, and not a gap a local test could close: the call refuses either on a pipe whose client and server are on the same computer, with the same error, so a swap is not observable without a remote server. What would reach it is a client of a pipe on another computer.",
+      "find": ["            optional(&max_collection_count),\n            optional(&collect_data_timeout),\n"],
+      "replace": ["            optional(&collect_data_timeout),\n            optional(&max_collection_count),\n"]
+    },
+    {
+      "name": "WP-1.5: the collection count and the timeout are read in each other's place",
+      "file": "src/pipe_state.rs",
+      "expect": "survives",
+      "why": "Declared, for the reason the set side is: the call refuses both on a local pipe, so no local query returns either value, and a swapped pair of pointers is not observable.",
+      "find": ["            out(query.max_collection_count, &mut max_collection_count),\n            out(query.collect_data_timeout, &mut collect_data_timeout),\n"],
+      "replace": ["            out(query.max_collection_count, &mut collect_data_timeout),\n            out(query.collect_data_timeout, &mut max_collection_count),\n"]
+    },
+    {
+      "name": "WP-1.6: the peek buffer is passed as empty",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "The size is what lets the call copy anything, so a size of zero reads no bytes.",
+      "find": ["            output_len(buffer.len()),\n        ),\n"],
+      "replace": ["            0,\n        ),\n"]
+    },
+    {
+      "name": "WP-1.6: the available count and the left-this-message count are reported in each other's place",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "Both are u32 out pointers in adjacent positions, so a swap compiles; a message pipe with two messages tells them apart.",
+      "find": ["            &mut peeked.total_bytes_available,\n            &mut peeked.bytes_left_this_message,\n"],
+      "replace": ["            &mut peeked.bytes_left_this_message,\n            &mut peeked.total_bytes_available,\n"]
+    },
+    {
+      "name": "WP-1.6: a failed peek is taken for a success",
+      "file": "src/peek.rs",
+      "expect": "caught",
+      "why": "The write end of an anonymous pipe has no read access, so the call fails, and zeros would come back as a report.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(peeked)"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(peeked)"]
+    },
+    {
+      "name": "WP-1.6: an input longer than the call can be told is passed truncated",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The call would write only the first u32::MAX bytes of a longer input and the caller would not be told.",
+      "find": ["    u32::try_from(len).map_err(|_| {\n"],
+      "replace": ["    Ok(len as u32).map_err(|_: std::convert::Infallible| {\n"]
+    },
+    {
+      "name": "WP-1.6: an output buffer longer than the call can be told is passed as empty",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The clamp is to u32::MAX so the call can still read into the buffer; zero reads nothing.",
+      "find": ["    u32::try_from(len).unwrap_or(u32::MAX)\n"],
+      "replace": ["    u32::try_from(len).unwrap_or(0)\n"]
+    },
+    {
+      "name": "WP-1.6: every failed transaction is taken for more data",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A handle in byte-read mode fails the call, and the failure would come back as a transaction.",
+      "find": ["        if u32::try_from(error.raw_os_error().unwrap_or(-1)) != Ok(ERROR_MORE_DATA) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "WP-1.6: more data is never reported",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A reply longer than the buffer would look complete, with the rest still in the pipe or discarded.",
+      "find": ["        true\n    };\n    Ok(Transaction {"],
+      "replace": ["        false\n    };\n    Ok(Transaction {"]
+    },
+    {
+      "name": "WP-1.6: a pending overlapped transaction is reported as finished",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "The caller would take an operation that is still in progress for one whose buffers it can read.",
+      "find": ["        Ok(ERROR_IO_PENDING) => Ok(TransactStart::Pending),\n"],
+      "replace": ["        Ok(ERROR_IO_PENDING) => Ok(TransactStart::Finished),\n"]
+    },
+    {
+      "name": "WP-1.6: the call's time-out is not passed",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A time-out of zero is the server's default, which is not the time the caller gave, so the wait on a busy instance is shorter.",
+      "find": ["            &mut bytes_read,\n            timeout.millis(),\n"],
+      "replace": ["            &mut bytes_read,\n            0,\n"]
+    },
+    {
+      "name": "WP-1.6: the transaction's output size is not passed",
+      "file": "src/transact.rs",
+      "expect": "caught",
+      "why": "A size of zero leaves no room for the reply, so every reply is more data and nothing is read.",
+      "find": ["            output_len(output.len()),\n            &mut bytes_read,\n            ptr::null_mut(),\n"],
+      "replace": ["            0,\n            &mut bytes_read,\n            ptr::null_mut(),\n"]
+    },
+    {
+      "name": "WP-1.6: the wait's time-out is not passed",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "Zero is the server's default time-out, so the time the caller gave is not the time waited.",
+      "find": ["WaitNamedPipeW(wide.as_ptr(), timeout.0)"],
+      "replace": ["WaitNamedPipeW(wide.as_ptr(), 0)"]
+    },
+    {
+      "name": "WP-1.6: a failed wait is taken for a success",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "A name with no instance fails the call, and the caller would be told an instance is available.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(())"]
+    },
+    {
+      "name": "WP-1.6: the no-wait time-out has another value",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The value is the page's, and it is also a millisecond count, so only a test of the constant sees it.",
+      "find": ["    pub const NO_WAIT: Self = Self(NMPWAIT_NOWAIT);"],
+      "replace": ["    pub const NO_WAIT: Self = Self(2);"]
+    },
+    {
+      "name": "WP-1.7: the client's process id is read from the server's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "The two calls have one shape, so a swap compiles; a client in another process then reports this process.",
+      "find": ["    identifier(pipe, GetNamedPipeClientProcessId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeServerProcessId)\n"]
+    },
+    {
+      "name": "WP-1.7: the server's process id is read from the client's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "As above, from the other side: a client in another process is not the server's id.",
+      "find": ["    identifier(pipe, GetNamedPipeServerProcessId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeClientProcessId)\n"]
+    },
+    {
+      "name": "WP-1.7: a failed identifier call is taken for a success",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "A handle that is not a pipe fails the call, and the zero left in the local would be reported as an identifier.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(value)"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(value)"]
+    },
+    {
+      "name": "WP-1.7: the computer name buffer is told it is twice its size",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "The size the call is told must never be more than the buffer holds, or the call writes past it; the unit test of the arithmetic sees what no local call can, since a local client has no computer name.",
+      "find": ["    (vec![0u16; units as usize], units * 2)"],
+      "replace": ["    (vec![0u16; units as usize], units * 4)"]
+    },
+    {
+      "name": "WP-1.7: a failed computer name call is taken for a success",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "Every local pipe fails the call with ERROR_PIPE_LOCAL, and the suite expects the failure.",
+      "find": ["    if ok == FALSE {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(from_wide_until_nul(&buffer))"],
+      "replace": ["    if false {\n        return Err(io::Error::last_os_error());\n    }\n    Ok(from_wide_until_nul(&buffer))"]
+    },
+    {
+      "name": "WP-1.7: a string that has no NUL is taken as empty",
+      "file": "src/name.rs",
+      "expect": "caught",
+      "why": "A buffer the call filled to the end has no terminator, and the whole of it is the string.",
+      "find": ["        .unwrap_or(units.len());\n"],
+      "replace": ["        .unwrap_or(0);\n"]
+    },
+    {
+      "name": "WP-1.7: the client's session identifier is read from the server's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "Both ends of every connected pipe here are in one session, so only an instance with no client tells the calls apart: the client's call fails there and the server's does not.",
+      "find": ["    identifier(pipe, GetNamedPipeClientSessionId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeServerSessionId)\n"]
+    },
+    {
+      "name": "WP-1.7: the server's session identifier is read from the client's call",
+      "file": "src/peer.rs",
+      "expect": "caught",
+      "why": "As above, from the other side: the instance with no client has a server session and no client session.",
+      "find": ["    identifier(pipe, GetNamedPipeServerSessionId)\n"],
+      "replace": ["    identifier(pipe, GetNamedPipeClientSessionId)\n"]
+    },
+    {
+      "name": "WP-1.7: the computer name call is told the buffer has no room",
+      "file": "src/peer.rs",
+      "expect": "survives",
+      "why": "Declared: a local pipe fails the call with ERROR_PIPE_LOCAL before the size matters, so no local call reaches the part that uses it. The arithmetic that produces the size is tested on its own, and what would reach this is a client on another computer.",
+      "find": ["            buffer.as_mut_ptr(),\n            buffer_bytes,\n"],
+      "replace": ["            buffer.as_mut_ptr(),\n            0,\n"]
+    },
+    {
+      "name": "WP-1.7: the computer name that was read is discarded",
+      "file": "src/peer.rs",
+      "expect": "survives",
+      "why": "Declared, for the same reason: the call that fills the buffer fails for every local client, so no local test sees what is made of a name. The decoding it goes through is `from_wide_until_nul`, which has its own tests and sabotage; what would reach this is a client on another computer.",
+      "find": ["    Ok(from_wide_until_nul(&buffer))\n"],
+      "replace": ["    Ok(OsString::new())\n"]
+    },
+    {
+      "name": "WP-1.6: control, the time-out accessor written another way",
+      "file": "src/wait.rs",
+      "expect": "survives",
+      "why": "A control: reading the field and reading it through a copy are the same, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["    pub const fn millis(self) -> u32 {\n        self.0\n    }"],
+      "replace": ["    pub const fn millis(self) -> u32 {\n        let Self(milliseconds) = self;\n        milliseconds\n    }"]
+    },
+    {
+      "name": "review: a SynchronousPipe client is opened overlapped",
+      "file": "src/synchronous.rs",
+      "expect": "caught",
+      "why": "The type's whole claim. A client opened with FILE_FLAG_OVERLAPPED is the handle on which a transaction with no OVERLAPPED is reported complete before its reply when another operation is made on the handle, so the concurrent-query test must see the reply missing.",
+      "find": ["                options.flags_and_attributes,\n                ptr::null_mut(),\n"],
+      "replace": ["                options.flags_and_attributes | FILE_FLAG_OVERLAPPED,\n                ptr::null_mut(),\n"]
+    },
+    {
+      "name": "review: create does not refuse the overlapped open mode",
+      "file": "src/synchronous.rs",
+      "expect": "caught",
+      "why": "An overlapped server end would then be a SynchronousPipe, and the safe connect would take it.",
+      "find": ["        if options.open_mode.contains(PipeOpenMode::OVERLAPPED) {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "review: open_client does not refuse the overlapped flag",
+      "file": "src/synchronous.rs",
+      "expect": "caught",
+      "why": "An overlapped client end would then be a SynchronousPipe, and the safe transaction would take it.",
+      "find": ["        if options.flags_and_attributes & FILE_FLAG_OVERLAPPED != 0 {\n"],
+      "replace": ["        if false {\n"]
+    },
+    {
+      "name": "review: control, the overlapped refusal's comparison written the other way round",
+      "file": "src/synchronous.rs",
+      "expect": "survives",
+      "why": "A control: the same predicate written differently, so the file changes and no behaviour. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        if options.flags_and_attributes & FILE_FLAG_OVERLAPPED != 0 {\n"],
+      "replace": ["        if 0 != options.flags_and_attributes & FILE_FLAG_OVERLAPPED {\n"]
+    }
+  ]
+}

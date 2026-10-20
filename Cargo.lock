@@ -187,6 +187,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-pipes-sys"
+version = "0.1.0"
+dependencies = [
+ "win-authorization-sys",
+ "win-handles-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "win-shared-os-owned-handle"
 version = "0.1.0"
 

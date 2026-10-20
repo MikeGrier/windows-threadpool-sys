@@ -9,6 +9,7 @@ members = [
 	"crates/win-handles-sys",
 	"crates/win-multi-file-tail-watcher",
 	"crates/win-numa-sys",
+	"crates/win-pipes-sys",
 	"crates/win-authorization-sys",
 	"crates/win-durable-ioring",
 	"crates/win-shared-os-owned-handle",
