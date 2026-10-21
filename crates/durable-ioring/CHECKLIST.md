@@ -39,19 +39,17 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
   and `DomainCompletion` exist. The router measures nothing: timing comes from paired begin and end events with correlation
   ids, which the sinks and their analysis tools use ([DI-D-80](DESIGN-NOTES.md#di-d-80), [DI-M19](#di-m19----paired-begin-and-end-events-with-correlation-ids)).
-  Two questions are open and are not decided, and each step says which it waits on:
+  A registered provider serves exactly the domains its own `domains()` returns ([DI-D-81](DESIGN-NOTES.md#di-d-81)). One
+  question is open and is not decided, and `DI-12.2.3` waits on it:
   - **Whether the router reports an inconsistency for a domain no provider owns,** which the core should never send it, or
     reports nothing at all, which is a legitimate answer. A router is built before the instance, so it does not know the
     instance number an `Inconsistency` event carries.
-  - **What decides the domains a registered provider serves.** The provider's own `domains()`, which the trait already has, or
-    domains named to the router at registration, which would let one provider be registered for a subset and let a router's
-    domains disagree with what the provider says it serves.
 
 - [ ] **DI-12.2.1** -- **The router and its build.** A `RoutingProvider` in `durable-ioring`, itself a `DurabilityProvider`,
   built from providers registered with it; its `domains()` is the union of theirs, read once as the trait says. A domain
   routed to two providers is refused at build, naming the domain and both registrations: earlier and clearer than the core's
-  `DuplicateDomain` for a single provider. Waits on the second open question of `DI-12.2` for how a provider's domains are
-  known; until it is answered the provider's own `domains()` is the working position and is not decided. Tests: each of one,
+  `DuplicateDomain` for a single provider. A registration takes a provider and no domains: what it serves is its own
+  `domains()` ([DI-D-81](DESIGN-NOTES.md#di-d-81)). Tests: each of one,
   two and many providers, a provider that serves no domain, a router with no provider, a domain routed twice by adjacent and by
   distant registrations, and the union's order.
 
@@ -169,6 +167,27 @@ would allow.
   paired event a Start or Stop opcode, writes the activity id by the mapping the section above holds as a working position,
   and the manifest is rendered and held equal as it is now. Verified as `DI-12.1.5` was: compiled and installed, then a trace
   recorded and read by `tracerpt`, which this time must show the begin and end paired and their duration computed.
+
+## DI-M20 -- Durability of a directory's entries
+
+Opened 2026-10-21 from [the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#directory-entries):
+a database that creates a data file by name at run time needs the creation, and so the directory entry, durable before it
+relies on the file, and nothing in [CONTRACT.md](CONTRACT.md) or [API.md](API.md) says whether a seal covers it. Linux
+requires an `fsync` of the directory; what Windows requires is not known to the assistant. Kept apart from the router by
+the engineer's agreement, 2026-10-21. Beyond the first two items this milestone is deliberately coarse: what is built, if
+anything, follows from what the pages say.
+
+- [ ] **DI-20.1** -- **Read what Windows documents about a directory entry's durability, and record it.** The pages for
+  `CreateFileW`, `FlushFileBuffers`, `MoveFileExW` (with `MOVEFILE_WRITE_THROUGH`), `SetFileInformationByHandle`'s rename
+  and disposition classes, and anything they lead to, each read for: whether flushing a new file makes its directory entry
+  durable; whether a directory handle may be flushed, and what that commits; and what a rename or a delete needs. Each
+  finding is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with its page and the date read, and silence is recorded as
+  silence. No `Nt*` page is a source ([the rule](../../.github/copilot-instructions.md)). If the pages leave a question open,
+  the experiment that would answer it is described, and is evidence, never a check.
+
+- [ ] **DI-20.2** -- **Bring the findings to the engineer for a design discussion.** Whether dioring makes a directory
+  entry durable, whether a consumer must, and whether a directory is a target a seal can cover, are decided there; the work
+  that follows is queued from that discussion and not before it.
 
 ## DI-M4 -- Evidence: Windows' flush-failure behaviour (ungated; gates nothing)
 

@@ -1407,3 +1407,20 @@ and a process id reused within one trace is a case the assistant has not settled
 
 **Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
 reports no timing, and what it reports otherwise is the open question of [DI-12.2.3](CHECKLIST.md).
+
+## <a id="di-d-81"></a>DI-D-81: a provider registered with the router serves exactly the domains its own `domains()` returns
+
+**What is decided.** The engineer, 2026-10-21, agreeing to the assistant's lean: the routing provider
+([DI-12.2](CHECKLIST.md)) is given providers and no domains, and routes to each the domains it declares. A registration
+cannot narrow a provider to a subset of what it declares, and cannot name a domain the provider does not.
+
+**Why.** A flush domain is the consumer's exact bytes ([DI-D-21](#di-d-21)), minted by the layer that maps the consumer's
+storage onto domains (root [M39](../../CHECKLIST.md)). Whatever builds a provider must be handed those same bytes, so it
+knows what the provider serves when it builds it, and a provider built with its domains says so through `domains()`. A
+second list at registration would be a second statement of the same fact, free to disagree with the first. Narrowing a
+provider, or renaming domains for a provider whose identifiers differ from the consumer's, can be added later as another
+way to register, beside this one; neither has been asked for. The model of how a consumer would use this, from which the
+argument came, is in
+[the design session](../../design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model).
+
+**Scheduled work.** [DI-12.2.1](CHECKLIST.md), which builds the router this way.
