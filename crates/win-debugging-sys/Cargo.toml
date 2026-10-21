@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-debugging-sys"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "Memory-safe Rust over the Win32 debugging API, starting with OutputDebugStringW: send a string to the debugger. Thin over Win32, adding no policy."
+keywords = ["windows", "debugging", "debugger", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "development-tools::debugging"]
+
+# Named by the engineer, 2026-10-20 ("how about win-debugging-sys?"), under the workspace's `win-` prefix
+# decision (DESIGN-NOTES.md at the repository root), and placed as a safe layer more or less directly over
+# a Win32 API area, the one Microsoft Learn files the function under: Diagnostics > Debugging and Error
+# Handling > Basic Debugging > Debugging Reference > Debugging Functions (WD-D-1).
+
+[dependencies]
+# `default-features = false` matches every other crate in the workspace.
+#
+# `Win32_System_Diagnostics_Debug` is `OutputDebugStringW`.
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = ["Win32_System_Diagnostics_Debug"]
+
+[dev-dependencies]
+# The debugger side of `tests/debugger.rs`, which starts the test binary as a process being debugged and
+# reads what it sends. The crate itself wraps only the sending side (WD-D-2).
+#
+# `Win32_Foundation` is `CloseHandle`, the debug status codes and the handle types.
+# `Win32_Security` is the security-attributes type `CreateProcessW` takes.
+# `Win32_System_Diagnostics_Debug` is `WaitForDebugEventEx`, `ContinueDebugEvent`, `ReadProcessMemory` and the
+# event structures.
+# `Win32_System_Threading` is `CreateProcessW`, `TerminateProcess` and the debug creation flag.
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_Diagnostics_Debug",
+	"Win32_System_Threading",
+]
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

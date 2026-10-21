@@ -77,6 +77,10 @@
             "package-name": "win-text-sys",
             "component": "win-text-sys"
         },
+        "crates/win-debugging-sys": {
+            "package-name": "win-debugging-sys",
+            "component": "win-debugging-sys"
+        },
     "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

@@ -4,6 +4,7 @@ Master tracker for every active checklist in the repository. Each source-compone
 plans tracker: [crates/durable-ioring/PLANS.md](crates/durable-ioring/PLANS.md),
 [crates/io-buffers/PLANS.md](crates/io-buffers/PLANS.md),
 [crates/win-authorization-sys/PLANS.md](crates/win-authorization-sys/PLANS.md),
+[crates/win-debugging-sys/PLANS.md](crates/win-debugging-sys/PLANS.md),
 [crates/win-error-codes/PLANS.md](crates/win-error-codes/PLANS.md),
 [crates/win-handles-sys/PLANS.md](crates/win-handles-sys/PLANS.md),
 [crates/win-multi-file-tail-watcher/PLANS.md](crates/win-multi-file-tail-watcher/PLANS.md),

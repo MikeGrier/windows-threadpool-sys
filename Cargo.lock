@@ -126,6 +126,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-debugging-sys"
+version = "0.0.1"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "win-durable-ioring"
 version = "0.3.2"
 dependencies = [
