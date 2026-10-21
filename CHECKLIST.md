@@ -490,6 +490,17 @@ as one domain -- so it does not belong in a `-sys` crate. It is built on the per
   which two spaces in one pool may share; a RAID controller's cache is not visible as a separate
   domain. The engineer's own VHDX layer composes its domains the same way, from its backing file.
 
+- [ ] **M39.3** -- **Predict a directory's domains, and confirm each file's by its handle.** A consumer presents storage
+  roots as directories and creates files in them by name, so the helper maps a directory once to the domains a file created
+  in it will have: the directory's volume, mount points included, by the traversal of `M39.2` from the directory's handle.
+  The directory's path is resolved again at each create, so a junction swapped between the two sends the file elsewhere;
+  an open relative to the directory's handle would close that, and is parked as
+  [DI-15.3](crates/durable-ioring/PARKED.md) for want of a documented call. So after each open the helper reads the new
+  file's volume from its own handle (`GetFileInformationByHandleEx` with `FileIdInfo`, whose volume serial number is the
+  documented field) and compares it with the prediction, reporting a mismatch before the file is declared to dioring. From
+  [the design session](design-sessions/DESIGN-SESSION-2026-10-21-router-domains-and-paired-events.md#the-real-world-model);
+  the engineer, 2026-10-21: "The volume id refinement is a good catch for that race condition."
+
 ## M42 -- Apply the documented-contract rule to the refusals that already exist
 
 The rule is in [DESIGN-NOTES.md](DESIGN-NOTES.md#refusals-rest-on-the-documented-contract) (the engineer,
