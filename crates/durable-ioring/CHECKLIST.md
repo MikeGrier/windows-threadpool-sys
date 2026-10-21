@@ -29,11 +29,9 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.3** -- `DebugOutputDiagnostics` writes each event as a `dioring:` line to the debugger, through `win-debugging-sys`, and wants every kind. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1213)
 
-- [ ] **DI-12.1.4** -- **A safe wrapper for the event-tracing provider functions** (register, unregister, whether a
-  session is listening, write an event), in `win-etw-sys` (the engineer, 2026-10-20: "win-etw-sys is good"). The step reads each function's page and records where it is documented before it names a section
-  ([DI-D-76](DESIGN-NOTES.md#di-d-76)). The registration is owned and unregistered when dropped, and an event's data is
-  built from typed fields without `unsafe` for the caller. Tests: against a real session started by a documented
-  route, or by what the pages let a test observe, which the step records.
+- [x] **DI-12.1.4** -- `win-etw-sys` is created: a `Registration` over `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and `EventWrite`, with an event's data built from typed fields. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1214)
+
+- [x] **DI-12.1.4.1** -- `win-etw-sys`' session tests were run elevated and pass, and what they observed is recorded in the crate's notes. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-12141)
 
 - [ ] **DI-12.1.5** -- **Create `durable-ioring-events`: the provider, its manifest and `EtwDiagnostics`.** The provider is
   named `durable-ioring-events` (the engineer, 2026-10-20: "Change the name of the event source to

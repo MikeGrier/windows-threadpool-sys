@@ -3677,3 +3677,37 @@ The item as written:
 What was built and chosen is [DI-D-78](DESIGN-NOTES.md#di-d-78). The emission is observed by a debugger the test starts, through
 the `test-util` feature of `win-debugging-sys` ([WD-D-3](../win-debugging-sys/DESIGN-NOTES.md#wd-d-3)), which is the one copy
 of that harness. `FlushPart` was exported from the portable crate on the way, and the line prefix became one constant.
+
+## Moved 2026-10-20 22:54:21 -04:00 -- DI-12.1.4 and DI-12.1.4.1: win-etw-sys is created and its session tests run
+
+### <a id="di-1214"></a>DI-12.1.4 -- `win-etw-sys` is created: a `Registration` over `EventRegister`, `EventUnregister`, `EventEnabled`, `EventProviderEnabled` and `EventWrite`, with an event's data built from typed fields. *(completed 2026-10-20 22:54:21 -04:00)*
+
+The item as written:
+
+**DI-12.1.4** -- **A safe wrapper for the event-tracing provider functions** (register, unregister, whether a
+  session is listening, write an event), in `win-etw-sys` (the engineer, 2026-10-20: "win-etw-sys is good"). The step reads each function's page and records where it is documented before it names a section
+  ([DI-D-76](DESIGN-NOTES.md#di-d-76)). The registration is owned and unregistered when dropped, and an event's data is
+  built from typed fields without `unsafe` for the caller. Tests: against a real session started by a documented
+  route, or by what the pages let a test observe, which the step records.
+
+The crate's name and where Learn files the functions, which the snapshot omits, are
+[WE-D-1](../win-etw-sys/DESIGN-NOTES.md#we-d-1); the shape and the two kinds of failure are
+[WE-D-2](../win-etw-sys/DESIGN-NOTES.md#we-d-2); the session facility the tests use, and why those tests are ignored without
+privilege, are [WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3).
+
+### <a id="di-12141"></a>DI-12.1.4.1 -- `win-etw-sys`' session tests were run elevated and pass, and what they observed is recorded in the crate's notes. *(completed 2026-10-20 22:54:21 -04:00)*
+
+The item as written:
+
+**DI-12.1.4.1** -- **Run `win-etw-sys`' session tests on a machine that can start a trace session, and record what
+  they observed.** `tests/session.rs` starts a real session, which needs an elevated process or the Performance Log Users
+  group; the development machine has neither, so the harness and the tests were written and not run
+  ([WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3)). Run
+  `cargo test -p win-etw-sys --test session -- --include-ignored` where a session can be started, fix what it shows, and
+  record in that note what a session recorded, what the call made of 129 blocks, and what it returned for an event over
+  64 KB. `DI-12.1.4` is done when this is.
+
+The tests were run from a process elevated by a prompt the engineer approved, twelve times in a row after the first run's
+three failures were fixed. The first run found a real defect: an event with no fields was passed with the pointer an empty
+vector holds, and the call refused it. What the sessions recorded, and what the call made of 129 blocks and of an event
+over 64 KB, are in [WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3).
