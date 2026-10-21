@@ -45,6 +45,68 @@ provider's manifest to see names and fields; the instance does not.
 API. A minor release of `windows-threadpool-sys` that changes those types is a minor release of this
 crate too, in the 0.x series: 0.3 of this crate pairs with 0.3 of `windows-threadpool-sys`.
 
+## Several durability providers
+
+An instance holds the built-in provider, which flushes each file through its own ring, and at most one more, given in
+`Setup::provider`: a `DurabilityProvider` serving the flush domains it declares, which answers for those domains of each
+seal. **Several are composed by `RoutingProvider`**, itself a provider. Each provider registered with it serves exactly the
+domains its own `domains()` returns, read once when the router is built; a domain claimed twice refuses the build, naming
+both registrations. A seal's work is split by domain, and each provider with a part is called once, in registration order;
+its answers go straight back to the instance. A file declared with domains of two providers is in both calls and is durable
+when both have succeeded; a domain no provider serves stays the built-in provider's. The rules are in
+[API.md](../durable-ioring/API.md) section 15 and [DI-D-81](../durable-ioring/DESIGN-NOTES.md#di-d-81) to
+[DI-D-83](../durable-ioring/DESIGN-NOTES.md#di-d-83).
+
+```rust
+use win_durable_ioring::*;
+
+/// A provider for one device, serving the domains it was built with. A real one flushes the
+/// files each part names, by its own means, before it answers.
+#[derive(Debug)]
+struct Device(Vec<FlushDomain>);
+
+impl DurabilityProvider<WindowsIds<u64>> for Device {
+    fn domains(&self) -> Vec<FlushDomain> {
+        self.0.clone()
+    }
+
+    fn make_durable(&mut self, request: FlushRequest<WindowsIds<u64>>) {
+        for part in request.domains {
+            part.completion.succeed();
+        }
+    }
+}
+
+let log = FlushDomain::new(b"log-disk".to_vec());
+let data = FlushDomain::new(b"data-disk".to_vec());
+let router = RoutingProvider::builder()
+    .register(Device(vec![log.clone()]))
+    .register(Device(vec![data.clone()]))
+    .build()?;
+assert_eq!(router.domains(), [log.clone(), data]);
+
+let (ring, _default) = Dioring::<Vec<u8>>::new(Setup {
+    submission_queue_size: 16,
+    completion_queue_size: 16,
+    files: Vec::new(),
+    buffers: Vec::new(),
+    provider: Some(Box::new(router)),
+    diagnostics: None,
+    delivery: DeliveryMode::Pool(None),
+})
+.expect("an instance");
+drop(ring);
+
+// The same domain from two providers refuses the router, naming both registrations.
+let refused = RoutingProvider::<WindowsIds<u64>>::builder()
+    .register(Device(vec![log.clone()]))
+    .register(Device(vec![log.clone()]))
+    .build()
+    .expect_err("the log twice");
+assert_eq!((refused.domain, refused.first, refused.second), (log, 0, 1));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Opening a file
 
 A file target is made from a file **this crate opened**, and from nothing else

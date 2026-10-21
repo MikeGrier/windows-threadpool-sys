@@ -2117,6 +2117,30 @@
       "why": "A control: the same sink by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
       "find": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::new()));\n"],
       "replace": ["        let diagnostics = diagnostics.unwrap_or_else(|| Arc::new(EtwDiagnostics::default()));\n"]
+    },
+    {
+      "name": "DI-12.2.4: the router sends every part to its first provider",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "caught",
+      "why": "Through a real instance, each routed provider is asked only for its own domains (DI-D-81): a part sent to another is flushed by something that never said it could, and the instance's tests here see it without the router's own.",
+      "find": ["            parts[registration].push(part);"],
+      "replace": ["            parts[0].push(part);"]
+    },
+    {
+      "name": "DI-12.2.4: the router calls its providers in reverse registration order",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "caught",
+      "why": "Through a real instance, a panicking provider stops the ones registered after it, whose domains are abandoned without being called (DI-D-83); calling in reverse hands the later ones their parts first.",
+      "find": ["        for (route, domains) in self.routes.iter_mut().zip(parts) {"],
+      "replace": ["        for (route, domains) in self.routes.iter_mut().rev().zip(parts.into_iter().rev()) {"]
+    },
+    {
+      "name": "DI-12.2.4 control: the router's per-provider parts are made by counting",
+      "file": "../durable-ioring/src/router.rs",
+      "expect": "survives",
+      "why": "A control: the same empty parts made by counting the routes instead of walking them, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["            self.routes.iter().map(|_| Vec::new()).collect();"],
+      "replace": ["            (0..self.routes.len()).map(|_| Vec::new()).collect();"]
     }
   ]
 }

@@ -1,22 +1,26 @@
 // Copyright (c) 2026 Mike Grier
 //! The consumer's durability provider (DI-3.2.6, DI-D-27, DI-D-44), against real files: what a
 //! seal asks it, its answers from inside `make_durable` and from another thread, what its failure
-//! and its silence are reported as, and what a panic in it does. Every entry is reported to the
-//! conformance oracle.
+//! and its silence are reported as, and what a panic in it does; and the routing provider in that
+//! place (DI-12.2.4), composing two providers. Every entry is reported to the conformance oracle.
 
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use windows_threadpool_sys::wait::ThreadpoolWait;
 
 use super::pushes::{BOUND, GIVEN, Harness, Ring, temp};
-use super::{FlushDomain, FlushRequest, Kept, TempFile, V, domain, file, keeper, setup};
+use super::{
+    FlushDomain, FlushRequest, Keeper, Kept, TargetSetup, TempFile, V, domain, file, keeper, setup,
+};
 use durable_ioring::DurabilityProvider;
 use durable_ioring::DurableRing;
+use durable_ioring::RoutingProvider;
 use durable_ioring::backend::SubmissionData;
 use durable_ioring::{
-    DurabilityRequest, Entry, EpochState, Failed, FailureCause, IoTargetKey, OpKind, WriteOptions,
+    DurabilityRequest, Entry, EpochState, Failed, FailureCause, IoTargetKey, OpId, OpKind,
+    WriteOptions,
 };
 
 /// `ERROR_IO_DEVICE`, the error a failing provider reports.
@@ -352,5 +356,228 @@ fn a_panic_in_the_provider_reaches_the_consumers_call_and_abandons_what_it_dropp
         DurabilityRequest::AlreadySealed(EpochState::Blocked(failed.id)),
         "the instance is still usable"
     );
+    harness.finish();
+}
+
+// The routing provider as the instance's provider (DI-12.2.4, DI-D-81, DI-D-83): two providers
+// composed by a router, the log's and the disk's, each a keeper the test answers for.
+
+const LOG: IoTargetKey = IoTargetKey(2);
+const DISK: IoTargetKey = IoTargetKey(3);
+
+/// A keeper serving `domains`, by itself, so a router can register it.
+fn kept_by(domains: &[&str]) -> (Keeper, Kept) {
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let keeper = Keeper {
+        domains: domains.iter().map(|name| domain(name)).collect(),
+        kept: Arc::clone(&kept),
+    };
+    (keeper, kept)
+}
+
+/// An instance over `files`, whose provider is a router over a keeper serving `log` and one serving
+/// `disk`, in that order; and what each keeps.
+fn routed(files: Vec<TargetSetup>) -> (Harness, Kept, Kept) {
+    let (log, log_kept) = kept_by(&["log"]);
+    let (disk, disk_kept) = kept_by(&["disk"]);
+    let router = RoutingProvider::builder()
+        .register(log)
+        .register(disk)
+        .build()
+        .expect("no domain twice");
+    let ring = Ring::new(setup(files, Vec::new(), Some(Box::new(router))))
+        .expect("build an instance with a router")
+        .0;
+    (Harness::new(ring), log_kept, disk_kept)
+}
+
+/// The files `requested` names, each with its writes.
+fn named(request: &FlushRequest<V>) -> Vec<(String, IoTargetKey, Vec<OpId>)> {
+    request
+        .domains
+        .iter()
+        .flat_map(|part| {
+            let name = String::from_utf8_lossy(part.domain.bytes()).into_owned();
+            part.files
+                .iter()
+                .map(move |file| (name.clone(), file.key, file.writes.clone()))
+        })
+        .collect()
+}
+
+#[test]
+fn a_seal_touching_both_routed_providers_asks_each_once_for_its_own_domain() {
+    let temps = [temp(&[0; 16]), temp(&[0; 16])];
+    let (mut harness, log_kept, disk_kept) = routed(vec![
+        file(LOG.0, &temps[0], &["log"]),
+        file(DISK.0, &temps[1], &["disk"]),
+    ]);
+    let log_write = harness.write(LOG, 0, b"log", 1, 1);
+    let disk_write = harness.write(DISK, 0, b"disk", 1, 2);
+    harness.next_n(2);
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+
+    let log = only(&log_kept);
+    let disk = only(&disk_kept);
+    assert_eq!(named(&log), [("log".to_owned(), LOG, vec![log_write])]);
+    assert_eq!(named(&disk), [("disk".to_owned(), DISK, vec![disk_write])]);
+
+    succeed(log);
+    nothing_for_a_while(&mut harness);
+    assert_eq!(
+        harness.state(1),
+        EpochState::Pending,
+        "the disk has not answered"
+    );
+    succeed(disk);
+    expect_durable(&mut harness, 1);
+    harness.finish();
+}
+
+#[test]
+fn a_file_whose_domains_span_routed_providers_is_durable_only_when_every_one_succeeds() {
+    // Its write is in each provider's call: the router merges nothing across providers, so a
+    // file whose coupled domains are split between them costs each a flush (DI-2.12 point 1).
+    let temp = temp(&[0; 16]);
+    let (mut harness, log_kept, disk_kept) = routed(vec![file(GIVEN.0, &temp, &["log", "disk"])]);
+    let write = harness.write(GIVEN, 0, b"both", 1, 1);
+    harness.next();
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+
+    let log = only(&log_kept);
+    let disk = only(&disk_kept);
+    assert_eq!(named(&log), [("log".to_owned(), GIVEN, vec![write])]);
+    assert_eq!(named(&disk), [("disk".to_owned(), GIVEN, vec![write])]);
+
+    succeed(disk);
+    nothing_for_a_while(&mut harness);
+    assert_eq!(
+        harness.state(1),
+        EpochState::Pending,
+        "the log has not answered"
+    );
+    succeed(log);
+    expect_durable(&mut harness, 1);
+    harness.finish();
+}
+
+#[test]
+fn one_routed_provider_failing_fails_only_the_files_in_its_domains() {
+    let temps = [temp(&[0; 16]), temp(&[0; 16])];
+    let (mut harness, log_kept, disk_kept) = routed(vec![
+        file(LOG.0, &temps[0], &["log"]),
+        file(DISK.0, &temps[1], &["disk"]),
+    ]);
+    let log_write = harness.write(LOG, 0, b"log", 1, 1);
+    harness.write(DISK, 0, b"disk", 1, 2);
+    harness.next_n(2);
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+
+    succeed(only(&disk_kept));
+    let mut log = only(&log_kept);
+    log.domains
+        .remove(0)
+        .completion
+        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+
+    let failed = next_failed(&mut harness);
+    match &failed.cause {
+        FailureCause::Provider { domain, error } => {
+            assert_eq!(domain.bytes(), b"log");
+            assert_eq!(error.raw_os_error(), Some(IO_DEVICE));
+        }
+        other => panic!("expected the log provider's failure, got {other:?}"),
+    }
+    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
+    assert_eq!(
+        suspects,
+        [log_write],
+        "the disk's file is not in the log's domain"
+    );
+    assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
+    harness.finish();
+}
+
+#[test]
+fn a_file_whose_domains_span_routed_providers_fails_when_either_fails() {
+    let temp = temp(&[0; 16]);
+    let (mut harness, log_kept, disk_kept) = routed(vec![file(GIVEN.0, &temp, &["log", "disk"])]);
+    let write = harness.write(GIVEN, 0, b"both", 1, 1);
+    harness.next();
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+
+    succeed(only(&log_kept));
+    let mut disk = only(&disk_kept);
+    disk.domains
+        .remove(0)
+        .completion
+        .fail(std::io::Error::from_raw_os_error(IO_DEVICE));
+
+    let failed = next_failed(&mut harness);
+    assert!(
+        matches!(&failed.cause, FailureCause::Provider { domain, .. } if domain.bytes() == b"disk"),
+        "{:?}",
+        failed.cause
+    );
+    let suspects: Vec<_> = failed.suspect.writes().iter().map(|w| w.op).collect();
+    assert_eq!(suspects, [write]);
+    assert_eq!(harness.state(1), EpochState::Blocked(failed.id));
+    harness.finish();
+}
+
+#[test]
+fn a_domain_no_routed_provider_serves_is_the_defaults() {
+    let temp = temp(&[0; 16]);
+    let (mut harness, log_kept, disk_kept) = routed(vec![file(GIVEN.0, &temp, &["other"])]);
+    harness.write(GIVEN, 0, b"other", 1, 1);
+    harness.next();
+    assert_eq!(harness.seal(1), DurabilityRequest::Submitted);
+    expect_durable(&mut harness, 1);
+    assert!(taken(&log_kept).is_empty());
+    assert!(taken(&disk_kept).is_empty());
+    harness.finish();
+}
+
+#[test]
+fn a_panic_in_a_routed_provider_abandons_its_domains_and_those_not_yet_handed_on() {
+    let temps = [temp(&[0; 16]), temp(&[0; 16])];
+    let (disk, disk_kept) = kept_by(&["disk"]);
+    let router = RoutingProvider::builder()
+        .register(Panics(vec![domain("log")]))
+        .register(disk)
+        .build()
+        .expect("no domain twice");
+    let ring = Ring::new(setup(
+        vec![
+            file(LOG.0, &temps[0], &["log"]),
+            file(DISK.0, &temps[1], &["disk"]),
+        ],
+        Vec::new(),
+        Some(Box::new(router)),
+    ))
+    .expect("build an instance with a router")
+    .0;
+    let mut harness = Harness::new(ring);
+    harness.write(LOG, 0, b"log", 1, 1);
+    harness.write(DISK, 0, b"disk", 1, 2);
+    harness.next_n(2);
+    let at = harness.default.at(1);
+    let sealing = panic::catch_unwind(AssertUnwindSafe(|| harness.ring.make_durable_through(at)));
+    assert!(
+        sealing.is_err(),
+        "the provider's panic propagates through the router"
+    );
+    harness.oracle.sealed(harness.epoch(1));
+    assert!(taken(&disk_kept).is_empty(), "the disk was never called");
+
+    let mut abandoned = Vec::new();
+    for _ in 0..2 {
+        match next_failed(&mut harness).cause {
+            FailureCause::ProviderAbandoned { domain } => abandoned.push(domain),
+            other => panic!("expected an abandoned domain, got {other:?}"),
+        }
+    }
+    abandoned.sort_by(|a, b| a.bytes().cmp(b.bytes()));
+    assert_eq!(abandoned, [domain("disk"), domain("log")]);
     harness.finish();
 }
