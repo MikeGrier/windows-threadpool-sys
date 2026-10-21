@@ -3711,3 +3711,25 @@ The tests were run from a process elevated by a prompt the engineer approved, tw
 three failures were fixed. The first run found a real defect: an event with no fields was passed with the pointer an empty
 vector holds, and the call refused it. What the sessions recorded, and what the call made of 129 blocks and of an event
 over 64 KB, are in [WE-D-3](../win-etw-sys/DESIGN-NOTES.md#we-d-3).
+
+## Moved 2026-10-20 23:12:00 -04:00 -- DI-12.1.5: durable-ioring-events
+
+### <a id="di-1215"></a>DI-12.1.5 -- `durable-ioring-events` is created: the provider, its manifest rendered from one table of events, and `EtwDiagnostics`, which wants a kind only when a session listens. *(completed 2026-10-20 23:12:00 -04:00)*
+
+The item as written:
+
+**DI-12.1.5** -- **Create `durable-ioring-events`: the provider, its manifest and `EtwDiagnostics`.** The provider is
+  named `durable-ioring-events` (the engineer, 2026-10-20: "Change the name of the event source to
+  durable-ioring-events", having first said "win-dioring, I'd put it in its own crate"), with a GUID generated
+  once and recorded in the crate's notes. Its manifest ships with the crate and maps each event of `DI-12.1.1`
+  one-to-one. It records whether or not the manifest is installed ("you don't actually have to install the manifest to
+  record events"); the crate's documentation says that a reader needs it to see names and fields, and how to install it.
+  An event is built only when a session is listening, so it costs nothing otherwise. Registered with the workspace,
+  release-please and the publish workflow. Tests: each event reaches a session, and none is built when nobody listens.
+
+  > **CROSS-COMPONENT PREREQUISITE:** `DI-12.1.1` and `DI-12.1.4`, in this checklist.
+
+The name and the GUID are [DE-D-1](../durable-ioring-events/DESIGN-NOTES.md#de-d-1), the events [DE-D-2](../durable-ioring-events/DESIGN-NOTES.md#de-d-2),
+the manifest and how it was checked with the real tools [DE-D-3](../durable-ioring-events/DESIGN-NOTES.md#de-d-3), and the sink
+[DE-D-4](../durable-ioring-events/DESIGN-NOTES.md#de-d-4). The session tests were run elevated and pass, and the manifest was
+installed and the events decoded by `tracerpt`.

@@ -33,16 +33,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.4.1** -- `win-etw-sys`' session tests were run elevated and pass, and what they observed is recorded in the crate's notes. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-12141)
 
-- [ ] **DI-12.1.5** -- **Create `durable-ioring-events`: the provider, its manifest and `EtwDiagnostics`.** The provider is
-  named `durable-ioring-events` (the engineer, 2026-10-20: "Change the name of the event source to
-  durable-ioring-events", having first said "win-dioring, I'd put it in its own crate"), with a GUID generated
-  once and recorded in the crate's notes. Its manifest ships with the crate and maps each event of `DI-12.1.1`
-  one-to-one. It records whether or not the manifest is installed ("you don't actually have to install the manifest to
-  record events"); the crate's documentation says that a reader needs it to see names and fields, and how to install it.
-  An event is built only when a session is listening, so it costs nothing otherwise. Registered with the workspace,
-  release-please and the publish workflow. Tests: each event reaches a session, and none is built when nobody listens.
-
-  > **CROSS-COMPONENT PREREQUISITE:** `DI-12.1.1` and `DI-12.1.4`, in this checklist.
+- [x] **DI-12.1.5** -- `durable-ioring-events` is created: the provider, its manifest rendered from one table of events, and `EtwDiagnostics`, which wants a kind only when a session listens. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1215)
 
 - [ ] **DI-12.1.6** -- **`win-durable-ioring`'s default sink is `EtwDiagnostics`**, so a consumer who chooses nothing
   still gets the events ([DI-D-51](DESIGN-NOTES.md#di-d-51) T4), and any sink, `NoDiagnostics` included, can be passed
