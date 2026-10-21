@@ -30,12 +30,51 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.6** -- `win-durable-ioring`'s default sink is `EtwDiagnostics`, so an instance built with none writes its delay events to ETW, and a sink given replaces it. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1216)
 
-- [ ] **DI-12.2** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
-  dispatches each seal's work by flush domain to providers registered with it when it is built,
-  refuses a domain routed twice at build time, and passes each domain's outcome back as it arrives.
-  It reports to the instance's diagnostic sink ([DI-D-51](DESIGN-NOTES.md#di-d-51)), so its
-  diagnostics go wherever the consumer sent the instance's. Tested alone against fake providers.
-  Gated on the provider trait from DI-2.12.
+- [ ] **DI-12.2** -- **The routing provider** (DI-2.12 point 1, which called it `DI-3+.8`): a provider dioring ships that
+  dispatches each seal's work by flush domain to providers registered with it when it is built, refuses a domain routed
+  twice at build time, and passes each domain's outcome back as it arrives. The core holds the built-in default and at most
+  one consumer-supplied provider ([DI-2.12](COMPLETED-CHECKLIST.md#di-212), the engineer, 2026-10-06: "do your clean form of
+  b"), so the router is that one provider, composed of others; it is portable and lives in `durable-ioring`. Restructured on
+  2026-10-20 into `DI-12.2.1` to `DI-12.2.4`, because it is four pieces that can each be built and checked alone and one of
+  them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
+  and `DomainCompletion` exist. Two questions are open and are not decided, and each step says which it waits on:
+  - **What the router reports.** The core already reports each domain's flush issued and answered, with its name and how long it
+    took ([DI-D-77](DESIGN-NOTES.md#di-d-77)), so what a router would add is not settled; and a router is built before the
+    instance, so it does not know the instance number an `Inconsistency` event carries. Candidate answers: nothing but an
+    inconsistency for a domain no provider owns; or a per-provider event for how long that provider's call took, from dispatch
+    to its last domain answering; or leave it coarse until the router exists and the core's events show whether anything is
+    missing, which is a legitimate answer.
+  - **What decides the domains a registered provider serves.** The provider's own `domains()`, which the trait already has, or
+    domains named to the router at registration, which would let one provider be registered for a subset and let a router's
+    domains disagree with what the provider says it serves.
+
+- [ ] **DI-12.2.1** -- **The router and its build.** A `RoutingProvider` in `durable-ioring`, itself a `DurabilityProvider`,
+  built from providers registered with it; its `domains()` is the union of theirs, read once as the trait says. A domain
+  routed to two providers is refused at build, naming the domain and both registrations: earlier and clearer than the core's
+  `DuplicateDomain` for a single provider. Waits on the second open question of `DI-12.2` for how a provider's domains are
+  known; until it is answered the provider's own `domains()` is the working position and is not decided. Tests: each of one,
+  two and many providers, a provider that serves no domain, a router with no provider, a domain routed twice by adjacent and by
+  distant registrations, and the union's order.
+
+- [ ] **DI-12.2.2** -- **Dispatch.** `make_durable` splits a request by the provider that owns each domain and makes one call
+  per provider that has parts, in registration order and with each provider's parts in the request's order. Each
+  `DomainCompletion` is handed to its owner unchanged, so a domain's outcome returns as it arrives and nothing is buffered or
+  re-answered. A panic in one provider propagates, as the trait says, and the providers not yet called have their completions
+  dropped, which is `ProviderAbandoned` for their domains. A domain no provider owns cannot come from the core; it fails that
+  domain and is not a panic. Tested alone against fake providers that answer inline, answer late from another thread, never
+  answer, drop their completions, and panic, with fake completion homes, and with several domains per provider.
+
+- [ ] **DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: what, if anything, the
+  router adds to the diagnostics the core already reports, and how it knows the instance's number. When answered this becomes
+  the router's events or the decision that it reports only the one inconsistency; until then nothing is built, and this is
+  recorded as a blocker and not as "no consumer".
+
+- [ ] **DI-12.2.4** -- **The router through the driver, and its record.** A router given as `Setup::provider` to a real
+  instance over two fake providers: a seal that touches both is one call to each; a file whose domains span providers is durable
+  only when every one succeeds (DI-2.12 point 5); one provider failing fails only its own domains; coupled domains split across
+  providers are correct and cost physical flushes, documented and not enforced. The README and
+  [API.md](API.md) say how to build one; the decision is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md); the sabotage manifest
+  gets entries and a control.
 
 - [ ] **DI-12.3** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).
