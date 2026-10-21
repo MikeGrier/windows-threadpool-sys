@@ -10,6 +10,7 @@ on:
       - 'win-debugging-sys-v*'
       - 'win-durable-ioring-v*'
       - 'win-error-codes-v*'
+      - 'win-etw-sys-v*'
       - 'win-handles-sys-v*'
       - 'win-multi-file-tail-watcher-v*'
       - 'win-numa-sys-v*'
@@ -50,6 +51,7 @@ on:
           - win-debugging-sys
           - win-durable-ioring
           - win-error-codes
+          - win-etw-sys
           - win-handles-sys
           - win-multi-file-tail-watcher
           - win-numa-sys
@@ -139,7 +141,7 @@ jobs:
       - name: Wait for workspace-sibling dependencies on crates.io
         shell: bash
         run: |
-          workspace_crates="durable-ioring io-buffers win-authorization-sys win-debugging-sys win-durable-ioring win-error-codes win-handles-sys win-multi-file-tail-watcher win-numa-sys win-pipes-sys win-shared-os-owned-handle win-sync-sys win-text-sys win-time-sys win-volume-sys windows-file-enumeration-sys windows-file-watcher windows-file-watcher-example-test-harness windows-impersonation-token-sys windows-ioring-sys windows-namespace-request-sys windows-overlapped-io-sys windows-thread-ambient-sys windows-threadpool-sys windows-topology-sys windows-waitable-queues wtf-string"
+          workspace_crates="durable-ioring io-buffers win-authorization-sys win-debugging-sys win-durable-ioring win-error-codes win-etw-sys win-handles-sys win-multi-file-tail-watcher win-numa-sys win-pipes-sys win-shared-os-owned-handle win-sync-sys win-text-sys win-time-sys win-volume-sys windows-file-enumeration-sys windows-file-watcher windows-file-watcher-example-test-harness windows-impersonation-token-sys windows-ioring-sys windows-namespace-request-sys windows-overlapped-io-sys windows-thread-ambient-sys windows-threadpool-sys windows-topology-sys windows-waitable-queues wtf-string"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           # `tr -d '\r'` is load-bearing on the Windows runner: jq.exe writes
           # CRLF, and `read` splits on LF alone, so without this the last field

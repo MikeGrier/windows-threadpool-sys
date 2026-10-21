@@ -1,0 +1,87 @@
+{
+  "package": "win-etw-sys",
+  "description": "Sabotages for win-etw-sys. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "What only a trace session can show is not swept here: whether an event is enabled while a session listens, that the level and keyword filters hold, and that the descriptor and data reach the session as written are tests/session.rs, which are ignored without elevation (WE-D-3), so a sweep on a machine that cannot start a session would report a sabotage of those as surviving for a reason that is not a hole. They are swept on a machine that can. A handle that is unregistered twice is not injected: the call would be made on a handle that is gone, and the sweep would be measuring a crash and not a test.",
+  "sabotages": [
+    {
+      "name": "WE-D-2: a GUID's second group is read back one bit off",
+      "file": "src/guid.rs",
+      "expect": "caught",
+      "why": "A GUID's value is one big-endian number, so each group is read from its own place; a shifted group reads back a value that is not the one given.",
+      "find": ["            | (data2 as u128) << 80\n"],
+      "replace": ["            | (data2 as u128) << 79\n"]
+    },
+    {
+      "name": "WE-D-2: a terminated UTF-16 string has no terminator",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "A decoder reads a UnicodeString to a zero unit, so a string without one runs on into the next field.",
+      "find": ["            Self::Utf16Terminated(v) => [Some(slice(v)), Some(of(&NUL_UNIT))],\n"],
+      "replace": ["            Self::Utf16Terminated(v) => [Some(slice(v)), None],\n"]
+    },
+    {
+      "name": "WE-D-2: a terminated UTF-16 string is ended with one byte",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "The terminator is a zero unit, two bytes; a one-byte terminator leaves the event's layout wrong for every field after it.",
+      "find": ["            Self::Utf16Terminated(v) => [Some(slice(v)), Some(of(&NUL_UNIT))],\n"],
+      "replace": ["            Self::Utf16Terminated(v) => [Some(slice(v)), Some(of(&NUL_BYTE))],\n"]
+    },
+    {
+      "name": "WE-D-2: a terminated byte string has no terminator",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "As for UTF-16: an AnsiString is read to a zero byte.",
+      "find": ["            Self::BytesTerminated(v) => [Some(slice(v)), Some(of(&NUL_BYTE))],\n"],
+      "replace": ["            Self::BytesTerminated(v) => [Some(slice(v)), None],\n"]
+    },
+    {
+      "name": "WE-D-2: a boolean is true as zero",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "A template's Boolean is four bytes, one for true and zero for false.",
+      "find": ["        Self::U32(value as u32)\n"],
+      "replace": ["        Self::U32(!value as u32)\n"]
+    },
+    {
+      "name": "WE-D-2: a block's size is cut to a ULONG and not refused",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "A block longer than a descriptor's size can hold would be written as a short one; it is refused instead, and the call is not made.",
+      "find": ["    u32::try_from(len).ok()\n"],
+      "replace": ["    Some(len as u32)\n"]
+    },
+    {
+      "name": "WE-D-2: a terminated string's blocks are written in reverse",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "The blocks are concatenated in order, so a terminator before its string is a different event.",
+      "find": ["        for block in field.blocks().into_iter().flatten() {\n"],
+      "replace": ["        for block in field.blocks().into_iter().rev().flatten() {\n"]
+    },
+    {
+      "name": "WE-D-2: a registration is not unregistered when dropped",
+      "file": "src/registration.rs",
+      "expect": "caught",
+      "why": "A registration that is dropped must give its handle back, or a process that registers and drops runs out of its registrations; the limit test is the one that takes them all.",
+      "find": ["        unregister(self.handle);\n"],
+      "replace": ["        let _ = self.handle;\n"]
+    },
+    {
+      "name": "WE-D-2: no fields are passed as a dangling pointer and not null",
+      "file": "src/field.rs",
+      "expect": "caught",
+      "why": "The page allows UserData to be NULL when UserDataCount is zero, and the call refused an event with no fields that was given the pointer an empty vector holds.",
+      "find": ["        let blocks = if self.descriptors.is_empty() {\n"],
+      "replace": ["        let blocks = if false {\n"]
+    },
+    {
+      "name": "WE-D-2 control: a boolean is built by another spelling of the same conversion",
+      "file": "src/field.rs",
+      "expect": "survives",
+      "why": "A control: the same value by another spelling, which no test can tell apart. A sweep that reports it caught is reporting everything caught and proves nothing.",
+      "find": ["        Self::U32(value as u32)\n"],
+      "replace": ["        Self::U32(if value { 1 } else { 0 })\n"]
+    }
+  ]
+}
