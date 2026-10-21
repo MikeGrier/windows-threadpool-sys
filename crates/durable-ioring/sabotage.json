@@ -2064,8 +2064,8 @@
       "file": "src/router.rs",
       "expect": "caught",
       "why": "Each domain's part goes to the provider that serves it (DI-D-81); a part given to another provider is flushed by something that never said it could.",
-      "find": ["                Some(&registration) => parts[registration].push(part),"],
-      "replace": ["                Some(_) => parts[0].push(part),"]
+      "find": ["            parts[registration].push(part);"],
+      "replace": ["            parts[0].push(part);"]
     },
     {
       "name": "DI-12.2.2: a provider with no part is called anyway",
@@ -2076,12 +2076,12 @@
       "replace": ["            if domains.len() < usize::MAX {"]
     },
     {
-      "name": "DI-12.2.2: an unrouted domain is dropped rather than failed",
+      "name": "DI-12.2.2: an unrouted domain is sent to the first registration instead of panicked on",
       "file": "src/router.rs",
       "expect": "caught",
-      "why": "A domain no provider serves is failed with Unrouted, so the consumer is told what happened; dropping it reports an abandoned provider that never existed.",
-      "find": ["                    part.completion.fail(error);"],
-      "replace": ["                    drop((part, error));"]
+      "why": "A domain no provider serves is a caller breaking the protocol and is panicked on where it is found (DI-D-46, DI-D-83); sending it to a provider hands work to something that never said it could do it, and lets the breach persist.",
+      "find": ["            let Some(&registration) = self.owners.get(&part.domain) else {"],
+      "replace": ["            let Some(&registration) = self.owners.get(&part.domain).or(Some(&0)) else {"]
     },
     {
       "name": "DI-12.2.2 control: the per-provider parts are made by counting",

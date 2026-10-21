@@ -3801,3 +3801,21 @@ The item as written:
 
 Built in `src/router.rs`, tested against fake providers and a fake completion home in `src/router/tests/dispatch.rs`;
 the choices are [DI-D-83](DESIGN-NOTES.md#di-d-83).
+
+## Moved 2026-10-21 14:44:32 -04:00 -- DI-12.2.3: what the router reports
+
+### <a id="di-1223"></a>DI-12.2.3 -- The router reports to no diagnostic sink: a domain no provider serves is a caller breaking the protocol, panicked on where it is found, and the panic is its only report. *(completed 2026-10-21 14:44:32 -04:00)*
+
+The item as written:
+
+**DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: whether it reports an
+  inconsistency for a domain no provider owns, and how it knows the instance's number. When answered this becomes that one
+  report or the decision that it reports nothing; until then nothing is built, and this is recorded as a blocker and not as
+  "no consumer". It reports no timing ([DI-D-80](DESIGN-NOTES.md#di-d-80)).
+
+Answered by the engineer, 2026-10-21, after the assistant traced how a domain could reach the router unrouted -- only through
+a driver building requests wrongly, a caller outside an instance, or a provider forwarding to a router domains it does not
+serve -- and pointed out that [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222)'s failing such a domain with `Unrouted` went against
+[DI-D-46](DESIGN-NOTES.md#di-d-46) and [DI-D-59](DESIGN-NOTES.md#di-d-59): "I agree, these exogenous messages should panic and
+it's the only report." `make_durable` now panics, naming the domain, before any provider is called, and `Unrouted` is gone.
+The decision is [DI-D-83](DESIGN-NOTES.md#di-d-83), corrected.

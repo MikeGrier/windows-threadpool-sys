@@ -39,20 +39,14 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
   and `DomainCompletion` exist. The router measures nothing: timing comes from paired begin and end events with correlation
   ids, which the sinks and their analysis tools use ([DI-D-80](DESIGN-NOTES.md#di-d-80), [DI-M19](#di-m19----paired-begin-and-end-events-with-correlation-ids)).
-  A registered provider serves exactly the domains its own `domains()` returns ([DI-D-81](DESIGN-NOTES.md#di-d-81)). One
-  question is open and is not decided, and `DI-12.2.3` waits on it:
-  - **Whether the router reports an inconsistency for a domain no provider owns,** which the core should never send it, or
-    reports nothing at all, which is a legitimate answer. A router is built before the instance, so it does not know the
-    instance number an `Inconsistency` event carries.
+  A registered provider serves exactly the domains its own `domains()` returns ([DI-D-81](DESIGN-NOTES.md#di-d-81)). A
+  domain no provider serves is panicked on, and the panic is the router's only report ([DI-D-83](DESIGN-NOTES.md#di-d-83)).
 
 - [x] **DI-12.2.1** -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1221)
 
 - [x] **DI-12.2.2** -- `RoutingProvider` is a `DurabilityProvider`: each provider with a part of a seal is called once, in registration order, with its completions untouched, a panic abandons the parts not yet handed on, and a domain no provider serves is failed with `Unrouted`. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1222)
 
-- [ ] **DI-12.2.3** -- **What the router reports.** BLOCKED on the first open question of `DI-12.2`: whether it reports an
-  inconsistency for a domain no provider owns, and how it knows the instance's number. When answered this becomes that one
-  report or the decision that it reports nothing; until then nothing is built, and this is recorded as a blocker and not as
-  "no consumer". It reports no timing ([DI-D-80](DESIGN-NOTES.md#di-d-80)).
+- [x] **DI-12.2.3** -- The router reports to no diagnostic sink: a domain no provider serves is a caller breaking the protocol, panicked on where it is found, and the panic is its only report. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1223)
 
 - [ ] **DI-12.2.4** -- **The router through the driver, and its record.** A router given as `Setup::provider` to a real
   instance over two fake providers: a seal that touches both is one call to each; a file whose domains span providers is durable

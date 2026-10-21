@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mike Grier
 //! The router's dispatch (DI-12.2.2): one call per provider with a part, in registration order,
-//! each completion handed on untouched, a panic propagating, and an unrouted domain failed.
+//! each completion handed on untouched, a panic propagating, and an unrouted domain panicked on.
 
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
@@ -15,7 +15,7 @@ use crate::provider::{
     DomainCompletion, DomainOutcome, DomainRequest, DurabilityProvider, FlushRequest,
     IoTargetWrites,
 };
-use crate::router::{RoutingProvider, Unrouted};
+use crate::router::RoutingProvider;
 use crate::types::{FlushDomain, IoTargetKey};
 
 /// How a domain was answered, as the instance would record it.
@@ -23,7 +23,6 @@ use crate::types::{FlushDomain, IoTargetKey};
 enum Seen {
     Succeeded,
     Failed(io::ErrorKind, String),
-    Unrouted(FlushDomain),
     Abandoned,
 }
 
@@ -42,13 +41,7 @@ impl Answer for Home {
     fn answer(&self, call: &DomainCall, outcome: DomainOutcome) {
         let seen = match outcome {
             DomainOutcome::Succeeded => Seen::Succeeded,
-            DomainOutcome::Failed(error) => match error
-                .get_ref()
-                .and_then(|inner| inner.downcast_ref::<Unrouted>())
-            {
-                Some(unrouted) => Seen::Unrouted(unrouted.0.clone()),
-                None => Seen::Failed(error.kind(), error.to_string()),
-            },
+            DomainOutcome::Failed(error) => Seen::Failed(error.kind(), error.to_string()),
             DomainOutcome::Abandoned => Seen::Abandoned,
         };
         self.answers
@@ -368,50 +361,67 @@ fn a_panic_propagates_and_abandons_the_parts_not_yet_handed_on() {
     assert!(home.all_answered());
 }
 
+/// The message of the panic `request` raises in `router`, which must panic.
+fn panic_of(router: &mut RoutingProvider<V>, request: FlushRequest<V>) -> String {
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| router.make_durable(request)));
+    let payload = outcome.expect_err("an unrouted domain panics");
+    payload
+        .downcast_ref::<String>()
+        .expect("a formatted panic")
+        .clone()
+}
+
 #[test]
-fn a_domain_no_provider_serves_is_failed_and_the_rest_dispatched() {
+fn a_domain_no_provider_serves_is_panicked_on_naming_it() {
     let home = Arc::new(Home::default());
     let mut rig = Rig::new(vec![("known", &["a"], Act::Succeed)]);
-    rig.router.make_durable(request(&home, &["stray", "a"]));
-    assert_eq!(rig.calls(), vec![("known", vec![part("a", 1)])]);
-    assert_eq!(
-        home.answer_for("stray"),
-        Some(Seen::Unrouted(domain("stray")))
+    let message = panic_of(&mut rig.router, request(&home, &["a", "stray"]));
+    assert!(
+        message.contains(&format!("{:?}", domain("stray"))),
+        "{message}"
     );
-    assert_eq!(home.answer_for("a"), Some(Seen::Succeeded));
+    assert!(message.contains("no provider registered"), "{message}");
+}
+
+#[test]
+fn an_unrouted_domain_is_panicked_on_before_any_provider_is_called() {
+    let home = Arc::new(Home::default());
+    let mut rig = Rig::new(vec![
+        ("first", &["a"], Act::Succeed),
+        ("second", &["b"], Act::Succeed),
+    ]);
+    let _ = panic_of(&mut rig.router, request(&home, &["a", "b", "stray"]));
+    assert!(rig.calls().is_empty(), "no provider called");
+}
+
+#[test]
+fn an_unrouted_domain_abandons_every_domain_of_the_request() {
+    let home = Arc::new(Home::default());
+    let mut rig = Rig::new(vec![("known", &["a", "b"], Act::Succeed)]);
+    let _ = panic_of(&mut rig.router, request(&home, &["a", "stray", "b"]));
+    assert_eq!(home.answer_for("a"), Some(Seen::Abandoned));
+    assert_eq!(home.answer_for("stray"), Some(Seen::Abandoned));
+    assert_eq!(home.answer_for("b"), Some(Seen::Abandoned));
     assert!(home.all_answered());
 }
 
 #[test]
-fn an_unrouted_domain_is_failed_before_any_provider_is_called() {
+fn a_router_with_no_provider_panics_on_any_domain() {
     let home = Arc::new(Home::default());
-    let mut rig = Rig::new(vec![("panics", &["a"], Act::Panic)]);
-    let request = request(&home, &["a", "stray"]);
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| rig.router.make_durable(request)));
-    assert!(outcome.is_err());
-    assert_eq!(
-        home.answer_for("stray"),
-        Some(Seen::Unrouted(domain("stray")))
-    );
+    let mut router = RoutingProvider::<V>::builder().build().expect("empty");
+    let message = panic_of(&mut router, request(&home, &["a"]));
+    assert!(message.contains(&format!("{:?}", domain("a"))), "{message}");
     assert_eq!(home.answer_for("a"), Some(Seen::Abandoned));
 }
 
 #[test]
-fn a_router_with_no_provider_fails_every_domain_as_unrouted() {
+fn the_router_is_usable_after_an_unrouted_request_panicked() {
     let home = Arc::new(Home::default());
-    let mut router = RoutingProvider::<V>::builder().build().expect("empty");
-    router.make_durable(request(&home, &["a", "b"]));
-    assert_eq!(home.answer_for("a"), Some(Seen::Unrouted(domain("a"))));
-    assert_eq!(home.answer_for("b"), Some(Seen::Unrouted(domain("b"))));
-}
-
-#[test]
-fn the_unrouted_failure_is_an_other_error_naming_the_domain() {
-    let error = io::Error::other(Unrouted(domain("stray")));
-    assert_eq!(error.kind(), io::ErrorKind::Other);
-    let shown = error.to_string();
-    assert!(shown.contains("no provider"), "{shown}");
-    assert!(shown.contains(&format!("{:?}", domain("stray"))), "{shown}");
+    let mut rig = Rig::new(vec![("known", &["a"], Act::Succeed)]);
+    let _ = panic_of(&mut rig.router, request(&home, &["stray"]));
+    rig.router.make_durable(request(&home, &["a"]));
+    assert_eq!(rig.called(), vec!["known"]);
+    assert_eq!(home.answer_for("a"), Some(Seen::Succeeded));
 }
 
 #[test]

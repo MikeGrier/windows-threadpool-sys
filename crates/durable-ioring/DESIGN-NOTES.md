@@ -1406,7 +1406,8 @@ process id as the upper 64 bits and the u64 as the lower?" It is held as a posit
 and a process id reused within one trace is a case the assistant has not settled.
 
 **Scheduled work.** [DI-M19](CHECKLIST.md#di-m19----paired-begin-and-end-events-with-correlation-ids). The router
-reports no timing, and what it reports otherwise is the open question of [DI-12.2.3](CHECKLIST.md).
+reports no timing, and nothing else: a domain it does not route is panicked on, the panic its only report
+([DI-D-83](#di-d-83)).
 
 ## <a id="di-d-81"></a>DI-D-81: a provider registered with the router serves exactly the domains its own `domains()` returns
 
@@ -1449,6 +1450,8 @@ its dispatch ([DI-D-83](#di-d-83)).
 
 ## <a id="di-d-83"></a>DI-D-83: how the router dispatches, and how it fails a domain it does not route
 
+**Amended by the engineer, 2026-10-21: a domain the router does not route is panicked on, and the panic is its only report; the assistant's first choice, failing it with `Unrouted`, is withdrawn.**
+
 The choices [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) left to its implementation, made by the assistant under
 [DI-D-81](#di-d-81) and open to a ruling.
 
@@ -1460,11 +1463,15 @@ The choices [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) left to its implementati
 - **A panic is not caught.** It propagates out of `make_durable`, as the trait says, and the unwinding drops the parts not
   yet handed on, whose completions then answer as abandoned; the provider that panicked drops its own the same way. So a
   panic fails exactly the domains of the providers it stopped, and the ones already called answer as they would have.
-- **A domain no provider serves is failed with `Unrouted`, inside an `io::Error` of kind `Other`,** and is not a panic.
-  The instance sends a provider only the domains it serves, read from the router at build, so the case needs a driver
-  that breaks that, or a router used outside an instance. Failing the domain keeps a defect elsewhere from taking down the
-  caller; the typed error lets a consumer tell it from a provider's own failure by downcasting. Such a domain is failed
-  before any provider is called, so a panic later in the same call does not hide it. Whether the router also reports it to a
-  diagnostic sink is [DI-12.2.3](CHECKLIST.md)'s open question.
+- **A domain no provider serves is panicked on, and the panic is the router's only report.** The engineer, 2026-10-21: "I
+  agree, these exogenous messages should panic and it's the only report." The instance sends a provider only the domains it
+  read from it at build, and the router's domains and its map of owners come from the same single read of each provider,
+  so such a domain needs a driver that builds requests wrongly, a caller outside an instance, or a provider that forwards a
+  router domains it does not serve: a caller breaking the protocol, which [DI-D-46](#di-d-46) panics on where it is found
+  and [DI-D-59](#di-d-59) keeps out of ordinary error reporting. The panic names the domain and comes before any provider is
+  called, so the whole request is dropped and every domain in it abandoned. The router reports to no diagnostic sink: it has
+  none, and no instance number to give one, which settles [DI-12.2.3](COMPLETED-CHECKLIST.md#di-1223). The assistant's
+  first choice, failing the domain with an `Unrouted` error inside an `io::Error`, made the breach look like an ordinary
+  provider failure and let it persist; it was withdrawn before release.
 
 **Scheduled work.** None.

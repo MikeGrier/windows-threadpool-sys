@@ -8,13 +8,12 @@
 //!
 //! A seal's request is split by the provider that serves each domain, and each provider with a part
 //! is called once, in registration order. Each domain's completion is handed to its provider as it
-//! came, so its answer goes straight back to the instance; the router answers nothing itself but a
-//! domain no provider serves.
+//! came, so its answer goes straight back to the instance; the router answers nothing itself. A
+//! domain no provider serves is a caller breaking the protocol, and is panicked on (DI-D-46).
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
-use std::io;
 
 use crate::contract::Identities;
 use crate::provider::{DomainRequest, DurabilityProvider, FlushRequest};
@@ -98,8 +97,15 @@ impl<V: Identities> fmt::Debug for RouterBuilder<V> {
 /// part of the request, once, in registration order, with its parts in the request's order and each
 /// part's completion untouched. A panic in one provider propagates, as the trait says, and the
 /// parts not yet handed on are dropped with it, so their completions are abandoned, which fails
-/// their domains. A domain no provider serves -- which the instance, having read the router's
-/// domains, does not send -- is failed with [`Unrouted`] before any provider is called.
+/// their domains.
+///
+/// # Panics
+///
+/// If the request names a domain no registered provider serves, before any provider is called,
+/// with a message naming the domain; every part is dropped with the request, so every domain in it
+/// is abandoned. The instance sends a provider only the domains it read from it at build, so this
+/// is a driver, or a caller outside an instance, breaking the protocol (DI-D-46, DI-D-83), and the
+/// panic is the router's only report of it.
 pub struct RoutingProvider<V: Identities> {
     routes: Vec<Route<V>>,
     /// Each domain's registration.
@@ -132,13 +138,14 @@ impl<V: Identities> DurabilityProvider<V> for RoutingProvider<V> {
         let mut parts: Vec<Vec<DomainRequest<V>>> =
             self.routes.iter().map(|_| Vec::new()).collect();
         for part in request.domains {
-            match self.owners.get(&part.domain) {
-                Some(&registration) => parts[registration].push(part),
-                None => {
-                    let error = io::Error::other(Unrouted(part.domain.clone()));
-                    part.completion.fail(error);
-                }
-            }
+            let Some(&registration) = self.owners.get(&part.domain) else {
+                panic!(
+                    "the routing provider was asked to make the flush domain {:?} durable, which no \
+                     provider registered with it serves",
+                    part.domain
+                );
+            };
+            parts[registration].push(part);
         }
         // A panic here unwinds through `parts`, dropping the parts of the providers not yet called,
         // whose completions then answer as abandoned.
@@ -199,25 +206,6 @@ impl fmt::Display for RoutedTwice {
 }
 
 impl std::error::Error for RoutedTwice {}
-
-/// A router was asked to make a domain durable that no provider registered with it serves: the
-/// domain. The router fails the domain with this inside an [`io::Error`], whose kind is
-/// [`Other`](io::ErrorKind::Other), so the failure's cause is `FailureCause::Provider` with it; the
-/// instance does not send such a domain to a router it built over.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Unrouted(pub FlushDomain);
-
-impl fmt::Display for Unrouted {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "no provider registered with the router serves the flush domain {:?}",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for Unrouted {}
 
 #[cfg(test)]
 mod tests;
