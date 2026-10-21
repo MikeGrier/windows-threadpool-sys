@@ -30,17 +30,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.6** -- `win-durable-ioring`'s default sink is `EtwDiagnostics`, so an instance built with none writes its delay events to ETW, and a sink given replaces it. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1216)
 
-- [ ] **DI-12.2** -- **The routing provider** (DI-2.12 point 1, which called it `DI-3+.8`): a provider dioring ships that
-  dispatches each seal's work by flush domain to providers registered with it when it is built, refuses a domain routed
-  twice at build time, and passes each domain's outcome back as it arrives. The core holds the built-in default and at most
-  one consumer-supplied provider ([DI-2.12](COMPLETED-CHECKLIST.md#di-212), the engineer, 2026-10-06: "do your clean form of
-  b"), so the router is that one provider, composed of others; it is portable and lives in `durable-ioring`. Restructured on
-  2026-10-20 into `DI-12.2.1` to `DI-12.2.4`, because it is four pieces that can each be built and checked alone and one of
-  them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
-  and `DomainCompletion` exist. The router measures nothing: timing comes from paired begin and end events with correlation
-  ids, which the sinks and their analysis tools use ([DI-D-80](DESIGN-NOTES.md#di-d-80), [DI-M19](#di-m19----paired-begin-and-end-events-with-correlation-ids)).
-  A registered provider serves exactly the domains its own `domains()` returns ([DI-D-81](DESIGN-NOTES.md#di-d-81)). A
-  domain no provider serves is panicked on, and the panic is the router's only report ([DI-D-83](DESIGN-NOTES.md#di-d-83)).
+- [x] **DI-12.2** -- The routing provider: `RoutingProvider`, which composes several providers as the instance's one, each serving the domains it declares. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-122)
 
 - [x] **DI-12.2.1** -- `RoutingProvider` is built by `RouterBuilder` from registered providers, serving the union of their own domains, and a domain claimed twice refuses the build naming both registrations. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1221)
 
@@ -48,12 +38,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.2.3** -- The router reports to no diagnostic sink: a domain no provider serves is a caller breaking the protocol, panicked on where it is found, and the panic is its only report. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1223)
 
-- [ ] **DI-12.2.4** -- **The router through the driver, and its record.** A router given as `Setup::provider` to a real
-  instance over two fake providers: a seal that touches both is one call to each; a file whose domains span providers is durable
-  only when every one succeeds (DI-2.12 point 5); one provider failing fails only its own domains; coupled domains split across
-  providers are correct and cost physical flushes, documented and not enforced. The README and
-  [API.md](API.md) say how to build one; the decision is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md); the sabotage manifest
-  gets entries and a control.
+- [x] **DI-12.2.4** -- `RoutingProvider` is proven through a real instance over two providers, and the driver's README and API.md say how to build one. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-1224)
 
 - [ ] **DI-12.3** -- **The `epoch_log` merge-or-delete decision**, once DI-3.2 is proven
   ([DI-D-7](DESIGN-NOTES.md#di-d-7)).

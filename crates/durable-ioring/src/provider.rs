@@ -11,8 +11,8 @@ use crate::types::{FailureCause, FlushDomain, IoTargetKey};
 
 /// A consumer-supplied durability provider. It makes writes the instance has seen complete
 /// durable, by any means, and answers per flush domain. An instance holds at most one; several
-/// are composed by a router that is itself a provider. Every other domain, and every file declared
-/// with none, is the built-in default's.
+/// are composed by [the routing provider](crate::RoutingProvider), itself a provider. Every other
+/// domain, and every file declared with none, is the built-in default's.
 pub trait DurabilityProvider<V: Identities>: Send + Debug {
     /// The flush domains this provider serves, read once when the instance is built.
     fn domains(&self) -> Vec<FlushDomain>;

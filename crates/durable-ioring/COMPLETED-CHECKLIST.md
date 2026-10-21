@@ -3819,3 +3819,41 @@ serve -- and pointed out that [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222)'s fail
 [DI-D-46](DESIGN-NOTES.md#di-d-46) and [DI-D-59](DESIGN-NOTES.md#di-d-59): "I agree, these exogenous messages should panic and
 it's the only report." `make_durable` now panics, naming the domain, before any provider is called, and `Unrouted` is gone.
 The decision is [DI-D-83](DESIGN-NOTES.md#di-d-83), corrected.
+
+## Moved 2026-10-21 14:56:18 -04:00 -- DI-12.2.4 and DI-12.2: the routing provider is done
+
+### <a id="di-1224"></a>DI-12.2.4 -- `RoutingProvider` is proven through a real instance over two providers, and the driver's README and API.md say how to build one. *(completed 2026-10-21 14:56:18 -04:00)*
+
+The item as written:
+
+**DI-12.2.4** -- **The router through the driver, and its record.** A router given as `Setup::provider` to a real
+  instance over two fake providers: a seal that touches both is one call to each; a file whose domains span providers is durable
+  only when every one succeeds (DI-2.12 point 5); one provider failing fails only its own domains; coupled domains split across
+  providers are correct and cost physical flushes, documented and not enforced. The README and
+  [API.md](API.md) say how to build one; the decision is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md); the sabotage manifest
+  gets entries and a control.
+
+The instance-level tests are in `win-durable-ioring`'s `src/dioring/tests/providers.rs`, under the routing provider's heading,
+and the sabotage entries that patch the router and run only that crate's suite are in its manifest. The README's example is
+compiled and run as a doctest. The record is [DI-D-84](DESIGN-NOTES.md#di-d-84).
+
+### <a id="di-122"></a>DI-12.2 -- The routing provider: `RoutingProvider`, which composes several providers as the instance's one, each serving the domains it declares. *(completed 2026-10-21 14:56:18 -04:00)*
+
+The item as written:
+
+**DI-12.2** -- **The routing provider** (DI-2.12 point 1, which called it `DI-3+.8`): a provider dioring ships that
+  dispatches each seal's work by flush domain to providers registered with it when it is built, refuses a domain routed
+  twice at build time, and passes each domain's outcome back as it arrives. The core holds the built-in default and at most
+  one consumer-supplied provider ([DI-2.12](COMPLETED-CHECKLIST.md#di-212), the engineer, 2026-10-06: "do your clean form of
+  b"), so the router is that one provider, composed of others; it is portable and lives in `durable-ioring`. Restructured on
+  2026-10-20 into `DI-12.2.1` to `DI-12.2.4`, because it is four pieces that can each be built and checked alone and one of
+  them is blocked; it is done when they all are. The gate this item carried, the provider trait, is met: `DurabilityProvider`
+  and `DomainCompletion` exist. The router measures nothing: timing comes from paired begin and end events with correlation
+  ids, which the sinks and their analysis tools use ([DI-D-80](DESIGN-NOTES.md#di-d-80), [DI-M19](#di-m19----paired-begin-and-end-events-with-correlation-ids)).
+  A registered provider serves exactly the domains its own `domains()` returns ([DI-D-81](DESIGN-NOTES.md#di-d-81)). A
+  domain no provider serves is panicked on, and the panic is the router's only report ([DI-D-83](DESIGN-NOTES.md#di-d-83)).
+
+Its four steps are archived: the build ([DI-12.2.1](COMPLETED-CHECKLIST.md#di-1221), [DI-D-82](DESIGN-NOTES.md#di-d-82)),
+dispatch ([DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222)), what it reports ([DI-12.2.3](COMPLETED-CHECKLIST.md#di-1223),
+[DI-D-83](DESIGN-NOTES.md#di-d-83)), and the router through the driver ([DI-12.2.4](COMPLETED-CHECKLIST.md#di-1224),
+[DI-D-84](DESIGN-NOTES.md#di-d-84)).

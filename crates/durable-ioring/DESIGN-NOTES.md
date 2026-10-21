@@ -1475,3 +1475,25 @@ The choices [DI-12.2.2](COMPLETED-CHECKLIST.md#di-1222) left to its implementati
   provider failure and let it persist; it was withdrawn before release.
 
 **Scheduled work.** None.
+
+## <a id="di-d-84"></a>DI-D-84: the routing provider, as shipped
+
+**What is decided.** dioring ships `RoutingProvider`, the router [DI-2.12](COMPLETED-CHECKLIST.md#di-212) point 1 decided on
+(where it was numbered `DI-3+.8`; it was built as [DI-12.2](COMPLETED-CHECKLIST.md#di-122)). It is portable, lives in
+`durable-ioring`, and reaches a Windows consumer through `win-durable-ioring`'s re-export of that crate. Its rules are three
+decisions, each made as it was built: what a registered provider serves ([DI-D-81](#di-d-81)), how it is built and what its
+refusal names ([DI-D-82](#di-d-82)), and how it dispatches and what it does with a domain it does not route
+([DI-D-83](#di-d-83)). It measures nothing ([DI-D-80](#di-d-80)) and reports to no diagnostic sink.
+
+- **What composing providers costs is documented, not enforced.** A file whose domains belong to two providers is in both
+  calls, and is durable when both succeed, as the core decides for any file and any provider. Coupled domains -- two names
+  whose flushes one physical flush would cover -- are deduplicated by nothing when split across providers, so each provider
+  flushes for its own; the router is correct either way, and a consumer who wants one flush registers them with one provider.
+- **What shows it.** The router is tested alone against fake providers and a fake completion home in `durable-ioring`, and
+  through a real instance in `win-durable-ioring`: a seal touching two providers is one call to each with only its own
+  domain; a file spanning both is durable only when both succeed, and fails when either does; one failing fails only the
+  files in its domains; a domain neither serves is the default's; and a panic in the first abandons both its domains and the
+  second's, which is never called. Sabotage entries in each crate's manifest patch the router, and the driver's run only its
+  own suite, so each crate's tests are shown to catch them on their own.
+
+**Scheduled work.** None.
