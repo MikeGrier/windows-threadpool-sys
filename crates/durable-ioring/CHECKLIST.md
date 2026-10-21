@@ -14,14 +14,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 ## DI-M12 -- Beside the core: diagnostics, routing, and release
 
-- [ ] **DI-12.1** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to its diagnostic
-  sink, and **the Windows sinks** ([DI-D-51](DESIGN-NOTES.md#di-d-51)). Restructured on 2026-10-20 into `DI-12.1.1` to
-  `DI-12.1.6` after the engineer's answers ([DI-D-76](DESIGN-NOTES.md#di-d-76)); it is done when they all are. What
-  DI-2.11 left to implementation is settled, and each step carries its part:
-  - **Identity per event** is the instance plus what the event is about: a lock wait names the lock, a flush the
-    lineage, the epoch and the domain.
-  - **The time base** is interrupt time, dioring's one ([DI-D-37](DESIGN-NOTES.md#di-d-37)).
-  - **The provider** is `durable-ioring-events`, in a crate of its own, and records whether or not its manifest is installed.
+- [x] **DI-12.1** -- The delay events are emitted as typed events the core reports to its sink, and the Windows sinks exist: the debugger sink, the ETW provider in its own crate, and the ETW sink as the driver's default. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-121)
 
 - [x] **DI-12.1.1** -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1211)
 
@@ -35,9 +28,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
 
 - [x] **DI-12.1.5** -- `durable-ioring-events` is created: the provider, its manifest rendered from one table of events, and `EtwDiagnostics`, which wants a kind only when a session listens. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1215)
 
-- [ ] **DI-12.1.6** -- **`win-durable-ioring`'s default sink is `EtwDiagnostics`**, so a consumer who chooses nothing
-  still gets the events ([DI-D-51](DESIGN-NOTES.md#di-d-51) T4), and any sink, `NoDiagnostics` included, can be passed
-  when the driver is built. Tests: the default, and a chosen sink replacing it.
+- [x] **DI-12.1.6** -- `win-durable-ioring`'s default sink is `EtwDiagnostics`, so an instance built with none writes its delay events to ETW, and a sink given replaces it. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1216)
 
 - [ ] **DI-12.2** -- **The routing provider** (DI-2.12 point 1): a provider dioring ships that
   dispatches each seal's work by flush domain to providers registered with it when it is built,

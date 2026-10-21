@@ -1334,3 +1334,27 @@ The choices [DI-12.1.3](COMPLETED-CHECKLIST.md#di-1213) left to its implementati
   that harness: this crate forbids unsafe code ([DI-D-4](#di-d-4)), so it could not carry one.
 
 **Scheduled work.** None beyond [DI-12.1.4](CHECKLIST.md) onward.
+
+## <a id="di-d-79"></a>DI-D-79: the driver's default sink is `EtwDiagnostics`, built for each instance, and an instance that cannot register carries on
+
+The choices [DI-12.1.6](COMPLETED-CHECKLIST.md#di-1216) left to its implementation, made by the assistant under
+[DI-D-51](#di-d-51) T4 and open to a ruling.
+
+- **The default is `EtwDiagnostics::new()`, built when an instance is built with `Setup::diagnostics` as `None`.** Each such
+  instance holds a sink, and the sinks of a process share one registration of the provider, made by the first and given back
+  when the last is dropped ([DE-D-4](../durable-ioring-events/DESIGN-NOTES.md#de-d-4)). So building instances does not use up
+  a process's registrations, and an instance that ends gives its part back.
+- **An instance whose provider could not be registered still builds, and writes nothing.** `EtwDiagnostics::new` carries on
+  with no registration, as the page for `EventRegister` says production code should, so a diagnostic surface that failed to
+  start never fails the driver. A consumer who wants to know builds the sink with `try_new` and passes it.
+- **`EtwDiagnostics` is re-exported from `win-durable-ioring`**, so a consumer can name the default, or build one to pass, with
+  no direct dependency on the provider's crate.
+- **The cost of the default is a test, per kind of event.** With no session listening the sink wants no kind, so the core
+  builds no event and reads no clock ([DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211)); that is what makes it a default.
+- **What shows it.** A process that builds an instance with no sink registers the provider and gives it back with the
+  instance, and one with a sink of its own does not (`tests/default_diagnostics.rs`); a sink given replaces the default and
+  receives the instance's events; and an instance with none writes its flush events to a session that is listening, which needs
+  privilege, so that test is ignored by default and CI runs it with `--include-ignored`. It was run elevated on 2026-10-20 and
+  passed five times in a row.
+
+**Scheduled work.** None.

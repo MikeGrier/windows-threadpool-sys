@@ -3733,3 +3733,36 @@ The name and the GUID are [DE-D-1](../durable-ioring-events/DESIGN-NOTES.md#de-d
 the manifest and how it was checked with the real tools [DE-D-3](../durable-ioring-events/DESIGN-NOTES.md#de-d-3), and the sink
 [DE-D-4](../durable-ioring-events/DESIGN-NOTES.md#de-d-4). The session tests were run elevated and pass, and the manifest was
 installed and the events decoded by `tracerpt`.
+
+## Moved 2026-10-20 23:37:27 -04:00 -- DI-12.1.6 and DI-12.1: the driver's default sink, and the delay events are done
+
+### <a id="di-1216"></a>DI-12.1.6 -- `win-durable-ioring`'s default sink is `EtwDiagnostics`, so an instance built with none writes its delay events to ETW, and a sink given replaces it. *(completed 2026-10-20 23:37:27 -04:00)*
+
+The item as written:
+
+**DI-12.1.6** -- **`win-durable-ioring`'s default sink is `EtwDiagnostics`**, so a consumer who chooses nothing
+  still gets the events ([DI-D-51](DESIGN-NOTES.md#di-d-51) T4), and any sink, `NoDiagnostics` included, can be passed
+  when the driver is built. Tests: the default, and a chosen sink replacing it.
+
+The choices are [DI-D-79](DESIGN-NOTES.md#di-d-79). The default is observed without privilege (a process registers the provider
+for an instance with no sink and not for one with a sink of its own) and with it (the instance's flush events reach a session).
+
+### <a id="di-121"></a>DI-12.1 -- The delay events are emitted as typed events the core reports to its sink, and the Windows sinks exist: the debugger sink, the ETW provider in its own crate, and the ETW sink as the driver's default. *(completed 2026-10-20 23:37:27 -04:00)*
+
+The item as written:
+
+**DI-12.1** -- **Emit the delay events** DI-2.11 designs, as typed events the core reports to its diagnostic
+  sink, and **the Windows sinks** ([DI-D-51](DESIGN-NOTES.md#di-d-51)). Restructured on 2026-10-20 into `DI-12.1.1` to
+  `DI-12.1.6` after the engineer's answers ([DI-D-76](DESIGN-NOTES.md#di-d-76)); it is done when they all are. What
+  DI-2.11 left to implementation is settled, and each step carries its part:
+  - **Identity per event** is the instance plus what the event is about: a lock wait names the lock, a flush the
+    lineage, the epoch and the domain.
+  - **The time base** is interrupt time, dioring's one ([DI-D-37](DESIGN-NOTES.md#di-d-37)).
+  - **The provider** is `durable-ioring-events`, in a crate of its own, and records whether or not its manifest is installed.
+
+It was restructured into six steps on 2026-10-20 after the engineer's answers
+([DI-D-76](DESIGN-NOTES.md#di-d-76)), and each is archived: the core's events
+([DI-12.1.1](COMPLETED-CHECKLIST.md#di-1211), [DI-D-77](DESIGN-NOTES.md#di-d-77)), the debugger crate and sink
+([DI-12.1.2](COMPLETED-CHECKLIST.md#di-1212), [DI-12.1.3](COMPLETED-CHECKLIST.md#di-1213), [DI-D-78](DESIGN-NOTES.md#di-d-78)),
+the ETW wrapper ([DI-12.1.4](COMPLETED-CHECKLIST.md#di-1214)), the provider crate
+([DI-12.1.5](COMPLETED-CHECKLIST.md#di-1215)) and the default ([DI-12.1.6](COMPLETED-CHECKLIST.md#di-1216)).
