@@ -1545,3 +1545,27 @@ The choices [DI-19.1](COMPLETED-CHECKLIST.md#di-191) left to its implementation,
 
 **Scheduled work.** [DI-19.2](CHECKLIST.md), which mints an id as it builds each begin.
 
+## <a id="di-d-87"></a>DI-D-87: the pairs' shapes, the ETW opcodes with them, and the core's duration code removed
+
+**What is decided.** The engineer, 2026-10-21, on the assistant's proposal for restructuring
+[DI-19.2](CHECKLIST.md):
+
+- **The ETW schema's Start and Stop opcodes come with the pairs** ("b"). Changing `Diagnostic` breaks
+  `durable-ioring-events` in the same commit, so its schema changes in `DI-19.2.4` once, with the opcodes, rather than
+  twice; `DI-19.4` keeps writing the activity id.
+- **The shapes** ("looks good!"). The kinds are `Seal`, `Flush`, `LockWait` and `Inconsistency`; `FlushIssued`,
+  `FlushAnswered` and `SealWaited` go, a seal's wait being the gap between its begin and its first flush's begin.
+  `SealBegan { instance, lineage, through, id }` and `SealEnded { ..., id, outcome }`, the outcome how the seal was answered
+  -- durable, failed, or blocked by an earlier failure -- or ended unanswered, by its lineage ending or its instance being
+  dropped. `FlushBegan { instance, lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or
+  abandoned. `LockWaitBegan { instance, lock, id }` and `LockWaitEnded { instance, lock, id }`. An end repeats its begin's
+  identity fields, which pairing does not need and a reader of one line does.
+- **The core's duration code is removed** ("remove the clock"): `StampClock::elapsed` and the lock watch's `LockTimer`,
+  which nothing uses once the ends carry no `elapsed`. The assistant reads the ruling as that code and not `StampClock`
+  itself, which still stamps writes and failures; that reading is open to correction.
+- **`PairingChecker` is public in `durable_ioring::oracle`** ("good"), beside the conformance oracle, so each crate's sink
+  tests bind to the one definition: every end follows a begin of the same id and kind, no id is begun twice, nothing follows
+  an end, and at the stream's end no begin is left open but those a test names.
+
+**Scheduled work.** [DI-19.2.1](CHECKLIST.md) to `DI-19.2.5`, and `DI-19.4`, narrowed.
+

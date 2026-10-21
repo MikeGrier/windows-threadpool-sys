@@ -37,38 +37,62 @@ would allow.
 
 - [x] **DI-19.1** -- `CorrelationId`, a process-scoped `u64` from one relaxed atomic counter, minted only by `CorrelationId::for_pair`, which asks the sink first. -> [completed 2026-10-21](COMPLETED-CHECKLIST.md#di-191)
 
-- [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Three pairs, each one kind of
-  event so a sink wants a pair or declines it, and cannot want a begin and not its end: a seal, from its being asked for to
-  its becoming durable or failing; each flush of a file or a domain, from its issue to its answer; and a lock wait, whose
-  begin is written when the immediate try fails and whose end is written as the lock is acquired, with the lock held. An end
-  is reported if and only if its begin was, whatever the sink wants by then, and on every path a begin can leave by: an
-  answer, a failure, a completion dropped unanswered, a lineage that retires, and an instance that is dropped; any it cannot
-  be reported on is documented. The pairing rule is defined once, as a checker over a sink's stream in `durable-ioring`, and
-  the sinks' tests, the in-memory ones and the instance's, use it and do not restate it. The text of every event carries its
-  id, so the standard-error and debugger lines can be paired by eye.
+- [ ] **DI-19.2** -- **Begin and end events in the core, and one oracle for their pairing.** Restructured on 2026-10-21 into
+  `DI-19.2.1` to `DI-19.2.5`, with the engineer's rulings recorded in [DI-D-87](DESIGN-NOTES.md#di-d-87): the event shapes
+  below, the ETW schema's opcodes moved here from `DI-19.4` because changing `Diagnostic` breaks the provider's crate in the
+  same commit, and the core's duration code removed. It is done when they all are. As written before the restructure:
+  three pairs, each one kind of event, so a sink wants a pair or declines it and cannot want a begin and not its end -- a
+  seal, from its being asked for to its becoming durable or failing; each flush of a file or a domain, from its issue to its
+  answer; and a lock wait, whose begin is written when the immediate try fails and whose end is written as the lock is
+  acquired, with the lock held. An end is reported if and only if its begin was, whatever the sink wants by then, and on
+  every path a begin can leave by; any it cannot be reported on is documented. The pairing rule is defined once, as a
+  checker in `durable-ioring` that every sink's tests use and do not restate. The text of every event carries its id.
 
-  The sink's contract is made to say what a lock wait's end needs of it: a sink is called with dioring's lock held, so its
-  own synchronization is leaf-only, never taken in a way that can wait on anything dioring's locks guard, and never held by
-  a thread while it calls into an instance, which includes a consumer holding a sink's lock around such a call. The shipped
-  sinks are checked against it and the result recorded: the ETW sink's report path takes no lock and its shared-registration
-  mutex is taken only to build, drop and ask, which was read on 2026-10-21; the standard-error and debugger sinks are
-  read in this step. A test sink that records under a mutex is shown to keep to it.
+  The shapes (DI-D-87): the kinds are `Seal`, `Flush`, `LockWait` and `Inconsistency`, and `FlushIssued`, `FlushAnswered`
+  and `SealWaited` go, a seal's wait being the gap between its begin and its first flush's. `SealBegan { instance, lineage,
+  through, id }` and `SealEnded { ..., id, outcome }`, the outcome how the seal was answered -- durable, failed, blocked by
+  an earlier failure -- or ended unanswered, by its lineage ending or its instance being dropped. `FlushBegan { instance,
+  lineage, through, part, id }` and `FlushEnded { ..., id, outcome }`, succeeded, failed or abandoned. `LockWaitBegan {
+  instance, lock, id }` and `LockWaitEnded { instance, lock, id }`. An end repeats its begin's identity fields.
 
-  `elapsed` leaves the ends; what the core's own duration code then serves, `StampClock::elapsed` and the lock watch's
-  timer, is counted, and removing any of it is raised with the engineer and not assumed. This changes `Diagnostic` and is a
-  major change for `durable-ioring`. A sweep for the delay events' old shape is recorded with it, of `DI-D-26`, `DI-D-51`,
-  `DI-D-77` and the README, and of the doc of `Diagnostic::LockWait`, which says it is reported after the lock was released,
-  and the sabotage that shows the checker is the one place the rule lives.
+- [ ] **DI-19.2.1** -- **The pair variants and kinds, and `PairingChecker`.** The new variants and kinds beside the old ones,
+  which stay until `DI-19.2.4` moves the sinks, so each step compiles. `PairingChecker`, public in `durable_ioring::oracle`
+  beside the conformance oracle: every end follows a begin of the same id and kind; no id is begun twice; nothing follows an
+  end; and at the stream's end no begin is left open but those a test names. Tested in memory against hand-built streams it
+  must accept and streams it must refuse, each rule in both directions.
+
+- [ ] **DI-19.2.2** -- **The core emits the seal and flush pairs.** In place of `SealWaited`, `FlushIssued` and
+  `FlushAnswered`, each pair's id minted by `CorrelationId::for_pair` as its begin is built. An end on every path a begin can
+  leave by: an answer, a failure, a completion dropped unanswered, a lineage that ends or retires, and the core closed or
+  dropped; any that cannot be reached is documented at its definition. Tested over the in-memory backend and its script,
+  through the checker.
+
+- [ ] **DI-19.2.3** -- **The lock-wait pair, and the sink's leaf-lock contract.** `LockWatch` writes the begin when the
+  immediate try fails and the end on acquisition, with the lock held, and its timer goes. `DiagnosticSink`'s contract says a
+  sink is called with dioring's lock held, so its own synchronization is leaf-only: never taken in a way that can wait on
+  anything dioring's locks guard, and never held by a thread while it calls into an instance, a consumer holding a sink's
+  lock around such a call included. The shipped sinks are checked against it and the result recorded; a test sink that
+  records under a mutex is shown to keep to it.
+
+- [ ] **DI-19.2.4** -- **The sinks follow, and the old variants go.** The standard-error and debugger lines carry the id.
+  `durable-ioring-events`' table maps the pairs to events with Start and Stop opcodes, the manifest is rendered and held
+  equal, and it is verified as `DI-12.1.5` was, compiled, installed and read back by `tracerpt`; the activity id is
+  `DI-19.4`'s. The driver's tests bind to the checker. `FlushIssued`, `FlushAnswered` and `SealWaited` are removed, and
+  `StampClock::elapsed` with them (DI-D-87). This is the major change to `durable-ioring`.
+
+- [ ] **DI-19.2.5** -- **The sweep, the sabotage and the record.** A sweep for the delay events' old shape, of `DI-D-26`,
+  `DI-D-51`, `DI-D-77`, the README and the crates' docs, is recorded with it; sabotage shows the checker is the one place
+  the pairing rule lives; and the decisions the steps made are recorded.
 
 - [ ] **DI-19.3** -- **`win-etw-sys` writes an event with an explicit activity id.** `EventWriteTransfer` with an activity
   id, and a related one, taken from the caller and not from the thread, so a begin and an end written on different threads
   carry the same one. The call's page is read first, and its conditions on the arguments are the only ones refused. A session
   test, elevated and `#[ignore]`d as the crate's others are, reads the activity id of a record written from two threads.
 
-- [ ] **DI-19.4** -- **The ETW provider pairs.** Waits on `DI-19.2` and `DI-19.3`. `durable-ioring-events`' table gives each
-  paired event a Start or Stop opcode, writes the activity id by the mapping the section above holds as a working position,
-  and the manifest is rendered and held equal as it is now. Verified as `DI-12.1.5` was: compiled and installed, then a trace
-  recorded and read by `tracerpt`, which this time must show the begin and end paired and their duration computed.
+- [ ] **DI-19.4** -- **The ETW provider writes the activity id.** Waits on `DI-19.2` and `DI-19.3`. The Start and Stop
+  opcodes moved to `DI-19.2.4` (DI-D-87); this step writes each pair's activity id by the mapping the section above holds as
+  a working position, and is verified as `DI-12.1.5` was: compiled and installed, then a trace recorded and read by
+  `tracerpt`, which this time must show the begin and end paired and their duration computed.
 
 ## DI-M20 -- Durability of a directory's entries
 
