@@ -21,7 +21,7 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   - **Identity per event** is the instance plus what the event is about: a lock wait names the lock, a flush the
     lineage, the epoch and the domain.
   - **The time base** is interrupt time, dioring's one ([DI-D-37](DESIGN-NOTES.md#di-d-37)).
-  - **The provider** is `win-dioring`, in a crate of its own, and records whether or not its manifest is installed.
+  - **The provider** is `durable-ioring-events`, in a crate of its own, and records whether or not its manifest is installed.
 
 - [x] **DI-12.1.1** -- The delay events are in the portable core: lock waits, flush issue and answer, and a seal's wait, built only for a sink that wants them. -> [completed 2026-10-20](COMPLETED-CHECKLIST.md#di-1211)
 
@@ -44,8 +44,9 @@ scope now; parked work, gated (`M{n}+`), on the horizon or deferred, is in [PARK
   built from typed fields without `unsafe` for the caller. Tests: against a real session started by a documented
   route, or by what the pages let a test observe, which the step records.
 
-- [ ] **DI-12.1.5** -- **Create `win-dioring`: the provider, its manifest and `EtwDiagnostics`.** The provider is
-  named `win-dioring` (the engineer, 2026-10-20: "win-dioring, I'd put it in its own crate"), with a GUID generated
+- [ ] **DI-12.1.5** -- **Create `durable-ioring-events`: the provider, its manifest and `EtwDiagnostics`.** The provider is
+  named `durable-ioring-events` (the engineer, 2026-10-20: "Change the name of the event source to
+  durable-ioring-events", having first said "win-dioring, I'd put it in its own crate"), with a GUID generated
   once and recorded in the crate's notes. Its manifest ships with the crate and maps each event of `DI-12.1.1`
   one-to-one. It records whether or not the manifest is installed ("you don't actually have to install the manifest to
   record events"); the crate's documentation says that a reader needs it to see names and fields, and how to install it.
